@@ -101,17 +101,6 @@ namespace Copper68k
 
         public int ByteLength => _snapshot.Bytes?.Length ?? 0;
 
-        public bool HasHostTrapStub(uint address)
-        {
-            address = NormalizeAddress(address);
-            if (!TryGetOffset(address, 2, out _))
-            {
-                return true;
-            }
-
-            return false;
-        }
-
         public ushort ReadHostWord(uint address)
         {
             if (!TryGetOffset(address, 2, out var offset))

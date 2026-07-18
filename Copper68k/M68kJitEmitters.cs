@@ -127,21 +127,9 @@ namespace Copper68k
             typeof(uint),
             typeof(bool),
             typeof(int));
-        private static readonly MethodInfo ExecuteRegisterShift = RequiredMethod(
+        private static readonly MethodInfo ExecuteDivideByZero = RequiredMethod(
             typeof(M68kJitCore),
-            "ExecuteCompiledRegisterShift",
-            typeof(int),
-            typeof(int),
-            typeof(int),
-            typeof(int));
-        private static readonly MethodInfo ExecuteMultiplyDivideValue = RequiredMethod(
-            typeof(M68kJitCore),
-            "ExecuteCompiledMultiplyDivideValue",
-            typeof(uint),
-            typeof(int),
-            typeof(bool),
-            typeof(bool),
-            typeof(int));
+            "ExecuteV2DivideByZero");
         private static readonly MethodInfo ReadMemoryByte = RequiredMethod(
             typeof(M68kJitCore),
             "ReadClassicCompiledMemoryByte",
@@ -200,6 +188,32 @@ namespace Copper68k
             typeof(uint),
             typeof(int),
             typeof(int));
+        private static readonly MethodInfo ShiftRegister = RequiredStaticMethod(
+            typeof(M68kIntegerSemantics),
+            nameof(M68kIntegerSemantics.ShiftRegister),
+            typeof(uint),
+            typeof(int),
+            typeof(int),
+            typeof(int),
+            typeof(int));
+        private static readonly MethodInfo GetMultiplyCoreCycles = RequiredStaticMethod(
+            typeof(M68kIntegerSemantics),
+            nameof(M68kIntegerSemantics.GetMultiplyCoreCycles),
+            typeof(uint),
+            typeof(bool));
+        private static readonly MethodInfo DivideRegister = RequiredStaticMethod(
+            typeof(M68kIntegerSemantics),
+            nameof(M68kIntegerSemantics.DivideRegister),
+            typeof(uint),
+            typeof(uint),
+            typeof(int),
+            typeof(bool));
+        private static readonly MethodInfo GetDivideCoreCycles = RequiredStaticMethod(
+            typeof(M68kIntegerSemantics),
+            nameof(M68kIntegerSemantics.GetDivideCoreCycles),
+            typeof(uint),
+            typeof(ushort),
+            typeof(bool));
 
         private static readonly PropertyInfo StateProperty = RequiredProperty(typeof(M68kJitCore), nameof(M68kJitCore.State));
         private static readonly PropertyInfo DataRegistersProperty = RequiredProperty(typeof(M68kCpuState), nameof(M68kCpuState.D));
@@ -208,11 +222,18 @@ namespace Copper68k
         private static readonly PropertyInfo CyclesProperty = RequiredProperty(typeof(M68kCpuState), nameof(M68kCpuState.Cycles));
         private static readonly PropertyInfo StatusRegisterProperty = RequiredProperty(typeof(M68kCpuState), nameof(M68kCpuState.StatusRegister));
 
-        public static TraceEmitContext EmitTraceLocals(ILGenerator il)
+        public static TraceEmitContext EmitTraceLocals(
+            ILGenerator il,
+            int pinnedDataRegisterMask = 0,
+            int pinnedAddressRegisterMask = 0,
+            int dirtyDataRegisterMask = 0,
+            int dirtyAddressRegisterMask = 0)
         {
             var state = il.DeclareLocal(typeof(M68kCpuState));
             var dataRegisters = il.DeclareLocal(typeof(uint[]));
             var addressRegisters = il.DeclareLocal(typeof(uint[]));
+            var pinnedDataRegisters = new LocalBuilder?[8];
+            var pinnedAddressRegisters = new LocalBuilder?[8];
 
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Call, StateProperty.GetMethod!);
@@ -224,20 +245,77 @@ namespace Copper68k
             il.Emit(OpCodes.Call, AddressRegistersProperty.GetMethod!);
             il.Emit(OpCodes.Stloc, addressRegisters);
 
-            return new TraceEmitContext(state, dataRegisters, addressRegisters);
+            for (var register = 0; register < 8; register++)
+            {
+                if ((pinnedDataRegisterMask & (1 << register)) != 0)
+                {
+                    var local = il.DeclareLocal(typeof(uint));
+                    pinnedDataRegisters[register] = local;
+                    il.Emit(OpCodes.Ldloc, dataRegisters);
+                    il.Emit(OpCodes.Ldc_I4, register);
+                    il.Emit(OpCodes.Ldelem_U4);
+                    il.Emit(OpCodes.Stloc, local);
+                }
+
+                // A7 is coupled to the active supervisor/user stack pointer and must
+                // continue through SetAddressRegister rather than deferred writeback.
+                if (register != 7 && (pinnedAddressRegisterMask & (1 << register)) != 0)
+                {
+                    var local = il.DeclareLocal(typeof(uint));
+                    pinnedAddressRegisters[register] = local;
+                    il.Emit(OpCodes.Ldloc, addressRegisters);
+                    il.Emit(OpCodes.Ldc_I4, register);
+                    il.Emit(OpCodes.Ldelem_U4);
+                    il.Emit(OpCodes.Stloc, local);
+                }
+            }
+
+            return new TraceEmitContext(
+                state,
+                dataRegisters,
+                addressRegisters,
+                pinnedDataRegisters,
+                pinnedAddressRegisters,
+                dirtyDataRegisterMask,
+                dirtyAddressRegisterMask & 0x7F);
+        }
+
+        public static void EmitPinnedRegisterWriteback(ILGenerator il, TraceEmitContext context)
+        {
+            for (var register = 0; register < 8; register++)
+            {
+                if ((context.DirtyDataRegisterMask & (1 << register)) != 0 &&
+                    context.PinnedDataRegisters[register] is { } dataLocal)
+                {
+                    il.Emit(OpCodes.Ldloc, context.DataRegisters);
+                    il.Emit(OpCodes.Ldc_I4, register);
+                    il.Emit(OpCodes.Ldloc, dataLocal);
+                    il.Emit(OpCodes.Stelem_I4);
+                }
+
+                if ((context.DirtyAddressRegisterMask & (1 << register)) != 0 &&
+                    context.PinnedAddressRegisters[register] is { } addressLocal)
+                {
+                    il.Emit(OpCodes.Ldloc, context.AddressRegisters);
+                    il.Emit(OpCodes.Ldc_I4, register);
+                    il.Emit(OpCodes.Ldloc, addressLocal);
+                    il.Emit(OpCodes.Stelem_I4);
+                }
+            }
         }
 
         public static M68kIlInstructionKind Emit(
             ILGenerator il,
             M68kDecodedInstruction instruction,
-            TraceEmitContext context)
+            TraceEmitContext context,
+            Label completedInstructionExit)
         {
             var kind = GetInstructionKind(instruction);
             switch (kind)
             {
                 case M68kIlInstructionKind.DirectCpu:
                 case M68kIlInstructionKind.DirectMemory:
-                    EmitDirect(il, instruction, context);
+                    EmitDirect(il, instruction, context, completedInstructionExit);
                     break;
                 case M68kIlInstructionKind.SpecializedHelper:
                     EmitSpecializedHelper(il, instruction);
@@ -283,12 +361,31 @@ namespace Copper68k
                 M68kJitOperation.Moveq => true,
                 M68kJitOperation.Move => instruction.Source.Kind == M68kJitEaKind.DataRegister &&
                     instruction.Destination.Kind == M68kJitEaKind.DataRegister,
-                M68kJitOperation.Addq or M68kJitOperation.Subq => instruction.Destination.Kind is
-                    M68kJitEaKind.DataRegister,
+                M68kJitOperation.Addq or M68kJitOperation.Subq =>
+                    instruction.Destination.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.Clr => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.Tst => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.Cmpi => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
                 M68kJitOperation.Cmp => instruction.Source.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.Add or M68kJitOperation.Sub =>
+                    instruction.Source.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister or M68kJitEaKind.Immediate &&
+                    instruction.Destination.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.AddressRegister,
+                M68kJitOperation.Addi or M68kJitOperation.Subi or
+                M68kJitOperation.Andi or M68kJitOperation.Ori or M68kJitOperation.Eori =>
+                    instruction.Destination.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.And or M68kJitOperation.Or or M68kJitOperation.Eor =>
+                    IsRegisterLogical(instruction),
                 M68kJitOperation.Not or M68kJitOperation.Neg or M68kJitOperation.Negx => instruction.Destination.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.ExtWord or M68kJitOperation.ExtLong or M68kJitOperation.Swap => true,
+                M68kJitOperation.Exg => true,
+                M68kJitOperation.ShiftRegister => (instruction.Variant & 8) == 0,
+                M68kJitOperation.BitImmediate or M68kJitOperation.BitDynamic =>
+                    instruction.Destination.Kind == M68kJitEaKind.DataRegister,
+                M68kJitOperation.Mulu or M68kJitOperation.Muls =>
+                    instruction.Source.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.Immediate,
+                M68kJitOperation.Divu or M68kJitOperation.Divs =>
+                    instruction.Source.Kind is M68kJitEaKind.DataRegister or M68kJitEaKind.Immediate,
+                M68kJitOperation.Nop => true,
                 M68kJitOperation.M68040Fpu => !M68040FpuHelpers.UsesBus(instruction),
                 M68kJitOperation.Bra or M68kJitOperation.Bcc or M68kJitOperation.Dbcc => true,
                 _ => false
@@ -406,7 +503,11 @@ namespace Copper68k
             il.Emit(OpCodes.Call, ExecuteMovem);
         }
 
-        private static void EmitDirect(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
+        private static void EmitDirect(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context,
+            Label completedInstructionExit)
         {
             switch (instruction.Operation)
             {
@@ -436,6 +537,10 @@ namespace Copper68k
                     return;
                 case M68kJitOperation.Tst:
                     EmitTst(il, instruction, context);
+                    EmitTrue(il);
+                    return;
+                case M68kJitOperation.Clr:
+                    EmitClrDataRegister(il, instruction, context);
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.Cmp:
@@ -518,6 +623,10 @@ namespace Copper68k
                     EmitNeg(il, instruction, context);
                     EmitTrue(il);
                     return;
+                case M68kJitOperation.Nop:
+                    EmitAddCycles(il, context, 4);
+                    EmitTrue(il);
+                    return;
                 case M68kJitOperation.Negx:
                     EmitNegx(il, instruction, context);
                     EmitTrue(il);
@@ -539,19 +648,25 @@ namespace Copper68k
                     EmitTrue(il);
                     return;
                 case M68kJitOperation.ShiftRegister:
-                    EmitRegisterShift(il, instruction);
+                    EmitRegisterShift(il, instruction, context);
+                    return;
+                case M68kJitOperation.BitImmediate:
+                    EmitRegisterBitOperation(il, instruction, context, immediateBit: true);
+                    return;
+                case M68kJitOperation.BitDynamic:
+                    EmitRegisterBitOperation(il, instruction, context, immediateBit: false);
                     return;
                 case M68kJitOperation.Mulu:
-                    EmitMultiplyDivide(il, instruction, context, signed: false, divide: false);
+                    EmitMultiply(il, instruction, context, signed: false);
                     return;
                 case M68kJitOperation.Muls:
-                    EmitMultiplyDivide(il, instruction, context, signed: true, divide: false);
+                    EmitMultiply(il, instruction, context, signed: true);
                     return;
                 case M68kJitOperation.Divu:
-                    EmitMultiplyDivide(il, instruction, context, signed: false, divide: true);
+                    EmitDivide(il, instruction, context, completedInstructionExit, signed: false);
                     return;
                 case M68kJitOperation.Divs:
-                    EmitMultiplyDivide(il, instruction, context, signed: true, divide: true);
+                    EmitDivide(il, instruction, context, completedInstructionExit, signed: true);
                     return;
                 case M68kJitOperation.Bra:
                     EmitBra(il, instruction, context);
@@ -659,6 +774,25 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, value);
             EmitSetLogicFlags(il, context, value, instruction.Size);
             EmitAddCycles(il, context, M68kJitCore.GetUnaryCyclesForTiming(M68kJitOperation.Tst, instruction.Destination, instruction.Size));
+        }
+
+        private static void EmitClrDataRegister(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context)
+        {
+            var value = il.DeclareLocal(typeof(uint));
+            il.Emit(OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Stloc, value);
+            EmitStoreDataRegister(il, context, instruction.Destination.Register, value, instruction.Size);
+            EmitSetLogicFlags(il, context, value, instruction.Size);
+            EmitAddCycles(
+                il,
+                context,
+                M68kJitCore.GetUnaryCyclesForTiming(
+                    M68kJitOperation.Clr,
+                    instruction.Destination,
+                    instruction.Size));
         }
 
         private static void EmitCompareImmediateDataRegister(
@@ -769,7 +903,7 @@ namespace Copper68k
             }
 
             il.Emit(OpCodes.Stloc, value);
-            EmitStoreAddressRegister(il, instruction.Destination.Register, value);
+            EmitStoreAddressRegister(il, context, instruction.Destination.Register, value);
             EmitAddCycles(il, context, M68kJitCore.EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
         }
 
@@ -778,7 +912,7 @@ namespace Copper68k
             var address = il.DeclareLocal(typeof(uint));
             EmitResolveEaAddress(il, context, instruction.Source, instruction.Size, applySideEffects: false);
             il.Emit(OpCodes.Stloc, address);
-            EmitStoreAddressRegister(il, instruction.Register, address);
+            EmitStoreAddressRegister(il, context, instruction.Register, address);
             EmitAddCycles(il, context, M68kJitCore.GetLeaCyclesForTiming(instruction.Source));
         }
 
@@ -791,7 +925,7 @@ namespace Copper68k
                 EmitLoadUIntConstant(il, M68kCpuState.SignExtend((uint)instruction.QuickValue, instruction.Size));
                 il.Emit(add ? OpCodes.Add : OpCodes.Sub);
                 il.Emit(OpCodes.Stloc, value);
-                EmitStoreAddressRegister(il, instruction.Destination.Register, value);
+                EmitStoreAddressRegister(il, context, instruction.Destination.Register, value);
                 EmitAddCycles(il, context, 8);
                 return;
             }
@@ -872,7 +1006,7 @@ namespace Copper68k
                 il.Emit(OpCodes.Ldloc, source);
                 il.Emit(add ? OpCodes.Add : OpCodes.Sub);
                 il.Emit(OpCodes.Stloc, result);
-                EmitStoreAddressRegister(il, instruction.Register, result);
+                EmitStoreAddressRegister(il, context, instruction.Register, result);
             }
 
             EmitAddCycles(
@@ -1161,8 +1295,8 @@ namespace Copper68k
                 il.Emit(OpCodes.Stloc, left);
                 EmitLoadAddressRegister(il, context, instruction.QuickValue);
                 il.Emit(OpCodes.Stloc, right);
-                EmitStoreAddressRegister(il, instruction.Register, right);
-                EmitStoreAddressRegister(il, instruction.QuickValue, left);
+                EmitStoreAddressRegister(il, context, instruction.Register, right);
+                EmitStoreAddressRegister(il, context, instruction.QuickValue, left);
             }
             else
             {
@@ -1171,39 +1305,261 @@ namespace Copper68k
                 EmitLoadAddressRegister(il, context, instruction.QuickValue);
                 il.Emit(OpCodes.Stloc, right);
                 EmitStoreDataRegister(il, context, instruction.Register, right, M68kOperandSize.Long);
-                EmitStoreAddressRegister(il, instruction.QuickValue, left);
+                EmitStoreAddressRegister(il, context, instruction.QuickValue, left);
             }
 
             EmitAddCycles(il, context, 6);
         }
 
-        private static void EmitRegisterShift(ILGenerator il, M68kDecodedInstruction instruction)
+        private static void EmitRegisterShift(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context)
         {
-            il.Emit(OpCodes.Ldarg_0);
-            il.Emit(OpCodes.Ldc_I4, instruction.Register);
+            var packed = il.DeclareLocal(typeof(ulong));
+            var value = il.DeclareLocal(typeof(uint));
+            var status = il.DeclareLocal(typeof(int));
+            EmitLoadDataRegister(il, context, instruction.Register, instruction.Size);
+            EmitLoadStatus(il, context);
             il.Emit(OpCodes.Ldc_I4, instruction.QuickValue);
             il.Emit(OpCodes.Ldc_I4, instruction.Variant);
             il.Emit(OpCodes.Ldc_I4, (int)instruction.Size);
-            il.Emit(OpCodes.Call, ExecuteRegisterShift);
+            il.Emit(OpCodes.Call, ShiftRegister);
+            il.Emit(OpCodes.Stloc, packed);
+            il.Emit(OpCodes.Ldloc, packed);
+            il.Emit(OpCodes.Conv_U4);
+            il.Emit(OpCodes.Stloc, value);
+            EmitStoreDataRegister(il, context, instruction.Register, value, instruction.Size);
+            il.Emit(OpCodes.Ldloc, packed);
+            il.Emit(OpCodes.Ldc_I4, 32);
+            il.Emit(OpCodes.Shr_Un);
+            il.Emit(OpCodes.Conv_I4);
+            il.Emit(OpCodes.Stloc, status);
+            EmitStoreStatus(il, context, status);
+            EmitAddCycles(
+                il,
+                context,
+                M68kIntegerSemantics.GetRegisterShiftCycles(instruction.Size, instruction.QuickValue));
+            EmitTrue(il);
         }
 
-        private static void EmitMultiplyDivide(
+        private static void EmitRegisterBitOperation(
             ILGenerator il,
             M68kDecodedInstruction instruction,
             TraceEmitContext context,
-            bool signed,
-            bool divide)
+            bool immediateBit)
+        {
+            var bit = il.DeclareLocal(typeof(int));
+            var value = il.DeclareLocal(typeof(uint));
+            var mask = il.DeclareLocal(typeof(uint));
+            var status = il.DeclareLocal(typeof(int));
+            var cycles = il.DeclareLocal(typeof(int));
+            if (immediateBit)
+            {
+                il.Emit(OpCodes.Ldc_I4, instruction.QuickValue & 31);
+            }
+            else
+            {
+                EmitLoadDataRegister(il, context, instruction.Register, M68kOperandSize.Long);
+                il.Emit(OpCodes.Ldc_I4, 31);
+                il.Emit(OpCodes.And);
+            }
+
+            il.Emit(OpCodes.Stloc, bit);
+            il.Emit(OpCodes.Ldc_I4_1);
+            il.Emit(OpCodes.Ldloc, bit);
+            il.Emit(OpCodes.Shl);
+            il.Emit(OpCodes.Stloc, mask);
+            EmitLoadDataRegister(
+                il,
+                context,
+                instruction.Destination.Register,
+                M68kOperandSize.Long);
+            il.Emit(OpCodes.Stloc, value);
+
+            EmitLoadStatus(il, context);
+            il.Emit(OpCodes.Ldc_I4, unchecked((int)~M68kCpuState.Zero));
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, status);
+            var bitWasSet = il.DefineLabel();
+            il.Emit(OpCodes.Ldloc, value);
+            il.Emit(OpCodes.Ldloc, mask);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Brtrue, bitWasSet);
+            EmitOrStatusFlag(il, status, M68kCpuState.Zero);
+            il.MarkLabel(bitWasSet);
+            EmitStoreStatus(il, context, status);
+
+            if (instruction.Variant != 0)
+            {
+                il.Emit(OpCodes.Ldloc, value);
+                il.Emit(OpCodes.Ldloc, mask);
+                if (instruction.Variant == 1)
+                {
+                    il.Emit(OpCodes.Xor);
+                }
+                else if (instruction.Variant == 2)
+                {
+                    il.Emit(OpCodes.Not);
+                    il.Emit(OpCodes.And);
+                }
+                else
+                {
+                    il.Emit(OpCodes.Or);
+                }
+
+                il.Emit(OpCodes.Stloc, value);
+                EmitStoreDataRegister(
+                    il,
+                    context,
+                    instruction.Destination.Register,
+                    value,
+                    M68kOperandSize.Long);
+            }
+
+            if (immediateBit)
+            {
+                il.Emit(
+                    OpCodes.Ldc_I4,
+                    M68kJitCore.GetBitOperationCyclesForTiming(
+                        instruction.Destination,
+                        instruction.Variant,
+                        (uint)instruction.QuickValue,
+                        immediateBit: true));
+                il.Emit(OpCodes.Stloc, cycles);
+            }
+            else
+            {
+                var timingDone = il.DefineLabel();
+                il.Emit(
+                    OpCodes.Ldc_I4,
+                    instruction.Variant == 0
+                        ? 6
+                        : instruction.Variant == 2 ? 8 : 6);
+                il.Emit(OpCodes.Stloc, cycles);
+                if (instruction.Variant != 0)
+                {
+                    il.Emit(OpCodes.Ldloc, bit);
+                    il.Emit(OpCodes.Ldc_I4, 16);
+                    il.Emit(OpCodes.Blt, timingDone);
+                    il.Emit(OpCodes.Ldloc, cycles);
+                    il.Emit(OpCodes.Ldc_I4_2);
+                    il.Emit(OpCodes.Add);
+                    il.Emit(OpCodes.Stloc, cycles);
+                    il.MarkLabel(timingDone);
+                }
+            }
+
+            EmitAddCycles(il, context, cycles);
+            EmitTrue(il);
+        }
+
+        private static void EmitMultiply(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context,
+            bool signed)
         {
             var source = il.DeclareLocal(typeof(uint));
-            EmitLoadEaValue(il, context, instruction.Source, M68kOperandSize.Word, applySideEffects: true);
+            var destination = il.DeclareLocal(typeof(uint));
+            var result = il.DeclareLocal(typeof(uint));
+            var cycles = il.DeclareLocal(typeof(int));
+            EmitLoadEaValue(il, context, instruction.Source, M68kOperandSize.Word, applySideEffects: false);
+            EmitLoadUIntConstant(il, 0xFFFF);
+            il.Emit(OpCodes.And);
             il.Emit(OpCodes.Stloc, source);
-            il.Emit(OpCodes.Ldarg_0);
+            EmitLoadDataRegister(il, context, instruction.Register, M68kOperandSize.Word);
+            EmitLoadUIntConstant(il, 0xFFFF);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, destination);
+            il.Emit(OpCodes.Ldloc, destination);
+            if (signed)
+            {
+                il.Emit(OpCodes.Conv_I2);
+            }
+
             il.Emit(OpCodes.Ldloc, source);
-            il.Emit(OpCodes.Ldc_I4, instruction.Register);
+            if (signed)
+            {
+                il.Emit(OpCodes.Conv_I2);
+            }
+
+            il.Emit(OpCodes.Mul);
+            il.Emit(OpCodes.Stloc, result);
+            EmitStoreDataRegister(il, context, instruction.Register, result, M68kOperandSize.Long);
+            EmitSetLogicFlags(il, context, result, M68kOperandSize.Long);
+            il.Emit(OpCodes.Ldloc, source);
             il.Emit(signed ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
-            il.Emit(divide ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
-            il.Emit(OpCodes.Ldc_I4, M68kJitCore.GetEaOperandCyclesForTiming(instruction.Source, M68kOperandSize.Word));
-            il.Emit(OpCodes.Call, ExecuteMultiplyDivideValue);
+            il.Emit(OpCodes.Call, GetMultiplyCoreCycles);
+            il.Emit(
+                OpCodes.Ldc_I4,
+                M68kJitCore.GetEaOperandCyclesForTiming(instruction.Source, M68kOperandSize.Word));
+            il.Emit(OpCodes.Add);
+            il.Emit(OpCodes.Stloc, cycles);
+            EmitAddCycles(il, context, cycles);
+            EmitTrue(il);
+        }
+
+        private static void EmitDivide(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context,
+            Label completedInstructionExit,
+            bool signed)
+        {
+            var divisor = il.DeclareLocal(typeof(uint));
+            var dividend = il.DeclareLocal(typeof(uint));
+            var value = il.DeclareLocal(typeof(uint));
+            var packed = il.DeclareLocal(typeof(ulong));
+            var status = il.DeclareLocal(typeof(int));
+            var cycles = il.DeclareLocal(typeof(int));
+            var nonZero = il.DefineLabel();
+            EmitLoadEaValue(il, context, instruction.Source, M68kOperandSize.Word, applySideEffects: false);
+            EmitLoadUIntConstant(il, 0xFFFF);
+            il.Emit(OpCodes.And);
+            il.Emit(OpCodes.Stloc, divisor);
+            il.Emit(OpCodes.Ldloc, divisor);
+            il.Emit(OpCodes.Brtrue, nonZero);
+
+            EmitPinnedRegisterWriteback(il, context);
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, ExecuteDivideByZero);
+            il.Emit(OpCodes.Br, completedInstructionExit);
+
+            il.MarkLabel(nonZero);
+            EmitLoadDataRegister(il, context, instruction.Register, M68kOperandSize.Long);
+            il.Emit(OpCodes.Stloc, dividend);
+            EmitLoadStatus(il, context);
+            il.Emit(OpCodes.Stloc, status);
+            il.Emit(OpCodes.Ldloc, dividend);
+            il.Emit(OpCodes.Ldloc, divisor);
+            il.Emit(OpCodes.Ldloc, status);
+            il.Emit(signed ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Call, DivideRegister);
+            il.Emit(OpCodes.Stloc, packed);
+            il.Emit(OpCodes.Ldloc, packed);
+            il.Emit(OpCodes.Conv_U4);
+            il.Emit(OpCodes.Stloc, value);
+            EmitStoreDataRegister(il, context, instruction.Register, value, M68kOperandSize.Long);
+            il.Emit(OpCodes.Ldloc, packed);
+            il.Emit(OpCodes.Ldc_I4, 32);
+            il.Emit(OpCodes.Shr_Un);
+            il.Emit(OpCodes.Conv_I4);
+            il.Emit(OpCodes.Stloc, status);
+            EmitStoreStatus(il, context, status);
+            il.Emit(OpCodes.Ldloc, dividend);
+            il.Emit(OpCodes.Ldloc, divisor);
+            il.Emit(signed ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
+            il.Emit(OpCodes.Call, GetDivideCoreCycles);
+            il.Emit(
+                OpCodes.Ldc_I4,
+                M68kJitCore.GetEaOperandCyclesForTiming(instruction.Source, M68kOperandSize.Word));
+            il.Emit(OpCodes.Add);
+            il.Emit(OpCodes.Ldc_I4_4);
+            il.Emit(OpCodes.Add);
+            il.Emit(OpCodes.Stloc, cycles);
+            EmitAddCycles(il, context, cycles);
+            EmitTrue(il);
         }
 
         private static void EmitBra(ILGenerator il, M68kDecodedInstruction instruction, TraceEmitContext context)
@@ -1445,11 +1801,11 @@ namespace Copper68k
                         il.Emit(OpCodes.Conv_I2);
                         il.Emit(OpCodes.Conv_U4);
                         il.Emit(OpCodes.Stloc, extended);
-                        EmitStoreAddressRegister(il, ea.Register, extended);
+                        EmitStoreAddressRegister(il, context, ea.Register, extended);
                     }
                     else
                     {
-                        EmitStoreAddressRegister(il, ea.Register, value);
+                        EmitStoreAddressRegister(il, context, ea.Register, value);
                     }
 
                     return;
@@ -1502,7 +1858,7 @@ namespace Copper68k
                         EmitLoadUIntConstant(il, AddressIncrement(ea.Register, size));
                         il.Emit(OpCodes.Add);
                         il.Emit(OpCodes.Stloc, updated);
-                        EmitStoreAddressRegister(il, ea.Register, updated);
+                        EmitStoreAddressRegister(il, context, ea.Register, updated);
                     }
 
                     il.Emit(OpCodes.Ldloc, address);
@@ -1517,7 +1873,7 @@ namespace Copper68k
                         EmitLoadUIntConstant(il, AddressIncrement(ea.Register, size));
                         il.Emit(OpCodes.Sub);
                         il.Emit(OpCodes.Stloc, address);
-                        EmitStoreAddressRegister(il, ea.Register, address);
+                        EmitStoreAddressRegister(il, context, ea.Register, address);
                     }
                     else
                     {
@@ -1571,9 +1927,17 @@ namespace Copper68k
             int register,
             M68kOperandSize size)
         {
-            il.Emit(OpCodes.Ldloc, context.DataRegisters);
-            il.Emit(OpCodes.Ldc_I4, register);
-            il.Emit(OpCodes.Ldelem_U4);
+            if (context.PinnedDataRegisters[register] is { } pinned)
+            {
+                il.Emit(OpCodes.Ldloc, pinned);
+            }
+            else
+            {
+                il.Emit(OpCodes.Ldloc, context.DataRegisters);
+                il.Emit(OpCodes.Ldc_I4, register);
+                il.Emit(OpCodes.Ldelem_U4);
+            }
+
             var mask = GetMask(size);
             if (mask != uint.MaxValue)
             {
@@ -1584,9 +1948,16 @@ namespace Copper68k
 
         private static void EmitLoadAddressRegister(ILGenerator il, TraceEmitContext context, int register)
         {
-            il.Emit(OpCodes.Ldloc, context.AddressRegisters);
-            il.Emit(OpCodes.Ldc_I4, register);
-            il.Emit(OpCodes.Ldelem_U4);
+            if (context.PinnedAddressRegisters[register] is { } pinned)
+            {
+                il.Emit(OpCodes.Ldloc, pinned);
+            }
+            else
+            {
+                il.Emit(OpCodes.Ldloc, context.AddressRegisters);
+                il.Emit(OpCodes.Ldc_I4, register);
+                il.Emit(OpCodes.Ldelem_U4);
+            }
         }
 
         private static void EmitLoadProgramCounter(ILGenerator il, TraceEmitContext context)
@@ -1602,6 +1973,28 @@ namespace Copper68k
             LocalBuilder value,
             M68kOperandSize size)
         {
+            if (context.PinnedDataRegisters[register] is { } pinned)
+            {
+                if (size == M68kOperandSize.Long)
+                {
+                    il.Emit(OpCodes.Ldloc, value);
+                }
+                else
+                {
+                    var mask = GetMask(size);
+                    il.Emit(OpCodes.Ldloc, pinned);
+                    EmitLoadUIntConstant(il, ~mask);
+                    il.Emit(OpCodes.And);
+                    il.Emit(OpCodes.Ldloc, value);
+                    EmitLoadUIntConstant(il, mask);
+                    il.Emit(OpCodes.And);
+                    il.Emit(OpCodes.Or);
+                }
+
+                il.Emit(OpCodes.Stloc, pinned);
+                return;
+            }
+
             il.Emit(OpCodes.Ldloc, context.DataRegisters);
             il.Emit(OpCodes.Ldc_I4, register);
             if (size == M68kOperandSize.Long)
@@ -1625,8 +2018,19 @@ namespace Copper68k
             il.Emit(OpCodes.Stelem_I4);
         }
 
-        private static void EmitStoreAddressRegister(ILGenerator il, int register, LocalBuilder value)
+        private static void EmitStoreAddressRegister(
+            ILGenerator il,
+            TraceEmitContext context,
+            int register,
+            LocalBuilder value)
         {
+            if (context.PinnedAddressRegisters[register] is { } pinned)
+            {
+                il.Emit(OpCodes.Ldloc, value);
+                il.Emit(OpCodes.Stloc, pinned);
+                return;
+            }
+
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldc_I4, register);
             il.Emit(OpCodes.Ldloc, value);
@@ -1938,6 +2342,14 @@ namespace Copper68k
             il.Emit(OpCodes.Call, CompleteCompiledInstructionCycles);
         }
 
+        private static void EmitAddCycles(ILGenerator il, TraceEmitContext context, LocalBuilder cycles)
+        {
+            _ = context;
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldloc, cycles);
+            il.Emit(OpCodes.Call, CompleteCompiledInstructionCycles);
+        }
+
         private static void EmitLoadUIntConstant(ILGenerator il, uint value)
         {
             il.Emit(OpCodes.Ldc_I4, unchecked((int)value));
@@ -1976,11 +2388,22 @@ namespace Copper68k
 
         internal readonly struct TraceEmitContext
         {
-            public TraceEmitContext(LocalBuilder state, LocalBuilder dataRegisters, LocalBuilder addressRegisters)
+            public TraceEmitContext(
+                LocalBuilder state,
+                LocalBuilder dataRegisters,
+                LocalBuilder addressRegisters,
+                LocalBuilder?[] pinnedDataRegisters,
+                LocalBuilder?[] pinnedAddressRegisters,
+                int dirtyDataRegisterMask,
+                int dirtyAddressRegisterMask)
             {
                 State = state;
                 DataRegisters = dataRegisters;
                 AddressRegisters = addressRegisters;
+                PinnedDataRegisters = pinnedDataRegisters;
+                PinnedAddressRegisters = pinnedAddressRegisters;
+                DirtyDataRegisterMask = dirtyDataRegisterMask;
+                DirtyAddressRegisterMask = dirtyAddressRegisterMask;
             }
 
             public LocalBuilder State { get; }
@@ -1988,6 +2411,14 @@ namespace Copper68k
             public LocalBuilder DataRegisters { get; }
 
             public LocalBuilder AddressRegisters { get; }
+
+            public LocalBuilder?[] PinnedDataRegisters { get; }
+
+            public LocalBuilder?[] PinnedAddressRegisters { get; }
+
+            public int DirtyDataRegisterMask { get; }
+
+            public int DirtyAddressRegisterMask { get; }
         }
     }
 }

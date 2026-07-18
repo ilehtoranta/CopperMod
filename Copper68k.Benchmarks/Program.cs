@@ -52,7 +52,7 @@ if (!workloads.Any(workload => backends.Any(workload.Supports)))
     throw new InvalidOperationException("No selected backend supports the selected workload.");
 }
 
-Console.WriteLine($"Copper68k backend benchmark, warmup={options.WarmupInstructions}, measured={options.Instructions}, repeats={options.Repeats}, Release={IsRelease()}");
+Console.WriteLine($"Copper68k backend benchmark, warmup={options.WarmupInstructions}, measured={options.Instructions}, repeats={options.Repeats}, single-step={options.SingleStep}, Release={IsRelease()}");
 Console.WriteLine("workload\tbackend\trepeat\tinstructions\tms\tinstr/sec\tmips\tcycles\tnative-cycles\tallocated bytes\tchecksum\tcompiled traces\tfallback instr\tpure trace instr\tbus trace instr\tzero-wait reads\tzero-wait writes");
 
 foreach (var workload in workloads)
@@ -73,7 +73,7 @@ foreach (var workload in workloads)
 static BenchmarkResult RunBenchmark(BenchmarkWorkload workload, BenchmarkBackend backend, BenchmarkOptions options)
 {
     using var run = CreateRun(workload, backend);
-    WarmUp(run.Cpu, options.WarmupInstructions);
+    WarmUp(run.Cpu, options.WarmupInstructions, options.SingleStep);
     ResetForMeasurement(run, workload);
 
     GC.Collect();
@@ -84,7 +84,7 @@ static BenchmarkResult RunBenchmark(BenchmarkWorkload workload, BenchmarkBackend
     var startNativeCycles = run.Cpu.State.NativeCycles;
     var beforeBytes = GC.GetAllocatedBytesForCurrentThread();
     var start = Stopwatch.GetTimestamp();
-    ExecuteMany(run.Cpu, options.Instructions);
+    ExecuteMany(run.Cpu, options.Instructions, options.SingleStep);
     var elapsed = Stopwatch.GetElapsedTime(start);
     var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeBytes;
     var counters = run.Cpu is M68kJitCore jit ? jit.Counters : default;
@@ -147,16 +147,16 @@ static BenchmarkRun CreateRun(BenchmarkWorkload workload, BenchmarkBackend backe
     return new BenchmarkRun(cpu, bus, backend.Name, bus.CaptureSnapshot());
 }
 
-static void WarmUp(IM68kCore cpu, int instructions)
+static void WarmUp(IM68kCore cpu, int instructions, bool singleStep)
 {
-    ExecuteMany(cpu, instructions);
+    ExecuteMany(cpu, instructions, singleStep);
     if (cpu is M68kJitCore jit)
     {
-        WarmUpJitUntilStable(jit);
+        WarmUpJitUntilStable(jit, singleStep);
     }
 }
 
-static void WarmUpJitUntilStable(M68kJitCore jit)
+static void WarmUpJitUntilStable(M68kJitCore jit, bool singleStep)
 {
     const int chunkInstructions = 1_000_000;
     const int minInstructions = 10_000_000;
@@ -170,7 +170,7 @@ static void WarmUpJitUntilStable(M68kJitCore jit)
         chunk < maxChunks && (executedInstructions < minInstructions || stableChunks < requiredStableChunks);
         chunk++)
     {
-        ExecuteMany(jit, chunkInstructions);
+        ExecuteMany(jit, chunkInstructions, singleStep);
         executedInstructions += chunkInstructions;
         var current = JitCompilationSnapshot.Capture(jit);
         if (current.Equals(previous) && jit.AsyncCompilationIdle)
@@ -185,7 +185,22 @@ static void WarmUpJitUntilStable(M68kJitCore jit)
     }
 }
 
-static void ExecuteMany(IM68kCore cpu, int instructions)
+static void ExecuteMany(IM68kCore cpu, int instructions, bool singleStep)
+{
+    if (singleStep)
+    {
+        for (var i = 0; i < instructions; i++)
+        {
+            cpu.ExecuteInstruction();
+        }
+
+        return;
+    }
+
+    ExecuteManyBatched(cpu, instructions);
+}
+
+static void ExecuteManyBatched(IM68kCore cpu, int instructions)
 {
     if (cpu is IM68kBatchCore batch)
     {
@@ -227,6 +242,10 @@ static BenchmarkBackend[] CreateBackends()
                 enableAdvancedFastPath: false),
             IncludeByDefault: false),
         new BenchmarkBackend("JitM68000", bus => M68kJitCore.CreateM68000(bus)),
+        new BenchmarkBackend(
+            "JitM68000Classic",
+            bus => new M68kJitCore(bus, enableV2: false),
+            IncludeByDefault: false),
         new BenchmarkBackend("JitM68040", bus => M68kJitCore.CreateM68040(bus))
     ];
 
@@ -275,6 +294,141 @@ static BenchmarkWorkload[] CreateWorkloads()
                 state.D[1] = 0x0101_0101;
             },
             1 << 20),
+        new BenchmarkWorkload(
+            "directcpu-clr-loop",
+            [
+                0x70FF, // MOVEQ #-1,D0
+                0x4200, // CLR.B D0
+                0x4600, // NOT.B D0
+                0x4240, // CLR.W D0
+                0x4640, // NOT.W D0
+                0x4280, // CLR.L D0
+                0x4680, // NOT.L D0
+                0x60F2  // BRA.S loop
+            ],
+            SetupNone,
+            _ => { },
+            1 << 20,
+            SupportsBackend: backend => backend.Name.Contains("M68000", StringComparison.Ordinal),
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "directcpu-immediate-shift-loop",
+            [
+                0xE380, // ASL.L #1,D0
+                0xE440, // ASR.W #2,D0
+                0xE709, // LSL.B #3,D1
+                0xE889, // LSR.L #4,D1
+                0xEB5A, // ROL.W #5,D2
+                0xEC1A, // ROR.B #6,D2
+                0xEF93, // ROXL.L #7,D3
+                0xE053, // ROXR.W #8,D3
+                0x60EE  // BRA.S loop
+            ],
+            SetupNone,
+            state =>
+            {
+                state.D[0] = 0x8123_4567;
+                state.D[1] = 0x89AB_CDEF;
+                state.D[2] = 0x1357_9BDF;
+                state.D[3] = 0x2468_ACE0;
+                state.StatusRegister |= M68kCpuState.Extend;
+            },
+            1 << 20,
+            SupportsBackend: backend => backend.Name.Contains("M68000", StringComparison.Ordinal),
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "directcpu-register-bit-loop",
+            [
+                0x0800, 0x001F, // BTST #31,D0
+                0x0840, 0x0000, // BCHG #0,D0
+                0x0881, 0x0010, // BCLR #16,D1
+                0x08C1, 0x000F, // BSET #15,D1
+                0x0500, // BTST D2,D0
+                0x0740, // BCHG D3,D0
+                0x0981, // BCLR D4,D1
+                0x0BC1, // BSET D5,D1
+                0x60E6  // BRA.S loop
+            ],
+            SetupNone,
+            state =>
+            {
+                state.D[0] = 0x8000_0001;
+                state.D[1] = 0x0001_0000;
+                state.D[2] = 63;
+                state.D[3] = 32;
+                state.D[4] = 16;
+                state.D[5] = 15;
+            },
+            1 << 20,
+            SupportsBackend: backend => backend.Name.Contains("M68000", StringComparison.Ordinal),
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "directcpu-address-register-loop",
+            [
+                0x2040,             // MOVEA.L D0,A0
+                0x327C, 0x7FFF,     // MOVEA.W #$7FFF,A1
+                0x247C, 0x0002, 0x0000, // MOVEA.L #$00020000,A2
+                0xB1C0,             // CMPA.L D0,A0
+                0xB2C1,             // CMPA.W D1,A1
+                0x47E8, 0x0004,     // LEA 4(A0),A3
+                0x49D3,             // LEA (A3),A4
+                0x5288,             // ADDQ.L #1,A0
+                0x5388,             // SUBQ.L #1,A0
+                0x60E4              // BRA.S loop
+            ],
+            SetupNone,
+            state =>
+            {
+                state.D[0] = 0x0001_0000;
+                state.D[1] = 0x0000_7FFF;
+            },
+            1 << 20,
+            SupportsBackend: backend => backend.Name.Contains("M68000", StringComparison.Ordinal),
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "directcpu-multiply-loop",
+            [
+                0x7203,       // MOVEQ #3,D1
+                0xC2C0,       // MULU.W D0,D1
+                0x76FD,       // MOVEQ #-3,D3
+                0xC7C2,       // MULS.W D2,D3
+                0x7805,       // MOVEQ #5,D4
+                0xC8FC, 0x0007, // MULU.W #7,D4
+                0x7AFB,       // MOVEQ #-5,D5
+                0xCBFC, 0xFFF9, // MULS.W #-7,D5
+                0x60EA        // BRA.S loop
+            ],
+            SetupNone,
+            state =>
+            {
+                state.D[0] = 0x1234;
+                state.D[2] = 0xFFFD;
+            },
+            1 << 20,
+            SupportsBackend: backend => backend.Name.Contains("M68000", StringComparison.Ordinal),
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "directcpu-divide-loop",
+            [
+                0x7264,       // MOVEQ #100,D1
+                0x82C0,       // DIVU.W D0,D1
+                0x769C,       // MOVEQ #-100,D3
+                0x87C2,       // DIVS.W D2,D3
+                0x7864,       // MOVEQ #100,D4
+                0x88FC, 0x0007, // DIVU.W #7,D4
+                0x7A9C,       // MOVEQ #-100,D5
+                0x8BFC, 0xFFF9, // DIVS.W #-7,D5
+                0x60EA        // BRA.S loop
+            ],
+            SetupNone,
+            state =>
+            {
+                state.D[0] = 3;
+                state.D[2] = 0xFFFD;
+            },
+            1 << 20,
+            SupportsBackend: backend => backend.Name.Contains("M68000", StringComparison.Ordinal),
+            IncludeByDefault: false),
         new BenchmarkWorkload(
             "fpu-register-arithmetic-loop",
             [
@@ -506,17 +660,19 @@ internal sealed record BenchmarkOptions(
     string? Backend,
     string? Workload,
     bool Dispatch,
-    bool ExtF80)
+    bool ExtF80,
+    bool SingleStep)
 {
     public static BenchmarkOptions Parse(string[] args)
     {
         var warmup = 500_000;
         var instructions = 5_000_000;
-        var repeats = 3;
+        var repeats = 6;
         string? backend = null;
         string? workload = null;
         var dispatch = false;
         var extF80 = false;
+        var singleStep = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -527,6 +683,9 @@ internal sealed record BenchmarkOptions(
                     break;
                 case "--extf80":
                     extF80 = true;
+                    break;
+                case "--single-step":
+                    singleStep = true;
                     break;
                 case "--warmup":
                     warmup = ParseInt(args, ref i);
@@ -545,7 +704,7 @@ internal sealed record BenchmarkOptions(
                     break;
                 case "--help":
                 case "-h":
-                    Console.WriteLine("Usage: dotnet run -c Release --project Copper68k.Benchmarks -- [--dispatch|--extf80] [--warmup N] [--instructions N] [--repeats N] [--backend text] [--workload text]");
+                    Console.WriteLine("Usage: dotnet run -c Release --project Copper68k.Benchmarks -- [--dispatch|--extf80] [--single-step] [--warmup N] [--instructions N] [--repeats N] [--backend text] [--workload text]");
                     Environment.Exit(0);
                     break;
                 default:
@@ -553,7 +712,7 @@ internal sealed record BenchmarkOptions(
             }
         }
 
-        return new BenchmarkOptions(warmup, instructions, repeats, backend, workload, dispatch, extF80);
+        return new BenchmarkOptions(warmup, instructions, repeats, backend, workload, dispatch, extF80, singleStep);
     }
 
     private static int ParseInt(string[] args, ref int index)
@@ -892,15 +1051,19 @@ internal sealed class BenchmarkBoundary :
 internal sealed class BenchmarkBus :
     IM68kBus,
     IM68kCodeReader,
+    IM68kFastMemoryBus,
+    IM68kFixedPlanRunBus,
     IM68kJitBus,
     IM68kJitFastMemoryBus,
     IM68kJitTimedMemoryBus,
+    IM68kJitDirectRamBus,
     IM68kFixedPhysicalAddressMap
 {
     private const int CodeGenerationPageShift = 8;
     private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
     private readonly byte[] _memory;
     private readonly uint[] _codePageGenerations;
+    private readonly uint[][] _fixedPlanRunWindowGenerations;
 
     public BenchmarkBus(int memorySize)
     {
@@ -911,6 +1074,11 @@ internal sealed class BenchmarkBus :
 
         _memory = new byte[memorySize];
         _codePageGenerations = new uint[Math.Max(1, memorySize >> CodeGenerationPageShift)];
+        _fixedPlanRunWindowGenerations = Enumerable.Range(
+                0,
+                Math.Max(1, memorySize >> CodeGenerationPageShift))
+            .Select(_ => new[] { 1u })
+            .ToArray();
     }
 
     public BenchmarkBusSnapshot CaptureSnapshot()
@@ -1008,6 +1176,134 @@ internal sealed class BenchmarkBus :
 
     public ushort ReadHostWord(uint address)
         => ReadWordValue(address);
+
+    public bool TryReadFastByte(
+        uint address,
+        M68kBusAccessKind accessKind,
+        out byte value)
+    {
+        _ = accessKind;
+        if (!IsRangeMapped(address, 1))
+        {
+            value = 0;
+            return false;
+        }
+
+        value = _memory[Normalize(address)];
+        return true;
+    }
+
+    public bool TryReadFastWord(
+        uint address,
+        M68kBusAccessKind accessKind,
+        out ushort value)
+    {
+        _ = accessKind;
+        if (!IsRangeMapped(address, 2))
+        {
+            value = 0;
+            return false;
+        }
+
+        value = ReadWordValue(address);
+        return true;
+    }
+
+    public bool TryReadFastLong(
+        uint address,
+        M68kBusAccessKind accessKind,
+        out uint value)
+    {
+        _ = accessKind;
+        if (!IsRangeMapped(address, 4))
+        {
+            value = 0;
+            return false;
+        }
+
+        value = ReadLongValue(address);
+        return true;
+    }
+
+    public bool TryWriteFastByte(
+        uint address,
+        byte value,
+        M68kBusAccessKind accessKind)
+    {
+        _ = accessKind;
+        if (!IsRangeMapped(address, 1))
+        {
+            return false;
+        }
+
+        _memory[Normalize(address)] = value;
+        InvalidateCode(address, 1);
+        return true;
+    }
+
+    public bool TryWriteFastWord(
+        uint address,
+        ushort value,
+        M68kBusAccessKind accessKind)
+    {
+        _ = accessKind;
+        if (!IsRangeMapped(address, 2))
+        {
+            return false;
+        }
+
+        WriteWordValue(address, value);
+        InvalidateCode(address, 2);
+        return true;
+    }
+
+    public bool TryWriteFastLong(
+        uint address,
+        uint value,
+        M68kBusAccessKind accessKind)
+    {
+        _ = accessKind;
+        if (!IsRangeMapped(address, 4))
+        {
+            return false;
+        }
+
+        WriteLongValue(address, value);
+        InvalidateCode(address, 4);
+        return true;
+    }
+
+    public bool TryGetFixedPlanRunWindow(uint address, out M68kFixedPlanRunWindow window)
+    {
+        const uint windowSize = 256;
+        window = default;
+        if ((address & 1) != 0 || !IsRangeMapped(address, 2))
+        {
+            return false;
+        }
+
+        var startAddress = address & ~(windowSize - 1);
+        var endAddress = Math.Min(
+            startAddress + windowSize,
+            (uint)_memory.Length);
+        var generationSource = _fixedPlanRunWindowGenerations[
+            Normalize(startAddress) >> CodeGenerationPageShift];
+        var fetchWindow = new M68kInstructionFetchWindow(
+            _memory,
+            Normalize(startAddress),
+            startAddress,
+            endAddress,
+            (uint)(_memory.Length - 1),
+            0,
+            generationSource,
+            generationSource[0]);
+        window = new M68kFixedPlanRunWindow(
+            in fetchWindow,
+            readyCycleOffset: 0,
+            nextBusCycleOffset: 0,
+            deferredBatchEligible: false);
+        return true;
+    }
 
     public bool IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind)
     {
@@ -1142,6 +1438,42 @@ internal sealed class BenchmarkBus :
         return TryGetJitMemory(physicalAddress, byteCount, out memory, out offset);
     }
 
+    public bool TryGetJitDirectRamMap(out M68kJitDirectRamMap map)
+    {
+        const int bankShift = 20;
+        var bankKinds = new byte[1 << (24 - bankShift)];
+        var bankOffsets = new int[bankKinds.Length];
+        Array.Fill(bankKinds, (byte)M68kJitDirectRamBankKind.RealFast);
+        map = new M68kJitDirectRamMap(
+            bankKinds,
+            bankOffsets,
+            [],
+            _memory,
+            bankShift,
+            realFastIsZeroWait: true);
+        return true;
+    }
+
+    public void ReplayJitPseudoFastAccesses(ref long cycle, int accessCount, ulong longAccessBits)
+    {
+        _ = cycle;
+        _ = accessCount;
+        _ = longAccessBits;
+    }
+
+    public void ReplayJitMove16PseudoFastAccesses(
+        ref long retireCycle,
+        bool sourcePseudoFast,
+        bool destinationPseudoFast)
+    {
+        _ = retireCycle;
+        _ = sourcePseudoFast;
+        _ = destinationPseudoFast;
+    }
+
+    public void CompleteJitDirectRamWrite(uint physicalAddress, int byteCount)
+        => InvalidateCode(physicalAddress, byteCount);
+
     public void CompleteJitZeroWaitWrite(uint physicalAddress, int byteCount)
         => InvalidateCode(physicalAddress, byteCount);
 
@@ -1223,6 +1555,13 @@ internal sealed class BenchmarkBus :
         for (var page = startPage; page <= endPage; page++)
         {
             _codePageGenerations[page]++;
+        }
+
+        for (var page = startPage; page <= endPage; page++)
+        {
+            var generationSource = _fixedPlanRunWindowGenerations[page];
+            var generation = generationSource[0] + 1u;
+            generationSource[0] = generation == 0 ? 1u : generation;
         }
 
         JitCodeRangeWritten?.Invoke(address, byteCount);

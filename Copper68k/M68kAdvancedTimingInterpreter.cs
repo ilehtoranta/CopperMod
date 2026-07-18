@@ -2281,7 +2281,7 @@ namespace Copper68k
                 return false;
             }
 
-            return !_bus.HasHostTrapStub(address);
+            return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

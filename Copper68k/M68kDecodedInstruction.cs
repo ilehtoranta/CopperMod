@@ -252,8 +252,6 @@ namespace Copper68k
 
     internal interface IM68kCodeReader
     {
-        bool HasHostTrapStub(uint address);
-
         ushort ReadHostWord(uint address);
     }
 
@@ -299,13 +297,13 @@ namespace Copper68k
                     return false;
                 }
 
-                if (codeReader.HasHostTrapStub(programCounter))
+                var opcode = codeReader.ReadHostWord(programCounter);
+                if (opcode == 0xFF00)
                 {
                     reason = M68kJitBailoutReason.HostTrap;
                     return false;
                 }
 
-                var opcode = codeReader.ReadHostWord(programCounter);
                 if ((opcode & 0xF000) == 0xF000 && cpuModel == M68kJitCpuModel.M68040)
                 {
                     return TryDecodeM68040LineF(programCounter, opcode, new DecodeCursor(codeReader, programCounter + 2), out instruction);

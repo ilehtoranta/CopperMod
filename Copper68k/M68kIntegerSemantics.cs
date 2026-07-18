@@ -264,6 +264,40 @@ namespace Copper68k
             return new M68kShiftResult(value & mask, carry, carry, extendChanged: type != 3, overflow);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static ulong ShiftRegister(uint value, int status, int count, int variant, int sizeValue)
+        {
+            var size = (M68kOperandSize)sizeValue;
+            var shifted = Shift(
+                value,
+                count,
+                size,
+                variant & 3,
+                (variant & 4) != 0,
+                (status & M68kCpuState.Extend) != 0);
+            status &= ~(shifted.ExtendChanged ? ArithmeticFlags : LogicFlags);
+            status |= GetNegativeZeroFlags(shifted.Value, size);
+            if (shifted.Carry)
+            {
+                status |= M68kCpuState.Carry;
+                if (shifted.ExtendChanged)
+                {
+                    status |= M68kCpuState.Extend;
+                }
+            }
+
+            if (shifted.Overflow)
+            {
+                status |= M68kCpuState.Overflow;
+            }
+
+            return ((ulong)(ushort)status << 32) | shifted.Value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static int GetRegisterShiftCycles(M68kOperandSize size, int count)
+            => (size == M68kOperandSize.Long ? 8 : 6) + (count * 2);
+
         internal static byte AddBcdByte(byte destination, byte source, int extend, out bool carry)
             => AddBcdByte(destination, source, extend, out carry, out _);
 
@@ -346,6 +380,51 @@ namespace Copper68k
                 ? GetSignedDivideCoreCycles(unchecked((int)dividend), unchecked((short)divisor))
                 : GetUnsignedDivideCoreCycles(dividend, divisor);
         }
+
+        internal static ulong DivideRegister(uint dividend, uint divisor, int status, bool signed)
+        {
+            if (!signed)
+            {
+                var quotient = dividend / divisor;
+                var remainder = dividend % divisor;
+                if ((quotient & 0xFFFF_0000) != 0)
+                {
+                    return PackDivideResult(dividend, status | M68kCpuState.Overflow);
+                }
+
+                var result = ((remainder & 0xFFFF) << 16) | (quotient & 0xFFFF);
+                status = SetDivideSuccessFlags(status, quotient);
+                return PackDivideResult(result, status);
+            }
+
+            var signedDivisor = unchecked((short)divisor);
+            var signedDividend = unchecked((int)dividend);
+            var signedQuotient = (long)signedDividend / signedDivisor;
+            var signedRemainder = (long)signedDividend % signedDivisor;
+            if (signedQuotient < short.MinValue || signedQuotient > short.MaxValue)
+            {
+                return PackDivideResult(dividend, status | M68kCpuState.Overflow);
+            }
+
+            var signedQuotientBits = unchecked((uint)(int)signedQuotient);
+            var signedRemainderBits = unchecked((uint)(int)signedRemainder);
+            var signedResult = ((signedRemainderBits & 0xFFFF) << 16) | (signedQuotientBits & 0xFFFF);
+            status = SetDivideSuccessFlags(status, signedQuotientBits);
+            return PackDivideResult(signedResult, status);
+        }
+
+        private static int SetDivideSuccessFlags(int status, uint quotient)
+        {
+            const int logicFlags = M68kCpuState.Negative |
+                M68kCpuState.Zero |
+                M68kCpuState.Overflow |
+                M68kCpuState.Carry;
+            status &= ~logicFlags;
+            return status | GetNegativeZeroFlags(quotient, M68kOperandSize.Word);
+        }
+
+        private static ulong PackDivideResult(uint value, int status)
+            => ((ulong)(uint)status << 32) | value;
 
         private static int GetUnsignedDivideCoreCycles(uint dividend, ushort divisor)
         {

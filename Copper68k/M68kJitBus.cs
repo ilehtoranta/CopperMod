@@ -21,13 +21,15 @@ namespace Copper68k
             int[] bankOffsets,
             byte[] pseudoFastMemory,
             byte[] realFastMemory,
-            int bankShift)
+            int bankShift,
+            bool realFastIsZeroWait)
         {
             BankKinds = bankKinds ?? throw new ArgumentNullException(nameof(bankKinds));
             BankOffsets = bankOffsets ?? throw new ArgumentNullException(nameof(bankOffsets));
             PseudoFastMemory = pseudoFastMemory ?? throw new ArgumentNullException(nameof(pseudoFastMemory));
             RealFastMemory = realFastMemory ?? throw new ArgumentNullException(nameof(realFastMemory));
             BankShift = bankShift;
+            RealFastIsZeroWait = realFastIsZeroWait;
         }
 
         public byte[] BankKinds { get; }
@@ -39,6 +41,11 @@ namespace Copper68k
         public byte[] RealFastMemory { get; }
 
         public int BankShift { get; }
+
+        /// <summary>
+        /// Gets whether the real-fast banks can be accessed without invoking bus timing.
+        /// </summary>
+        public bool RealFastIsZeroWait { get; }
 
         public bool IsValid =>
             BankShift > 0 &&

@@ -15,6 +15,8 @@ internal sealed class Copper68kTestBus : IM68kBus, IM68kCodeReader
 
 	public int ExternalResetCount { get; private set; }
 
+	public int HostTrapProbeCount { get; private set; }
+
 	public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
 	{
 		_ = cycle;
@@ -58,7 +60,10 @@ internal sealed class Copper68kTestBus : IM68kBus, IM68kCodeReader
 	}
 
 	public bool HasHostTrapStub(uint address)
-		=> _hostTrapStubs.ContainsKey(address);
+	{
+		HostTrapProbeCount++;
+		return _hostTrapStubs.ContainsKey(address);
+	}
 
 	public ushort ReadHostWord(uint address)
 		=> ReadWord(address);
@@ -82,7 +87,10 @@ internal sealed class Copper68kTestBus : IM68kBus, IM68kCodeReader
 	}
 
 	public void RegisterHostTrapStub(uint address, Action<M68kCpuState> handler)
-		=> _hostTrapStubs[address] = handler;
+	{
+		_hostTrapStubs[address] = handler;
+		WriteWords(address, 0xFF00, 0x0001);
+	}
 
 	public void WriteWords(uint address, params ushort[] words)
 	{

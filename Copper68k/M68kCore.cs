@@ -454,6 +454,42 @@ namespace Copper68k
         void CommitInstructionFetchWindowWord(in M68kInstructionFetchWindow window, uint address, ref long cycle);
     }
 
+    internal readonly struct M68kFixedPlanRunWindow
+    {
+        public M68kFixedPlanRunWindow(
+            in M68kInstructionFetchWindow fetchWindow,
+            int readyCycleOffset,
+            int nextBusCycleOffset,
+            bool deferredBatchEligible)
+        {
+            FetchWindow = fetchWindow;
+            ReadyCycleOffset = readyCycleOffset;
+            NextBusCycleOffset = nextBusCycleOffset;
+            DeferredBatchEligible = deferredBatchEligible;
+        }
+
+        public M68kInstructionFetchWindow FetchWindow { get; }
+
+        public int ReadyCycleOffset { get; }
+
+        public int NextBusCycleOffset { get; }
+
+        public bool DeferredBatchEligible { get; }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool ContainsWord(uint address)
+            => FetchWindow.ContainsWord(address);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public ushort ReadWord(uint address)
+            => FetchWindow.ReadWord(address);
+    }
+
+    internal interface IM68kFixedPlanRunBus
+    {
+        bool TryGetFixedPlanRunWindow(uint address, out M68kFixedPlanRunWindow window);
+    }
+
     internal enum M68kTraceBatchWakeSource
     {
         Unknown = 0,
@@ -1545,6 +1581,104 @@ namespace Copper68k
             public bool SkipRetireTopUp;
         }
 
+        // Fixed-plan batches keep the frequently-mutated pipeline/timing state
+        // in one stack local. Architectural registers and SR remain live in
+        // M68kCpuState; this context is committed on every batch exit.
+        private struct M68000FixedBatchContext
+        {
+            public long Cycles;
+            public uint ProgramCounter;
+            public ushort LastOpcode;
+            public uint LastInstructionProgramCounter;
+
+            public bool InstructionCycleFloorActive;
+            public long InstructionStart;
+            public long InstructionFloor;
+            public int PendingInternalCycles;
+
+            public long NextBusCycle;
+            public long ReadyBusCycle;
+            public long RetireBusCycle;
+            public long ExceptionEntryNotBeforeCycle;
+
+            public uint PrefetchAddress;
+            public ushort PrefetchWord0;
+            public ushort PrefetchWord1;
+            public long PrefetchReadyCycle0;
+            public long PrefetchReadyCycle1;
+            public bool PrefetchDeferredBatchEligible0;
+            public bool PrefetchDeferredBatchEligible1;
+            public int PrefetchCount;
+            public bool HasPendingPrefetch;
+            public uint PendingPrefetchAddress;
+            public long PendingPrefetchEarliestCycle;
+            public bool ConsumeWithoutPrefetch;
+            public bool SkipRetirePrefetchTopUp;
+
+            public uint ActiveInstructionProgramCounter;
+            public long InstructionEntryBusCycle;
+            public int InstructionEntryPrefetchCount;
+            public long InstructionEntryReadyCycle0;
+            public long InstructionEntryReadyCycle1;
+            public long InstructionInterruptSampleCycle;
+            public long LastInterruptSampleCycle;
+            public int NextCpuDataAccessDelayCycles;
+
+            public bool DirectRunFetch;
+            public M68kFixedPlanRunWindow DirectRunWindow;
+        }
+
+        private struct M68000FixedPlanRunSlot
+        {
+            public bool Valid;
+            public bool FastMemory;
+            public uint EntryProgramCounter;
+            public ushort EntryWord0;
+            public ushort EntryWord1;
+            public uint WindowStartAddress;
+            public uint WindowEndAddressExclusive;
+            public byte[]? WindowMemory;
+            public int WindowMemoryOffset;
+            public int WindowBusTag;
+            public uint[]? GenerationSource;
+            public uint Generation;
+            public byte InstructionCount;
+            public byte LoopStartIndex;
+        }
+
+        private struct M68000FixedPlanRunInstruction
+        {
+            public uint ProgramCounter;
+            public ushort Opcode;
+            public ushort ExtensionWord0;
+            public ushort ExtensionWord1;
+            public byte WordLength;
+            public M68kOpcodePlanKind Kind;
+            public M68kPackedOpcodePlan PackedPlan;
+            public byte NextIndex;
+        }
+
+        private struct M68000FixedPlanRunRegisters
+        {
+            public uint D0;
+            public uint D1;
+            public uint D2;
+            public uint D3;
+            public uint D4;
+            public uint D5;
+            public uint D6;
+            public uint D7;
+            public uint A0;
+            public uint A1;
+            public uint A2;
+            public uint A3;
+            public uint A4;
+            public uint A5;
+            public uint A6;
+            public uint A7;
+            public ushort StatusRegister;
+        }
+
         private enum PlannedRetireMode : byte
         {
             Unsupported = 0,
@@ -1558,10 +1692,16 @@ namespace Copper68k
         // instruction poll. A transition on the setup boundary is staged and
         // becomes serviceable after the following instruction.
         private const int M68000InterruptSetupCycles = 4;
+        private const int M68000DbccExceptionTailAfterCommittedFetchCycles = 4;
+        private const int FixedPlanRunCacheSlotCount = 256;
+        private const int FixedPlanRunMaximumInstructions = 32;
+        private const byte FixedPlanRunExitIndex = byte.MaxValue;
         private const uint SubroutineSentinel = 0xFFFF_FFFC;
         private readonly IM68kBus _bus;
         private readonly TBus _typedBus;
         private readonly IM68kInstructionFetchWindowBus? _instructionFetchWindowBus;
+        private readonly IM68kFixedPlanRunBus? _fixedPlanRunBus;
+        private readonly IM68kFastMemoryBus? _fastMemoryBus;
         private readonly IM68kDeferredCpuInstructionTiming? _deferredCpuInstructionTiming;
         private readonly IM68kCpuBusPhaseTrace? _cpuBusPhaseTrace;
         private readonly IM68000BusCycleTiming? _m68000BusCycleTiming;
@@ -1571,6 +1711,8 @@ namespace Copper68k
         private readonly M68000ExecutionTimeline _executionTimeline = new();
         private readonly M68000BusTimeline _busTimeline = new();
         private readonly M68000PrefetchQueue _prefetchQueue = new();
+        private readonly M68000FixedPlanRunSlot[]? _fixedPlanRunSlots;
+        private readonly M68000FixedPlanRunInstruction[]? _fixedPlanRunInstructions;
         private byte _deferredCpuBusBatchAdmissionRetryInstructions;
         private uint _activeInstructionProgramCounter;
         private uint _dataAccessStackedProgramCounter;
@@ -1649,6 +1791,10 @@ namespace Copper68k
             _instructionFetchWindowBus = enableInstructionFetchWindow
                 ? bus as IM68kInstructionFetchWindowBus
                 : null;
+            _fixedPlanRunBus = enableInstructionFetchWindow
+                ? bus as IM68kFixedPlanRunBus
+                : null;
+            _fastMemoryBus = bus as IM68kFastMemoryBus;
             _deferredCpuInstructionTiming = bus as IM68kDeferredCpuInstructionTiming;
             _m68000BusCycleTiming = bus as IM68000BusCycleTiming;
             _cpuBusPhaseTrace = enableCpuBusPhaseTrace &&
@@ -1659,6 +1805,12 @@ namespace Copper68k
             State = state ?? throw new ArgumentNullException(nameof(state));
             _instructionFrequency = instructionFrequency ?? new M68kInstructionFrequencyMatrix();
             _opcodePlanDispatch = enableOpcodePlan ? opcodePlanDispatch : M68kOpcodePlanDispatch.Scalar;
+            if (_fixedPlanRunBus != null && _opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar)
+            {
+                _fixedPlanRunSlots = new M68000FixedPlanRunSlot[FixedPlanRunCacheSlotCount];
+                _fixedPlanRunInstructions = new M68000FixedPlanRunInstruction[
+                    FixedPlanRunCacheSlotCount * FixedPlanRunMaximumInstructions];
+            }
         }
 
         public M68kCpuState State { get; }
@@ -1733,7 +1885,27 @@ namespace Copper68k
             ArgumentNullException.ThrowIfNull(boundary);
             var instructions = 0;
             var busAccessBatchBoundary = boundary as IM68kBusAccessTraceBatchBoundary;
+            var pureCpuTraceBatchBoundary = boundary as IM68kPureCpuTraceBatchBoundary;
             var fastBatchAdmissionPending =
+                _opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar &&
+                targetCycle.HasValue &&
+                !_instructionFrequency.Enabled &&
+                busAccessBatchBoundary != null;
+            var fixedPlanRunAdmissionEnabled =
+                _fixedPlanRunBus != null &&
+                _fixedPlanRunSlots != null &&
+                _fixedPlanRunInstructions != null &&
+                _cpuBusPhaseTrace == null &&
+                _opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar &&
+                targetCycle.HasValue &&
+                !_instructionFrequency.Enabled &&
+                pureCpuTraceBatchBoundary != null;
+            var fastMemoryRunAdmissionEnabled =
+                _fixedPlanRunBus != null &&
+                _fastMemoryBus != null &&
+                _fixedPlanRunSlots != null &&
+                _fixedPlanRunInstructions != null &&
+                _cpuBusPhaseTrace == null &&
                 _opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar &&
                 targetCycle.HasValue &&
                 !_instructionFrequency.Enabled &&
@@ -1766,6 +1938,34 @@ namespace Copper68k
                     continue;
                 }
 
+                if (fixedPlanRunAdmissionEnabled &&
+                    _prefetchWord0 == 0x60FE &&
+                    _prefetchCount > 0 &&
+                    _prefetchAddress == State.ProgramCounter &&
+                    TryExecuteCachedFixedPlanRun(
+                        maxInstructions - instructions,
+                        targetCycle,
+                        pureCpuTraceBatchBoundary!,
+                        out var cachedSelfBranchInstructions))
+                {
+                    instructions += cachedSelfBranchInstructions;
+                    continue;
+                }
+
+                if (fastMemoryRunAdmissionEnabled &&
+                    _prefetchCount == 2 &&
+                    _prefetchAddress == State.ProgramCounter &&
+                    IsFastMemoryRunEntryPair(_prefetchWord0, _prefetchWord1) &&
+                    TryExecuteCachedFastMemoryRun(
+                        maxInstructions - instructions,
+                        targetCycle,
+                        busAccessBatchBoundary!,
+                        out var cachedFastMemoryInstructions))
+                {
+                    instructions += cachedFastMemoryInstructions;
+                    continue;
+                }
+
                 if (fastBatchAdmissionPending &&
                     _prefetchWord0 == 0x60FE &&
                     _prefetchCount > 0 &&
@@ -1780,17 +1980,45 @@ namespace Copper68k
                     continue;
                 }
 
-                if (fastBatchAdmissionPending &&
+                if ((fixedPlanRunAdmissionEnabled || fastBatchAdmissionPending) &&
                     _prefetchCount == 2 &&
-                    _prefetchAddress == State.ProgramCounter &&
-                    TryExecuteFixedPlanBatch(
-                    maxInstructions - instructions,
-                    targetCycle,
-                    busAccessBatchBoundary!,
-                    out var fixedPlanInstructions))
+                    _prefetchAddress == State.ProgramCounter)
                 {
-                    instructions += fixedPlanInstructions;
-                    continue;
+                    if (fixedPlanRunAdmissionEnabled &&
+                        !_hasPendingPrefetch &&
+                        IsFixedPlanRunEntryPair(_prefetchWord0, _prefetchWord1) &&
+                        TryExecuteCachedFixedPlanRun(
+                            maxInstructions - instructions,
+                            targetCycle,
+                            pureCpuTraceBatchBoundary!,
+                            out var cachedRunInstructions))
+                    {
+                        instructions += cachedRunInstructions;
+                        continue;
+                    }
+
+                    // Cache admission is deliberately one-shot until a cached
+                    // run has actually executed. Hardware-bound execution
+                    // re-enters this method at the next boundary, while
+                    // generic or memory-heavy batches avoid paying a probe on
+                    // every unsupported instruction.
+                    if (!_hasPendingPrefetch)
+                    {
+                        fixedPlanRunAdmissionEnabled = false;
+                    }
+
+                    if (fastBatchAdmissionPending &&
+                        TryExecuteFixedPlanBatch(
+                            maxInstructions - instructions,
+                            targetCycle,
+                            busAccessBatchBoundary!,
+                            out var fixedPlanInstructions))
+                    {
+                        instructions += fixedPlanInstructions;
+                        continue;
+                    }
+
+                    fastBatchAdmissionPending = false;
                 }
 
                 if (fastBatchAdmissionPending &&
@@ -2132,6 +2360,1616 @@ namespace Copper68k
             return true;
         }
 
+        private bool TryExecuteCachedFixedPlanRun(
+            int maxInstructions,
+            long? targetCycle,
+            IM68kPureCpuTraceBatchBoundary batchBoundary,
+            out int executedInstructions)
+        {
+            executedInstructions = 0;
+            if (maxInstructions <= 1 ||
+                !targetCycle.HasValue ||
+                _hasPendingPrefetch ||
+                (!HasQueuedFixedPlanPair() && !IsQueuedShortSelfBranch()) ||
+                !IsFixedPlanRunEntryPair(_prefetchWord0, _prefetchWord1))
+            {
+                return false;
+            }
+
+            var previousCycle = State.Cycles;
+            if (!batchBoundary.TryBeginPureCpuTraceBatch(
+                State,
+                targetCycle.Value,
+                out var batchTargetCycle))
+            {
+                return false;
+            }
+
+            if (_hasPendingPrefetch ||
+                (!HasQueuedFixedPlanPair() && !IsQueuedShortSelfBranch()) ||
+                !_fixedPlanRunBus!.TryGetFixedPlanRunWindow(
+                    State.ProgramCounter,
+                    out var runWindow) ||
+                !runWindow.ContainsWord(State.ProgramCounter) ||
+                !runWindow.ContainsWord(unchecked(State.ProgramCounter + 2)))
+            {
+                return false;
+            }
+
+            var slotIndex = GetFixedPlanRunCacheSlot(
+                State.ProgramCounter,
+                _prefetchWord0,
+                _prefetchWord1);
+            if (!FixedPlanRunSlotMatches(
+                slotIndex,
+                State.ProgramCounter,
+                _prefetchWord0,
+                _prefetchWord1,
+                in runWindow,
+                fastMemory: false) &&
+                !BuildFixedPlanRun(
+                    slotIndex,
+                    State.ProgramCounter,
+                    _prefetchWord0,
+                    _prefetchWord1,
+                    in runWindow,
+                    allowFastMemory: false))
+            {
+                return false;
+            }
+
+            var slot = _fixedPlanRunSlots![slotIndex];
+            var instructionBase = slotIndex * FixedPlanRunMaximumInstructions;
+            var instructionIndex = 0;
+            var context = CaptureFixedBatchContext();
+            var registers = CaptureFixedPlanRunRegisters();
+            context.DirectRunFetch = true;
+            context.DirectRunWindow = runWindow;
+            var loopStartContext = default(M68000FixedBatchContext);
+            var loopStartCaptured = false;
+            try
+            {
+                while (executedInstructions < maxInstructions &&
+                    context.Cycles < batchTargetCycle &&
+                    instructionIndex < slot.InstructionCount)
+                {
+                    ref var instruction = ref _fixedPlanRunInstructions![instructionBase + instructionIndex];
+                    if (context.ProgramCounter != instruction.ProgramCounter ||
+                        context.PrefetchCount == 0 ||
+                        context.PrefetchAddress != context.ProgramCounter ||
+                        context.PrefetchWord0 != instruction.Opcode)
+                    {
+                        _fixedPlanRunSlots[slotIndex].Valid = false;
+                        break;
+                    }
+
+                    if (!loopStartCaptured && instructionIndex == slot.LoopStartIndex)
+                    {
+                        loopStartContext = context;
+                        loopStartCaptured = true;
+                    }
+
+                    ExecuteCachedFixedPlanRunInstruction(
+                        ref context,
+                        ref registers,
+                        in instruction);
+
+                    executedInstructions++;
+                    if (instruction.NextIndex == FixedPlanRunExitIndex)
+                    {
+                        break;
+                    }
+
+                    if (loopStartCaptured &&
+                        instruction.NextIndex == slot.LoopStartIndex &&
+                        !_plannedInterpreterCountersEnabled &&
+                        FixedPlanRunLoopMatchesWindow(
+                            in context.DirectRunWindow,
+                            in slot,
+                            instructionBase))
+                    {
+                        AdvanceCachedFixedPlanRunLoop(
+                            ref context,
+                            ref registers,
+                            in slot,
+                            instructionBase,
+                            maxInstructions,
+                            batchTargetCycle,
+                            in loopStartContext,
+                            ref executedInstructions);
+                        loopStartCaptured = false;
+                    }
+
+                    instructionIndex = instruction.NextIndex;
+                }
+            }
+            finally
+            {
+                CommitFixedPlanRunRegisters(in registers);
+                CommitFixedBatchContext(in context);
+            }
+
+            if (executedInstructions == 0)
+            {
+                return false;
+            }
+
+            batchBoundary.AfterPureCpuTraceBatch(
+                previousCycle,
+                State.Cycles,
+                executedInstructions);
+            return true;
+        }
+
+        private bool TryExecuteCachedFastMemoryRun(
+            int maxInstructions,
+            long? targetCycle,
+            IM68kBusAccessTraceBatchBoundary batchBoundary,
+            out int executedInstructions)
+        {
+            executedInstructions = 0;
+            if (maxInstructions <= 1 ||
+                !targetCycle.HasValue ||
+                _hasPendingPrefetch ||
+                _fastMemoryBus == null ||
+                _prefetchCount != 2 ||
+                _prefetchAddress != State.ProgramCounter ||
+                !IsFastMemoryRunEntryPair(_prefetchWord0, _prefetchWord1))
+            {
+                return false;
+            }
+
+            var previousCycle = State.Cycles;
+            if (!batchBoundary.TryBeginBusAccessTraceBatch(
+                State,
+                targetCycle.Value,
+                out var batchTargetCycle) ||
+                !_fixedPlanRunBus!.TryGetFixedPlanRunWindow(
+                    State.ProgramCounter,
+                    out var runWindow) ||
+                !runWindow.ContainsWord(State.ProgramCounter) ||
+                !runWindow.ContainsWord(unchecked(State.ProgramCounter + 2)))
+            {
+                return false;
+            }
+
+            var slotIndex = GetFixedPlanRunCacheSlot(
+                State.ProgramCounter,
+                _prefetchWord0,
+                _prefetchWord1);
+            if (!FixedPlanRunSlotMatches(
+                    slotIndex,
+                    State.ProgramCounter,
+                    _prefetchWord0,
+                    _prefetchWord1,
+                    in runWindow,
+                    fastMemory: true) &&
+                !BuildFixedPlanRun(
+                    slotIndex,
+                    State.ProgramCounter,
+                    _prefetchWord0,
+                    _prefetchWord1,
+                    in runWindow,
+                    allowFastMemory: true))
+            {
+                return false;
+            }
+
+            var slot = _fixedPlanRunSlots![slotIndex];
+            var instructionBase = slotIndex * FixedPlanRunMaximumInstructions;
+            var instructionIndex = 0;
+            var context = CaptureFixedBatchContext();
+            var registers = CaptureFixedPlanRunRegisters();
+            context.DirectRunFetch = true;
+            context.DirectRunWindow = runWindow;
+            var validateWindow = true;
+            try
+            {
+                if (IsCanonicalFastMemoryLoop(in slot, instructionBase))
+                {
+                    executedInstructions = ExecuteCanonicalFastMemoryLoop(
+                        ref context,
+                        ref registers,
+                        in runWindow,
+                        instructionBase,
+                        maxInstructions,
+                        batchTargetCycle);
+                }
+                else
+                {
+                while (executedInstructions < maxInstructions &&
+                    context.Cycles < batchTargetCycle &&
+                    instructionIndex < slot.InstructionCount)
+                {
+                    ref var instruction = ref _fixedPlanRunInstructions![
+                        instructionBase + instructionIndex];
+                    if ((validateWindow &&
+                            !FixedPlanRunInstructionMatchesWindow(
+                                in runWindow,
+                                in instruction)) ||
+                        context.ProgramCounter != instruction.ProgramCounter ||
+                        context.PrefetchCount == 0 ||
+                        context.PrefetchAddress != context.ProgramCounter ||
+                        context.PrefetchWord0 != instruction.Opcode)
+                    {
+                        _fixedPlanRunSlots[slotIndex].Valid = false;
+                        break;
+                    }
+
+                    if (!TryExecuteCachedFastMemoryRunInstruction(
+                        ref context,
+                        ref registers,
+                        in instruction,
+                        out validateWindow))
+                    {
+                        break;
+                    }
+
+                    executedInstructions++;
+                    if (instruction.NextIndex == FixedPlanRunExitIndex)
+                    {
+                        break;
+                    }
+
+                    instructionIndex = instruction.NextIndex;
+                }
+                }
+            }
+            finally
+            {
+                CommitFixedPlanRunRegisters(in registers);
+                CommitFixedBatchContext(in context);
+            }
+
+            if (executedInstructions == 0)
+            {
+                return false;
+            }
+
+            batchBoundary.AfterBusAccessTraceBatch(
+                previousCycle,
+                State.Cycles,
+                executedInstructions);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsCanonicalFastMemoryLoop(
+            in M68000FixedPlanRunSlot slot,
+            int instructionBase)
+        {
+            if (slot.LoopStartIndex != 0 || slot.InstructionCount != 4)
+            {
+                return false;
+            }
+
+            ref var first = ref _fixedPlanRunInstructions![instructionBase];
+            ref var second = ref _fixedPlanRunInstructions[instructionBase + 1];
+            ref var third = ref _fixedPlanRunInstructions[instructionBase + 2];
+            ref var fourth = ref _fixedPlanRunInstructions[instructionBase + 3];
+            return first.Kind == M68kOpcodePlanKind.MoveLongPostincrementToData &&
+                second.Kind == M68kOpcodePlanKind.DataRegisterLongAddToRegister &&
+                third.Kind == M68kOpcodePlanKind.MoveLongDataToAbsoluteLong &&
+                fourth.Kind == M68kOpcodePlanKind.Dbcc &&
+                first.NextIndex == 1 &&
+                second.NextIndex == 2 &&
+                third.NextIndex == 3 &&
+                fourth.NextIndex == 0;
+        }
+
+        private int ExecuteCanonicalFastMemoryLoop(
+            ref M68000FixedBatchContext context,
+            ref M68000FixedPlanRunRegisters registers,
+            in M68kFixedPlanRunWindow runWindow,
+            int instructionBase,
+            int maxInstructions,
+            long batchTargetCycle)
+        {
+            var executedInstructions = 0;
+            ref var load = ref _fixedPlanRunInstructions![instructionBase];
+            ref var add = ref _fixedPlanRunInstructions[instructionBase + 1];
+            ref var store = ref _fixedPlanRunInstructions[instructionBase + 2];
+            ref var branch = ref _fixedPlanRunInstructions[instructionBase + 3];
+            if (!FixedPlanRunInstructionMatchesWindow(in runWindow, in load) ||
+                !FixedPlanRunInstructionMatchesWindow(in runWindow, in add) ||
+                !FixedPlanRunInstructionMatchesWindow(in runWindow, in store) ||
+                !FixedPlanRunInstructionMatchesWindow(in runWindow, in branch))
+            {
+                return 0;
+            }
+
+            while (executedInstructions < maxInstructions &&
+                context.Cycles < batchTargetCycle)
+            {
+                if (!TryExecuteCanonicalFastLoad(
+                    ref context,
+                    ref registers,
+                    in load))
+                {
+                    break;
+                }
+
+                executedInstructions++;
+                if (executedInstructions >= maxInstructions || context.Cycles >= batchTargetCycle)
+                {
+                    break;
+                }
+
+                ExecuteCanonicalFastAdd(
+                    ref context,
+                    ref registers,
+                    in add);
+                executedInstructions++;
+                if (executedInstructions >= maxInstructions || context.Cycles >= batchTargetCycle)
+                {
+                    break;
+                }
+
+                if (!TryExecuteCanonicalFastStore(
+                    ref context,
+                    ref registers,
+                    in store,
+                    out var validateWindow))
+                {
+                    break;
+                }
+
+                executedInstructions++;
+                if (executedInstructions >= maxInstructions || context.Cycles >= batchTargetCycle)
+                {
+                    break;
+                }
+
+                if (validateWindow &&
+                    (!FixedPlanRunInstructionMatchesWindow(in runWindow, in branch) ||
+                    !FixedPlanRunInstructionMatchesWindow(in runWindow, in load)))
+                {
+                    break;
+                }
+
+                if (!TryExecuteCanonicalFastDbra(
+                    ref context,
+                    ref registers,
+                    in branch))
+                {
+                    break;
+                }
+
+                executedInstructions++;
+            }
+
+            return executedInstructions;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryExecuteCanonicalFastLoad(
+            ref M68000FixedBatchContext context,
+            ref M68000FixedPlanRunRegisters registers,
+            in M68000FixedPlanRunInstruction instruction)
+        {
+            var plan = instruction.PackedPlan;
+            var sourceAddress = GetFixedPlanRunAddressRegister(
+                in registers,
+                plan.SourceRegister);
+            if ((sourceAddress & 1) != 0)
+            {
+                return false;
+            }
+
+            var busAddress = GetCpuBusAddress(sourceAddress);
+            if (!_fastMemoryBus!.TryReadFastLong(
+                busAddress,
+                M68kBusAccessKind.CpuDataRead,
+                out var value))
+            {
+                return false;
+            }
+
+            BeginFixedBatchInstruction(ref context);
+            BeginCachedRunInstruction(ref context, in instruction);
+            var requestedCycle = BeginFixedBatchDataAccess(ref context);
+            CompleteFixedBatchDataAccess(
+                ref context,
+                busAddress,
+                M68kOperandSize.Long,
+                M68kBusAccessKind.CpuDataRead,
+                isWrite: false,
+                requestedCycle);
+            SetFixedPlanRunAddressRegister(
+                ref registers,
+                plan.SourceRegister,
+                unchecked(sourceAddress + 4));
+            SetFixedPlanRunDataRegister(
+                ref registers,
+                plan.DestinationRegister,
+                value);
+            SetFixedPlanRunLogicFlags(
+                ref registers.StatusRegister,
+                value,
+                M68kOperandSize.Long);
+            SetFixedBatchInstructionCycles(ref context, 12);
+            RecordPlannedFast(instruction.Kind);
+            CompleteFixedBatchInstruction(
+                ref context,
+                PlannedRetireMode.SequentialOneWordRefill);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteCanonicalFastAdd(
+            ref M68000FixedBatchContext context,
+            ref M68000FixedPlanRunRegisters registers,
+            in M68000FixedPlanRunInstruction instruction)
+        {
+            BeginFixedBatchInstruction(ref context);
+            BeginCachedRunInstruction(ref context, in instruction);
+            var plan = instruction.PackedPlan;
+            ExecuteFixedPlanRunAddLong(ref registers, in plan);
+            SetFixedBatchInstructionCycles(ref context, 8);
+            RecordPlannedFast(instruction.Kind);
+            CompleteFixedBatchInstruction(
+                ref context,
+                PlannedRetireMode.SequentialOneWordRefill);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryExecuteCanonicalFastStore(
+            ref M68000FixedBatchContext context,
+            ref M68000FixedPlanRunRegisters registers,
+            in M68000FixedPlanRunInstruction instruction,
+            out bool validateWindow)
+        {
+            validateWindow = false;
+            var destinationAddress =
+                ((uint)instruction.ExtensionWord0 << 16) |
+                instruction.ExtensionWord1;
+            if ((destinationAddress & 1) != 0)
+            {
+                return false;
+            }
+
+            var instructionEntryContext = context;
+            BeginFixedBatchInstruction(ref context);
+            BeginCachedRunInstruction(ref context, in instruction);
+            _ = FetchFixedBatchWordWithoutTopUp(ref context);
+            _ = FetchFixedBatchWordWithoutTopUp(ref context);
+            var value = GetFixedPlanRunDataRegister(
+                in registers,
+                instruction.PackedPlan.SourceRegister);
+            TopUpFixedBatchPrefetchOne(ref context);
+            if (!TryWriteFixedBatchFastLong(
+                ref context,
+                destinationAddress,
+                value))
+            {
+                context = instructionEntryContext;
+                return false;
+            }
+
+            SetFixedPlanRunLogicFlags(
+                ref registers.StatusRegister,
+                value,
+                M68kOperandSize.Long);
+
+            var fetchWindow = context.DirectRunWindow.FetchWindow;
+            var normalizedDestination = destinationAddress & fetchWindow.AddressMask;
+            validateWindow = normalizedDestination < fetchWindow.EndAddressExclusive &&
+                (ulong)normalizedDestination + 4u > fetchWindow.StartAddress;
+            var readyCycle = TopUpFixedBatchPrefetchOne(ref context);
+            context.RetireBusCycle = Math.Max(context.RetireBusCycle, readyCycle);
+            context.SkipRetirePrefetchTopUp = true;
+            SetFixedBatchInstructionCycles(ref context, 20);
+            RecordPlannedFast(instruction.Kind);
+            CompleteFixedBatchInstruction(ref context, PlannedRetireMode.General);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryExecuteCanonicalFastDbra(
+            ref M68000FixedBatchContext context,
+            ref M68000FixedPlanRunRegisters registers,
+            in M68000FixedPlanRunInstruction instruction)
+        {
+            var register = instruction.PackedPlan.Register;
+            var oldData = GetFixedPlanRunDataRegister(in registers, register);
+            var oldCounter = (ushort)oldData;
+            if (oldCounter == 0)
+            {
+                return false;
+            }
+
+            var target = unchecked(
+                instruction.ProgramCounter + 2u +
+                (uint)(int)(short)instruction.ExtensionWord0);
+            BeginFixedBatchInstruction(ref context);
+            BeginCachedRunInstruction(ref context, in instruction);
+            context.PendingInternalCycles += 2;
+            _ = FetchFixedBatchWordWithoutTopUp(ref context);
+            SetFixedPlanRunDataRegister(
+                ref registers,
+                register,
+                (oldData & 0xFFFF_0000u) | unchecked((ushort)(oldCounter - 1)));
+            SetFixedBatchInstructionCycles(ref context, 10);
+            context.ProgramCounter = target;
+            FlushFixedBatchPrefetch(ref context);
+            context.PrefetchAddress = target;
+            var opcodeReadyCycle = TopUpFixedBatchPrefetchOne(ref context);
+            context.InstructionInterruptSampleCycle = opcodeReadyCycle;
+            var extensionReadyCycle = TopUpFixedBatchPrefetchOne(ref context);
+            context.RetireBusCycle = Math.Max(
+                context.RetireBusCycle,
+                extensionReadyCycle);
+            context.ExceptionEntryNotBeforeCycle = Math.Max(
+                context.ExceptionEntryNotBeforeCycle,
+                extensionReadyCycle + M68000DbccExceptionTailAfterCommittedFetchCycles);
+            context.SkipRetirePrefetchTopUp = true;
+            RecordPlannedFast(instruction.Kind);
+            CompleteFixedBatchInstruction(ref context, PlannedRetireMode.General);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool FixedPlanRunInstructionMatchesWindow(
+            in M68kFixedPlanRunWindow runWindow,
+            in M68000FixedPlanRunInstruction instruction)
+        {
+            if (!runWindow.ContainsWord(instruction.ProgramCounter) ||
+                runWindow.ReadWord(instruction.ProgramCounter) != instruction.Opcode)
+            {
+                return false;
+            }
+
+            if (instruction.WordLength > 1)
+            {
+                var address = unchecked(instruction.ProgramCounter + 2);
+                if (!runWindow.ContainsWord(address) ||
+                    runWindow.ReadWord(address) != instruction.ExtensionWord0)
+                {
+                    return false;
+                }
+            }
+
+            if (instruction.WordLength > 2)
+            {
+                var address = unchecked(instruction.ProgramCounter + 4);
+                if (!runWindow.ContainsWord(address) ||
+                    runWindow.ReadWord(address) != instruction.ExtensionWord1)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool FixedPlanRunLoopMatchesWindow(
+            in M68kFixedPlanRunWindow runWindow,
+            in M68000FixedPlanRunSlot slot,
+            int instructionBase)
+        {
+            for (var instructionIndex = (int)slot.LoopStartIndex;
+                instructionIndex < slot.InstructionCount;
+                instructionIndex++)
+            {
+                ref var instruction = ref _fixedPlanRunInstructions![
+                    instructionBase + instructionIndex];
+                if (!runWindow.ContainsWord(instruction.ProgramCounter) ||
+                    runWindow.ReadWord(instruction.ProgramCounter) != instruction.Opcode)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFixedPlanRunEntryPair(ushort word0, ushort word1)
+            => word0 == 0x60FE ||
+                (IsFixedPlanBatchOpcode(word0, M68kOpcodePlanTable.Kinds[word0]) &&
+                IsFixedPlanBatchOpcode(word1, M68kOpcodePlanTable.Kinds[word1]));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFastMemoryRunEntryPair(ushort word0, ushort word1)
+            => IsFastMemoryRunKind(word0, M68kOpcodePlanTable.Kinds[word0]) &&
+                (IsFastMemoryRunKind(word1, M68kOpcodePlanTable.Kinds[word1]) ||
+                IsFixedPlanBatchOpcode(word1, M68kOpcodePlanTable.Kinds[word1]));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFastMemoryRunKind(ushort opcode, M68kOpcodePlanKind kind)
+            => kind is
+                M68kOpcodePlanKind.MoveLongPostincrementToData or
+                M68kOpcodePlanKind.MoveLongDataToAbsoluteLong ||
+                (kind == M68kOpcodePlanKind.Dbcc && (opcode & 0xFFF8) == 0x51C8);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryGetFixedPlanRunWordLength(
+            ushort opcode,
+            M68kOpcodePlanKind kind,
+            bool allowFastMemory,
+            out byte wordLength)
+        {
+            if (IsFixedPlanBatchOpcode(opcode, kind))
+            {
+                wordLength = 1;
+                return true;
+            }
+
+            if (allowFastMemory && IsFastMemoryRunKind(opcode, kind))
+            {
+                wordLength = kind switch
+                {
+                    M68kOpcodePlanKind.MoveLongDataToAbsoluteLong => 3,
+                    M68kOpcodePlanKind.Dbcc => 2,
+                    _ => 1
+                };
+                return true;
+            }
+
+            wordLength = 0;
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int GetFixedPlanRunCacheSlot(
+            uint programCounter,
+            ushort word0,
+            ushort word1)
+            => (int)(((programCounter >> 1) ^ word0 ^ ((uint)word1 << 7)) &
+                (FixedPlanRunCacheSlotCount - 1));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool FixedPlanRunSlotMatches(
+            int slotIndex,
+            uint programCounter,
+            ushort word0,
+            ushort word1,
+            in M68kFixedPlanRunWindow runWindow,
+            bool fastMemory)
+        {
+            ref var slot = ref _fixedPlanRunSlots![slotIndex];
+            var fetchWindow = runWindow.FetchWindow;
+            return slot.Valid &&
+                slot.FastMemory == fastMemory &&
+                slot.EntryProgramCounter == programCounter &&
+                slot.EntryWord0 == word0 &&
+                slot.EntryWord1 == word1 &&
+                slot.WindowStartAddress == fetchWindow.StartAddress &&
+                slot.WindowEndAddressExclusive == fetchWindow.EndAddressExclusive &&
+                ReferenceEquals(slot.WindowMemory, fetchWindow.Memory) &&
+                slot.WindowMemoryOffset == fetchWindow.MemoryOffset &&
+                slot.WindowBusTag == fetchWindow.BusTag &&
+                ReferenceEquals(slot.GenerationSource, fetchWindow.GenerationSource) &&
+                slot.Generation == fetchWindow.Generation &&
+                fetchWindow.GenerationSource.Length != 0 &&
+                fetchWindow.GenerationSource[0] == fetchWindow.Generation;
+        }
+
+        private bool BuildFixedPlanRun(
+            int slotIndex,
+            uint entryProgramCounter,
+            ushort entryWord0,
+            ushort entryWord1,
+            in M68kFixedPlanRunWindow runWindow,
+            bool allowFastMemory)
+        {
+            ref var slot = ref _fixedPlanRunSlots![slotIndex];
+            slot.Valid = false;
+            var instructionBase = slotIndex * FixedPlanRunMaximumInstructions;
+            var instructionCount = 0;
+            var programCounter = entryProgramCounter;
+            var previousInstructionIndex = -1;
+            var loopStartIndex = FixedPlanRunExitIndex;
+
+            while (instructionCount < FixedPlanRunMaximumInstructions)
+            {
+                if (!runWindow.ContainsWord(programCounter))
+                {
+                    break;
+                }
+
+                var opcode = programCounter == entryProgramCounter
+                    ? entryWord0
+                    : programCounter == unchecked(entryProgramCounter + 2)
+                        ? entryWord1
+                        : runWindow.ReadWord(programCounter);
+                var kind = M68kOpcodePlanTable.Kinds[opcode];
+                if (!TryGetFixedPlanRunWordLength(
+                    opcode,
+                    kind,
+                    allowFastMemory,
+                    out var wordLength))
+                {
+                    break;
+                }
+
+                ushort extensionWord0 = 0;
+                ushort extensionWord1 = 0;
+                if (wordLength > 1)
+                {
+                    var extensionAddress = unchecked(programCounter + 2);
+                    if (!runWindow.ContainsWord(extensionAddress))
+                    {
+                        break;
+                    }
+
+                    extensionWord0 = runWindow.ReadWord(extensionAddress);
+                }
+
+                if (wordLength > 2)
+                {
+                    var extensionAddress = unchecked(programCounter + 4);
+                    if (!runWindow.ContainsWord(extensionAddress))
+                    {
+                        break;
+                    }
+
+                    extensionWord1 = runWindow.ReadWord(extensionAddress);
+                }
+
+                uint nextProgramCounter;
+                if (kind == M68kOpcodePlanKind.ShortUnconditionalBranch)
+                {
+                    nextProgramCounter = unchecked(
+                        programCounter + 2u + (uint)(int)(sbyte)opcode);
+                    if ((nextProgramCounter & 1) != 0 ||
+                        !runWindow.ContainsWord(nextProgramCounter) ||
+                        !runWindow.ContainsWord(unchecked(nextProgramCounter + 2)))
+                    {
+                        break;
+                    }
+                }
+                else if (kind == M68kOpcodePlanKind.Dbcc)
+                {
+                    nextProgramCounter = unchecked(
+                        programCounter + 2u + (uint)(int)(short)extensionWord0);
+                    if ((nextProgramCounter & 1) != 0 ||
+                        !runWindow.ContainsWord(nextProgramCounter) ||
+                        !runWindow.ContainsWord(unchecked(nextProgramCounter + 2)))
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    nextProgramCounter = unchecked(programCounter + ((uint)wordLength * 2u));
+                    if (!runWindow.ContainsWord(unchecked(nextProgramCounter + 2)))
+                    {
+                        break;
+                    }
+                }
+
+                var currentInstructionIndex = instructionCount;
+                ref var instruction = ref _fixedPlanRunInstructions![
+                    instructionBase + currentInstructionIndex];
+                instruction.ProgramCounter = programCounter;
+                instruction.Opcode = opcode;
+                instruction.ExtensionWord0 = extensionWord0;
+                instruction.ExtensionWord1 = extensionWord1;
+                instruction.WordLength = wordLength;
+                instruction.Kind = kind;
+                instruction.PackedPlan = M68kOpcodePlanTable.PackedPlans[opcode];
+                instruction.NextIndex = FixedPlanRunExitIndex;
+                if (previousInstructionIndex >= 0)
+                {
+                    _fixedPlanRunInstructions[
+                        instructionBase + previousInstructionIndex].NextIndex =
+                        (byte)currentInstructionIndex;
+                }
+
+                instructionCount++;
+                for (var existingIndex = 0; existingIndex < instructionCount; existingIndex++)
+                {
+                    if (_fixedPlanRunInstructions[
+                        instructionBase + existingIndex].ProgramCounter == nextProgramCounter)
+                    {
+                        instruction.NextIndex = (byte)existingIndex;
+                        loopStartIndex = (byte)existingIndex;
+                        previousInstructionIndex = -1;
+                        goto CompleteRun;
+                    }
+                }
+
+                previousInstructionIndex = currentInstructionIndex;
+                programCounter = nextProgramCounter;
+            }
+
+        CompleteRun:
+            if (instructionCount == 0 ||
+                (allowFastMemory && loopStartIndex == FixedPlanRunExitIndex))
+            {
+                return false;
+            }
+
+            var fetchWindow = runWindow.FetchWindow;
+            slot.EntryProgramCounter = entryProgramCounter;
+            slot.FastMemory = allowFastMemory;
+            slot.EntryWord0 = entryWord0;
+            slot.EntryWord1 = entryWord1;
+            slot.WindowStartAddress = fetchWindow.StartAddress;
+            slot.WindowEndAddressExclusive = fetchWindow.EndAddressExclusive;
+            slot.WindowMemory = fetchWindow.Memory;
+            slot.WindowMemoryOffset = fetchWindow.MemoryOffset;
+            slot.WindowBusTag = fetchWindow.BusTag;
+            slot.GenerationSource = fetchWindow.GenerationSource;
+            slot.Generation = fetchWindow.Generation;
+            slot.InstructionCount = (byte)instructionCount;
+            slot.LoopStartIndex = loopStartIndex;
+            slot.Valid = true;
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private M68000FixedPlanRunRegisters CaptureFixedPlanRunRegisters()
+            => new()
+            {
+                D0 = State.D[0],
+                D1 = State.D[1],
+                D2 = State.D[2],
+                D3 = State.D[3],
+                D4 = State.D[4],
+                D5 = State.D[5],
+                D6 = State.D[6],
+                D7 = State.D[7],
+                A0 = State.A[0],
+                A1 = State.A[1],
+                A2 = State.A[2],
+                A3 = State.A[3],
+                A4 = State.A[4],
+                A5 = State.A[5],
+                A6 = State.A[6],
+                A7 = State.A[7],
+                StatusRegister = State.StatusRegister
+            };
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CommitFixedPlanRunRegisters(in M68000FixedPlanRunRegisters registers)
+        {
+            State.D[0] = registers.D0;
+            State.D[1] = registers.D1;
+            State.D[2] = registers.D2;
+            State.D[3] = registers.D3;
+            State.D[4] = registers.D4;
+            State.D[5] = registers.D5;
+            State.D[6] = registers.D6;
+            State.D[7] = registers.D7;
+            State.A[0] = registers.A0;
+            State.A[1] = registers.A1;
+            State.A[2] = registers.A2;
+            State.A[3] = registers.A3;
+            State.A[4] = registers.A4;
+            State.A[5] = registers.A5;
+            State.A[6] = registers.A6;
+            State.A[7] = registers.A7;
+            State.StatusRegister = registers.StatusRegister;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint GetFixedPlanRunAddressRegister(
+            in M68000FixedPlanRunRegisters registers,
+            int register)
+            => register switch
+            {
+                0 => registers.A0,
+                1 => registers.A1,
+                2 => registers.A2,
+                3 => registers.A3,
+                4 => registers.A4,
+                5 => registers.A5,
+                6 => registers.A6,
+                _ => registers.A7
+            };
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void SetFixedPlanRunAddressRegister(
+            ref M68000FixedPlanRunRegisters registers,
+            int register,
+            uint value)
+        {
+            switch (register)
+            {
+                case 0: registers.A0 = value; break;
+                case 1: registers.A1 = value; break;
+                case 2: registers.A2 = value; break;
+                case 3: registers.A3 = value; break;
+                case 4: registers.A4 = value; break;
+                case 5: registers.A5 = value; break;
+                case 6: registers.A6 = value; break;
+                default: registers.A7 = value; break;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteCachedFixedPlanRunInstruction(
+            ref M68000FixedBatchContext context,
+            ref M68000FixedPlanRunRegisters registers,
+            in M68000FixedPlanRunInstruction instruction)
+        {
+            BeginFixedBatchInstruction(ref context);
+            var instructionPc = context.ProgramCounter;
+            context.ActiveInstructionProgramCounter = instructionPc;
+            var consumedFromFullPlannedQueue = context.PrefetchCount == 2;
+            var opcode = ConsumeFixedBatchPrefetchedWord(ref context);
+            System.Diagnostics.Debug.Assert(opcode == instruction.Opcode);
+            context.LastOpcode = opcode;
+            context.LastInstructionProgramCounter = instructionPc;
+
+            var plan = instruction.PackedPlan;
+            var retireMode = PlannedRetireMode.SequentialOneWordRefill;
+            var instructionCycles = 0;
+            switch (instruction.Kind)
+            {
+                case M68kOpcodePlanKind.Nop:
+                    instructionCycles = 4;
+                    break;
+                case M68kOpcodePlanKind.Moveq:
+                    var moveq = unchecked((uint)(int)plan.Displacement);
+                    SetFixedPlanRunDataRegister(ref registers, plan.Register, moveq);
+                    SetFixedPlanRunLogicFlags(
+                        ref registers.StatusRegister,
+                        moveq,
+                        M68kOperandSize.Long);
+                    instructionCycles = 4;
+                    break;
+                case M68kOpcodePlanKind.ShortUnconditionalBranch:
+                    ExecuteFixedBatchShortBranch(ref context, plan.Displacement);
+                    retireMode = PlannedRetireMode.PrefetchHandled;
+                    break;
+                case M68kOpcodePlanKind.QuickRegister:
+                    instructionCycles = ExecuteFixedPlanRunQuickRegister(
+                        ref registers,
+                        in plan);
+                    break;
+                case M68kOpcodePlanKind.QuickLongDataRegister:
+                    ExecuteFixedPlanRunQuickLongDataRegister(ref registers, in plan);
+                    instructionCycles = 8;
+                    break;
+                case M68kOpcodePlanKind.DataRegisterLongOrToRegister:
+                case M68kOpcodePlanKind.DataRegisterLongEorToDestination:
+                case M68kOpcodePlanKind.DataRegisterLongAndToRegister:
+                    ExecuteFixedPlanRunLongLogical(ref registers, in plan);
+                    instructionCycles = 8;
+                    break;
+                case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
+                    ExecuteFixedPlanRunAddLong(ref registers, in plan);
+                    instructionCycles = 8;
+                    break;
+                default:
+                    throw new InvalidOperationException(
+                        $"Unsupported cached fixed-plan operation {instruction.Kind}.");
+            }
+
+            if (instructionCycles != 0)
+            {
+                SetFixedBatchInstructionCycles(ref context, instructionCycles);
+            }
+
+            RecordPlannedFast(instruction.Kind);
+            if (retireMode == PlannedRetireMode.SequentialOneWordRefill &&
+                !consumedFromFullPlannedQueue)
+            {
+                retireMode = PlannedRetireMode.General;
+            }
+
+            CompleteFixedBatchInstruction(ref context, retireMode);
+        }
+
+        private bool TryExecuteCachedFastMemoryRunInstruction(
+            ref M68000FixedBatchContext context,
+            ref M68000FixedPlanRunRegisters registers,
+            in M68000FixedPlanRunInstruction instruction,
+            out bool validateWindow)
+        {
+            validateWindow = false;
+            var plan = instruction.PackedPlan;
+            if (instruction.Kind == M68kOpcodePlanKind.MoveLongPostincrementToData)
+            {
+                var sourceAddress = GetFixedPlanRunAddressRegister(
+                    in registers,
+                    plan.SourceRegister);
+                if ((sourceAddress & 1) != 0)
+                {
+                    return false;
+                }
+
+                var busAddress = GetCpuBusAddress(sourceAddress);
+                if (!_fastMemoryBus!.TryReadFastLong(
+                    busAddress,
+                    M68kBusAccessKind.CpuDataRead,
+                    out var value))
+                {
+                    return false;
+                }
+
+                BeginFixedBatchInstruction(ref context);
+                BeginCachedRunInstruction(ref context, in instruction);
+                var requestedCycle = BeginFixedBatchDataAccess(ref context);
+                CompleteFixedBatchDataAccess(
+                    ref context,
+                    busAddress,
+                    M68kOperandSize.Long,
+                    M68kBusAccessKind.CpuDataRead,
+                    isWrite: false,
+                    requestedCycle);
+
+                SetFixedPlanRunAddressRegister(
+                    ref registers,
+                    plan.SourceRegister,
+                    unchecked(sourceAddress + 4));
+                SetFixedPlanRunDataRegister(
+                    ref registers,
+                    plan.DestinationRegister,
+                    value);
+                SetFixedPlanRunLogicFlags(
+                    ref registers.StatusRegister,
+                    value,
+                    M68kOperandSize.Long);
+                SetFixedBatchInstructionCycles(ref context, 12);
+                RecordPlannedFast(instruction.Kind);
+                CompleteFixedBatchInstruction(
+                    ref context,
+                    PlannedRetireMode.SequentialOneWordRefill);
+                return true;
+            }
+
+            if (instruction.Kind == M68kOpcodePlanKind.MoveLongDataToAbsoluteLong)
+            {
+                var destinationAddress =
+                    ((uint)instruction.ExtensionWord0 << 16) |
+                    instruction.ExtensionWord1;
+                if ((destinationAddress & 1) != 0)
+                {
+                    return false;
+                }
+
+                var instructionEntryContext = context;
+                BeginFixedBatchInstruction(ref context);
+                BeginCachedRunInstruction(ref context, in instruction);
+                var high = FetchFixedBatchWordWithoutTopUp(ref context);
+                var low = FetchFixedBatchWordWithoutTopUp(ref context);
+                System.Diagnostics.Debug.Assert(high == instruction.ExtensionWord0);
+                System.Diagnostics.Debug.Assert(low == instruction.ExtensionWord1);
+                var value = GetFixedPlanRunDataRegister(in registers, plan.SourceRegister);
+                TopUpFixedBatchPrefetchOne(ref context);
+                if (!TryWriteFixedBatchFastLong(
+                    ref context,
+                    destinationAddress,
+                    value))
+                {
+                    context = instructionEntryContext;
+                    return false;
+                }
+
+                SetFixedPlanRunLogicFlags(
+                    ref registers.StatusRegister,
+                    value,
+                    M68kOperandSize.Long);
+
+                var fetchWindow = context.DirectRunWindow.FetchWindow;
+                var normalizedDestination = destinationAddress & fetchWindow.AddressMask;
+                validateWindow = normalizedDestination < fetchWindow.EndAddressExclusive &&
+                    (ulong)normalizedDestination + 4u > fetchWindow.StartAddress;
+
+                var readyCycle = TopUpFixedBatchPrefetchOne(ref context);
+                context.RetireBusCycle = Math.Max(context.RetireBusCycle, readyCycle);
+                context.SkipRetirePrefetchTopUp = true;
+                SetFixedBatchInstructionCycles(ref context, 20);
+                RecordPlannedFast(instruction.Kind);
+                CompleteFixedBatchInstruction(ref context, PlannedRetireMode.General);
+                return true;
+            }
+
+            if (instruction.Kind == M68kOpcodePlanKind.Dbcc)
+            {
+                var register = plan.Register;
+                var oldCounter = (ushort)GetFixedPlanRunDataRegister(in registers, register);
+                if (oldCounter == 0)
+                {
+                    // The expired path performs an abandoned-target read and a
+                    // fall-through refill. Keep that uncommon path scalar.
+                    return false;
+                }
+
+                var target = unchecked(
+                    instruction.ProgramCounter + 2u +
+                    (uint)(int)(short)instruction.ExtensionWord0);
+                if ((target & 1) != 0)
+                {
+                    return false;
+                }
+
+                BeginFixedBatchInstruction(ref context);
+                BeginCachedRunInstruction(ref context, in instruction);
+                context.PendingInternalCycles += 2;
+                var displacement = FetchFixedBatchWordWithoutTopUp(ref context);
+                System.Diagnostics.Debug.Assert(displacement == instruction.ExtensionWord0);
+                var counter = unchecked((ushort)(oldCounter - 1));
+                var oldData = GetFixedPlanRunDataRegister(in registers, register);
+                SetFixedPlanRunDataRegister(
+                    ref registers,
+                    register,
+                    (oldData & 0xFFFF_0000u) | counter);
+
+                SetFixedBatchInstructionCycles(ref context, 10);
+                context.ProgramCounter = target;
+                FlushFixedBatchPrefetch(ref context);
+                context.PrefetchAddress = target;
+                var opcodeReadyCycle = TopUpFixedBatchPrefetchOne(ref context);
+                context.InstructionInterruptSampleCycle = opcodeReadyCycle;
+                var extensionReadyCycle = TopUpFixedBatchPrefetchOne(ref context);
+                context.RetireBusCycle = Math.Max(
+                    context.RetireBusCycle,
+                    extensionReadyCycle);
+                context.ExceptionEntryNotBeforeCycle = Math.Max(
+                    context.ExceptionEntryNotBeforeCycle,
+                    extensionReadyCycle + M68000DbccExceptionTailAfterCommittedFetchCycles);
+                context.SkipRetirePrefetchTopUp = true;
+                RecordPlannedFast(instruction.Kind);
+                CompleteFixedBatchInstruction(ref context, PlannedRetireMode.General);
+                return true;
+            }
+
+            BeginFixedBatchInstruction(ref context);
+            BeginCachedRunInstruction(ref context, in instruction);
+            var retireMode = PlannedRetireMode.SequentialOneWordRefill;
+            var instructionCycles = instruction.Kind switch
+            {
+                M68kOpcodePlanKind.DataRegisterLongAddToRegister => 8,
+                _ => 0
+            };
+            if (instruction.Kind != M68kOpcodePlanKind.DataRegisterLongAddToRegister)
+            {
+                return false;
+            }
+
+            ExecuteFixedPlanRunAddLong(ref registers, in plan);
+            SetFixedBatchInstructionCycles(ref context, instructionCycles);
+            RecordPlannedFast(instruction.Kind);
+            CompleteFixedBatchInstruction(ref context, retireMode);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void BeginCachedRunInstruction(
+            ref M68000FixedBatchContext context,
+            in M68000FixedPlanRunInstruction instruction)
+        {
+            var instructionPc = context.ProgramCounter;
+            context.ActiveInstructionProgramCounter = instructionPc;
+            var opcode = ConsumeFixedBatchPrefetchedWord(ref context);
+            System.Diagnostics.Debug.Assert(opcode == instruction.Opcode);
+            context.LastOpcode = opcode;
+            context.LastInstructionProgramCounter = instructionPc;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ushort FetchFixedBatchWordWithoutTopUp(
+            ref M68000FixedBatchContext context)
+        {
+            if (context.PrefetchCount == 0 ||
+                context.PrefetchAddress != context.ProgramCounter)
+            {
+                FlushFixedBatchPrefetch(ref context);
+                context.PrefetchAddress = context.ProgramCounter;
+                TopUpFixedBatchPrefetchOne(ref context);
+            }
+
+            return ConsumeFixedBatchPrefetchedWord(ref context);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryReadFixedBatchFastLong(
+            ref M68000FixedBatchContext context,
+            uint address,
+            out uint value)
+        {
+            var busAddress = GetCpuBusAddress(address);
+            var requestedCycle = BeginFixedBatchDataAccess(ref context);
+            if (!_fastMemoryBus!.TryReadFastLong(
+                busAddress,
+                M68kBusAccessKind.CpuDataRead,
+                out value))
+            {
+                return false;
+            }
+
+            CompleteFixedBatchDataAccess(
+                ref context,
+                busAddress,
+                M68kOperandSize.Long,
+                M68kBusAccessKind.CpuDataRead,
+                isWrite: false,
+                requestedCycle);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryWriteFixedBatchFastLong(
+            ref M68000FixedBatchContext context,
+            uint address,
+            uint value)
+        {
+            var busAddress = GetCpuBusAddress(address);
+            var requestedCycle = BeginFixedBatchDataAccess(ref context);
+            if (!_fastMemoryBus!.TryWriteFastLong(
+                busAddress,
+                value,
+                M68kBusAccessKind.CpuDataWrite))
+            {
+                return false;
+            }
+
+            CompleteFixedBatchDataAccess(
+                ref context,
+                busAddress,
+                M68kOperandSize.Long,
+                M68kBusAccessKind.CpuDataWrite,
+                isWrite: true,
+                requestedCycle);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long BeginFixedBatchDataAccess(ref M68000FixedBatchContext context)
+        {
+            var cycle = context.Cycles;
+            if (context.PendingInternalCycles != 0)
+            {
+                cycle += context.PendingInternalCycles;
+                context.PendingInternalCycles = 0;
+            }
+
+            if (_m68000BusCycleTiming != null)
+            {
+                cycle += _m68000BusCycleTiming.M68000BusCycleStartDelay;
+            }
+
+            return Math.Max(cycle, context.NextBusCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CompleteFixedBatchDataAccess(
+            ref M68000FixedBatchContext context,
+            uint address,
+            M68kOperandSize size,
+            M68kBusAccessKind accessKind,
+            bool isWrite,
+            long requestedCycle)
+        {
+            var timing = GetM68000BusAccessTiming(
+                address,
+                size,
+                accessKind,
+                isWrite,
+                requestedCycle,
+                requestedCycle);
+            context.NextBusCycle = timing.NextBusCycle;
+            context.ReadyBusCycle = timing.ReadyCycle;
+            context.RetireBusCycle = Math.Max(
+                context.RetireBusCycle,
+                timing.ReadyCycle);
+            context.Cycles = timing.ReadyCycle;
+        }
+
+        private void AdvanceCachedFixedPlanRunLoop(
+            ref M68000FixedBatchContext context,
+            ref M68000FixedPlanRunRegisters registers,
+            in M68000FixedPlanRunSlot slot,
+            int instructionBase,
+            int maxInstructions,
+            long batchTargetCycle,
+            in M68000FixedBatchContext loopStartContext,
+            ref int executedInstructions)
+        {
+            var loopLength = slot.InstructionCount - slot.LoopStartIndex;
+            var loopCycles = context.Cycles - loopStartContext.Cycles;
+            if (loopLength <= 0 ||
+                loopCycles <= 0 ||
+                !IsSteadyFixedPlanRunLoop(in loopStartContext, in context, loopCycles))
+            {
+                return;
+            }
+
+            var repeatCount = (maxInstructions - executedInstructions) / loopLength;
+            if (repeatCount <= 0)
+            {
+                return;
+            }
+
+            var cyclesUntilTarget = batchTargetCycle - context.Cycles;
+            if (cyclesUntilTarget <= 0)
+            {
+                return;
+            }
+
+            repeatCount = (int)Math.Min(
+                repeatCount,
+                cyclesUntilTarget / loopCycles);
+            if (repeatCount <= 0)
+            {
+                return;
+            }
+
+            for (var repeat = 0; repeat < repeatCount; repeat++)
+            {
+                var operationIndex = (int)slot.LoopStartIndex;
+                do
+                {
+                    ref var operation = ref _fixedPlanRunInstructions![
+                        instructionBase + operationIndex];
+                    ExecuteFixedPlanRunArchitecturalOperation(
+                        ref registers,
+                        in operation);
+                    operationIndex = operation.NextIndex;
+                }
+                while (operationIndex != slot.LoopStartIndex &&
+                    operationIndex != FixedPlanRunExitIndex);
+            }
+
+            var advancedCycles = loopCycles * repeatCount;
+            context.Cycles += advancedCycles;
+            context.InstructionStart += advancedCycles;
+            context.InstructionFloor += advancedCycles;
+            context.NextBusCycle += advancedCycles;
+            context.ReadyBusCycle += advancedCycles;
+            context.RetireBusCycle += advancedCycles;
+            context.PrefetchReadyCycle0 += advancedCycles;
+            context.PrefetchReadyCycle1 += advancedCycles;
+            if (context.HasPendingPrefetch)
+            {
+                context.PendingPrefetchEarliestCycle += advancedCycles;
+            }
+
+            context.InstructionEntryBusCycle += advancedCycles;
+            context.InstructionEntryReadyCycle0 += advancedCycles;
+            context.InstructionEntryReadyCycle1 += advancedCycles;
+            if (context.InstructionInterruptSampleCycle != long.MinValue)
+            {
+                context.InstructionInterruptSampleCycle += advancedCycles;
+            }
+
+            if (context.LastInterruptSampleCycle != long.MinValue)
+            {
+                context.LastInterruptSampleCycle += advancedCycles;
+            }
+
+            executedInstructions += repeatCount * loopLength;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsSteadyFixedPlanRunLoop(
+            in M68000FixedBatchContext before,
+            in M68000FixedBatchContext after,
+            long cycleDelta)
+            => after.ProgramCounter == before.ProgramCounter &&
+                after.PrefetchAddress == before.PrefetchAddress &&
+                after.PrefetchWord0 == before.PrefetchWord0 &&
+                after.PrefetchWord1 == before.PrefetchWord1 &&
+                after.PrefetchCount == before.PrefetchCount &&
+                after.HasPendingPrefetch == before.HasPendingPrefetch &&
+                after.PendingPrefetchAddress == before.PendingPrefetchAddress &&
+                after.ConsumeWithoutPrefetch == before.ConsumeWithoutPrefetch &&
+                after.SkipRetirePrefetchTopUp == before.SkipRetirePrefetchTopUp &&
+                after.PrefetchReadyCycle0 - before.PrefetchReadyCycle0 == cycleDelta &&
+                after.PrefetchReadyCycle1 - before.PrefetchReadyCycle1 == cycleDelta &&
+                after.NextBusCycle - before.NextBusCycle == cycleDelta &&
+                after.ReadyBusCycle - before.ReadyBusCycle == cycleDelta &&
+                after.RetireBusCycle - before.RetireBusCycle == cycleDelta;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteFixedPlanRunArchitecturalOperation(
+            ref M68000FixedPlanRunRegisters registers,
+            in M68000FixedPlanRunInstruction instruction)
+        {
+            var plan = instruction.PackedPlan;
+            switch (instruction.Kind)
+            {
+                case M68kOpcodePlanKind.Nop:
+                case M68kOpcodePlanKind.ShortUnconditionalBranch:
+                    return;
+                case M68kOpcodePlanKind.Moveq:
+                    var moveq = unchecked((uint)(int)plan.Displacement);
+                    SetFixedPlanRunDataRegister(ref registers, plan.Register, moveq);
+                    SetFixedPlanRunLogicFlags(
+                        ref registers.StatusRegister,
+                        moveq,
+                        M68kOperandSize.Long);
+                    return;
+                case M68kOpcodePlanKind.QuickRegister:
+                    _ = ExecuteFixedPlanRunQuickRegister(ref registers, in plan);
+                    return;
+                case M68kOpcodePlanKind.QuickLongDataRegister:
+                    ExecuteFixedPlanRunQuickLongDataRegister(ref registers, in plan);
+                    return;
+                case M68kOpcodePlanKind.DataRegisterLongOrToRegister:
+                case M68kOpcodePlanKind.DataRegisterLongEorToDestination:
+                case M68kOpcodePlanKind.DataRegisterLongAndToRegister:
+                    ExecuteFixedPlanRunLongLogical(ref registers, in plan);
+                    return;
+                case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
+                    ExecuteFixedPlanRunAddLong(ref registers, in plan);
+                    return;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int ExecuteFixedPlanRunQuickRegister(
+            ref M68000FixedPlanRunRegisters registers,
+            in M68kPackedOpcodePlan plan)
+        {
+            var count = (uint)plan.QuickValue;
+            var register = plan.DestinationRegister;
+            var subtract = plan.Variant != 0;
+            if (plan.DestinationMode == 1)
+            {
+                var oldAddress = GetFixedPlanRunAddressRegister(in registers, register);
+                SetFixedPlanRunAddressRegister(
+                    ref registers,
+                    register,
+                    subtract
+                        ? unchecked(oldAddress - count)
+                        : unchecked(oldAddress + count));
+                return 8;
+            }
+
+            var size = plan.Size;
+            var mask = M68kCpuState.Mask(size);
+            var oldRegister = GetFixedPlanRunDataRegister(in registers, register);
+            var arithmetic = subtract
+                ? M68kIntegerSemantics.Subtract(oldRegister & mask, count, size)
+                : M68kIntegerSemantics.Add(oldRegister & mask, count, size);
+            SetFixedPlanRunDataRegister(
+                ref registers,
+                register,
+                size == M68kOperandSize.Long
+                    ? arithmetic.Value
+                    : (oldRegister & ~mask) | arithmetic.Value);
+            SetFixedPlanRunArithmeticFlags(
+                ref registers.StatusRegister,
+                arithmetic.Value,
+                size,
+                arithmetic.Overflow,
+                arithmetic.Carry);
+            return size == M68kOperandSize.Long ? 8 : 4;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ExecuteFixedPlanRunQuickLongDataRegister(
+            ref M68000FixedPlanRunRegisters registers,
+            in M68kPackedOpcodePlan plan)
+        {
+            var old = GetFixedPlanRunDataRegister(in registers, plan.DestinationRegister);
+            var arithmetic = plan.Variant != 0
+                ? M68kIntegerSemantics.Subtract(old, plan.QuickValue, M68kOperandSize.Long)
+                : M68kIntegerSemantics.Add(old, plan.QuickValue, M68kOperandSize.Long);
+            SetFixedPlanRunDataRegister(
+                ref registers,
+                plan.DestinationRegister,
+                arithmetic.Value);
+            SetFixedPlanRunArithmeticFlags(
+                ref registers.StatusRegister,
+                arithmetic.Value,
+                M68kOperandSize.Long,
+                arithmetic.Overflow,
+                arithmetic.Carry);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ExecuteFixedPlanRunLongLogical(
+            ref M68000FixedPlanRunRegisters registers,
+            in M68kPackedOpcodePlan plan)
+        {
+            var source = GetFixedPlanRunDataRegister(in registers, plan.SourceRegister);
+            var destination = GetFixedPlanRunDataRegister(in registers, plan.Register);
+            int resultRegister;
+            uint result;
+            if (plan.Kind == M68kOpcodePlanKind.DataRegisterLongEorToDestination)
+            {
+                resultRegister = plan.SourceRegister;
+                result = source ^ destination;
+            }
+            else
+            {
+                resultRegister = plan.Register;
+                result = plan.Kind == M68kOpcodePlanKind.DataRegisterLongOrToRegister
+                    ? source | destination
+                    : source & destination;
+            }
+
+            SetFixedPlanRunDataRegister(ref registers, resultRegister, result);
+            SetFixedPlanRunLogicFlags(
+                ref registers.StatusRegister,
+                result,
+                M68kOperandSize.Long);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ExecuteFixedPlanRunAddLong(
+            ref M68000FixedPlanRunRegisters registers,
+            in M68kPackedOpcodePlan plan)
+        {
+            var arithmetic = M68kIntegerSemantics.Add(
+                GetFixedPlanRunDataRegister(in registers, plan.Register),
+                GetFixedPlanRunDataRegister(in registers, plan.SourceRegister),
+                M68kOperandSize.Long);
+            SetFixedPlanRunDataRegister(ref registers, plan.Register, arithmetic.Value);
+            SetFixedPlanRunArithmeticFlags(
+                ref registers.StatusRegister,
+                arithmetic.Value,
+                M68kOperandSize.Long,
+                arithmetic.Overflow,
+                arithmetic.Carry);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void SetFixedPlanRunLogicFlags(
+            ref ushort statusRegister,
+            uint value,
+            M68kOperandSize size)
+            => statusRegister = (ushort)(
+                (statusRegister & ~M68kIntegerSemantics.LogicFlags) |
+                M68kIntegerSemantics.GetNegativeZeroFlags(value, size));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void SetFixedPlanRunArithmeticFlags(
+            ref ushort statusRegister,
+            uint value,
+            M68kOperandSize size,
+            bool overflow,
+            bool carry)
+        {
+            var flags = M68kIntegerSemantics.GetNegativeZeroFlags(value, size);
+            if (overflow)
+            {
+                flags |= M68kCpuState.Overflow;
+            }
+
+            if (carry)
+            {
+                flags |= M68kCpuState.Carry | M68kCpuState.Extend;
+            }
+
+            statusRegister = (ushort)(
+                (statusRegister & ~M68kIntegerSemantics.ArithmeticFlags) |
+                flags);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint GetFixedPlanRunDataRegister(
+            in M68000FixedPlanRunRegisters registers,
+            int register)
+            => register switch
+            {
+                0 => registers.D0,
+                1 => registers.D1,
+                2 => registers.D2,
+                3 => registers.D3,
+                4 => registers.D4,
+                5 => registers.D5,
+                6 => registers.D6,
+                _ => registers.D7
+            };
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void SetFixedPlanRunDataRegister(
+            ref M68000FixedPlanRunRegisters registers,
+            int register,
+            uint value)
+        {
+            switch (register)
+            {
+                case 0: registers.D0 = value; break;
+                case 1: registers.D1 = value; break;
+                case 2: registers.D2 = value; break;
+                case 3: registers.D3 = value; break;
+                case 4: registers.D4 = value; break;
+                case 5: registers.D5 = value; break;
+                case 6: registers.D6 = value; break;
+                default: registers.D7 = value; break;
+            }
+        }
+
         private bool TryExecuteFixedPlanBatch(
             int maxInstructions,
             long? targetCycle,
@@ -2160,17 +3998,16 @@ namespace Copper68k
                 return false;
             }
 
-            while (executedInstructions < maxInstructions &&
-                State.Cycles < batchTargetCycle &&
-                IsQueuedFixedPlanInstruction())
+            executedInstructions = _opcodePlanDispatch switch
             {
-                if (!TryExecuteQueuedShortSelfBranch())
-                {
-                    ExecuteSingleInstruction();
-                }
-
-                executedInstructions++;
-            }
+                M68kOpcodePlanDispatch.KindTable => ExecuteFixedPlanKindBatch(
+                    maxInstructions,
+                    batchTargetCycle),
+                M68kOpcodePlanDispatch.PackedPlan => ExecuteFixedPackedPlanBatch(
+                    maxInstructions,
+                    batchTargetCycle),
+                _ => 0
+            };
 
             if (executedInstructions == 0)
             {
@@ -2182,6 +4019,778 @@ namespace Copper68k
                 State.Cycles,
                 executedInstructions);
             return true;
+        }
+
+        private int ExecuteFixedPlanKindBatch(int maxInstructions, long batchTargetCycle)
+        {
+            var executedInstructions = 0;
+            var context = CaptureFixedBatchContext();
+            try
+            {
+                while (executedInstructions < maxInstructions &&
+                    context.Cycles < batchTargetCycle &&
+                    IsFixedBatchInstructionState(in context))
+                {
+                    var queuedOpcode = context.PrefetchWord0;
+                    var kind = M68kOpcodePlanTable.Kinds[queuedOpcode];
+                    if (!IsFixedPlanBatchOpcode(queuedOpcode, kind) || queuedOpcode == 0x60FE)
+                    {
+                        break;
+                    }
+
+                    ExecuteFixedBatchKindInstruction(ref context, queuedOpcode, kind);
+                    executedInstructions++;
+                }
+            }
+            finally
+            {
+                CommitFixedBatchContext(in context);
+            }
+
+            return executedInstructions;
+        }
+
+        private int ExecuteFixedPackedPlanBatch(int maxInstructions, long batchTargetCycle)
+        {
+            var executedInstructions = 0;
+            var context = CaptureFixedBatchContext();
+            try
+            {
+                while (executedInstructions < maxInstructions &&
+                    context.Cycles < batchTargetCycle &&
+                    IsFixedBatchInstructionState(in context))
+                {
+                    var queuedOpcode = context.PrefetchWord0;
+                    var plan = M68kOpcodePlanTable.PackedPlans[queuedOpcode];
+                    if (!IsFixedPlanBatchOpcode(queuedOpcode, plan.Kind) || queuedOpcode == 0x60FE)
+                    {
+                        break;
+                    }
+
+                    ExecuteFixedBatchPackedInstruction(ref context, queuedOpcode, in plan);
+                    executedInstructions++;
+                }
+            }
+            finally
+            {
+                CommitFixedBatchContext(in context);
+            }
+
+            return executedInstructions;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteFixedBatchKindInstruction(
+            ref M68000FixedBatchContext context,
+            ushort queuedOpcode,
+            M68kOpcodePlanKind kind)
+        {
+            BeginFixedBatchInstruction(ref context);
+            var instructionPc = context.ProgramCounter;
+            context.ActiveInstructionProgramCounter = instructionPc;
+            var consumedFromFullPlannedQueue =
+                context.PrefetchCount == 2 &&
+                context.PrefetchAddress == instructionPc;
+            var opcode = ConsumeFixedBatchPrefetchedWord(ref context);
+            System.Diagnostics.Debug.Assert(opcode == queuedOpcode);
+            context.LastOpcode = opcode;
+            context.LastInstructionProgramCounter = instructionPc;
+
+            var retireMode = ExecuteFixedBatchKindOperation(
+                ref context,
+                opcode,
+                instructionPc,
+                kind);
+            System.Diagnostics.Debug.Assert(retireMode != PlannedRetireMode.Unsupported);
+            if (retireMode == PlannedRetireMode.SequentialOneWordRefill &&
+                !consumedFromFullPlannedQueue)
+            {
+                retireMode = PlannedRetireMode.General;
+            }
+
+            CompleteFixedBatchInstruction(ref context, retireMode);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteFixedBatchPackedInstruction(
+            ref M68000FixedBatchContext context,
+            ushort queuedOpcode,
+            in M68kPackedOpcodePlan plan)
+        {
+            BeginFixedBatchInstruction(ref context);
+            var instructionPc = context.ProgramCounter;
+            context.ActiveInstructionProgramCounter = instructionPc;
+            var consumedFromFullPlannedQueue =
+                context.PrefetchCount == 2 &&
+                context.PrefetchAddress == instructionPc;
+            var opcode = ConsumeFixedBatchPrefetchedWord(ref context);
+            System.Diagnostics.Debug.Assert(opcode == queuedOpcode);
+            context.LastOpcode = opcode;
+            context.LastInstructionProgramCounter = instructionPc;
+
+            var retireMode = ExecuteFixedBatchPackedOperation(
+                ref context,
+                opcode,
+                instructionPc,
+                in plan);
+            System.Diagnostics.Debug.Assert(retireMode != PlannedRetireMode.Unsupported);
+            if (retireMode == PlannedRetireMode.SequentialOneWordRefill &&
+                !consumedFromFullPlannedQueue)
+            {
+                retireMode = PlannedRetireMode.General;
+            }
+
+            CompleteFixedBatchInstruction(ref context, retireMode);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private M68000FixedBatchContext CaptureFixedBatchContext()
+        {
+            System.Diagnostics.Debug.Assert(!_deferredCpuBusBatchExecutionActive);
+            System.Diagnostics.Debug.Assert(!_deferredCpuInstructionTimingStarted);
+            return new M68000FixedBatchContext
+            {
+                Cycles = State.Cycles,
+                ProgramCounter = State.ProgramCounter,
+                LastOpcode = State.LastOpcode,
+                LastInstructionProgramCounter = State.LastInstructionProgramCounter,
+                InstructionCycleFloorActive = _instructionCycleFloorActive,
+                InstructionStart = _instructionCycleStart,
+                InstructionFloor = _instructionCycleFloor,
+                PendingInternalCycles = _pendingInternalCycles,
+                NextBusCycle = _cpuBusCycle,
+                ReadyBusCycle = _cpuBusReadyCycle,
+                RetireBusCycle = _cpuRetireBusCycle,
+                ExceptionEntryNotBeforeCycle = _exceptionEntryNotBeforeCycle,
+                PrefetchAddress = _prefetchAddress,
+                PrefetchWord0 = _prefetchWord0,
+                PrefetchWord1 = _prefetchWord1,
+                PrefetchReadyCycle0 = _prefetchCompletedCycle0,
+                PrefetchReadyCycle1 = _prefetchCompletedCycle1,
+                PrefetchDeferredBatchEligible0 = _prefetchDeferredCpuBusBatchEligible0,
+                PrefetchDeferredBatchEligible1 = _prefetchDeferredCpuBusBatchEligible1,
+                PrefetchCount = _prefetchCount,
+                HasPendingPrefetch = _hasPendingPrefetch,
+                PendingPrefetchAddress = _pendingPrefetchAddress,
+                PendingPrefetchEarliestCycle = _pendingPrefetchEarliestCycle,
+                ConsumeWithoutPrefetch = _consumeWithoutPrefetch,
+                SkipRetirePrefetchTopUp = _skipRetirePrefetchTopUp,
+                ActiveInstructionProgramCounter = _activeInstructionProgramCounter,
+                InstructionEntryBusCycle = _instructionEntryBusCycle,
+                InstructionEntryPrefetchCount = _instructionEntryPrefetchCount,
+                InstructionEntryReadyCycle0 = _instructionEntryReadyCycle0,
+                InstructionEntryReadyCycle1 = _instructionEntryReadyCycle1,
+                InstructionInterruptSampleCycle = _instructionInterruptSampleCycle,
+                LastInterruptSampleCycle = _lastInterruptSampleCycle,
+                NextCpuDataAccessDelayCycles = _nextCpuDataAccessDelayCycles
+            };
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CommitFixedBatchContext(in M68000FixedBatchContext context)
+        {
+            State.Cycles = context.Cycles;
+            State.ProgramCounter = context.ProgramCounter;
+            State.LastOpcode = context.LastOpcode;
+            State.LastInstructionProgramCounter = context.LastInstructionProgramCounter;
+            _instructionCycleFloorActive = context.InstructionCycleFloorActive;
+            _instructionCycleStart = context.InstructionStart;
+            _instructionCycleFloor = context.InstructionFloor;
+            _pendingInternalCycles = context.PendingInternalCycles;
+            _cpuBusCycle = context.NextBusCycle;
+            _cpuBusReadyCycle = context.ReadyBusCycle;
+            _cpuRetireBusCycle = context.RetireBusCycle;
+            _exceptionEntryNotBeforeCycle = context.ExceptionEntryNotBeforeCycle;
+            _prefetchAddress = context.PrefetchAddress;
+            _prefetchWord0 = context.PrefetchWord0;
+            _prefetchWord1 = context.PrefetchWord1;
+            _prefetchCompletedCycle0 = context.PrefetchReadyCycle0;
+            _prefetchCompletedCycle1 = context.PrefetchReadyCycle1;
+            _prefetchDeferredCpuBusBatchEligible0 = context.PrefetchDeferredBatchEligible0;
+            _prefetchDeferredCpuBusBatchEligible1 = context.PrefetchDeferredBatchEligible1;
+            _prefetchCount = context.PrefetchCount;
+            _hasPendingPrefetch = context.HasPendingPrefetch;
+            _pendingPrefetchAddress = context.PendingPrefetchAddress;
+            _pendingPrefetchEarliestCycle = context.PendingPrefetchEarliestCycle;
+            _consumeWithoutPrefetch = context.ConsumeWithoutPrefetch;
+            _skipRetirePrefetchTopUp = context.SkipRetirePrefetchTopUp;
+            _activeInstructionProgramCounter = context.ActiveInstructionProgramCounter;
+            _instructionEntryBusCycle = context.InstructionEntryBusCycle;
+            _instructionEntryPrefetchCount = context.InstructionEntryPrefetchCount;
+            _instructionEntryReadyCycle0 = context.InstructionEntryReadyCycle0;
+            _instructionEntryReadyCycle1 = context.InstructionEntryReadyCycle1;
+            _instructionInterruptSampleCycle = context.InstructionInterruptSampleCycle;
+            _lastInterruptSampleCycle = context.LastInterruptSampleCycle;
+            _nextCpuDataAccessDelayCycles = context.NextCpuDataAccessDelayCycles;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsFixedBatchInstructionState(in M68000FixedBatchContext context)
+            => !State.Halted &&
+                !State.Stopped &&
+                (context.ProgramCounter & 1) == 0 &&
+                context.PrefetchCount > 0 &&
+                context.PrefetchAddress == context.ProgramCounter;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void BeginFixedBatchInstruction(ref M68000FixedBatchContext context)
+        {
+            context.ExceptionEntryNotBeforeCycle = 0;
+            context.InstructionCycleFloorActive = true;
+            context.InstructionStart = context.Cycles;
+            context.InstructionEntryBusCycle = context.NextBusCycle;
+            context.InstructionEntryPrefetchCount = context.PrefetchCount;
+            context.InstructionEntryReadyCycle0 = context.PrefetchReadyCycle0;
+            context.InstructionEntryReadyCycle1 = context.PrefetchReadyCycle1;
+            context.InstructionInterruptSampleCycle = long.MinValue;
+            context.InstructionFloor = context.Cycles;
+            context.NextBusCycle = Math.Max(context.NextBusCycle, context.Cycles);
+            context.RetireBusCycle = Math.Max(context.RetireBusCycle, context.Cycles);
+            context.PendingInternalCycles = 0;
+            context.ConsumeWithoutPrefetch = false;
+            context.NextCpuDataAccessDelayCycles = 0;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ushort ConsumeFixedBatchPrefetchedWord(ref M68000FixedBatchContext context)
+        {
+            System.Diagnostics.Debug.Assert(context.PrefetchCount > 0);
+            System.Diagnostics.Debug.Assert(context.PrefetchAddress == context.ProgramCounter);
+            var value = context.PrefetchWord0;
+            var completedCycle = context.PrefetchReadyCycle0;
+            var address = context.PrefetchAddress;
+            context.ProgramCounter = unchecked(address + 2);
+            if (context.PendingInternalCycles != 0)
+            {
+                context.Cycles += context.PendingInternalCycles;
+                context.PendingInternalCycles = 0;
+            }
+
+            if (context.Cycles < completedCycle)
+            {
+                context.Cycles = completedCycle;
+            }
+
+            if (context.RetireBusCycle < completedCycle)
+            {
+                context.RetireBusCycle = completedCycle;
+            }
+
+            context.PrefetchAddress = unchecked(address + 2);
+            if (context.PrefetchCount > 1)
+            {
+                context.PrefetchWord0 = context.PrefetchWord1;
+                context.PrefetchReadyCycle0 = context.PrefetchReadyCycle1;
+                context.PrefetchDeferredBatchEligible0 = context.PrefetchDeferredBatchEligible1;
+                context.PrefetchCount = 1;
+            }
+            else
+            {
+                context.PrefetchCount = 0;
+                context.PrefetchDeferredBatchEligible0 = false;
+            }
+
+            context.PrefetchDeferredBatchEligible1 = false;
+            return value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private PlannedRetireMode ExecuteFixedBatchKindOperation(
+            ref M68000FixedBatchContext context,
+            ushort opcode,
+            uint instructionPc,
+            M68kOpcodePlanKind kind)
+        {
+            switch (kind)
+            {
+                case M68kOpcodePlanKind.Nop:
+                    SetFixedBatchInstructionCycles(ref context, 4);
+                    break;
+                case M68kOpcodePlanKind.Moveq:
+                    ExecuteMoveqRegister((opcode >> 9) & 7, unchecked((sbyte)opcode));
+                    SetFixedBatchInstructionCycles(ref context, 4);
+                    break;
+                case M68kOpcodePlanKind.ShortUnconditionalBranch:
+                    ExecuteFixedBatchShortBranch(
+                        ref context,
+                        unchecked((sbyte)opcode));
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.PrefetchHandled;
+                case M68kOpcodePlanKind.QuickRegister:
+                    SetFixedBatchInstructionCycles(
+                        ref context,
+                        ExecuteQuickRegisterOperation(
+                            (uint)((opcode >> 9) & 7),
+                            DecodeQuickSize(opcode),
+                            (opcode >> 3) & 7,
+                            opcode & 7,
+                            (opcode & 0x0100) != 0));
+                    break;
+                case M68kOpcodePlanKind.QuickLongDataRegister:
+                    var quickCount = (opcode >> 9) & 7;
+                    ExecuteQuickLongDataRegisterOperation(
+                        opcode & 7,
+                        quickCount == 0 ? 8u : (uint)quickCount,
+                        (opcode & 0x0100) != 0);
+                    SetFixedBatchInstructionCycles(ref context, 8);
+                    break;
+                case M68kOpcodePlanKind.DataRegisterLongOrToRegister:
+                    ExecuteLongLogicalOperation(opcode, M68kOpcodePlanKind.DataRegisterLongOrToRegister);
+                    SetFixedBatchInstructionCycles(ref context, 8);
+                    break;
+                case M68kOpcodePlanKind.DataRegisterLongEorToDestination:
+                    ExecuteLongLogicalOperation(opcode, M68kOpcodePlanKind.DataRegisterLongEorToDestination);
+                    SetFixedBatchInstructionCycles(ref context, 8);
+                    break;
+                case M68kOpcodePlanKind.DataRegisterLongAndToRegister:
+                    ExecuteLongLogicalOperation(opcode, M68kOpcodePlanKind.DataRegisterLongAndToRegister);
+                    SetFixedBatchInstructionCycles(ref context, 8);
+                    break;
+                case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
+                    ExecuteAddLongRegisterOperation((opcode >> 9) & 7, opcode & 7);
+                    SetFixedBatchInstructionCycles(ref context, 8);
+                    break;
+                default:
+                    return PlannedRetireMode.Unsupported;
+            }
+
+            _ = instructionPc;
+            RecordPlannedFast(kind);
+            return PlannedRetireMode.SequentialOneWordRefill;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private PlannedRetireMode ExecuteFixedBatchPackedOperation(
+            ref M68000FixedBatchContext context,
+            ushort opcode,
+            uint instructionPc,
+            in M68kPackedOpcodePlan plan)
+        {
+            switch (plan.Kind)
+            {
+                case M68kOpcodePlanKind.Nop:
+                    SetFixedBatchInstructionCycles(ref context, 4);
+                    break;
+                case M68kOpcodePlanKind.Moveq:
+                    ExecuteMoveqRegister(plan.Register, plan.Displacement);
+                    SetFixedBatchInstructionCycles(ref context, 4);
+                    break;
+                case M68kOpcodePlanKind.ShortUnconditionalBranch:
+                    ExecuteFixedBatchShortBranch(ref context, plan.Displacement);
+                    RecordPlannedFast(plan.Kind);
+                    return PlannedRetireMode.PrefetchHandled;
+                case M68kOpcodePlanKind.QuickRegister:
+                    SetFixedBatchInstructionCycles(
+                        ref context,
+                        ExecuteQuickRegisterOperation(
+                            plan.QuickValue,
+                            plan.Size,
+                            plan.DestinationMode,
+                            plan.DestinationRegister,
+                            plan.Variant != 0));
+                    break;
+                case M68kOpcodePlanKind.QuickLongDataRegister:
+                    ExecuteQuickLongDataRegisterOperation(
+                        plan.DestinationRegister,
+                        plan.QuickValue,
+                        plan.Variant != 0);
+                    SetFixedBatchInstructionCycles(ref context, 8);
+                    break;
+                case M68kOpcodePlanKind.DataRegisterLongOrToRegister:
+                    ExecutePackedLongLogicalOperation(in plan, plan.Kind);
+                    SetFixedBatchInstructionCycles(ref context, 8);
+                    break;
+                case M68kOpcodePlanKind.DataRegisterLongEorToDestination:
+                    ExecutePackedLongLogicalOperation(in plan, plan.Kind);
+                    SetFixedBatchInstructionCycles(ref context, 8);
+                    break;
+                case M68kOpcodePlanKind.DataRegisterLongAndToRegister:
+                    ExecutePackedLongLogicalOperation(in plan, plan.Kind);
+                    SetFixedBatchInstructionCycles(ref context, 8);
+                    break;
+                case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
+                    ExecuteAddLongRegisterOperation(plan.Register, plan.SourceRegister);
+                    SetFixedBatchInstructionCycles(ref context, 8);
+                    break;
+                default:
+                    return PlannedRetireMode.Unsupported;
+            }
+
+            _ = opcode;
+            _ = instructionPc;
+            RecordPlannedFast(plan.Kind);
+            return PlannedRetireMode.SequentialOneWordRefill;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteMoveqRegister(int register, int value)
+        {
+            State.D[register] = unchecked((uint)value);
+            State.SetLongLogicFlags(State.D[register]);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int ExecuteQuickRegisterOperation(
+            uint count,
+            M68kOperandSize size,
+            int destinationMode,
+            int register,
+            bool subtract)
+        {
+            if (count == 0)
+            {
+                count = 8;
+            }
+
+            if (destinationMode == 1)
+            {
+                SetAddressRegister(
+                    register,
+                    subtract
+                        ? unchecked(State.A[register] - count)
+                        : unchecked(State.A[register] + count));
+                return 8;
+            }
+
+            var old = State.D[register] & M68kCpuState.Mask(size);
+            var result = subtract
+                ? Subtract(old, count, size, setExtend: true)
+                : Add(old, count, size, setExtend: true);
+            WriteDataRegister(register, result, size);
+            return size == M68kOperandSize.Long ? 8 : 4;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteQuickLongDataRegisterOperation(int register, uint count, bool subtract)
+        {
+            var old = State.D[register];
+            var arithmetic = subtract
+                ? M68kIntegerSemantics.Subtract(old, count, M68kOperandSize.Long)
+                : M68kIntegerSemantics.Add(old, count, M68kOperandSize.Long);
+            State.D[register] = arithmetic.Value;
+            State.SetLongArithmeticFlags(arithmetic.Value, arithmetic.Overflow, arithmetic.Carry);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteLongLogicalOperation(ushort opcode, M68kOpcodePlanKind kind)
+        {
+            var register = (opcode >> 9) & 7;
+            var sourceRegister = opcode & 7;
+            if (kind == M68kOpcodePlanKind.DataRegisterLongEorToDestination)
+            {
+                var eor = State.D[sourceRegister] ^ State.D[register];
+                State.D[sourceRegister] = eor;
+                SetLogicFlags(eor, M68kOperandSize.Long);
+                return;
+            }
+
+            var result = kind == M68kOpcodePlanKind.DataRegisterLongOrToRegister
+                ? State.D[sourceRegister] | State.D[register]
+                : State.D[sourceRegister] & State.D[register];
+            State.D[register] = result;
+            SetLogicFlags(result, M68kOperandSize.Long);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePackedLongLogicalOperation(
+            in M68kPackedOpcodePlan plan,
+            M68kOpcodePlanKind kind)
+        {
+            if (kind == M68kOpcodePlanKind.DataRegisterLongEorToDestination)
+            {
+                var eor = State.D[plan.SourceRegister] ^ State.D[plan.Register];
+                State.D[plan.SourceRegister] = eor;
+                SetLogicFlags(eor, M68kOperandSize.Long);
+                return;
+            }
+
+            var result = kind == M68kOpcodePlanKind.DataRegisterLongOrToRegister
+                ? State.D[plan.SourceRegister] | State.D[plan.Register]
+                : State.D[plan.SourceRegister] & State.D[plan.Register];
+            State.D[plan.Register] = result;
+            SetLogicFlags(result, M68kOperandSize.Long);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteAddLongRegisterOperation(int destinationRegister, int sourceRegister)
+        {
+            var arithmetic = M68kIntegerSemantics.Add(
+                State.D[destinationRegister],
+                State.D[sourceRegister],
+                M68kOperandSize.Long);
+            State.D[destinationRegister] = arithmetic.Value;
+            State.SetLongArithmeticFlags(arithmetic.Value, arithmetic.Overflow, arithmetic.Carry);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void SetFixedBatchInstructionCycles(
+            ref M68000FixedBatchContext context,
+            int cycles)
+            => context.InstructionFloor = Math.Max(
+                context.InstructionFloor,
+                context.InstructionStart + cycles);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteFixedBatchShortBranch(
+            ref M68000FixedBatchContext context,
+            int displacement)
+        {
+            var branchBase = context.ProgramCounter;
+            context.PendingInternalCycles += 2;
+            SetFixedBatchInstructionCycles(ref context, 10);
+            PrimeFixedBatchBranchTarget(
+                ref context,
+                unchecked((uint)(branchBase + displacement)));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void PrimeFixedBatchBranchTarget(
+            ref M68000FixedBatchContext context,
+            uint target)
+        {
+            System.Diagnostics.Debug.Assert((target & 1) == 0);
+            context.ProgramCounter = target;
+            FlushFixedBatchPrefetch(ref context);
+            context.PrefetchAddress = target;
+            TopUpFixedBatchPrefetchOne(ref context);
+            context.InstructionInterruptSampleCycle = TopUpFixedBatchPrefetchOne(ref context);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void FlushFixedBatchPrefetch(ref M68000FixedBatchContext context)
+        {
+            context.PrefetchCount = 0;
+            context.HasPendingPrefetch = false;
+            context.PendingPrefetchAddress = 0;
+            context.PendingPrefetchEarliestCycle = 0;
+            context.PrefetchDeferredBatchEligible0 = false;
+            context.PrefetchDeferredBatchEligible1 = false;
+            context.ConsumeWithoutPrefetch = false;
+            context.SkipRetirePrefetchTopUp = false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CompleteFixedBatchInstruction(
+            ref M68000FixedBatchContext context,
+            PlannedRetireMode retireMode)
+        {
+            context.PendingInternalCycles = 0;
+            if (context.InstructionInterruptSampleCycle == long.MinValue)
+            {
+                context.InstructionInterruptSampleCycle = context.ReadyBusCycle;
+            }
+
+            if (retireMode == PlannedRetireMode.SequentialOneWordRefill)
+            {
+                System.Diagnostics.Debug.Assert(context.PrefetchCount == 1);
+                System.Diagnostics.Debug.Assert(context.PrefetchAddress == context.ProgramCounter);
+                TopUpFixedBatchPrefetchAtRetirement(ref context);
+            }
+            else if (retireMode == PlannedRetireMode.PrefetchHandled)
+            {
+                System.Diagnostics.Debug.Assert(!context.SkipRetirePrefetchTopUp);
+            }
+            else if (context.SkipRetirePrefetchTopUp)
+            {
+                context.SkipRetirePrefetchTopUp = false;
+            }
+            else
+            {
+                TopUpFixedBatchPrefetchAtRetirement(ref context);
+            }
+
+            var completedCycle = Math.Max(context.InstructionFloor, context.RetireBusCycle);
+            context.NextBusCycle = Math.Max(context.NextBusCycle, completedCycle);
+            context.RetireBusCycle = Math.Max(context.RetireBusCycle, completedCycle);
+            if (context.Cycles < completedCycle)
+            {
+                context.Cycles = completedCycle;
+            }
+
+            context.LastInterruptSampleCycle = context.InstructionInterruptSampleCycle;
+            context.InstructionCycleFloorActive = false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void TopUpFixedBatchPrefetchAtRetirement(ref M68000FixedBatchContext context)
+        {
+            if ((context.ProgramCounter & 1) != 0)
+            {
+                return;
+            }
+
+            if (context.PrefetchCount == 0)
+            {
+                context.PrefetchAddress = context.ProgramCounter;
+            }
+
+            if (context.PrefetchAddress != context.ProgramCounter)
+            {
+                return;
+            }
+
+            while (context.PrefetchCount < 2)
+            {
+                var earliestCycle = context.HasPendingPrefetch
+                    ? Math.Max(context.PendingPrefetchEarliestCycle, context.NextBusCycle)
+                    : Math.Max(
+                        context.Cycles + (_m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0),
+                        context.NextBusCycle);
+                if (earliestCycle + 2 > context.InstructionFloor)
+                {
+                    if (!context.HasPendingPrefetch)
+                    {
+                        context.HasPendingPrefetch = true;
+                        context.PendingPrefetchAddress = unchecked(
+                            context.PrefetchAddress + (uint)(context.PrefetchCount * 2));
+                        context.PendingPrefetchEarliestCycle = earliestCycle;
+                    }
+                    return;
+                }
+
+                var readyCycle = TopUpFixedBatchPrefetchOne(ref context);
+                context.RetireBusCycle = Math.Max(context.RetireBusCycle, readyCycle);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long TopUpFixedBatchPrefetchOne(ref M68000FixedBatchContext context)
+        {
+            if (context.PrefetchCount >= 2)
+            {
+                return context.PrefetchReadyCycle1;
+            }
+
+            var slot = context.PrefetchCount;
+            var address = unchecked(context.PrefetchAddress + (uint)(slot * 2));
+            if (context.HasPendingPrefetch)
+            {
+                System.Diagnostics.Debug.Assert(context.PendingPrefetchAddress == address);
+                context.NextBusCycle = Math.Max(
+                    context.NextBusCycle,
+                    context.PendingPrefetchEarliestCycle);
+                context.HasPendingPrefetch = false;
+                context.PendingPrefetchAddress = 0;
+                context.PendingPrefetchEarliestCycle = 0;
+            }
+
+            var value = ReadFixedBatchPrefetchWord(
+                ref context,
+                address,
+                out var completedCycle,
+                out var deferredEligible);
+            if (slot == 0)
+            {
+                context.PrefetchWord0 = value;
+                context.PrefetchReadyCycle0 = completedCycle;
+                context.PrefetchDeferredBatchEligible0 = deferredEligible;
+            }
+            else
+            {
+                context.PrefetchWord1 = value;
+                context.PrefetchReadyCycle1 = completedCycle;
+                context.PrefetchDeferredBatchEligible1 = deferredEligible;
+            }
+
+            context.PrefetchCount = slot + 1;
+            return completedCycle;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ushort ReadFixedBatchPrefetchWord(
+            ref M68000FixedBatchContext context,
+            uint address,
+            out long completedCycle,
+            out bool deferredEligible)
+        {
+            var busAddress = GetCpuBusAddress(address);
+            var cycle = context.Cycles;
+            if (context.PendingInternalCycles != 0)
+            {
+                cycle += context.PendingInternalCycles;
+                context.PendingInternalCycles = 0;
+            }
+
+            if (_m68000BusCycleTiming != null)
+            {
+                cycle += _m68000BusCycleTiming.M68000BusCycleStartDelay;
+            }
+
+            if (cycle < context.NextBusCycle)
+            {
+                cycle = context.NextBusCycle;
+            }
+
+            var requestedCycle = cycle;
+            if (context.DirectRunFetch)
+            {
+                var runWindow = context.DirectRunWindow;
+                System.Diagnostics.Debug.Assert(runWindow.ContainsWord(address));
+                var directValue = runWindow.ReadWord(address);
+                var readyCycle = requestedCycle + runWindow.ReadyCycleOffset;
+                context.NextBusCycle = requestedCycle + runWindow.NextBusCycleOffset;
+                context.ReadyBusCycle = readyCycle;
+                completedCycle = readyCycle;
+                deferredEligible = runWindow.DeferredBatchEligible;
+                return directValue;
+            }
+
+            var value = ReadInstructionFetchWord(busAddress, ref cycle, out deferredEligible);
+            var timing = GetM68000BusAccessTiming(
+                busAddress,
+                M68kOperandSize.Word,
+                M68kBusAccessKind.CpuInstructionFetch,
+                isWrite: false,
+                requestedCycle,
+                cycle);
+            context.NextBusCycle = timing.NextBusCycle;
+            context.ReadyBusCycle = timing.ReadyCycle;
+            completedCycle = timing.ReadyCycle;
+            if (_cpuBusPhaseTrace != null)
+            {
+                RecordFixedBatchCpuBusPhase(
+                    in context,
+                    busAddress,
+                    requestedCycle,
+                    timing.ReadyCycle);
+            }
+
+            return value;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void RecordFixedBatchCpuBusPhase(
+            in M68000FixedBatchContext context,
+            uint address,
+            long requestedCycle,
+            long completedCycle)
+        {
+            var trace = _cpuBusPhaseTrace;
+            if (trace == null)
+            {
+                return;
+            }
+
+            if (_m68000BusCycleTiming != null)
+            {
+                requestedCycle -= _m68000BusCycleTiming.M68000BusCycleStartDelay;
+            }
+
+            var phase = new M68kCpuBusPhase(
+                context.ActiveInstructionProgramCounter,
+                context.InstructionStart,
+                context.InstructionEntryBusCycle,
+                context.InstructionEntryPrefetchCount,
+                context.InstructionEntryReadyCycle0,
+                context.InstructionEntryReadyCycle1,
+                address,
+                M68kOperandSize.Word,
+                requestedCycle,
+                completedCycle,
+                M68kBusAccessKind.CpuInstructionFetch,
+                isWrite: false,
+                State.StatusRegister);
+            trace.RecordCpuBusPhase(in phase);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2204,18 +4813,6 @@ namespace Copper68k
                     _prefetchWord1,
                     M68kOpcodePlanTable.Kinds[_prefetchWord1]);
         }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool IsQueuedFixedPlanInstruction()
-            => _opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar &&
-                !State.Halted &&
-                !State.Stopped &&
-                (State.ProgramCounter & 1) == 0 &&
-                _prefetchCount > 0 &&
-                _prefetchAddress == State.ProgramCounter &&
-                IsFixedPlanBatchOpcode(
-                    _prefetchWord0,
-                    M68kOpcodePlanTable.Kinds[_prefetchWord0]);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsFixedPlanBatchOpcode(ushort opcode, M68kOpcodePlanKind kind)
@@ -2258,7 +4855,7 @@ namespace Copper68k
 
             ExecuteShortUnconditionalBranch(opcode, displacement: -2, instructionPc);
             RecordPlannedFast(M68kOpcodePlanKind.ShortUnconditionalBranch);
-            CompleteInstruction(startCycle, PlannedRetireMode.PrefetchHandled);
+            CompletePrefetchHandledPlannedInstruction(startCycle);
             _instructionCycleFloorActive = false;
             return true;
         }
@@ -2316,13 +4913,16 @@ namespace Copper68k
                 var retireMode = TryExecutePlannedInstruction(opcode, instructionPc);
                 if (retireMode != PlannedRetireMode.Unsupported)
                 {
-                    if (retireMode == PlannedRetireMode.SequentialOneWordRefill &&
-                        !consumedFromFullPlannedQueue)
+                    if (retireMode == PlannedRetireMode.SequentialOneWordRefill)
                     {
-                        retireMode = PlannedRetireMode.General;
+                        return consumedFromFullPlannedQueue
+                            ? CompleteSequentialPlannedInstruction(startCycles)
+                            : CompleteInstruction(startCycles);
                     }
 
-                    return CompleteInstruction(startCycles, retireMode);
+                    return retireMode == PlannedRetireMode.PrefetchHandled
+                        ? CompletePrefetchHandledPlannedInstruction(startCycles)
+                        : CompleteInstruction(startCycles);
                 }
             }
 
@@ -2562,9 +5162,7 @@ namespace Copper68k
 
         private void ExecutePlannedMoveq(ushort opcode)
         {
-            var register = (opcode >> 9) & 7;
-            State.D[register] = unchecked((uint)(int)(sbyte)(opcode & 0xFF));
-            State.SetLongLogicFlags(State.D[register]);
+            ExecuteMoveqRegister((opcode >> 9) & 7, unchecked((sbyte)opcode));
             AddInstructionCycles(4);
         }
 
@@ -2599,6 +5197,10 @@ namespace Copper68k
             }
 
             AddInstructionCycles(extensionDisplacement ? 12 : 8);
+            if (!extensionDisplacement)
+            {
+                CommitShortConditionalBranchFallthroughPrefetch();
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2700,38 +5302,12 @@ namespace Copper68k
 
         private void ExecutePlannedQuickRegister(ushort opcode)
         {
-            if ((opcode & 0xFFF8) == 0x5380)
-            {
-                ExecutePlannedSubqLongOneDataRegister(opcode);
-                return;
-            }
-
-            var count = (opcode >> 9) & 7;
-            if (count == 0)
-            {
-                count = 8;
-            }
-
-            var size = DecodeQuickSize(opcode);
-            var register = opcode & 7;
-            var subtract = (opcode & 0x0100) != 0;
-            if (((opcode >> 3) & 7) == 1)
-            {
-                SetAddressRegister(
-                    register,
-                    subtract
-                        ? unchecked(State.A[register] - (uint)count)
-                        : unchecked(State.A[register] + (uint)count));
-                AddInstructionCycles(8);
-                return;
-            }
-
-            var old = State.D[register] & M68kCpuState.Mask(size);
-            var result = subtract
-                ? Subtract(old, (uint)count, size, setExtend: true)
-                : Add(old, (uint)count, size, setExtend: true);
-            WriteDataRegister(register, result, size);
-            AddInstructionCycles(size == M68kOperandSize.Long ? 8 : 4);
+            AddInstructionCycles(ExecuteQuickRegisterOperation(
+                (uint)((opcode >> 9) & 7),
+                DecodeQuickSize(opcode),
+                (opcode >> 3) & 7,
+                opcode & 7,
+                (opcode & 0x0100) != 0));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2751,20 +5327,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecuteQuickLongDataRegister(int register, uint count, bool subtract)
         {
-            var old = State.D[register];
-            var arithmetic = subtract
-                ? M68kIntegerSemantics.Subtract(old, count, M68kOperandSize.Long)
-                : M68kIntegerSemantics.Add(old, count, M68kOperandSize.Long);
-            State.D[register] = arithmetic.Value;
-            State.SetLongArithmeticFlags(arithmetic.Value, arithmetic.Overflow, arithmetic.Carry);
-            AddInstructionCycles(8);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void ExecutePlannedSubqLongOneDataRegister(ushort opcode)
-        {
-            var register = opcode & 7;
-            State.D[register] = Subtract(State.D[register], 1, M68kOperandSize.Long, setExtend: true);
+            ExecuteQuickLongDataRegisterOperation(register, count, subtract);
             AddInstructionCycles(8);
         }
 
@@ -3635,50 +6198,34 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePlannedOrLongToDataRegister(ushort opcode)
         {
-            var register = (opcode >> 9) & 7;
-            var result = State.D[opcode & 7] | State.D[register];
-            State.D[register] = result;
-            SetLogicFlags(result, M68kOperandSize.Long);
+            ExecuteLongLogicalOperation(opcode, M68kOpcodePlanKind.DataRegisterLongOrToRegister);
             AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePlannedEorLongToDataRegister(ushort opcode)
         {
-            var sourceRegister = opcode & 7;
-            var result = State.D[sourceRegister] ^ State.D[(opcode >> 9) & 7];
-            State.D[sourceRegister] = result;
-            SetLogicFlags(result, M68kOperandSize.Long);
+            ExecuteLongLogicalOperation(opcode, M68kOpcodePlanKind.DataRegisterLongEorToDestination);
             AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePlannedAndLongToDataRegister(ushort opcode)
         {
-            var register = (opcode >> 9) & 7;
-            var result = State.D[opcode & 7] & State.D[register];
-            State.D[register] = result;
-            SetLogicFlags(result, M68kOperandSize.Long);
+            ExecuteLongLogicalOperation(opcode, M68kOpcodePlanKind.DataRegisterLongAndToRegister);
             AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePlannedAddLongToDataRegister(ushort opcode)
         {
-            var register = (opcode >> 9) & 7;
-            var arithmetic = M68kIntegerSemantics.Add(
-                State.D[register],
-                State.D[opcode & 7],
-                M68kOperandSize.Long);
-            State.D[register] = arithmetic.Value;
-            State.SetLongArithmeticFlags(arithmetic.Value, arithmetic.Overflow, arithmetic.Carry);
+            ExecuteAddLongRegisterOperation((opcode >> 9) & 7, opcode & 7);
             AddInstructionCycles(8);
         }
 
         private void ExecutePackedMoveq(in M68kPackedOpcodePlan plan)
         {
-            State.D[plan.Register] = unchecked((uint)(int)plan.Displacement);
-            State.SetLongLogicFlags(State.D[plan.Register]);
+            ExecuteMoveqRegister(plan.Register, plan.Displacement);
             AddInstructionCycles(4);
         }
 
@@ -3710,6 +6257,10 @@ namespace Copper68k
             }
 
             AddInstructionCycles(plan.ExtensionDisplacement ? 12 : 8);
+            if (!plan.ExtensionDisplacement)
+            {
+                CommitShortConditionalBranchFallthroughPrefetch();
+            }
         }
 
         private void ExecutePackedDbcc(ushort opcode, in M68kPackedOpcodePlan plan)
@@ -3755,31 +6306,13 @@ namespace Copper68k
 
         private void ExecutePackedQuickRegister(ushort opcode, in M68kPackedOpcodePlan plan)
         {
-            if ((opcode & 0xFFF8) == 0x5380)
-            {
-                ExecutePlannedSubqLongOneDataRegister(opcode);
-                return;
-            }
-
-            var count = plan.QuickValue;
-            var register = plan.DestinationRegister;
-            if (plan.DestinationMode == 1)
-            {
-                SetAddressRegister(
-                    register,
-                    plan.Variant != 0
-                        ? unchecked(State.A[register] - (uint)count)
-                        : unchecked(State.A[register] + (uint)count));
-                AddInstructionCycles(8);
-                return;
-            }
-
-            var old = State.D[register] & M68kCpuState.Mask(plan.Size);
-            var result = plan.Variant != 0
-                ? Subtract(old, count, plan.Size, setExtend: true)
-                : Add(old, count, plan.Size, setExtend: true);
-            WriteDataRegister(register, result, plan.Size);
-            AddInstructionCycles(plan.Size == M68kOperandSize.Long ? 8 : 4);
+            _ = opcode;
+            AddInstructionCycles(ExecuteQuickRegisterOperation(
+                plan.QuickValue,
+                plan.Size,
+                plan.DestinationMode,
+                plan.DestinationRegister,
+                plan.Variant != 0));
         }
 
         private void ExecutePackedMove(in M68kPackedOpcodePlan plan)
@@ -4143,39 +6676,28 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePackedOrLongToDataRegister(in M68kPackedOpcodePlan plan)
         {
-            var result = State.D[plan.SourceRegister] | State.D[plan.Register];
-            State.D[plan.Register] = result;
-            SetLogicFlags(result, M68kOperandSize.Long);
+            ExecutePackedLongLogicalOperation(in plan, plan.Kind);
             AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePackedEorLongToDataRegister(in M68kPackedOpcodePlan plan)
         {
-            var result = State.D[plan.SourceRegister] ^ State.D[plan.Register];
-            State.D[plan.SourceRegister] = result;
-            SetLogicFlags(result, M68kOperandSize.Long);
+            ExecutePackedLongLogicalOperation(in plan, plan.Kind);
             AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePackedAndLongToDataRegister(in M68kPackedOpcodePlan plan)
         {
-            var result = State.D[plan.SourceRegister] & State.D[plan.Register];
-            State.D[plan.Register] = result;
-            SetLogicFlags(result, M68kOperandSize.Long);
+            ExecutePackedLongLogicalOperation(in plan, plan.Kind);
             AddInstructionCycles(8);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePackedAddLongToDataRegister(in M68kPackedOpcodePlan plan)
         {
-            var arithmetic = M68kIntegerSemantics.Add(
-                State.D[plan.Register],
-                State.D[plan.SourceRegister],
-                M68kOperandSize.Long);
-            State.D[plan.Register] = arithmetic.Value;
-            State.SetLongArithmeticFlags(arithmetic.Value, arithmetic.Overflow, arithmetic.Carry);
+            ExecuteAddLongRegisterOperation(plan.Register, plan.SourceRegister);
             AddInstructionCycles(8);
         }
 
@@ -5131,6 +7653,10 @@ namespace Copper68k
                 {
                     _ = instructionPc;
                     AddInstructionCycles(displacement == 0 ? 12 : 8);
+                    if (displacement != 0)
+                    {
+                        CommitShortConditionalBranchFallthroughPrefetch();
+                    }
                 }
 
                 return true;
@@ -5153,6 +7679,10 @@ namespace Copper68k
                 {
                     _ = instructionPc;
                     AddInstructionCycles(displacement == 0 ? 12 : 8);
+                    if (displacement != 0)
+                    {
+                        CommitShortConditionalBranchFallthroughPrefetch();
+                    }
                 }
 
                 return true;
@@ -5175,6 +7705,10 @@ namespace Copper68k
                 {
                     _ = instructionPc;
                     AddInstructionCycles(displacement == 0 ? 12 : 8);
+                    if (displacement != 0)
+                    {
+                        CommitShortConditionalBranchFallthroughPrefetch();
+                    }
                 }
 
                 return true;
@@ -5195,6 +7729,10 @@ namespace Copper68k
             {
                 _ = instructionPc;
                 AddInstructionCycles(displacement == 0 ? 12 : 8);
+                if (displacement != 0)
+                {
+                    CommitShortConditionalBranchFallthroughPrefetch();
+                }
             }
 
             return true;
@@ -5560,7 +8098,7 @@ namespace Copper68k
                     var programCounter = PullLong();
                     State.StatusRegister = statusRegister;
                     AddInstructionCycles(20);
-                    BranchTo(programCounter, State.ProgramCounter);
+                    ReturnFromExceptionTo(programCounter, State.ProgramCounter);
                     return true;
                 }
                 case 0x4E75:
@@ -7806,6 +10344,34 @@ namespace Copper68k
             _cpuRetireBusCycle = Math.Max(
                 _cpuRetireBusCycle,
                 targetExtensionReadyCycle);
+            // IPL is sampled after the target opcode read. If it is accepted,
+            // the already-started target-extension transfer and the remaining
+            // CE000 DBcc retirement tail still completes before exception
+            // stacking. Two CPU cycles overlap the committed transfer, leaving
+            // four cycles after its frozen completion. The architectural
+            // decrement is not repeated.
+            _exceptionEntryNotBeforeCycle = Math.Max(
+                _exceptionEntryNotBeforeCycle,
+                targetExtensionReadyCycle + M68000DbccExceptionTailAfterCommittedFetchCycles);
+            _skipRetirePrefetchTopUp = true;
+        }
+
+        private void ReturnFromExceptionTo(uint target, uint stackedProgramCounter)
+        {
+            ValidateBranchTarget(target, stackedProgramCounter);
+
+            // CE000 RTE fetches the returned-to opcode, polls IPL, and then
+            // performs the returned-to extension fetch. Once that second bus
+            // transfer has started it is committed even if the IPL poll accepts
+            // an interrupt and discards the prefetched values.
+            SetProgramCounterAndFlushPrefetch(target);
+            _prefetchAddress = target;
+            var targetOpcodeReadyCycle = TopUpPrefetchOne();
+            _instructionInterruptSampleCycle = targetOpcodeReadyCycle;
+            var targetExtensionReadyCycle = TopUpPrefetchOne();
+            _cpuRetireBusCycle = Math.Max(
+                _cpuRetireBusCycle,
+                targetExtensionReadyCycle);
             _exceptionEntryNotBeforeCycle = Math.Max(
                 _exceptionEntryNotBeforeCycle,
                 targetExtensionReadyCycle);
@@ -8138,6 +10704,16 @@ namespace Copper68k
         private void PrefetchFallthroughAfterMemoryWriteback()
         {
             _skipRetirePrefetchTopUp = true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CommitShortConditionalBranchFallthroughPrefetch()
+        {
+            // CE000 short Bcc not-taken performs both internal two-cycle
+            // steps before its explicit fallthrough lookahead transfer.
+            // CompleteInstruction clears pending internal progress before its
+            // generic retirement top-up, so commit this physical fetch here.
+            PrefetchFallthroughAfterMoveSourceRead();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -8828,37 +11404,50 @@ namespace Copper68k
             }
         }
 
-        private int CompleteInstruction(long startCycle, PlannedRetireMode retireMode = PlannedRetireMode.General)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int CompleteSequentialPlannedInstruction(long startCycle)
+        {
+            PrepareInstructionRetirement();
+            AppendSequentialPlannedPrefetchWord();
+            return PublishInstructionRetirement(startCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int CompletePrefetchHandledPlannedInstruction(long startCycle)
+        {
+            PrepareInstructionRetirement();
+            System.Diagnostics.Debug.Assert(!_skipRetirePrefetchTopUp);
+            return PublishInstructionRetirement(startCycle);
+        }
+
+        private int CompleteInstruction(long startCycle)
+        {
+            PrepareInstructionRetirement();
+            if (_skipRetirePrefetchTopUp)
+            {
+                _skipRetirePrefetchTopUp = false;
+            }
+            else
+            {
+                TopUpPrefetchAtRetirement();
+            }
+
+            return PublishInstructionRetirement(startCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void PrepareInstructionRetirement()
         {
             _pendingInternalCycles = 0;
             if (_instructionInterruptSampleCycle == long.MinValue)
             {
                 _instructionInterruptSampleCycle = _cpuBusReadyCycle;
             }
-            if (retireMode == PlannedRetireMode.SequentialOneWordRefill)
-            {
-                AppendSequentialPlannedPrefetchWord();
-            }
-            else if (retireMode == PlannedRetireMode.PrefetchHandled)
-            {
-                System.Diagnostics.Debug.Assert(!_skipRetirePrefetchTopUp);
-            }
-            else if (_skipRetirePrefetchTopUp)
-            {
-                _skipRetirePrefetchTopUp = false;
-            }
-            else
-            {
-                if (_prefetchCount == 1 && _prefetchAddress == State.ProgramCounter)
-                {
-                    TopUpPrefetchAtRetirement();
-                }
-                else
-                {
-                    TopUpPrefetchAtRetirement();
-                }
-            }
+        }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int PublishInstructionRetirement(long startCycle)
+        {
             var completedCycle = Math.Max(_instructionCycleFloor, _cpuRetireBusCycle);
             if (_deferredCpuInstructionTimingStarted)
             {

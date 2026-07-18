@@ -106,6 +106,7 @@ public sealed class M68kDecoderTests
 
 		Assert.False(M68kDecoder.TryDecode(bus, 0x1000, out _, out var reason));
 		Assert.Equal(M68kJitBailoutReason.HostTrap, reason);
+		Assert.Equal(0, bus.HostTrapProbeCount);
 	}
 
 	private static M68kDecodedInstruction Decode(Copper68kTestBus bus, uint address)
