@@ -136,7 +136,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(extensionReadyCycle, elapsed);
 		Assert.Equal(24, elapsed);
 		Assert.Equal(2, transition.PrefetchCount);
-		Assert.Equal(extensionReadyCycle + 6, transition.ExceptionEntryNotBeforeCycle);
+		Assert.Equal(extensionReadyCycle + 4, transition.ExceptionEntryNotBeforeCycle);
 
 		var interruptPhaseStart = bus.CpuBusPhases.Count;
 		cpu.RequestInterrupt(1, 0x0064);
@@ -144,7 +144,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			.Skip(interruptPhaseStart)
 			.First(phase => phase.AccessKind == M68kBusAccessKind.CpuDataWrite);
 
-		Assert.Equal(extensionReadyCycle + 12, lowPcWrite.RequestedCycle);
+		Assert.Equal(extensionReadyCycle + 10, lowPcWrite.RequestedCycle);
 	}
 
 	[Fact]
