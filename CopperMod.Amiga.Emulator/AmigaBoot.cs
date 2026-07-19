@@ -35,7 +35,8 @@ namespace CopperMod.Amiga
         private const uint DosResidentIdAddress = DosResidentAddress + 0x50;
         private const uint DosResidentInitAddress = 0x00F2_0100;
         private const uint WorkbenchRootLock = 0x00F8_0000;
-        private const int ExecBaseImageSize = 0x180;
+        // Exec's LibList header begins at 0x17A and occupies 14 bytes.
+        private const int ExecBaseImageSize = 0x188;
         private const int ExecSoftVerOffset = 0x22;
         private const int ExecLowMemChkSumOffset = 0x24;
         private const int ExecChkBaseOffset = 0x26;
@@ -773,11 +774,22 @@ namespace CopperMod.Amiga
             bus.RegisterHostTrapStub(DosResidentInitAddress, HostInitResident);
             bus.ConfigureAutoconfigFastRamForHost();
             bus.ConfigureAutoconfigRtgForHost();
+            InstallKickstartMemoryList();
             if (bus.RtgVram.IsPresent)
             {
-                CyberGraphics.InstallTrapVectors(CyberGraphicsLibrary.HostLibraryBase);
+                var diagnosticCopy = AllocateMemoryFromMemList(
+                    CyberGraphicsRtgFirmware.DiagAreaCopySize,
+                    MemfPublic | MemfClear);
+                if (diagnosticCopy == 0)
+                {
+                    throw new AmigaEmulationException("CopperStart could not allocate CyberGraphX diagnostic memory.");
+                }
+
+                _cyberGraphicsFirmware!.InstallHostShimResident(
+                    bus,
+                    diagnosticCopy,
+                    AmigaKickstartHost.ExecLibraryBase);
             }
-            InstallKickstartMemoryList();
             InstallHostSupervisorStack();
         }
 
@@ -1798,56 +1810,55 @@ namespace CopperMod.Amiga
 
         private bool TryGetHostLibraryBase(string? cachedName, uint nameAddress, out uint libraryBase)
         {
-            if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "graphics"))
+            if (MatchesNullTerminatedString(cachedName, nameAddress, 96, "cybergraphics.library"))
+            {
+                libraryBase = _cyberGraphicsFirmware?.LibraryBase ?? 0;
+                return libraryBase != 0 && _machine.Bus.RtgVram.Active;
+            }
+
+            if (MatchesNullTerminatedString(cachedName, nameAddress, 96, "graphics.library"))
             {
                 libraryBase = AmigaKickstartHost.GraphicsLibraryBase;
                 return true;
             }
 
-            if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "intuition"))
+            if (MatchesNullTerminatedString(cachedName, nameAddress, 96, "intuition.library"))
             {
                 libraryBase = AmigaKickstartHost.IntuitionLibraryBase;
                 return true;
             }
 
-            if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "expansion"))
+            if (MatchesNullTerminatedString(cachedName, nameAddress, 96, "expansion.library"))
             {
                 libraryBase = AmigaKickstartHost.ExpansionLibraryBase;
                 return true;
             }
 
-            if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "cybergraphics"))
-            {
-                libraryBase = CyberGraphicsLibrary.HostLibraryBase;
-                return _machine.Bus.RtgVram.Active;
-            }
-
-            if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "dos"))
+            if (MatchesNullTerminatedString(cachedName, nameAddress, 96, "dos.library"))
             {
                 libraryBase = AmigaKickstartHost.DosLibraryBase;
                 return true;
             }
 
-            if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "ciaa"))
+            if (MatchesNullTerminatedString(cachedName, nameAddress, 96, "ciaa.resource"))
             {
                 libraryBase = AmigaKickstartHost.CiaAResourceBase;
                 return true;
             }
 
-            if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "ciab") ||
-                ContainsNullTerminatedString(cachedName, nameAddress, 96, "cia"))
+            if (MatchesNullTerminatedString(cachedName, nameAddress, 96, "ciab.resource"))
             {
                 libraryBase = AmigaKickstartHost.CiaBResourceBase;
                 return true;
             }
 
-            if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "icon"))
+            if (MatchesNullTerminatedString(cachedName, nameAddress, 96, "icon.library"))
             {
                 libraryBase = AmigaKickstartHost.IconLibraryBase;
                 return true;
             }
 
-            if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "workbench"))
+            if (MatchesNullTerminatedString(cachedName, nameAddress, 96, "workbench.library"))
             {
                 libraryBase = AmigaKickstartHost.WorkbenchLibraryBase;
                 return true;
@@ -7013,6 +7024,29 @@ namespace CopperMod.Amiga
             public uint InterruptAddress { get; }
 
             public uint DataAddress { get; }
+        }
+
+        private bool MatchesNullTerminatedString(string? cached, uint address, int maxLength, string value)
+        {
+            if (cached != null)
+            {
+                return string.Equals(cached, value, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (address == 0 || maxLength <= value.Length)
+            {
+                return false;
+            }
+
+            for (var offset = 0; offset < value.Length; offset++)
+            {
+                if (!AsciiEqualsIgnoreCase(_machine.Bus.ReadByte(address + (uint)offset), value[offset]))
+                {
+                    return false;
+                }
+            }
+
+            return _machine.Bus.ReadByte(address + (uint)value.Length) == 0;
         }
 
         uint ICyberGraphicsGuestServices.Allocate(int byteCount)

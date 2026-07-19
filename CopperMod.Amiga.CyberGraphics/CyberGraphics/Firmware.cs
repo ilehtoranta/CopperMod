@@ -62,6 +62,33 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             _library.ResetRtgState();
         }
 
+        internal uint InstallHostShimResident(AmigaBus bus, uint copyBase, uint execBase)
+        {
+            ArgumentNullException.ThrowIfNull(bus);
+            if (copyBase == 0 || execBase == 0 ||
+                !bus.IsMappedMemoryRange(copyBase, DiagAreaCopySize))
+            {
+                throw new ArgumentOutOfRangeException(nameof(copyBase));
+            }
+
+            for (var offset = 0; offset < DiagAreaCopySize; offset++)
+            {
+                bus.WriteByte(copyBase + (uint)offset, _rom[DiagAreaOffset + offset], 0);
+            }
+
+            var state = new M68kCpuState();
+            state.A[2] = copyBase;
+            state.A[6] = execBase;
+            HostDiagBootstrap(state);
+            HostResidentInit(state);
+            if (state.D[0] == 0)
+            {
+                throw new InvalidOperationException("CyberGraphX diagnostic resident could not be installed.");
+            }
+
+            return state.D[0];
+        }
+
         private void HostDiagBootstrap(M68kCpuState state)
         {
             var bus = _bus;
