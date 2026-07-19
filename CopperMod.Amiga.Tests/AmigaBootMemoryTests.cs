@@ -121,6 +121,41 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void HostShimBootInstallsCyberGraphicsDiagnosticResidentAndResolvesOnlyItsExactName()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithCpu(AmigaM68kCoreFactory.Default, M68kBackendKind.AccurateM68040)
+			.WithLiveAgnusDma(false)
+			.WithRtgVram(16L * 1024 * 1024));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var bus = machine.Bus;
+
+		const uint nameAddress = 0x1800;
+		WriteCString(bus, nameAddress, "cybergraphics.library");
+		var openState = new M68kCpuState();
+		openState.A[1] = nameAddress;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -408), openState));
+
+		var libraryBase = openState.D[0];
+		Assert.NotEqual(0u, libraryBase);
+		Assert.NotEqual(AmigaKickstartHost.GraphicsLibraryBase, libraryBase);
+		Assert.Equal(libraryBase, boot.CyberGraphics.LibraryBase);
+		Assert.Equal(libraryBase, bus.ReadLong(AmigaKickstartHost.ExecLibraryBase + 0x17A));
+
+		var cyberState = new M68kCpuState { D = { [0] = 0xFFFF_FFFF } };
+		Assert.True(InvokeHostTrap(bus, Lvo(libraryBase, -54), cyberState));
+		Assert.Equal(0u, cyberState.D[0]);
+
+		WriteCString(bus, nameAddress, "notcybergraphics.library");
+		var partialState = new M68kCpuState();
+		partialState.A[1] = nameAddress;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -408), partialState));
+		Assert.Equal(AmigaKickstartHost.DummyLibraryBase, partialState.D[0]);
+	}
+
+	[Fact]
 	public void NativeCopperStartTakeoverPreparesRuntimeBoundaryExactlyOnce()
 	{
 		var machine = new Machine(MachineOptions
