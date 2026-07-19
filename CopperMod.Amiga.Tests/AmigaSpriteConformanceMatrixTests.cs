@@ -1,4 +1,5 @@
 using CopperMod.Amiga;
+using CopperMod.Amiga.CustomChips.Denise;
 
 namespace CopperMod.Amiga.Tests;
 
@@ -1017,6 +1018,20 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
+	public void ActionableSpriteEventCacheMatchesReferenceLiveDma()
+	{
+		var reference = RenderSpriteEventCacheFrame(SpriteEventCacheMode.Off);
+		var cached = RenderSpriteEventCacheFrame(SpriteEventCacheMode.Verify);
+
+		Assert.Equal(reference.Frame, cached.Frame);
+		Assert.Equal(reference.SpriteFetches, cached.SpriteFetches);
+		Assert.Equal(reference.MissedSlots, cached.MissedSlots);
+		Assert.True(cached.CacheHits > 0);
+		Assert.True(cached.CacheMisses > 0);
+		Assert.Equal(0, cached.VerificationMismatches);
+	}
+
+	[Fact]
 	public void SpriteDmaLatchIsConsumedAfterGrantedDataFetch()
 	{
 		var bus = CreateDisplayComponentBus();
@@ -1550,6 +1565,15 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		method.Invoke(instance, arguments);
 	}
 
+	private static long InvokePrivateLong(object instance, string methodName)
+	{
+		var method = instance.GetType().GetMethod(
+			methodName,
+			System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+		Assert.NotNull(method);
+		return (long)method.Invoke(instance, Array.Empty<object>())!;
+	}
+
 	private static void WriteSpriteDmaBlock(
 		AmigaBus bus,
 		uint address,
@@ -1571,6 +1595,27 @@ public sealed class AmigaSpriteConformanceMatrixTests
 			WriteChipWord(bus, address + 8, 0);
 			WriteChipWord(bus, address + 10, 0);
 		}
+	}
+
+	private static SpriteEventCacheFrameResult RenderSpriteEventCacheFrame(SpriteEventCacheMode mode)
+	{
+		var bus = CreateDisplayComponentBus();
+		bus.Display.SetSpriteEventCacheMode(mode, profilingEnabled: true);
+		EnableSpriteDma(bus, 0x8220);
+		WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+		bus.Display.RenderFrame(frame, 0, FrameCycles());
+		_ = InvokePrivateLong(bus.Display, "GetNextActionableLiveSpriteEventCycle");
+		_ = InvokePrivateLong(bus.Display, "GetNextActionableLiveSpriteEventCycle");
+		var snapshot = bus.Display.CaptureSnapshot();
+		return new SpriteEventCacheFrameResult(
+			frame,
+			snapshot.LastSpriteDmaFetches,
+			snapshot.LastMissedSpriteDmaSlots,
+			bus.Display.SpriteEventCacheHits,
+			bus.Display.SpriteEventCacheMisses,
+			bus.Display.SpriteEventCacheVerificationMismatches);
 	}
 
 	private static void WriteSpriteDmaRows(
@@ -1798,4 +1843,12 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	private sealed record DmaHeightRow(int Height);
 
 	private sealed record SpritePriorityRow(int FrontSprite, int BackSprite);
+
+	private sealed record SpriteEventCacheFrameResult(
+		uint[] Frame,
+		int SpriteFetches,
+		int MissedSlots,
+		long CacheHits,
+		long CacheMisses,
+		long VerificationMismatches);
 }

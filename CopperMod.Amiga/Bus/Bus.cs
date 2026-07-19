@@ -347,18 +347,18 @@ namespace CopperMod.Amiga.Bus
         private bool _chipDataBusLatchWasDma;
         private uint _codeGenerationClock = 1;
         private uint _cpuPhysicalAddressMapGeneration = 1;
-        private int _graphicsDirectAccessDepth;
-        private uint _graphicsRealFastWriteStart = uint.MaxValue;
-        private uint _graphicsRealFastWriteEnd;
-        private uint _graphicsRtgWriteStart = uint.MaxValue;
-        private uint _graphicsRtgWriteEnd;
-        private byte[]? _graphicsReadWindow;
-        private uint _graphicsReadWindowStart;
-        private uint _graphicsReadWindowEnd;
-        private byte[]? _graphicsWriteWindow;
-        private uint _graphicsWriteWindowStart;
-        private uint _graphicsWriteWindowEnd;
-        private CyberGraphicsDirectMemoryKind _graphicsWriteWindowKind;
+        private int _hostAcceleratorAccessDepth;
+        private uint _hostAcceleratorRealFastWriteStart = uint.MaxValue;
+        private uint _hostAcceleratorRealFastWriteEnd;
+        private uint _hostAcceleratorRtgWriteStart = uint.MaxValue;
+        private uint _hostAcceleratorRtgWriteEnd;
+        private byte[]? _hostAcceleratorReadWindow;
+        private uint _hostAcceleratorReadWindowStart;
+        private uint _hostAcceleratorReadWindowEnd;
+        private byte[]? _hostAcceleratorWriteWindow;
+        private uint _hostAcceleratorWriteWindowStart;
+        private uint _hostAcceleratorWriteWindowEnd;
+        private HostAcceleratorMemoryKind _hostAcceleratorWriteWindowKind;
         private bool _strictCpuPhysicalDataMapping;
         private ushort _nextHostTrapId = 1;
         private readonly AmigaChipset _chipset;
@@ -505,7 +505,6 @@ namespace CopperMod.Amiga.Bus
             _autoconfig = new AutoconfigChain(autoconfigBoards);
             _autoconfig.BoardConfigured += OnAutoconfigBoardConfigured;
             _autoconfig.AddressMapChanged += OnAutoconfigAddressMapChanged;
-            CyberGraphics = new CyberGraphicsLibrary(this);
             Display = new OcsDisplay(this, _agnusRegisters, selectedChipset, enableLiveDisplayDma);
             Display.SetCpuWaitFixedSlotImageDiagnosticsEnabled(verifyDeferredCpuBusBatch);
             _diagnosticChipSlots = _hrmSlotEngine;
@@ -590,8 +589,6 @@ namespace CopperMod.Amiga.Bus
         public AmigaDiskController Disk { get; }
 
         public CopperHdfController CopperHdf { get; }
-
-        internal CyberGraphicsLibrary CyberGraphics { get; }
 
         public OcsDisplay Display { get; }
 
@@ -877,11 +874,6 @@ namespace CopperMod.Amiga.Bus
 
         private void OnAutoconfigBoardConfigured(IAutoconfigBoard board)
         {
-            if (ReferenceEquals(board, _autoconfigRtg))
-            {
-                _autoconfigRtg!.InstallBootstrapTraps(this, CyberGraphics);
-            }
-
             if (ReferenceEquals(board, CopperHdf))
             {
                 CopperHdf.InstallBootstrapTraps(this);
@@ -948,6 +940,16 @@ namespace CopperMod.Amiga.Bus
             }
         }
 
+        internal void AttachRtgFirmware(IAmigaRtgFirmwareProvider firmware)
+        {
+            if (_autoconfigRtg == null)
+            {
+                throw new InvalidOperationException("RTG firmware requires a configured RTG VRAM device.");
+            }
+
+            _autoconfigRtg.AttachFirmware(this, firmware);
+        }
+
         internal uint AllocateRtgVram(long byteCount)
             => _rtgVram.Allocate(byteCount);
 
@@ -992,12 +994,12 @@ namespace CopperMod.Amiga.Bus
             _chipRam.ClearData();
             _expansionRam.ClearData();
             _autoconfig.ColdReset();
-            CyberGraphics.ResetRtgState();
             _hostTrapStubs.Clear();
             _relocatableHostTrapStubs.Clear();
             _hostTrapStubAddresses.Clear();
             Array.Clear(_hostTrapStubPages);
             _nextHostTrapId = 1;
+            _autoconfigRtg?.RefreshFirmwareAttachment(this);
             _mappedMemory.Clear();
             _romOverlayEnabled = true;
             InvalidateInstructionFetchWindows();
@@ -1130,7 +1132,6 @@ namespace CopperMod.Amiga.Bus
             Paula.Reset();
             Disk.Reset();
             _autoconfig.ResetConfiguration();
-            CyberGraphics.ResetRtgState();
             _agnusRegisters.Reset();
             Display.Reset();
             Agnus.Reset();
@@ -2609,21 +2610,21 @@ namespace CopperMod.Amiga.Bus
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void WriteGraphicsByte(uint address, byte value)
+        internal void WriteHostAcceleratorByte(uint address, byte value)
         {
-            if (_graphicsDirectAccessDepth != 0 &&
-                address >= _graphicsWriteWindowStart &&
-                address < _graphicsWriteWindowEnd)
+            if (_hostAcceleratorAccessDepth != 0 &&
+                address >= _hostAcceleratorWriteWindowStart &&
+                address < _hostAcceleratorWriteWindowEnd)
             {
-                _graphicsWriteWindow![(int)(address - _graphicsWriteWindowStart)] = value;
-                RecordGraphicsDirectWrite(_graphicsWriteWindowKind, address, 1);
+                _hostAcceleratorWriteWindow![(int)(address - _hostAcceleratorWriteWindowStart)] = value;
+                RecordHostAcceleratorDirectWrite(_hostAcceleratorWriteWindowKind, address, 1);
                 return;
             }
 
-            if (_graphicsDirectAccessDepth != 0 && TryResolveGraphicsWriteWindow(address))
+            if (_hostAcceleratorAccessDepth != 0 && TryResolveHostAcceleratorWriteWindow(address))
             {
-                _graphicsWriteWindow![checked((int)(address - _graphicsWriteWindowStart))] = value;
-                RecordGraphicsDirectWrite(_graphicsWriteWindowKind, address, 1);
+                _hostAcceleratorWriteWindow![checked((int)(address - _hostAcceleratorWriteWindowStart))] = value;
+                RecordHostAcceleratorDirectWrite(_hostAcceleratorWriteWindowKind, address, 1);
                 return;
             }
 
@@ -2644,30 +2645,30 @@ namespace CopperMod.Amiga.Bus
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal byte ReadGraphicsByte(uint address)
+        internal byte ReadHostAcceleratorByte(uint address)
         {
-            if (_graphicsDirectAccessDepth != 0 &&
-                address >= _graphicsReadWindowStart &&
-                address < _graphicsReadWindowEnd)
+            if (_hostAcceleratorAccessDepth != 0 &&
+                address >= _hostAcceleratorReadWindowStart &&
+                address < _hostAcceleratorReadWindowEnd)
             {
-                return _graphicsReadWindow?[(int)(address - _graphicsReadWindowStart)] ?? 0;
+                return _hostAcceleratorReadWindow?[(int)(address - _hostAcceleratorReadWindowStart)] ?? 0;
             }
 
-            if (_graphicsDirectAccessDepth != 0 && TryResolveGraphicsReadWindow(address))
+            if (_hostAcceleratorAccessDepth != 0 && TryResolveHostAcceleratorReadWindow(address))
             {
-                return _graphicsReadWindow?[(int)(address - _graphicsReadWindowStart)] ?? 0;
+                return _hostAcceleratorReadWindow?[(int)(address - _hostAcceleratorReadWindowStart)] ?? 0;
             }
 
             return ReadByte(address);
         }
 
-        private bool TryResolveGraphicsReadWindow(uint address)
+        private bool TryResolveHostAcceleratorReadWindow(uint address)
         {
             if (TryGetRealFastRamOffset(address, out _))
             {
-                _graphicsReadWindow = _realFastRam.Data;
-                _graphicsReadWindowStart = RealFastRamBase;
-                _graphicsReadWindowEnd = RealFastRamBase + (uint)_realFastRam.Length;
+                _hostAcceleratorReadWindow = _realFastRam.Data;
+                _hostAcceleratorReadWindowStart = RealFastRamBase;
+                _hostAcceleratorReadWindowEnd = RealFastRamBase + (uint)_realFastRam.Length;
                 return true;
             }
 
@@ -2677,20 +2678,20 @@ namespace CopperMod.Amiga.Bus
             }
 
             var pageIndex = checked((int)((address - RtgVramBackend.BaseAddress) >> RtgVramBackend.PageShift));
-            _graphicsReadWindow = _rtgVram.GetDirectReadPage(pageIndex);
-            _graphicsReadWindowStart = RtgVramBackend.BaseAddress + ((uint)pageIndex << RtgVramBackend.PageShift);
-            _graphicsReadWindowEnd = _graphicsReadWindowStart + RtgVramBackend.PageSize;
+            _hostAcceleratorReadWindow = _rtgVram.GetDirectReadPage(pageIndex);
+            _hostAcceleratorReadWindowStart = RtgVramBackend.BaseAddress + ((uint)pageIndex << RtgVramBackend.PageShift);
+            _hostAcceleratorReadWindowEnd = _hostAcceleratorReadWindowStart + RtgVramBackend.PageSize;
             return true;
         }
 
-        private bool TryResolveGraphicsWriteWindow(uint address)
+        private bool TryResolveHostAcceleratorWriteWindow(uint address)
         {
             if (TryGetRealFastRamOffset(address, out _))
             {
-                _graphicsWriteWindow = _realFastRam.Data;
-                _graphicsWriteWindowStart = RealFastRamBase;
-                _graphicsWriteWindowEnd = RealFastRamBase + (uint)_realFastRam.Length;
-                _graphicsWriteWindowKind = CyberGraphicsDirectMemoryKind.RealFastRam;
+                _hostAcceleratorWriteWindow = _realFastRam.Data;
+                _hostAcceleratorWriteWindowStart = RealFastRamBase;
+                _hostAcceleratorWriteWindowEnd = RealFastRamBase + (uint)_realFastRam.Length;
+                _hostAcceleratorWriteWindowKind = HostAcceleratorMemoryKind.RealFastRam;
                 return true;
             }
 
@@ -2700,27 +2701,27 @@ namespace CopperMod.Amiga.Bus
             }
 
             var pageIndex = checked((int)((address - RtgVramBackend.BaseAddress) >> RtgVramBackend.PageShift));
-            _graphicsWriteWindow = _rtgVram.GetDirectWritePage(pageIndex);
-            _graphicsWriteWindowStart = RtgVramBackend.BaseAddress + ((uint)pageIndex << RtgVramBackend.PageShift);
-            _graphicsWriteWindowEnd = _graphicsWriteWindowStart + RtgVramBackend.PageSize;
-            _graphicsWriteWindowKind = CyberGraphicsDirectMemoryKind.RtgVram;
+            _hostAcceleratorWriteWindow = _rtgVram.GetDirectWritePage(pageIndex);
+            _hostAcceleratorWriteWindowStart = RtgVramBackend.BaseAddress + ((uint)pageIndex << RtgVramBackend.PageShift);
+            _hostAcceleratorWriteWindowEnd = _hostAcceleratorWriteWindowStart + RtgVramBackend.PageSize;
+            _hostAcceleratorWriteWindowKind = HostAcceleratorMemoryKind.RtgVram;
             return true;
         }
 
-        internal bool TryResolveGraphicsDirectMemory(
+        internal bool TryResolveHostAcceleratorDirectMemory(
             uint address,
             int byteCount,
-            out CyberGraphicsDirectMemory? memory)
+            out HostAcceleratorDirectMemory? memory)
         {
             if (_realFastRam.TryGetContiguousMemory(address, byteCount, out var linearMemory, out var offset))
             {
-                memory = new CyberGraphicsDirectMemory(linearMemory, offset);
+                memory = new HostAcceleratorDirectMemory(linearMemory, offset);
                 return true;
             }
 
             if (_rtgVram.IsAllocatedRange(address, byteCount))
             {
-                memory = new CyberGraphicsDirectMemory(_rtgVram, address);
+                memory = new HostAcceleratorDirectMemory(_rtgVram, address);
                 return true;
             }
 
@@ -2728,87 +2729,87 @@ namespace CopperMod.Amiga.Bus
             return false;
         }
 
-        internal IDisposable BeginGraphicsDirectAccess()
+        internal IDisposable BeginHostAcceleratorAccess()
         {
-            if (_graphicsDirectAccessDepth == 0)
+            if (_hostAcceleratorAccessDepth == 0)
             {
-                _graphicsReadWindowStart = 0;
-                _graphicsReadWindowEnd = 0;
-                _graphicsWriteWindowStart = 0;
-                _graphicsWriteWindowEnd = 0;
+                _hostAcceleratorReadWindowStart = 0;
+                _hostAcceleratorReadWindowEnd = 0;
+                _hostAcceleratorWriteWindowStart = 0;
+                _hostAcceleratorWriteWindowEnd = 0;
             }
 
-            _graphicsDirectAccessDepth++;
-            return new GraphicsDirectAccessScope(this);
+            _hostAcceleratorAccessDepth++;
+            return new HostAcceleratorAccessScope(this);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void RecordGraphicsDirectWrite(
-            CyberGraphicsDirectMemoryKind kind,
+        internal void RecordHostAcceleratorDirectWrite(
+            HostAcceleratorMemoryKind kind,
             uint address,
             int byteCount)
         {
-            if (_graphicsDirectAccessDepth == 0)
+            if (_hostAcceleratorAccessDepth == 0)
             {
-                CompleteGraphicsDirectWrite(kind, address, byteCount);
+                CompleteHostAcceleratorDirectWrite(kind, address, byteCount);
                 return;
             }
 
             var end = address + (uint)byteCount;
-            if (kind == CyberGraphicsDirectMemoryKind.RtgVram)
+            if (kind == HostAcceleratorMemoryKind.RtgVram)
             {
-                _graphicsRtgWriteStart = Math.Min(_graphicsRtgWriteStart, address);
-                _graphicsRtgWriteEnd = Math.Max(_graphicsRtgWriteEnd, end);
+                _hostAcceleratorRtgWriteStart = Math.Min(_hostAcceleratorRtgWriteStart, address);
+                _hostAcceleratorRtgWriteEnd = Math.Max(_hostAcceleratorRtgWriteEnd, end);
             }
             else
             {
-                _graphicsRealFastWriteStart = Math.Min(_graphicsRealFastWriteStart, address);
-                _graphicsRealFastWriteEnd = Math.Max(_graphicsRealFastWriteEnd, end);
+                _hostAcceleratorRealFastWriteStart = Math.Min(_hostAcceleratorRealFastWriteStart, address);
+                _hostAcceleratorRealFastWriteEnd = Math.Max(_hostAcceleratorRealFastWriteEnd, end);
             }
         }
 
-        private void EndGraphicsDirectAccess()
+        private void EndHostAcceleratorAccess()
         {
-            if (--_graphicsDirectAccessDepth != 0)
+            if (--_hostAcceleratorAccessDepth != 0)
             {
                 return;
             }
 
-            FlushGraphicsDirectWrite(
-                CyberGraphicsDirectMemoryKind.RealFastRam,
-                ref _graphicsRealFastWriteStart,
-                ref _graphicsRealFastWriteEnd);
-            FlushGraphicsDirectWrite(
-                CyberGraphicsDirectMemoryKind.RtgVram,
-                ref _graphicsRtgWriteStart,
-                ref _graphicsRtgWriteEnd);
-            _graphicsReadWindow = null;
-            _graphicsReadWindowStart = 0;
-            _graphicsReadWindowEnd = 0;
-            _graphicsWriteWindow = null;
-            _graphicsWriteWindowStart = 0;
-            _graphicsWriteWindowEnd = 0;
+            FlushHostAcceleratorDirectWrite(
+                HostAcceleratorMemoryKind.RealFastRam,
+                ref _hostAcceleratorRealFastWriteStart,
+                ref _hostAcceleratorRealFastWriteEnd);
+            FlushHostAcceleratorDirectWrite(
+                HostAcceleratorMemoryKind.RtgVram,
+                ref _hostAcceleratorRtgWriteStart,
+                ref _hostAcceleratorRtgWriteEnd);
+            _hostAcceleratorReadWindow = null;
+            _hostAcceleratorReadWindowStart = 0;
+            _hostAcceleratorReadWindowEnd = 0;
+            _hostAcceleratorWriteWindow = null;
+            _hostAcceleratorWriteWindowStart = 0;
+            _hostAcceleratorWriteWindowEnd = 0;
         }
 
-        private void FlushGraphicsDirectWrite(
-            CyberGraphicsDirectMemoryKind kind,
+        private void FlushHostAcceleratorDirectWrite(
+            HostAcceleratorMemoryKind kind,
             ref uint start,
             ref uint end)
         {
             if (start != uint.MaxValue)
             {
-                CompleteGraphicsDirectWrite(kind, start, checked((int)(end - start)));
+                CompleteHostAcceleratorDirectWrite(kind, start, checked((int)(end - start)));
                 start = uint.MaxValue;
                 end = 0;
             }
         }
 
-        private void CompleteGraphicsDirectWrite(
-            CyberGraphicsDirectMemoryKind kind,
+        private void CompleteHostAcceleratorDirectWrite(
+            HostAcceleratorMemoryKind kind,
             uint address,
             int byteCount)
         {
-            if (kind == CyberGraphicsDirectMemoryKind.RtgVram)
+            if (kind == HostAcceleratorMemoryKind.RtgVram)
             {
                 _rtgVram.CompleteDirectWrite(address, byteCount);
                 return;
@@ -2818,18 +2819,18 @@ namespace CopperMod.Amiga.Bus
             NotifyJitEligibleMemoryWritten(address, byteCount);
         }
 
-        private sealed class GraphicsDirectAccessScope : IDisposable
+        private sealed class HostAcceleratorAccessScope : IDisposable
         {
             private AmigaBus? _bus;
 
-            public GraphicsDirectAccessScope(AmigaBus bus)
+            public HostAcceleratorAccessScope(AmigaBus bus)
                 => _bus = bus;
 
             public void Dispose()
             {
                 var bus = _bus;
                 _bus = null;
-                bus?.EndGraphicsDirectAccess();
+                bus?.EndHostAcceleratorAccess();
             }
         }
 

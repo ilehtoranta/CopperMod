@@ -24,6 +24,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveNextSpriteRow = 0;
             _liveNextSpriteIndex = 0;
             _liveNextSpriteWord = 0;
+            InvalidateLiveSpriteEventCache();
             _liveBitplaneDmaFetches = 0;
             _liveSpriteDmaFetches = 0;
             _liveMissedSpriteDmaSlots = 0;
@@ -238,6 +239,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveNextSpriteRow = Math.Min(_liveNextSpriteRow, invalidateRow);
             _liveNextSpriteIndex = 0;
             _liveNextSpriteWord = 0;
+            InvalidateLiveSpriteEventCache();
             _liveCycle = Math.Min(_liveCycle, Math.Max(_liveFrameStartCycle, cycle));
             _liveCapturedThroughCycle = Math.Min(_liveCapturedThroughCycle, Math.Max(_liveFrameStartCycle, cycle - 1));
             if (_liveCopper.Cycle > cycle)
@@ -307,6 +309,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveNextSpriteRow = 0;
             _liveNextSpriteIndex = 0;
             _liveNextSpriteWord = 0;
+            InvalidateLiveSpriteEventCache();
             _liveBitplaneDmaFetches = 0;
             _liveSpriteDmaFetches = 0;
             _liveMissedSpriteDmaSlots = 0;

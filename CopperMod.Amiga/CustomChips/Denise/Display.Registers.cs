@@ -54,6 +54,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void ApplyWrite(ushort offset, ushort value, long cycle = long.MinValue)
         {
+            if (_spriteEventCacheMode != SpriteEventCacheMode.Off)
+            {
+                InvalidateLiveSpriteEventCache();
+            }
+
             offset &= 0x01FE;
             switch ((CustomRegister)offset)
             {

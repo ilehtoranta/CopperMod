@@ -132,6 +132,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (_liveNextSpriteRow >= row)
             {
+                InvalidateLiveSpriteEventCache();
                 _liveNextSpriteRow = row;
                 _liveNextSpriteIndex = 0;
                 _liveNextSpriteWord = 0;
@@ -727,6 +728,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var entry = _rowDmaSpriteEntries[entryIndex];
                 if (entry.Cycle > stopCycle)
                 {
+                    InvalidateLiveSpriteEventCache();
                     _liveNextSpriteRow = row;
                     _liveNextSpriteIndex = entry.SpriteIndex;
                     _liveNextSpriteWord = entry.Word;
@@ -739,6 +741,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return true;
                 }
 
+                InvalidateLiveSpriteEventCache();
                 _liveNextSpriteRow = row;
                 _liveNextSpriteIndex = entry.SpriteIndex;
                 _liveNextSpriteWord = entry.Word;
@@ -1149,6 +1152,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void AdvanceLiveSpriteFetchCursor()
         {
+            InvalidateLiveSpriteEventCache();
             if (_liveNextSpriteRow >= LowResOutputHeight)
             {
                 return;

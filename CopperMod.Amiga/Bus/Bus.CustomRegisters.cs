@@ -438,17 +438,22 @@ namespace CopperMod.Amiga.Bus
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long GetDisplayWriteCycle(in CustomRegisterWriteContext write)
+            => GetDisplayWriteCycle(write.Requester, write.Offset, write.Cycle);
+
+        internal static long GetDisplayWriteCycle(
+            AmigaBusRequester requester,
+            ushort offset,
+            long cycle)
         {
-            if (write.Requester != AmigaBusRequester.Cpu ||
-                !CustomRegisterScheduleClassifier.IsColorRegister(write.Offset))
+            if (requester != AmigaBusRequester.Cpu ||
+                !CustomRegisterScheduleClassifier.IsColorRegister(offset))
             {
-                return write.Cycle;
+                return cycle;
             }
 
-            // The HRM slot engine uses Agnus-internal coordinates, three CCKs
-            // before the externally visible bus hpos. A CPU palette write then
-            // reaches Denise three CCKs after that physical bus transfer.
-            return write.Cycle + (6 * AgnusChipSlotScheduler.SlotCycles);
+            // Denise samples CPU COLOR data from the beginning of the write
+            // transfer, two CCKs before the slot recorded as its grant.
+            return cycle - (2 * AgnusChipSlotScheduler.SlotCycles);
         }
 
 

@@ -7110,6 +7110,23 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
+	public void CpuColorPresentationBeginsAtWriteTransferStart()
+	{
+		const long grantCycle = 100;
+		var transferStart = grantCycle - (2 * AgnusChipSlotScheduler.SlotCycles);
+
+		Assert.Equal(
+			transferStart,
+			AmigaBus.GetDisplayWriteCycle(AmigaBusRequester.Cpu, 0x180, grantCycle));
+		Assert.Equal(
+			grantCycle,
+			AmigaBus.GetDisplayWriteCycle(AmigaBusRequester.Copper, 0x180, grantCycle));
+		Assert.Equal(
+			grantCycle,
+			AmigaBus.GetDisplayWriteCycle(AmigaBusRequester.Cpu, 0x100, grantCycle));
+	}
+
+	[Fact]
 	public void CopperQuiescentCpuColorWriteIsCountedAsBenignCustomWrite()
 	{
 		var bus = new AmigaBus(enableLiveAgnusDma: true, enableCopperQuiescentFastPath: true);

@@ -10,6 +10,13 @@ using System.Runtime.InteropServices;
 
 namespace CopperMod.Amiga.CustomChips.Denise
 {
+    internal enum SpriteEventCacheMode : byte
+    {
+        Off,
+        On,
+        Verify
+    }
+
     internal enum DeniseResolution : byte
     {
         LowRes,
@@ -289,6 +296,22 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int _liveNextSpriteRow;
         private int _liveNextSpriteIndex;
         private int _liveNextSpriteWord;
+        private SpriteEventCacheMode _spriteEventCacheMode;
+        private bool _spriteEventCacheProfilingEnabled;
+        private bool _liveSpriteEventCacheValid;
+        private long _liveSpriteEventCacheCycle = long.MaxValue;
+        private int _liveSpriteEventCacheRow;
+        private int _liveSpriteEventCacheIndex;
+        private int _liveSpriteEventCacheWord;
+        private long _liveSpriteEventCacheQueries;
+        private long _liveSpriteEventCacheHits;
+        private long _liveSpriteEventCacheMisses;
+        private long _liveSpriteEventCacheNormalizedSlots;
+        private long _liveSpriteEventCacheInvalidations;
+        private long _liveSpriteEventCacheActionableEvents;
+        private long _liveSpriteEventCacheTerminalEvents;
+        private long _liveSpriteEventCacheVerificationMismatches;
+        private string _liveSpriteEventCacheFirstMismatch = string.Empty;
         private int _liveBitplaneDmaFetches;
         private int _liveSpriteDmaFetches;
         private int _liveMissedSpriteDmaSlots;
@@ -425,6 +448,22 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             Reset();
         }
+
+        internal void SetSpriteEventCacheMode(SpriteEventCacheMode mode, bool profilingEnabled = false)
+        {
+            _spriteEventCacheMode = mode;
+            _spriteEventCacheProfilingEnabled = profilingEnabled;
+            InvalidateLiveSpriteEventCache();
+        }
+
+        internal string SpriteEventCacheProfileSummary =>
+            $"sprcache={_liveSpriteEventCacheQueries}/{_liveSpriteEventCacheHits}/{_liveSpriteEventCacheMisses}/skip:{_liveSpriteEventCacheNormalizedSlots}/inv:{_liveSpriteEventCacheInvalidations}/event:{_liveSpriteEventCacheActionableEvents}/terminal:{_liveSpriteEventCacheTerminalEvents}/mismatch:{_liveSpriteEventCacheVerificationMismatches}/first:{_liveSpriteEventCacheFirstMismatch}";
+
+        internal long SpriteEventCacheHits => _liveSpriteEventCacheHits;
+
+        internal long SpriteEventCacheMisses => _liveSpriteEventCacheMisses;
+
+        internal long SpriteEventCacheVerificationMismatches => _liveSpriteEventCacheVerificationMismatches;
 
         private int LowResWidth => _lowResWidth;
 
@@ -1331,6 +1370,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void ResetLiveSpriteDmaStates(int controlRow)
         {
+            InvalidateLiveSpriteEventCache();
             controlRow = Math.Clamp(controlRow, 0, LowResOutputHeight);
             for (var spriteIndex = 0; spriteIndex < _liveSpriteDmaStates.Length; spriteIndex++)
             {
@@ -1347,6 +1387,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             controlRow = Math.Clamp(controlRow, 0, LowResOutputHeight);
+            InvalidateLiveSpriteEventCache();
             _liveSpriteDmaStates[spriteIndex].Reset(_sprites[spriteIndex].Pointer, controlRow);
             _liveSpriteDmaExhausted[spriteIndex] = false;
             if (_liveFrameValid)
@@ -1477,6 +1518,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 return false;
             }
+
+            // HRM preparation can execute a sprite slot without advancing the live
+            // display cursor, so the cached actionable event must be discarded here.
+            InvalidateLiveSpriteEventCache();
 
             if (!IsSpriteDmaSlotAvailable(spriteIndex, word))
             {
