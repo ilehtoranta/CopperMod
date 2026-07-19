@@ -5460,9 +5460,9 @@ public sealed class AmigaBusTimingTests
 		Assert.True(committedTailIndex >= 0, diagnostic);
 		var committedTail = phases[committedTailIndex];
 		var firstStackWrite = phases[committedTailIndex + 1];
-		// The four-cycle internal tail plus exception setup produces this
+		// The committed DBRA tail plus exception setup produces this
 		// observable request gap in the synthetic physical-bus sequence.
-		Assert.Equal(10, firstStackWrite.Request - committedTail.Complete);
+		Assert.Equal(12, firstStackWrite.Request - committedTail.Complete);
 
 		// The beam phase depends on preceding refresh/Copper ownership, but these
 		// transfers are one indivisible physical sequence. In particular, the

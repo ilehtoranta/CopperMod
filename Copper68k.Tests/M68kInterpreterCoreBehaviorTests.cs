@@ -136,7 +136,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(extensionReadyCycle, elapsed);
 		Assert.Equal(24, elapsed);
 		Assert.Equal(2, transition.PrefetchCount);
-		Assert.Equal(extensionReadyCycle + 4, transition.ExceptionEntryNotBeforeCycle);
+		Assert.Equal(extensionReadyCycle + 6, transition.ExceptionEntryNotBeforeCycle);
 
 		var interruptPhaseStart = bus.CpuBusPhases.Count;
 		cpu.RequestInterrupt(1, 0x0064);
@@ -144,7 +144,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			.Skip(interruptPhaseStart)
 			.First(phase => phase.AccessKind == M68kBusAccessKind.CpuDataWrite);
 
-		Assert.Equal(extensionReadyCycle + 10, lowPcWrite.RequestedCycle);
+		Assert.Equal(extensionReadyCycle + 12, lowPcWrite.RequestedCycle);
 	}
 
 	[Fact]
@@ -978,6 +978,67 @@ public sealed class M68kInterpreterCoreBehaviorTests
 				((IM68000InterruptRecognition)scalar).LastInterruptSampleCycle,
 				((IM68000InterruptRecognition)planned).LastInterruptSampleCycle);
 		}
+	}
+	[Fact]
+	public void ShortBsrPushesReturnAddressHighWordBeforeLowWord()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, Words(0x6104, 0x4E71, 0x4E71, 0x4E71));
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		var stackWrites = bus.CpuBusPhases
+			.Where(phase => phase.AccessKind == M68kBusAccessKind.CpuDataWrite)
+			.ToArray();
+		Assert.Equal(new uint[] { 0x2FFC, 0x2FFE }, stackWrites.Select(phase => phase.Address));
+		Assert.Equal(new byte[] { 0x00, 0x00, 0x10, 0x02 }, bus.Memory[0x2FFC..0x3000]);
+		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
+	}
+	[Theory]
+	[InlineData(false, (int)M68kOpcodePlanDispatch.KindTable, false)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable, false)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan, false)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable, true)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan, true)]
+	public void ShortBranchPollsIplWhenCommittedTargetExtensionStarts(
+		bool enableOpcodePlan,
+		int dispatchValue,
+		bool executeBatch)
+	{
+		var bus = new CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x1002,
+			DelayedInstructionFetchOccurrence = 2,
+			DelayedInstructionFetchCycles = 16
+		};
+		Write(bus.Memory, 0x1000, Words(0x60FE)); // BRA.S self
+		var cpu = CreateCycleParityCpu(
+			bus,
+			enableOpcodePlan,
+			(M68kOpcodePlanDispatch)dispatchValue);
+
+		if (executeBatch)
+		{
+			Assert.Equal(1, ((IM68kBatchCore)cpu).ExecuteInstructions(
+				1,
+				long.MaxValue,
+				new BusAccessBatchBoundary()));
+		}
+		else
+		{
+			cpu.ExecuteInstruction();
+		}
+
+		var targetExtension = bus.CpuBusPhases.Last(phase =>
+			phase.InstructionProgramCounter == 0x1000 &&
+			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.Address == 0x1002);
+		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
+
+		Assert.Equal(targetExtension.RequestedCycle, recognition.LastInterruptSampleCycle);
+		Assert.True(recognition.LastInterruptSampleCycle < targetExtension.CompletedCycle);
 	}
 	[Theory]
 	[InlineData((int)M68kOpcodePlanDispatch.KindTable)]

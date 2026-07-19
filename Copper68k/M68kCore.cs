@@ -1695,7 +1695,7 @@ namespace Copper68k
         // instruction poll. A transition on the setup boundary is staged and
         // becomes serviceable after the following instruction.
         private const int M68000InterruptSetupCycles = 4;
-        private const int M68000DbccExceptionTailAfterCommittedFetchCycles = 4;
+        private const int M68000DbccExceptionTailAfterCommittedFetchCycles = 6;
         private const int FixedPlanRunCacheSlotCount = 256;
         private const int FixedPlanRunMaximumInstructions = 32;
         private const byte FixedPlanRunExitIndex = byte.MaxValue;
@@ -4561,7 +4561,9 @@ namespace Copper68k
             FlushFixedBatchPrefetch(ref context);
             context.PrefetchAddress = target;
             TopUpFixedBatchPrefetchOne(ref context);
-            context.InstructionInterruptSampleCycle = TopUpFixedBatchPrefetchOne(ref context);
+            TopUpFixedBatchPrefetchOne(
+                ref context,
+                out context.InstructionInterruptSampleCycle);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -4663,9 +4665,16 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long TopUpFixedBatchPrefetchOne(ref M68000FixedBatchContext context)
+            => TopUpFixedBatchPrefetchOne(ref context, out _);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long TopUpFixedBatchPrefetchOne(
+            ref M68000FixedBatchContext context,
+            out long requestedCycle)
         {
             if (context.PrefetchCount >= 2)
             {
+                requestedCycle = context.PrefetchReadyCycle1;
                 return context.PrefetchReadyCycle1;
             }
 
@@ -4686,7 +4695,8 @@ namespace Copper68k
                 ref context,
                 address,
                 out var completedCycle,
-                out var deferredEligible);
+                out var deferredEligible,
+                out requestedCycle);
             if (slot == 0)
             {
                 context.PrefetchWord0 = value;
@@ -4710,6 +4720,20 @@ namespace Copper68k
             uint address,
             out long completedCycle,
             out bool deferredEligible)
+            => ReadFixedBatchPrefetchWord(
+                ref context,
+                address,
+                out completedCycle,
+                out deferredEligible,
+                out _);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ushort ReadFixedBatchPrefetchWord(
+            ref M68000FixedBatchContext context,
+            uint address,
+            out long completedCycle,
+            out bool deferredEligible,
+            out long requestedCycle)
         {
             var busAddress = GetCpuBusAddress(address);
             var cycle = context.Cycles;
@@ -4729,7 +4753,7 @@ namespace Copper68k
                 cycle = context.NextBusCycle;
             }
 
-            var requestedCycle = cycle;
+            requestedCycle = cycle;
             if (context.DirectRunFetch)
             {
                 var runWindow = context.DirectRunWindow;
@@ -7329,7 +7353,6 @@ namespace Copper68k
             _prefetchDeferredCpuBusBatchEligible1 = false;
             var firstReadyCycle = TopUpPrefetchOne();
             State.Cycles = Math.Max(State.Cycles, firstReadyCycle);
-            AdvanceInterruptInternalCycles(2);
             var secondReadyCycle = TopUpPrefetchOne();
             State.Cycles = Math.Max(State.Cycles, secondReadyCycle);
         }
@@ -7594,12 +7617,12 @@ namespace Copper68k
                 if ((target & 1) != 0)
                 {
                     AddInstructionCycles(18);
-                    PushLong(State.ProgramCounter);
+                    PushSubroutineReturnAddress(State.ProgramCounter);
                     BranchTo(target, target);
                     return true;
                 }
 
-                PushLong(State.ProgramCounter);
+                PushSubroutineReturnAddress(State.ProgramCounter);
                 SetProgramCounterAndFlushPrefetch(target);
                 AddInstructionCycles(displacement == 0 ? 18 : 18);
                 return true;
@@ -10317,9 +10340,9 @@ namespace Copper68k
             // IPL is sampled after the target opcode read. If it is accepted,
             // the already-started target-extension transfer and the remaining
             // CE000 DBcc retirement tail still completes before exception
-            // stacking. Two CPU cycles overlap the committed transfer, leaving
-            // four cycles after its frozen completion. The architectural
-            // decrement is not repeated.
+            // stacking. The remaining DBcc microcode occupies six cycles
+            // after its frozen completion. The architectural decrement is not
+            // repeated.
             _exceptionEntryNotBeforeCycle = Math.Max(
                 _exceptionEntryNotBeforeCycle,
                 targetExtensionReadyCycle + M68000DbccExceptionTailAfterCommittedFetchCycles);
@@ -10354,7 +10377,7 @@ namespace Copper68k
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
             TopUpPrefetchOne();
-            _instructionInterruptSampleCycle = TopUpPrefetchOne();
+            TopUpPrefetchOne(out _instructionInterruptSampleCycle);
             _skipRetirePrefetchTopUp = true;
         }
 
@@ -10409,7 +10432,7 @@ namespace Copper68k
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
             TopUpPrefetchOne();
-            _instructionInterruptSampleCycle = TopUpPrefetchOne();
+            TopUpPrefetchOne(out _instructionInterruptSampleCycle);
         }
 
         private void JumpToSubroutine(uint target, uint stackedProgramCounter, bool prefetchFallthroughBeforeStackWrite)
@@ -10429,11 +10452,18 @@ namespace Copper68k
                 TopUpPrefetchOne();
             }
 
-            PushLong(State.ProgramCounter);
+            PushSubroutineReturnAddress(State.ProgramCounter);
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
             TopUpPrefetchOne();
             _skipRetirePrefetchTopUp = true;
+        }
+
+        private void PushSubroutineReturnAddress(uint value)
+        {
+            State.SetActiveStackPointer(State.A[7] - 4);
+            WriteWord(State.A[7], (ushort)(value >> 16));
+            WriteWord(State.A[7] + 2, (ushort)value);
         }
 
         private void ResetPrefetchPipeline()
@@ -10556,9 +10586,14 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long TopUpPrefetchOne()
+            => TopUpPrefetchOne(out _);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long TopUpPrefetchOne(out long requestedCycle)
         {
             if (_prefetchCount >= 2)
             {
+                requestedCycle = _prefetchCompletedCycle1;
                 return _prefetchCompletedCycle1;
             }
 
@@ -10573,7 +10608,11 @@ namespace Copper68k
                 _pendingPrefetchEarliestCycle = 0;
             }
 
-            var value = ReadPrefetchWord(address, out var completedCycle, out var deferredEligible);
+            var value = ReadPrefetchWord(
+                address,
+                out var completedCycle,
+                out var deferredEligible,
+                out requestedCycle);
             if (slot == 0)
             {
                 _prefetchWord0 = value;
@@ -10590,7 +10629,6 @@ namespace Copper68k
             _prefetchCount = slot + 1;
             return completedCycle;
         }
-
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void TopUpPrefetchAtRetirement()
@@ -10628,15 +10666,16 @@ namespace Copper68k
                         _pendingPrefetchAddress = unchecked(_prefetchAddress + (uint)(_prefetchCount * 2));
                         _pendingPrefetchEarliestCycle = earliestCycle;
                     }
+
                     return;
                 }
 
                 var readyCycle = TopUpPrefetchOne();
 
                 // Once the retirement fetch has entered the physical bus it is
-                // no longer speculative.  A wait state may move its completion
+                // no longer speculative. A wait state may move its completion
                 // beyond the nominal instruction floor, and the successor's
-                // microcode must not overlap that frozen tail.  CE000 performs
+                // microcode must not overlap that frozen tail. CE000 performs
                 // the final fall-through fetch before dispatching the next
                 // instruction (notably CMP; Bcc at a refresh boundary).
                 _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, readyCycle);
@@ -10650,6 +10689,7 @@ namespace Copper68k
             System.Diagnostics.Debug.Assert(_prefetchAddress == State.ProgramCounter);
             TopUpPrefetchAtRetirement();
         }
+
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void PrefetchFallthroughBeforeMemoryWriteback()
@@ -10769,10 +10809,22 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ushort ReadPrefetchWord(uint address, out long completedCycle, out bool deferredEligible)
+            => ReadPrefetchWord(
+                address,
+                out completedCycle,
+                out deferredEligible,
+                out _);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ushort ReadPrefetchWord(
+            uint address,
+            out long completedCycle,
+            out bool deferredEligible,
+            out long requestedCycle)
         {
             var busAddress = GetCpuBusAddress(address);
             var cycle = BeginPrefetchBusAccessCycle();
-            var requestedCycle = cycle;
+            requestedCycle = cycle;
             var value = ReadInstructionFetchWord(busAddress, ref cycle, out deferredEligible);
             var timing = GetM68000BusAccessTiming(
                 busAddress,
