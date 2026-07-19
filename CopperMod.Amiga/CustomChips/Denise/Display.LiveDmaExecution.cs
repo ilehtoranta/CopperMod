@@ -23,9 +23,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             while (true)
             {
                 SkipLiveRowsWithoutFetches();
+                SkipLiveSpriteSlotsWithoutFetches();
                 var nextLineStateCycle = GetNextLiveLineStateCycle();
                 var nextBitplaneFetchCycle = GetNextLiveBitplaneFetchCycle();
-                var nextSpriteFetchCycle = GetNextActionableLiveSpriteEventCycle();
+                var nextSpriteFetchCycle = GetNextLiveSpriteFetchCycle();
                 var nextPendingWriteCycle = GetNextLivePendingWriteCycle();
                 var nextCycle = Math.Min(
                     Math.Min(nextLineStateCycle, nextBitplaneFetchCycle),
@@ -99,7 +100,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         cursorB: 0,
                         cursorC: 0);
                     CaptureLiveLineState(_liveNextLineStateRow);
-                    InvalidateLiveSpriteEventCache();
                     TryBuildPredictedRasterlinePlanForCapturedLine(_liveNextLineStateRow);
                     _liveNextLineStateRow++;
                     InvalidateLiveWorkCycle();
@@ -457,7 +457,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var captured = false;
             while (_liveNextSpriteRow == descriptor.Row)
             {
-                var nextSpriteEventCycle = GetNextActionableLiveSpriteEventCycle();
+                SkipLiveSpriteSlotsWithoutFetches();
                 if (_liveNextSpriteRow != descriptor.Row ||
                     !IsLiveLineValid(_liveNextSpriteRow) ||
                     !IsSpriteDmaEnabled())
@@ -465,7 +465,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return captured;
                 }
 
-                var fetchCycle = nextSpriteEventCycle;
+                var fetchCycle = GetNextLiveSpriteFetchCycle();
                 if (fetchCycle > stopCycle)
                 {
                     return captured;

@@ -5,7 +5,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using CopperMod.Amiga;
 using CopperMod.Amiga.CustomChips.Blitter;
-using CopperMod.Amiga.CustomChips.Denise;
 using CopperScreen;
 
 const int SampleRate = 44_100;
@@ -91,7 +90,7 @@ if (options.DiskDivergenceTrace)
     return;
 }
 
-Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, BlitterAdvance={options.BlitterAdvanceMode.ToString().ToLowerInvariant()}, SpriteEventCache={options.SpriteEventCacheMode.ToString().ToLowerInvariant()}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuBusBatchVerify={options.DeferredCpuBusBatchVerify}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
+Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, BlitterAdvance={options.BlitterAdvanceMode.ToString().ToLowerInvariant()}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuBusBatchVerify={options.DeferredCpuBusBatchVerify}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
 WriteBenchmarkHeader();
 
 foreach (var workload in workloads)
@@ -418,7 +417,6 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
 
     var benchmarkBus = GetMachine(emulator).Bus;
     benchmarkBus.SetBlitterAdvanceMode(options.BlitterAdvanceMode);
-    benchmarkBus.Display.SetSpriteEventCacheMode(options.SpriteEventCacheMode, options.HardwareProfile);
     benchmarkBus.Blitter.SetBoundedFixedSlotExecutionEnabledForTest(
         options.BlitterAdvanceMode == BlitterAdvanceMode.Bounded);
 
@@ -721,7 +719,7 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         options.DiskDivergenceTrace ? CaptureDiskTrace(emulator) : Array.Empty<AmigaDiskTraceEvent>(),
         emulator.CopperStartRuntimeHandoffActive,
         emulator.CopperStartRuntimeHandoffCount,
-        $"{CaptureStatusText(emulator)} | {GetDisplay(emulator).SpriteEventCacheProfileSummary}");
+        CaptureStatusText(emulator));
 }
 
 static void RunDiskDivergenceTrace(BenchmarkWorkload workload, BenchmarkOptions options)
@@ -2721,7 +2719,6 @@ internal readonly record struct BenchmarkOptions(
     bool CpuWaitSlotReference,
     bool HardwareSpecialization,
     BlitterAdvanceMode BlitterAdvanceMode,
-    SpriteEventCacheMode SpriteEventCacheMode,
     bool StopOnDebugSnapshot,
     int PauseBeforeMeasureMilliseconds,
     string? DumpDebugSnapshotPath,
@@ -2771,7 +2768,6 @@ internal readonly record struct BenchmarkOptions(
         var cpuWaitSlotReference = false;
         var hardwareSpecialization = false;
         var blitterAdvanceMode = BlitterAdvanceMode.Reference;
-        var spriteEventCacheMode = SpriteEventCacheMode.Off;
         var stopOnDebugSnapshot = false;
         var pauseBeforeMeasureMilliseconds = 0;
         string? dumpDebugSnapshotPath = null;
@@ -3022,10 +3018,6 @@ internal readonly record struct BenchmarkOptions(
             {
                 blitterAdvanceMode = ParseBlitterAdvanceMode(args[++i]);
             }
-            else if (string.Equals(args[i], "--sprite-event-cache", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-            {
-                spriteEventCacheMode = ParseSpriteEventCacheMode(args[++i]);
-            }
             else if (string.Equals(args[i], "--stop-on-debug-snapshot", StringComparison.OrdinalIgnoreCase))
             {
                 stopOnDebugSnapshot = true;
@@ -3093,7 +3085,6 @@ internal readonly record struct BenchmarkOptions(
             cpuWaitSlotReference,
             hardwareSpecialization,
             blitterAdvanceMode,
-            spriteEventCacheMode,
             stopOnDebugSnapshot,
             Math.Max(0, pauseBeforeMeasureMilliseconds),
             dumpDebugSnapshotPath,
@@ -3127,15 +3118,6 @@ internal readonly record struct BenchmarkOptions(
                 $"Unsupported blitter advance mode '{value}'. Expected reference, bounded, or verify.")
         };
 
-    private static SpriteEventCacheMode ParseSpriteEventCacheMode(string value)
-        => value.Trim().ToLowerInvariant() switch
-        {
-            "off" => SpriteEventCacheMode.Off,
-            "on" => SpriteEventCacheMode.On,
-            "verify" => SpriteEventCacheMode.Verify,
-            _ => throw new ArgumentException(
-                $"Unsupported sprite event cache mode '{value}'. Expected off, on, or verify.")
-        };
 }
 
 internal readonly record struct CiaPollBenchmarkResult(

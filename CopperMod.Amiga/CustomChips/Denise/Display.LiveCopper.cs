@@ -639,110 +639,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return GetSpriteDmaFetchCycle(_liveFrameStartCycle, _liveNextSpriteRow, _liveNextSpriteIndex, _liveNextSpriteWord);
         }
 
-        private long GetNextActionableLiveSpriteEventCycle()
-        {
-            if (_spriteEventCacheMode == SpriteEventCacheMode.Off)
-            {
-                SkipLiveSpriteSlotsWithoutFetches();
-                return GetNextLiveSpriteFetchCycle();
-            }
-
-            if (_spriteEventCacheProfilingEnabled)
-            {
-                _liveSpriteEventCacheQueries++;
-            }
-            if (_liveSpriteEventCacheValid && _liveSpriteEventCacheCycle < _liveCycle)
-            {
-                InvalidateLiveSpriteEventCache();
-            }
-
-            if (_liveSpriteEventCacheValid)
-            {
-                if (_spriteEventCacheProfilingEnabled)
-                {
-                    _liveSpriteEventCacheHits++;
-                }
-                if (_spriteEventCacheMode != SpriteEventCacheMode.Verify)
-                {
-                    return _liveSpriteEventCacheCycle;
-                }
-
-                var cachedCycle = _liveSpriteEventCacheCycle;
-                var cachedRow = _liveSpriteEventCacheRow;
-                var cachedIndex = _liveSpriteEventCacheIndex;
-                var cachedWord = _liveSpriteEventCacheWord;
-                var referenceCycle = NormalizeAndGetNextLiveSpriteEventCycle();
-                if (referenceCycle == cachedCycle &&
-                    _liveNextSpriteRow == cachedRow &&
-                    _liveNextSpriteIndex == cachedIndex &&
-                    _liveNextSpriteWord == cachedWord)
-                {
-                    return referenceCycle;
-                }
-
-                _liveSpriteEventCacheVerificationMismatches++;
-                if (_liveSpriteEventCacheFirstMismatch.Length == 0)
-                {
-                    _liveSpriteEventCacheFirstMismatch =
-                        $"live={_liveCycle},cached={cachedCycle}@{cachedRow}/{cachedIndex}/{cachedWord},actual={referenceCycle}@{_liveNextSpriteRow}/{_liveNextSpriteIndex}/{_liveNextSpriteWord},dma={IsSpriteDmaEnabled()},line={IsLiveLineValid(_liveNextSpriteRow)},channels={GetUsableSpriteDmaChannelCount()},dmacon={_dmacon:X4},bplcon0={_bplcon0:X4}";
-                }
-                StoreLiveSpriteEventCache(referenceCycle);
-                return referenceCycle;
-            }
-
-            if (_spriteEventCacheProfilingEnabled)
-            {
-                _liveSpriteEventCacheMisses++;
-            }
-            var cycle = NormalizeAndGetNextLiveSpriteEventCycle();
-            StoreLiveSpriteEventCache(cycle);
-            return cycle;
-        }
-
-        private long NormalizeAndGetNextLiveSpriteEventCycle()
-        {
-            var skipped = SkipLiveSpriteSlotsWithoutFetches();
-            if (_spriteEventCacheProfilingEnabled)
-            {
-                _liveSpriteEventCacheNormalizedSlots += skipped;
-            }
-            return GetNextLiveSpriteFetchCycle();
-        }
-
-        private void StoreLiveSpriteEventCache(long cycle)
-        {
-            var cacheable = cycle != long.MaxValue || _liveNextSpriteRow >= LowResOutputHeight;
-            _liveSpriteEventCacheCycle = cycle;
-            _liveSpriteEventCacheRow = _liveNextSpriteRow;
-            _liveSpriteEventCacheIndex = _liveNextSpriteIndex;
-            _liveSpriteEventCacheWord = _liveNextSpriteWord;
-            _liveSpriteEventCacheValid = cacheable;
-            if (!_spriteEventCacheProfilingEnabled)
-            {
-                return;
-            }
-
-            if (cycle == long.MaxValue)
-            {
-                _liveSpriteEventCacheTerminalEvents++;
-            }
-            else
-            {
-                _liveSpriteEventCacheActionableEvents++;
-            }
-        }
-
-        private void InvalidateLiveSpriteEventCache()
-        {
-            if (_liveSpriteEventCacheValid && _spriteEventCacheProfilingEnabled)
-            {
-                _liveSpriteEventCacheInvalidations++;
-            }
-
-            _liveSpriteEventCacheValid = false;
-            _liveSpriteEventCacheCycle = long.MaxValue;
-        }
-
         private void SkipLiveRowsWithoutFetches()
         {
             var advanced = false;
@@ -775,14 +671,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
         }
 
-        private int SkipLiveSpriteSlotsWithoutFetches()
+        private void SkipLiveSpriteSlotsWithoutFetches()
         {
-            var skipped = 0;
             while (_liveNextSpriteRow < LowResOutputHeight)
             {
                 if (!IsLiveLineValid(_liveNextSpriteRow) || !IsSpriteDmaEnabled())
                 {
-                    return skipped;
+                    return;
                 }
 
                 if (!IsSpriteDmaChannelAvailable(_liveNextSpriteIndex))
@@ -800,14 +695,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
                 else if (CanLiveSpriteSlotFetch(_liveNextSpriteRow, _liveNextSpriteIndex))
                 {
-                    return skipped;
+                    return;
                 }
 
                 AdvanceLiveSpriteFetchCursor();
-                skipped++;
             }
-
-            return skipped;
         }
 
         private bool WouldLiveSpriteSlotFetchIfChannelAvailable(int row, int spriteIndex)
