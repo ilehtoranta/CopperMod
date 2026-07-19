@@ -6,16 +6,26 @@ public sealed class CustomRegisterFileTests
 {
     private const uint CustomBase = 0x00DFF000;
 
-    public static TheoryData<int, int, int> SupportedChipsetCombinations => new()
+    public static TheoryData<int, int, int> AllChipsetCombinations => new()
     {
-        { (int)AgnusModel.Ocs, (int)DeniseModel.Ocs, (int)VideoStandard.Pal },
-        { (int)AgnusModel.Ocs, (int)DeniseModel.Ocs, (int)VideoStandard.Ntsc },
-        { (int)AgnusModel.Ocs, (int)DeniseModel.Ecs, (int)VideoStandard.Pal },
-        { (int)AgnusModel.Ocs, (int)DeniseModel.Ecs, (int)VideoStandard.Ntsc },
-        { (int)AgnusModel.Ecs, (int)DeniseModel.Ocs, (int)VideoStandard.Pal },
-        { (int)AgnusModel.Ecs, (int)DeniseModel.Ocs, (int)VideoStandard.Ntsc },
-        { (int)AgnusModel.Ecs, (int)DeniseModel.Ecs, (int)VideoStandard.Pal },
-        { (int)AgnusModel.Ecs, (int)DeniseModel.Ecs, (int)VideoStandard.Ntsc }
+        { (int)DmaChipModel.OcsAgnus, (int)DisplayChipModel.OcsDenise, (int)VideoStandard.Pal },
+        { (int)DmaChipModel.OcsAgnus, (int)DisplayChipModel.OcsDenise, (int)VideoStandard.Ntsc },
+        { (int)DmaChipModel.OcsAgnus, (int)DisplayChipModel.EcsDenise, (int)VideoStandard.Pal },
+        { (int)DmaChipModel.OcsAgnus, (int)DisplayChipModel.EcsDenise, (int)VideoStandard.Ntsc },
+        { (int)DmaChipModel.EcsAgnus, (int)DisplayChipModel.OcsDenise, (int)VideoStandard.Pal },
+        { (int)DmaChipModel.EcsAgnus, (int)DisplayChipModel.OcsDenise, (int)VideoStandard.Ntsc },
+        { (int)DmaChipModel.EcsAgnus, (int)DisplayChipModel.EcsDenise, (int)VideoStandard.Pal },
+        { (int)DmaChipModel.EcsAgnus, (int)DisplayChipModel.EcsDenise, (int)VideoStandard.Ntsc },
+        { (int)DmaChipModel.OcsAgnus, (int)DisplayChipModel.AgaLisa, (int)VideoStandard.Pal },
+        { (int)DmaChipModel.OcsAgnus, (int)DisplayChipModel.AgaLisa, (int)VideoStandard.Ntsc },
+        { (int)DmaChipModel.EcsAgnus, (int)DisplayChipModel.AgaLisa, (int)VideoStandard.Pal },
+        { (int)DmaChipModel.EcsAgnus, (int)DisplayChipModel.AgaLisa, (int)VideoStandard.Ntsc },
+        { (int)DmaChipModel.AgaAlice, (int)DisplayChipModel.OcsDenise, (int)VideoStandard.Pal },
+        { (int)DmaChipModel.AgaAlice, (int)DisplayChipModel.OcsDenise, (int)VideoStandard.Ntsc },
+        { (int)DmaChipModel.AgaAlice, (int)DisplayChipModel.EcsDenise, (int)VideoStandard.Pal },
+        { (int)DmaChipModel.AgaAlice, (int)DisplayChipModel.EcsDenise, (int)VideoStandard.Ntsc },
+        { (int)DmaChipModel.AgaAlice, (int)DisplayChipModel.AgaLisa, (int)VideoStandard.Pal },
+        { (int)DmaChipModel.AgaAlice, (int)DisplayChipModel.AgaLisa, (int)VideoStandard.Ntsc }
     };
 
     [Fact]
@@ -37,23 +47,92 @@ public sealed class CustomRegisterFileTests
     }
 
     [Theory]
-    [MemberData(nameof(SupportedChipsetCombinations))]
-    public void EverySupportedChipsetResolvesACompleteDefinitionFile(int agnus, int denise, int video)
+    [MemberData(nameof(AllChipsetCombinations))]
+    public void EveryChipsetProfileResolvesACompleteDefinitionFile(int agnus, int denise, int video)
     {
-        var chipset = new AmigaChipset((AgnusModel)agnus, (DeniseModel)denise, (VideoStandard)video);
-        var snapshot = new AmigaBus(chipset: chipset).CaptureCustomRegisterFileSnapshot();
+        var chipset = new AmigaChipset((DmaChipModel)agnus, (DisplayChipModel)denise, (VideoStandard)video);
+        var snapshot = new CustomRegisterFile(chipset).CaptureSnapshot();
 
         Assert.Equal(256, snapshot.Count);
         Assert.All(snapshot, entry =>
         {
             Assert.Equal(0, entry.Offset & 1);
             Assert.False(string.IsNullOrWhiteSpace(entry.Name));
-            if (!entry.IsPresent)
+            if (!entry.IsPresent && entry.ImplementationStatus != CustomRegisterImplementationStatus.Unspecified)
             {
                 Assert.Equal(CustomRegisterImplementationStatus.Absent, entry.ImplementationStatus);
                 Assert.Equal(CustomRegisterWriteTarget.None, entry.WriteTargets);
             }
         });
+    }
+
+    [Fact]
+    public void AgaProfilesInheritEcsRegisterCapabilitiesIndependently()
+    {
+        var aliceOnly = new CustomRegisterFile(new AmigaChipset(
+            DmaChipModel.AgaAlice,
+            DisplayChipModel.OcsDenise,
+            VideoStandard.Pal)).CaptureSnapshot();
+        var lisaOnly = new CustomRegisterFile(new AmigaChipset(
+            DmaChipModel.OcsAgnus,
+            DisplayChipModel.AgaLisa,
+            VideoStandard.Pal)).CaptureSnapshot();
+
+        Assert.True(aliceOnly.Get(0x05C).IsPresent);
+        Assert.False(aliceOnly.Get(0x07C).IsPresent);
+        Assert.False(lisaOnly.Get(0x05C).IsPresent);
+        Assert.True(lisaOnly.Get(0x07C).IsPresent);
+    }
+
+    [Fact]
+    public void DisplayIdentificationResetIsResolvedByDisplayChip()
+    {
+        var ecs = new CustomRegisterFile(AmigaChipset.EcsPal).CaptureSnapshot().Get(0x07C);
+        var aga = new CustomRegisterFile(AmigaChipset.AgaPal).CaptureSnapshot().Get(0x07C);
+
+        Assert.Equal((ushort)DisplayChipIdentification.EcsDenise, ecs.ResetValue);
+        Assert.Equal(0xFFFF, ecs.ResetKnownMask);
+        Assert.Equal((ushort)DisplayChipIdentification.EcsDenise, ecs.StoredValue);
+        Assert.Equal((ushort)DisplayChipIdentification.AgaLisa, aga.ResetValue);
+        Assert.Equal(0x00FF, aga.ResetKnownMask);
+        Assert.Equal((ushort)DisplayChipIdentification.AgaLisa, aga.StoredValue);
+    }
+
+    [Fact]
+    public void AgaOnlyRegistersRemainExplicitlyUnspecifiedInTheFirstProfileSlice()
+    {
+        var snapshot = new CustomRegisterFile(AmigaChipset.AgaPal).CaptureSnapshot();
+
+        Assert.Equal(CustomRegisterImplementationStatus.Unspecified, snapshot.Get(0x10C).ImplementationStatus);
+        Assert.Equal(CustomRegisterImplementationStatus.Unspecified, snapshot.Get(0x10E).ImplementationStatus);
+        Assert.Equal(CustomRegisterImplementationStatus.Unspecified, snapshot.Get(0x11C).ImplementationStatus);
+        Assert.Equal(CustomRegisterImplementationStatus.Unspecified, snapshot.Get(0x11E).ImplementationStatus);
+        Assert.Equal(CustomRegisterImplementationStatus.Unspecified, snapshot.Get(0x1FC).ImplementationStatus);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AgaExecutionFailsFastAtBusConstruction(bool ntsc)
+    {
+        var chipset = ntsc ? AmigaChipset.AgaNtsc : AmigaChipset.AgaPal;
+
+        var error = Assert.Throws<NotSupportedException>(() => new AmigaBus(chipset: chipset));
+
+        Assert.Contains("AGA Alice/Lisa execution is not implemented", error.Message);
+    }
+
+    [Theory]
+    [InlineData((int)DmaChipModel.AgaAlice, (int)DisplayChipModel.OcsDenise)]
+    [InlineData((int)DmaChipModel.OcsAgnus, (int)DisplayChipModel.AgaLisa)]
+    public void MixedAgaExecutionProfilesAlsoFailFast(int dmaChip, int displayChip)
+    {
+        var chipset = new AmigaChipset(
+            (DmaChipModel)dmaChip,
+            (DisplayChipModel)displayChip,
+            VideoStandard.Pal);
+
+        Assert.Throws<NotSupportedException>(() => new AmigaBus(chipset: chipset));
     }
 
     [Fact]

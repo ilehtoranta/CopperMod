@@ -2220,7 +2220,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 if (register == 0x106)
                 {
-                    if (_display._chipset.Denise == DeniseModel.Ecs)
+                    if (_display._chipset.SupportsEcsDisplayRegisters)
                     {
                         _bplcon3 = (ushort)(value & EcsBplcon3WritableMask);
                     }
@@ -2316,18 +2316,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 if (register == 0x1E4)
                 {
-                    if (_display._chipset.Agnus == AgnusModel.Ecs ||
-                        _display._chipset.Denise == DeniseModel.Ecs)
+                    if (_display._chipset.SupportsEcsDmaRegisters ||
+                        _display._chipset.SupportsEcsDisplayRegisters)
                     {
                         MarkDynamicBitplaneScheduleChange(cycle);
                         PreserveStartedBitplaneRow(cycle);
-                        if (_display._chipset.Agnus == AgnusModel.Ecs)
+                        if (_display._chipset.SupportsEcsDmaRegisters)
                         {
                             _agnusDiwHigh = (ushort)(value & AgnusRegisterBank.DiwhighWritableMask);
                             _agnusDiwHighValid = true;
                         }
 
-                        if (_display._chipset.Denise == DeniseModel.Ecs)
+                        if (_display._chipset.SupportsEcsDisplayRegisters)
                         {
                             _diwHigh = (ushort)(value & EcsDiwHighWritableMask);
                             _diwHighValid = true;
@@ -2829,19 +2829,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
             private void RefreshScratchDisplayGeometry()
             {
                 _agnusDisplayWindow = DisplayGeometryDecoder.DecodeDisplayWindow(
-                    _display._chipset.Agnus,
+                    _display._chipset.DmaChip,
                     _diwStart,
                     _diwStop,
                     _agnusDiwHigh,
                     _agnusDiwHighValid);
                 _deniseDisplayWindow = DisplayGeometryDecoder.DecodeDisplayWindow(
-                    _display._chipset.Denise,
+                    _display._chipset.DisplayChip,
                     _diwStart,
                     _diwStop,
                     _diwHigh,
                     _diwHighValid);
                 _dataFetchWindow = DisplayGeometryDecoder.DecodeDataFetchWindow(
-                    _display._chipset.Agnus,
+                    _display._chipset.DmaChip,
                     _bplcon0,
                     _ddfStart,
                     _ddfStop);

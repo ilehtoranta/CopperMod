@@ -6,7 +6,7 @@ public sealed class DisplayGeometryDecoderTests
     public void OcsDisplayWindowUsesLegacyImplicitStopBitsAndVerticalWrap()
     {
         var window = DisplayGeometryDecoder.DecodeDisplayWindow(
-            DeniseModel.Ocs,
+            DisplayChipModel.OcsDenise,
             0xF081,
             0x20C1,
             0x2F2F,
@@ -19,7 +19,7 @@ public sealed class DisplayGeometryDecoderTests
     public void EcsDisplayWindowDecodesHorizontalAndAllVerticalHighBits()
     {
         var window = DisplayGeometryDecoder.DecodeDisplayWindow(
-            DeniseModel.Ecs,
+            DisplayChipModel.EcsDenise,
             0x3412,
             0x7856,
             0x2F2F,
@@ -32,7 +32,7 @@ public sealed class DisplayGeometryDecoderTests
     public void EcsDisplayWindowWrapsInNineAndTwelveBitDomains()
     {
         var window = DisplayGeometryDecoder.DecodeDisplayWindow(
-            AgnusModel.Ecs,
+            DmaChipModel.EcsAgnus,
             0xF0F0,
             0x1010,
             0x000F,
@@ -45,13 +45,13 @@ public sealed class DisplayGeometryDecoderTests
     public void InvalidDiwHighFallsBackToLegacyDecode()
     {
         var ecs = DisplayGeometryDecoder.DecodeDisplayWindow(
-            DeniseModel.Ecs,
+            DisplayChipModel.EcsDenise,
             0x2C81,
             0x2CC1,
             0x2F2F,
             diwHighValid: false);
         var ocs = DisplayGeometryDecoder.DecodeDisplayWindow(
-            DeniseModel.Ocs,
+            DisplayChipModel.OcsDenise,
             0x2C81,
             0x2CC1,
             0,
@@ -64,13 +64,13 @@ public sealed class DisplayGeometryDecoderTests
     public void MixedChipModelsDecodeTheirOwnDiwHighSupport()
     {
         var agnus = DisplayGeometryDecoder.DecodeDisplayWindow(
-            AgnusModel.Ecs,
+            DmaChipModel.EcsAgnus,
             0x2C81,
             0x2CC1,
             0x2020,
             diwHighValid: true);
         var denise = DisplayGeometryDecoder.DecodeDisplayWindow(
-            DeniseModel.Ocs,
+            DisplayChipModel.OcsDenise,
             0x2C81,
             0x2CC1,
             0x2020,
@@ -96,7 +96,7 @@ public sealed class DisplayGeometryDecoderTests
         int expectedResolution)
     {
         var window = DisplayGeometryDecoder.DecodeDataFetchWindow(
-            ecs ? AgnusModel.Ecs : AgnusModel.Ocs,
+            ecs ? DmaChipModel.EcsAgnus : DmaChipModel.OcsAgnus,
             bplcon0,
             ddfStart,
             ddfStop);
@@ -114,7 +114,7 @@ public sealed class DisplayGeometryDecoderTests
         int expectedWords)
     {
         var window = DisplayGeometryDecoder.DecodeDataFetchWindow(
-            AgnusModel.Ocs,
+            DmaChipModel.OcsAgnus,
             0,
             ddfStart,
             ddfStop);
@@ -134,7 +134,7 @@ public sealed class DisplayGeometryDecoderTests
         int expectedWords)
     {
         var window = DisplayGeometryDecoder.DecodeDataFetchWindow(
-            AgnusModel.Ecs,
+            DmaChipModel.EcsAgnus,
             bplcon0,
             ddfStart,
             ddfStop);
@@ -148,7 +148,7 @@ public sealed class DisplayGeometryDecoderTests
     public void ReversedEffectiveDataFetchRangeProducesNoFetches()
     {
         var window = DisplayGeometryDecoder.DecodeDataFetchWindow(
-            AgnusModel.Ecs,
+            DmaChipModel.EcsAgnus,
             0,
             0x00D0,
             0x0038);

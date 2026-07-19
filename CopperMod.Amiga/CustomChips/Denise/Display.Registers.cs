@@ -9,48 +9,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 {
     internal sealed partial class Display
     {
-        public bool TryReadByte(ushort offset, out byte value)
-        {
-            if (_chipset.Denise == DeniseModel.Ecs && offset == (ushort)CustomRegister.DeniseId)
-            {
-                value = 0x00;
-                return true;
-            }
-
-            if (_chipset.Denise == DeniseModel.Ecs && offset == (ushort)CustomRegister.DeniseId + 1)
-            {
-                value = 0xFC;
-                return true;
-            }
-
-            if (offset == 0x00E)
-            {
-                value = 0x80;
-                return true;
-            }
-
-            if (offset == 0x00F)
-            {
-                value = 0x00;
-                return true;
-            }
-
-            value = 0;
-            return false;
-        }
-
-        public bool TryReadWord(ushort offset, out ushort value)
-        {
-            if (_chipset.Denise == DeniseModel.Ecs &&
-                (offset & 0x01FE) == (ushort)CustomRegister.DeniseId)
-            {
-                value = 0x00FC;
-                return true;
-            }
-
-            value = 0;
-            return false;
-        }
+        public ushort ReadCollisionData()
+            => 0x8000;
 
         private void ApplyWrite(ushort offset, ushort value, long cycle = long.MinValue)
         {
@@ -126,7 +86,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _bplcon2 = value;
                 return;
             case CustomRegister.Bplcon3:
-                if (_chipset.Denise == DeniseModel.Ecs)
+                if (_chipset.SupportsEcsDisplayRegisters)
                 {
                     var impact = CustomRegisterScheduleClassifier.GetChangedImpact(
                         _chipset,
@@ -196,16 +156,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _bpl2mod = unchecked((short)value);
                 return;
             case CustomRegister.Diwhigh:
-                if (_chipset.Agnus == AgnusModel.Ecs || _chipset.Denise == DeniseModel.Ecs)
+                if (_chipset.SupportsEcsDmaRegisters || _chipset.SupportsEcsDisplayRegisters)
                 {
                     AnchorActiveBitplanePointersToCurrentRow();
-                    if (_chipset.Agnus == AgnusModel.Ecs)
+                    if (_chipset.SupportsEcsDmaRegisters)
                     {
                         _agnusDiwHigh = (ushort)(value & AgnusRegisterBank.DiwhighWritableMask);
                         _agnusDiwHighValid = true;
                     }
 
-                    if (_chipset.Denise == DeniseModel.Ecs)
+                    if (_chipset.SupportsEcsDisplayRegisters)
                     {
                         _diwHigh = (ushort)(value & EcsDiwHighWritableMask);
                         _diwHighValid = true;

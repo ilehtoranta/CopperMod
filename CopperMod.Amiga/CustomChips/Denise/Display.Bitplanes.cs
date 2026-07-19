@@ -510,13 +510,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private ushort GetSuperHighResolutionEncodedColor(int colorRegister, int x, int y)
         {
-            for (var i = _paletteFrameSpans.Count - 1; i >= 0; i--)
+            var spanIndex = GetPaletteFrameSpanIndex(x, y);
+            if (spanIndex >= 0)
             {
-                var span = _paletteFrameSpans[i];
-                if (span.Contains(x, y))
-                {
-                    return _paletteFrameSpanEncodedColors[span.EncodedColorOffset + colorRegister];
-                }
+                ref readonly var span = ref GetPaletteFrameSpan(spanIndex);
+                return _paletteFrameSnapshots.GetEncodedColor(
+                    span.PaletteSnapshotIndex,
+                    colorRegister);
             }
 
             return _colors[colorRegister];
@@ -809,19 +809,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void RefreshDisplayGeometry()
         {
             _agnusDisplayWindow = DisplayGeometryDecoder.DecodeDisplayWindow(
-                _chipset.Agnus,
+                _chipset.DmaChip,
                 _diwStart,
                 _diwStop,
                 _agnusDiwHigh,
                 _agnusDiwHighValid);
             _deniseDisplayWindow = DisplayGeometryDecoder.DecodeDisplayWindow(
-                _chipset.Denise,
+                _chipset.DisplayChip,
                 _diwStart,
                 _diwStop,
                 _diwHigh,
                 _diwHighValid);
             _dataFetchWindow = DisplayGeometryDecoder.DecodeDataFetchWindow(
-                _chipset.Agnus,
+                _chipset.DmaChip,
                 _bplcon0,
                 _ddfStart,
                 _ddfStop);
@@ -926,24 +926,24 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private static bool IsSuperHighResolutionRequested(ushort bplcon0)
             => (bplcon0 & (0x8000 | Bplcon0SuperHires)) == Bplcon0SuperHires;
 
-        internal static DeniseResolution GetDeniseResolution(DeniseModel deniseModel, ushort bplcon0)
+        internal static DeniseResolution GetDeniseResolution(DisplayChipModel deniseModel, ushort bplcon0)
         {
             if ((bplcon0 & 0x8000) != 0)
             {
                 return DeniseResolution.HighRes;
             }
 
-            return deniseModel == DeniseModel.Ecs && IsSuperHighResolutionRequested(bplcon0)
+            return deniseModel.SupportsEcsRegisters() && IsSuperHighResolutionRequested(bplcon0)
                 ? DeniseResolution.SuperHighRes
                 : DeniseResolution.LowRes;
         }
 
         private DeniseResolution GetDeniseResolution(ushort bplcon0)
-            => GetDeniseResolution(_chipset.Denise, bplcon0);
+            => GetDeniseResolution(_chipset.DisplayChip, bplcon0);
 
         private DeniseResolution GetAgnusFetchResolution(ushort bplcon0)
         {
-            return DisplayGeometryDecoder.GetDataFetchResolution(_chipset.Agnus, bplcon0);
+            return DisplayGeometryDecoder.GetDataFetchResolution(_chipset.DmaChip, bplcon0);
         }
 
         private static int GetResolutionSamplesPerLowResSpan(DeniseResolution resolution)
@@ -976,14 +976,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private int GetAgnusBitplaneFetchPlaneCount(ushort bplcon0)
             => GetAgnusBitplaneFetchPlaneCount(
-                _chipset.Agnus,
-                _chipset.Denise,
+                _chipset.DmaChip,
+                _chipset.DisplayChip,
                 GetAgnusFetchResolution(bplcon0),
                 bplcon0);
 
         internal static int GetAgnusBitplaneFetchPlaneCount(
-            AgnusModel agnusModel,
-            DeniseModel deniseModel,
+            DmaChipModel agnusModel,
+            DisplayChipModel deniseModel,
             DeniseResolution resolution,
             ushort bplcon0)
         {
@@ -993,12 +993,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return 0;
             }
 
-            if (agnusModel != AgnusModel.Ecs && resolution == DeniseResolution.SuperHighRes)
+            if (!agnusModel.SupportsEcsRegisters() && resolution == DeniseResolution.SuperHighRes)
             {
                 resolution = DeniseResolution.LowRes;
             }
 
-            if (agnusModel == AgnusModel.Ecs && resolution == DeniseResolution.SuperHighRes)
+            if (agnusModel.SupportsEcsRegisters() && resolution == DeniseResolution.SuperHighRes)
             {
                 return Math.Min(requested, SuperHighResBitplaneFetchSlotsByPlane.Length);
             }
@@ -1008,7 +1008,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return Math.Min(requested, HighResBitplaneFetchSlotsByPlane.Length);
             }
 
-            return deniseModel == DeniseModel.Ocs && requested == 7
+            return !deniseModel.SupportsEcsRegisters() && requested == 7
                 ? 4
                 : Math.Min(requested, LiveBitplanePlaneCount);
         }
@@ -1018,17 +1018,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private int GetDeniseBitplaneDecodePlaneCount(ushort bplcon0)
             => GetDeniseBitplaneDecodePlaneCount(
-                _chipset.Denise,
+                _chipset.DisplayChip,
                 GetDeniseResolution(bplcon0),
                 bplcon0);
 
         internal static int GetDeniseBitplaneDecodePlaneCount(
-            DeniseModel deniseModel,
+            DisplayChipModel deniseModel,
             DeniseResolution resolution,
             ushort bplcon0)
         {
             var requested = GetRequestedBitplaneCount(bplcon0);
-            if (deniseModel != DeniseModel.Ecs && resolution == DeniseResolution.SuperHighRes)
+            if (!deniseModel.SupportsEcsRegisters() && resolution == DeniseResolution.SuperHighRes)
             {
                 resolution = DeniseResolution.LowRes;
             }
@@ -1047,7 +1047,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
         private bool IsLatchedOnlyOcsBpu7Plane(ushort bplcon0, int plane)
-            => _chipset.Denise == DeniseModel.Ocs &&
+            => !_chipset.SupportsEcsDisplayRegisters &&
                 GetDeniseResolution(bplcon0) == DeniseResolution.LowRes &&
                 GetRequestedBitplaneCount(bplcon0) == 7 &&
                 plane >= 4 &&

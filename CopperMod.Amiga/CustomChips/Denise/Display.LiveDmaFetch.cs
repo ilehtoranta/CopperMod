@@ -366,14 +366,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return _liveCurrentPaletteSnapshotIndex;
             }
 
-            if (_livePaletteSnapshotCount >= MaxLivePaletteSnapshots)
-            {
-                return _liveCurrentPaletteSnapshotIndex >= 0 ? _liveCurrentPaletteSnapshotIndex : 0;
-            }
-
-            var index = _livePaletteSnapshotCount++;
-            Array.Copy(_colors, 0, _livePaletteSnapshotColors, index * _colors.Length, _colors.Length);
-            Array.Copy(_convertedColors, 0, _livePaletteSnapshotConvertedColors, index * PaletteColorCount, PaletteColorCount);
+            var index = _livePaletteSnapshots.GetOrAdd(
+                _colors,
+                _convertedColors,
+                MaxLivePaletteSnapshots);
             _liveCurrentPaletteSnapshotIndex = index;
             _livePaletteSnapshotDirty = false;
             return index;
@@ -812,17 +808,32 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return long.MaxValue;
             }
 
-            var state = _liveLineStates[_livePreparedFetchRow];
-            var fetchHorizontal = state.DataFetchStart + (_livePreparedFetchWord * state.FetchSlotStride) + _livePreparedFetchSlot;
-            return AgnusChipSlotScheduler.AlignToSlot(state.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles));
+            return GetBitplaneFetchCycle(in _liveBitplaneFetchTimeline.Prepared);
+        }
+
+        private long GetBitplaneFetchCycle(in LiveBitplaneFetchCursor cursor)
+        {
+            var state = _liveLineStates[cursor.Row];
+            var fetchHorizontal = state.DataFetchStart +
+                (cursor.Word * state.FetchSlotStride) +
+                cursor.Slot;
+            return AgnusChipSlotScheduler.AlignToSlot(
+                state.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles));
         }
 
         private bool NormalizePreparedLiveBitplaneFetchCursor()
+            => NormalizeBitplaneFetchCursor(
+                ref _liveBitplaneFetchTimeline.Prepared,
+                advanceCapturedPointers: false);
+
+        private bool NormalizeBitplaneFetchCursor(
+            ref LiveBitplaneFetchCursor cursor,
+            bool advanceCapturedPointers)
         {
-            while (_livePreparedFetchRow < LowResOutputHeight)
+            while (cursor.Row < LowResOutputHeight)
             {
-                var state = _liveLineStates[_livePreparedFetchRow];
-                if (!IsLiveLineValid(_livePreparedFetchRow))
+                var state = _liveLineStates[cursor.Row];
+                if (!IsLiveLineValid(cursor.Row))
                 {
                     return false;
                 }
@@ -833,28 +844,32 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     !state.DisplayWindowVerticallyOpen ||
                     !IsBitplaneDmaEnabled(state.Dmacon))
                 {
-                    AdvancePreparedLiveFetchToNextRow();
+                    AdvanceBitplaneFetchToNextRow(ref cursor, advanceCapturedPointers: false);
                     continue;
                 }
 
-                while (_livePreparedFetchWord < state.FetchWords)
+                while (cursor.Word < state.FetchWords)
                 {
-                    while (_livePreparedFetchSlot < state.FetchSlotStride)
+                    while (cursor.Slot < state.FetchSlotStride)
                     {
-                        if (TryGetBitplanePlaneForFetchSlot(_livePreparedFetchSlot, planeCount, state.FetchResolution, out var plane))
+                        if (TryGetBitplanePlaneForFetchSlot(
+                                cursor.Slot,
+                                planeCount,
+                                state.FetchResolution,
+                                out var plane))
                         {
-                            _livePreparedFetchPlane = plane;
+                            cursor.Plane = plane;
                             return true;
                         }
 
-                        _livePreparedFetchSlot++;
+                        cursor.Slot++;
                     }
 
-                    _livePreparedFetchSlot = 0;
-                    _livePreparedFetchWord++;
+                    cursor.Slot = 0;
+                    cursor.Word++;
                 }
 
-                AdvancePreparedLiveFetchToNextRow();
+                AdvanceBitplaneFetchToNextRow(ref cursor, advanceCapturedPointers);
             }
 
             return false;
@@ -935,40 +950,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
         private void AdvancePreparedLiveFetchCursor()
-        {
-            if (_livePreparedFetchRow >= LowResOutputHeight)
-            {
-                return;
-            }
-
-            var state = _liveLineStates[_livePreparedFetchRow];
-            _livePreparedFetchSlot++;
-            if (_livePreparedFetchSlot < state.FetchSlotStride)
-            {
-                InvalidateLiveWorkCycle();
-                return;
-            }
-
-            _livePreparedFetchSlot = 0;
-            _livePreparedFetchPlane = 0;
-            _livePreparedFetchWord++;
-            if (_livePreparedFetchWord < state.FetchWords)
-            {
-                InvalidateLiveWorkCycle();
-                return;
-            }
-
-            AdvancePreparedLiveFetchToNextRow();
-        }
+            => AdvanceBitplaneFetchCursor(
+                ref _liveBitplaneFetchTimeline.Prepared,
+                advanceCapturedPointers: false);
 
         private void AdvancePreparedLiveFetchToNextRow()
-        {
-            _livePreparedFetchRow++;
-            _livePreparedFetchWord = 0;
-            _livePreparedFetchPlane = 0;
-            _livePreparedFetchSlot = 0;
-            InvalidateLiveWorkCycle();
-        }
+            => AdvanceBitplaneFetchToNextRow(
+                ref _liveBitplaneFetchTimeline.Prepared,
+                advanceCapturedPointers: false);
 
         private bool CaptureKnownLiveBitplaneFetchesThrough(long targetCycle)
         {
@@ -1072,43 +1061,57 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
         private void AdvanceLiveFetchCursor()
-        {
-            if (_liveNextFetchRow >= LowResOutputHeight)
-            {
-                return;
-            }
-
-            var state = _liveLineStates[_liveNextFetchRow];
-            _liveNextFetchSlot++;
-            if (_liveNextFetchSlot < state.FetchSlotStride)
-            {
-                InvalidateLiveWorkCycle();
-                return;
-            }
-
-            _liveNextFetchSlot = 0;
-            _liveNextFetchPlane = 0;
-            _liveNextFetchWord++;
-            if (_liveNextFetchWord < state.FetchWords)
-            {
-                InvalidateLiveWorkCycle();
-                return;
-            }
-
-            AdvanceLiveFetchToNextRow(advanceBitplanePointers: true);
-        }
+            => AdvanceBitplaneFetchCursor(
+                ref _liveBitplaneFetchTimeline.Captured,
+                advanceCapturedPointers: true);
 
         private void AdvanceLiveFetchToNextRow(bool advanceBitplanePointers)
+            => AdvanceBitplaneFetchToNextRow(
+                ref _liveBitplaneFetchTimeline.Captured,
+                advanceBitplanePointers);
+
+        private void AdvanceBitplaneFetchCursor(
+            ref LiveBitplaneFetchCursor cursor,
+            bool advanceCapturedPointers)
         {
-            if (advanceBitplanePointers)
+            if (cursor.Row >= LowResOutputHeight)
             {
-                AdvanceLiveBitplanePointersPastCapturedRow(_liveNextFetchRow);
+                return;
             }
 
-            _liveNextFetchRow++;
-            _liveNextFetchWord = 0;
-            _liveNextFetchPlane = 0;
-            _liveNextFetchSlot = 0;
+            var state = _liveLineStates[cursor.Row];
+            cursor.Slot++;
+            if (cursor.Slot < state.FetchSlotStride)
+            {
+                InvalidateLiveWorkCycle();
+                return;
+            }
+
+            cursor.Slot = 0;
+            cursor.Plane = 0;
+            cursor.Word++;
+            if (cursor.Word < state.FetchWords)
+            {
+                InvalidateLiveWorkCycle();
+                return;
+            }
+
+            AdvanceBitplaneFetchToNextRow(ref cursor, advanceCapturedPointers);
+        }
+
+        private void AdvanceBitplaneFetchToNextRow(
+            ref LiveBitplaneFetchCursor cursor,
+            bool advanceCapturedPointers)
+        {
+            if (advanceCapturedPointers)
+            {
+                AdvanceLiveBitplanePointersPastCapturedRow(cursor.Row);
+            }
+
+            cursor.Row++;
+            cursor.Word = 0;
+            cursor.Plane = 0;
+            cursor.Slot = 0;
             InvalidateLiveWorkCycle();
         }
 

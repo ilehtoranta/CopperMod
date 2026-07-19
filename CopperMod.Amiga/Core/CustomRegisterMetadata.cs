@@ -19,13 +19,58 @@ internal enum CustomRegisterOwner : byte
     Disk = 1 << 4
 }
 
-internal enum CustomRegisterPresence : byte
+internal readonly record struct CustomRegisterAvailability(
+    AmigaChipCapabilities RequiredAll,
+    AmigaChipCapabilities RequiredAny,
+    AmigaChipCapabilities ForbiddenAny,
+    bool Never = false)
 {
-    Common,
-    EcsAgnus,
-    EcsDenise,
-    EcsAgnusOrDenise,
-    Absent
+    public static CustomRegisterAvailability Common { get; } = new(
+        AmigaChipCapabilities.None,
+        AmigaChipCapabilities.None,
+        AmigaChipCapabilities.None);
+
+    public static CustomRegisterAvailability EcsDmaOrLater { get; } = new(
+        AmigaChipCapabilities.EcsDmaRegisters,
+        AmigaChipCapabilities.None,
+        AmigaChipCapabilities.None);
+
+    public static CustomRegisterAvailability EcsDisplayOrLater { get; } = new(
+        AmigaChipCapabilities.EcsDisplayRegisters,
+        AmigaChipCapabilities.None,
+        AmigaChipCapabilities.None);
+
+    public static CustomRegisterAvailability EcsDmaOrDisplayOrLater { get; } = new(
+        AmigaChipCapabilities.None,
+        AmigaChipCapabilities.EcsDmaRegisters | AmigaChipCapabilities.EcsDisplayRegisters,
+        AmigaChipCapabilities.None);
+
+    public static CustomRegisterAvailability AgaAlice { get; } = new(
+        AmigaChipCapabilities.AgaAliceRegisters,
+        AmigaChipCapabilities.None,
+        AmigaChipCapabilities.None);
+
+    public static CustomRegisterAvailability AgaLisa { get; } = new(
+        AmigaChipCapabilities.AgaLisaRegisters,
+        AmigaChipCapabilities.None,
+        AmigaChipCapabilities.None);
+
+    public static CustomRegisterAvailability AgaAliceAndLisa { get; } = new(
+        AmigaChipCapabilities.AgaAliceRegisters | AmigaChipCapabilities.AgaLisaRegisters,
+        AmigaChipCapabilities.None,
+        AmigaChipCapabilities.None);
+
+    public static CustomRegisterAvailability Absent { get; } = new(
+        AmigaChipCapabilities.None,
+        AmigaChipCapabilities.None,
+        AmigaChipCapabilities.None,
+        Never: true);
+
+    public bool Matches(AmigaChipCapabilities capabilities)
+        => !Never &&
+            (capabilities & RequiredAll) == RequiredAll &&
+            (RequiredAny == AmigaChipCapabilities.None || (capabilities & RequiredAny) != 0) &&
+            (capabilities & ForbiddenAny) == 0;
 }
 
 internal enum CustomRegisterAccess : byte
@@ -43,27 +88,29 @@ internal enum CustomRegisterReadback : byte
     Hardware
 }
 
+internal enum DisplayChipIdentification : byte
+{
+    EcsDenise = 0xFC,
+    AgaLisa = 0xF8
+}
+
 internal readonly record struct CustomRegisterDescriptor(
     ushort Offset,
     string Name,
     CustomRegisterOwner Owner,
-    CustomRegisterPresence Presence,
+    CustomRegisterAvailability Availability,
     CustomRegisterAccess Access,
     ushort ResetValue,
     ushort OcsWritableMask,
     ushort EcsWritableMask,
-    CustomRegisterReadback Readback)
+    CustomRegisterReadback Readback,
+    ushort? EcsResetValue = null,
+    ushort? AgaResetValue = null,
+    ushort? AgaWritableMask = null,
+    ushort AgaResetKnownMask = 0xFFFF)
 {
     public bool IsPresent(AmigaChipset chipset)
-        => Presence switch
-        {
-            CustomRegisterPresence.Common => true,
-            CustomRegisterPresence.EcsAgnus => chipset.Agnus == AgnusModel.Ecs,
-            CustomRegisterPresence.EcsDenise => chipset.Denise == DeniseModel.Ecs,
-            CustomRegisterPresence.EcsAgnusOrDenise =>
-                chipset.Agnus == AgnusModel.Ecs || chipset.Denise == DeniseModel.Ecs,
-            _ => false
-        };
+        => Availability.Matches(chipset.Capabilities);
 
     public ushort GetWritableMask(AmigaChipset chipset)
     {
@@ -72,11 +119,23 @@ internal readonly record struct CustomRegisterDescriptor(
             return 0;
         }
 
-        var ecsOwnerPresent =
-            (Owner.HasFlag(CustomRegisterOwner.Agnus) && chipset.Agnus == AgnusModel.Ecs) ||
-            (Owner.HasFlag(CustomRegisterOwner.Denise) && chipset.Denise == DeniseModel.Ecs);
-        return ecsOwnerPresent ? EcsWritableMask : OcsWritableMask;
+        if (HasAgaOwner(chipset))
+        {
+            return AgaWritableMask ?? EcsWritableMask;
+        }
+
+        return HasEcsOwner(chipset) ? EcsWritableMask : OcsWritableMask;
     }
+
+    public ushort GetResetValue(AmigaChipset chipset)
+        => HasAgaOwner(chipset)
+            ? AgaResetValue ?? EcsResetValue ?? ResetValue
+            : HasEcsOwner(chipset)
+                ? EcsResetValue ?? ResetValue
+                : ResetValue;
+
+    public ushort GetResetKnownMask(AmigaChipset chipset)
+        => HasAgaOwner(chipset) ? AgaResetKnownMask : (ushort)0xFFFF;
 
     public bool IsCpuReadable(AmigaChipset chipset)
         => IsPresent(chipset) && Access is CustomRegisterAccess.ReadOnly or CustomRegisterAccess.ReadWrite;
@@ -85,6 +144,16 @@ internal readonly record struct CustomRegisterDescriptor(
         => IsPresent(chipset) &&
             Access != CustomRegisterAccess.ReadOnly &&
             AgnusCopperRegisterAccess.CanWrite(Offset, copcon);
+
+    private bool HasEcsOwner(AmigaChipset chipset)
+        => (Owner.HasFlag(CustomRegisterOwner.Agnus) && chipset.SupportsEcsDmaRegisters) ||
+            (Owner.HasFlag(CustomRegisterOwner.Denise) && chipset.SupportsEcsDisplayRegisters);
+
+    private bool HasAgaOwner(AmigaChipset chipset)
+        => (Owner.HasFlag(CustomRegisterOwner.Agnus) &&
+                chipset.HasAllCapabilities(AmigaChipCapabilities.AgaAliceRegisters)) ||
+            (Owner.HasFlag(CustomRegisterOwner.Denise) &&
+                chipset.HasAllCapabilities(AmigaChipCapabilities.AgaLisaRegisters));
 }
 
 internal static class CustomRegisterMetadata
@@ -135,7 +204,7 @@ internal static class CustomRegisterMetadata
                 offset,
                 $"RESERVED_{offset:X3}",
                 CustomRegisterOwner.None,
-                CustomRegisterPresence.Absent,
+                CustomRegisterAvailability.Absent,
                 CustomRegisterAccess.WriteOnly,
                 0,
                 0,
@@ -161,7 +230,7 @@ internal static class CustomRegisterMetadata
         AddRead(result, declared, 0x01E, "INTREQR", CustomRegisterOwner.Paula, CustomRegisterReadback.Stored);
 
         Add(result, 0x020, "DSKPTH", CustomRegisterOwner.Disk | CustomRegisterOwner.Agnus,
-            CustomRegisterPresence.Common, CustomRegisterAccess.WriteOnly, 0, 0x000F, 0x001F,
+            CustomRegisterAvailability.Common, CustomRegisterAccess.WriteOnly, 0, 0x000F, 0x001F,
             CustomRegisterReadback.OpenBus, declared);
         AddWrite(result, declared, 0x022, "DSKPTL", CustomRegisterOwner.Disk | CustomRegisterOwner.Agnus, 0xFFFE);
         AddWrite(result, declared, 0x024, "DSKLEN", CustomRegisterOwner.Disk, 0xFFFF);
@@ -169,7 +238,7 @@ internal static class CustomRegisterMetadata
         AddWrite(result, declared, 0x028, "REFPTR", CustomRegisterOwner.Agnus, 0xFFFF);
         AddWrite(result, declared, 0x02A, "VPOSW", CustomRegisterOwner.Agnus, 0xFFFF);
         AddWrite(result, declared, 0x02C, "VHPOSW", CustomRegisterOwner.Agnus, 0xFFFF);
-        Add(result, 0x02E, "COPCON", CustomRegisterOwner.Agnus, CustomRegisterPresence.Common,
+        Add(result, 0x02E, "COPCON", CustomRegisterOwner.Agnus, CustomRegisterAvailability.Common,
             CustomRegisterAccess.WriteOnly, 0, 0x0002, 0x0002, CustomRegisterReadback.OpenBus);
         Declare(declared, 0x02E);
         AddWrite(result, declared, 0x030, "SERDAT", CustomRegisterOwner.Paula, 0xFFFF);
@@ -182,7 +251,7 @@ internal static class CustomRegisterMetadata
         AddStrobe(result, declared, 0x03E, "STRLONG", CustomRegisterOwner.Agnus);
 
         AddWrite(result, declared, 0x040, "BLTCON0", CustomRegisterOwner.Blitter, 0xFFFF);
-        Add(result, 0x042, "BLTCON1", CustomRegisterOwner.Blitter, CustomRegisterPresence.Common,
+        Add(result, 0x042, "BLTCON1", CustomRegisterOwner.Blitter, CustomRegisterAvailability.Common,
             CustomRegisterAccess.WriteOnly, 0, 0xFFFF, 0xFFFF, CustomRegisterReadback.OpenBus);
         Declare(declared, 0x042);
         AddWrite(result, declared, 0x044, "BLTAFWM", CustomRegisterOwner.Blitter, 0xFFFF);
@@ -195,13 +264,13 @@ internal static class CustomRegisterMetadata
         AddWrite(result, declared, 0x058, "BLTSIZE", CustomRegisterOwner.Blitter, 0xFFFF);
 
         Add(result, 0x05A, "BLTCON0L", CustomRegisterOwner.Blitter | CustomRegisterOwner.Agnus,
-            CustomRegisterPresence.EcsAgnus, CustomRegisterAccess.WriteOnly, 0, 0, 0x00FF,
+            CustomRegisterAvailability.EcsDmaOrLater, CustomRegisterAccess.WriteOnly, 0, 0, 0x00FF,
             CustomRegisterReadback.OpenBus, declared);
         Add(result, 0x05C, "BLTSIZV", CustomRegisterOwner.Blitter | CustomRegisterOwner.Agnus,
-            CustomRegisterPresence.EcsAgnus, CustomRegisterAccess.WriteOnly, 0, 0, 0x7FFF,
+            CustomRegisterAvailability.EcsDmaOrLater, CustomRegisterAccess.WriteOnly, 0, 0, 0x7FFF,
             CustomRegisterReadback.OpenBus, declared);
         Add(result, 0x05E, "BLTSIZH", CustomRegisterOwner.Blitter | CustomRegisterOwner.Agnus,
-            CustomRegisterPresence.EcsAgnus, CustomRegisterAccess.WriteOnly, 0, 0, 0x07FF,
+            CustomRegisterAvailability.EcsDmaOrLater, CustomRegisterAccess.WriteOnly, 0, 0, 0x07FF,
             CustomRegisterReadback.OpenBus, declared);
         AddWrite(result, declared, 0x060, "BLTCMOD", CustomRegisterOwner.Blitter, 0xFFFF);
         AddWrite(result, declared, 0x062, "BLTBMOD", CustomRegisterOwner.Blitter, 0xFFFF);
@@ -211,8 +280,11 @@ internal static class CustomRegisterMetadata
         AddWrite(result, declared, 0x072, "BLTBDAT", CustomRegisterOwner.Blitter, 0xFFFF);
         AddWrite(result, declared, 0x074, "BLTADAT", CustomRegisterOwner.Blitter, 0xFFFF);
 
-        Add(result, 0x07C, "DENISEID", CustomRegisterOwner.Denise, CustomRegisterPresence.EcsDenise,
-            CustomRegisterAccess.ReadOnly, 0x00FC, 0, 0, CustomRegisterReadback.Stored, declared);
+        Add(result, 0x07C, "DENISEID", CustomRegisterOwner.Denise, CustomRegisterAvailability.EcsDisplayOrLater,
+            CustomRegisterAccess.ReadOnly, (ushort)DisplayChipIdentification.EcsDenise, 0, 0,
+            CustomRegisterReadback.Stored, declared,
+            agaResetValue: (ushort)DisplayChipIdentification.AgaLisa,
+            agaResetKnownMask: 0x00FF);
         AddWrite(result, declared, 0x07E, "DSKSYNC", CustomRegisterOwner.Disk, 0xFFFF);
 
         AddDmaPointer(result, declared, 0x080, "COP1LCH", "COP1LCL", CustomRegisterOwner.Agnus);
@@ -236,7 +308,7 @@ internal static class CustomRegisterMetadata
             AddDmaPointer(result, declared, baseOffset, $"AUD{channel}LCH", $"AUD{channel}LCL", CustomRegisterOwner.Paula | CustomRegisterOwner.Agnus);
             AddWrite(result, declared, (ushort)(baseOffset + 0x04), $"AUD{channel}LEN", CustomRegisterOwner.Paula, 0xFFFF);
             Add(result, (ushort)(baseOffset + 0x06), $"AUD{channel}PER", CustomRegisterOwner.Paula,
-                CustomRegisterPresence.Common, CustomRegisterAccess.WriteOnly, 0, 0xFFFF, 0xFFFF,
+                CustomRegisterAvailability.Common, CustomRegisterAccess.WriteOnly, 0, 0xFFFF, 0xFFFF,
                 CustomRegisterReadback.OpenBus, declared);
             AddWrite(result, declared, (ushort)(baseOffset + 0x08), $"AUD{channel}VOL", CustomRegisterOwner.Paula, 0x007F);
             AddWrite(result, declared, (ushort)(baseOffset + 0x0A), $"AUD{channel}DAT", CustomRegisterOwner.Paula, 0xFFFF);
@@ -249,13 +321,13 @@ internal static class CustomRegisterMetadata
         }
 
         Add(result, 0x100, "BPLCON0", CustomRegisterOwner.Agnus | CustomRegisterOwner.Denise,
-            CustomRegisterPresence.Common, CustomRegisterAccess.WriteOnly, 0, 0xFF0F, 0xFF4F,
+            CustomRegisterAvailability.Common, CustomRegisterAccess.WriteOnly, 0, 0xFF0F, 0xFF4F,
             CustomRegisterReadback.OpenBus, declared);
         AddWrite(result, declared, 0x102, "BPLCON1", CustomRegisterOwner.Denise, 0x00FF);
-        Add(result, 0x104, "BPLCON2", CustomRegisterOwner.Denise, CustomRegisterPresence.Common,
+        Add(result, 0x104, "BPLCON2", CustomRegisterOwner.Denise, CustomRegisterAvailability.Common,
             CustomRegisterAccess.WriteOnly, 0, 0x007F, 0x007F, CustomRegisterReadback.OpenBus);
         Declare(declared, 0x104);
-        Add(result, 0x106, "BPLCON3", CustomRegisterOwner.Denise, CustomRegisterPresence.EcsDenise,
+        Add(result, 0x106, "BPLCON3", CustomRegisterOwner.Denise, CustomRegisterAvailability.EcsDisplayOrLater,
             CustomRegisterAccess.WriteOnly, 0, 0, 0x0037, CustomRegisterReadback.OpenBus, declared);
         AddWrite(result, declared, 0x108, "BPL1MOD", CustomRegisterOwner.Agnus, 0xFFFF);
         AddWrite(result, declared, 0x10A, "BPL2MOD", CustomRegisterOwner.Agnus, 0xFFFF);
@@ -302,21 +374,21 @@ internal static class CustomRegisterMetadata
         AddEcsBeamRegister(result, declared, 0x1D4, "BPLHSTRT", 0, 0x01FF, CustomRegisterAccess.ReadWrite);
         AddEcsBeamRegister(result, declared, 0x1D6, "BPLHSTOP", 0, 0x01FF, CustomRegisterAccess.ReadWrite);
         AddEcsBeamRegister(result, declared, 0x1D8, "HHPOSW", 0, 0x01FF, CustomRegisterAccess.ReadWrite);
-        Add(result, 0x1DA, "HHPOSR", CustomRegisterOwner.Agnus, CustomRegisterPresence.EcsAgnus,
+        Add(result, 0x1DA, "HHPOSR", CustomRegisterOwner.Agnus, CustomRegisterAvailability.EcsDmaOrLater,
             CustomRegisterAccess.ReadOnly, 0, 0, 0, CustomRegisterReadback.Hardware, declared);
         AddEcsBeamRegister(result, declared, 0x1DC, "BEAMCON0", 0, 0x7FFF, CustomRegisterAccess.ReadWrite);
         AddEcsBeamRegister(result, declared, 0x1DE, "HSSTRT", 0, 0x01FF, CustomRegisterAccess.ReadWrite);
         AddEcsBeamRegister(result, declared, 0x1E0, "VSSTRT", 0, 0x07FF, CustomRegisterAccess.ReadWrite);
         AddEcsBeamRegister(result, declared, 0x1E2, "HCENTER", 0, 0x01FF, CustomRegisterAccess.ReadWrite);
         Add(result, 0x1E4, "DIWHIGH", CustomRegisterOwner.Agnus | CustomRegisterOwner.Denise,
-            CustomRegisterPresence.EcsAgnusOrDenise, CustomRegisterAccess.WriteOnly, 0, 0, 0x2F2F,
+            CustomRegisterAvailability.EcsDmaOrDisplayOrLater, CustomRegisterAccess.WriteOnly, 0, 0, 0x2F2F,
             CustomRegisterReadback.OpenBus, declared);
 
         AddAbsent(result, declared, 0x1E6, "BPLHMOD");
         AddAbsent(result, declared, 0x1E8, "SPRHPT");
         AddAbsent(result, declared, 0x1EA, "BPLHPT");
 
-        Add(result, 0x1FC, "FMODE", CustomRegisterOwner.None, CustomRegisterPresence.Absent,
+        Add(result, 0x1FC, "FMODE", CustomRegisterOwner.None, CustomRegisterAvailability.Absent,
             CustomRegisterAccess.WriteOnly, 0, 0, 0, CustomRegisterReadback.OpenBus, declared);
         return result;
     }
@@ -328,7 +400,7 @@ internal static class CustomRegisterMetadata
         string name,
         CustomRegisterOwner owner,
         CustomRegisterReadback readback)
-        => Add(result, offset, name, owner, CustomRegisterPresence.Common, CustomRegisterAccess.ReadOnly,
+        => Add(result, offset, name, owner, CustomRegisterAvailability.Common, CustomRegisterAccess.ReadOnly,
             0, 0, 0, readback, declared);
 
     private static void AddWrite(
@@ -338,7 +410,7 @@ internal static class CustomRegisterMetadata
         string name,
         CustomRegisterOwner owner,
         ushort writableMask)
-        => Add(result, offset, name, owner, CustomRegisterPresence.Common, CustomRegisterAccess.WriteOnly,
+        => Add(result, offset, name, owner, CustomRegisterAvailability.Common, CustomRegisterAccess.WriteOnly,
             0, writableMask, writableMask, CustomRegisterReadback.OpenBus, declared);
 
     private static void AddSetClear(
@@ -356,7 +428,7 @@ internal static class CustomRegisterMetadata
         ushort offset,
         string name,
         CustomRegisterOwner owner)
-        => Add(result, offset, name, owner, CustomRegisterPresence.Common, CustomRegisterAccess.Strobe,
+        => Add(result, offset, name, owner, CustomRegisterAvailability.Common, CustomRegisterAccess.Strobe,
             0, 0, 0, CustomRegisterReadback.OpenBus, declared);
 
     private static void AddAbsent(
@@ -364,7 +436,7 @@ internal static class CustomRegisterMetadata
         bool[] declared,
         ushort offset,
         string name)
-        => Add(result, offset, name, CustomRegisterOwner.None, CustomRegisterPresence.Absent,
+        => Add(result, offset, name, CustomRegisterOwner.None, CustomRegisterAvailability.Absent,
             CustomRegisterAccess.WriteOnly, 0, 0, 0, CustomRegisterReadback.OpenBus, declared);
 
     private static void AddDmaPointer(
@@ -375,7 +447,7 @@ internal static class CustomRegisterMetadata
         string lowName,
         CustomRegisterOwner owner)
     {
-        Add(result, highOffset, highName, owner, CustomRegisterPresence.Common, CustomRegisterAccess.WriteOnly,
+        Add(result, highOffset, highName, owner, CustomRegisterAvailability.Common, CustomRegisterAccess.WriteOnly,
             0, 0x000F, 0x001F, CustomRegisterReadback.OpenBus, declared);
         AddWrite(result, declared, (ushort)(highOffset + 2), lowName, owner, 0xFFFE);
     }
@@ -388,7 +460,7 @@ internal static class CustomRegisterMetadata
         ushort resetValue,
         ushort writableMask,
         CustomRegisterAccess access)
-        => Add(result, offset, name, CustomRegisterOwner.Agnus, CustomRegisterPresence.EcsAgnus,
+        => Add(result, offset, name, CustomRegisterOwner.Agnus, CustomRegisterAvailability.EcsDmaOrLater,
             access, resetValue, 0, writableMask,
             access == CustomRegisterAccess.WriteOnly ? CustomRegisterReadback.OpenBus : CustomRegisterReadback.Stored,
             declared);
@@ -398,25 +470,33 @@ internal static class CustomRegisterMetadata
         ushort offset,
         string name,
         CustomRegisterOwner owner,
-        CustomRegisterPresence presence,
+        CustomRegisterAvailability availability,
         CustomRegisterAccess access,
         ushort resetValue,
         ushort ocsWritableMask,
         ushort ecsWritableMask,
         CustomRegisterReadback readback,
-        bool[]? declared = null)
+        bool[]? declared = null,
+        ushort? ecsResetValue = null,
+        ushort? agaResetValue = null,
+        ushort? agaWritableMask = null,
+        ushort agaResetKnownMask = 0xFFFF)
     {
         var normalized = Normalize(offset);
         result[normalized >> 1] = new CustomRegisterDescriptor(
             normalized,
             name,
             owner,
-            presence,
+            availability,
             access,
             resetValue,
             ocsWritableMask,
             ecsWritableMask,
-            readback);
+            readback,
+            ecsResetValue,
+            agaResetValue,
+            agaWritableMask,
+            agaResetKnownMask);
         if (declared != null)
         {
             Declare(declared, normalized);

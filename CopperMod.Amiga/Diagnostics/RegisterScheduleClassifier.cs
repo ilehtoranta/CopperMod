@@ -24,8 +24,6 @@ namespace CopperMod.Amiga.Diagnostics
 
     internal static class CustomRegisterScheduleClassifier
     {
-        private const ushort Bplcon0FetchMask = 0xF040;
-        private const ushort EcsBplcon3WritableMask = 0x0037;
         private const ushort Bplcon3BorderSpriteEnable = 0x0002;
 
         public const HardwareScheduleImpact EventSchedulingImpacts =
@@ -68,12 +66,7 @@ namespace CopperMod.Amiga.Diagnostics
 
                 case CustomRegisterImpactRule.Bplcon3Fields:
                 {
-                    if (chipset.Denise != DeniseModel.Ecs)
-                    {
-                        return HardwareScheduleImpact.None;
-                    }
-
-                    var changed = (ushort)((oldValue ^ newValue) & EcsBplcon3WritableMask);
+                    var changed = (ushort)((oldValue ^ newValue) & entry.ImpactMask);
                     if (changed == 0)
                     {
                         return HardwareScheduleImpact.None;
@@ -90,7 +83,7 @@ namespace CopperMod.Amiga.Diagnostics
 
                 case CustomRegisterImpactRule.DiwhighOwners:
                 {
-                    var changed = (ushort)((oldValue ^ newValue) & AgnusRegisterBank.DiwhighWritableMask);
+                    var changed = (ushort)((oldValue ^ newValue) & entry.ImpactMask);
                     return changed != 0 ? entry.PotentialImpact : HardwareScheduleImpact.None;
                 }
 
@@ -103,10 +96,7 @@ namespace CopperMod.Amiga.Diagnostics
                     }
 
                     var impact = HardwareScheduleImpact.Composition;
-                    var fetchMask = chipset.Agnus == AgnusModel.Ecs
-                        ? Bplcon0FetchMask
-                        : (ushort)(Bplcon0FetchMask & ~0x0040);
-                    if ((changed & fetchMask) != 0)
+                    if ((changed & entry.ImpactMask) != 0)
                     {
                         impact |= HardwareScheduleImpact.Bitplane;
                     }

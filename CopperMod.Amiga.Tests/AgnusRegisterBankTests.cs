@@ -9,7 +9,7 @@ public sealed class AgnusRegisterBankTests
     [Fact]
     public void ResetProvidesCanonicalOcsDisplayDefaults()
     {
-        var registers = Create(AgnusModel.Ocs);
+        var registers = Create(DmaChipModel.OcsAgnus);
 
         Assert.Equal(AgnusRegisterBank.DefaultDiwStart, registers.DiwStart);
         Assert.Equal(AgnusRegisterBank.DefaultDiwStop, registers.DiwStop);
@@ -25,7 +25,7 @@ public sealed class AgnusRegisterBankTests
     [Fact]
     public void CommonDisplayRegistersStoreOriginalBusValues()
     {
-        var registers = Create(AgnusModel.Ocs);
+        var registers = Create(DmaChipModel.OcsAgnus);
 
         registers.Write(AgnusRegisterBank.Copcon, 0x0002);
         registers.Write(AgnusRegisterBank.Diwstrt, 0x1234);
@@ -47,7 +47,7 @@ public sealed class AgnusRegisterBankTests
     [Fact]
     public void PairedDmaPointerWritesUseTheSelectedAgnusMask()
     {
-        var registers = Create(AgnusModel.Ocs);
+        var registers = Create(DmaChipModel.OcsAgnus);
 
         registers.Write(AgnusRegisterBank.Cop1lch, 0x00FF);
         registers.Write(AgnusRegisterBank.Cop1lcl, 0xFFFF);
@@ -64,8 +64,8 @@ public sealed class AgnusRegisterBankTests
     [Fact]
     public void DiwHighIsStoredOnlyByEcsAgnus()
     {
-        var ocs = Create(AgnusModel.Ocs);
-        var ecs = Create(AgnusModel.Ecs);
+        var ocs = Create(DmaChipModel.OcsAgnus);
+        var ecs = Create(DmaChipModel.EcsAgnus);
 
         var ocsWrite = ocs.Write(AgnusRegisterBank.Diwhigh, 0xFFFF);
         var ecsWrite = ecs.Write(AgnusRegisterBank.Diwhigh, 0xFFFF);
@@ -162,6 +162,6 @@ public sealed class AgnusRegisterBankTests
         Assert.Equal(0u, bus.Display.CaptureSnapshot().BitplanePointers[0]);
     }
 
-    private static AgnusRegisterBank Create(AgnusModel model)
+    private static AgnusRegisterBank Create(DmaChipModel model)
         => new(model, new ChipDmaAddressing(model));
 }

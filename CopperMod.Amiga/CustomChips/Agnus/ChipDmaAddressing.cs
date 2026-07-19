@@ -9,9 +9,9 @@ namespace CopperMod.Amiga.CustomChips.Agnus;
 
 internal readonly struct ChipDmaAddressing
 {
-    public ChipDmaAddressing(AgnusModel model)
+    public ChipDmaAddressing(DmaChipModel model)
     {
-        AddressMask = model == AgnusModel.Ecs
+        AddressMask = model.SupportsEcsRegisters()
             ? AmigaConstants.EcsChipDmaAddressMask
             : AmigaConstants.OcsChipDmaAddressMask;
     }
@@ -39,7 +39,7 @@ internal readonly struct ChipDmaAddressing
             AmigaConstants.DefaultChipRamSize or
             AmigaConstants.MaxChipRamSize;
 
-    public static bool SupportsPhysicalSize(AgnusModel model, int size)
+    public static bool SupportsPhysicalSize(DmaChipModel model, int size)
         => IsStandardPhysicalSize(size) &&
-            (model == AgnusModel.Ecs || size <= AmigaConstants.DefaultChipRamSize);
+            (model.SupportsEcsRegisters() || size <= AmigaConstants.DefaultChipRamSize);
 }

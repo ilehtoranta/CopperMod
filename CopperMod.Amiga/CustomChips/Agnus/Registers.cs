@@ -126,15 +126,15 @@ internal sealed class AgnusRegisterBank
     private short _bpl1mod;
     private short _bpl2mod;
 
-    public AgnusRegisterBank(AgnusModel model, ChipDmaAddressing dmaAddressing, RasterTiming timing)
+    public AgnusRegisterBank(DmaChipModel model, ChipDmaAddressing dmaAddressing, RasterTiming timing)
     {
-        _ecs = model == AgnusModel.Ecs;
+        _ecs = model.SupportsEcsRegisters();
         _dmaAddressing = dmaAddressing;
         _timing = timing;
         Reset();
     }
 
-    public AgnusRegisterBank(AgnusModel model, ChipDmaAddressing dmaAddressing)
+    public AgnusRegisterBank(DmaChipModel model, ChipDmaAddressing dmaAddressing)
         : this(model, dmaAddressing, RasterTiming.Pal)
     {
     }

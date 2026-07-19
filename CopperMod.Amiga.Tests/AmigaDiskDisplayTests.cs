@@ -2544,6 +2544,19 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void PaletteFrameStorageGrowsLazilyAndDeduplicatesUnchangedRows()
+    {
+        var bus = new AmigaBus();
+        Assert.Equal(0, bus.Display.PaletteSnapshotReservedBytes);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+
+        bus.Display.RenderFrame(frame);
+
+        Assert.Equal(1, bus.Display.PaletteFrameSnapshotCount);
+        Assert.InRange(bus.Display.PaletteSnapshotReservedBytes, 1, 64 * 1024);
+    }
+
+    [Fact]
     public void HardwareSpriteUsesPaletteFromItsRasterSpan()
     {
         var bus = new AmigaBus();

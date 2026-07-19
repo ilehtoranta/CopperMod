@@ -2318,7 +2318,7 @@ public sealed class AmigaBusTimingTests
 			(write.Value & AmigaConstants.IntreqCopper) != 0);
 		var cpuVisibleCycle = intreqWrite.Cycle +
 			AmigaConstants.A500CopperIntreqDelayCpuCycles +
-			AmigaConstants.A500IntreqToIplDelayCpuCycles;
+			AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles;
 		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqCopper);
 		Assert.Equal(3, bus.Paula.GetHighestPendingInterruptLevel());
 		Assert.Equal(0, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle - 1));
@@ -2374,18 +2374,18 @@ public sealed class AmigaBusTimingTests
 			$"v{beam.BeamLine:X3}h{beam.BeamHorizontal:X2}, " +
 			$"accesses=[{accessText}]";
 
-		Assert.Equal(line256Start - 186, intreqWrite.Cycle);
+		Assert.Equal(line256Start - 182, intreqWrite.Cycle);
 		Assert.Equal(0x0FF, beam.BeamLine);
-		Assert.Equal(0x86, beam.BeamHorizontal);
+		Assert.Equal(0x88, beam.BeamHorizontal);
 		Assert.Equal(4, copperAccesses.Length);
-		Assert.Equal(new long[] { -190, -186, -182, -178 }, copperAccesses
+		Assert.Equal(new long[] { -186, -182, -178, -174 }, copperAccesses
 			.Select(access => access.GrantedCycle - line256Start)
 			.ToArray());
 		Assert.Contains("0x002416", diagnostic);
 	}
 
 	[Fact]
-	public void CopperWaitFf81Level1IntreqBecomesCpuVisibleAfterGenericPaulaDelay()
+	public void CopperWaitFf81Level1IntreqBecomesCpuVisibleAfterSoftwareRegisterDelay()
 	{
 		var bus = new AmigaBus(
 			captureBusAccesses: true,
@@ -2412,7 +2412,8 @@ public sealed class AmigaBusTimingTests
 		var intreqWrite = bus.CustomRegisterWrites.Last(write =>
 			write.Address == 0x09C &&
 			write.Value == (0x8000 | intreqLevel1));
-		var cpuVisibleCycle = intreqWrite.Cycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
+		var cpuVisibleCycle = intreqWrite.Cycle +
+			AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles;
 		var intreqBeam = bus.GetBeamPosition(intreqWrite.Cycle);
 		var visibleBeam = bus.GetBeamPosition(cpuVisibleCycle);
 		var diagnostic =
@@ -2424,16 +2425,18 @@ public sealed class AmigaBusTimingTests
 
 		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & intreqLevel1);
 		Assert.Equal(1, bus.Paula.GetHighestPendingInterruptLevel());
-		Assert.Equal(line256Start - 186, intreqWrite.Cycle);
-		Assert.Equal(line256Start - 178, cpuVisibleCycle);
-		Assert.Equal(AmigaConstants.A500IntreqToIplDelayCpuCycles, cpuVisibleCycle - intreqWrite.Cycle);
+		Assert.Equal(line256Start - 182, intreqWrite.Cycle);
+		Assert.Equal(line256Start - 180, cpuVisibleCycle);
+		Assert.Equal(
+			AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles,
+			cpuVisibleCycle - intreqWrite.Cycle);
 		Assert.Equal(0, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle - 1));
 		Assert.Equal(1, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle));
 		Assert.Equal(0x0FF, intreqBeam.BeamLine);
-		Assert.Equal(0x86, intreqBeam.BeamHorizontal);
+		Assert.Equal(0x88, intreqBeam.BeamHorizontal);
 		Assert.Equal(0x0FF, visibleBeam.BeamLine);
-		Assert.Equal(0x8A, visibleBeam.BeamHorizontal);
-		Assert.Contains("delay=8", diagnostic);
+		Assert.Equal(0x89, visibleBeam.BeamHorizontal);
+		Assert.Contains("delay=2", diagnostic);
 	}
 
 	[Fact]
@@ -2468,7 +2471,7 @@ public sealed class AmigaBusTimingTests
 			(write.Value & AmigaConstants.IntreqCopper) != 0);
 		var cpuVisibleCycle = intreqWrite.Cycle +
 			AmigaConstants.A500CopperIntreqDelayCpuCycles +
-			AmigaConstants.A500IntreqToIplDelayCpuCycles;
+			AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles;
 		machine.Cpu.State.Cycles = cpuVisibleCycle - 1;
 		Assert.False(machine.DispatchPendingHardwareInterrupt());
 		Assert.Equal(0x1000u, machine.Cpu.State.ProgramCounter);
@@ -2483,20 +2486,20 @@ public sealed class AmigaBusTimingTests
 
 		Assert.Equal(3, (machine.Cpu.State.StatusRegister >> 8) & 7);
 		Assert.Equal(handlerAddress, machine.Cpu.State.ProgramCounter);
-		Assert.Equal(acceptanceCycle + 48, machine.Cpu.State.Cycles);
+		Assert.Equal(acceptanceCycle + 46, machine.Cpu.State.Cycles);
 		Assert.Equal(3, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle));
 		var interruptPhases = bus.CpuBusPhases
 			.Skip(phaseCountBeforeDispatch)
 			.ToArray();
 		var timeline = BuildCpuBusPhaseTimeline(interruptPhases, acceptanceCycle);
 		var expected =
-			"pc=0x1000,CpuDataWrite,0x002FFE,r+8..+12,g+10 | " +
-			"pc=0x1000,CpuInterruptAcknowledge,0xFFFFF7,r+12..+18 | " +
-			"pc=0x1000,CpuDataWrite,0x002FFA,r+22..+26,g+24 | " +
-			"pc=0x1000,CpuDataWrite,0x002FFC,r+26..+30,g+28 | " +
-			"pc=0x1000,CpuDataRead,0x00006C,r+30..+38,g+32 | " +
-			"pc=0x1000,CpuInstructionFetch,0x002000,r+38..+42,g+40 | " +
-			"pc=0x1000,CpuInstructionFetch,0x002002,r+44..+48,g+46";
+			"pc=0x1000,CpuDataWrite,0x002FFE,r+6..+10,g+8 | " +
+			"pc=0x1000,CpuInterruptAcknowledge,0xFFFFF7,r+10..+16 | " +
+			"pc=0x1000,CpuDataWrite,0x002FFA,r+20..+24,g+22 | " +
+			"pc=0x1000,CpuDataWrite,0x002FFC,r+24..+28,g+26 | " +
+			"pc=0x1000,CpuDataRead,0x00006C,r+28..+36,g+30 | " +
+			"pc=0x1000,CpuInstructionFetch,0x002000,r+36..+40,g+38 | " +
+			"pc=0x1000,CpuInstructionFetch,0x002002,r+42..+46,g+44";
 		Assert.True(expected == timeline, timeline);
 	}
 
@@ -4313,6 +4316,53 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(before.PaulaEvents, after.PaulaEvents);
 		Assert.Equal(before.DiskEvents, after.DiskEvents);
 		Assert.Equal(before.BlitterEvents, after.BlitterEvents);
+	}
+
+	[Theory]
+	[InlineData(0)]
+	[InlineData(1)]
+	[InlineData(2)]
+	[InlineData(3)]
+	public void DeferredDmaReadOwnershipShadowIsSafeAcrossOcsEcsPalNtscProfiles(int profile)
+	{
+		var chipset = profile switch
+		{
+			0 => AmigaChipset.OcsPal,
+			1 => AmigaChipset.OcsNtsc,
+			2 => AmigaChipset.EcsPal,
+			_ => AmigaChipset.EcsNtsc
+		};
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableHardwareSpecialization: true,
+			chipset: chipset,
+			verifyDeferredDmaReads: true);
+		bus.WriteWord(0x00DFF096, 0x8300);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x0038);
+		bus.WriteWord(0x00DFF0E0, 0x0000);
+		bus.WriteWord(0x00DFF0E2, 0x4000);
+		bus.WriteWord(0x00DFF100, 0x1000);
+		bus.EnableLiveAgnusDma();
+
+		var cycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		for (var i = 0; i < 96; i++)
+		{
+			_ = bus.ReadWord(0x2000, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
+		}
+
+		var scheduler = bus.CaptureHardwareSchedulerSnapshot();
+		Assert.Equal(0, scheduler.DeferredCpuWaitFixedImageProductionVerificationMismatches);
+		Assert.Equal(0, scheduler.DeferredCpuWaitFixedImageProductionUsed);
+		if (chipset.VideoStandard == VideoStandard.Pal)
+		{
+			Assert.True(scheduler.DeferredCpuWaitFixedImageProductionVerificationMatches > 0);
+		}
+		else
+		{
+			Assert.Equal(0, scheduler.DeferredCpuWaitFixedImageProductionVerificationMatches);
+			Assert.True(scheduler.DeferredCpuWaitFixedImageProductionFallbackFrame > 0);
+		}
 	}
 
 	[Fact]
@@ -6883,7 +6933,7 @@ public sealed class AmigaBusTimingTests
 			(ushort)(0x8000 | AmigaConstants.IntreqVerticalBlank));
 		bus.Paula.AdvanceTo(0);
 
-		var releaseCycle = AmigaConstants.A500IntreqToIplDelayCpuCycles;
+		var releaseCycle = AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles;
 		var delayedCandidate = bus.GetNextCpuBatchWakeCandidateCycle(0, 200, out var delayedWakeSource);
 		var visibleCandidate = bus.GetNextCpuBatchWakeCandidateCycle(10, 200, out var visibleWakeSource);
 		var pendingCandidate = bus.GetNextCpuBatchWakeCandidateCycle(releaseCycle, releaseCycle + 100, out var pendingWakeSource);

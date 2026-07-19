@@ -24,23 +24,23 @@ internal static class DisplayGeometryDecoder
     private const ushort Bplcon0SuperHighResolution = 0x0040;
 
     public static DisplayWindow DecodeDisplayWindow(
-        AgnusModel model,
+        DmaChipModel model,
         ushort diwStart,
         ushort diwStop,
         ushort diwHigh,
         bool diwHighValid)
-        => DecodeDisplayWindow(model == AgnusModel.Ecs, diwStart, diwStop, diwHigh, diwHighValid);
+        => DecodeDisplayWindow(model.SupportsEcsRegisters(), diwStart, diwStop, diwHigh, diwHighValid);
 
     public static DisplayWindow DecodeDisplayWindow(
-        DeniseModel model,
+        DisplayChipModel model,
         ushort diwStart,
         ushort diwStop,
         ushort diwHigh,
         bool diwHighValid)
-        => DecodeDisplayWindow(model == DeniseModel.Ecs, diwStart, diwStop, diwHigh, diwHighValid);
+        => DecodeDisplayWindow(model.SupportsEcsRegisters(), diwStart, diwStop, diwHigh, diwHighValid);
 
     public static DataFetchWindow DecodeDataFetchWindow(
-        AgnusModel model,
+        DmaChipModel model,
         ushort bplcon0,
         ushort ddfStart,
         ushort ddfStop)
@@ -98,14 +98,14 @@ internal static class DisplayGeometryDecoder
             _ => 8
         };
 
-    public static DeniseResolution GetDataFetchResolution(AgnusModel model, ushort bplcon0)
+    public static DeniseResolution GetDataFetchResolution(DmaChipModel model, ushort bplcon0)
     {
         if ((bplcon0 & Bplcon0HighResolution) != 0)
         {
             return DeniseResolution.HighRes;
         }
 
-        return model == AgnusModel.Ecs &&
+        return model.SupportsEcsRegisters() &&
             (bplcon0 & (Bplcon0HighResolution | Bplcon0SuperHighResolution)) == Bplcon0SuperHighResolution
                 ? DeniseResolution.SuperHighRes
                 : DeniseResolution.LowRes;

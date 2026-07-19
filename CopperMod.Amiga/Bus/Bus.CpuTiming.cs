@@ -11,6 +11,14 @@ namespace CopperMod.Amiga.Bus
 {
     internal sealed partial class Bus
     {
+        // Reuses the prepared display-owner segment while a CPU grant search walks
+        // forward within the same raster line. The cursor self-invalidates when a
+        // Copper/custom-register wake changes the live display generation.
+        private BlitterFixedSlotImageCursor _cpuGrantFixedSlotImageCursor;
+        // A positive dynamic-DMA rejection is stable for the remainder of the line.
+        // Cache only that conservative result; a negative result must be rechecked.
+        private long _cpuGrantDynamicDmaRejectSegmentEnd = -1;
+
         private const int DeferredCpuBusBatchMinimumHorizonCycles = 16;
         // The CPU wait-slot executor remains shadow-only until its display and
         // scheduler state transitions are proven equivalent to the reference drain.
@@ -835,6 +843,10 @@ namespace CopperMod.Amiga.Bus
             var cpuGrantCommitted = false;
             var deferredPreparationUsed = false;
             var deferredFixedImageUsed = false;
+            var verifyDeferredDmaReadOwnership = false;
+            var predictedDeferredDmaReadGrant = 0L;
+            var predictedDeferredDmaReadCompletion = 0L;
+            var predictedDeferredDmaReadTimeline = default(CpuWaitFixedSlotTimelineSignature);
             var verifyDeferredFixedImage = false;
             var deferredFixedImageTimeline = default(CpuWaitFixedSlotTimelineSignature);
             if (!slotContendedClean &&
@@ -972,6 +984,22 @@ namespace CopperMod.Amiga.Bus
                 }
             }
 
+            if (!slotContendedClean &&
+                !cpuGrantCommitted &&
+                _deferredDmaReadsVerifyEnabled &&
+                !isWrite)
+            {
+                verifyDeferredDmaReadOwnership = _hardwareScheduler.TryPredictDeferredReadOwnership(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    grantRequestCycle,
+                    out predictedDeferredDmaReadGrant,
+                    out predictedDeferredDmaReadCompletion,
+                    out predictedDeferredDmaReadTimeline);
+            }
+
             if (!slotContendedClean && !cpuGrantCommitted)
             {
                 if (ShouldRunDeferredCpuWaitSlotShadowAudit && !scratchAudit.BlitterAttempted)
@@ -1067,7 +1095,13 @@ namespace CopperMod.Amiga.Bus
             {
                 var fixedImageRequiresPostGrantCatchup = deferredFixedImageUsed &&
                     !_hardwareScheduler.IsSlotContendedCleanThrough(grantedCycle);
-                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite);
+                if (target is not (AmigaBusAccessTarget.ChipRam or
+                        AmigaBusAccessTarget.ExpansionRam or
+                        AmigaBusAccessTarget.RealTimeClock) ||
+                    !_hardwareScheduler.TryCatchUpPreparedCpuGrant(requestedCycle, grantedCycle))
+                {
+                    AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite);
+                }
                 if (fixedImageRequiresPostGrantCatchup && grantedCycle > requestedCycle)
                 {
                     RecordProductionCpuWaitFixedSlotImagePostGrantCatchup();
@@ -1101,6 +1135,21 @@ namespace CopperMod.Amiga.Bus
                         completedCycle,
                         deferredFixedImageTimeline);
                 }
+            }
+
+            if (verifyDeferredDmaReadOwnership)
+            {
+                VerifyDeferredDmaReadOwnership(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    grantRequestCycle,
+                    grantedCycle,
+                    completedCycle,
+                    predictedDeferredDmaReadGrant,
+                    predictedDeferredDmaReadCompletion,
+                    predictedDeferredDmaReadTimeline);
             }
 
             return true;
@@ -1521,37 +1570,37 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            var prepareCycle = Math.Max(0, requestedCycle);
-            var lastGrant = -1L;
-            for (var prepareAttempt = 0; prepareAttempt < 8; prepareAttempt++)
+            var searchCycle = Math.Max(0, requestedCycle);
+            for (var attempt = 0; attempt < 512; attempt++)
             {
-                var searchCycle = Math.Max(0, requestedCycle);
-                long candidate;
-                while (true)
+                if (!_hrmSlotEngine.TryPredictCpuDataSingleSlotFrom(
+                        kind,
+                        target,
+                        address,
+                        size,
+                        searchCycle,
+                        requestedCycle,
+                        isWrite,
+                        out var candidate))
                 {
-                    if (!_hrmSlotEngine.TryPredictCpuDataSingleSlotFrom(
-                            kind,
-                            target,
-                            address,
-                            size,
-                            searchCycle,
-                            requestedCycle,
-                            isWrite,
-                            out candidate) ||
-                        !Display.TryGetCpuWaitFixedSlotOwner(candidate, out var owner, out unsupported))
-                    {
-                        return false;
-                    }
-
-                    if (candidate > prepareCycle || owner == CpuWaitFixedSlotOwner.Free)
-                    {
-                        break;
-                    }
-
-                    searchCycle = candidate + AgnusChipSlotScheduler.SlotCycles;
+                    return false;
                 }
 
-                if (candidate == lastGrant || candidate <= prepareCycle)
+                CpuWaitFixedSlotOwner owner;
+                if (IsMandatoryRefreshSlot(candidate))
+                {
+                    owner = CpuWaitFixedSlotOwner.Refresh;
+                }
+                else if (!Display.TryGetBlitterFixedDisplaySlotOwner(
+                             candidate,
+                             ref _cpuGrantFixedSlotImageCursor,
+                             out owner,
+                             out unsupported))
+                {
+                    return false;
+                }
+
+                if (owner == CpuWaitFixedSlotOwner.Free)
                 {
                     grantedCycle = candidate;
                     completedCycle = candidate + AgnusChipSlotScheduler.SlotCycles;
@@ -1564,8 +1613,7 @@ namespace CopperMod.Amiga.Bus
                         out unsupported);
                 }
 
-                lastGrant = candidate;
-                prepareCycle = candidate;
+                searchCycle = candidate + AgnusChipSlotScheduler.SlotCycles;
             }
 
             grantedCycle = 0;
@@ -1712,6 +1760,17 @@ namespace CopperMod.Amiga.Bus
                 return;
             }
 
+            if (TryPrepareLiveDisplayBeforeCpuHrmGrantFromFixedSlotImage(
+                    target,
+                    address,
+                    size,
+                    isWrite,
+                    kind,
+                    grantRequestCycle))
+            {
+                return;
+            }
+
             var prepareCycle = grantRequestCycle;
             var lastGrant = -1L;
             var lastSecondWord = -1L;
@@ -1750,6 +1809,69 @@ namespace CopperMod.Amiga.Bus
                 lastSecondWord = predictedSecondWord;
                 prepareCycle = nextPrepareCycle;
             }
+        }
+
+        private bool TryPrepareLiveDisplayBeforeCpuHrmGrantFromFixedSlotImage(
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            bool isWrite,
+            AmigaBusAccessKind kind,
+            long grantRequestCycle)
+        {
+            // Fixed display ownership can replace the prepare/predict fixed-point
+            // loop only while no device with movable ownership can enter the line.
+            // Those paths retain canonical gatling-order preparation.
+            if (size is not (AmigaBusAccessSize.Byte or AmigaBusAccessSize.Word) ||
+                target is not (AmigaBusAccessTarget.ChipRam or
+                    AmigaBusAccessTarget.ExpansionRam or
+                    AmigaBusAccessTarget.RealTimeClock) ||
+                Display.HasLiveSpriteDmaWork() ||
+                HasPreparedCpuGrantDynamicDmaBarrier(grantRequestCycle) ||
+                !TryPredictCpuWaitFixedSlotGrant(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    grantRequestCycle,
+                    isWrite,
+                    out var predictedGrant,
+                    out _,
+                    out _))
+            {
+                return false;
+            }
+
+            Display.CaptureLiveDisplayDmaBeforeHrmGrant(predictedGrant);
+            return TryPredictCpuGrant(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    grantRequestCycle,
+                    isWrite,
+                    out var committedGrant,
+                    out _,
+                    out _) &&
+                committedGrant == predictedGrant;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool HasPreparedCpuGrantDynamicDmaBarrier(long grantRequestCycle)
+        {
+            if (grantRequestCycle <= _cpuGrantDynamicDmaRejectSegmentEnd)
+            {
+                return true;
+            }
+
+            if (!HasNonDisplayDynamicCpuWaitSlotWorkThrough(grantRequestCycle + LineCycles))
+            {
+                return false;
+            }
+
+            var line = Math.Max(0, grantRequestCycle) / LineCycles;
+            _cpuGrantDynamicDmaRejectSegmentEnd = ((line + 1) * LineCycles) - 1;
+            return true;
         }
 
 

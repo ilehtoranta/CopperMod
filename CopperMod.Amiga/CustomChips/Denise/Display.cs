@@ -19,6 +19,23 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
     internal sealed partial class Display
     {
+        private struct LiveBitplaneFetchCursor
+        {
+            internal int Row;
+            internal int Word;
+            internal int Plane;
+            internal int Slot;
+        }
+
+        private struct LiveBitplaneFetchTimeline
+        {
+            // Both boundaries walk the same ordered row-plan sequence. Prepared may
+            // lead Captured, but only Captured is allowed to read memory or advance
+            // the hardware bitplane pointers.
+            internal LiveBitplaneFetchCursor Captured;
+            internal LiveBitplaneFetchCursor Prepared;
+        }
+
         private const int MaxPendingWrites = 65536;
         private const int StandardHStart = 0x81 - AmigaConstants.PalLowResOverscanBorderX;
         // Left overscan exposes the bitplane shifter's comparator-$80 pixel.
@@ -119,10 +136,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private readonly List<SpriteFrameCommand>[] _spriteCommandScratch = new List<SpriteFrameCommand>[8];
         private readonly bool[] _evenSpriteAttached = new bool[MaxSpriteFrameCommands];
         private readonly bool[] _oddSpriteAttached = new bool[MaxSpriteFrameCommands];
-        private readonly List<PaletteFrameSpan> _paletteFrameSpans = new List<PaletteFrameSpan>(MaxPaletteFrameSpans);
+        private readonly List<PaletteFrameSpan> _paletteFrameSpans = new List<PaletteFrameSpan>(LowResOutputHeight);
+        private readonly int[] _paletteFrameSpanIndexByPixel;
+        private readonly PaletteSnapshotPool _paletteFrameSnapshots = new PaletteSnapshotPool();
         private readonly List<BitplaneDataSpan> _bitplaneDataSpans = new List<BitplaneDataSpan>(MaxBitplaneDataSpans);
-        private readonly uint[] _paletteFrameSpanColors = new uint[MaxPaletteFrameSpans * PaletteColorCount];
-        private readonly ushort[] _paletteFrameSpanEncodedColors = new ushort[MaxPaletteFrameSpans * 32];
         private readonly byte[] _timelineFastPathColorIndexes = new byte[MaxLowResWidth];
         private readonly byte[] _timelineFastPathPriorityMasks = new byte[MaxLowResWidth];
         private readonly SavedDisplayState _savedDisplayState = new SavedDisplayState();
@@ -219,8 +236,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private readonly bool[] _liveSpriteDmaExhausted = new bool[LiveSpriteChannelCount];
         private readonly LiveSpriteDmaState[] _liveSpriteDmaStates = new LiveSpriteDmaState[LiveSpriteChannelCount];
         private SpriteDmaReadLatch _spriteDmaReadLatch;
-        private readonly ushort[] _livePaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
-        private readonly uint[] _livePaletteSnapshotConvertedColors = new uint[MaxLivePaletteSnapshots * PaletteColorCount];
+        private PaletteSnapshotPool _livePaletteSnapshots = new PaletteSnapshotPool();
         private readonly List<SpriteFrameCommand> _previousLiveSpriteFrameCommands = new(MaxSpriteFrameCommands * 8);
         private readonly ushort[] _previousLiveSpriteWords = new ushort[LowResOutputHeight * LiveSpriteWordsPerRow];
         private readonly byte[] _previousLiveSpriteWordMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
@@ -244,8 +260,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private BoundedWriteLog? _copperDisplayWrites;
         private DisplayFrameTimeline _displayTimeline;
         private DisplayFrameTimeline _archivedDisplayTimeline;
-        private readonly ushort[] _archivedPaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
-        private readonly uint[] _archivedPaletteSnapshotConvertedColors = new uint[MaxLivePaletteSnapshots * PaletteColorCount];
+        private PaletteSnapshotPool _archivedPaletteSnapshots = new PaletteSnapshotPool();
         private long _archivedFrameWritesStartCycle = long.MinValue;
         private long _archivedFrameWritesStopCycle = long.MinValue;
         private bool _archivedFrameWritesValid;
@@ -254,7 +269,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private long _previousLiveSpriteFrameStartCycle = long.MinValue;
         private bool _liveFrameValid;
         private int _liveGeneration = 1;
-        private int _livePaletteSnapshotCount;
         private int _liveCurrentPaletteSnapshotIndex = -1;
         private int _lastAppliedLivePaletteSnapshotIndex = -1;
         private bool _livePaletteSnapshotDirty = true;
@@ -278,14 +292,47 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private long _liveFrameStartCycle;
         private long _liveCapturedThroughCycle;
         private int _liveNextLineStateRow;
-        private int _liveNextFetchRow;
-        private int _liveNextFetchWord;
-        private int _liveNextFetchPlane;
-        private int _liveNextFetchSlot;
-        private int _livePreparedFetchRow;
-        private int _livePreparedFetchWord;
-        private int _livePreparedFetchPlane;
-        private int _livePreparedFetchSlot;
+        private LiveBitplaneFetchTimeline _liveBitplaneFetchTimeline;
+        private int _liveNextFetchRow
+        {
+            get => _liveBitplaneFetchTimeline.Captured.Row;
+            set => _liveBitplaneFetchTimeline.Captured.Row = value;
+        }
+        private int _liveNextFetchWord
+        {
+            get => _liveBitplaneFetchTimeline.Captured.Word;
+            set => _liveBitplaneFetchTimeline.Captured.Word = value;
+        }
+        private int _liveNextFetchPlane
+        {
+            get => _liveBitplaneFetchTimeline.Captured.Plane;
+            set => _liveBitplaneFetchTimeline.Captured.Plane = value;
+        }
+        private int _liveNextFetchSlot
+        {
+            get => _liveBitplaneFetchTimeline.Captured.Slot;
+            set => _liveBitplaneFetchTimeline.Captured.Slot = value;
+        }
+        private int _livePreparedFetchRow
+        {
+            get => _liveBitplaneFetchTimeline.Prepared.Row;
+            set => _liveBitplaneFetchTimeline.Prepared.Row = value;
+        }
+        private int _livePreparedFetchWord
+        {
+            get => _liveBitplaneFetchTimeline.Prepared.Word;
+            set => _liveBitplaneFetchTimeline.Prepared.Word = value;
+        }
+        private int _livePreparedFetchPlane
+        {
+            get => _liveBitplaneFetchTimeline.Prepared.Plane;
+            set => _liveBitplaneFetchTimeline.Prepared.Plane = value;
+        }
+        private int _livePreparedFetchSlot
+        {
+            get => _liveBitplaneFetchTimeline.Prepared.Slot;
+            set => _liveBitplaneFetchTimeline.Prepared.Slot = value;
+        }
         private int _liveNextSpriteRow;
         private int _liveNextSpriteIndex;
         private int _liveNextSpriteWord;
@@ -352,7 +399,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private bool _renderingArchivedTimeline;
         private long _archivedTimelineFrameStartCycle = long.MinValue;
         private long _archivedTimelineFrameStopCycle = long.MinValue;
-        private int _archivedPaletteSnapshotCount;
         private int _liveRasterlinePlanRow = -1;
         private long _liveRasterlinePlanLineStartCycle;
         private long _liveRasterlinePlanLineStopCycle;
@@ -408,6 +454,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _timing = bus.RasterTiming;
             _lowResWidth = Math.Min(MaxLowResWidth, _timing.PresentationLowResWidth);
             _lowResHeight = Math.Min(LowResOutputHeight, _timing.PresentationLowResHeight);
+            _paletteFrameSpanIndexByPixel = new int[_lowResWidth * LowResOutputHeight];
             _displayTimeline = new DisplayFrameTimeline(_lowResWidth);
             _archivedDisplayTimeline = new DisplayFrameTimeline(_lowResWidth);
             _liveDmaEnabled = liveDmaEnabled;
@@ -436,7 +483,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private int LineCycles => _timing.MaximumCpuCyclesPerLine;
 
-        public int Width => _chipset.Denise == DeniseModel.Ecs
+        public int Width => _chipset.SupportsEcsDisplayRegisters
             ? _timing.PresentationSuperHighResWidth
             : _timing.PresentationHighResWidth;
 
@@ -456,6 +503,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             => _copperDisplayWrites ?? (IReadOnlyList<CustomRegisterWrite>)Array.Empty<CustomRegisterWrite>();
 
         internal int BitplaneDataSpanCount => _bitplaneDataSpans.Count;
+
+        internal int PaletteFrameSnapshotCount => _paletteFrameSnapshots.Count;
+
+        internal int PaletteSnapshotReservedBytes
+            => _paletteFrameSnapshots.ReservedBytes +
+                _livePaletteSnapshots.ReservedBytes +
+                _archivedPaletteSnapshots.ReservedBytes;
 
         internal bool LiveDmaEnabled => _liveDmaEnabled;
 
@@ -616,6 +670,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _pendingWrites.Clear();
             _copperDisplayWrites?.Clear();
             _pendingIndex = 0;
+            ClearPaletteFrameSpans();
             Array.Clear(_bitplanePointers);
             Array.Clear(_bitplaneBaseRows);
             Array.Clear(_bitplaneDataRegisters);
@@ -661,9 +716,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             ResetLiveDma();
-            if (_chipset.Denise == DeniseModel.Ecs)
+            ref readonly var displayIdentification = ref CustomRegisterFile.GetResolved(
+                _chipset,
+                (ushort)CustomRegister.DeniseId);
+            if (displayIdentification.IsPresent)
             {
-                _bus.PublishCustomRegisterState((ushort)CustomRegister.DeniseId, 0x00FC, 0);
+                _bus.PublishCustomRegisterState(
+                    (ushort)CustomRegister.DeniseId,
+                    displayIdentification.ResetValue,
+                    0);
             }
         }
 
@@ -1763,7 +1824,33 @@ namespace CopperMod.Amiga.CustomChips.Denise
             => BitOperations.PopCount((ulong)value) + BitOperations.PopCount((ulong)(value >> 64));
 
         private bool AreEcsDeniseExtensionsEnabled(ushort bplcon0)
-            => _chipset.Denise == DeniseModel.Ecs && (bplcon0 & Bplcon0EcsEnable) != 0;
+            => _chipset.SupportsEcsDisplayRegisters && (bplcon0 & Bplcon0EcsEnable) != 0;
+
+        private void ClearPaletteFrameSpans()
+        {
+            _paletteFrameSpans.Clear();
+            _paletteFrameSnapshots.Clear();
+            Array.Fill(_paletteFrameSpanIndexByPixel, -1);
+        }
+
+        private int GetPaletteFrameSpanIndex(int x, int y)
+        {
+            if ((uint)x >= (uint)LowResWidth || (uint)y >= (uint)LowResOutputHeight)
+            {
+                return -1;
+            }
+
+            var spanIndex = _paletteFrameSpanIndexByPixel[(y * LowResWidth) + x];
+            if ((uint)spanIndex >= (uint)_paletteFrameSpans.Count)
+            {
+                return -1;
+            }
+
+            return spanIndex;
+        }
+
+        private ref readonly PaletteFrameSpan GetPaletteFrameSpan(int spanIndex)
+            => ref CollectionsMarshal.AsSpan(_paletteFrameSpans)[spanIndex];
 
         private void CapturePaletteFrameSpans(int rowStart, int rowStop, int xStart, int xStop)
         {
@@ -1776,7 +1863,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
+            if (_paletteFrameSpans.Count >= MaxPaletteFrameSpans)
+            {
+                return;
+            }
+
             var window = GetEffectiveDisplayWindow();
+            var paletteSnapshotIndex = _paletteFrameSnapshots.GetOrAdd(
+                _colors,
+                _convertedColors,
+                MaxPaletteFrameSpans);
             for (var row = rowStart; row < rowStop; row++)
             {
                 if (_paletteFrameSpans.Count >= MaxPaletteFrameSpans)
@@ -1785,20 +1881,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 var spanIndex = _paletteFrameSpans.Count;
-                var colorOffset = spanIndex * PaletteColorCount;
-                var encodedColorOffset = spanIndex * _colors.Length;
-                Array.Copy(_convertedColors, 0, _paletteFrameSpanColors, colorOffset, PaletteColorCount);
-                Array.Copy(_colors, 0, _paletteFrameSpanEncodedColors, encodedColorOffset, _colors.Length);
                 _paletteFrameSpans.Add(new PaletteFrameSpan(
-                    row,
-                    xStart,
-                    xStop,
-                    colorOffset,
-                    encodedColorOffset,
+                    paletteSnapshotIndex,
                     _bplcon0,
                     _bplcon2,
                     _bplcon3,
                     window));
+                _paletteFrameSpanIndexByPixel.AsSpan(
+                    (row * LowResWidth) + xStart,
+                    xStop - xStart).Fill(spanIndex);
             }
         }
 
@@ -2338,9 +2429,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _bpl2mod = state.Bpl2Mod;
             if (_lastAppliedLivePaletteSnapshotIndex != state.PaletteSnapshotIndex)
             {
-                var paletteIndex = Math.Clamp(state.PaletteSnapshotIndex, 0, Math.Max(0, _livePaletteSnapshotCount - 1));
-                Array.Copy(_livePaletteSnapshotColors, paletteIndex * _colors.Length, _colors, 0, _colors.Length);
-                Array.Copy(_livePaletteSnapshotConvertedColors, paletteIndex * PaletteColorCount, _convertedColors, 0, PaletteColorCount);
+                _livePaletteSnapshots.CopyTo(
+                    state.PaletteSnapshotIndex,
+                    _colors,
+                    _convertedColors);
                 _lastAppliedLivePaletteSnapshotIndex = state.PaletteSnapshotIndex;
             }
 
@@ -2413,39 +2505,114 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
         }
 
+        private sealed class PaletteSnapshotPool
+        {
+            private const int EncodedColorCount = 32;
+            private const int InitialSnapshotCapacity = 16;
+            private ushort[] _encodedColors = Array.Empty<ushort>();
+            private uint[] _convertedColors = Array.Empty<uint>();
+
+            public int Count { get; private set; }
+
+            public int ReservedBytes
+                => (_encodedColors.Length * sizeof(ushort)) +
+                    (_convertedColors.Length * sizeof(uint));
+
+            public void Clear()
+            {
+                Count = 0;
+            }
+
+            public int GetOrAdd(
+                ReadOnlySpan<ushort> encodedColors,
+                ReadOnlySpan<uint> convertedColors,
+                int maximumSnapshotCount)
+            {
+                if (Count > 0)
+                {
+                    var lastIndex = Count - 1;
+                    if (encodedColors.SequenceEqual(GetEncodedColors(lastIndex)) &&
+                        convertedColors.SequenceEqual(GetConvertedColors(lastIndex)))
+                    {
+                        return lastIndex;
+                    }
+                }
+
+                if (Count >= maximumSnapshotCount)
+                {
+                    return Count > 0 ? Count - 1 : 0;
+                }
+
+                EnsureCapacity(Count + 1, maximumSnapshotCount);
+                var index = Count++;
+                encodedColors.CopyTo(_encodedColors.AsSpan(index * EncodedColorCount, EncodedColorCount));
+                convertedColors.CopyTo(_convertedColors.AsSpan(index * PaletteColorCount, PaletteColorCount));
+                return index;
+            }
+
+            public void CopyTo(
+                int requestedIndex,
+                Span<ushort> encodedColors,
+                Span<uint> convertedColors)
+            {
+                if (Count == 0)
+                {
+                    encodedColors.Clear();
+                    convertedColors.Clear();
+                    return;
+                }
+
+                var index = Math.Clamp(requestedIndex, 0, Count - 1);
+                GetEncodedColors(index).CopyTo(encodedColors);
+                GetConvertedColors(index).CopyTo(convertedColors);
+            }
+
+            public ushort GetEncodedColor(int snapshotIndex, int colorIndex)
+                => _encodedColors[(snapshotIndex * EncodedColorCount) + colorIndex];
+
+            public uint GetConvertedColor(int snapshotIndex, int colorIndex)
+                => _convertedColors[(snapshotIndex * PaletteColorCount) + colorIndex];
+
+            private ReadOnlySpan<ushort> GetEncodedColors(int snapshotIndex)
+                => _encodedColors.AsSpan(snapshotIndex * EncodedColorCount, EncodedColorCount);
+
+            private ReadOnlySpan<uint> GetConvertedColors(int snapshotIndex)
+                => _convertedColors.AsSpan(snapshotIndex * PaletteColorCount, PaletteColorCount);
+
+            private void EnsureCapacity(int requiredSnapshotCount, int maximumSnapshotCount)
+            {
+                var capacity = _encodedColors.Length / EncodedColorCount;
+                if (capacity >= requiredSnapshotCount)
+                {
+                    return;
+                }
+
+                var newCapacity = capacity == 0
+                    ? Math.Min(InitialSnapshotCapacity, maximumSnapshotCount)
+                    : Math.Min(capacity * 2, maximumSnapshotCount);
+                newCapacity = Math.Max(newCapacity, requiredSnapshotCount);
+                Array.Resize(ref _encodedColors, newCapacity * EncodedColorCount);
+                Array.Resize(ref _convertedColors, newCapacity * PaletteColorCount);
+            }
+        }
+
         private readonly struct PaletteFrameSpan
         {
             public PaletteFrameSpan(
-                int row,
-                int xStart,
-                int xStop,
-                int colorOffset,
-                int encodedColorOffset,
+                int paletteSnapshotIndex,
                 ushort bplcon0,
                 ushort bplcon2,
                 ushort bplcon3,
                 DisplayWindow window)
             {
-                Row = row;
-                XStart = xStart;
-                XStop = xStop;
-                ColorOffset = colorOffset;
-                EncodedColorOffset = encodedColorOffset;
+                PaletteSnapshotIndex = paletteSnapshotIndex;
                 Bplcon0 = bplcon0;
                 Bplcon2 = bplcon2;
                 Bplcon3 = bplcon3;
                 Window = window;
             }
 
-            public int Row { get; }
-
-            public int XStart { get; }
-
-            public int XStop { get; }
-
-            public int ColorOffset { get; }
-
-            public int EncodedColorOffset { get; }
+            public int PaletteSnapshotIndex { get; }
 
             public ushort Bplcon0 { get; }
 
@@ -2454,11 +2621,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public ushort Bplcon3 { get; }
 
             public DisplayWindow Window { get; }
-
-            public bool Contains(int x, int y)
-            {
-                return y == Row && x >= XStart && x < XStop;
-            }
         }
 
         private readonly struct BitplaneDataSpan

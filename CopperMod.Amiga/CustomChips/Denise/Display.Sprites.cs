@@ -1390,13 +1390,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private DisplayWindow GetSpriteDisplayWindow(int x, int y)
         {
-            for (var i = _paletteFrameSpans.Count - 1; i >= 0; i--)
+            var spanIndex = GetPaletteFrameSpanIndex(x, y);
+            if (spanIndex >= 0)
             {
-                var span = _paletteFrameSpans[i];
-                if (span.Contains(x, y))
-                {
-                    return span.Window;
-                }
+                ref readonly var span = ref GetPaletteFrameSpan(spanIndex);
+                return span.Window;
             }
 
             return GetDisplayWindow();
@@ -1404,13 +1402,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private ushort GetSpritePriorityRegister(int x, int y)
         {
-            for (var i = _paletteFrameSpans.Count - 1; i >= 0; i--)
+            var spanIndex = GetPaletteFrameSpanIndex(x, y);
+            if (spanIndex >= 0)
             {
-                var span = _paletteFrameSpans[i];
-                if (span.Contains(x, y))
-                {
-                    return span.Bplcon2;
-                }
+                ref readonly var span = ref GetPaletteFrameSpan(spanIndex);
+                return span.Bplcon2;
             }
 
             return _bplcon2;
@@ -1418,13 +1414,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private (ushort Bplcon0, ushort Bplcon3) GetSpriteEcsRegisters(int x, int y)
         {
-            for (var i = _paletteFrameSpans.Count - 1; i >= 0; i--)
+            var spanIndex = GetPaletteFrameSpanIndex(x, y);
+            if (spanIndex >= 0)
             {
-                var span = _paletteFrameSpans[i];
-                if (span.Contains(x, y))
-                {
-                    return (span.Bplcon0, span.Bplcon3);
-                }
+                ref readonly var span = ref GetPaletteFrameSpan(spanIndex);
+                return (span.Bplcon0, span.Bplcon3);
             }
 
             return (_bplcon0, _bplcon3);
@@ -1452,13 +1446,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private uint ConvertSpriteColorIndex(int colorIndex, int x, int y)
         {
-            for (var i = _paletteFrameSpans.Count - 1; i >= 0; i--)
+            var spanIndex = GetPaletteFrameSpanIndex(x, y);
+            if ((uint)colorIndex < PaletteColorCount && spanIndex >= 0)
             {
-                var span = _paletteFrameSpans[i];
-                if (span.Contains(x, y) && (uint)colorIndex < PaletteColorCount)
-                {
-                    return _paletteFrameSpanColors[span.ColorOffset + colorIndex];
-                }
+                ref readonly var span = ref GetPaletteFrameSpan(spanIndex);
+                return _paletteFrameSnapshots.GetConvertedColor(
+                    span.PaletteSnapshotIndex,
+                    colorIndex);
             }
 
             return ConvertColorIndex(colorIndex);

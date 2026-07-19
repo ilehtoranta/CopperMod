@@ -379,9 +379,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 		{
 			machineOptions.WithKickstart(KickstartConfiguration.FromRomImage(
 				startupOptions.Profile.KickstartVersion,
-				File.ReadAllBytes(romPath)));
+				CopperScreenKickstartRomArchive.ReadRomImage(
+					romPath,
+					startupOptions.Profile.KickstartSource,
+					startupOptions.Profile.KickstartVersion)));
 		}
-		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidDataException or InvalidOperationException)
 		{
 			startupError ??= $"Could not load {GetRomDisplayName(startupOptions.Profile.KickstartSource)}: {ex.Message}";
 		}
@@ -456,7 +459,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		=> source switch
 		{
 			CopperScreenKickstartSource.DiagRom => "ROM\\DiagROM\\diagrom-a500.rom or ROM\\DiagROM\\diagrom.rom",
-			CopperScreenKickstartSource.KickstartRom => "ROM\\kickstart-3.1-a500.rom or ROM\\Kickstart_13.rom",
+			CopperScreenKickstartSource.KickstartRom => "ROM\\kickstart-3.1-a500.rom, a .zip containing a ROM, or ROM\\Kickstart_13.rom",
 			_ => "ROM\\Kickstart_13.rom"
 		};
 

@@ -14,6 +14,7 @@ const int OpcodeDispatchTransformMemorySize = 1 << 24;
 
 if (Move16AlignmentBenchmark.TryRun(args) ||
     AmigaFastRamBenchmark.TryRun(args) ||
+    AmigaInstructionFetchArbitrationBenchmark.TryRun(args) ||
     EcsTimingBenchmark.TryRun(args) ||
     CustomRegisterDispatchBenchmark.TryRun(args))
 {

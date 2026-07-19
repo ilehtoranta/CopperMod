@@ -128,8 +128,8 @@ internal sealed class CopperScreenProfile
 
 	public bool BootsWithoutDisk => KickstartSource == CopperScreenKickstartSource.DiagRom;
 
-	public MachineProfile MachineProfile => Chipset.Agnus == AgnusModel.Ecs &&
-		Chipset.Denise == DeniseModel.Ecs
+	public MachineProfile MachineProfile => Chipset.DmaChip == DmaChipModel.EcsAgnus &&
+		Chipset.DisplayChip == DisplayChipModel.EcsDenise
 		? Chipset.VideoStandard == VideoStandard.Ntsc
 			? MachineProfile.A500PlusEcsNtsc
 			: MachineProfile.A500PlusEcsPal
@@ -261,8 +261,8 @@ internal sealed class CopperScreenProfile
 		}
 
 		var chipset = new AmigaChipset(
-			ParseAgnusModel(machine.Agnus),
-			ParseDeniseModel(machine.Denise),
+			ParseDmaChipModel(machine.Agnus),
+			ParseDisplayChipModel(machine.Denise),
 			ParseVideoStandard(machine.VideoStandard));
 
 		var chipRamSize = CheckedKilobytes(machine.ChipRamKb, "machine.chipRamKb");
@@ -507,32 +507,32 @@ internal sealed class CopperScreenProfile
 			: KickstartVersion.Kickstart13;
 	}
 
-	private static AgnusModel ParseAgnusModel(string? value)
+	private static DmaChipModel ParseDmaChipModel(string? value)
 	{
 		if (string.IsNullOrWhiteSpace(value))
 		{
-			return AgnusModel.Ocs;
+			return DmaChipModel.OcsAgnus;
 		}
 
 		return value.Trim().ToLowerInvariant() switch
 		{
-			"ocs" => AgnusModel.Ocs,
-			"ecs" => AgnusModel.Ecs,
+			"ocs" => DmaChipModel.OcsAgnus,
+			"ecs" => DmaChipModel.EcsAgnus,
 			_ => throw new InvalidOperationException($"Unsupported Agnus model '{value}'.")
 		};
 	}
 
-	private static DeniseModel ParseDeniseModel(string? value)
+	private static DisplayChipModel ParseDisplayChipModel(string? value)
 	{
 		if (string.IsNullOrWhiteSpace(value))
 		{
-			return DeniseModel.Ocs;
+			return DisplayChipModel.OcsDenise;
 		}
 
 		return value.Trim().ToLowerInvariant() switch
 		{
-			"ocs" => DeniseModel.Ocs,
-			"ecs" => DeniseModel.Ecs,
+			"ocs" => DisplayChipModel.OcsDenise,
+			"ecs" => DisplayChipModel.EcsDenise,
 			_ => throw new InvalidOperationException($"Unsupported Denise model '{value}'.")
 		};
 	}

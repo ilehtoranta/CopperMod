@@ -26,7 +26,7 @@ public sealed class AmigaEcsBlitterTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void LegacyBltSizeStillStartsTheSameAreaBlitOnBothAgnusModels(bool ecs)
+    public void LegacyBltSizeStillStartsTheSameAreaBlitOnBothDmaChipModels(bool ecs)
     {
         var bus = CreateBus(ecs);
         WriteChipWord(bus, SourceA, 0xCAFE);

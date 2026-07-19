@@ -214,8 +214,8 @@ public sealed class AmigaCustomChipPointerTests
         => new(
             chipRamSize,
             chipset: new AmigaChipset(
-                ecsAgnus ? AgnusModel.Ecs : AgnusModel.Ocs,
-                DeniseModel.Ocs,
+                ecsAgnus ? DmaChipModel.EcsAgnus : DmaChipModel.OcsAgnus,
+                DisplayChipModel.OcsDenise,
                 VideoStandard.Pal));
 
     private static void WritePointer(AmigaBus bus, int registerOffset)

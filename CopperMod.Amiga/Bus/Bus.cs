@@ -253,6 +253,7 @@ namespace CopperMod.Amiga.Bus
         private readonly bool _usePaulaDmaFixedSlotFastPath;
         private readonly bool _deferredCpuBusBatchEnabled;
         private readonly bool _deferredCpuBusBatchVerifyEnabled;
+        private readonly bool _deferredDmaReadsVerifyEnabled;
         private readonly bool _forceCpuWaitSlotReference;
         private readonly bool _liveAgnusDmaDefault;
         private readonly bool _hardwareSpecializationEnabled;
@@ -397,9 +398,16 @@ namespace CopperMod.Amiga.Bus
             bool enableCopperQuiescentDiagnostics = false,
             bool forceCpuWaitSlotReference = false,
             long rtgVramSize = 0,
-            AmigaChipset? chipset = null)
+            AmigaChipset? chipset = null,
+            bool verifyDeferredDmaReads = false)
         {
             var selectedChipset = chipset ?? AmigaChipset.OcsPal;
+            if (selectedChipset.HasAgaComponent)
+            {
+                throw new NotSupportedException(
+                    "AGA Alice/Lisa execution is not implemented. The AGA register profile is available for inspection only.");
+            }
+
             _chipset = selectedChipset;
             _customRegisterFile = new CustomRegisterFile(selectedChipset);
             if (!ChipDmaAddressing.IsStandardPhysicalSize(chipRamSize))
@@ -410,7 +418,7 @@ namespace CopperMod.Amiga.Bus
                     "Chip RAM size must be 512 KiB, 1 MiB, or 2 MiB.");
             }
 
-            if (!ChipDmaAddressing.SupportsPhysicalSize(selectedChipset.Agnus, chipRamSize))
+            if (!ChipDmaAddressing.SupportsPhysicalSize(selectedChipset.DmaChip, chipRamSize))
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(chipRamSize),
@@ -440,8 +448,8 @@ namespace CopperMod.Amiga.Bus
 
             _rasterTiming = RasterTiming.For(selectedChipset.VideoStandard);
             _beamClock = new AgnusBeamClock(_rasterTiming);
-            _chipDmaAddressing = new ChipDmaAddressing(selectedChipset.Agnus);
-            _agnusRegisters = new AgnusRegisterBank(selectedChipset.Agnus, _chipDmaAddressing, _rasterTiming);
+            _chipDmaAddressing = new ChipDmaAddressing(selectedChipset.DmaChip);
+            _agnusRegisters = new AgnusRegisterBank(selectedChipset.DmaChip, _chipDmaAddressing, _rasterTiming);
             PublishAgnusRegisterState(0);
             _chipRam = new AmigaChipRamBackend(
                 chipRamSize,
@@ -490,6 +498,7 @@ namespace CopperMod.Amiga.Bus
                 verifyCopperQuiescentFastPath;
             _deferredCpuBusBatchEnabled = enableDeferredCpuBusBatch;
             _deferredCpuBusBatchVerifyEnabled = verifyDeferredCpuBusBatch;
+            _deferredDmaReadsVerifyEnabled = verifyDeferredDmaReads && enableHardwareSpecialization;
             _deferredCpuWaitDiagnosticsEnabled = verifyDeferredCpuBusBatch;
             _forceCpuWaitSlotReference = forceCpuWaitSlotReference;
             Paula = new Paula(this);
@@ -2963,6 +2972,7 @@ namespace CopperMod.Amiga.Bus
             return IsChipRamRange(address, byteCount) ||
                 IsExpansionRamRange(address, byteCount) ||
                 IsRealFastRamRange(address, byteCount) ||
+                _mappedMemory.TryGetMappedReadMemory(address, byteCount, out _, out _) ||
                 _rtgVram.IsAllocatedRange(address, byteCount);
         }
 

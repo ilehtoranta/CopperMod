@@ -30,7 +30,7 @@ namespace CopperMod.Amiga.Bus
 
         private void PublishAgnusRegisterState(long cycle)
         {
-            if (_chipset.Agnus != AgnusModel.Ecs)
+            if (!_chipset.SupportsEcsDmaRegisters)
             {
                 return;
             }
@@ -71,11 +71,11 @@ namespace CopperMod.Amiga.Bus
                     return TryReadGamePortCustomByte(offset, out var gamePortValue)
                         ? gamePortValue
                         : Paula.ReadByte(offset);
-                case CustomRegisterReadHandler.Display:
                 case CustomRegisterReadHandler.Collision:
-                    return Display.TryReadByte(offset, out var displayValue)
-                        ? displayValue
-                        : Paula.ReadByte(offset);
+                {
+                    var value = Display.ReadCollisionData();
+                    return (offset & 1) == 0 ? (byte)(value >> 8) : (byte)value;
+                }
                 case CustomRegisterReadHandler.Disk:
                     return Disk.TryReadByte(offset, out var diskValue)
                         ? diskValue
@@ -134,8 +134,6 @@ namespace CopperMod.Amiga.Bus
                         ? agnusValue
                         : (ushort)0;
                 }
-                case CustomRegisterReadHandler.Display:
-                    return Display.TryReadWord(offset, out var displayValue) ? displayValue : (ushort)0;
                 case CustomRegisterReadHandler.Dmaconr:
                     return (ushort)(Paula.Dmacon | Blitter.DmaconStatusBits);
                 case CustomRegisterReadHandler.BeamPosition:
@@ -149,7 +147,7 @@ namespace CopperMod.Amiga.Bus
                 case CustomRegisterReadHandler.GamePort:
                     return ReadGamePortData(offset == 0x00A ? 0 : 1);
                 case CustomRegisterReadHandler.Collision:
-                    return 0x8000;
+                    return Display.ReadCollisionData();
                 case CustomRegisterReadHandler.PotGo:
                     return ReadPotGoData();
                 case CustomRegisterReadHandler.Paula:
@@ -581,9 +579,9 @@ namespace CopperMod.Amiga.Bus
                 return cycle;
             }
 
-            // The slot engine records CPU grants in Agnus-internal coordinates.
-            // A CPU palette write becomes visible to Denise six CCKs after that
-            // recorded grant; keep this conversion local to presentation time.
+            // The slot engine records CPU grants three CCKs before externally
+            // visible Agnus HPOS. The palette transfer then reaches Denise
+            // three CCKs later; keep both physical phases in this conversion.
             return cycle + (6 * AgnusChipSlotScheduler.SlotCycles);
         }
 

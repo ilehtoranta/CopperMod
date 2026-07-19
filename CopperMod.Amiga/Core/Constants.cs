@@ -122,6 +122,7 @@ namespace CopperMod.Amiga.Core
         public const double A500PalVBlankHz = A500PalCpuClockHz / A500PalCpuCyclesPerFrame;
         public const int A500IntreqToIplDelayDmaCycles = 4;
         public const int A500IntreqToIplDelayCpuCycles = A500IntreqToIplDelayDmaCycles * A500PalCpuCyclesPerColorClock;
+        public const int A500SoftwareInterruptRegisterToIplDelayCpuCycles = A500PalCpuCyclesPerColorClock;
         public const int A500CopperIntreqDelayColorClocks = 2;
         public const int A500CopperIntreqDelayCpuCycles = A500CopperIntreqDelayColorClocks * A500PalCpuCyclesPerColorClock;
         public const ushort IntreqDiskBlock = 0x0002;

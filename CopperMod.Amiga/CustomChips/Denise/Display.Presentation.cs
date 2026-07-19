@@ -81,7 +81,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ResetFrameCounters();
             ResetPlayfieldPriorityMasks();
             _spriteFrameCommands.Clear();
-            _paletteFrameSpans.Clear();
+            ClearPaletteFrameSpans();
             _bitplaneDataSpans.Clear();
             _enforceDmaForFrame = useTimedWrites;
             _useTimedPresentationReads = useTimedWrites;
@@ -774,18 +774,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _bpl2mod = state.Bpl2Mod;
             if (_lastAppliedLivePaletteSnapshotIndex != state.PaletteSnapshotIndex)
             {
-                var paletteSnapshotCount = _renderingArchivedTimeline
-                    ? _archivedPaletteSnapshotCount
-                    : _livePaletteSnapshotCount;
-                var paletteColors = _renderingArchivedTimeline
-                    ? _archivedPaletteSnapshotColors
-                    : _livePaletteSnapshotColors;
-                var convertedPaletteColors = _renderingArchivedTimeline
-                    ? _archivedPaletteSnapshotConvertedColors
-                    : _livePaletteSnapshotConvertedColors;
-                var paletteIndex = Math.Clamp(state.PaletteSnapshotIndex, 0, Math.Max(0, paletteSnapshotCount - 1));
-                Array.Copy(paletteColors, paletteIndex * _colors.Length, _colors, 0, _colors.Length);
-                Array.Copy(convertedPaletteColors, paletteIndex * PaletteColorCount, _convertedColors, 0, PaletteColorCount);
+                var paletteSnapshots = _renderingArchivedTimeline
+                    ? _archivedPaletteSnapshots
+                    : _livePaletteSnapshots;
+                paletteSnapshots.CopyTo(
+                    state.PaletteSnapshotIndex,
+                    _colors,
+                    _convertedColors);
                 _lastAppliedLivePaletteSnapshotIndex = state.PaletteSnapshotIndex;
             }
 
@@ -1537,7 +1532,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ResetFrameCounters();
             ResetPlayfieldPriorityMasks();
             _bitplaneDataSpans.Clear();
-            _paletteFrameSpans.Clear();
+            ClearPaletteFrameSpans();
             _renderInterlaceField = InterlaceEnabled
                 ? GetInterlaceField(frameStartCycle)
                 : 0;
@@ -1595,7 +1590,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ResetFrameCounters();
             ResetPlayfieldPriorityMasks();
             _bitplaneDataSpans.Clear();
-            _paletteFrameSpans.Clear();
+            ClearPaletteFrameSpans();
             _renderInterlaceField = InterlaceEnabled
                 ? GetInterlaceField(frameStartCycle)
                 : 0;
@@ -1692,7 +1687,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ResetFrameCounters();
             ResetPlayfieldPriorityMasks();
             _bitplaneDataSpans.Clear();
-            _paletteFrameSpans.Clear();
+            ClearPaletteFrameSpans();
             _renderInterlaceField = InterlaceEnabled
                 ? GetInterlaceField(frameStartCycle)
                 : 0;

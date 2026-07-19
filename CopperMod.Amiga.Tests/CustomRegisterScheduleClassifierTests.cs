@@ -21,8 +21,8 @@ public sealed class CustomRegisterScheduleClassifierTests
     [Fact]
     public void DiwHighImpactFollowsTheOwningChipModels()
     {
-        var ecsAgnus = new AmigaChipset(AgnusModel.Ecs, DeniseModel.Ocs, VideoStandard.Pal);
-        var ecsDenise = new AmigaChipset(AgnusModel.Ocs, DeniseModel.Ecs, VideoStandard.Pal);
+        var ecsAgnus = new AmigaChipset(DmaChipModel.EcsAgnus, DisplayChipModel.OcsDenise, VideoStandard.Pal);
+        var ecsDenise = new AmigaChipset(DmaChipModel.OcsAgnus, DisplayChipModel.EcsDenise, VideoStandard.Pal);
 
         Assert.Equal(
             HardwareScheduleImpact.Bitplane,

@@ -41,7 +41,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _archivedTimelineValid = false;
             _archivedTimelineFrameStartCycle = long.MinValue;
             _archivedTimelineFrameStopCycle = long.MinValue;
-            _archivedPaletteSnapshotCount = 0;
+            _archivedPaletteSnapshots.Clear();
             _displayTimeline.Reset(0);
             _archivedDisplayTimeline.Reset(long.MinValue);
             _liveWakeVersion++;
@@ -336,7 +336,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _archivedTimelineValid = false;
             _archivedTimelineFrameStartCycle = long.MinValue;
             _archivedTimelineFrameStopCycle = long.MinValue;
-            _archivedPaletteSnapshotCount = 0;
+            _archivedPaletteSnapshots.Clear();
 
             if (!_liveFrameValid ||
                 _liveFrameStartCycle >= nextFrameStartCycle ||
@@ -367,19 +367,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _archivedTimelineValid = true;
             _archivedTimelineFrameStartCycle = _liveFrameStartCycle;
             _archivedTimelineFrameStopCycle = frameStopCycle;
-            _archivedPaletteSnapshotCount = _livePaletteSnapshotCount;
-            Array.Copy(
-                _livePaletteSnapshotColors,
-                0,
-                _archivedPaletteSnapshotColors,
-                0,
-                _livePaletteSnapshotCount * _colors.Length);
-            Array.Copy(
-                _livePaletteSnapshotConvertedColors,
-                0,
-                _archivedPaletteSnapshotConvertedColors,
-                0,
-                _livePaletteSnapshotCount * PaletteColorCount);
+            var archivedPaletteSnapshots = _archivedPaletteSnapshots;
+            _archivedPaletteSnapshots = _livePaletteSnapshots;
+            _livePaletteSnapshots = archivedPaletteSnapshots;
         }
 
         private void ArchiveLiveFrameWritesBeforeStarting(long nextFrameStartCycle)
@@ -999,7 +989,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _displayTimeline.Reset(frameStartCycle);
             _spriteFrameCommands.Clear();
             CaptureInitialManualSpriteFrameCommands();
-            _livePaletteSnapshotCount = 0;
+            _livePaletteSnapshots.Clear();
             _liveCurrentPaletteSnapshotIndex = -1;
             _livePaletteSnapshotDirty = true;
             Array.Clear(_liveSpriteWordMasks);
@@ -1733,6 +1723,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool HasLiveLineStateWakeWork()
             => IsLiveBitplaneDmaEnabled() || IsSpriteDmaEnabled();
+
+        internal bool HasLiveSpriteDmaWork()
+            => _liveDmaEnabled && IsSpriteDmaEnabled();
 
         private long GetNextLiveCpuVisibleWorkCycle()
         {

@@ -9,16 +9,37 @@ using System.Linq;
 
 namespace CopperMod.Amiga.Runtime
 {
-    internal enum AgnusModel
+    internal enum DmaChipModel
     {
-        Ocs,
-        Ecs
+        OcsAgnus,
+        EcsAgnus,
+        AgaAlice
     }
 
-    internal enum DeniseModel
+    internal enum DisplayChipModel
     {
-        Ocs,
-        Ecs
+        OcsDenise,
+        EcsDenise,
+        AgaLisa
+    }
+
+    internal static class AmigaChipModelCapabilities
+    {
+        public static bool SupportsEcsRegisters(this DmaChipModel model)
+            => model is DmaChipModel.EcsAgnus or DmaChipModel.AgaAlice;
+
+        public static bool SupportsEcsRegisters(this DisplayChipModel model)
+            => model is DisplayChipModel.EcsDenise or DisplayChipModel.AgaLisa;
+    }
+
+    [Flags]
+    internal enum AmigaChipCapabilities : ushort
+    {
+        None = 0,
+        EcsDmaRegisters = 1 << 0,
+        EcsDisplayRegisters = 1 << 1,
+        AgaAliceRegisters = 1 << 2,
+        AgaLisaRegisters = 1 << 3
     }
 
     internal enum VideoStandard
@@ -27,30 +48,97 @@ namespace CopperMod.Amiga.Runtime
         Ntsc
     }
 
-    internal readonly record struct AmigaChipset(
-        AgnusModel Agnus,
-        DeniseModel Denise,
-        VideoStandard VideoStandard)
+    internal readonly record struct AmigaChipset
     {
+        public AmigaChipset(
+            DmaChipModel dmaChip,
+            DisplayChipModel displayChip,
+            VideoStandard videoStandard)
+        {
+            DmaChip = dmaChip;
+            DisplayChip = displayChip;
+            VideoStandard = videoStandard;
+            Capabilities = ResolveCapabilities(dmaChip, displayChip);
+        }
+
+        public DmaChipModel DmaChip { get; }
+
+        public DisplayChipModel DisplayChip { get; }
+
+        public VideoStandard VideoStandard { get; }
+
+        public AmigaChipCapabilities Capabilities { get; }
+
+        public bool SupportsEcsDmaRegisters
+            => HasAllCapabilities(AmigaChipCapabilities.EcsDmaRegisters);
+
+        public bool SupportsEcsDisplayRegisters
+            => HasAllCapabilities(AmigaChipCapabilities.EcsDisplayRegisters);
+
+        public bool HasAgaComponent
+            => HasAnyCapability(
+                AmigaChipCapabilities.AgaAliceRegisters |
+                AmigaChipCapabilities.AgaLisaRegisters);
+
+        public bool HasAllCapabilities(AmigaChipCapabilities required)
+            => (Capabilities & required) == required;
+
+        public bool HasAnyCapability(AmigaChipCapabilities candidates)
+            => (Capabilities & candidates) != 0;
+
         public static AmigaChipset OcsPal { get; } = new(
-            AgnusModel.Ocs,
-            DeniseModel.Ocs,
+            DmaChipModel.OcsAgnus,
+            DisplayChipModel.OcsDenise,
             VideoStandard.Pal);
 
         public static AmigaChipset OcsNtsc { get; } = new(
-            AgnusModel.Ocs,
-            DeniseModel.Ocs,
+            DmaChipModel.OcsAgnus,
+            DisplayChipModel.OcsDenise,
             VideoStandard.Ntsc);
 
         public static AmigaChipset EcsPal { get; } = new(
-            AgnusModel.Ecs,
-            DeniseModel.Ecs,
+            DmaChipModel.EcsAgnus,
+            DisplayChipModel.EcsDenise,
             VideoStandard.Pal);
 
         public static AmigaChipset EcsNtsc { get; } = new(
-            AgnusModel.Ecs,
-            DeniseModel.Ecs,
+            DmaChipModel.EcsAgnus,
+            DisplayChipModel.EcsDenise,
             VideoStandard.Ntsc);
+
+        public static AmigaChipset AgaPal { get; } = new(
+            DmaChipModel.AgaAlice,
+            DisplayChipModel.AgaLisa,
+            VideoStandard.Pal);
+
+        public static AmigaChipset AgaNtsc { get; } = new(
+            DmaChipModel.AgaAlice,
+            DisplayChipModel.AgaLisa,
+            VideoStandard.Ntsc);
+
+        private static AmigaChipCapabilities ResolveCapabilities(
+            DmaChipModel dmaChip,
+            DisplayChipModel displayChip)
+        {
+            var capabilities = dmaChip switch
+            {
+                DmaChipModel.EcsAgnus => AmigaChipCapabilities.EcsDmaRegisters,
+                DmaChipModel.AgaAlice =>
+                    AmigaChipCapabilities.EcsDmaRegisters |
+                    AmigaChipCapabilities.AgaAliceRegisters,
+                _ => AmigaChipCapabilities.None
+            };
+
+            capabilities |= displayChip switch
+            {
+                DisplayChipModel.EcsDenise => AmigaChipCapabilities.EcsDisplayRegisters,
+                DisplayChipModel.AgaLisa =>
+                    AmigaChipCapabilities.EcsDisplayRegisters |
+                    AmigaChipCapabilities.AgaLisaRegisters,
+                _ => AmigaChipCapabilities.None
+            };
+            return capabilities;
+        }
     }
 
     internal readonly record struct InterruptDispatchTrace(
@@ -363,7 +451,7 @@ namespace CopperMod.Amiga.Runtime
         public Machine(MachineOptions options)
         {
             Options = options ?? throw new ArgumentNullException(nameof(options));
-            if (!ChipDmaAddressing.SupportsPhysicalSize(options.Chipset.Agnus, options.ChipRamSize))
+            if (!ChipDmaAddressing.SupportsPhysicalSize(options.Chipset.DmaChip, options.ChipRamSize))
             {
                 throw new InvalidOperationException(
                     "OCS Agnus supports at most 1 MiB of Chip RAM; select ECS Agnus for 2 MiB.");

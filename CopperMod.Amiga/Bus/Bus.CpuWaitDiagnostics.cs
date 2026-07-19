@@ -447,6 +447,45 @@ namespace CopperMod.Amiga.Bus
             }
         }
 
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void VerifyDeferredDmaReadOwnership(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            long grantedCycle,
+            long completedCycle,
+            long predictedGrantedCycle,
+            long predictedCompletedCycle,
+            CpuWaitFixedSlotTimelineSignature predictedTimeline)
+        {
+            _ = TryCaptureCpuWaitFixedSlotTimeline(
+                requestedCycle,
+                completedCycle,
+                grantedCycle,
+                predicted: false,
+                out var committedTimeline,
+                out _);
+            if (predictedGrantedCycle == grantedCycle &&
+                predictedCompletedCycle == completedCycle &&
+                predictedTimeline.Equals(committedTimeline))
+            {
+                _deferredCpuWaitFixedImageProductionVerificationMatches++;
+                return;
+            }
+
+            _deferredCpuWaitFixedImageProductionVerificationMismatches++;
+            _deferredCpuWaitFixedImageProductionDisabled = true;
+            if (_deferredCpuWaitFixedImageProductionFirstMismatch.Length == 0)
+            {
+                _deferredCpuWaitFixedImageProductionFirstMismatch =
+                    $"deferred-read/{kind}/{target}/{size}/addr=0x{address:X6}/req={requestedCycle}/" +
+                    $"grant={predictedGrantedCycle}->{predictedCompletedCycle}/{grantedCycle}->{completedCycle}/" +
+                    $"image={predictedTimeline}/committed={committedTimeline}";
+            }
+        }
+
         internal void VerifyProductionCpuWaitFixedSlotImageForTest(
             CpuWaitFixedSlotTimelineSignature predictedTimeline,
             CpuWaitFixedSlotTimelineSignature committedTimeline)

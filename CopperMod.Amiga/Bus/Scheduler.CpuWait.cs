@@ -291,6 +291,115 @@ namespace CopperMod.Amiga.Bus
             }
         }
 
+        internal bool TryCatchUpPreparedCpuGrant(long requestedCycle, long grantedCycle)
+        {
+            if (_draining || grantedCycle <= requestedCycle)
+            {
+                return grantedCycle <= requestedCycle;
+            }
+
+            if (_bus.Display.HasLiveDmaSlotWorkThrough(grantedCycle) ||
+                HasSlotContendedDiskWorkThrough(grantedCycle))
+            {
+                return false;
+            }
+
+            _draining = true;
+            try
+            {
+                _bus.AdvanceAgnusCoreTo(grantedCycle);
+                _agnusEvents++;
+
+                var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle));
+                if (slotCycle <= requestedCycle)
+                {
+                    slotCycle += AgnusChipSlotScheduler.SlotCycles;
+                }
+
+                for (; slotCycle <= grantedCycle; slotCycle += AgnusChipSlotScheduler.SlotCycles)
+                {
+                    AdvanceSlotContendedPaulaDmaTo(slotCycle);
+                    if (_bus.Blitter.GetNextWakeCandidateCycle(
+                            Math.Max(0, slotCycle - 1),
+                            slotCycle) <= slotCycle)
+                    {
+                        SynchronizeBlitterThrough(slotCycle);
+                        _blitterEvents++;
+                        InvalidateWakeAgenda();
+                    }
+
+                    _bus.InvalidateRasterlineSchedule(slotCycle, SlotContendedMemoryAccessMask);
+                }
+
+                MarkClean(grantedCycle, SlotContendedMemoryAccessMask);
+                return true;
+            }
+            finally
+            {
+                _draining = false;
+            }
+        }
+
+        internal bool TryPredictDeferredReadOwnership(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            out long grantedCycle,
+            out long completedCycle,
+            out CpuWaitFixedSlotTimelineSignature timeline)
+        {
+            _bus.RecordProductionCpuWaitFixedSlotImageAttempt();
+            grantedCycle = 0;
+            completedCycle = 0;
+            timeline = default;
+            if (_draining ||
+                _bus.DeferredCpuWaitFixedImageProductionDisabled ||
+                size == AmigaBusAccessSize.Long ||
+                target is not (AmigaBusAccessTarget.ChipRam or AmigaBusAccessTarget.ExpansionRam))
+            {
+                _bus.RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.Unsupported);
+                return false;
+            }
+
+            requestedCycle = Math.Max(0, requestedCycle);
+            if (!_bus.Display.HasLiveDisplayWork() ||
+                _bus.Display.HasLiveSpriteDmaWork() ||
+                _bus.HasNonDisplayDynamicCpuWaitSlotWorkThrough(requestedCycle + _bus.LineCycles))
+            {
+                _bus.RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.DynamicDma);
+                return false;
+            }
+
+            if (_bus.TryPredictCpuWaitFixedSlotGrant(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    isWrite: false,
+                    out grantedCycle,
+                    out completedCycle,
+                    out var unsupported,
+                    out timeline))
+            {
+                return true;
+            }
+
+            _bus.RecordProductionCpuWaitFixedSlotImageFallback(unsupported switch
+            {
+                CpuWaitFixedSlotImageUnsupported.Frame => CpuWaitFixedImageProductionFallback.Frame,
+                CpuWaitFixedSlotImageUnsupported.Copper => CpuWaitFixedImageProductionFallback.Copper,
+                CpuWaitFixedSlotImageUnsupported.PendingWrite => CpuWaitFixedImageProductionFallback.PendingWrite,
+                CpuWaitFixedSlotImageUnsupported.RasterlinePlan => CpuWaitFixedImageProductionFallback.RasterlinePlan,
+                CpuWaitFixedSlotImageUnsupported.SpriteState => CpuWaitFixedImageProductionFallback.SpriteState,
+                CpuWaitFixedSlotImageUnsupported.Unstable => CpuWaitFixedImageProductionFallback.Unstable,
+                _ => CpuWaitFixedImageProductionFallback.Unsupported
+            });
+            return false;
+        }
+
         private void ExecutePendingCpuSlot(long slotCycle, bool processBlitter)
         {
             const int MaxSameCyclePasses = 8;

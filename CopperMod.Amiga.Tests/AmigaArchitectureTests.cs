@@ -160,19 +160,19 @@ public sealed class AmigaArchitectureTests
 	[InlineData(true, false)]
 	[InlineData(false, true)]
 	[InlineData(true, true)]
-	public void AgnusAndDeniseModelsCanBeSelectedIndependently(
+	public void AgnusAndDisplayChipModelsCanBeSelectedIndependently(
 		bool ecsAgnus,
 		bool ecsDenise)
 	{
-		var agnus = ecsAgnus ? AgnusModel.Ecs : AgnusModel.Ocs;
-		var denise = ecsDenise ? DeniseModel.Ecs : DeniseModel.Ocs;
+		var agnus = ecsAgnus ? DmaChipModel.EcsAgnus : DmaChipModel.OcsAgnus;
+		var denise = ecsDenise ? DisplayChipModel.EcsDenise : DisplayChipModel.OcsDenise;
 		var chipset = new AmigaChipset(agnus, denise, VideoStandard.Pal);
 		var options = MachineOptions
 			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithChipset(chipset);
 
-		Assert.Equal(agnus, options.Chipset.Agnus);
-		Assert.Equal(denise, options.Chipset.Denise);
+		Assert.Equal(agnus, options.Chipset.DmaChip);
+		Assert.Equal(denise, options.Chipset.DisplayChip);
 		Assert.Equal(VideoStandard.Pal, options.Chipset.VideoStandard);
 	}
 
@@ -180,16 +180,16 @@ public sealed class AmigaArchitectureTests
 	public void ChipsetPresetsSelectExpectedModelsAndVideoStandards()
 	{
 		Assert.Equal(
-			new AmigaChipset(AgnusModel.Ocs, DeniseModel.Ocs, VideoStandard.Pal),
+			new AmigaChipset(DmaChipModel.OcsAgnus, DisplayChipModel.OcsDenise, VideoStandard.Pal),
 			AmigaChipset.OcsPal);
 		Assert.Equal(
-			new AmigaChipset(AgnusModel.Ocs, DeniseModel.Ocs, VideoStandard.Ntsc),
+			new AmigaChipset(DmaChipModel.OcsAgnus, DisplayChipModel.OcsDenise, VideoStandard.Ntsc),
 			AmigaChipset.OcsNtsc);
 		Assert.Equal(
-			new AmigaChipset(AgnusModel.Ecs, DeniseModel.Ecs, VideoStandard.Pal),
+			new AmigaChipset(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise, VideoStandard.Pal),
 			AmigaChipset.EcsPal);
 		Assert.Equal(
-			new AmigaChipset(AgnusModel.Ecs, DeniseModel.Ecs, VideoStandard.Ntsc),
+			new AmigaChipset(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise, VideoStandard.Ntsc),
 			AmigaChipset.EcsNtsc);
 	}
 

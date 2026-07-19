@@ -741,7 +741,9 @@ namespace CopperMod.Amiga.CustomChips.Paula
                     case 0x09A:
                         ApplySetClear(ref _registerTimeline.Intena, write.Value);
                         WriteRegisterWord(0x01C, _registerTimeline.Intena, write.Cycle);
-                        RefreshCpuInterruptVisibility(write.Cycle);
+                        RefreshCpuInterruptVisibility(
+                            write.Cycle,
+                            AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles);
                         break;
                     case 0x09C:
                         var mask = (ushort)(write.Value & WritableIntreqMask);
@@ -756,7 +758,9 @@ namespace CopperMod.Amiga.CustomChips.Paula
                         }
 
                         WriteRegisterWord(0x01E, _registerTimeline.Intreq, write.Cycle);
-                        RefreshCpuInterruptVisibility(write.Cycle);
+                        RefreshCpuInterruptVisibility(
+                            write.Cycle,
+                            AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles);
                         break;
                     case 0x09E:
                         ApplySetClear(ref _registerTimeline.Adkcon, write.Value);
@@ -887,7 +891,9 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 {
                     WriteRegisterWord(0x01C, timeline.Intena, timeline.LastCycle);
                     QueuePendingEnabledAudioInterrupts(timeline.LastCycle);
-                    RefreshCpuInterruptVisibility(timeline.LastCycle);
+                    RefreshCpuInterruptVisibility(
+                        timeline.LastCycle,
+                        AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles);
                 }
 
                 return;
@@ -912,7 +918,9 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 if (kind == PaulaTimelineKind.Register)
                 {
                     WriteRegisterWord(0x01E, timeline.Intreq, timeline.LastCycle);
-                    RefreshCpuInterruptVisibility(timeline.LastCycle);
+                    RefreshCpuInterruptVisibility(
+                        timeline.LastCycle,
+                        AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles);
                 }
 
                 return;
@@ -1042,7 +1050,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
             return visible;
         }
 
-        private void RefreshCpuInterruptVisibility(long cycle)
+        private void RefreshCpuInterruptVisibility(long cycle, int? releaseDelayCycles = null)
         {
             cycle = Math.Max(0, cycle);
             var active = ActiveInterruptBits;
@@ -1063,7 +1071,10 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
                 if ((newlyActive & bit) != 0 || _cpuInterruptReleaseCycles[bitIndex] == 0)
                 {
-                    _cpuInterruptReleaseCycles[bitIndex] = GetCpuInterruptReleaseCycle(bit, cycle);
+                    _cpuInterruptReleaseCycles[bitIndex] = GetCpuInterruptReleaseCycle(
+                        bit,
+                        cycle,
+                        releaseDelayCycles);
                 }
             }
 
@@ -1103,7 +1114,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
         private static int GetInterruptLevelForBit(ushort bit)
             => GetHighestInterruptLevel(bit);
 
-        private long GetCpuInterruptReleaseCycle(ushort bit, long cycle)
+        private long GetCpuInterruptReleaseCycle(ushort bit, long cycle, int? releaseDelayCycles = null)
         {
             var recognitionCycle = cycle;
             if ((bit & AmigaConstants.IntreqCopper) != 0 && _copperInterruptRecognitionCycle > recognitionCycle)
@@ -1111,7 +1122,8 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 recognitionCycle = _copperInterruptRecognitionCycle;
             }
 
-            return recognitionCycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
+            return recognitionCycle +
+                (releaseDelayCycles ?? AmigaConstants.A500IntreqToIplDelayCpuCycles);
         }
 
         private void ApplyVolumeModulationFrom(PaulaTimelineState timeline, int sourceChannel, ushort value)

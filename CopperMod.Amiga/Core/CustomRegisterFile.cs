@@ -52,6 +52,7 @@ internal enum CustomRegisterWriteTarget : byte
 internal enum CustomRegisterImplementationStatus : byte
 {
     Absent,
+    Unspecified,
     Implemented,
     Partial,
     Unimplemented
@@ -62,7 +63,6 @@ internal enum CustomRegisterReadHandler : byte
     None,
     ChipDataBusLatch,
     Agnus,
-    Display,
     Dmaconr,
     BeamPosition,
     Disk,
@@ -96,6 +96,8 @@ internal readonly record struct ResolvedCustomRegister(
     CustomRegisterDescriptor Definition,
     bool IsPresent,
     ushort WritableMask,
+    ushort ResetValue,
+    ushort ResetKnownMask,
     string? ReadName,
     string? WriteName,
     CustomRegisterImplementationStatus ImplementationStatus,
@@ -105,6 +107,7 @@ internal readonly record struct ResolvedCustomRegister(
     CustomRegisterWriteTarget WriteTargets,
     HardwareScheduleImpact PotentialImpact,
     CustomRegisterImpactRule ImpactRule,
+    ushort ImpactMask,
     CustomRegisterStorageMode StorageMode);
 
 internal readonly record struct CustomRegisterFileSnapshotEntry(
@@ -116,12 +119,16 @@ internal readonly record struct CustomRegisterFileSnapshotEntry(
     CustomRegisterImplementationStatus ImplementationStatus,
     CustomRegisterAccess Access,
     CustomRegisterReadback Readback,
+    ushort WritableMask,
+    ushort ResetValue,
+    ushort ResetKnownMask,
     CustomRegisterReadHandler ReadHandler,
     CustomRegisterReadHandler HostReadHandler,
     CustomRegisterWriteSemantics WriteSemantics,
     CustomRegisterWriteTarget WriteTargets,
     HardwareScheduleImpact PotentialImpact,
     CustomRegisterImpactRule ImpactRule,
+    ushort ImpactMask,
     CustomRegisterStorageMode StorageMode,
     bool HasWrite,
     ushort LastWriteValue,
@@ -219,7 +226,7 @@ internal sealed class CustomRegisterFile
             }
 
             _hasStoredValues[index] = true;
-            _storedValues[index] = definition.Definition.ResetValue;
+            _storedValues[index] = definition.ResetValue;
         }
     }
 
@@ -266,7 +273,7 @@ internal sealed class CustomRegisterFile
             return false;
         }
 
-        var previous = _hasStoredValues[index] ? _storedValues[index] : definition.Definition.ResetValue;
+        var previous = _hasStoredValues[index] ? _storedValues[index] : definition.ResetValue;
         var stored = ApplyStoredWriteValue(
             previous,
             value,
@@ -337,12 +344,16 @@ internal sealed class CustomRegisterFile
                 definition.ImplementationStatus,
                 definition.Definition.Access,
                 definition.Definition.Readback,
+                definition.WritableMask,
+                definition.ResetValue,
+                definition.ResetKnownMask,
                 definition.ReadHandler,
                 definition.HostReadHandler,
                 definition.WriteSemantics,
                 definition.WriteTargets,
                 definition.PotentialImpact,
                 definition.ImpactRule,
+                definition.ImpactMask,
                 definition.StorageMode,
                 state.HasWrite,
                 state.LastWriteValue,
@@ -368,6 +379,7 @@ internal sealed class CustomRegisterFile
             var descriptor = CustomRegisterMetadata.GetComplete(offset);
             var present = descriptor.IsPresent(chipset);
             var access = descriptor.Access;
+            var writableMask = descriptor.GetWritableMask(chipset);
             var storageMode = GetStorageMode(descriptor, present);
             var readHandler = storageMode is CustomRegisterStorageMode.RegisterFile or CustomRegisterStorageMode.DevicePublished
                 ? CustomRegisterReadHandler.StoredValue
@@ -375,30 +387,41 @@ internal sealed class CustomRegisterFile
             result[index] = new ResolvedCustomRegister(
                 descriptor,
                 present,
-                descriptor.GetWritableMask(chipset),
+                writableMask,
+                descriptor.GetResetValue(chipset),
+                descriptor.GetResetKnownMask(chipset),
                 present && access is CustomRegisterAccess.ReadOnly or CustomRegisterAccess.ReadWrite
                     ? descriptor.Name
                     : null,
                 present && access is CustomRegisterAccess.WriteOnly or CustomRegisterAccess.ReadWrite or CustomRegisterAccess.Strobe
                     ? descriptor.Name
                     : null,
-                GetImplementationStatus(offset, present),
+                GetImplementationStatus(offset, present, chipset),
                 readHandler,
                 GetHostReadHandler(offset, readHandler),
                 GetWriteSemantics(offset, present, access, storageMode),
                 GetWriteTargets(offset, present, chipset),
                 GetPotentialImpact(offset, present, chipset),
                 GetImpactRule(offset),
+                GetImpactMask(offset, writableMask, chipset),
                 storageMode);
         }
 
         return result;
     }
 
-    private static CustomRegisterImplementationStatus GetImplementationStatus(ushort offset, bool present)
+    private static CustomRegisterImplementationStatus GetImplementationStatus(
+        ushort offset,
+        bool present,
+        AmigaChipset chipset)
     {
         if (!present)
         {
+            if (chipset.HasAgaComponent && offset is 0x10C or 0x10E or 0x11C or 0x11E or 0x1FC)
+            {
+                return CustomRegisterImplementationStatus.Unspecified;
+            }
+
             return CustomRegisterImplementationStatus.Absent;
         }
 
@@ -436,7 +459,6 @@ internal sealed class CustomRegisterFile
             0x00A or 0x00C => CustomRegisterReadHandler.GamePort,
             0x00E => CustomRegisterReadHandler.Collision,
             0x016 => CustomRegisterReadHandler.PotGo,
-            0x07C => CustomRegisterReadHandler.Display,
             >= 0x1C0 and <= 0x1E2 => CustomRegisterReadHandler.Agnus,
             <= 0x01E => CustomRegisterReadHandler.Paula,
             _ => CustomRegisterReadHandler.None
@@ -572,7 +594,7 @@ internal sealed class CustomRegisterFile
         if (offset == 0x1E4)
         {
             var targets = CustomRegisterWriteTarget.Display;
-            if (chipset.Agnus == AgnusModel.Ecs)
+            if (chipset.SupportsEcsDmaRegisters)
             {
                 targets |= CustomRegisterWriteTarget.Agnus;
             }
@@ -608,7 +630,7 @@ internal sealed class CustomRegisterFile
 
         if (offset is >= 0x1C0 and <= 0x1E2)
         {
-            return chipset.Agnus == AgnusModel.Ecs && offset != 0x1DA
+            return chipset.SupportsEcsDmaRegisters && offset != 0x1DA
                 ? HardwareScheduleImpact.Raster
                 : HardwareScheduleImpact.None;
         }
@@ -616,11 +638,11 @@ internal sealed class CustomRegisterFile
         if (offset == 0x1E4)
         {
             var impact = HardwareScheduleImpact.None;
-            if (chipset.Agnus == AgnusModel.Ecs)
+            if (chipset.SupportsEcsDmaRegisters)
             {
                 impact |= HardwareScheduleImpact.Bitplane;
             }
-            if (chipset.Denise == DeniseModel.Ecs)
+            if (chipset.SupportsEcsDisplayRegisters)
             {
                 impact |= HardwareScheduleImpact.Composition;
             }
@@ -650,7 +672,7 @@ internal sealed class CustomRegisterFile
 
         if (offset == 0x106)
         {
-            return chipset.Denise == DeniseModel.Ecs
+            return chipset.SupportsEcsDisplayRegisters
                 ? HardwareScheduleImpact.Sprite | HardwareScheduleImpact.Composition
                 : HardwareScheduleImpact.None;
         }
@@ -682,7 +704,7 @@ internal sealed class CustomRegisterFile
 
         if (offset is >= 0x040 and <= 0x074)
         {
-            return offset is 0x05A or 0x05C or 0x05E && chipset.Agnus != AgnusModel.Ecs
+            return offset is 0x05A or 0x05C or 0x05E && !chipset.SupportsEcsDmaRegisters
                 ? HardwareScheduleImpact.None
                 : HardwareScheduleImpact.Blitter;
         }
@@ -715,6 +737,14 @@ internal sealed class CustomRegisterFile
             0x106 => CustomRegisterImpactRule.Bplcon3Fields,
             0x1E4 => CustomRegisterImpactRule.DiwhighOwners,
             _ => CustomRegisterImpactRule.ValueChanged
+        };
+
+    private static ushort GetImpactMask(ushort offset, ushort writableMask, AmigaChipset chipset)
+        => offset switch
+        {
+            0x100 => chipset.SupportsEcsDmaRegisters ? (ushort)0xF040 : (ushort)0xF000,
+            0x106 or 0x1E4 => writableMask,
+            _ => 0xFFFF
         };
 
     private struct WriteRuntimeState

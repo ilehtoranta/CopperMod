@@ -9,8 +9,8 @@ public sealed class EcsDeniseRegisterTests
     [Fact]
     public void DeniseIdIsReadableOnlyWithEcsDenise()
     {
-        var ecs = CreateBus(AgnusModel.Ocs, DeniseModel.Ecs);
-        var ocs = CreateBus(AgnusModel.Ecs, DeniseModel.Ocs);
+        var ecs = CreateBus(DmaChipModel.OcsAgnus, DisplayChipModel.EcsDenise);
+        var ocs = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.OcsDenise);
         var ecsCycle = 0L;
         var ocsCycle = 0L;
 
@@ -33,8 +33,8 @@ public sealed class EcsDeniseRegisterTests
         bool expected)
     {
         var chipset = new AmigaChipset(
-            ecsAgnus ? AgnusModel.Ecs : AgnusModel.Ocs,
-            ecsDenise ? DeniseModel.Ecs : DeniseModel.Ocs,
+            ecsAgnus ? DmaChipModel.EcsAgnus : DmaChipModel.OcsAgnus,
+            ecsDenise ? DisplayChipModel.EcsDenise : DisplayChipModel.OcsDenise,
             VideoStandard.Pal);
 
         Assert.Equal(expected, CustomRegisterScheduleClassifier.IsReadableRegister(chipset, offset));
@@ -66,8 +66,8 @@ public sealed class EcsDeniseRegisterTests
     [Fact]
     public void Bplcon3AndDiwHighUseEcsMasksAndIgnoreOcsWrites()
     {
-        var ecs = CreateBus(AgnusModel.Ecs, DeniseModel.Ecs);
-        var ocs = CreateBus(AgnusModel.Ocs, DeniseModel.Ocs);
+        var ecs = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
+        var ocs = CreateBus(DmaChipModel.OcsAgnus, DisplayChipModel.OcsDenise);
 
         ecs.WriteWord(CustomBase + 0x106, 0xFFFF);
         ecs.WriteWord(CustomBase + 0x1E4, 0xFFFF);
@@ -89,7 +89,7 @@ public sealed class EcsDeniseRegisterTests
     [Fact]
     public void DiwWritesClearValidityUntilDiwHighIsWrittenAgain()
     {
-        var bus = CreateBus(AgnusModel.Ecs, DeniseModel.Ecs);
+        var bus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
 
         bus.WriteWord(CustomBase + 0x1E4, 0x0101);
         FlushDisplay(bus);
@@ -115,8 +115,8 @@ public sealed class EcsDeniseRegisterTests
     [Fact]
     public void MixedChipsetsKeepAgnusAndDeniseDiwHighStateSeparate()
     {
-        var ecsAgnus = CreateBus(AgnusModel.Ecs, DeniseModel.Ocs);
-        var ecsDenise = CreateBus(AgnusModel.Ocs, DeniseModel.Ecs);
+        var ecsAgnus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.OcsDenise);
+        var ecsDenise = CreateBus(DmaChipModel.OcsAgnus, DisplayChipModel.EcsDenise);
 
         ecsAgnus.WriteWord(CustomBase + 0x1E4, 0x2121);
         ecsDenise.WriteWord(CustomBase + 0x1E4, 0x2121);
@@ -141,8 +141,8 @@ public sealed class EcsDeniseRegisterTests
     [Fact]
     public void EcsDeniseUsesNativeSuperHiresCaptureWidth()
     {
-        var ecs = CreateBus(AgnusModel.Ocs, DeniseModel.Ecs);
-        var ocs = CreateBus(AgnusModel.Ecs, DeniseModel.Ocs);
+        var ecs = CreateBus(DmaChipModel.OcsAgnus, DisplayChipModel.EcsDenise);
+        var ocs = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.OcsDenise);
 
         Assert.Equal(AmigaConstants.PalSuperHighResWidth, ecs.Display.Width);
         Assert.Equal(AmigaConstants.PalHighResWidth, ocs.Display.Width);
@@ -161,7 +161,7 @@ public sealed class EcsDeniseRegisterTests
         ushort bplcon0,
         int expected)
     {
-        var denise = ecsDenise ? DeniseModel.Ecs : DeniseModel.Ocs;
+        var denise = ecsDenise ? DisplayChipModel.EcsDenise : DisplayChipModel.OcsDenise;
         Assert.Equal((DeniseResolution)expected, Display.GetDeniseResolution(denise, bplcon0));
     }
 
@@ -182,8 +182,8 @@ public sealed class EcsDeniseRegisterTests
         int expectedFetchPlanes,
         int expectedDecodePlanes)
     {
-        var agnus = ecsAgnus ? AgnusModel.Ecs : AgnusModel.Ocs;
-        var denise = ecsDenise ? DeniseModel.Ecs : DeniseModel.Ocs;
+        var agnus = ecsAgnus ? DmaChipModel.EcsAgnus : DmaChipModel.OcsAgnus;
+        var denise = ecsDenise ? DisplayChipModel.EcsDenise : DisplayChipModel.OcsDenise;
         var resolution = (DeniseResolution)resolutionValue;
         Assert.Equal(
             expectedFetchPlanes,
@@ -196,7 +196,7 @@ public sealed class EcsDeniseRegisterTests
     [Fact]
     public void Bplcon3BorderEffectsAreGatedByEcsena()
     {
-        var bus = CreateBus(AgnusModel.Ecs, DeniseModel.Ecs);
+        var bus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
         bus.WriteWord(CustomBase + 0x180, 0x0F00);
         bus.WriteWord(CustomBase + 0x106, 0x0030);
         var frame = new uint[bus.Display.Width * bus.Display.Height];
@@ -345,7 +345,7 @@ public sealed class EcsDeniseRegisterTests
         bool oddPlane,
         int delay)
     {
-        var bus = CreateBus(AgnusModel.Ecs, DeniseModel.Ecs);
+        var bus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
         bus.WriteWord(CustomBase + 0x092, 0x003C);
         bus.WriteWord(CustomBase + 0x094, 0x003C);
         bus.WriteWord(CustomBase + 0x182, 0x0C00);
@@ -376,7 +376,7 @@ public sealed class EcsDeniseRegisterTests
     [Fact]
     public void SuperHiresShifterContinuesAcrossSixteenSampleWordBoundary()
     {
-        var bus = CreateBus(AgnusModel.Ecs, DeniseModel.Ecs);
+        var bus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
         bus.WriteWord(CustomBase + 0x092, 0x003C);
         bus.WriteWord(CustomBase + 0x094, 0x003C);
         bus.WriteWord(CustomBase + 0x182, 0x0C00);
@@ -403,7 +403,7 @@ public sealed class EcsDeniseRegisterTests
     {
         var bus = new AmigaBus(
             enableLiveAgnusDma: true,
-            chipset: new AmigaChipset(AgnusModel.Ecs, DeniseModel.Ecs, VideoStandard.Pal));
+            chipset: new AmigaChipset(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise, VideoStandard.Pal));
         const uint spriteAddress = 0x2000;
         var x = AmigaConstants.PalLowResOverscanBorderX;
         var y = AmigaConstants.PalLowResOverscanBorderY;
@@ -436,7 +436,7 @@ public sealed class EcsDeniseRegisterTests
     [Fact]
     public void FmodeOffsetRemainsAbsent()
     {
-        var bus = CreateBus(AgnusModel.Ecs, DeniseModel.Ecs);
+        var bus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
         BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0xA55A);
         var cycle = 0L;
         _ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
@@ -445,12 +445,12 @@ public sealed class EcsDeniseRegisterTests
         Assert.False(CustomRegisterScheduleClassifier.IsReadableRegister(AmigaChipset.EcsPal, 0x1FC));
     }
 
-    private static AmigaBus CreateBus(AgnusModel agnus, DeniseModel denise)
+    private static AmigaBus CreateBus(DmaChipModel agnus, DisplayChipModel denise)
         => new(chipset: new AmigaChipset(agnus, denise, VideoStandard.Pal));
 
     private static AmigaBus CreateBorderSpriteBus(ushort bplcon3)
     {
-        var bus = CreateBus(AgnusModel.Ecs, DeniseModel.Ecs);
+        var bus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
         const int hardwareX = 129 - AmigaConstants.PalLowResOverscanBorderX;
         const int hardwareYStart = 0x2C - AmigaConstants.PalLowResOverscanBorderY;
         const int hardwareYStop = hardwareYStart + 1;
@@ -469,7 +469,7 @@ public sealed class EcsDeniseRegisterTests
         ushort dataA,
         ushort dataB)
     {
-        var bus = CreateBus(AgnusModel.Ecs, DeniseModel.Ecs);
+        var bus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
         var x = AmigaConstants.PalLowResOverscanBorderX;
         var y = AmigaConstants.PalLowResOverscanBorderY;
         var hardwareX = x + 129 - AmigaConstants.PalLowResOverscanBorderX;
