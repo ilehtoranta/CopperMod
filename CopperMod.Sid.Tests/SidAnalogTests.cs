@@ -68,6 +68,19 @@ public sealed class SidAnalogTests
 	}
 
 	[Fact]
+	public void Mos8580OutputLowPassCutoffIsProfileSpecific()
+	{
+		Assert.Equal(
+			14_000.0,
+			SidAnalog.OutputLowPassCutoffHz(SidChipModel.Mos8580, SidEmulationProfile.Balanced),
+			precision: 12);
+		Assert.Equal(
+			22_000.0,
+			SidAnalog.OutputLowPassCutoffHz(SidChipModel.Mos8580, SidEmulationProfile.ReferenceMeasured),
+			precision: 12);
+	}
+
+	[Fact]
 	public void ReferenceCalibrationOverrideIsScopedToMeasuredProfile()
 	{
 		var defaultLimit = SidAnalog.VolumeRegisterTransientLimit(SidChipModel.Mos6581, SidEmulationProfile.ReferenceMeasured);

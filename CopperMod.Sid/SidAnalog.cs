@@ -860,7 +860,9 @@ namespace CopperMod.Sid
                 volumeStepTransientLimit: is6581 ? (referenceMeasured ? 0.70 : 0.70) : (referenceMeasured ? 0.055 : 0.0),
                 volumeStepAttackSeconds: is6581 ? (referenceMeasured ? SidD418TransitionMatrices.Mos6581TransientAttackSeconds : 0.00130) : (referenceMeasured ? SidD418TransitionMatrices.Mos8580TransientAttackSeconds : 0.0),
                 volumeStepDecaySeconds: is6581 ? (referenceMeasured ? SidD418TransitionMatrices.Mos6581TransientDecaySeconds : 0.0042) : (referenceMeasured ? SidD418TransitionMatrices.Mos8580TransientDecaySeconds : 0.0),
-                chipOutputLowPassCutoffHz: is6581 ? (referenceMeasured ? 24_000.0 : 22_000.0) : 14_000.0,
+                chipOutputLowPassCutoffHz: is6581
+                    ? (referenceMeasured ? 24_000.0 : 22_000.0)
+                    : (referenceMeasured ? 22_000.0 : 14_000.0),
                 d418TransitionOffsetGain: is6581 ? (referenceMeasured ? 0.36 : 0.0) : (referenceMeasured ? 0.11 : 0.0),
                 d418TransitionAmplitudeGain: is6581 ? (referenceMeasured ? 0.030 : 0.0) : (referenceMeasured ? 0.0045 : 0.0),
                 d418HighNibbleTransitionGain: is6581 ? (referenceMeasured ? 0.018 : 0.0) : (referenceMeasured ? 0.0025 : 0.0),

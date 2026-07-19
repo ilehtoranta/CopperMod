@@ -23,41 +23,43 @@ namespace CopperMod.Sid
     internal readonly struct CpuBusTraceFrame
     {
         public CpuBusTraceFrame(
-            long requestedCycle,
             long cycle,
-            int cycleOffset,
             byte opcode,
-            ushort address,
+            ushort? address,
             byte? value,
-            Mos6510BusAccessKind kind,
-            bool delayedByVic)
+            Mos6510BusAccessKind? kind,
+            bool cpuAdvanced = true,
+            bool ready = true,
+            bool busAvailable = true,
+            bool vicOwned = false)
         {
-            RequestedCycle = requestedCycle;
             Cycle = cycle;
-            CycleOffset = cycleOffset;
             Opcode = opcode;
             Address = address;
             Value = value;
             Kind = kind;
-            DelayedByVic = delayedByVic;
+            CpuAdvanced = cpuAdvanced;
+            Ready = ready;
+            BusAvailable = busAvailable;
+            VicOwned = vicOwned;
         }
-
-        public long RequestedCycle { get; }
 
         public long Cycle { get; }
 
-        public int CycleOffset { get; }
-
         public byte Opcode { get; }
 
-        public ushort Address { get; }
+        public ushort? Address { get; }
 
         public byte? Value { get; }
 
-        public Mos6510BusAccessKind Kind { get; }
+        public Mos6510BusAccessKind? Kind { get; }
 
-        public bool DelayedByVic { get; }
+        public bool CpuAdvanced { get; }
 
-        public long DelayCycles => Cycle - RequestedCycle;
+        public bool Ready { get; }
+
+        public bool BusAvailable { get; }
+
+        public bool VicOwned { get; }
     }
 }

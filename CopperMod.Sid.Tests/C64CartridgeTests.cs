@@ -54,6 +54,8 @@ public sealed class C64CartridgeTests
 		Assert.Equal(SidChipModel.Mos6581, module.EffectiveChipModel);
 		Assert.Equal(SidChipModel.Mos6581, machine.Sid.Chips[0].Model);
 		Assert.Equal(0x8000, machine.Cpu.ProgramCounter);
+		Assert.Equal(9, machine.Cycle);
+		Assert.Equal(0xFD, machine.Cpu.StackPointer);
 		Assert.Equal(0x30, machine.Read(0xE000));
 		machine.Write(0xDE02, 0x05, 0);
 		Assert.Equal(0x30, machine.Read(0xE000));
