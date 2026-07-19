@@ -152,7 +152,6 @@ namespace CopperMod.Amiga.Firmware
         public const uint GraphicsLibraryBase = 0x00F9_0000;
         public const uint IntuitionLibraryBase = 0x00FA_0000;
         public const uint ExpansionLibraryBase = 0x00FB_0000;
-        public const uint CyberGraphicsLibraryBase = 0x00FC_0000;
         public const uint ExecStructAddress = 0x0000_2000;
         public const uint HostPathBufferAddress = 0x0000_3000;
         public const int HostPathBufferLength = 512;

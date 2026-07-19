@@ -14,6 +14,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
         public const string Name = "cybergraphics.library";
         public const ushort Version = 52;
         public const ushort Revision = 1;
+        internal const uint HostLibraryBase = 0x00FC_0000;
 
         public const int OpenOffset = -6;
         public const int CloseOffset = -12;
@@ -777,7 +778,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                     {
                         var planeAddress = planes[plane];
                         if (planeAddress == uint.MaxValue ||
-                            (planeAddress != 0 && (_bus.ReadGraphicsByte(planeAddress + byteOffset) & bit) != 0))
+                            (planeAddress != 0 && (_bus.ReadHostAcceleratorByte(planeAddress + byteOffset) & bit) != 0))
                         {
                             destinationPen |= 1 << plane;
                         }
@@ -792,11 +793,11 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                         }
 
                         var address = planes[plane] + byteOffset;
-                        var value = _bus.ReadGraphicsByte(address);
+                        var value = _bus.ReadHostAcceleratorByte(address);
                         value = ((resultPen >> plane) & 1) != 0
                             ? (byte)(value | bit)
                             : (byte)(value & (byte)~bit);
-                        _bus.WriteGraphicsByte(address, value);
+                        _bus.WriteHostAcceleratorByte(address, value);
                     }
 
                     written++;
@@ -814,7 +815,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             }
 
             var offset = checked((uint)(y * maskBytesPerRow + (x >> 3)));
-            return ((_bus.ReadGraphicsByte(maskPlane + offset) >> (7 - (x & 7))) & 1) != 0;
+            return ((_bus.ReadHostAcceleratorByte(maskPlane + offset) >> (7 - (x & 7))) & 1) != 0;
         }
 
         private static uint ApplyRtgMinterm(uint source, uint destination, byte operation)
@@ -850,7 +851,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                 return false;
             }
 
-            using var directAccess = _bus.BeginGraphicsDirectAccess();
+            using var directAccess = _bus.BeginHostAcceleratorAccess();
             CallObserved?.Invoke(vector.Function);
             switch (vector.Function)
             {

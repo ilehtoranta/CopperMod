@@ -4,40 +4,26 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <PackageId>CopperMod.Amiga.Emulator</PackageId>
-    <Title>CopperMod.Amiga.Emulator</Title>
+    <PackageId>CopperMod.Amiga.CyberGraphics</PackageId>
+    <Title>CopperMod.Amiga CyberGraphX</Title>
     <Authors>Ilkka Lehtoranta</Authors>
-    <Description>Full Amiga emulator host services, boot helpers, and disk media adapters layered on CopperMod.Amiga.</Description>
+    <Description>Optional CyberGraphX software and firmware integration for CopperMod.Amiga emulator hosts.</Description>
     <PackageVersion>1.1.0</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageTags>amiga;emulation;adf;ipf;scp;disk;boot</PackageTags>
+    <PackageTags>amiga;emulation;rtg;cybergraphics</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Disk adapter pass with SCP loading, CopperDisk track-region mapping, preserved IPF/SCP feature flags, and coordinated CopperDisk 2.1.0 integration.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-    <NoWarn>1701;1702;NU1900</NoWarn>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-    <NoWarn>1701;1702;NU1900</NoWarn>
-  </PropertyGroup>
-
   <ItemGroup>
     <None Include="..\README.md" Pack="true" PackagePath="\" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\CopperDisk\CopperDisk.csproj" />
     <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
-    <ProjectReference Include="..\CopperMod.Amiga.CyberGraphics\CopperMod.Amiga.CyberGraphics.csproj" />
     <ProjectReference Include="..\Copper68k\Copper68k.csproj" />
   </ItemGroup>
 

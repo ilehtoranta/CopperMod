@@ -68,7 +68,7 @@ public sealed class AutoconfigBusTests
 		var map = (IM68kStablePhysicalAddressMap)bus;
 		var generation = map.CpuPhysicalAddressMapGeneration;
 
-		Assert.Equal(0xD0, bus.ReadByte(AutoconfigChain.ZorroIIConfigBase));
+		Assert.Equal(0xC0, bus.ReadByte(AutoconfigChain.ZorroIIConfigBase));
 		Assert.Equal(0x10, bus.ReadByte(AutoconfigChain.ZorroIIConfigBase + 2));
 		Assert.Equal(0, bus.RtgVram.CommittedPageCount);
 		bus.ConfigureAutoconfigRtgForHost();
@@ -105,14 +105,50 @@ public sealed class AutoconfigBusTests
 	}
 
 	[Fact]
+	public void BareRtgBoardHasNoDiagnosticFirmware()
+	{
+		var bus = new AmigaBus(rtgVramSize: 16L * 1024 * 1024);
+		var board = Assert.IsType<AutoconfigRtgBoard>(bus.AutoconfigRtg);
+
+		Assert.False(board.HasFirmware);
+		Assert.Equal(0, board.Identity.DiagnosticRomVector);
+		bus.ConfigureAutoconfigRtgForHost();
+		Assert.Equal(0, bus.ReadByte(board.ConfiguredBase + 0x4000));
+	}
+
+	[Fact]
+	public void RtgFirmwareCanOnlyAttachBeforeAutoconfig()
+	{
+		var bus = new AmigaBus(rtgVramSize: 16L * 1024 * 1024);
+		bus.ConfigureAutoconfigRtgForHost();
+
+		Assert.Throws<InvalidOperationException>(() => bus.AttachRtgFirmware(new TestRtgFirmware()));
+	}
+
+	[Fact]
+	public void ZeroCapacityRtgUsesNoPageMaps()
+	{
+		var backend = new RtgVramBackend(0);
+		var fields = typeof(RtgVramBackend).GetFields(
+			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+		Assert.All(
+			fields.Where(field => field.Name is "_pages" or "_pageOwners" or "_dirtyPages"),
+			field => Assert.Empty(Assert.IsAssignableFrom<Array>(field.GetValue(backend))));
+	}
+
+	[Fact]
 	public void RtgDiagnosticResidentInstallsCyberGraphicsLibraryFromItsCopiedArea()
 	{
 		var bus = new AmigaBus(rtgVramSize: 256L * 1024 * 1024);
+		var library = new CyberGraphicsLibrary(bus);
+		var firmware = new CyberGraphicsRtgFirmware(library);
+		bus.AttachRtgFirmware(firmware);
 		bus.ConfigureAutoconfigRtgForHost();
 		var board = Assert.IsType<AutoconfigRtgBoard>(bus.AutoconfigRtg);
-		var diagBase = board.ConfiguredBase + (uint)AutoconfigRtgBoard.DiagAreaOffset;
+		var diagBase = board.ConfiguredBase + (uint)CyberGraphicsRtgFirmware.DiagAreaOffset;
 		const uint copyBase = 0x3000;
-		for (var offset = 0; offset < AutoconfigRtgBoard.DiagAreaCopySize; offset++)
+		for (var offset = 0; offset < CyberGraphicsRtgFirmware.DiagAreaCopySize; offset++)
 		{
 			bus.WriteByte(copyBase + (uint)offset, bus.ReadByte(diagBase + (uint)offset), 0);
 		}
@@ -123,17 +159,17 @@ public sealed class AutoconfigBusTests
 		state.A[0] = board.ConfiguredBase;
 		state.A[2] = copyBase;
 		state.A[6] = execBase;
-		var diagPoint = copyBase + (uint)AutoconfigRtgBoard.DiagPointOffset;
+		var diagPoint = copyBase + (uint)CyberGraphicsRtgFirmware.DiagPointOffset;
 		Assert.True(bus.TryInvokeHostTrap(diagPoint, bus.ReadWord(diagPoint + 2), state));
 		Assert.Equal(1u, state.D[0]);
 
-		var resident = copyBase + (uint)AutoconfigRtgBoard.ResidentOffset;
+		var resident = copyBase + (uint)CyberGraphicsRtgFirmware.ResidentOffset;
 		var residentInit = bus.ReadLong(resident + 0x16);
 		Assert.True(bus.TryInvokeHostTrap(residentInit, bus.ReadWord(residentInit + 2), state));
 
-		var libraryBase = copyBase + (uint)AutoconfigRtgBoard.LibraryBaseOffset;
-		Assert.True(board.ResidentInstalled);
-		Assert.Equal(libraryBase, board.LibraryBase);
+		var libraryBase = copyBase + (uint)CyberGraphicsRtgFirmware.LibraryBaseOffset;
+		Assert.True(firmware.ResidentInstalled);
+		Assert.Equal(libraryBase, firmware.LibraryBase);
 		Assert.Equal(libraryBase, state.D[0]);
 		Assert.True(bus.HasHostTrapStub(unchecked(libraryBase - 54u)));
 		Assert.Equal(libraryBase, bus.ReadLong(execBase + 0x17A));
@@ -362,5 +398,19 @@ public sealed class AutoconfigBusTests
 		public void AfterPureCpuTraceBatch(long previousCycle, long currentCycle, int instructionCount)
 		{
 		}
+	}
+
+	private sealed class TestRtgFirmware : IAmigaRtgFirmwareProvider
+	{
+		public AutoconfigIdentity Identity => AutoconfigIdentity.CreateIoBoard(
+			AutoconfigRtgBoard.BoardSize,
+			AutoconfigRtgBoard.ManufacturerId,
+			AutoconfigRtgBoard.ProductId,
+			0x4000);
+
+		public void Attach(AmigaBus bus) => _ = bus;
+		public byte ReadBoardByte(int offset) => 0;
+		public void OnConfigured(uint baseAddress) => _ = baseAddress;
+		public void Reset(bool cold) => _ = cold;
 	}
 }

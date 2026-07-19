@@ -341,8 +341,8 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                         ColorsEqualForSurface(source, ReadSurfaceArgb(source, sourceX + x, sourceY + y), wanted);
                     var byteAddress = plane + (uint)(y * bytesPerRow) + (uint)(x >> 3);
                     var mask = (byte)(0x80 >> (x & 7));
-                    var value = _bus.ReadGraphicsByte(byteAddress);
-                    _bus.WriteGraphicsByte(byteAddress, match ? (byte)(value | mask) : (byte)(value & ~mask));
+                    var value = _bus.ReadHostAcceleratorByte(byteAddress);
+                    _bus.WriteHostAcceleratorByte(byteAddress, match ? (byte)(value | mask) : (byte)(value & ~mask));
                 }
             }
 
@@ -380,7 +380,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                         continue;
                     }
 
-                    var index = _bus.ReadGraphicsByte(sourceAddress);
+                    var index = _bus.ReadHostAcceleratorByte(sourceAddress);
                     var tableAddress = state.A[2] + ((uint)index * 4);
                     if (!_bus.IsMappedMemoryRange(tableAddress, 4))
                     {
@@ -425,7 +425,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                         continue;
                     }
 
-                    var alpha = _bus.ReadGraphicsByte(alphaAddress);
+                    var alpha = _bus.ReadHostAcceleratorByte(alphaAddress);
                     var sourceColor = (destination.DrawColor & 0x00FF_FFFFu) | ((uint)alpha << 24);
                     WriteSurfaceArgb(
                         destination,
@@ -951,7 +951,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             CyberGraphicsRectangleFormat format,
             CyberGraphicsSurface rawSurface)
         {
-            byte B(int index) => _bus.ReadGraphicsByte(address + (uint)index);
+            byte B(int index) => _bus.ReadHostAcceleratorByte(address + (uint)index);
             return format switch
             {
                 CyberGraphicsRectangleFormat.Rgb => PackArgb(0xFF, B(0), B(1), B(2)),
@@ -974,7 +974,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             var red = (byte)(color >> 16);
             var green = (byte)(color >> 8);
             var blue = (byte)color;
-            void B(int index, byte value) => _bus.WriteGraphicsByte(address + (uint)index, value);
+            void B(int index, byte value) => _bus.WriteHostAcceleratorByte(address + (uint)index, value);
             switch (format)
             {
                 case CyberGraphicsRectangleFormat.Rgb:
@@ -1003,7 +1003,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             Span<byte> pixel = stackalloc byte[4];
             for (var i = 0; i < surface.BytesPerPixel; i++)
             {
-                pixel[i] = _bus.ReadGraphicsByte(address + (uint)i);
+                pixel[i] = _bus.ReadHostAcceleratorByte(address + (uint)i);
             }
 
             var bigEndianWord = (ushort)((pixel[0] << 8) | pixel[1]);
@@ -1055,7 +1055,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
 
             for (var i = 0; i < surface.BytesPerPixel; i++)
             {
-                _bus.WriteGraphicsByte(address + (uint)i, pixel[i]);
+                _bus.WriteHostAcceleratorByte(address + (uint)i, pixel[i]);
             }
         }
 

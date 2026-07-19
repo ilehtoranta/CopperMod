@@ -97,6 +97,30 @@ public sealed class AmigaBootMemoryTests
 	private const uint MemfClear = 0x0001_0000;
 
 	[Fact]
+	public void EmulatorCreatesNoCyberGraphicsLayerWithoutRtgVram()
+	{
+		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
+		var boot = new AmigaBootController(machine);
+
+		Assert.False(boot.HasCyberGraphics);
+		Assert.Null(machine.Bus.AutoconfigRtg);
+		Assert.False(boot.TryGetRtgComposition(out _));
+	}
+
+	[Fact]
+	public void EmulatorAttachesCyberGraphicsFirmwareWhenRtgVramIsConfigured()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithCpu(AmigaM68kCoreFactory.Default, M68kBackendKind.AccurateM68040)
+			.WithRtgVram(16L * 1024 * 1024));
+		var boot = new AmigaBootController(machine);
+
+		Assert.True(boot.HasCyberGraphics);
+		Assert.True(Assert.IsType<AutoconfigRtgBoard>(machine.Bus.AutoconfigRtg).HasFirmware);
+	}
+
+	[Fact]
 	public void NativeCopperStartTakeoverPreparesRuntimeBoundaryExactlyOnce()
 	{
 		var machine = new Machine(MachineOptions

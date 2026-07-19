@@ -813,7 +813,7 @@ public sealed class CyberGraphicsLibraryTests
 
         Assert.True(library.Invoke(-252, state));
         Assert.Equal(1u, state.D[0]);
-        Assert.Equal(0x80FF_0000u, ReadArgb(library, RastPort, 0, 0));
+        Assert.Equal(0x8080_0000u, ReadArgb(library, RastPort, 0, 0));
     }
 
     [Theory]

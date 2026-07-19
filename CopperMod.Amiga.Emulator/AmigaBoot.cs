@@ -180,6 +180,8 @@ namespace CopperMod.Amiga
         private const int InterruptCodeOffset = 0x12;
 
         private readonly Machine _machine;
+        private readonly CyberGraphicsLibrary? _cyberGraphics;
+        private readonly CyberGraphicsRtgFirmware? _cyberGraphicsFirmware;
         private readonly IAmigaDiskDmaEngine _diskDma;
         private readonly BootInstructionBoundary _instructionBoundary;
         private readonly List<AmigaBootDiagnostic> _diagnostics = new List<AmigaBootDiagnostic>(16);
@@ -277,7 +279,13 @@ namespace CopperMod.Amiga
             _diskDma = diskDma ?? new ImmediateDiskDmaEngine();
             _instructionBoundary = new BootInstructionBoundary(this);
             _runtimeInstructionBoundary = new RuntimeInstructionBoundary(this);
-            _machine.Bus.CyberGraphics.AttachGuestServices(this);
+            if (_machine.Bus.RtgVram.IsPresent)
+            {
+                _cyberGraphics = new CyberGraphicsLibrary(_machine.Bus);
+                _cyberGraphicsFirmware = new CyberGraphicsRtgFirmware(_cyberGraphics);
+                _machine.Bus.AttachRtgFirmware(_cyberGraphicsFirmware);
+                _cyberGraphics.AttachGuestServices(this);
+            }
         }
 
         public AmigaFloppyDrive Drive0 => _machine.Bus.Disk.Drive0;
@@ -290,20 +298,39 @@ namespace CopperMod.Amiga
 
         public IReadOnlyList<AmigaBootDiagnostic> Diagnostics => _diagnostics;
 
-        internal CyberGraphicsLibrary CyberGraphics => _machine.Bus.CyberGraphics;
+        internal CyberGraphicsLibrary CyberGraphics
+            => _cyberGraphics ?? throw new InvalidOperationException("CyberGraphX is not enabled for this machine.");
+
+        internal bool HasCyberGraphics => _cyberGraphics != null;
 
         internal bool TryRenderRtgFrame(out CyberGraphicsRtgFrame frame)
-            => CyberGraphics.TryRenderRtgFrame(out frame);
+        {
+            if (_cyberGraphics != null)
+            {
+                return _cyberGraphics.TryRenderRtgFrame(out frame);
+            }
+
+            frame = default;
+            return false;
+        }
 
         internal bool TryGetRtgComposition(out CyberGraphicsDisplayComposition composition)
-            => CyberGraphics.TryBuildDisplayComposition(
-                _currentViewAddress,
-                _machine.Bus.Display.Width,
-                _machine.Bus.Display.Height,
-                out composition);
+        {
+            if (_cyberGraphics != null)
+            {
+                return _cyberGraphics.TryBuildDisplayComposition(
+                    _currentViewAddress,
+                    _machine.Bus.Display.Width,
+                    _machine.Bus.Display.Height,
+                    out composition);
+            }
+
+            composition = default!;
+            return false;
+        }
 
         internal bool RtgScanoutSelected
-            => TryGetRtgComposition(out _) || CyberGraphics.RtgScanoutSelected;
+            => TryGetRtgComposition(out _) || _cyberGraphics?.RtgScanoutSelected == true;
 
         internal void GetRtgPointerPosition(out int x, out int y)
         {
@@ -748,7 +775,7 @@ namespace CopperMod.Amiga
             bus.ConfigureAutoconfigRtgForHost();
             if (bus.RtgVram.IsPresent)
             {
-                CyberGraphics.InstallTrapVectors(AmigaKickstartHost.CyberGraphicsLibraryBase);
+                CyberGraphics.InstallTrapVectors(CyberGraphicsLibrary.HostLibraryBase);
             }
             InstallKickstartMemoryList();
             InstallHostSupervisorStack();
@@ -1791,7 +1818,7 @@ namespace CopperMod.Amiga
 
             if (ContainsNullTerminatedString(cachedName, nameAddress, 96, "cybergraphics"))
             {
-                libraryBase = AmigaKickstartHost.CyberGraphicsLibraryBase;
+                libraryBase = CyberGraphicsLibrary.HostLibraryBase;
                 return _machine.Bus.RtgVram.Active;
             }
 

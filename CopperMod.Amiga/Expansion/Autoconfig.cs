@@ -150,7 +150,7 @@ namespace CopperMod.Amiga.Expansion
             Identity = identity;
         }
 
-        public AutoconfigIdentity Identity { get; }
+        public AutoconfigIdentity Identity { get; protected set; }
 
         public virtual bool IsPresent => true;
 

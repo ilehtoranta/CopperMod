@@ -76,7 +76,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                     {
                         var maskOffset = checked((uint)(sy * bytesPerRow + (sx >> 3)));
                         var maskBit = 7 - (sx & 7);
-                        if (((bus.ReadGraphicsByte(maskPlane + maskOffset) >> maskBit) & 1) == 0)
+                        if (((bus.ReadHostAcceleratorByte(maskPlane + maskOffset) >> maskBit) & 1) == 0)
                         {
                             continue;
                         }
@@ -112,7 +112,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
 
                 var pointer = bus.ReadLong(bitMap + BitMapPlanesOffset + (uint)(plane * 4));
                 var set = pointer == uint.MaxValue ||
-                    (pointer != 0 && ((bus.ReadGraphicsByte(pointer + byteOffset) >> bit) & 1) != 0);
+                    (pointer != 0 && ((bus.ReadHostAcceleratorByte(pointer + byteOffset) >> bit) & 1) != 0);
                 if (set)
                 {
                     pen |= 1 << plane;

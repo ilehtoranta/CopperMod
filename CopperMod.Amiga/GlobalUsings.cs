@@ -17,7 +17,6 @@ global using CopperMod.Amiga.Memory;
 global using CopperMod.Amiga.Storage.Floppy;
 global using CopperMod.Amiga.Storage.Hardfile;
 global using CopperMod.Amiga.Video.Rtg;
-global using CopperMod.Amiga.Video.Rtg.CyberGraphics;
 global using AmigaBus = CopperMod.Amiga.Bus.Bus;
 global using AmigaHardwareScheduler = CopperMod.Amiga.Bus.Scheduler;
 global using OcsDisplay = CopperMod.Amiga.CustomChips.Denise.Display;

@@ -642,7 +642,7 @@ public sealed class CopperScreenBootTests
 		var diskPath = FindWorkspaceFile("CopperScreen", "TestImages", "Full Contact (1991)(Team 17)(Disk 1 of 2).zip");
 		var disk = AmigaDiskImage.Load(diskPath);
 
-		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
+		using var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot));
 		var boot = new AmigaBootController(machine);
 
 		var result = boot.BootFromDisk(disk, maxInstructions: 25_000);
@@ -689,7 +689,7 @@ public sealed class CopperScreenBootTests
 		var options = MachineOptions
 			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithKickstart(KickstartConfiguration.FromRomImage(KickstartVersion.Kickstart13, File.ReadAllBytes(romPath)));
-		var machine = new Machine(options);
+		using var machine = new Machine(options);
 		var boot = new AmigaBootController(machine);
 
 		boot.StartKickstartRomBoot(AmigaDiskImage.Load(diskPath));
@@ -748,7 +748,7 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "vanilla-kickstart13", diskPath }, AppContext.BaseDirectory);
+		using var emulator = CopperScreenEmulator.Create(new[] { "--profile", "vanilla-kickstart13", diskPath }, AppContext.BaseDirectory);
 		var fatalFrame = -1;
 		var reachedLoadingScreen = false;
 		for (var frame = 0; frame < 1_230; frame++)
@@ -790,7 +790,7 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-kickstart13", diskPath }, AppContext.BaseDirectory);
+		using var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-kickstart13", diskPath }, AppContext.BaseDirectory);
 		var machine = GetMachine(emulator);
 		var fatalFrame = -1;
 		var reachedLoadingScreen = false;
@@ -1227,7 +1227,7 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "vanilla-copperstart", diskPath }, AppContext.BaseDirectory);
+		using var emulator = CopperScreenEmulator.Create(new[] { "--profile", "vanilla-copperstart", diskPath }, AppContext.BaseDirectory);
 		for (var frame = 0; frame < 420; frame++)
 		{
 			if (frame == 260)
@@ -2553,7 +2553,7 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		using var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
 		var machine = GetMachine(emulator);
 		var loadedMain = false;
 		for (var frame = 0; frame < 360; frame++)
