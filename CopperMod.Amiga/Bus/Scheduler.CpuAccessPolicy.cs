@@ -19,14 +19,16 @@ namespace CopperMod.Amiga.Bus
                 return SlotContendedMemoryAccessMask;
             }
 
+            if (target == AmigaBusAccessTarget.CustomRegisters)
+            {
+                return isWrite
+                    ? AmigaHardwareEventMask.All
+                    : CustomRegisterReadMask;
+            }
+
             if (!isWrite)
             {
                 return AmigaHardwareEventMask.None;
-            }
-
-            if (target == AmigaBusAccessTarget.CustomRegisters)
-            {
-                return AmigaHardwareEventMask.All;
             }
 
             return AmigaHardwareEventMask.None;

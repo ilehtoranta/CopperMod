@@ -62,6 +62,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
             var cpuCyclesPerColorClock = bus.RasterTiming.CpuCyclesPerColorClock;
             _audioTimeline = new PaulaTimelineState(cpuCyclesPerColorClock);
             _registerTimeline = new PaulaTimelineState(cpuCyclesPerColorClock);
+            PublishResetReadState();
         }
 
         public IReadOnlyList<CustomRegisterWrite> Writes => _writes;
@@ -136,6 +137,17 @@ namespace CopperMod.Amiga.CustomChips.Paula
             _interruptSourceDmaForcedCatchUpCount = 0;
             _paulaDmaWordReservationCount = 0;
             _registerDmaFastForwardIterationCount = 0;
+            PublishResetReadState();
+        }
+
+        private void PublishResetReadState()
+        {
+            _bus.PublishCustomRegisterState(0x010, _registerTimeline.Adkcon, 0);
+            _bus.PublishCustomRegisterState(0x012, 0, 0);
+            _bus.PublishCustomRegisterState(0x014, 0, 0);
+            _bus.PublishCustomRegisterState(0x018, IdleSerdatr, 0);
+            _bus.PublishCustomRegisterState(0x01C, _registerTimeline.Intena, 0);
+            _bus.PublishCustomRegisterState(0x01E, _registerTimeline.Intreq, 0);
         }
 
         public byte ReadByte(ushort offset)
@@ -724,11 +736,11 @@ namespace CopperMod.Amiga.CustomChips.Paula
                             _registerTimeline.Dmacon &= (ushort)~dmaconMask;
                         }
 
-                        WriteRegisterWord(0x002, _registerTimeline.Dmacon);
+                        WriteRegisterWord(0x002, _registerTimeline.Dmacon, write.Cycle);
                         break;
                     case 0x09A:
                         ApplySetClear(ref _registerTimeline.Intena, write.Value);
-                        WriteRegisterWord(0x01C, _registerTimeline.Intena);
+                        WriteRegisterWord(0x01C, _registerTimeline.Intena, write.Cycle);
                         RefreshCpuInterruptVisibility(write.Cycle);
                         break;
                     case 0x09C:
@@ -743,12 +755,12 @@ namespace CopperMod.Amiga.CustomChips.Paula
                             _registerTimeline.Intreq &= (ushort)~mask;
                         }
 
-                        WriteRegisterWord(0x01E, _registerTimeline.Intreq);
+                        WriteRegisterWord(0x01E, _registerTimeline.Intreq, write.Cycle);
                         RefreshCpuInterruptVisibility(write.Cycle);
                         break;
                     case 0x09E:
                         ApplySetClear(ref _registerTimeline.Adkcon, write.Value);
-                        WriteRegisterWord(0x010, _registerTimeline.Adkcon);
+                        WriteRegisterWord(0x010, _registerTimeline.Adkcon, write.Cycle);
                         break;
                 }
             }
@@ -847,7 +859,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
                 if (kind == PaulaTimelineKind.Register)
                 {
-                    WriteRegisterWord(0x002, timeline.Dmacon);
+                    WriteRegisterWord(0x002, timeline.Dmacon, timeline.LastCycle);
                 }
 
                 for (var i = 0; i < timeline.Channels.Length; i++)
@@ -873,7 +885,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 ApplySetClear(ref timeline.Intena, value);
                 if (kind == PaulaTimelineKind.Register)
                 {
-                    WriteRegisterWord(0x01C, timeline.Intena);
+                    WriteRegisterWord(0x01C, timeline.Intena, timeline.LastCycle);
                     QueuePendingEnabledAudioInterrupts(timeline.LastCycle);
                     RefreshCpuInterruptVisibility(timeline.LastCycle);
                 }
@@ -899,7 +911,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
                 if (kind == PaulaTimelineKind.Register)
                 {
-                    WriteRegisterWord(0x01E, timeline.Intreq);
+                    WriteRegisterWord(0x01E, timeline.Intreq, timeline.LastCycle);
                     RefreshCpuInterruptVisibility(timeline.LastCycle);
                 }
 
@@ -912,7 +924,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
                 if (kind == PaulaTimelineKind.Register)
                 {
-                    WriteRegisterWord(0x010, timeline.Adkcon);
+                    WriteRegisterWord(0x010, timeline.Adkcon, timeline.LastCycle);
                 }
 
                 return;
@@ -997,7 +1009,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
             }
 
             _registerTimeline.Intreq |= bit;
-            WriteRegisterWord(0x01E, _registerTimeline.Intreq);
+            WriteRegisterWord(0x01E, _registerTimeline.Intreq, cycle);
             QueuePendingEnabledAudioInterrupts(cycle, bit);
             RefreshCpuInterruptVisibility(cycle);
         }
@@ -1175,7 +1187,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
             }
         }
 
-        private void WriteRegisterWord(ushort offset, ushort value)
+        private void WriteRegisterWord(ushort offset, ushort value, long cycle)
         {
             if (offset + 1 >= _registerBytes.Length)
             {
@@ -1184,6 +1196,14 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
             _registerBytes[offset] = (byte)(value >> 8);
             _registerBytes[offset + 1] = (byte)value;
+            if (offset == 0x002)
+            {
+                _bus.PublishDmaconrState(cycle);
+            }
+            else
+            {
+                _bus.PublishCustomRegisterState(offset, value, cycle);
+            }
         }
 
         private static void ApplySetClear(ref ushort register, ushort value)

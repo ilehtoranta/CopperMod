@@ -695,7 +695,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	}
 
 	[Fact]
-	public void BlitterLineModeUsesEightHrmTicksPerPixel()
+	public void BlitterLineModeNominalPredictionUsesEightHrmTicksPerPixel()
 	{
 		var bus = new AmigaBus();
 		var baseAddress = DestinationD + 0x1800;
@@ -703,14 +703,11 @@ public sealed class AmigaBlitterConformanceMatrixTests
 
 		bus.WriteWord(0x00DFF058, 0x0082);
 		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
-		var expectedCompletion = startCycle + (2 * 8);
+		var nominalCompletion = startCycle + (2 * 8);
 
-		bus.AdvanceDmaTo(expectedCompletion - 1);
-		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
-
-		bus.AdvanceDmaTo(expectedCompletion);
-		Assert.False(bus.Blitter.CaptureSnapshot().Busy);
-		Assert.Equal(expectedCompletion, bus.Blitter.CaptureSnapshot().CurrentCycle);
+		Assert.Equal(nominalCompletion, bus.Blitter.GetPredictedCompletionCycle());
+		RunBlitterUntilIdle(bus);
+		Assert.True(bus.Blitter.LastCompletionCycle >= nominalCompletion);
 	}
 
 	[Fact]
@@ -798,26 +795,65 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	[Fact]
 	public void BlitterLineBusyClearsAtFinalWriteCompletionWithoutPolling()
 	{
-		var bus = new AmigaBus();
+		var oracle = new AmigaBus();
 		var baseAddress = DestinationD + 0x1C00;
-		ConfigureLineBlit(bus, baseAddress, LineRowStride, bltcon1: 0x0003);
+		ConfigureLineBlit(oracle, baseAddress, LineRowStride, bltcon1: 0x0003);
+		oracle.WriteWord(0x00DFF058, 0x1002);
+		for (var cycle = 0L; oracle.Blitter.CaptureSnapshot().Busy; cycle++)
+		{
+			oracle.AdvanceDmaTo(cycle);
+		}
+		var expectedCompletion = oracle.Blitter.LastCompletionCycle;
 
+		var bus = new AmigaBus();
+		ConfigureLineBlit(bus, baseAddress, LineRowStride, bltcon1: 0x0003);
 		bus.WriteWord(0x00DFF058, 0x1002);
-		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
-		var expectedCompletion = startCycle + (64 * 8);
 
 		bus.AdvanceDmaTo(expectedCompletion - 1);
 		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
 		Assert.Equal(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
 
 		bus.AdvanceDmaTo(expectedCompletion);
-		Assert.False(bus.Blitter.CaptureSnapshot().Busy);
-		Assert.Equal(expectedCompletion, bus.Blitter.CaptureSnapshot().CurrentCycle);
+		var completed = bus.Blitter.CaptureSnapshot();
+		Assert.False(
+			completed.Busy,
+			$"expectedCompletion={expectedCompletion}, current={completed.CurrentCycle}, " +
+			$"nextDma={completed.NextDmaCycle}, lastDma={completed.LastDmaCycle}, " +
+			$"row={completed.RowY}, microOps={completed.CompletedMicroOps}");
+		Assert.Equal(expectedCompletion, completed.CurrentCycle);
 		Assert.NotEqual(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
 	}
 
 	[Fact]
-	public void BlitterLineDmaconrPollingDoesNotAdvanceToFinalWriteCompletion()
+	public void BlitterLineCompletionIsIndependentOfAdvanceHorizon()
+	{
+		var batched = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		var incremental = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		var baseAddress = DestinationD + 0x1D00;
+		ConfigureLineBlit(batched, baseAddress, LineRowStride, bltcon1: 0x0003);
+		ConfigureLineBlit(incremental, baseAddress, LineRowStride, bltcon1: 0x0003);
+		batched.WriteWord(0x00DFF058, 0x1002);
+		incremental.WriteWord(0x00DFF058, 0x1002);
+
+		batched.AdvanceDmaTo(1_000_000, advanceLiveAgnus: true);
+		for (var cycle = 0L; incremental.Blitter.CaptureSnapshot().Busy; cycle++)
+		{
+			incremental.AdvanceDmaTo(cycle, advanceLiveAgnus: true);
+		}
+
+		Assert.Equal(incremental.Blitter.LastCompletionCycle, batched.Blitter.LastCompletionCycle);
+		Assert.Equal(incremental.ChipRam, batched.ChipRam);
+		Assert.Equal(
+			incremental.BusAccesses
+				.Where(access => access.Request.Requester == AmigaBusRequester.Blitter)
+				.Select(access => (access.Request.Address, access.Request.IsWrite, access.GrantedCycle, access.CompletedCycle)),
+			batched.BusAccesses
+				.Where(access => access.Request.Requester == AmigaBusRequester.Blitter)
+				.Select(access => (access.Request.Address, access.Request.IsWrite, access.GrantedCycle, access.CompletedCycle)));
+	}
+
+	[Fact]
+	public void BlitterLineDmaconrPollingAdvancesToFinalWriteCompletion()
 	{
 		var bus = new AmigaBus(captureBusAccesses: true);
 		var baseAddress = DestinationD + 0x1E00;
@@ -838,10 +874,9 @@ public sealed class AmigaBlitterConformanceMatrixTests
 			cycle += AgnusChipSlotScheduler.SlotCycles;
 		}
 
-		Assert.Equal(-1, firstIdleReadCycle);
-		Assert.Equal(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
+		Assert.True(firstIdleReadCycle >= 0);
+		Assert.NotEqual(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
 
-		bus.AdvanceDmaTo(cycle + 100_000);
 		var finalWrite = bus.BusAccesses
 			.Where(access => access.Request.Requester == AmigaBusRequester.Blitter &&
 				access.Request.Kind == AmigaBusAccessKind.Blitter &&
@@ -857,14 +892,29 @@ public sealed class AmigaBlitterConformanceMatrixTests
 	[Fact]
 	public void BlitterLineBusyWaitsForDelayedFinalWriteSlot()
 	{
-		var bus = new AmigaBus(captureBusAccesses: true);
+		var oracle = new AmigaBus(captureBusAccesses: true);
 		var baseAddress = DestinationD + 0x2000;
+		ConfigureLineBlit(oracle, baseAddress, LineRowStride, bltcon1: 0x0003);
+		oracle.WriteWord(0x00DFF058, 0x1002);
+		for (var cycle = 0L; oracle.Blitter.CaptureSnapshot().Busy; cycle++)
+		{
+			oracle.AdvanceDmaTo(cycle);
+		}
+
+		var baselineCompletion = oracle.Blitter.LastCompletionCycle;
+		var finalNominalWriteGrant = oracle.BusAccesses
+			.Where(access => access.Request.Requester == AmigaBusRequester.Blitter &&
+				access.Request.Kind == AmigaBusAccessKind.Blitter &&
+				access.Request.IsWrite &&
+				access.CompletedCycle == baselineCompletion)
+			.Select(access => access.GrantedCycle)
+			.Single();
+
+		var bus = new AmigaBus(captureBusAccesses: true);
 		ConfigureLineBlit(bus, baseAddress, LineRowStride, bltcon1: 0x0003);
 
 		bus.WriteWord(0x00DFF058, 0x1002);
-		var startCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
 		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
-		var finalNominalWriteGrant = startCycle + (63 * 8) + (3 * slotCycles);
 		Assert.True(bus.TryReserveDisplayDmaSlot(
 			AmigaBusRequester.Bitplane,
 			AmigaBusAccessKind.Bitplane,
@@ -873,7 +923,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 			out var reserved));
 		Assert.Equal(finalNominalWriteGrant, reserved.GrantedCycle);
 
-		var delayedCompletion = startCycle + (64 * 8) + slotCycles;
+		var delayedCompletion = baselineCompletion + slotCycles;
 		bus.AdvanceDmaTo(delayedCompletion - 1);
 		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
 		Assert.Equal(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);

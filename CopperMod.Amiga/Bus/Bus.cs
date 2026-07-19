@@ -45,6 +45,7 @@ namespace CopperMod.Amiga.Bus
         private const int MaxCapturedBusAccesses = 65536;
         private const int MaxCapturedCpuBusPhases = 65536;
         private const int MaxCapturedCustomRegisterReads = 65536;
+        private const int MaxCapturedCustomRegisterWrites = 65536;
         private const int MaxPendingInterruptEvents = 65536;
         private const int InstructionFetchWindowMaxBytes = 256;
         private const uint CpuAddressMask = 0x00FF_FFFFu;
@@ -223,6 +224,8 @@ namespace CopperMod.Amiga.Bus
         private readonly BoundedCpuBusPhaseLog _cpuBusPhases = new BoundedCpuBusPhaseLog(MaxCapturedCpuBusPhases);
         private Action<AmigaCpuBusPhaseTrace>? _cpuBusPhaseObserver;
         private readonly BoundedReadLog _customRegisterReads = new BoundedReadLog(MaxCapturedCustomRegisterReads);
+        private readonly BoundedWriteLog _customRegisterWrites = new BoundedWriteLog(MaxCapturedCustomRegisterWrites);
+        private readonly CustomRegisterFile _customRegisterFile;
         private BoundedCpuChipRamWriteTraceLog? _cpuChipRamWriteTrace;
         private BoundedReadLog? _customRegisterReadTrace;
         private uint _cpuChipRamWriteTraceStart;
@@ -398,6 +401,7 @@ namespace CopperMod.Amiga.Bus
         {
             var selectedChipset = chipset ?? AmigaChipset.OcsPal;
             _chipset = selectedChipset;
+            _customRegisterFile = new CustomRegisterFile(selectedChipset);
             if (!ChipDmaAddressing.IsStandardPhysicalSize(chipRamSize))
             {
                 throw new ArgumentOutOfRangeException(
@@ -438,6 +442,7 @@ namespace CopperMod.Amiga.Bus
             _beamClock = new AgnusBeamClock(_rasterTiming);
             _chipDmaAddressing = new ChipDmaAddressing(selectedChipset.Agnus);
             _agnusRegisters = new AgnusRegisterBank(selectedChipset.Agnus, _chipDmaAddressing, _rasterTiming);
+            PublishAgnusRegisterState(0);
             _chipRam = new AmigaChipRamBackend(
                 chipRamSize,
                 AmigaConstants.ChipRamCpuDecodeSize,
@@ -510,6 +515,8 @@ namespace CopperMod.Amiga.Bus
             _diagnosticChipSlots = _hrmSlotEngine;
             Agnus = new AgnusBeamDmaScheduler(this, _diagnosticChipSlots);
             Blitter = new AmigaBlitter(this, enableHardwareSpecialization);
+            PublishDmaconrState(0);
+            PublishGamePortRegisterState(0);
             CiaA = new AmigaCia(AmigaCiaId.A, _rasterTiming);
             CiaB = new AmigaCia(AmigaCiaId.B, _rasterTiming);
             Keyboard = new AmigaKeyboard((rawKey, cycle) => CiaA.SetSerialData(rawKey, cycle, _pendingCiaInterrupts));
@@ -625,25 +632,41 @@ namespace CopperMod.Amiga.Bus
         public bool GamePort0FirePressed
         {
             get => _gamePorts[0].PrimaryFirePressed;
-            set => _gamePorts[0].PrimaryFirePressed = value;
+            set
+            {
+                _gamePorts[0].PrimaryFirePressed = value;
+                PublishGamePortRegisterState(_lastRasterAdvanceCycle);
+            }
         }
 
         public bool GamePort1FirePressed
         {
             get => _gamePorts[1].PrimaryFirePressed;
-            set => _gamePorts[1].PrimaryFirePressed = value;
+            set
+            {
+                _gamePorts[1].PrimaryFirePressed = value;
+                PublishGamePortRegisterState(_lastRasterAdvanceCycle);
+            }
         }
 
         public bool GamePort0SecondFirePressed
         {
             get => _gamePorts[0].SecondFirePressed;
-            set => _gamePorts[0].SecondFirePressed = value;
+            set
+            {
+                _gamePorts[0].SecondFirePressed = value;
+                PublishGamePortRegisterState(_lastRasterAdvanceCycle);
+            }
         }
 
         public bool GamePort1SecondFirePressed
         {
             get => _gamePorts[1].SecondFirePressed;
-            set => _gamePorts[1].SecondFirePressed = value;
+            set
+            {
+                _gamePorts[1].SecondFirePressed = value;
+                PublishGamePortRegisterState(_lastRasterAdvanceCycle);
+            }
         }
 
         public byte[] ChipRam => _chipRam.Data;
@@ -685,11 +708,20 @@ namespace CopperMod.Amiga.Bus
             }
         }
 
-        public IReadOnlyList<CustomRegisterWrite> CustomRegisterWrites => Paula.Writes;
+        public IReadOnlyList<CustomRegisterWrite> CustomRegisterWrites => _customRegisterWrites;
 
         internal AmigaChipset Chipset => _chipset;
 
         internal IReadOnlyList<CustomRegisterRead> CustomRegisterReads => _customRegisterReads;
+
+        internal CustomRegisterFileSnapshot CaptureCustomRegisterFileSnapshot()
+            => _customRegisterFile.CaptureSnapshot();
+
+        internal bool CanCopperWriteCustomRegister(ushort offset, ushort copcon)
+            => _customRegisterFile.CanCopperWrite(offset, copcon);
+
+        internal bool StopsCopperAtCustomRegister(ushort offset, ushort copcon)
+            => _customRegisterFile.StopsCopper(offset, copcon);
 
         internal IReadOnlyList<CustomRegisterRead> CustomRegisterReadTrace
         {
@@ -1008,6 +1040,8 @@ namespace CopperMod.Amiga.Bus
             _busAccesses.Clear();
             _cpuBusPhases.Clear();
             _customRegisterReads.Clear();
+            _customRegisterWrites.Clear();
+            _customRegisterFile.Reset();
             _lastCpuBusAccess = null;
             _lastCpuBusGrantedSlot = null;
             ResetChipDataBusLatch();
@@ -1022,10 +1056,12 @@ namespace CopperMod.Amiga.Bus
             {
                 gamePort.Reset();
             }
+            PublishGamePortRegisterState(0);
 
             Paula.Reset();
             Disk.Reset();
             _agnusRegisters.Reset();
+            PublishAgnusRegisterState(0);
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
@@ -1044,6 +1080,7 @@ namespace CopperMod.Amiga.Bus
             var gamePort = GetGamePort(port);
             gamePort.MouseXCounter = unchecked((byte)(gamePort.MouseXCounter + deltaX));
             gamePort.MouseYCounter = unchecked((byte)(gamePort.MouseYCounter + deltaY));
+            PublishGamePortRegisterState(_lastRasterAdvanceCycle);
         }
 
         public void SetGamePortJoystick(int port, bool up, bool down, bool left, bool right)
@@ -1053,6 +1090,7 @@ namespace CopperMod.Amiga.Bus
             gamePort.JoystickDown = down;
             gamePort.JoystickLeft = left;
             gamePort.JoystickRight = right;
+            PublishGamePortRegisterState(_lastRasterAdvanceCycle);
         }
 
         public ushort RegisterHostTrapStub(uint address, Action<M68kCpuState> callback)
@@ -1133,6 +1171,7 @@ namespace CopperMod.Amiga.Bus
             Disk.Reset();
             _autoconfig.ResetConfiguration();
             _agnusRegisters.Reset();
+            PublishAgnusRegisterState(0);
             Display.Reset();
             Agnus.Reset();
             Blitter.Reset();
@@ -2120,6 +2159,14 @@ namespace CopperMod.Amiga.Bus
                 (ushort)(address - 0x00DFF000),
                 grantedCycle,
                 sampleCycle);
+            RecordCpuCustomRegisterRead(
+                address,
+                value,
+                requestedCycle,
+                grantedCycle,
+                completedCycle,
+                sampleCycle,
+                accessKind);
             cycle = completedCycle;
             return value;
         }
@@ -2159,12 +2206,13 @@ namespace CopperMod.Amiga.Bus
                 (ushort)(address - 0x00DFF000),
                 grantedCycle,
                 sampleCycle);
-            RecordCpuBeamRegisterRead(address, value, requestedCycle, grantedCycle, completedCycle, sampleCycle, accessKind);
+            RecordCpuCustomRegisterRead(address, value, requestedCycle, grantedCycle, completedCycle, sampleCycle, accessKind);
             cycle = completedCycle;
             return value;
         }
 
-        private void RecordCpuBeamRegisterRead(
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void RecordCpuCustomRegisterRead(
             uint address,
             ushort value,
             long requestedCycle,
@@ -2180,11 +2228,6 @@ namespace CopperMod.Amiga.Bus
             }
 
             var offset = (ushort)(address & 0x01FE);
-            if (offset != 0x004 && offset != 0x006)
-            {
-                return;
-            }
-
             var read = new CustomRegisterRead(
                 offset,
                 value,
@@ -4427,22 +4470,7 @@ namespace CopperMod.Amiga.Bus
             if (address >= 0x00DFF000 && address < 0x00DFF200)
             {
                 var offset = (ushort)(address - 0x00DFF000);
-                if (TryReadBeamPositionByte(offset, sampleCycle, out var beamPositionValue))
-                {
-                    return beamPositionValue;
-                }
-
-                if (TryReadGamePortCustomByte(offset, out var gamePortValue))
-                {
-                    return gamePortValue;
-                }
-
-                if (Display.TryReadByte(offset, out var displayValue))
-                {
-                    return displayValue;
-                }
-
-                return Disk.TryReadByte(offset, out var diskValue) ? diskValue : Paula.ReadByte(offset);
+                return ReadCustomByte(offset, sampleCycle, hostRead: true);
             }
 
             // ROM overlay (only during early boot).
@@ -4681,7 +4709,7 @@ namespace CopperMod.Amiga.Bus
             // Custom registers.
             if (IsCustomRegisterWordAddress(address))
             {
-                return ReadCustomWord((ushort)(address - 0x00DFF000), long.MinValue);
+                return ReadCustomWord((ushort)(address - 0x00DFF000), long.MinValue, hostRead: true);
             }
 
             // ROM overlay (only during early boot).
@@ -4736,7 +4764,7 @@ namespace CopperMod.Amiga.Bus
             // Custom registers.
             if (IsCustomRegisterWordAddress(address))
             {
-                return ReadCustomWord((ushort)(address - 0x00DFF000), sampleCycle);
+                return ReadCustomWord((ushort)(address - 0x00DFF000), sampleCycle, hostRead: true);
             }
 
             // ROM overlay (only during early boot).

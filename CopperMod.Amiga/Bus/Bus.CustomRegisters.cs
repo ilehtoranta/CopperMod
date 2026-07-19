@@ -10,71 +10,162 @@ namespace CopperMod.Amiga.Bus
 {
     internal sealed partial class Bus
     {
-        private byte ReadCustomByte(ushort offset, long sampleCycle)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool PublishCustomRegisterState(ushort offset, ushort value, long cycle)
+            => _customRegisterFile.PublishStoredValue(offset, value, cycle);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void PublishDmaconrState(long cycle)
+            => _customRegisterFile.PublishStoredValue(
+                0x002,
+                (ushort)(Paula.Dmacon | Blitter.DmaconStatusBits),
+                cycle);
+
+        private void PublishGamePortRegisterState(long cycle)
         {
-            if (TryReadBeamPositionByte(offset, sampleCycle, out var beamPositionValue))
-            {
-                return beamPositionValue;
-            }
-
-            if (TryReadGamePortCustomByte(offset, out var gamePortValue))
-            {
-                return gamePortValue;
-            }
-
-            if (Display.TryReadByte(offset, out var displayValue))
-            {
-                return displayValue;
-            }
-
-            return Disk.TryReadByte(offset, out var diskValue) ? diskValue : Paula.ReadByte(offset);
+            PublishCustomRegisterState(0x00A, ReadGamePortData(0), cycle);
+            PublishCustomRegisterState(0x00C, ReadGamePortData(1), cycle);
+            PublishCustomRegisterState(0x016, ReadPotGoData(), cycle);
         }
 
-        private ushort ReadCustomWord(ushort offset, long sampleCycle)
+        private void PublishAgnusRegisterState(long cycle)
+        {
+            if (_chipset.Agnus != AgnusModel.Ecs)
+            {
+                return;
+            }
+
+            var beam = _beamClock.GetPosition(Math.Max(0, cycle));
+            for (ushort offset = 0x1C0; offset <= 0x1E2; offset += 2)
+            {
+                if (offset != 0x1DA && _agnusRegisters.TryRead(offset, beam, out var value))
+                {
+                    PublishCustomRegisterState(offset, value, cycle);
+                }
+            }
+        }
+
+        private byte ReadCustomByte(ushort offset, long sampleCycle, bool hostRead = false)
+        {
+            var wordOffset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+            var handler = hostRead
+                ? _customRegisterFile.GetHostReadHandler(wordOffset)
+                : _customRegisterFile.GetCpuReadHandler(wordOffset);
+            return ReadCustomByteRouted(offset, sampleCycle, handler);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private byte ReadCustomByteRouted(
+            ushort offset,
+            long sampleCycle,
+            CustomRegisterReadHandler handler)
+        {
+            var wordOffset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+            switch (handler)
+            {
+                case CustomRegisterReadHandler.BeamPosition:
+                    return TryReadBeamPositionByte(offset, sampleCycle, out var beamPositionValue)
+                        ? beamPositionValue
+                        : Paula.ReadByte(offset);
+                case CustomRegisterReadHandler.GamePort:
+                    return TryReadGamePortCustomByte(offset, out var gamePortValue)
+                        ? gamePortValue
+                        : Paula.ReadByte(offset);
+                case CustomRegisterReadHandler.Display:
+                case CustomRegisterReadHandler.Collision:
+                    return Display.TryReadByte(offset, out var displayValue)
+                        ? displayValue
+                        : Paula.ReadByte(offset);
+                case CustomRegisterReadHandler.Disk:
+                    return Disk.TryReadByte(offset, out var diskValue)
+                        ? diskValue
+                        : Paula.ReadByte(offset);
+                case CustomRegisterReadHandler.PotGo:
+                {
+                    var value = ReadPotGoData();
+                    return (offset & 1) == 0 ? (byte)(value >> 8) : (byte)value;
+                }
+                case CustomRegisterReadHandler.Dmaconr:
+                case CustomRegisterReadHandler.Agnus:
+                case CustomRegisterReadHandler.Paula:
+                case CustomRegisterReadHandler.ChipDataBusLatch:
+                case CustomRegisterReadHandler.None:
+                    return Paula.ReadByte(offset);
+                case CustomRegisterReadHandler.LastWriteMirror:
+                    if (!_customRegisterFile.TryGetLastWriteValue(wordOffset, out var lastWrite))
+                    {
+                        return 0;
+                    }
+
+                    return (offset & 1) == 0 ? (byte)(lastWrite >> 8) : (byte)lastWrite;
+                case CustomRegisterReadHandler.StoredValue:
+                {
+                    var value = _customRegisterFile.GetStoredValue(wordOffset);
+                    return (offset & 1) == 0 ? (byte)(value >> 8) : (byte)value;
+                }
+                default:
+                    return Paula.ReadByte(offset);
+            }
+        }
+
+        private ushort ReadCustomWord(ushort offset, long sampleCycle, bool hostRead = false)
         {
             offset = (ushort)(offset & 0x01FE);
-            var beamCycle = sampleCycle == long.MinValue ? _lastRasterAdvanceCycle : sampleCycle;
-            if (_agnusRegisters.TryRead(offset, _beamClock.GetPosition(beamCycle), out var agnusValue))
-            {
-                return agnusValue;
-            }
+            var handler = hostRead
+                ? _customRegisterFile.GetHostReadHandler(offset)
+                : _customRegisterFile.GetCpuReadHandler(offset);
+            return ReadCustomWordRouted(offset, sampleCycle, handler);
+        }
 
-            if (Display.TryReadWord(offset, out var displayValue))
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ushort ReadCustomWordRouted(
+            ushort offset,
+            long sampleCycle,
+            CustomRegisterReadHandler handler)
+        {
+            switch (handler)
             {
-                return displayValue;
-            }
-
-            switch (offset)
-            {
-                case 0x002:
+                case CustomRegisterReadHandler.ChipDataBusLatch:
+                    return _chipDataBusLatch;
+                case CustomRegisterReadHandler.Agnus:
+                {
+                    var beamCycle = sampleCycle == long.MinValue ? _lastRasterAdvanceCycle : sampleCycle;
+                    return _agnusRegisters.TryRead(offset, _beamClock.GetPosition(beamCycle), out var agnusValue)
+                        ? agnusValue
+                        : (ushort)0;
+                }
+                case CustomRegisterReadHandler.Display:
+                    return Display.TryReadWord(offset, out var displayValue) ? displayValue : (ushort)0;
+                case CustomRegisterReadHandler.Dmaconr:
                     return (ushort)(Paula.Dmacon | Blitter.DmaconStatusBits);
-                case 0x004:
-                    CalculateBeamPosition(sampleCycle == long.MinValue ? _lastRasterAdvanceCycle : sampleCycle, out var vposr, out _);
-                    return vposr;
-                case 0x006:
-                    CalculateBeamPosition(sampleCycle == long.MinValue ? _lastRasterAdvanceCycle : sampleCycle, out _, out var vhposr);
-                    return vhposr;
-                case 0x008:
-                case 0x01A:
-                case 0x020:
-                case 0x022:
-                case 0x024:
-                case 0x07E:
+                case CustomRegisterReadHandler.BeamPosition:
+                    CalculateBeamPosition(
+                        sampleCycle == long.MinValue ? _lastRasterAdvanceCycle : sampleCycle,
+                        out var vposr,
+                        out var vhposr);
+                    return offset == 0x004 ? vposr : vhposr;
+                case CustomRegisterReadHandler.Disk:
                     return Disk.ReadWord(offset);
-                case 0x00A:
-                    return ReadGamePortData(0);
-                case 0x00C:
-                    return ReadGamePortData(1);
-                case 0x00E:
+                case CustomRegisterReadHandler.GamePort:
+                    return ReadGamePortData(offset == 0x00A ? 0 : 1);
+                case CustomRegisterReadHandler.Collision:
                     return 0x8000;
-                case 0x010:
-                    return Paula.Adkcon;
-                case 0x016:
+                case CustomRegisterReadHandler.PotGo:
                     return ReadPotGoData();
-                case 0x01C:
-                    return Paula.Intena;
-                case 0x01E:
-                    return Paula.Intreq;
+                case CustomRegisterReadHandler.Paula:
+                    return offset switch
+                    {
+                        0x010 => Paula.Adkcon,
+                        0x01C => Paula.Intena,
+                        0x01E => Paula.Intreq,
+                        _ => (ushort)((Paula.ReadByte(offset) << 8) | Paula.ReadByte((ushort)(offset + 1)))
+                    };
+                case CustomRegisterReadHandler.LastWriteMirror:
+                    return _customRegisterFile.TryGetLastWriteValue(offset, out var lastWrite)
+                        ? lastWrite
+                        : (ushort)0;
+                case CustomRegisterReadHandler.StoredValue:
+                    return _customRegisterFile.GetStoredValue(offset);
                 default:
                     return (ushort)((Paula.ReadByte(offset) << 8) | Paula.ReadByte((ushort)(offset + 1)));
             }
@@ -86,19 +177,25 @@ namespace CopperMod.Amiga.Bus
             var capturedLatch = _chipDataBusLatch;
             var dmaValueVisible = _chipDataBusLatchWasDma &&
                 _chipDataBusLatchCycle + AgnusChipSlotScheduler.SlotCycles == grantedCycle;
+            var handler = _customRegisterFile.GetCpuReadHandler(offset);
             ushort value;
             if (offset == 0x000)
             {
                 value = capturedLatch;
             }
-            else if (!CustomRegisterScheduleClassifier.IsReadableRegister(_chipset, offset))
+            else if (handler == CustomRegisterReadHandler.None)
             {
-                WriteCustomWord(AmigaBusRequester.Cpu, offset, capturedLatch, grantedCycle);
+                WriteCustomWord(
+                    AmigaBusRequester.Cpu,
+                    offset,
+                    capturedLatch,
+                    grantedCycle,
+                    cause: CustomRegisterWriteCause.UnreadableReadSideEffect);
                 value = dmaValueVisible ? capturedLatch : (ushort)0xFFFF;
             }
             else
             {
-                value = ReadCustomWord(offset, sampleCycle);
+                value = ReadCustomWordRouted(offset, sampleCycle, handler);
             }
 
             RememberChipDataBusWord(value, grantedCycle, wasDma: false);
@@ -113,19 +210,25 @@ namespace CopperMod.Amiga.Bus
             var capturedByte = highLane ? (byte)(capturedLatch >> 8) : (byte)capturedLatch;
             var dmaValueVisible = _chipDataBusLatchWasDma &&
                 _chipDataBusLatchCycle + AgnusChipSlotScheduler.SlotCycles == grantedCycle;
+            var handler = _customRegisterFile.GetCpuReadHandler(wordOffset);
             byte value;
             if (wordOffset == 0x000)
             {
                 value = capturedByte;
             }
-            else if (!CustomRegisterScheduleClassifier.IsReadableRegister(_chipset, wordOffset))
+            else if (handler == CustomRegisterReadHandler.None)
             {
-                WriteCustomByte(AmigaBusRequester.Cpu, offset, capturedByte, grantedCycle);
+                WriteCustomByte(
+                    AmigaBusRequester.Cpu,
+                    offset,
+                    capturedByte,
+                    grantedCycle,
+                    CustomRegisterWriteCause.UnreadableReadSideEffect);
                 value = dmaValueVisible ? capturedByte : (byte)0xFF;
             }
             else
             {
-                value = ReadCustomByte(offset, sampleCycle);
+                value = ReadCustomByteRouted(offset, sampleCycle, handler);
             }
 
             RememberChipDataBusByte(value, grantedCycle, wasDma: false);
@@ -398,9 +501,14 @@ namespace CopperMod.Amiga.Bus
             AmigaBusRequester requester,
             ushort offset,
             ushort value,
-            long cycle)
+            long cycle,
+            CustomRegisterObservationWidth width = CustomRegisterObservationWidth.Word,
+            CustomRegisterByteLane lane = CustomRegisterByteLane.None,
+            CustomRegisterWriteCause cause = CustomRegisterWriteCause.Explicit)
         {
             offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+            _customRegisterFile.RecordWrite(offset, value, width, lane, cycle, requester, cause);
+            _customRegisterWrites.Add(new CustomRegisterWrite(cycle, offset, value));
             if (requester != AmigaBusRequester.Host)
             {
                 RememberChipDataBusWord(
@@ -423,16 +531,38 @@ namespace CopperMod.Amiga.Bus
 
         private void DispatchCustomRegisterWrite(in CustomRegisterWriteContext write)
         {
+            ref readonly var entry = ref _customRegisterFile.Get(write.Offset);
+            var targets = entry.WriteTargets;
+            _customRegisterFile.ApplyRegisterFileWrite(write.Offset, write.Value, write.Cycle);
+            // Custom-register writes are broadcast on the shared chip fabric.
+            // Ownership metadata is descriptive; each device filters offsets.
             ApplyAgnusRegisterWrite(write.Offset, write.Value, write.Cycle);
-            Paula.ScheduleWrite(write.Cycle, write.Offset, write.Value);
-            Paula.AdvanceRegisterWritesTo(write.Cycle);
+
+            if ((targets & CustomRegisterWriteTarget.Paula) != 0)
+            {
+                Paula.ScheduleWrite(write.Cycle, write.Offset, write.Value);
+                Paula.AdvanceRegisterWritesTo(write.Cycle);
+            }
+
             Display.ScheduleWrite(new AgnusDisplayRegisterWrite(
                 GetDisplayWriteCycle(in write),
                 write.Offset,
                 write.Value));
+
             _hardwareScheduler.SynchronizeBlitterThrough(write.Cycle);
             Blitter.WriteRegister(write.Offset, write.Value, write.Cycle);
+
             Disk.WriteRegister(write.Offset, write.Value, write.Cycle);
+
+            if (entry.StorageMode == CustomRegisterStorageMode.DevicePublished &&
+                _agnusRegisters.TryRead(
+                    write.Offset,
+                    _beamClock.GetPosition(Math.Max(0, write.Cycle)),
+                    out var storedValue))
+            {
+                _customRegisterFile.PublishStoredValue(write.Offset, storedValue, write.Cycle);
+            }
+
             _hardwareScheduler.NotifyWorkScheduled(write.Cycle);
         }
 
@@ -451,9 +581,10 @@ namespace CopperMod.Amiga.Bus
                 return cycle;
             }
 
-            // Denise samples CPU COLOR data from the beginning of the write
-            // transfer, two CCKs before the slot recorded as its grant.
-            return cycle - (2 * AgnusChipSlotScheduler.SlotCycles);
+            // The slot engine records CPU grants in Agnus-internal coordinates.
+            // A CPU palette write becomes visible to Denise six CCKs after that
+            // recorded grant; keep this conversion local to presentation time.
+            return cycle + (6 * AgnusChipSlotScheduler.SlotCycles);
         }
 
 
@@ -556,11 +687,23 @@ namespace CopperMod.Amiga.Bus
             }
         }
 
-        private void WriteCustomByte(AmigaBusRequester requester, ushort offset, byte value, long cycle)
+        private void WriteCustomByte(
+            AmigaBusRequester requester,
+            ushort offset,
+            byte value,
+            long cycle,
+            CustomRegisterWriteCause cause = CustomRegisterWriteCause.Explicit)
         {
             var wordOffset = (ushort)(offset & 0x01FE);
             var wordValue = (ushort)((value << 8) | value);
-            WriteCustomWord(requester, wordOffset, wordValue, cycle);
+            WriteCustomWord(
+                requester,
+                wordOffset,
+                wordValue,
+                cycle,
+                CustomRegisterObservationWidth.Byte,
+                (offset & 1) == 0 ? CustomRegisterByteLane.High : CustomRegisterByteLane.Low,
+                cause);
         }
 
         private readonly struct CustomRegisterWriteContext

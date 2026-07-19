@@ -892,6 +892,9 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             return (int)(lineCycle / AgnusChipSlotScheduler.SlotCycles);
         }
 
+        // Nominal CPU half of the HRM allocation diagram. This classifies the
+        // steady-state slot table; it is not a restriction on where an already
+        // pending CPU bus transaction may be granted after DMA contention.
         public static bool IsCpuAccessibleSlot(long slotCycle)
             => (GetHorizontal(slotCycle) & 1) != 0;
 
@@ -1120,6 +1123,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         internal bool IsMandatoryRefreshSlot(long slotCycle)
             => AgnusHrmOcsSlotTable.GetFixedOwner(GetHorizontal(slotCycle)) == AgnusChipSlotOwner.Refresh;
 
+        // Used for nominal/static slot-table scheduling. Live arbitration keeps
+        // a denied CPU request pending and may retry it in the following slot.
         internal bool IsCpuAccessibleSlot(long slotCycle)
             => (GetHorizontal(slotCycle) & 1) != 0;
 

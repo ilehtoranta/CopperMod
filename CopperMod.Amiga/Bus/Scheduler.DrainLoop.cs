@@ -63,6 +63,7 @@ namespace CopperMod.Amiga.Bus
                 var cpuBoundary = (mask & AmigaHardwareEventMask.CpuBoundary) != 0;
                 if ((mask & AmigaHardwareEventMask.Agnus) != 0 &&
                     !cpuBoundary &&
+                    !_bus.Blitter.Busy &&
                     (forceCatchUp || _bus.Display.HasLiveDisplayWork()))
                 {
                     if (HostProfilingEnabled)

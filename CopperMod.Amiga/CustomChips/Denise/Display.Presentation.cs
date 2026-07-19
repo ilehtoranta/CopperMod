@@ -669,7 +669,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var lineStart = GetOutputRowStartCycle(_renderFrameStartCycle, row);
-            var firstSpriteSlot = _bus.FindNextFixedDmaSlot(lineStart, AgnusChipSlotOwner.Sprite);
+            var firstSpriteSlot = GetFirstSpriteDmaSlotCycle(lineStart);
             var firstSpriteHorizontal = (int)((firstSpriteSlot - lineStart) / CopperHpCycles);
             var horizontal = firstSpriteHorizontal + (spriteIndex * 4) + (word * 2);
             var x = GetCopperOutputX(horizontal);

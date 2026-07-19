@@ -367,10 +367,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
         private bool CanCopperWriteRegister(ushort offset)
-            => AgnusCopperRegisterAccess.CanWrite(offset, _copcon);
+            => _bus.CanCopperWriteCustomRegister(offset, _copcon);
 
         private bool IsCopperDangerStopRegister(ushort offset)
-            => AgnusCopperRegisterAccess.StopsCopper(offset, _copcon);
+            => _bus.StopsCopperAtCustomRegister(offset, _copcon);
 
         private static bool HasCopperHardwareSideEffect(ushort offset)
         {

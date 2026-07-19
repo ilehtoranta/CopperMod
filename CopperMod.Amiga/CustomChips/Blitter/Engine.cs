@@ -1131,6 +1131,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _rowPipelineFallbacks = 0;
             ResetAdvanceProfileCounters();
             _patternCounts.Clear();
+            _bus.PublishDmaconrState(0);
         }
 
         public AmigaBlitterSnapshot CaptureSnapshot()
@@ -1310,6 +1311,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             finally
             {
                 UpdateSchedulerWakeVersionIfChanged(schedulerWake);
+                _bus.PublishDmaconrState(cycle);
             }
         }
 
@@ -1523,6 +1525,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 }
 
                 UpdateSchedulerWakeVersionIfChanged(schedulerWake);
+                _bus.PublishDmaconrState(_currentCycle);
             }
         }
 
@@ -1769,6 +1772,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             finally
             {
                 _cpuWaitExactSlotCycle = -1;
+                _bus.PublishDmaconrState(_currentCycle);
             }
         }
 
@@ -1790,6 +1794,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             finally
             {
                 _cpuWaitExactSlotCycle = -1;
+                _bus.PublishDmaconrState(_currentCycle);
             }
         }
 

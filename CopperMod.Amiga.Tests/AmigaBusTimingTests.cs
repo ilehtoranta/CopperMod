@@ -163,25 +163,23 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void CpuRetryAfterCopperCollisionPreservesM68000BusPhase()
+	public void CpuRequestUsesNextPairedOpportunityAfterCopperCollision()
 	{
-		var engine = new AgnusHrmSlotEngine();
+		var bus = new AmigaBus();
 		const long collisionCycle = 20;
-		var copper = engine.ReserveCopperDmaSlot(0x1000, collisionCycle);
+		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x1234);
+		_ = bus.ReadLiveCopperDmaWord(0x1000, collisionCycle, out var copper);
 
-		engine.GrantCpuDataSingleSlot(
-			AmigaBusAccessKind.CpuInstructionFetch,
-			AmigaBusAccessTarget.ChipRam,
-			0x2000,
-			AmigaBusAccessSize.Word,
-			collisionCycle,
-			isWrite: false,
-			out var grantedCycle,
-			out var completedCycle);
+		var completedCycle = collisionCycle;
+		_ = bus.ReadWord(0x00002000, ref completedCycle, AmigaBusAccessKind.CpuInstructionFetch);
+		var cpu = bus.BusAccesses.Last(access => access.Request.Requester == AmigaBusRequester.Cpu);
 
 		Assert.Equal(collisionCycle, copper.GrantedCycle);
-		Assert.Equal(collisionCycle + (2 * AgnusChipSlotScheduler.SlotCycles), grantedCycle);
-		Assert.Equal(grantedCycle + AgnusChipSlotScheduler.SlotCycles, completedCycle);
+		// Copper's fixed half of the HRM pair is handled as one paired arbitration
+		// opportunity. This does not impose a universal parity rule on retries after
+		// other DMA owners.
+		Assert.Equal(collisionCycle + (2 * AgnusChipSlotScheduler.SlotCycles), cpu.GrantedCycle);
+		Assert.Equal(cpu.GrantedCycle + AgnusChipSlotScheduler.SlotCycles, completedCycle);
 	}
 
 	[Fact]
@@ -686,58 +684,58 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void NonNastyBlitterStallsCpuByAtMostTwoSlots()
+	public void PendingCpuRequestRetriesInSlotImmediatelyAfterBlitterCollision()
 	{
-		// Without BLTPRI: Blitter takes its DMA slots; CPU is restricted to even-phase slots.
-		// If Blitter occupies an even slot, CPU bumps to the next even slot (2 slots later).
+		// The HRM phase diagram describes normal bus allocation. Once the CPU request is
+		// pending, Agnus retries it in the immediately following slot rather than forcing
+		// the eventual grant back onto the request's original phase.
 		var bus = new AmigaBus();
-		var blitterCycle = 20L; // even absolute slot
+		var blitterCycle = 20L;
 		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1000, blitterCycle);
 
 		var cycle = blitterCycle;
 		_ = bus.ReadWord(0x00001002, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
 		var cpu = bus.BusAccesses.Last(access => access.Request.Requester == AmigaBusRequester.Cpu);
-		// Slot 20 (even) is taken by Blitter. Slot 22 is odd (not CPU-accessible). Next even slot is 24.
-		Assert.Equal(blitterCycle + (2 * AgnusChipSlotScheduler.SlotCycles), cpu.GrantedCycle);
-		Assert.Equal(blitterCycle + (3 * AgnusChipSlotScheduler.SlotCycles), cycle);
+		Assert.Equal(blitterCycle + AgnusChipSlotScheduler.SlotCycles, cpu.GrantedCycle);
+		Assert.Equal(blitterCycle + (2 * AgnusChipSlotScheduler.SlotCycles), cycle);
 	}
 
 	[Fact]
-	public void NonNastyBlitterYieldsThirdConsecutiveCpuMiss()
+	public void NonNastyBlitterYieldsThirdConsecutivePendingCpuRetry()
 	{
 		var bus = new AmigaBus();
 		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
 		var firstSlot = 20L;
 		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1000, firstSlot);
-		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1002, firstSlot + (2 * slotCycles));
-		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1004, firstSlot + (4 * slotCycles));
+		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1002, firstSlot + slotCycles);
+		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1004, firstSlot + (2 * slotCycles));
 
 		var cycle = firstSlot;
 		_ = bus.ReadWord(0x00001006, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
 		var cpu = bus.BusAccesses.Last(access => access.Request.Requester == AmigaBusRequester.Cpu);
-		Assert.Equal(firstSlot + (4 * slotCycles), cpu.GrantedCycle);
-		Assert.Equal(firstSlot + (5 * slotCycles), cycle);
+		Assert.Equal(firstSlot + (2 * slotCycles), cpu.GrantedCycle);
+		Assert.Equal(firstSlot + (3 * slotCycles), cycle);
 	}
 
 	[Fact]
-	public void NastyBlitterDoesNotYieldThirdConsecutiveCpuMiss()
+	public void NastyBlitterDoesNotYieldThirdConsecutivePendingCpuRetry()
 	{
 		var bus = new AmigaBus();
 		var slotCycles = AgnusChipSlotScheduler.SlotCycles;
 		var firstSlot = 20L;
 		bus.WriteWord(0x00DFF096, 0x8640);
 		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1000, firstSlot);
-		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1002, firstSlot + (2 * slotCycles));
-		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1004, firstSlot + (4 * slotCycles));
+		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1002, firstSlot + slotCycles);
+		_ = bus.ReadChipWordForDeviceWithResult(AmigaBusRequester.Blitter, AmigaBusAccessKind.Blitter, 0x1004, firstSlot + (2 * slotCycles));
 
 		var cycle = firstSlot;
 		_ = bus.ReadWord(0x00001006, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
 		var cpu = bus.BusAccesses.Last(access => access.Request.Requester == AmigaBusRequester.Cpu);
-		Assert.Equal(firstSlot + (6 * slotCycles), cpu.GrantedCycle);
-		Assert.Equal(firstSlot + (7 * slotCycles), cycle);
+		Assert.Equal(firstSlot + (3 * slotCycles), cpu.GrantedCycle);
+		Assert.Equal(firstSlot + (4 * slotCycles), cycle);
 	}
 
 	[Fact]
@@ -3857,9 +3855,9 @@ public sealed class AmigaBusTimingTests
 			out var secondWordCycle,
 			out var completedCycle);
 
-		Assert.Equal(Cycle(0x9D), firstWordCycle);
-		Assert.Equal(Cycle(0xA1), secondWordCycle);
-		Assert.Equal(Cycle(0xA2), completedCycle);
+		Assert.Equal(Cycle(0x9A), firstWordCycle);
+		Assert.Equal(Cycle(0x9C), secondWordCycle);
+		Assert.Equal(Cycle(0x9D), completedCycle);
 	}
 
 	[Fact]
@@ -3893,9 +3891,9 @@ public sealed class AmigaBusTimingTests
 			out var predictedFirst,
 			out var predictedSecond,
 			out var predictedCompleted));
-		Assert.Equal(Cycle(0x9D), predictedFirst);
-		Assert.Equal(Cycle(0xA1), predictedSecond);
-		Assert.Equal(Cycle(0xA2), predictedCompleted);
+		Assert.Equal(Cycle(0x9A), predictedFirst);
+		Assert.Equal(Cycle(0x9C), predictedSecond);
+		Assert.Equal(Cycle(0x9D), predictedCompleted);
 
 		var value = bus.ReadLong(0x64, ref readCycle, AmigaBusAccessKind.CpuDataRead);
 
@@ -3906,9 +3904,9 @@ public sealed class AmigaBusTimingTests
 			.ToArray();
 		var diagnostic = string.Join(",", auditSlots);
 		Assert.Equal(0x00002000u, value);
-		Assert.True(readCycle == Cycle(0xA2), diagnostic);
-		Assert.Contains("0x9D:Cpu/Cpu/ChipRam/Long", auditSlots);
-		Assert.Contains("0xA1:Cpu/Cpu/ChipRam/Long", auditSlots);
+		Assert.True(readCycle == Cycle(0x9D), diagnostic);
+		Assert.Contains("0x9A:Cpu/Cpu/ChipRam/Long", auditSlots);
+		Assert.Contains("0x9C:Cpu/Cpu/ChipRam/Long", auditSlots);
 		Assert.DoesNotContain("0xD9:Cpu/Cpu/ChipRam/Long", diagnostic);
 	}
 
@@ -3973,7 +3971,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void IntreqPollingPreparesLiveBitplaneSlotsWithoutCapturingFetchWords()
+	public void IntreqPollingAdvancesLiveBitplaneDmaThroughReadBarrier()
 	{
 		var bus = new AmigaBus();
 		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
@@ -3994,7 +3992,8 @@ public sealed class AmigaBusTimingTests
 			access.Request.Target == AmigaBusAccessTarget.CustomRegisters);
 		Assert.Equal(fetchCycle + AgnusChipSlotScheduler.SlotCycles, cpuCustom.GrantedCycle);
 		Assert.Equal(fetchCycle + (2 * AgnusChipSlotScheduler.SlotCycles), cycle);
-		Assert.Equal(initialFetchWords, bus.Display.LiveFetchBatchWordCount);
+		Assert.True(bus.Display.LiveFetchBatchWordCount > initialFetchWords);
+		var fetchWordsAfterFirstRead = bus.Display.LiveFetchBatchWordCount;
 		var snapshot = bus.Agnus.CaptureSnapshot();
 		Assert.True(snapshot.BitplaneSlotGrantCount > 0);
 		Assert.True(snapshot.CpuChipStallCycles >= AgnusChipSlotScheduler.SlotCycles);
@@ -4002,11 +4001,11 @@ public sealed class AmigaBusTimingTests
 		cycle = fetchCycle + (4 * AgnusChipSlotScheduler.SlotCycles);
 		_ = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
-		Assert.Equal(initialFetchWords, bus.Display.LiveFetchBatchWordCount);
+		Assert.True(bus.Display.LiveFetchBatchWordCount >= fetchWordsAfterFirstRead);
 	}
 
 	[Fact]
-	public void IntreqPollingDoesNotPreventLaterLiveBitplaneCapture()
+	public void IntreqPollingCapturesLiveBitplanesWhileCrossingTheFrame()
 	{
 		var bus = new AmigaBus();
 		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
@@ -4020,19 +4019,17 @@ public sealed class AmigaBusTimingTests
 		bus.EnableLiveAgnusDma();
 
 		var initialFetchWords = bus.Display.LiveFetchBatchWordCount;
+		var maximumFetchWords = initialFetchWords;
 		for (var requestedCycle = fetchCycle; requestedCycle <= frameStopCycle + 64; requestedCycle += 32)
 		{
 			var cycle = requestedCycle;
 			_ = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
+			maximumFetchWords = Math.Max(maximumFetchWords, bus.Display.LiveFetchBatchWordCount);
 		}
 
-		Assert.Equal(initialFetchWords, bus.Display.LiveFetchBatchWordCount);
-
-		bus.AdvanceDmaTo(frameStopCycle);
-
 		Assert.True(
-			bus.Display.LiveFetchBatchWordCount > initialFetchWords,
-			$"Expected the later full DMA advance to capture bitplane words after INTREQ polling, liveWords={bus.Display.LiveFetchBatchWordCount}");
+			maximumFetchWords > initialFetchWords,
+			$"Expected INTREQ polling barriers to capture bitplane words, maxLiveWords={maximumFetchWords}");
 	}
 
 	[Fact]
@@ -4297,7 +4294,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void RepeatedIntreqPollingDoesNotPublishHardwareEvents()
+	public void RepeatedIntreqPollingSkipsWhenNoHardwareEventIsDue()
 	{
 		var bus = new AmigaBus();
 		var cycle = 4L;
@@ -4316,6 +4313,21 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(before.PaulaEvents, after.PaulaEvents);
 		Assert.Equal(before.DiskEvents, after.DiskEvents);
 		Assert.Equal(before.BlitterEvents, after.BlitterEvents);
+	}
+
+	[Fact]
+	public void CpuCustomRegisterReadExecutesDueCopperMovesBeforeSampling()
+	{
+		var bus = new AmigaBus();
+		StartCopperListAtFrameStart(
+			bus,
+			(0x009A, (ushort)(0x8000 | AmigaConstants.IntreqCopper)),
+			(0xFFFF, 0xFFFE));
+
+		var cycle = 64L;
+		var intenar = bus.ReadWord(0x00DFF01C, ref cycle, AmigaBusAccessKind.CpuDataRead);
+
+		Assert.NotEqual(0, intenar & AmigaConstants.IntreqCopper);
 	}
 
 	[Fact]
@@ -4405,7 +4417,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void IntreqTimedReadObservesPublishedVblankOnly()
+	public void IntreqTimedReadPublishesVblankThroughItsSampleCycle()
 	{
 		var bus = new AmigaBus();
 		var frameCycle = (long)AmigaConstants.A500PalCpuCyclesPerFrame;
@@ -4417,17 +4429,11 @@ public sealed class AmigaBusTimingTests
 		var cycle = frameCycle;
 		var value = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
-		Assert.Equal(0, value & AmigaConstants.IntreqVerticalBlank);
-
-		bus.AdvanceRasterTo(frameCycle);
-		cycle = frameCycle;
-		value = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
-
 		Assert.NotEqual(0, value & AmigaConstants.IntreqVerticalBlank);
 	}
 
 	[Fact]
-	public void IntreqReadAfterSameCyclePseudoFastAccessObservesPublishedVblankOnly()
+	public void IntreqReadAfterSameCyclePseudoFastAccessPublishesVblank()
 	{
 		var bus = new AmigaBus(expansionRamSize: 0x10000);
 		var frameCycle = (long)AmigaConstants.A500PalCpuCyclesPerFrame;
@@ -4441,17 +4447,11 @@ public sealed class AmigaBusTimingTests
 		var intreqCycle = frameCycle;
 		var value = bus.ReadWord(0x00DFF01E, ref intreqCycle, AmigaBusAccessKind.CpuDataRead);
 
-		Assert.Equal(0, value & AmigaConstants.IntreqVerticalBlank);
-
-		bus.AdvanceRasterTo(frameCycle);
-		intreqCycle = frameCycle;
-		value = bus.ReadWord(0x00DFF01E, ref intreqCycle, AmigaBusAccessKind.CpuDataRead);
-
 		Assert.NotEqual(0, value & AmigaConstants.IntreqVerticalBlank);
 	}
 
 	[Fact]
-	public void RepeatedIntreqPollingDoesNotPublishCiaTimerInterrupt()
+	public void RepeatedIntreqPollingAdvancesCiaTimersThroughTheReadBarrier()
 	{
 		var bus = new AmigaBus();
 		var setupEvents = new List<AmigaCiaInterruptEvent>();
@@ -4467,8 +4467,6 @@ public sealed class AmigaBusTimingTests
 			_ = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
 		}
 
-		Assert.Empty(bus.DrainCiaInterrupts());
-		bus.AdvanceCiaTimersTo(20);
 		var interrupt = Assert.Single(bus.DrainCiaInterrupts());
 		Assert.Equal(AmigaCiaId.A, interrupt.Cia);
 		Assert.Equal(AmigaCia.TimerAInterruptMask, interrupt.IcrBits);
@@ -4476,7 +4474,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void RepeatedIntreqPollingDoesNotPublishDiskBlockInterrupt()
+	public void IntreqPollingAdvancesDiskDmaAndPublishesBlockInterrupt()
 	{
 		const ushort DskBlkInterrupt = 0x0002;
 		var bus = new AmigaBus();
@@ -4499,13 +4497,11 @@ public sealed class AmigaBusTimingTests
 
 		var startReadCycle = readyCycle;
 		_ = bus.ReadWord(0x00DFF01E, ref startReadCycle, AmigaBusAccessKind.CpuDataRead);
-		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+		Assert.Equal(1, bus.Disk.CaptureSnapshot().TransferCount);
 		Assert.Equal(0, bus.Paula.Intreq & DskBlkInterrupt);
 
-		bus.AdvanceDmaTo(readyCycle);
 		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
 		Assert.True(completionCycle > readyCycle);
-		bus.AdvanceDmaTo(completionCycle);
 		var completionReadCycle = completionCycle;
 		var value = bus.ReadWord(0x00DFF01E, ref completionReadCycle, AmigaBusAccessKind.CpuDataRead);
 
@@ -4514,7 +4510,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void RepeatedIntreqPollingDoesNotPublishBlitterInterrupt()
+	public void IntreqPollingPublishesBlitterInterruptAtCompletion()
 	{
 		var bus = new AmigaBus();
 		StartLongBlit(bus);
@@ -4526,13 +4522,6 @@ public sealed class AmigaBusTimingTests
 
 		var cycle = completionCycle;
 		var value = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
-
-		Assert.Equal(0, value & AmigaConstants.IntreqBlitter);
-
-		var publishedCycle = completionCycle + 10_000;
-		bus.AdvanceDmaTo(publishedCycle);
-		cycle = publishedCycle;
-		value = bus.ReadWord(0x00DFF01E, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
 		Assert.NotEqual(0, value & AmigaConstants.IntreqBlitter);
 	}
@@ -4553,7 +4542,7 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void BeamAndInputRegisterReadsDoNotAdvanceAudioOrPassiveDiskInput()
+	public void BeamAndInputRegisterReadsAdvanceTheSharedCustomChipBarrier()
 	{
 		var bus = new AmigaBus();
 		const long readyCycle = 20;
@@ -4574,13 +4563,12 @@ public sealed class AmigaBusTimingTests
 		_ = bus.ReadWord(0x00DFF016, ref potCycle, AmigaBusAccessKind.CpuDataRead);
 
 		var audioAfter = bus.Paula.GetChannelSnapshot(0);
-		Assert.Equal(audioBefore.NextSampleCycle, audioAfter.NextSampleCycle);
-		Assert.Equal(audioBefore.CurrentSample, audioAfter.CurrentSample);
-		Assert.Equal(0, bus.Disk.CaptureSnapshot().Dskbytr & 0x8000);
+		Assert.True(audioAfter.NextSampleCycle >= audioBefore.NextSampleCycle);
+		Assert.NotEqual(0, bus.Disk.CaptureSnapshot().Dskbytr & 0x8000);
 	}
 
 	[Fact]
-	public void DskbytrReadObservesPublishedPassiveInputAndClearsReadyOnce()
+	public void DskbytrReadPublishesPassiveInputAndClearsReadyOnce()
 	{
 		var bus = new AmigaBus();
 		const long readyCycle = 20;
@@ -4591,11 +4579,6 @@ public sealed class AmigaBusTimingTests
 
 		var firstCycle = targetCycle;
 		var first = bus.ReadWord(0x00DFF01A, ref firstCycle, AmigaBusAccessKind.CpuDataRead);
-		Assert.Equal(0, first & 0x8000);
-
-		bus.AdvanceDmaTo(targetCycle);
-		firstCycle = targetCycle;
-		first = bus.ReadWord(0x00DFF01A, ref firstCycle, AmigaBusAccessKind.CpuDataRead);
 		var secondCycle = firstCycle;
 		var second = bus.ReadWord(0x00DFF01A, ref secondCycle, AmigaBusAccessKind.CpuDataRead);
 
@@ -4624,16 +4607,11 @@ public sealed class AmigaBusTimingTests
 
 		var dskCycle = chipCycle;
 		var dskbytr = bus.ReadWord(0x00DFF01A, ref dskCycle, AmigaBusAccessKind.CpuDataRead);
-		Assert.Equal(0, dskbytr & 0x1000);
-
-		bus.AdvanceDmaTo(targetCycle);
-		dskCycle = chipCycle;
-		dskbytr = bus.ReadWord(0x00DFF01A, ref dskCycle, AmigaBusAccessKind.CpuDataRead);
 		Assert.NotEqual(0, dskbytr & 0x1000);
 	}
 
 	[Fact]
-	public void RegisterLatchReadsObservePublishedWritesOnly()
+	public void RegisterLatchReadsPublishScheduledWritesThroughTheSampleCycle()
 	{
 		var bus = new AmigaBus();
 		bus.Paula.ScheduleWrite(20, 0x09E, 0x8001);
@@ -4642,15 +4620,11 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(0, bus.ReadWord(0x00DFF010, ref beforeCycle, AmigaBusAccessKind.CpuDataRead));
 
 		var atCycle = 20L;
-		Assert.Equal(0, bus.ReadWord(0x00DFF010, ref atCycle, AmigaBusAccessKind.CpuDataRead));
-
-		bus.Paula.AdvanceRegisterObservableTo(20);
-		atCycle = 20L;
 		Assert.Equal(1, bus.ReadWord(0x00DFF010, ref atCycle, AmigaBusAccessKind.CpuDataRead));
 	}
 
 	[Fact]
-	public void RegisterLatchReadsDoNotAdvanceAudioOrPassiveDiskInput()
+	public void RegisterLatchReadsAdvanceAudioAndPassiveDiskInput()
 	{
 		var bus = new AmigaBus();
 		const long readyCycle = 20;
@@ -4667,13 +4641,12 @@ public sealed class AmigaBusTimingTests
 		_ = bus.ReadWord(0x00DFF010, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
 		var audioAfter = bus.Paula.GetChannelSnapshot(0);
-		Assert.Equal(audioBefore.NextSampleCycle, audioAfter.NextSampleCycle);
-		Assert.Equal(audioBefore.CurrentSample, audioAfter.CurrentSample);
-		Assert.Equal(0, bus.Disk.CaptureSnapshot().Dskbytr & 0x8000);
+		Assert.True(audioAfter.NextSampleCycle >= audioBefore.NextSampleCycle);
+		Assert.NotEqual(0, bus.Disk.CaptureSnapshot().Dskbytr & 0x8000);
 	}
 
 	[Fact]
-	public void DiskStatusRegisterReadsDoNotPublishPassiveInput()
+	public void DiskStatusRegisterReadsPublishPassiveInput()
 	{
 		var bus = new AmigaBus();
 		const long readyCycle = 20;
@@ -4685,15 +4658,10 @@ public sealed class AmigaBusTimingTests
 		var cycle = targetCycle;
 		_ = bus.ReadWord(0x00DFF008, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
-		Assert.Equal(0, bus.Disk.CaptureSnapshot().Dskbytr & 0x8000);
+		Assert.NotEqual(0, bus.Disk.CaptureSnapshot().Dskbytr & 0x8000);
 
 		var dskCycle = cycle;
 		var dskbytr = bus.ReadWord(0x00DFF01A, ref dskCycle, AmigaBusAccessKind.CpuDataRead);
-		Assert.Equal(0, dskbytr & 0x8000);
-
-		bus.AdvanceDmaTo(targetCycle);
-		dskCycle = cycle;
-		dskbytr = bus.ReadWord(0x00DFF01A, ref dskCycle, AmigaBusAccessKind.CpuDataRead);
 		Assert.NotEqual(0, dskbytr & 0x8000);
 		Assert.Equal(0x12, dskbytr & 0x00FF);
 	}
@@ -4738,11 +4706,6 @@ public sealed class AmigaBusTimingTests
 
 		cycle = ciaGrantCycle;
 		var dskbytr = bus.ReadWord(0x00DFF01A, ref cycle, AmigaBusAccessKind.CpuDataRead);
-		Assert.Equal(0, dskbytr & 0x8000);
-
-		bus.AdvanceDmaTo(targetCycle);
-		cycle = ciaGrantCycle;
-		dskbytr = bus.ReadWord(0x00DFF01A, ref cycle, AmigaBusAccessKind.CpuDataRead);
 		Assert.NotEqual(0, dskbytr & 0x8000);
 		Assert.Equal(0x12, dskbytr & 0x00FF);
 	}
@@ -4769,17 +4732,12 @@ public sealed class AmigaBusTimingTests
 
 		var dskCycle = ciaGrantCycle + DiskByteCycleCount(trackByteLength: 2, byteCount: 1);
 		var dskbytr = bus.ReadWord(0x00DFF01A, ref dskCycle, AmigaBusAccessKind.CpuDataRead);
-		Assert.Equal(0, dskbytr & 0x8000);
-
-		bus.AdvanceDmaTo(dskCycle);
-		dskCycle = ciaGrantCycle + DiskByteCycleCount(trackByteLength: 2, byteCount: 1);
-		dskbytr = bus.ReadWord(0x00DFF01A, ref dskCycle, AmigaBusAccessKind.CpuDataRead);
 		Assert.NotEqual(0, dskbytr & 0x8000);
 		Assert.Equal(0x12, dskbytr & 0x00FF);
 	}
 
 	[Fact]
-	public void DmaconrPollingDoesNotAdvanceBlitterOrAudioPlayback()
+	public void DmaconrPollingAdvancesBlitterWithoutCouplingHostAudioPlayback()
 	{
 		var bus = new AmigaBus();
 		bus.Paula.ScheduleWrite(0, 0x0A6, 0x0004);
@@ -4799,13 +4757,6 @@ public sealed class AmigaBusTimingTests
 
 		cycle = completionCycle;
 		var complete = bus.ReadByte(0x00DFF002, ref cycle, AmigaBusAccessKind.CpuDataRead);
-
-		Assert.NotEqual(0, complete & 0x40);
-
-		var publishedCycle = completionCycle + 10_000;
-		bus.AdvanceDmaTo(publishedCycle);
-		cycle = publishedCycle;
-		complete = bus.ReadByte(0x00DFF002, ref cycle, AmigaBusAccessKind.CpuDataRead);
 
 		Assert.Equal(0, complete & 0x40);
 	}
@@ -7110,13 +7061,13 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Fact]
-	public void CpuColorPresentationBeginsAtWriteTransferStart()
+	public void CpuColorPresentationUsesDeniseVisiblePhase()
 	{
 		const long grantCycle = 100;
-		var transferStart = grantCycle - (2 * AgnusChipSlotScheduler.SlotCycles);
+		var deniseVisibleCycle = grantCycle + (6 * AgnusChipSlotScheduler.SlotCycles);
 
 		Assert.Equal(
-			transferStart,
+			deniseVisibleCycle,
 			AmigaBus.GetDisplayWriteCycle(AmigaBusRequester.Cpu, 0x180, grantCycle));
 		Assert.Equal(
 			grantCycle,
@@ -8333,9 +8284,9 @@ public sealed class AmigaBusTimingTests
 	}
 
 	[Theory]
-	[InlineData(false, 42L)]
-	[InlineData(true, 46L)]
-	public void ExactCpuGrantAcrossReservedBlitterSlotsMatchesHrmPriority(bool nasty, long expectedGrant)
+	[InlineData(false)]
+	[InlineData(true)]
+	public void ExactCpuGrantUsesRequestedFreeSlotBeforeLaterBlitterReservations(bool nasty)
 	{
 		var bus = new AmigaBus(captureBusAccesses: false);
 		if (nasty)
@@ -8351,7 +8302,7 @@ public sealed class AmigaBusTimingTests
 		var grantedCycle = cycle - AgnusChipSlotScheduler.SlotCycles;
 
 		Assert.True(
-			grantedCycle == expectedGrant,
+			grantedCycle == 32,
 			$"nasty={nasty},grant={grantedCycle},completion={cycle}");
 	}
 
@@ -8484,7 +8435,7 @@ public sealed class AmigaBusTimingTests
 	public void StoppedCpuWakeCandidateIncludesBlitterCompletion()
 	{
 		var bus = new AmigaBus();
-		StartNastyBlit(bus);
+		StartNastyBlit(bus, startCycle: 100);
 		bus.AdvanceDmaTo(100);
 		var completionCycle = bus.Blitter.GetPredictedCompletionCycle();
 
@@ -11315,7 +11266,7 @@ public sealed class AmigaBusTimingTests
 		return program;
 	}
 
-	private static void StartNastyBlit(AmigaBus bus)
+	private static void StartNastyBlit(AmigaBus bus, long startCycle = 0)
 	{
 		BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0x1234);
 		bus.WriteWord(0x00DFF040, 0x09F0);
@@ -11325,7 +11276,7 @@ public sealed class AmigaBusTimingTests
 		bus.WriteWord(0x00DFF056, 0x4000);
 		bus.WriteWord(0x00DFF096, 0x8640);
 		bus.AdvanceDmaTo(100);
-		bus.WriteWord(0x00DFF058, 0x0044);
+		bus.WriteWord(0x00DFF058, 0x0044, startCycle);
 	}
 
 	private sealed class FixedDelayArbiter : IAmigaBusArbiter

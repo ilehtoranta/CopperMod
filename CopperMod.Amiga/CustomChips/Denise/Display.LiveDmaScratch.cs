@@ -2848,10 +2848,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             private bool CanCopperWriteRegister(ushort offset)
-                => AgnusCopperRegisterAccess.CanWrite(offset, _copcon);
+                => _display._bus.CanCopperWriteCustomRegister(offset, _copcon);
 
             private bool IsCopperDangerStopRegister(ushort offset)
-                => AgnusCopperRegisterAccess.StopsCopper(offset, _copcon);
+                => _display._bus.StopsCopperAtCustomRegister(offset, _copcon);
 
             private void RecordDma(long cycle)
             {

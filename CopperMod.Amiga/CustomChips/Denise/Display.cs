@@ -661,6 +661,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             ResetLiveDma();
+            if (_chipset.Denise == DeniseModel.Ecs)
+            {
+                _bus.PublishCustomRegisterState((ushort)CustomRegister.DeniseId, 0x00FC, 0);
+            }
         }
 
         private void RenderRows(
@@ -1420,11 +1424,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private long GetSpriteDmaFetchCycle(long frameStartCycle, int row, int spriteIndex, int word)
         {
             var lineStart = GetOutputRowStartCycle(frameStartCycle, row);
-            var firstSpriteSlot = _bus.FindNextFixedDmaSlot(lineStart, AgnusChipSlotOwner.Sprite);
+            var firstSpriteSlot = GetFirstSpriteDmaSlotCycle(lineStart);
             var horizontalOffset = (Math.Clamp(spriteIndex, 0, 7) * 4) +
                 (Math.Clamp(word, 0, 1) * 2);
             return firstSpriteSlot + ((long)horizontalOffset * CopperHpCycles);
         }
+
+        [System.Runtime.CompilerServices.MethodImpl(
+            System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        private long GetFirstSpriteDmaSlotCycle(long lineStartCycle)
+            => lineStartCycle +
+                ((long)AgnusHrmOcsSlotTable.FirstSpriteHorizontal * CopperHpCycles);
 
         private bool TryGetLiveSpriteDmaSlot(long slotCycle, out int row, out int spriteIndex, out int word)
         {
@@ -1449,7 +1459,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var firstSpriteSlot = _bus.FindNextFixedDmaSlot(lineStart, AgnusChipSlotOwner.Sprite);
+            var firstSpriteSlot = GetFirstSpriteDmaSlotCycle(lineStart);
             var spriteOffsetCycles = slotCycle - firstSpriteSlot;
             if (spriteOffsetCycles < 0 ||
                 spriteOffsetCycles >= _sprites.Length * 4 * CopperHpCycles ||

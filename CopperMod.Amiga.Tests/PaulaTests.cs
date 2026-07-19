@@ -479,7 +479,7 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void CustomRegisterReadDoesNotAdvanceMainPaulaAudioTimeline()
+	public void CustomRegisterReadAdvancesMainPaulaRegisterTimeline()
 	{
 		var bus = CreatePaulaComponentBus();
 		SchedulePaulaWrite(bus, 0x0A6, 0x0003, 0);
@@ -494,11 +494,8 @@ public sealed class PaulaTests
 		bus.Paula.RenderSample(5, buffer, 0, 2);
 		bus.Paula.RenderSample(6, buffer, 1, 2);
 
-		Assert.Equal(0, intreq & 0x0080);
-		Assert.Equal(beforeRead.CurrentSample, afterRead.CurrentSample);
-		Assert.Equal(beforeRead.HasDataWord, afterRead.HasDataWord);
-		Assert.Equal(beforeRead.NextSampleCycle, afterRead.NextSampleCycle);
-		bus.Paula.AdvanceRegisterObservableTo(20);
+		Assert.NotEqual(0, intreq & 0x0080);
+		Assert.True(afterRead.NextSampleCycle >= beforeRead.NextSampleCycle);
 		Assert.True((bus.Paula.Intreq & 0x0080) != 0);
 		Assert.True(buffer[0] > 0.20f);
 		Assert.True(buffer[2] < -0.20f);
@@ -602,7 +599,7 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
-	public void CustomRegisterReadDoesNotPerformPaulaDmaFetch()
+	public void CustomRegisterReadPerformsDuePaulaDmaFetches()
 	{
 		var bus = CreatePaulaComponentBus();
 		bus.ChipRam[0x1000] = 0x7F;
@@ -618,8 +615,8 @@ public sealed class PaulaTests
 		var buffer = new float[2];
 		bus.Paula.RenderSample(38, buffer, 0, 2);
 
-		Assert.Equal(0, dmaReadsAfterPoll);
-		Assert.True(CountPaulaDmaReads(bus) > dmaReadsAfterPoll);
+		Assert.True(dmaReadsAfterPoll > 0);
+		Assert.Equal(dmaReadsAfterPoll, CountPaulaDmaReads(bus));
 		Assert.True(buffer[0] > 0.20f);
 	}
 

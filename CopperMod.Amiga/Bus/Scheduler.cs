@@ -23,6 +23,10 @@ namespace CopperMod.Amiga.Bus
             AmigaHardwareEventMask.DiskEvents |
             AmigaHardwareEventMask.Agnus |
             AmigaHardwareEventMask.Blitter;
+        private const AmigaHardwareEventMask CustomRegisterReadMask =
+            AmigaHardwareEventMask.All |
+            AmigaHardwareEventMask.PaulaDma |
+            AmigaHardwareEventMask.DiskPassiveInput;
         private const AmigaHardwareEventMask DiskWakeCacheKeyMask =
             AmigaHardwareEventMask.DiskEvents |
             AmigaHardwareEventMask.DiskPassiveInput;
@@ -444,6 +448,9 @@ namespace CopperMod.Amiga.Bus
             out long predictedGrant)
         {
             predictedGrant = 0;
+            // This fast path predicts the nominal start of a new CPU transfer.
+            // Slot-by-slot retries for a request that has already lost arbitration
+            // are handled by the live pending-request loop.
             var candidate = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle));
             if (!_bus.IsCpuAccessibleSlot(candidate))
             {

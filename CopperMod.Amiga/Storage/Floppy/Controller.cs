@@ -1292,6 +1292,7 @@ namespace CopperMod.Amiga.Storage.Floppy
                 drive.ResetPosition();
             }
 
+            _bus.PublishCustomRegisterState(DskDatr, _diskDataRegister, 0);
             _schedulerWakeVersion++;
         }
 
@@ -2229,6 +2230,7 @@ namespace CopperMod.Amiga.Storage.Floppy
             {
                 case DskDat:
                     _diskDataRegister = value;
+                    _bus.PublishCustomRegisterState(DskDatr, _diskDataRegister, cycle);
                     AppendDivergenceTrace(AmigaDiskTraceEventKind.RegisterWrite, cycle, offset, value);
                     break;
                 case DskPth:
@@ -3114,6 +3116,7 @@ namespace CopperMod.Amiga.Storage.Floppy
                 ? _bus.CommitDmaWordRead(in reservation)
                 : latch.Value;
             _diskDataRegister = value;
+            _bus.PublishCustomRegisterState(DskDatr, value, _currentCycle);
             if (latch.WriteMode)
             {
                 if (_activeWriteTrackData != null)
@@ -3686,6 +3689,7 @@ namespace CopperMod.Amiga.Storage.Floppy
                     if (diskEvent.HasWordValue)
                     {
                         _diskDataRegister = ReadPreparedUInt16(preparedTrack, diskEvent.WordStartBit);
+                        _bus.PublishCustomRegisterState(DskDatr, _diskDataRegister, diskEvent.Cycle);
                     }
 
                     _dskbytrByteReady = true;

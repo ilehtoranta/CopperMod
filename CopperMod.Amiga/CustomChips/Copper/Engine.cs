@@ -25,7 +25,7 @@ namespace CopperMod.Amiga.CustomChips.Copper
                     var register = (ushort)(first & 0x01FE);
                     var suppressMove = suppressNextMove;
                     suppressNextMove = false;
-                    if (AgnusCopperRegisterAccess.StopsCopper(register, copcon))
+                    if (bus.StopsCopperAtCustomRegister(register, copcon))
                     {
                         return;
                     }
@@ -35,7 +35,7 @@ namespace CopperMod.Amiga.CustomChips.Copper
                         continue;
                     }
 
-                    if (!AgnusCopperRegisterAccess.CanWrite(register, copcon))
+                    if (!bus.CanCopperWriteCustomRegister(register, copcon))
                     {
                         continue;
                     }
