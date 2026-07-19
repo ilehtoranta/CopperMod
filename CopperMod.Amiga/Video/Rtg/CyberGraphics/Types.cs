@@ -5,9 +5,86 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
 {
+    internal enum CyberGraphicsDirectMemoryKind
+    {
+        RealFastRam,
+        RtgVram
+    }
+
+    internal sealed class CyberGraphicsDirectMemory
+    {
+        private readonly byte[]? _linearMemory;
+        private readonly int _linearOffset;
+        private readonly RtgVramBackend? _rtgVram;
+        private int _cachedReadPageIndex = -1;
+        private byte[]? _cachedReadPage;
+        private int _cachedWritePageIndex = -1;
+        private byte[]? _cachedWritePage;
+
+        internal CyberGraphicsDirectMemory(byte[] memory, int offset)
+        {
+            _linearMemory = memory;
+            _linearOffset = offset;
+            Kind = CyberGraphicsDirectMemoryKind.RealFastRam;
+        }
+
+        internal CyberGraphicsDirectMemory(RtgVramBackend rtgVram, uint baseAddress)
+        {
+            _rtgVram = rtgVram;
+            BaseAddress = baseAddress;
+            Kind = CyberGraphicsDirectMemoryKind.RtgVram;
+        }
+
+        internal CyberGraphicsDirectMemoryKind Kind { get; }
+
+        internal uint BaseAddress { get; }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal byte ReadByte(int offset)
+        {
+            if (_linearMemory != null)
+            {
+                return _linearMemory[_linearOffset + offset];
+            }
+
+            var address = BaseAddress + (uint)offset;
+            var pageIndex = (int)((address - RtgVramBackend.BaseAddress) >> RtgVramBackend.PageShift);
+            if (pageIndex != _cachedReadPageIndex || _cachedReadPage == null)
+            {
+                _cachedReadPageIndex = pageIndex;
+                _cachedReadPage = _rtgVram!.GetDirectReadPage(pageIndex);
+            }
+
+            return _cachedReadPage?[address & (RtgVramBackend.PageSize - 1)] ?? 0;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void WriteByte(int offset, byte value)
+        {
+            if (_linearMemory != null)
+            {
+                _linearMemory[_linearOffset + offset] = value;
+                return;
+            }
+
+            var address = BaseAddress + (uint)offset;
+            var pageIndex = (int)((address - RtgVramBackend.BaseAddress) >> RtgVramBackend.PageShift);
+            if (pageIndex != _cachedWritePageIndex)
+            {
+                _cachedWritePageIndex = pageIndex;
+                _cachedWritePage = _rtgVram!.GetDirectWritePage(pageIndex);
+                _cachedReadPageIndex = pageIndex;
+                _cachedReadPage = _cachedWritePage;
+            }
+
+            _cachedWritePage![address & (RtgVramBackend.PageSize - 1)] = value;
+        }
+    }
+
     internal enum CyberGraphicsFunction
     {
         Open,
@@ -213,6 +290,9 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
 
         public uint[] Palette { get; private set; }
 
+        private AmigaBus? _directMemoryBus;
+        private CyberGraphicsDirectMemory? _directMemory;
+
         public void AssociateColorMap(uint colorMapAddress, uint[]? sharedPalette = null)
         {
             ColorMapAddress = colorMapAddress;
@@ -237,9 +317,15 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                 return 0;
             }
 
-            return GuestBaseAddress != 0
-                ? bus.ReadByte(GuestBaseAddress + (uint)offset)
-                : _hostStorage![offset];
+            if (GuestBaseAddress == 0)
+            {
+                return _hostStorage![offset];
+            }
+
+            var directMemory = GetDirectMemory(bus);
+            return directMemory != null
+                ? directMemory.ReadByte(offset)
+                : bus.ReadGraphicsByte(GuestBaseAddress + (uint)offset);
         }
 
         public void WriteByte(AmigaBus bus, int offset, byte value)
@@ -251,12 +337,38 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
 
             if (GuestBaseAddress != 0)
             {
-                bus.WriteByte(GuestBaseAddress + (uint)offset, value, 0);
+                var directMemory = GetDirectMemory(bus);
+                if (directMemory != null)
+                {
+                    directMemory.WriteByte(offset, value);
+                    bus.RecordGraphicsDirectWrite(
+                        directMemory.Kind,
+                        GuestBaseAddress + (uint)offset,
+                        1);
+                }
+                else
+                {
+                    bus.WriteGraphicsByte(GuestBaseAddress + (uint)offset, value);
+                }
             }
             else
             {
                 _hostStorage![offset] = value;
             }
+        }
+
+        private CyberGraphicsDirectMemory? GetDirectMemory(AmigaBus bus)
+        {
+            if (!ReferenceEquals(_directMemoryBus, bus))
+            {
+                _directMemoryBus = bus;
+                bus.TryResolveGraphicsDirectMemory(
+                    GuestBaseAddress,
+                    checked(BytesPerRow * Height),
+                    out _directMemory);
+            }
+
+            return _directMemory;
         }
 
         public static int GetBytesPerPixel(CyberGraphicsPixelFormat pixelFormat)

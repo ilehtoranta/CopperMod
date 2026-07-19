@@ -212,6 +212,12 @@ namespace CopperMod.Amiga.Video.Rtg
             return true;
         }
 
+        internal byte[]? GetDirectReadPage(int pageIndex)
+            => _pages[pageIndex];
+
+        internal byte[] GetDirectWritePage(int pageIndex)
+            => GetOrCreatePage(pageIndex);
+
         public bool TryGetContiguousReadMemory(uint address, int byteCount, out byte[] memory, out int offset)
         {
             memory = Array.Empty<byte>();

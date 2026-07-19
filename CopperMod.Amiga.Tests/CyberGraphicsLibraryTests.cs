@@ -6,6 +6,57 @@ namespace CopperMod.Amiga.Tests;
 public sealed class CyberGraphicsLibraryTests
 {
 	[Fact]
+	public void SurfaceWritesToRtgVramDoNotCreateCpuBusTransactions()
+	{
+		var bus = new AmigaBus(rtgVramSize: 16L * 1024 * 1024, captureBusAccesses: true);
+		bus.ConfigureAutoconfigRtgForHost();
+		var library = new CyberGraphicsLibrary(bus);
+		var surface = Assert.IsType<CyberGraphicsSurface>(
+			library.AllocateRtgSurface(1, 1, CyberGraphicsPixelFormat.Lut8));
+		var accessesBefore = bus.BusAccesses.Count;
+
+		surface.WriteByte(bus, 0, 0x5A);
+
+		Assert.Equal(0x5A, bus.ReadByte(surface.GuestBaseAddress));
+		Assert.Equal(accessesBefore, bus.BusAccesses.Count);
+	}
+
+	[Fact]
+	public void SurfaceWritesToRealFastRamDoNotCreateCpuBusTransactions()
+	{
+		var bus = new AmigaBus(
+			realFastRamSize: 2 * 1024 * 1024,
+			realFastRamBase: AmigaConstants.A500RealFastRamBase,
+			captureBusAccesses: true);
+		bus.ConfigureAutoconfigFastRamForHost();
+		var surface = new CyberGraphicsSurface(
+			1,
+			1,
+			CyberGraphicsPixelFormat.Lut8,
+			1,
+			bus.RealFastRamBase);
+		var accessesBefore = bus.BusAccesses.Count;
+
+		surface.WriteByte(bus, 0, 0xA5);
+
+		Assert.Equal(0xA5, bus.ReadByte(surface.GuestBaseAddress));
+		Assert.Equal(accessesBefore, bus.BusAccesses.Count);
+	}
+
+	[Fact]
+	public void SurfaceWritesToChipRamRetainCpuBusArbitration()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true);
+		var surface = new CyberGraphicsSurface(1, 1, CyberGraphicsPixelFormat.Lut8, 1, 0x1000);
+		var accessesBefore = bus.BusAccesses.Count;
+
+		surface.WriteByte(bus, 0, 0x3C);
+
+		Assert.Equal(0x3C, bus.ReadByte(surface.GuestBaseAddress));
+		Assert.True(bus.BusAccesses.Count > accessesBefore);
+	}
+
+	[Fact]
 	public void RtgDeviceRegistersStableModesAndLinearGuestBackedSurfaces()
 	{
 		var bus = new AmigaBus(rtgVramSize: 256L * 1024 * 1024);

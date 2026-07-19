@@ -261,7 +261,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
         private uint ReadSurfaceArgb(CyberGraphicsSurface surface, int x, int y)
         {
             var offset = checked(y * surface.BytesPerRow + x * surface.BytesPerPixel);
-            byte B(int relative) => _bus.ReadByte(surface.GuestBaseAddress + (uint)(offset + relative));
+            byte B(int relative) => surface.ReadByte(_bus, offset + relative);
             ushort W(bool littleEndian = false)
                 => littleEndian ? (ushort)(B(0) | (B(1) << 8)) : (ushort)((B(0) << 8) | B(1));
             return surface.PixelFormat switch
