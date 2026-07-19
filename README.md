@@ -18,6 +18,53 @@ The project focuses on accurate replay behavior rather than format conversion.
 Backends render audio in small time slices, making them useful both for the
 CopperMod player and for other applications that need tracker playback.
 
+## Built with Codex and GPT-5.6
+
+Codex, powered by GPT-5.6, was used as an active engineering collaborator during
+OpenAI Build Week. It worked directly in the repository: reading the existing
+architecture, implementing focused changes, running .NET tests, profiling Release
+builds, and comparing emulator output across a corpus of Amiga software.
+
+The collaboration was especially useful in the Amiga work behind CopperScreen and
+its reusable components. Notable Build Week changes include:
+
+- **Native, managed IPF disk support.** `CopperDisk` provides what we believe is the
+  first native C# implementation for reading SPS/CAPS IPF preservation images. It
+  is MIT licensed, requires no native CAPS library, and feeds decoded track data
+  into the same cycle-exact floppy and disk-DMA path used for ADF images. Codex
+  helped implement the decoder, validate disk-DMA behavior, and test real images.
+- **One cycle-exact timeline for the CPU and Amiga custom chips.** An Amiga's CPU,
+  display, Copper coprocessor, and blitter all compete for the same memory bus.
+  Previously, advancing those components through separate catch-up paths made both
+  correctness and performance work difficult. The refactor brought CPU/Agnus bus
+  arbitration, live display DMA, Copper execution, and a bounded blitter executor
+  onto one ordered slot timeline. In simple terms, every device now performs its
+  read or write at the exact point when it owns the bus, so later devices observe
+  the correct data without sacrificing cycle accuracy.
+- **AI-automated regression testing with real software.** Codex runs a corpus of
+  games and demos, drives repeatable workloads, records framebuffer and audio
+  checksums, CPU and scheduler cycles, boot status, and bus ownership, and compares
+  the results after each timing change. When a checksum diverges, the AI narrows the
+  first mismatching event and helps turn it into a focused synthetic test. Lemmings
+  and Full Contact also serve as recurring performance workloads.
+- **ECS and CyberGraphX support.** The project added Enhanced Chip Set timing and
+  display behavior as well as CyberGraphX RTG integration, extending CopperScreen
+  beyond its original OCS-only A500 target.
+
+Codex also built differential tests for CPU timing and custom-chip behavior,
+created benchmark and audit tooling, profiled Release builds down to individual
+methods, and evaluated speculative optimizations experimentally. Ideas that failed
+their correctness or repeat-5 performance gate were removed rather than retained as
+unproven complexity.
+
+GPT-5.6 was not treated as a source of hardware truth. The project owner supplied
+the emulator architecture, hardware reasoning, priorities, and acceptance criteria.
+Codex turned those decisions into code and tests, challenged assumptions when traces
+disagreed, and iterated against executable evidence. Changes were accepted only when
+cycle timing, framebuffer and audio checksums, regression tests, and Release
+benchmarks agreed. This made the AI workflow valuable not just for generating code,
+but for sustaining a long, measurement-driven systems-engineering loop.
+
 ## Current Status
 
 - MED / OctaMED: MMD0-MMD3 parsing and Amiga-style playback work is underway.
