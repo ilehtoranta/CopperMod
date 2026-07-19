@@ -229,6 +229,14 @@ static BenchmarkBackend[] CreateBackends()
     =>
     [
         new BenchmarkBackend("InterpreterM68000", bus => M68kCoreFactory.Default.Create(M68kCpuModel.M68000, bus)),
+        new BenchmarkBackend(
+            "InterpreterM68000Scalar",
+            bus => new M68kInterpreter(
+                bus,
+                new M68kCpuState(),
+                enableCpuBusPhaseTrace: false,
+                enableOpcodePlan: false),
+            IncludeByDefault: false),
         new BenchmarkBackend("InterpreterM68010", bus => M68kCoreFactory.Default.Create(M68kCpuModel.M68010, bus)),
         new BenchmarkBackend("InterpreterM68020", bus => M68kCoreFactory.Default.Create(M68kCpuModel.M68020, bus)),
         new BenchmarkBackend("InterpreterM68030", bus => M68kCoreFactory.Default.Create(M68kCpuModel.M68030, bus)),
@@ -294,6 +302,48 @@ static BenchmarkWorkload[] CreateWorkloads()
                 state.D[1] = 0x0101_0101;
             },
             1 << 20),
+        new BenchmarkWorkload(
+            "cfg-bcc-register-loop",
+            [
+                0x703F, // MOVEQ #63,D0
+                0x5281, // ADDQ.L #1,D1
+                0x5340, // SUBQ.W #1,D0
+                0x66FA, // BNE.S arithmetic
+                0x60F6  // BRA.S reset
+            ],
+            SetupNone,
+            state => state.D[1] = 0x1020_3040,
+            1 << 20,
+            SupportsBackend: backend => backend.Name.Contains("M68000", StringComparison.Ordinal),
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "cfg-dbra-load-loop",
+            [
+                0x74FF,       // MOVEQ #-1,D2
+                0x2018,       // MOVE.L (A0)+,D0
+                0x51CA, 0xFFFC, // DBRA D2,load
+                0x60F6        // BRA.S reset
+            ],
+            SetupMemoryTransform,
+            state => state.A[0] = 0x0002_0000,
+            1 << 20,
+            SupportsBackend: backend => backend.Name.Contains("M68000", StringComparison.Ordinal),
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "cfg-bcc-memory-loop",
+            [
+                0x703F, // MOVEQ #63,D0
+                0x2218, // MOVE.L (A0)+,D1
+                0xD281, // ADD.L D1,D1
+                0x5340, // SUBQ.W #1,D0
+                0x66F8, // BNE.S load
+                0x60F4  // BRA.S reset
+            ],
+            SetupMemoryTransform,
+            state => state.A[0] = 0x0002_0000,
+            1 << 20,
+            SupportsBackend: backend => backend.Name.Contains("M68000", StringComparison.Ordinal),
+            IncludeByDefault: false),
         new BenchmarkWorkload(
             "directcpu-clr-loop",
             [
