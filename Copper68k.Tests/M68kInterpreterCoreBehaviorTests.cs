@@ -1018,6 +1018,192 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.False(bus.IsDeferredCpuBusBatchActive);
 	}
 	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void BatchedFixedPlanGraphMatchesSequentialExecuteInstruction(int dispatchValue)
+	{
+		var program = Words(
+			0x7003, // MOVEQ #3,D0
+			0x5281, // ADDQ.L #1,D1
+			0x5340, // SUBQ.W #1,D0
+			0x66FA, // BNE.S ADDQ
+			0x60F6); // BRA.S reset
+		var sequentialBus = CreateFastMemoryRunBus();
+		var batchedBus = CreateFastMemoryRunBus();
+		Write(sequentialBus.Memory, 0x1000, program);
+		Write(batchedBus.Memory, 0x1000, program);
+		var sequential = CreateCycleParityCpu(
+			sequentialBus,
+			true,
+			(M68kOpcodePlanDispatch)dispatchValue,
+			enableCpuBusPhaseTrace: false);
+		var batched = CreateCycleParityCpu(
+			batchedBus,
+			true,
+			(M68kOpcodePlanDispatch)dispatchValue,
+			enableCpuBusPhaseTrace: false);
+		var boundary = new BusAccessBatchBoundary();
+
+		ExecuteSequentially(sequential, 97);
+		Assert.Equal(97, ((IM68kBatchCore)batched).ExecuteInstructions(
+			97,
+			long.MaxValue,
+			boundary));
+
+		AssertCachedRunParity(sequential, batched);
+		Assert.True(boundary.PureCpuBatchCalls > 0);
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void BatchedFastMemoryDbraMatchesSequentialExecuteInstruction(int dispatchValue)
+	{
+		var program = Words(
+			0x2018, // MOVE.L (A0)+,D0
+			0xD081, // ADD.L D1,D0
+			0x23C0, 0x0000, 0x3000, // MOVE.L D0,$3000.L
+			0x51CA, 0xFFF4); // DBRA D2,$1000
+		var sequentialBus = CreateFastMemoryRunBus();
+		var batchedBus = CreateFastMemoryRunBus();
+		Write(sequentialBus.Memory, 0x1000, program);
+		Write(batchedBus.Memory, 0x1000, program);
+		for (var index = 0; index < 3; index++)
+		{
+			var value = unchecked(0x1020_3040u + (uint)index);
+			WriteLongRaw(sequentialBus.Memory, 0x2000u + ((uint)index * 4), value);
+			WriteLongRaw(batchedBus.Memory, 0x2000u + ((uint)index * 4), value);
+		}
+
+		var sequential = CreateCycleParityCpu(
+			sequentialBus,
+			true,
+			(M68kOpcodePlanDispatch)dispatchValue,
+			enableCpuBusPhaseTrace: false);
+		var batched = CreateCycleParityCpu(
+			batchedBus,
+			true,
+			(M68kOpcodePlanDispatch)dispatchValue,
+			enableCpuBusPhaseTrace: false);
+		sequential.State.A[0] = batched.State.A[0] = 0x2000;
+		sequential.State.D[1] = batched.State.D[1] = 0x0101_0101;
+		sequential.State.D[2] = batched.State.D[2] = 2;
+		var boundary = new BusAccessBatchBoundary();
+
+		ExecuteSequentially(sequential, 12);
+		Assert.Equal(12, ((IM68kBatchCore)batched).ExecuteInstructions(
+			12,
+			long.MaxValue,
+			boundary));
+
+		AssertCachedRunParity(sequential, batched);
+		Assert.Equal(
+			ReadLongRaw(sequentialBus.Memory, 0x3000),
+			ReadLongRaw(batchedBus.Memory, 0x3000));
+		Assert.Equal(0, sequentialBus.FastLongReadCalls);
+		Assert.True(batchedBus.FastLongReadCalls > 0);
+		Assert.True(boundary.BusAccessBatchCalls > 0);
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void BatchedTargetCycleMatchesSequentialStoppingRule(int dispatchValue)
+	{
+		var program = Words(0x5280, 0x60FC); // ADDQ.L #1,D0; BRA.S ADDQ
+		var sequentialBus = CreateFastMemoryRunBus();
+		var batchedBus = CreateFastMemoryRunBus();
+		Write(sequentialBus.Memory, 0x1000, program);
+		Write(batchedBus.Memory, 0x1000, program);
+		var sequential = CreateCycleParityCpu(
+			sequentialBus,
+			true,
+			(M68kOpcodePlanDispatch)dispatchValue,
+			enableCpuBusPhaseTrace: false);
+		var batched = CreateCycleParityCpu(
+			batchedBus,
+			true,
+			(M68kOpcodePlanDispatch)dispatchValue,
+			enableCpuBusPhaseTrace: false);
+		var targetCycle = sequential.State.Cycles + 83;
+		var sequentialCount = 0;
+		while (sequentialCount < 100 && sequential.State.Cycles < targetCycle)
+		{
+			sequential.ExecuteInstruction();
+			sequentialCount++;
+		}
+
+		var batchedCount = ((IM68kBatchCore)batched).ExecuteInstructions(
+			100,
+			targetCycle,
+			new BusAccessBatchBoundary());
+
+		Assert.Equal(sequentialCount, batchedCount);
+		AssertCachedRunParity(sequential, batched);
+		Assert.True(batched.State.Cycles >= targetCycle);
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void BatchedGraphExitAndExceptionMatchSequentialExecuteInstruction(int dispatchValue)
+	{
+		var program = Words(
+			0x7001, // MOVEQ #1,D0
+			0x5340, // SUBQ.W #1,D0
+			0x66FC, // BNE.S SUBQ
+			0x4AFC); // ILLEGAL
+		var sequentialBus = CreateFastMemoryRunBus();
+		var batchedBus = CreateFastMemoryRunBus();
+		Write(sequentialBus.Memory, 0x1000, program);
+		Write(batchedBus.Memory, 0x1000, program);
+		WriteLongRaw(sequentialBus.Memory, 4u * 4u, 0x2000);
+		WriteLongRaw(batchedBus.Memory, 4u * 4u, 0x2000);
+		Write(sequentialBus.Memory, 0x2000, Words(0x4E71, 0x4E71));
+		Write(batchedBus.Memory, 0x2000, Words(0x4E71, 0x4E71));
+		var sequential = CreateCycleParityCpu(
+			sequentialBus,
+			true,
+			(M68kOpcodePlanDispatch)dispatchValue,
+			enableCpuBusPhaseTrace: false);
+		var batched = CreateCycleParityCpu(
+			batchedBus,
+			true,
+			(M68kOpcodePlanDispatch)dispatchValue,
+			enableCpuBusPhaseTrace: false);
+
+		ExecuteSequentially(sequential, 4);
+		Assert.Equal(4, ((IM68kBatchCore)batched).ExecuteInstructions(
+			4,
+			long.MaxValue,
+			new BusAccessBatchBoundary()));
+
+		AssertCachedRunParity(sequential, batched);
+		Assert.Equal(4, sequential.State.LastExceptionVector);
+		Assert.Equal(sequential.State.LastExceptionVector, batched.State.LastExceptionVector);
+		Assert.True(sequentialBus.Memory.AsSpan(0x7F00, 0x100).SequenceEqual(
+			batchedBus.Memory.AsSpan(0x7F00, 0x100)));
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void BatchedTracedExecutionMatchesSequentialBusCallbacks(int dispatchValue)
+	{
+		var program = Words(0x7001, 0x5280, 0x60FC);
+		var sequentialBus = new CycleCountingBus();
+		var batchedBus = new CycleCountingBus();
+		Write(sequentialBus.Memory, 0x1000, program);
+		Write(batchedBus.Memory, 0x1000, program);
+		var sequential = CreateCycleParityCpu(
+			sequentialBus,
+			true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		var batched = CreateCycleParityCpu(
+			batchedBus,
+			true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+
+		ExecuteSequentially(sequential, 31);
+		Assert.Equal(31, ((IM68kBatchCore)batched).ExecuteInstructions(
+			31,
+			long.MaxValue,
+			new BusAccessBatchBoundary()));
+
+		AssertCycleParity(sequential, sequentialBus, batched, batchedBus);
+	}
+	[Theory]
 	[InlineData(false, (int)M68kOpcodePlanDispatch.KindTable)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan)]
@@ -3726,6 +3912,13 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(
 			((IM68000InterruptRecognition)scalar).LastInterruptSampleCycle,
 			((IM68000InterruptRecognition)cached).LastInterruptSampleCycle);
+	}
+	private static void ExecuteSequentially(M68kInterpreter cpu, int instructionCount)
+	{
+		for (var instruction = 0; instruction < instructionCount; instruction++)
+		{
+			cpu.ExecuteInstruction();
+		}
 	}
 	private static object ToComparableBusPhase(M68kCpuBusPhase phase)
 		=> new
