@@ -187,7 +187,7 @@ namespace CopperMod.Cust
                 DmaconAddress,
                 DmaconSetMasterDma,
                 0);
-            Bus.Paula.AdvanceTo(0);
+            Bus.SynchronizePaulaThrough(0);
         }
 
         public void SelectSubSong(int index)
@@ -1194,7 +1194,7 @@ namespace CopperMod.Cust
         private void AdvanceTimedHardwareTo(long targetCycle)
         {
             Bus.AdvanceRasterTo(targetCycle);
-            Bus.Paula.AdvanceTo(targetCycle);
+            Bus.SynchronizePaulaThrough(targetCycle);
         }
 
         private bool TryRecoverHostInterruptWait(uint returnAddress, uint? alternateReturnAddress)
