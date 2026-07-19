@@ -191,6 +191,8 @@ namespace CopperMod.Amiga
         private readonly List<SyntheticInterruptServer> _syntheticVBlankInterruptServers = new List<SyntheticInterruptServer>();
         private readonly Dictionary<uint, int> _allocatedRtgBitMaps = new Dictionary<uint, int>();
         private bool _bootDiskReadCompleted;
+        private bool _copperStartRuntimeHandoffPrepared;
+        private long _copperStartRuntimeHandoffCount;
         private bool _dosBootContinuationStarted;
         private bool _dosBootBlockHeaderProbeEnabled;
         private int _hostAllocationDiagnosticCount;
@@ -315,15 +317,28 @@ namespace CopperMod.Amiga
 
         public AmigaProgramLaunchRequest? PendingWorkbenchLaunchRequest { get; private set; }
 
-        public bool IsCopperStartRuntimeHandoffReady =>
-            !_kickstartRomBootActive &&
-            _bootDiskReadCompleted &&
-            !AutoRunStartupSequence &&
-            !AutoStartWorkbenchDefaultTool &&
-            !_dosBootContinuationStarted &&
-            !_startupSequenceActive &&
-            PendingWorkbenchLaunchRequest == null &&
-            HasEnteredLoadedProgram;
+        internal long CopperStartRuntimeHandoffCount => _copperStartRuntimeHandoffCount;
+
+        internal bool TryPrepareCopperStartRuntimeHandoff()
+        {
+            if (_copperStartRuntimeHandoffPrepared ||
+                _kickstartRomBootActive ||
+                !_bootDiskReadCompleted ||
+                _dosBootContinuationStarted ||
+                _startupSequenceActive ||
+                PendingWorkbenchLaunchRequest != null ||
+                !HasEnteredLoadedProgram)
+            {
+                return false;
+            }
+
+            EnsureTaskTrapVectorsCurrent();
+            EnsureHostLowMemoryPointersCurrent();
+            EnsureSafeAutovectorsCurrent();
+            _copperStartRuntimeHandoffPrepared = true;
+            _copperStartRuntimeHandoffCount++;
+            return true;
+        }
 
         private bool HasEnteredLoadedProgram
         {
@@ -464,6 +479,8 @@ namespace CopperMod.Amiga
             _rtgIntuitionScreens.Clear();
             _rtgOpenScreenContinuationAddress = 0;
             _bootDiskReadCompleted = false;
+            _copperStartRuntimeHandoffPrepared = false;
+            _copperStartRuntimeHandoffCount = 0;
             _dosBootContinuationStarted = false;
             _dosBootBlockHeaderProbeEnabled = true;
             _hostAllocationDiagnosticCount = 0;
@@ -568,7 +585,7 @@ namespace CopperMod.Amiga
             _machine.Bus.WriteByte(0x00BFD100, 0x77, 0);
             _machine.Bus.WriteWord(0x00DFF096, 0x82D0, 0);
             _machine.Bus.WriteWord(0x00DFF024, 0x4000, 0);
-            _machine.Bus.Paula.AdvanceTo(0);
+            _machine.Bus.SynchronizePaulaThrough(0);
         }
 
         public AmigaBootResult ContinueExecution(int maxInstructions = 20_000)
@@ -5607,7 +5624,7 @@ namespace CopperMod.Amiga
         {
             var cycle = _machine.Cpu.State.Cycles;
             _machine.Bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | AmigaConstants.IntreqVerticalBlank), cycle);
-            _machine.Bus.Paula.AdvanceTo(cycle);
+            _machine.Bus.SynchronizePaulaThrough(cycle);
         }
 
         private void ApplyWorkbenchLanguageSelectionIfNeeded()

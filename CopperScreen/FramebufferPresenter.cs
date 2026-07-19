@@ -11,9 +11,9 @@ namespace CopperScreen;
 internal sealed class FramebufferPresenter : Control
 {
 	private const int PresentationBitmapCount = 3;
-	private readonly WriteableBitmap[] _bitmaps;
-	private readonly int _width;
-	private readonly int _height;
+	private WriteableBitmap[] _bitmaps;
+	private int _width;
+	private int _height;
 	private PixelRect _sourceRect;
 	private int _frontBitmapIndex;
 	private bool _devicePixelExactLayout;
@@ -47,6 +47,36 @@ internal sealed class FramebufferPresenter : Control
 		_frontBitmapIndex = nextBitmapIndex;
 		InvalidateVisual();
 		LastUpdateMilliseconds = Stopwatch.GetElapsedTime(updateStartTimestamp).TotalMilliseconds;
+	}
+
+	public int PixelWidth => _width;
+
+	public int PixelHeight => _height;
+
+	public void EnsureDimensions(int width, int height)
+	{
+		if (width == _width && height == _height)
+		{
+			return;
+		}
+
+		foreach (var bitmap in _bitmaps)
+		{
+			bitmap.Dispose();
+		}
+
+		_width = width;
+		_height = height;
+		_bitmaps = new WriteableBitmap[PresentationBitmapCount];
+		for (var i = 0; i < _bitmaps.Length; i++)
+		{
+			_bitmaps[i] = CreateBitmap(width, height);
+		}
+
+		_frontBitmapIndex = 0;
+		_sourceRect = new PixelRect(0, 0, width, height);
+		InvalidateMeasure();
+		InvalidateVisual();
 	}
 
 	public double LastUpdateMilliseconds { get; private set; }

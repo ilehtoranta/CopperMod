@@ -329,9 +329,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var state = _liveLineStates[row];
             if (state.LineStartCycle != descriptor.LineStartCycle ||
                 state.DisplayWindowVerticallyOpen != descriptor.DisplayWindowVerticallyOpen ||
+                state.Resolution != descriptor.Resolution ||
+                state.FetchResolution != descriptor.FetchResolution ||
                 state.Bplcon0 != descriptor.Bplcon0 ||
                 state.Bplcon1 != descriptor.Bplcon1 ||
                 state.Bplcon2 != descriptor.Bplcon2 ||
+                state.Bplcon3 != descriptor.Bplcon3 ||
+                state.DiwHigh != descriptor.DiwHigh ||
+                state.DiwHighValid != descriptor.DiwHighValid ||
+                state.AgnusDiwHigh != descriptor.AgnusDiwHigh ||
+                state.AgnusDiwHighValid != descriptor.AgnusDiwHighValid ||
+                state.AgnusDisplayWindow != descriptor.AgnusDisplayWindow ||
+                state.DeniseDisplayWindow != descriptor.DeniseDisplayWindow ||
+                state.DataFetchWindow != descriptor.DataFetchWindow ||
                 state.Dmacon != descriptor.Dmacon ||
                 state.Bpl1Mod != descriptor.Bpl1Mod ||
                 state.Bpl2Mod != descriptor.Bpl2Mod ||
@@ -412,7 +422,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 while (slot < descriptor.FetchSlotStride)
                 {
-                    if (TryGetBitplanePlaneForFetchSlot(slot, planeCount, descriptor.FetchSlotStride, out plane))
+                    if (TryGetBitplanePlaneForFetchSlot(slot, planeCount, descriptor.FetchResolution, out plane))
                     {
                         var fetchHorizontal = descriptor.DataFetchStart + (word * descriptor.FetchSlotStride) + slot;
                         fetchCycle = AgnusChipSlotScheduler.AlignToSlot(
@@ -573,7 +583,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return NormalizeCopperBatchBarrier(
                     currentCycle,
                     targetCycle,
-                    waitCycle + CopperHpToCpuCycles(CopperWaitWakeHpUnits));
+                    waitCycle + CopperHpToCpuCycles(GetCopperWaitWakeHpUnits(
+                        _liveCopper.WaitSecond,
+                        _liveCopper.WaitObservedBlitterBusy)));
             }
 
             // Do not scan ahead through copper list memory here. The next copper

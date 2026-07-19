@@ -42,12 +42,54 @@ public sealed class AmigaArchitectureTests
 	[Fact]
 	public void MachineProfilesDefaultToOcsPalChipset()
 	{
-		foreach (var profile in Enum.GetValues<MachineProfile>())
+		foreach (var profile in new[]
+		{
+			MachineProfile.A500PalCustPlayback,
+			MachineProfile.A500PalFullEmulationSkeleton,
+			MachineProfile.A500Pal512KChipOnlyBoot,
+			MachineProfile.A500Pal512KBoot
+		})
 		{
 			var options = MachineOptions.ForProfile(profile);
 
 			Assert.Equal(AmigaChipset.OcsPal, options.Chipset);
 		}
+	}
+
+	[Fact]
+	public void A500PlusProfileUsesAuthenticEcsPalDefaultsAndSupportsTwoMegChipRam()
+	{
+		var defaults = MachineOptions.ForProfile(MachineProfile.A500PlusEcsPal);
+
+		Assert.Equal(AmigaChipset.EcsPal, defaults.Chipset);
+		Assert.Equal(1024 * 1024, defaults.ChipRamSize);
+		Assert.Equal(M68kBackendKind.AccurateM68000, defaults.CpuBackend);
+		Assert.True(defaults.RealTimeClockEnabled);
+		Assert.Equal(2, defaults.FloppyDriveCount);
+		Assert.Same(KickstartConfiguration.HostShim20, defaults.KickstartConfiguration);
+
+		using var expanded = new Machine(
+			MachineOptions.ForProfile(MachineProfile.A500PlusEcsPal).WithChipRam(2 * 1024 * 1024));
+		Assert.Equal(2 * 1024 * 1024, expanded.Bus.ChipRam.Length);
+		Assert.Equal(AmigaConstants.EcsChipDmaAddressMask, expanded.Bus.ChipDmaAddressMask);
+	}
+
+	[Fact]
+	public void A500PlusEcsNtscProfileSelectsNtscTimingAndEcsMemoryDefaults()
+	{
+		var defaults = MachineOptions.ForProfile(MachineProfile.A500PlusEcsNtsc);
+
+		Assert.Equal(AmigaChipset.EcsNtsc, defaults.Chipset);
+		Assert.Equal(1024 * 1024, defaults.ChipRamSize);
+		Assert.Equal(2, defaults.FloppyDriveCount);
+		Assert.True(defaults.RealTimeClockEnabled);
+		Assert.Same(KickstartConfiguration.HostShim20, defaults.KickstartConfiguration);
+
+		using var machine = new Machine(defaults);
+		Assert.Equal(AmigaChipset.EcsNtsc, machine.Options.Chipset);
+		Assert.Equal(AmigaConstants.EcsChipDmaAddressMask, machine.Bus.ChipDmaAddressMask);
+		Assert.Equal(1448, machine.Bus.Display.Width);
+		Assert.Equal(482, machine.Bus.Display.Height);
 	}
 
 	[Fact]

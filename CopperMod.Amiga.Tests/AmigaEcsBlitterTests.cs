@@ -254,7 +254,7 @@ public sealed class AmigaEcsBlitterTests
 
     private static void RunUntilIdle(AmigaBus bus)
     {
-        bus.Blitter.AdvanceTo(1_000_000);
+        bus.AdvanceDmaTo(1_000_000);
         Assert.False(bus.Blitter.CaptureSnapshot().Busy);
     }
 

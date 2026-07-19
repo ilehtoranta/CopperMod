@@ -76,6 +76,10 @@ public sealed class AgnusRegisterBankTests
         Assert.True(ecs.IsSupported(AgnusRegisterBank.Diwhigh));
         Assert.True(ecsWrite.Handled);
         Assert.Equal(AgnusRegisterBank.DiwhighWritableMask, ecs.DiwHigh);
+        Assert.True(ecs.DiwHighValid);
+
+        ecs.Write(AgnusRegisterBank.Diwstrt, 0x2C81);
+        Assert.False(ecs.DiwHighValid);
     }
 
     [Theory]

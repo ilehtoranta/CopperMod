@@ -335,7 +335,7 @@ namespace CopperMod.Amiga.Bus
             AmigaBusRequester requester,
             ushort offset,
             long cycle,
-            bool scheduleAffecting)
+            HardwareScheduleImpact impact)
         {
             if (!_bus.CopperQuiescentDiagnosticsEnabled ||
                 requester == AmigaBusRequester.Host)
@@ -349,7 +349,9 @@ namespace CopperMod.Amiga.Bus
             }
 
             _copperQuiescentCustomRegisterWrites++;
-            if (scheduleAffecting)
+            var eventImpact = impact &
+                CustomRegisterScheduleClassifier.GetPotentialEventScheduleImpact(_bus.Chipset, offset);
+            if (CustomRegisterScheduleClassifier.AffectsEventSchedule(eventImpact))
             {
                 if (requester == AmigaBusRequester.Copper)
                 {
@@ -443,7 +445,7 @@ namespace CopperMod.Amiga.Bus
         {
             predictedGrant = 0;
             var candidate = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle));
-            if (!AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
+            if (!_bus.IsCpuAccessibleSlot(candidate))
             {
                 candidate += AgnusChipSlotScheduler.SlotCycles;
             }

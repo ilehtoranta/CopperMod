@@ -16,7 +16,8 @@ internal enum AgnusRegisterWriteEffects : byte
     TimingChanged = 1 << 2,
     DisplayHistory = 1 << 3,
     CopperJump1 = 1 << 4,
-    CopperJump2 = 1 << 5
+    CopperJump2 = 1 << 5,
+    RasterEventsChanged = 1 << 6
 }
 
 internal readonly record struct AgnusRegisterWriteResult(AgnusRegisterWriteEffects Effects)
@@ -24,6 +25,7 @@ internal readonly record struct AgnusRegisterWriteResult(AgnusRegisterWriteEffec
     public bool Handled => Effects != AgnusRegisterWriteEffects.None;
     public bool BeamStateChanged => (Effects & AgnusRegisterWriteEffects.BeamState) != 0;
     public bool TimingChanged => (Effects & AgnusRegisterWriteEffects.TimingChanged) != 0;
+    public bool RasterEventsChanged => (Effects & AgnusRegisterWriteEffects.RasterEventsChanged) != 0;
 }
 
 internal readonly record struct AgnusDisplayRegisterWrite(long Cycle, ushort Offset, ushort Value)
@@ -105,6 +107,7 @@ internal sealed class AgnusRegisterBank
     internal const ushort VarVBlankEnable = 0x1000;
 
     private readonly bool _ecs;
+    private readonly RasterTiming _timing;
     private readonly ChipDmaAddressing _dmaAddressing;
     private readonly ushort[] _beamValues = new ushort[0x12];
     private readonly uint[] _bitplanePointers = new uint[6];
@@ -117,16 +120,23 @@ internal sealed class AgnusRegisterBank
     private ushort _diwStart;
     private ushort _diwStop;
     private ushort _diwHigh;
+    private bool _diwHighValid;
     private ushort _ddfStart;
     private ushort _ddfStop;
     private short _bpl1mod;
     private short _bpl2mod;
 
-    public AgnusRegisterBank(AgnusModel model, ChipDmaAddressing dmaAddressing)
+    public AgnusRegisterBank(AgnusModel model, ChipDmaAddressing dmaAddressing, RasterTiming timing)
     {
         _ecs = model == AgnusModel.Ecs;
         _dmaAddressing = dmaAddressing;
+        _timing = timing;
         Reset();
+    }
+
+    public AgnusRegisterBank(AgnusModel model, ChipDmaAddressing dmaAddressing)
+        : this(model, dmaAddressing, RasterTiming.Pal)
+    {
     }
 
     public bool IsEcs => _ecs;
@@ -137,6 +147,7 @@ internal sealed class AgnusRegisterBank
     public ushort DiwStart => _diwStart;
     public ushort DiwStop => _diwStop;
     public ushort DiwHigh => _diwHigh;
+    public bool DiwHighValid => _diwHighValid;
     public ushort DdfStart => _ddfStart;
     public ushort DdfStop => _ddfStop;
     public short BitplaneModulo1 => _bpl1mod;
@@ -185,12 +196,13 @@ internal sealed class AgnusRegisterBank
         _diwStart = DefaultDiwStart;
         _diwStop = DefaultDiwStop;
         _diwHigh = 0;
+        _diwHighValid = false;
         _ddfStart = DefaultDdfStart;
         _ddfStop = DefaultDdfStop;
         _bpl1mod = 0;
         _bpl2mod = 0;
-        this[Htotal] = (ushort)(RasterTiming.Pal.ColorClocksPerLine - 1);
-        this[Vtotal] = (ushort)(RasterTiming.Pal.LongFrameLines - 1);
+        this[Htotal] = (ushort)(_timing.ColorClocksPerLine - 1);
+        this[Vtotal] = (ushort)(_timing.LongFrameLines - 1);
     }
 
     public bool IsReadable(ushort offset)
@@ -244,6 +256,7 @@ internal sealed class AgnusRegisterBank
         if (offset == Diwhigh)
         {
             _diwHigh = (ushort)(value & DiwhighWritableMask);
+            _diwHighValid = true;
             return Result(AgnusRegisterWriteEffects.Stored | AgnusRegisterWriteEffects.DisplayHistory);
         }
 
@@ -263,6 +276,14 @@ internal sealed class AgnusRegisterBank
         if (timingChanged)
         {
             beamEffects |= AgnusRegisterWriteEffects.TimingChanged;
+        }
+
+        // These registers control future sync/blanking events, but do not
+        // redefine the beam's line/frame geometry. Keep them separate from
+        // TimingChanged so a mid-frame write cannot re-anchor the beam.
+        if (changed && offset is Hsstop or Hbstrt or Hbstop or Vsstop or Vbstrt or Vbstop or Hsstrt or Vsstrt or Hcenter)
+        {
+            beamEffects |= AgnusRegisterWriteEffects.RasterEventsChanged;
         }
 
         return Result(beamEffects);
@@ -300,9 +321,11 @@ internal sealed class AgnusRegisterBank
                 return true;
             case Diwstrt:
                 _diwStart = value;
+                _diwHighValid = false;
                 return true;
             case Diwstop:
                 _diwStop = value;
+                _diwHighValid = false;
                 return true;
             case Ddfstrt:
                 _ddfStart = value;

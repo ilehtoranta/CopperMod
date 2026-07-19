@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (C) 2026 Ilkka Lehtoranta
  * SPDX-License-Identifier: MIT
  */
@@ -275,7 +275,7 @@ namespace CopperMod.Amiga.Bus
             }
 
             var cursor = Math.Min(GetMaskDrainedThroughCycle(mask), targetCycle);
-            var targetLineStartCycle = targetCycle - (targetCycle % _bus.LineCycles);
+            var targetLineStartCycle = _bus.GetLineStartCycle(targetCycle);
             if (cursor < targetLineStartCycle - 1)
             {
                 return false;
@@ -580,7 +580,7 @@ namespace CopperMod.Amiga.Bus
             {
                 if ((mask & (AmigaHardwareEventMask.ForceCatchUp | AmigaHardwareEventMask.DiskPassiveInput)) != 0)
                 {
-                    _bus.Disk.AdvanceTo(cycle);
+                    SynchronizeDiskThrough(cycle);
                 }
                 else
                 {
@@ -601,15 +601,21 @@ namespace CopperMod.Amiga.Bus
             if ((mask & AmigaHardwareEventMask.Blitter) != 0 &&
                 _bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, cycle - 1), cycle) <= cycle)
             {
-                _bus.Blitter.AdvanceTo(cycle);
+                SynchronizeBlitterThrough(cycle);
                 _blitterEvents++;
             }
         }
 
         private void ProcessSlotContendedEventsAt(long cycle)
-            => ProcessSlotContendedEventsAt(cycle, useCpuWaitBlitterMicroOps: false);
+            => ProcessSlotContendedEventsAt(
+                cycle,
+                useCpuWaitBlitterMicroOps: false,
+                processBlitter: true);
 
-        private void ProcessSlotContendedEventsAt(long cycle, bool useCpuWaitBlitterMicroOps)
+        private void ProcessSlotContendedEventsAt(
+            long cycle,
+            bool useCpuWaitBlitterMicroOps,
+            bool processBlitter)
         {
             Debug.Assert(cycle >= 0, "Hardware scheduler event cycles must be non-negative.");
             InvalidateWakeAgenda();
@@ -632,6 +638,11 @@ namespace CopperMod.Amiga.Bus
                 _agnusEvents++;
             }
 
+            if (!processBlitter)
+            {
+                return;
+            }
+
             if (useCpuWaitBlitterMicroOps && _bus.Blitter.CanUseCpuWaitAreaMicroOps)
             {
                 if (_bus.Blitter.AdvanceCpuWaitAreaMicroOpTo(cycle))
@@ -641,9 +652,59 @@ namespace CopperMod.Amiga.Bus
             }
             else if (_bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, cycle - 1), cycle) <= cycle)
             {
-                _bus.Blitter.AdvanceTo(cycle);
+                SynchronizeBlitterThrough(cycle);
                 _blitterEvents++;
             }
+        }
+
+        internal void AdvanceDynamicDmaBeforeBlitterSlot(
+            long cycle,
+            out bool advancedPaula,
+            out bool advancedDisk)
+        {
+            Debug.Assert(cycle >= 0, "Ordered blitter slot cycles must be non-negative.");
+            InvalidateWakeAgenda();
+            advancedPaula = _bus.Paula.HasDmaWorkThrough(cycle);
+            if (advancedPaula)
+            {
+                _bus.Paula.AdvanceDmaObservableTo(cycle);
+                _paulaEvents++;
+            }
+
+            advancedDisk = HasSlotContendedDiskWorkThrough(cycle);
+            if (advancedDisk)
+            {
+                _bus.Disk.AdvanceEventsTo(cycle);
+                InvalidateDiskWakeFalseCache();
+                _diskEvents++;
+            }
+        }
+
+        internal OcsCpuWaitLiveSlotResult AdvanceOrderedDmaBeforeBlitterSlot(
+            long cycle,
+            out int bitplaneFetches,
+            out int spriteFetches,
+            out bool advancedPaula,
+            out bool advancedDisk)
+        {
+            AdvanceDynamicDmaBeforeBlitterSlot(cycle, out advancedPaula, out advancedDisk);
+            var result = _bus.AdvanceBlitterFixedSlot(
+                cycle,
+                out bitplaneFetches,
+                out spriteFetches);
+            _bus.InvalidateRasterlineSchedule(cycle, SlotContendedMemoryAccessMask);
+            return result;
+        }
+
+        internal OcsCpuWaitLiveSlotResult AdvanceFixedDmaBeforeBlitterSlotInScope(
+            long cycle,
+            out int bitplaneFetches,
+            out int spriteFetches)
+        {
+            return _bus.AdvanceBlitterFixedSlot(
+                cycle,
+                out bitplaneFetches,
+                out spriteFetches);
         }
 
         private void ProcessSlotContendedTargetCatchUp(long targetCycle, bool blitterWasBusyAtDrainStart)
@@ -664,7 +725,7 @@ namespace CopperMod.Amiga.Bus
             if (!blitterWasBusyAtDrainStart &&
                 _bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle)
             {
-                _bus.Blitter.AdvanceTo(targetCycle);
+                SynchronizeBlitterThrough(targetCycle);
                 InvalidateWakeAgenda();
             }
         }
@@ -707,7 +768,7 @@ namespace CopperMod.Amiga.Bus
             {
                 if (forceCatchUp || (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0)
                 {
-                    _bus.Disk.AdvanceTo(targetCycle);
+                    SynchronizeDiskThrough(targetCycle);
                 }
                 else
                 {
@@ -727,9 +788,11 @@ namespace CopperMod.Amiga.Bus
 
             if ((mask & AmigaHardwareEventMask.Blitter) != 0 &&
                 !blitterWasBusyAtDrainStart &&
-                (forceCatchUp || _bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle))
+                (forceCatchUp
+                    ? _bus.Blitter.HasAdvanceWorkThrough(targetCycle)
+                    : _bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle))
             {
-                _bus.Blitter.AdvanceTo(targetCycle);
+                SynchronizeBlitterThrough(targetCycle);
                 InvalidateWakeAgenda();
             }
         }

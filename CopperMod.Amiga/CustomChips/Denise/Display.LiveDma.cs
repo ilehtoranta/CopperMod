@@ -15,6 +15,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
     internal sealed partial class Display
     {
+        internal bool IsAdvancingLiveDma => _advancingLiveDma;
+
         internal bool HasLiveDmaCapturedThrough(long cycle)
         {
             return _liveFrameValid &&
@@ -87,6 +89,56 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return GetNextLiveCopperCycle(slotCycle) <= slotCycle
                 ? OcsCpuWaitLiveSlotResult.CopperBarrier
                 : OcsCpuWaitLiveSlotResult.Processed;
+        }
+
+        internal OcsCpuWaitLiveSlotResult AdvanceBlitterFixedSlot(
+            long slotCycle,
+            out int bitplaneFetches,
+            out int spriteFetches)
+        {
+            var bitplanesBefore = _liveBitplaneDmaFetches;
+            var spritesBefore = _liveSpriteDmaFetches;
+            if (!_liveDmaEnabled || !_liveFrameValid || !HasLiveDisplayWork())
+            {
+                bitplaneFetches = 0;
+                spriteFetches = 0;
+                return OcsCpuWaitLiveSlotResult.Processed;
+            }
+
+            var savedAdvancingLiveDma = BeginLiveDmaCapture();
+            try
+            {
+                slotCycle = Math.Max(_liveFrameStartCycle, slotCycle);
+                if (slotCycle >= GetLiveFrameStopCycle() ||
+                    GetNextLivePendingWriteCycle() <= slotCycle ||
+                    GetNextLiveCopperCycle(Math.Min(slotCycle + 1, GetLiveFrameStopCycle())) <= slotCycle)
+                {
+                    bitplaneFetches = 0;
+                    spriteFetches = 0;
+                    return OcsCpuWaitLiveSlotResult.CopperBarrier;
+                }
+
+                AdvanceLiveDmaWithinFrame(slotCycle, includeCopper: false);
+                bitplaneFetches = _liveBitplaneDmaFetches - bitplanesBefore;
+                spriteFetches = _liveSpriteDmaFetches - spritesBefore;
+                return OcsCpuWaitLiveSlotResult.Processed;
+            }
+            finally
+            {
+                EndLiveDmaCapture(savedAdvancingLiveDma);
+            }
+        }
+
+        internal long GetNextBlitterFixedSlotBarrierCycle(long targetCycle)
+        {
+            if (!_liveDmaEnabled || !_liveFrameValid || !HasLiveDisplayWork())
+            {
+                return long.MaxValue;
+            }
+
+            var frameStopCycle = GetLiveFrameStopCycle();
+            var copperCycle = GetNextLiveCopperCycle(Math.Min(targetCycle + 1, frameStopCycle));
+            return Math.Min(frameStopCycle, Math.Min(GetNextLivePendingWriteCycle(), copperCycle));
         }
 
         private bool CanCompleteSafeCpuWaitCopperOperation(long slotCycle)

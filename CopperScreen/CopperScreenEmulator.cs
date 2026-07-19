@@ -25,11 +25,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private const int DefaultBootMaxInstructionsPerFrame = 100_000;
 	private const int JitM68040BootMaxInstructionsPerFrame = 2_000_000;
 	private const long JitM68040BootRunAheadCyclesPerFrame = 250_000_000;
-	private const long PalFrameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
 	private const string RunningStatusText = "boot program running:";
 	private const string TraceBusAccessesEnvironmentVariable = "COPPER_AMIGA_TRACE_BUS_ACCESSES";
 	private const string VAmigaTsTraceWritesEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_TRACE_WRITES";
 	private readonly Machine _machine;
+	private readonly long _timingCpuClockHz;
+	private readonly long _timingFrameCycles;
 	private readonly AmigaBootController _boot;
 	private readonly CopperScreenProfile _profile;
 	private readonly string _baseDirectory;
@@ -86,6 +87,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 		_initialDriveWriteProtected = startupOptions.DriveWriteProtected.ToArray();
 		_initialHardDrives = startupOptions.HardDrives;
 		_machine = new Machine(machineOptions);
+		_timingCpuClockHz = _machine.Bus.RasterTiming.CpuClockHz;
+		_timingFrameCycles = _machine.Bus.RasterTiming.GetFrameCycles(_machine.Bus.RasterTiming.LongFrameLines);
 		_boot = new AmigaBootController(_machine);
 		var enableHostWorkbenchStartup = !_profile.UsesKickstartRom && _profile.AutoStartWorkbenchStartupSequence;
 		_boot.AutoStartWorkbenchDefaultTool = enableHostWorkbenchStartup;
@@ -139,6 +142,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	internal OcsDisplaySnapshot DisplaySnapshot => _machine.Bus.Display.CaptureSnapshot();
 
+	internal double VideoVBlankHz => _machine.Bus.RasterTiming.VBlankHz;
+
 	public bool AudioFilterEnabled => _machine.Bus.AudioFilterEnabled;
 
 	public CopperScreenCpuState CpuState => new CopperScreenCpuState(
@@ -155,6 +160,10 @@ internal sealed class CopperScreenEmulator : IDisposable
 	public FloppyDriveAudioOptions FloppyDriveAudioOptions => _floppyDriveAudioOptions;
 
 	public string CpuBackendName => _machine.Options.CpuBackend.ToString();
+
+	internal bool CopperStartRuntimeHandoffActive => _copperStartRuntimeHandoff;
+
+	internal long CopperStartRuntimeHandoffCount => _boot.CopperStartRuntimeHandoffCount;
 
 	public M68kJitCounters JitCounters => _machine.Cpu is M68kJitCore jit ? jit.Counters : default;
 
@@ -232,8 +241,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		return Math.Max(1, (int)CeilingDiv(
-			(long)sampleRate * AmigaConstants.A500PalCpuCyclesPerFrame,
-			AmigaConstants.A500PalCpuCyclesPerSecond));
+			(long)sampleRate * _timingFrameCycles,
+			_timingCpuClockHz));
 	}
 
 	public CopperScreenDriveState[] CaptureDriveStates()
@@ -369,7 +378,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		try
 		{
 			machineOptions.WithKickstart(KickstartConfiguration.FromRomImage(
-				KickstartVersion.Kickstart13,
+				startupOptions.Profile.KickstartVersion,
 				File.ReadAllBytes(romPath)));
 		}
 		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
@@ -1283,7 +1292,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 		if (!_copperStartRuntimeHandoff &&
 			!_profile.UsesKickstartRom &&
-			_boot.IsCopperStartRuntimeHandoffReady)
+			_boot.TryPrepareCopperStartRuntimeHandoff())
 		{
 			_copperStartRuntimeHandoff = true;
 		}
@@ -1656,7 +1665,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		return ConsumeExactAudioFrameCount(sampleRate, ref _outputAudioFrameRemainder);
 	}
 
-	private static int ConsumeExactAudioFrameCount(int sampleRate, ref long remainder)
+	private int ConsumeExactAudioFrameCount(int sampleRate, ref long remainder)
 	{
 		if (sampleRate <= 0)
 		{
@@ -1664,9 +1673,9 @@ internal sealed class CopperScreenEmulator : IDisposable
 			return 0;
 		}
 
-		var numerator = ((long)sampleRate * AmigaConstants.A500PalCpuCyclesPerFrame) + remainder;
-		var frames = numerator / AmigaConstants.A500PalCpuCyclesPerSecond;
-		remainder = numerator % AmigaConstants.A500PalCpuCyclesPerSecond;
+		var numerator = ((long)sampleRate * _timingFrameCycles) + remainder;
+		var frames = numerator / _timingCpuClockHz;
+		remainder = numerator % _timingCpuClockHz;
 		return (int)frames;
 	}
 
@@ -2140,7 +2149,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			CpuBackendName,
 			DiskName,
 			DiskPath,
-			_targetCycle / PalFrameCycles,
+			_machine.Bus.GetBeamPosition(_targetCycle).FrameNumber,
 			cpuSnapshot,
 			CaptureDriveStates(),
 			diagnostics,

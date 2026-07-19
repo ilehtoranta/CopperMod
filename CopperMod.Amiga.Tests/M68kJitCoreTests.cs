@@ -377,6 +377,48 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Theory]
+	[InlineData((int)M68kBackendKind.JitM68000)]
+	[InlineData((int)M68kBackendKind.JitM68040)]
+	public void WarmCompiledRegisterLoopDoesNotAllocate(int backendValue)
+	{
+		var backend = (M68kBackendKind)backendValue;
+		var bus = CreateRealFastCodeBus();
+		WriteWords(
+			bus,
+			RealFastCodeBase,
+			0x7001, // MOVEQ #1,D0
+			0x7202, // MOVEQ #2,D1
+			0xD081, // ADD.L D1,D0
+			0x5482, // ADDQ.L #2,D2
+			0x60F8); // BRA.S loop
+		var cpu = Assert.IsType<M68kJitCore>(
+			AmigaM68kCoreFactory.Default.Create(backend, bus));
+		cpu.Reset(RealFastCodeBase, 0x4000);
+		if (backend == M68kBackendKind.JitM68040)
+		{
+			EnableM68040InstructionCache(cpu);
+		}
+
+		var boundary = new PureBatchBoundary();
+		ExecuteUntilTraceHits(cpu, boundary, 1);
+		for (var attempt = 0; attempt < 250 && !cpu.AsyncCompilationIdle; attempt++)
+		{
+			Thread.Sleep(1);
+		}
+		cpu.ExecuteInstructions(100_000, cpu.State.Cycles + 1_000_000, boundary);
+
+		GC.Collect();
+		GC.WaitForPendingFinalizers();
+		GC.Collect();
+		var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+		cpu.ExecuteInstructions(100_000, cpu.State.Cycles + 1_000_000, boundary);
+		var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+		Assert.Equal(0, allocated);
+		Assert.True(cpu.Counters.TraceHits > 0);
+	}
+
+	[Theory]
 	[InlineData(false, 0x1010, 0x1280, 1)]
 	[InlineData(false, 0x3010, 0x3280, 2)]
 	[InlineData(false, 0x2010, 0x2280, 4)]

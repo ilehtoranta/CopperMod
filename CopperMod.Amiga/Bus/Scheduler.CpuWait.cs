@@ -53,6 +53,19 @@ namespace CopperMod.Amiga.Bus
             => _slotContendedCleanThroughCycle = cycle;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal long ExecuteThroughBlitterCpuStall(long requestedCycle)
+        {
+            if (!_bus.Blitter.CpuStallActive)
+            {
+                return requestedCycle;
+            }
+
+            var releaseCycle = _bus.Blitter.CpuStallReleaseCycle;
+            SynchronizeBlitterThrough(releaseCycle);
+            return Math.Max(requestedCycle, _bus.Blitter.CurrentCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrant(
             AmigaBusAccessKind kind,
             AmigaBusAccessTarget target,
@@ -79,19 +92,6 @@ namespace CopperMod.Amiga.Bus
             // Hardware before the CPU request cannot observe the pending request.
             if (requestedCycle > 0)
             {
-                if (_bus.Blitter.Busy && _bus.Blitter.CanUseCpuWaitAreaMicroOps)
-                {
-                    var blitterSlot = AgnusChipSlotScheduler.AlignToSlot(
-                        Math.Max(0, _bus.Blitter.CurrentCycle));
-                    while (blitterSlot < requestedCycle &&
-                        _bus.Blitter.Busy &&
-                        _bus.Blitter.CanUseCpuWaitAreaMicroOps)
-                    {
-                        _bus.Blitter.AdvanceCpuWaitAreaMicroOpTo(blitterSlot);
-                        blitterSlot += AgnusChipSlotScheduler.SlotCycles;
-                    }
-                }
-
                 DrainSlotContendedAccess(requestedCycle - 1);
             }
 
@@ -100,13 +100,20 @@ namespace CopperMod.Amiga.Bus
                 return CpuWaitGrantAdvanceResult.ReferenceContinuation;
             }
 
+            var firstCandidateCycle = requestedCycle;
+            var blitterStallReleased = _bus.Blitter.CpuStallActive;
+            if (blitterStallReleased)
+            {
+                firstCandidateCycle = ExecuteThroughBlitterCpuStall(requestedCycle);
+            }
+
             _busAccessDrainCount++;
 
             _draining = true;
             _bus.BeginPendingCpuSlotRequest(kind, target, address, size, requestedCycle, isWrite);
             try
             {
-                var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
+                var candidate = AgnusChipSlotScheduler.AlignToSlot(firstCandidateCycle);
                 while (true)
                 {
                     if (_bus.Display.HasLiveDisplayWork())
@@ -122,11 +129,11 @@ namespace CopperMod.Amiga.Bus
                             return CpuWaitGrantAdvanceResult.ReferenceContinuation;
                         }
 
-                        ExecutePendingCpuSlot(candidate);
+                        ExecutePendingCpuSlot(candidate, processBlitter: !blitterStallReleased);
                     }
                     else
                     {
-                        ExecutePendingCpuSlot(candidate);
+                        ExecutePendingCpuSlot(candidate, processBlitter: !blitterStallReleased);
                     }
 
                     _bus.SynchronizeHrmBlitterPriority();
@@ -284,13 +291,16 @@ namespace CopperMod.Amiga.Bus
             }
         }
 
-        private void ExecutePendingCpuSlot(long slotCycle)
+        private void ExecutePendingCpuSlot(long slotCycle, bool processBlitter)
         {
             const int MaxSameCyclePasses = 8;
             for (var pass = 0; pass < MaxSameCyclePasses; pass++)
             {
                 var generationBefore = _generation;
-                ProcessSlotContendedEventsAt(slotCycle, useCpuWaitBlitterMicroOps: true);
+                ProcessSlotContendedEventsAt(
+                    slotCycle,
+                    useCpuWaitBlitterMicroOps: true,
+                    processBlitter);
                 _bus.InvalidateRasterlineSchedule(slotCycle, SlotContendedMemoryAccessMask);
 
                 if (!HasSlotContendedSameCycleWork(slotCycle) ||

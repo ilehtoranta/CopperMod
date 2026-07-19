@@ -247,21 +247,33 @@ namespace CopperMod.Amiga.Storage.Floppy
         private int _start;
         private int _count;
         private long _nextSequence;
+        private readonly RasterTiming _timing;
         private string _backend = string.Empty;
         private Func<AmigaDiskTraceCpuContext>? _cpuContextProvider;
 
         public AmigaDiskTraceRecorder()
-            : this(GetEnvironmentCapacity())
+            : this(RasterTiming.Pal, GetEnvironmentCapacity())
         {
         }
 
         public AmigaDiskTraceRecorder(int capacity)
+            : this(RasterTiming.Pal, capacity)
         {
+        }
+
+        public AmigaDiskTraceRecorder(RasterTiming timing, int capacity = -1)
+        {
+            if (capacity < 0)
+            {
+                capacity = GetEnvironmentCapacity();
+            }
+
             if (capacity <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(capacity), capacity, "Trace capacity must be positive.");
             }
 
+            _timing = timing;
             _events = new AmigaDiskTraceEvent[capacity];
         }
 
@@ -284,7 +296,7 @@ namespace CopperMod.Amiga.Storage.Floppy
         public void Add(in AmigaDiskTraceEventBuilder builder)
         {
             var cpu = _cpuContextProvider?.Invoke() ?? default;
-            var beam = AgnusBeamPosition.FromCycle(builder.Cycle);
+            var beam = AgnusBeamPosition.FromCycle(builder.Cycle, _timing);
             var entry = new AmigaDiskTraceEvent(
                 _nextSequence++,
                 _backend,

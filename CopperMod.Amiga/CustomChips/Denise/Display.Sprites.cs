@@ -390,6 +390,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 return new SpriteDescriptor(
                     baseDescriptor.X,
+                    baseDescriptor.SuperHighResSampleOffset,
                     baseDescriptor.YStart,
                     baseDescriptor.YStart,
                     baseDescriptor.Attached,
@@ -401,6 +402,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             return new SpriteDescriptor(
                 baseDescriptor.X,
+                baseDescriptor.SuperHighResSampleOffset,
                 baseDescriptor.YStart,
                 LowResOutputHeight,
                 baseDescriptor.Attached,
@@ -580,7 +582,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var ddfStart = GetDataFetchStartValue();
-            if (!IsHighResolutionEnabled() && ddfStart <= 0x0018 && spriteIndex == 0)
+            if (GetAgnusFetchResolution(_bplcon0) == DeniseResolution.LowRes &&
+                ddfStart <= 0x0018 &&
+                spriteIndex == 0)
             {
                 return word == 0;
             }
@@ -600,7 +604,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return true;
             }
 
-            if (!IsHighResolutionEnabled(state.Bplcon0) && state.DataFetchStart <= 0x0018 && spriteIndex == 0)
+            if (state.FetchResolution == DeniseResolution.LowRes &&
+                state.DataFetchStart <= 0x0018 &&
+                spriteIndex == 0)
             {
                 return word == 0;
             }
@@ -615,7 +621,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return true;
             }
 
-            if (!IsHighResolutionEnabled(state.Bplcon0) &&
+            if (state.FetchResolution == DeniseResolution.LowRes &&
                 state.DataFetchStart <= 0x0018 &&
                 spriteIndex == 0)
             {
@@ -633,7 +639,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var ddfStart = GetDataFetchStartValue();
-            var standardStart = IsHighResolutionEnabled() ? DefaultHighResDdfStart : DefaultDdfStart;
+            var standardStart = GetAgnusFetchResolution(_bplcon0) == DeniseResolution.LowRes
+                ? DefaultDdfStart
+                : DefaultHighResDdfStart;
             if (ddfStart >= standardStart)
             {
                 return _sprites.Length;
@@ -665,7 +673,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var ddfStart = state.DataFetchStart;
-            var standardStart = IsHighResolutionEnabled(state.Bplcon0) ? DefaultHighResDdfStart : DefaultDdfStart;
+            var standardStart = state.FetchResolution == DeniseResolution.LowRes
+                ? DefaultDdfStart
+                : DefaultHighResDdfStart;
             if (ddfStart >= standardStart)
             {
                 return LiveSpriteChannelCount;
@@ -697,7 +707,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var ddfStart = state.DataFetchStart;
-            var standardStart = IsHighResolutionEnabled(state.Bplcon0) ? DefaultHighResDdfStart : DefaultDdfStart;
+            var standardStart = state.FetchResolution == DeniseResolution.LowRes
+                ? DefaultDdfStart
+                : DefaultHighResDdfStart;
             if (ddfStart >= standardStart)
             {
                 return LiveSpriteChannelCount;
@@ -755,6 +767,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var vStop = ((ctl >> 8) & 0x00FF) | ((ctl & 0x0002) != 0 ? 0x100 : 0);
             return new SpriteDescriptor(
                 hStart - StandardSpriteHorizontalOffset,
+                (ctl & 0x0010) != 0 ? 2 : 0,
                 vStart - StandardVStart,
                 vStop - StandardVStart,
                 (ctl & 0x0080) != 0,
@@ -773,7 +786,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var yStop = Math.Min(sprite.YStop, LowResOutputHeight);
                 for (var y = yStart; y < yStop; y++)
                 {
-                    RenderSpriteLine(bgra, spriteIndex, sprite.X, y, sprite.ManualDataA, sprite.ManualDataB);
+                    RenderSpriteLine(bgra, spriteIndex, sprite, y, sprite.ManualDataA, sprite.ManualDataB);
                 }
 
                 return;
@@ -797,7 +810,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         out var dataB,
                         recordLiveCapture: false))
                 {
-                    RenderSpriteLine(bgra, spriteIndex, sprite.X, y, dataA, dataB);
+                    RenderSpriteLine(bgra, spriteIndex, sprite, y, dataA, dataB);
                 }
 
                 address = AddDmaPointerOffset(address, 4);
@@ -817,7 +830,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var yStop = Math.Min(sprite.YStop, LowResOutputHeight);
                 for (var y = yStart; y < yStop; y++)
                 {
-                    RenderSpriteLine(bgra, spriteIndex, sprite.X, y, sprite.ManualDataA, sprite.ManualDataB);
+                    RenderSpriteLine(bgra, spriteIndex, sprite, y, sprite.ManualDataA, sprite.ManualDataB);
                 }
 
                 return;
@@ -827,7 +840,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 if (TryReadTimelineSpriteLine(command, y, timeline, out var dataA, out var dataB))
                 {
-                    RenderSpriteLine(bgra, spriteIndex, sprite.X, y, dataA, dataB);
+                    RenderSpriteLine(bgra, spriteIndex, sprite, y, dataA, dataB);
                 }
             }
         }
@@ -997,7 +1010,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var hasPriorDatb = HasPriorTimelineSpriteDatb(timeline, command, y, command.SpriteIndex);
+            var hasPriorDatb = TryGetPriorTimelineSpriteDatb(
+                timeline,
+                command,
+                y,
+                command.SpriteIndex,
+                out var priorDatb);
             if (statusB == TimelineFetchStatus.Denied && !hasPriorDatb)
             {
                 return true;
@@ -1006,17 +1024,30 @@ namespace CopperMod.Amiga.CustomChips.Denise
             dataA = statusA == TimelineFetchStatus.Granted
                 ? timeline.GetSpriteWord(y, command.SpriteIndex, 0)
                 : (ushort)0;
-            dataB = statusB == TimelineFetchStatus.Granted ||
-                (statusB == TimelineFetchStatus.Denied && hasPriorDatb)
+            dataB = statusB == TimelineFetchStatus.Granted
                 ? timeline.GetSpriteWord(y, command.SpriteIndex, 1)
-                : (ushort)0;
+                : statusB == TimelineFetchStatus.Denied && hasPriorDatb
+                    ? priorDatb
+                    : (ushort)0;
             return true;
         }
 
-        private void RenderSpriteLine(Span<uint> bgra, int spriteIndex, int x, int y, ushort dataA, ushort dataB)
+        private void RenderSpriteLine(
+            Span<uint> bgra,
+            int spriteIndex,
+            SpriteDescriptor descriptor,
+            int y,
+            ushort dataA,
+            ushort dataB)
         {
             if (y < 0 || y >= LowResOutputHeight)
             {
+                return;
+            }
+
+            if (GetDeniseResolution(GetSpriteEcsRegisters(descriptor.X, y).Bplcon0) == DeniseResolution.SuperHighRes)
+            {
+                RenderSuperHighResolutionSpriteLine(bgra, spriteIndex, descriptor, y, dataA, dataB);
                 return;
             }
 
@@ -1028,8 +1059,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     continue;
                 }
 
-                var px = x + (15 - bit);
-                if (px < 0 || px >= AmigaConstants.PalLowResWidth)
+                var px = descriptor.X + (15 - bit);
+                if (px < 0 || px >= LowResWidth)
                 {
                     continue;
                 }
@@ -1041,6 +1072,168 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 WriteSpritePixel(bgra, px, y, ConvertSpriteColorIndex(GetSpriteColorIndex(spriteIndex, pixel), px, y));
             }
+        }
+
+        private void RenderSuperHighResolutionSpriteLine(
+            Span<uint> bgra,
+            int spriteIndex,
+            SpriteDescriptor descriptor,
+            int y,
+            ushort dataA,
+            ushort dataB)
+        {
+            var firstSample = (descriptor.X * MaxDeniseSamplesPerLowResSpan) + descriptor.SuperHighResSampleOffset;
+            for (var pixel = 0; pixel < 16; pixel++)
+            {
+                var bit = 15 - pixel;
+                var spriteRaw = (((dataB >> bit) & 1) << 1) | ((dataA >> bit) & 1);
+                var firstAbsoluteSample = firstSample + (pixel * 2);
+                var secondAbsoluteSample = firstAbsoluteSample + 1;
+
+                var firstRaw = ComposeSuperHighResolutionSpriteRawSample(
+                    spriteIndex,
+                    firstAbsoluteSample,
+                    y,
+                    spriteRaw,
+                    out var drawFirst);
+                var secondRaw = ComposeSuperHighResolutionSpriteRawSample(
+                    spriteIndex,
+                    secondAbsoluteSample,
+                    y,
+                    spriteRaw,
+                    out var drawSecond);
+                if (!drawFirst && !drawSecond)
+                {
+                    continue;
+                }
+
+                if (!TryGetLowResSpanSample(firstAbsoluteSample, out var paletteX, out _))
+                {
+                    TryGetLowResSpanSample(secondAbsoluteSample, out paletteX, out _);
+                }
+
+                var colors = ConvertSuperHighResolutionSpriteColorPair(firstRaw, secondRaw, paletteX, y);
+                if (drawFirst)
+                {
+                    WriteSuperHighResolutionSpritePixel(bgra, firstAbsoluteSample, y, colors.Left);
+                }
+
+                if (drawSecond)
+                {
+                    WriteSuperHighResolutionSpritePixel(bgra, secondAbsoluteSample, y, colors.Right);
+                }
+            }
+        }
+
+        private int ComposeSuperHighResolutionSpriteRawSample(
+            int spriteIndex,
+            int absoluteSample,
+            int y,
+            int spriteRaw,
+            out bool draw)
+        {
+            draw = false;
+            if (spriteRaw == 0 || !TryGetLowResSpanSample(absoluteSample, out var x, out var sample))
+            {
+                return 0;
+            }
+
+            if (!ShouldSuperHighResolutionSpriteSampleDraw(spriteIndex, x, y, sample, out var xorPlayfield))
+            {
+                return 0;
+            }
+
+            draw = true;
+            var offset = GetCompositionSampleOffset(x, y, sample);
+            return xorPlayfield ? spriteRaw ^ _playfieldSampleColorIndexes[offset] : spriteRaw;
+        }
+
+        private bool ShouldSuperHighResolutionSpriteSampleDraw(
+            int spriteIndex,
+            int x,
+            int y,
+            int sample,
+            out bool xorPlayfield)
+        {
+            xorPlayfield = false;
+            if (!IsSpritePixelInsideDisplayWindow(x, y))
+            {
+                var (bplcon0, bplcon3) = GetSpriteEcsRegisters(x, y);
+                return AreEcsDeniseExtensionsEnabled(bplcon0) &&
+                    (bplcon3 & Bplcon3BorderSpriteEnable) != 0;
+            }
+
+            if (!IsSpritePastDeniseOutputEnable(x, y))
+            {
+                return false;
+            }
+
+            var mask = _playfieldPriorityMasks[GetCompositionSampleOffset(x, y, sample)];
+            if (mask == 0)
+            {
+                return true;
+            }
+
+            var bplcon2 = GetSpritePriorityRegister(x, y);
+            var effectivePriority = 0;
+            if ((mask & NormalPlayfieldPriorityMask) != 0)
+            {
+                effectivePriority = GetNormalPlayfieldPriorityPlacement(bplcon2);
+            }
+            else
+            {
+                var hasPlayfield1 = (mask & Playfield1PriorityMask) != 0;
+                var hasPlayfield2 = (mask & Playfield2PriorityMask) != 0;
+                if (hasPlayfield1 && hasPlayfield2)
+                {
+                    effectivePriority = (bplcon2 & 0x0040) != 0
+                        ? GetPlayfield2PriorityPlacement(bplcon2)
+                        : GetPlayfield1PriorityPlacement(bplcon2);
+                }
+                else if (hasPlayfield1)
+                {
+                    effectivePriority = GetPlayfield1PriorityPlacement(bplcon2);
+                }
+                else if (hasPlayfield2)
+                {
+                    effectivePriority = GetPlayfield2PriorityPlacement(bplcon2);
+                }
+            }
+
+            if (effectivePriority >= 4)
+            {
+                xorPlayfield = true;
+                return true;
+            }
+
+            return true;
+        }
+
+        private void WriteSuperHighResolutionSpritePixel(Span<uint> bgra, int absoluteSample, int y, uint pixel)
+        {
+            if (!TryGetLowResSpanSample(absoluteSample, out var x, out var sample))
+            {
+                return;
+            }
+
+            _lastSpriteNonZeroPixels++;
+            _lastSpriteMinX = Math.Min(_lastSpriteMinX, x);
+            _lastSpriteMinY = Math.Min(_lastSpriteMinY, y);
+            _lastSpriteMaxX = Math.Max(_lastSpriteMaxX, x);
+            _lastSpriteMaxY = Math.Max(_lastSpriteMaxY, y);
+            WriteSuperHighResolutionOutputSample(bgra, x, y, sample, pixel);
+        }
+
+        private bool TryGetLowResSpanSample(int absoluteSample, out int x, out int sample)
+        {
+            x = Math.DivRem(absoluteSample, MaxDeniseSamplesPerLowResSpan, out sample);
+            if (sample < 0)
+            {
+                sample += MaxDeniseSamplesPerLowResSpan;
+                x--;
+            }
+
+            return (uint)x < (uint)LowResWidth;
         }
 
         private void RenderAttachedSpriteLine(
@@ -1071,7 +1264,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     continue;
                 }
 
-                if (px < 0 || px >= AmigaConstants.PalLowResWidth)
+                if (px < 0 || px >= LowResWidth)
                 {
                     continue;
                 }
@@ -1108,22 +1301,32 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool ShouldSpritePixelDrawOverPlayfields(int spriteIndex, int x, int y)
         {
-            if ((uint)x >= (uint)AmigaConstants.PalLowResWidth || (uint)y >= (uint)LowResOutputHeight)
+            if ((uint)x >= (uint)LowResWidth || (uint)y >= (uint)LowResOutputHeight)
             {
                 return false;
             }
 
-            if (!IsSpritePixelInsideDisplayWindow(x, y))
+            var insideDisplayWindow = IsSpritePixelInsideDisplayWindow(x, y);
+            if (!insideDisplayWindow)
+            {
+                var (bplcon0, bplcon3) = GetSpriteEcsRegisters(x, y);
+                if (!AreEcsDeniseExtensionsEnabled(bplcon0) ||
+                    (bplcon3 & Bplcon3BorderSpriteEnable) == 0)
+                {
+                    return false;
+                }
+            }
+
+            if (insideDisplayWindow && !IsSpritePastDeniseOutputEnable(x, y))
             {
                 return false;
             }
 
-            if (!IsSpritePastDeniseOutputEnable(x, y))
-            {
-                return false;
-            }
-
-            var mask = _playfieldPriorityMasks[(y * AmigaConstants.PalLowResWidth) + x];
+            var maskOffset = GetCompositionSampleOffset(x, y, 0);
+            var mask = (byte)(_playfieldPriorityMasks[maskOffset] |
+                _playfieldPriorityMasks[maskOffset + 1] |
+                _playfieldPriorityMasks[maskOffset + 2] |
+                _playfieldPriorityMasks[maskOffset + 3]);
             if (mask == 0)
             {
                 return true;
@@ -1154,10 +1357,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private bool IsSpritePixelInsideDisplayWindow(int x, int y)
         {
             var window = GetSpriteDisplayWindow(x, y);
-            return x >= window.X &&
-                x < window.X + window.Width &&
-                y >= window.Y &&
-                y < window.Y + window.Height;
+            return x >= GetDisplayWindowOutputXStart(window) &&
+                x < GetDisplayWindowOutputXStop(window) &&
+                y >= GetDisplayWindowOutputYStart(window) &&
+                y < GetDisplayWindowOutputYStop(window);
         }
 
         private bool IsSpritePastDeniseOutputEnable(int x, int y)
@@ -1211,6 +1414,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             return _bplcon2;
+        }
+
+        private (ushort Bplcon0, ushort Bplcon3) GetSpriteEcsRegisters(int x, int y)
+        {
+            for (var i = _paletteFrameSpans.Count - 1; i >= 0; i--)
+            {
+                var span = _paletteFrameSpans[i];
+                if (span.Contains(x, y))
+                {
+                    return (span.Bplcon0, span.Bplcon3);
+                }
+            }
+
+            return (_bplcon0, _bplcon3);
         }
 
         private static int GetPlayfield1PriorityPlacement(ushort bplcon2)
@@ -1302,12 +1519,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool IsRenderingHighResolutionWidth()
         {
-            return _renderWidth >= AmigaConstants.PalHighResWidth;
+            return _renderWidth >= _timing.PresentationHighResWidth;
         }
+
+        private int GetRenderHorizontalScale()
+            => Math.Max(1, _renderWidth / LowResWidth);
 
         private bool IsRenderingHighResolutionHeight()
         {
-            return _renderHeight >= AmigaConstants.PalHighResHeight;
+            return _renderHeight >= _timing.PresentationHighResHeight;
         }
 
         private OutputRows EnumerateOutputRows(int y)
@@ -1345,18 +1565,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
             bool interlace,
             int interlaceField)
         {
+            if ((uint)x >= (uint)LowResWidth || (uint)y >= (uint)ActiveLowResOutputHeight)
+            {
+                return;
+            }
+
+            StoreCompositionSamples(x, y, pixel, pixel, pixel, pixel);
             if (!highResolutionHeight)
             {
-                if (highResolutionWidth)
-                {
-                    var offset = (y * _renderWidth) + (x * 2);
-                    bgra[offset] = pixel;
-                    bgra[offset + 1] = pixel;
-                }
-                else
-                {
-                    bgra[(y * _renderWidth) + x] = pixel;
-                }
+                WriteLowResolutionOutputPixelRow(bgra, x, y, pixel, highResolutionWidth);
 
                 return;
             }
@@ -1394,18 +1611,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
             bool interlace,
             int interlaceField)
         {
+            if ((uint)x >= (uint)LowResWidth || (uint)y >= (uint)ActiveLowResOutputHeight)
+            {
+                return;
+            }
+
+            StoreCompositionSamples(x, y, left, left, right, right);
             if (!highResolutionHeight)
             {
-                if (highResolutionWidth)
-                {
-                    var offset = (y * _renderWidth) + (x * 2);
-                    bgra[offset] = left;
-                    bgra[offset + 1] = right;
-                }
-                else
-                {
-                    bgra[(y * _renderWidth) + x] = AveragePixels(left, right);
-                }
+                WriteHighResolutionOutputPixelRow(bgra, x, y, left, right, highResolutionWidth);
 
                 return;
             }
@@ -1418,18 +1632,79 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
         }
 
+        private void WriteSuperHighResolutionOutputPixels(
+            Span<uint> bgra,
+            int x,
+            int y,
+            uint pixel0,
+            uint pixel1,
+            uint pixel2,
+            uint pixel3)
+        {
+            if ((uint)x >= (uint)LowResWidth || (uint)y >= (uint)ActiveLowResOutputHeight)
+            {
+                return;
+            }
+
+            StoreCompositionSamples(x, y, pixel0, pixel1, pixel2, pixel3);
+            foreach (var outputY in EnumerateOutputRows(y))
+            {
+                var scale = GetRenderHorizontalScale();
+                var offset = (outputY * _renderWidth) + (x * scale);
+                if (scale >= 4)
+                {
+                    var subpixelScale = scale / 4;
+                    bgra.Slice(offset, subpixelScale).Fill(pixel0);
+                    bgra.Slice(offset + subpixelScale, subpixelScale).Fill(pixel1);
+                    bgra.Slice(offset + (subpixelScale * 2), subpixelScale).Fill(pixel2);
+                    bgra.Slice(offset + (subpixelScale * 3), subpixelScale).Fill(pixel3);
+                }
+                else
+                {
+                    bgra[offset] = AveragePixels(AveragePixels(pixel0, pixel1), AveragePixels(pixel2, pixel3));
+                }
+            }
+        }
+
+        private void WriteSuperHighResolutionOutputSample(Span<uint> bgra, int x, int y, int sample, uint pixel)
+        {
+            if ((uint)x >= (uint)LowResWidth ||
+                (uint)y >= (uint)ActiveLowResOutputHeight ||
+                (uint)sample >= MaxDeniseSamplesPerLowResSpan)
+            {
+                return;
+            }
+
+            var offset = GetCompositionSampleOffset(x, y, 0);
+            _compositionSampleColors[offset + sample] = pixel;
+            WriteSuperHighResolutionOutputPixels(
+                bgra,
+                x,
+                y,
+                _compositionSampleColors[offset],
+                _compositionSampleColors[offset + 1],
+                _compositionSampleColors[offset + 2],
+                _compositionSampleColors[offset + 3]);
+        }
+
+        private void StoreCompositionSamples(int x, int y, uint pixel0, uint pixel1, uint pixel2, uint pixel3)
+        {
+            if ((uint)x >= (uint)LowResWidth || (uint)y >= (uint)ActiveLowResOutputHeight)
+            {
+                return;
+            }
+
+            var offset = GetCompositionSampleOffset(x, y, 0);
+            _compositionSampleColors[offset] = pixel0;
+            _compositionSampleColors[offset + 1] = pixel1;
+            _compositionSampleColors[offset + 2] = pixel2;
+            _compositionSampleColors[offset + 3] = pixel3;
+        }
+
         private void WriteLowResolutionOutputPixelRow(Span<uint> bgra, int x, int outputY, uint pixel, bool highResolutionWidth)
         {
-            if (highResolutionWidth)
-            {
-                var offset = (outputY * _renderWidth) + (x * 2);
-                bgra[offset] = pixel;
-                bgra[offset + 1] = pixel;
-            }
-            else
-            {
-                bgra[(outputY * _renderWidth) + x] = pixel;
-            }
+            var scale = GetRenderHorizontalScale();
+            bgra.Slice((outputY * _renderWidth) + (x * scale), scale).Fill(pixel);
         }
 
         private void WriteHighResolutionOutputPixelRow(
@@ -1442,9 +1717,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             if (highResolutionWidth)
             {
-                var offset = (outputY * _renderWidth) + (x * 2);
-                bgra[offset] = left;
-                bgra[offset + 1] = right;
+                var scale = GetRenderHorizontalScale();
+                var subpixelScale = Math.Max(1, scale / 2);
+                var offset = (outputY * _renderWidth) + (x * scale);
+                bgra.Slice(offset, subpixelScale).Fill(left);
+                bgra.Slice(offset + subpixelScale, subpixelScale).Fill(right);
             }
             else
             {

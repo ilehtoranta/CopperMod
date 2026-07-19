@@ -20,8 +20,8 @@ namespace CopperMod.Amiga.CustomChips.Paula
         private const int MaxCapturedWrites = 65536;
         private const int MaxPendingInterruptEvents = 65536;
         private readonly AmigaBus _bus;
-        private readonly PaulaTimelineState _audioTimeline = new PaulaTimelineState();
-        private readonly PaulaTimelineState _registerTimeline = new PaulaTimelineState();
+        private readonly PaulaTimelineState _audioTimeline;
+        private readonly PaulaTimelineState _registerTimeline;
         private readonly List<PendingWrite> _pendingWrites = new List<PendingWrite>();
         private readonly PaulaDmaReadLatchQueue[] _dmaReadLatchQueues = CreateDmaReadLatchQueues();
         private readonly List<PaulaInterruptEvent> _pendingInterrupts = new List<PaulaInterruptEvent>();
@@ -59,6 +59,9 @@ namespace CopperMod.Amiga.CustomChips.Paula
         public Paula(AmigaBus bus)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+            var cpuCyclesPerColorClock = bus.RasterTiming.CpuCyclesPerColorClock;
+            _audioTimeline = new PaulaTimelineState(cpuCyclesPerColorClock);
+            _registerTimeline = new PaulaTimelineState(cpuCyclesPerColorClock);
         }
 
         public IReadOnlyList<CustomRegisterWrite> Writes => _writes;
@@ -221,9 +224,11 @@ namespace CopperMod.Amiga.CustomChips.Paula
         public void ScheduleWrite(long cycle, ushort offset, ushort value)
         {
             offset = (ushort)(offset & 0x01FE);
-            if (CustomRegisterScheduleClassifier.IsPaulaBusScheduleAffectingWrite(offset))
+            var impact = CustomRegisterScheduleClassifier.GetPotentialImpact(_bus.Chipset, offset) &
+                HardwareScheduleImpact.Audio;
+            if (impact != HardwareScheduleImpact.None)
             {
-                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle);
+                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle, impact);
             }
 
             var pending = new PendingWrite(cycle, offset, value);
@@ -1199,11 +1204,6 @@ namespace CopperMod.Amiga.CustomChips.Paula
             return (ushort)(0x0080 << channel);
         }
 
-        private static long GetPeriodCycles(int period)
-        {
-            return GetEffectivePeriod(period) * AmigaConstants.A500PalCpuCyclesPerColorClock;
-        }
-
         private static long GetEffectivePeriod(int period)
         {
             if (period == 0)
@@ -1448,10 +1448,10 @@ namespace CopperMod.Amiga.CustomChips.Paula
             return true;
         }
 
-        private static long GetNextAudioDmaSlotCycle(int channel, long cycle)
+        private long GetNextAudioDmaSlotCycle(int channel, long cycle)
         {
             cycle = Math.Max(0, cycle);
-            return AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(
+            return _bus.FindNextFixedDmaSlot(
                 cycle,
                 AgnusChipSlotOwner.Paula,
                 channel);
@@ -1514,12 +1514,12 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
         private sealed class PaulaTimelineState
         {
-            public PaulaTimelineState()
+            public PaulaTimelineState(int cpuCyclesPerColorClock)
             {
                 Channels = new PaulaChannel[AmigaConstants.PaulaChannelCount];
                 for (var i = 0; i < Channels.Length; i++)
                 {
-                    Channels[i] = new PaulaChannel(i);
+                    Channels[i] = new PaulaChannel(i, cpuCyclesPerColorClock);
                 }
             }
 
@@ -1751,6 +1751,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
         private sealed class PaulaChannel
         {
+            private readonly int _cpuCyclesPerColorClock;
             private ushort _dataLatch;
             private bool _dataLatchWritten;
             private ushort _dataWord;
@@ -1782,13 +1783,17 @@ namespace CopperMod.Amiga.CustomChips.Paula
             private uint _currentAddress;
             private int _remainingWords;
 
-            public PaulaChannel(int index)
+            public PaulaChannel(int index, int cpuCyclesPerColorClock)
             {
                 Index = index;
+                _cpuCyclesPerColorClock = cpuCyclesPerColorClock;
                 Reset();
             }
 
             public int Index { get; }
+
+            private long GetPeriodCycles(int period)
+                => GetEffectivePeriod(period) * _cpuCyclesPerColorClock;
 
             public uint Location { get; set; }
 
@@ -2444,7 +2449,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 _pendingDmaRequestAddress = requestAddress;
                 _pendingDmaRequestCycle = requestCycle;
                 _pendingDmaServiceCycle = UsesLiveAgnusAudioDma(context.Bus)
-                    ? GetNextAudioDmaSlotCycle(Index, requestCycle)
+                    ? context.Paula.GetNextAudioDmaSlotCycle(Index, requestCycle)
                     : requestCycle;
                 _pendingDmaLoadCycle = long.MaxValue;
                 _pendingDmaLoadTarget = loadTarget;
@@ -2506,7 +2511,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
                         return;
                     }
 
-                    _pendingDmaServiceCycle = GetNextAudioDmaSlotCycle(
+                    _pendingDmaServiceCycle = context.Paula.GetNextAudioDmaSlotCycle(
                         Index,
                         _pendingDmaServiceCycle + AgnusChipSlotScheduler.SlotCycles);
                 }

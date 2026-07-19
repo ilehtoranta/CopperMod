@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (C) 2026 Ilkka Lehtoranta
  * SPDX-License-Identifier: MIT
  */
@@ -335,7 +335,7 @@ namespace CopperMod.Amiga.Bus
                 var start = Stopwatch.GetTimestamp();
                 if ((mask & (AmigaHardwareEventMask.ForceCatchUp | AmigaHardwareEventMask.DiskPassiveInput)) != 0)
                 {
-                    _bus.Disk.AdvanceTo(cycle);
+                    SynchronizeDiskThrough(cycle);
                 }
                 else
                 {
@@ -360,7 +360,7 @@ namespace CopperMod.Amiga.Bus
                 _bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, cycle - 1), cycle) <= cycle)
             {
                 var start = Stopwatch.GetTimestamp();
-                _bus.Blitter.AdvanceTo(cycle);
+                SynchronizeBlitterThrough(cycle);
                 _hostBlitterTicks += Stopwatch.GetTimestamp() - start;
                 _blitterEvents++;
             }
@@ -398,7 +398,7 @@ namespace CopperMod.Amiga.Bus
             if (_bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, cycle - 1), cycle) <= cycle)
             {
                 var start = Stopwatch.GetTimestamp();
-                _bus.Blitter.AdvanceTo(cycle);
+                SynchronizeBlitterThrough(cycle);
                 _hostBlitterTicks += Stopwatch.GetTimestamp() - start;
                 _blitterEvents++;
             }
@@ -427,7 +427,7 @@ namespace CopperMod.Amiga.Bus
                 _bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle)
             {
                 var start = Stopwatch.GetTimestamp();
-                _bus.Blitter.AdvanceTo(targetCycle);
+                SynchronizeBlitterThrough(targetCycle);
                 _hostBlitterTicks += Stopwatch.GetTimestamp() - start;
                 InvalidateWakeAgenda();
             }
@@ -480,7 +480,7 @@ namespace CopperMod.Amiga.Bus
                 var start = Stopwatch.GetTimestamp();
                 if (forceCatchUp || (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0)
                 {
-                    _bus.Disk.AdvanceTo(targetCycle);
+                    SynchronizeDiskThrough(targetCycle);
                 }
                 else
                 {
@@ -503,10 +503,12 @@ namespace CopperMod.Amiga.Bus
 
             if ((mask & AmigaHardwareEventMask.Blitter) != 0 &&
                 !blitterWasBusyAtDrainStart &&
-                (forceCatchUp || _bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle))
+                (forceCatchUp
+                    ? _bus.Blitter.HasAdvanceWorkThrough(targetCycle)
+                    : _bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle))
             {
                 var start = Stopwatch.GetTimestamp();
-                _bus.Blitter.AdvanceTo(targetCycle);
+                SynchronizeBlitterThrough(targetCycle);
                 _hostBlitterTicks += Stopwatch.GetTimestamp() - start;
                 InvalidateWakeAgenda();
             }

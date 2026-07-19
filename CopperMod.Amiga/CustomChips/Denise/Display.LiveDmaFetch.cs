@@ -27,21 +27,32 @@ namespace CopperMod.Amiga.CustomChips.Denise
             state.Generation = _liveGeneration;
             state.LineStartCycle = GetOutputRowStartCycle(_liveFrameStartCycle, row);
             state.DisplayWindowVerticallyOpen = _liveDisplayWindowVerticallyOpen;
+            state.DeniseDisplayWindowVerticallyOpen = _liveDeniseDisplayWindowVerticallyOpen;
+            state.Resolution = GetDeniseResolution(_bplcon0);
+            state.FetchResolution = _dataFetchWindow.Resolution;
             state.Bplcon0 = _bplcon0;
             state.Bplcon1 = _bplcon1;
             state.Bplcon2 = _bplcon2;
+            state.Bplcon3 = _bplcon3;
             state.DiwStart = _diwStart;
             state.DiwStop = _diwStop;
+            state.DiwHigh = _diwHigh;
+            state.DiwHighValid = _diwHighValid;
+            state.AgnusDiwHigh = _agnusDiwHigh;
+            state.AgnusDiwHighValid = _agnusDiwHighValid;
+            state.AgnusDisplayWindow = _agnusDisplayWindow;
+            state.DeniseDisplayWindow = _deniseDisplayWindow;
             state.DdfStart = _ddfStart;
             state.DdfStop = _ddfStop;
+            state.DataFetchWindow = _dataFetchWindow;
             state.Dmacon = _dmacon;
             state.Bpl1Mod = _bpl1mod;
             state.Bpl2Mod = _bpl2mod;
             state.PlaneCount = GetAgnusBitplaneFetchPlaneCount();
             state.DecodePlaneCount = GetDeniseBitplaneDecodePlaneCount();
             state.FetchWords = GetDataFetchWordCount();
-            state.DataFetchStart = GetDataFetchStartValue();
-            state.FetchSlotStride = GetBitplaneFetchSlotStride(IsHighResolutionEnabled());
+            state.DataFetchStart = _dataFetchWindow.Start;
+            state.FetchSlotStride = DisplayGeometryDecoder.GetDataFetchSlotStride(_dataFetchWindow);
             state.PaletteSnapshotIndex = CaptureLivePaletteSnapshot();
             Array.Copy(_bitplanePointers, state.BitplanePointers, _bitplanePointers.Length);
             Array.Copy(_bitplaneBaseRows, state.BitplaneBaseRows, _bitplaneBaseRows.Length);
@@ -136,6 +147,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
+            var signature = ComputeRowDmaPlanSignature(state);
+            var existing = _rowDmaPlans[row];
+            if (existing.Valid &&
+                existing.Generation == _liveGeneration &&
+                existing.Row == row &&
+                existing.Signature == signature)
+            {
+                return;
+            }
+
             var bitplaneStart = row * MaxRowDmaBitplaneEntriesPerRow;
             var bitplaneCount = 0;
             if (state.PlaneCount > 0 &&
@@ -148,7 +169,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     for (var slot = 0; slot < state.FetchSlotStride; slot++)
                     {
-                        if (!TryGetBitplanePlaneForFetchSlot(slot, planeCount, state.FetchSlotStride, out var plane))
+                        if (!TryGetBitplanePlaneForFetchSlot(slot, planeCount, state.FetchResolution, out var plane))
                         {
                             continue;
                         }
@@ -183,7 +204,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _rowDmaPlans[row] = new RowDmaPlan(
                 _liveGeneration,
                 row,
-                ComputeRowDmaPlanSignature(state),
+                signature,
                 bitplaneStart,
                 bitplaneCount,
                 spriteStart,
@@ -273,8 +294,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 hash = AddRowDmaPlanSignature(hash, state.Bplcon0);
                 hash = AddRowDmaPlanSignature(hash, state.Bplcon1);
                 hash = AddRowDmaPlanSignature(hash, state.Bplcon2);
+                hash = AddRowDmaPlanSignature(hash, state.Bplcon3);
+                hash = AddRowDmaPlanSignature(hash, state.DiwStart);
+                hash = AddRowDmaPlanSignature(hash, state.DiwStop);
+                hash = AddRowDmaPlanSignature(hash, state.DiwHigh);
+                hash = AddRowDmaPlanSignature(hash, state.DiwHighValid ? 1 : 0);
+                hash = AddRowDmaPlanSignature(hash, state.AgnusDiwHigh);
+                hash = AddRowDmaPlanSignature(hash, state.AgnusDiwHighValid ? 1 : 0);
+                hash = AddRowDmaPlanSignature(hash, state.AgnusDisplayWindow.GetHashCode());
+                hash = AddRowDmaPlanSignature(hash, state.DeniseDisplayWindow.GetHashCode());
                 hash = AddRowDmaPlanSignature(hash, state.DdfStart);
                 hash = AddRowDmaPlanSignature(hash, state.DdfStop);
+                hash = AddRowDmaPlanSignature(hash, state.DataFetchWindow.GetHashCode());
                 hash = AddRowDmaPlanSignature(hash, state.Dmacon);
                 hash = AddRowDmaPlanSignature(hash, state.Bpl1Mod);
                 hash = AddRowDmaPlanSignature(hash, state.Bpl2Mod);
@@ -382,7 +413,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     while (slot < fetchSlotStride)
                     {
-                        if (!TryGetBitplanePlaneForFetchSlot(slot, planeCount, fetchSlotStride, out var plane))
+                        if (!TryGetBitplanePlaneForFetchSlot(slot, planeCount, state.FetchResolution, out var plane))
                         {
                             slot++;
                             continue;
@@ -572,10 +603,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var entry = _rowDmaBitplaneEntries[entryStart + offset];
                 var value = _rowDmaBitplaneBatchValues[offset];
                 _liveBitplaneWords[liveWordBase + (entry.Plane * MaxBitplaneFetchWords) + entry.Word] = value;
-                _liveBitplaneWordMasks[liveMaskBase + entry.Plane] |= 1UL << entry.Word;
+                _liveBitplaneWordMasks[liveMaskBase + entry.Plane] |= (UInt128)1 << entry.Word;
                 if (recordTimeline)
                 {
-                    var bit = 1UL << entry.Word;
+                    var bit = (UInt128)1 << entry.Word;
                     var index = (entry.Plane * MaxBitplaneFetchWords) + entry.Word;
                     timelineLine.BitplaneWords[index] = value;
                     timelineLine.BitplaneFetchMasks[entry.Plane] |= bit;
@@ -810,7 +841,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     while (_livePreparedFetchSlot < state.FetchSlotStride)
                     {
-                        if (TryGetBitplanePlaneForFetchSlot(_livePreparedFetchSlot, planeCount, state.FetchSlotStride, out var plane))
+                        if (TryGetBitplanePlaneForFetchSlot(_livePreparedFetchSlot, planeCount, state.FetchResolution, out var plane))
                         {
                             _livePreparedFetchPlane = plane;
                             return true;

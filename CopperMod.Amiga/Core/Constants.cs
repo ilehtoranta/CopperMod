@@ -3,23 +3,105 @@
  * SPDX-License-Identifier: MIT
  */
 
+using System;
+
 namespace CopperMod.Amiga.Core
 {
     internal readonly record struct RasterTiming(
         int CpuCyclesPerColorClock,
-        int ColorClocksPerLine,
+        int ShortLineColorClocks,
+        int LongLineColorClocks,
+        bool AlternatingLineLengths,
         int ShortFrameLines,
         int LongFrameLines,
-        long MasterClockHz)
+        long MasterClockHz,
+        int StandardLowResWidth,
+        int StandardLowResHeight,
+        int PresentationLowResWidth,
+        int PresentationLowResHeight)
     {
         public static RasterTiming Pal { get; } = new(
             AmigaConstants.A500PalCpuCyclesPerColorClock,
             AmigaConstants.A500PalColorClocksPerRasterLine,
+            AmigaConstants.A500PalColorClocksPerRasterLine,
+            false,
             AmigaConstants.A500PalShortRasterLines,
             AmigaConstants.A500PalLongRasterLines,
-            28_375_160);
+            28_375_160,
+            AmigaConstants.PalLowResStandardWidth,
+            AmigaConstants.PalLowResStandardHeight,
+            AmigaConstants.PalLowResWidth,
+            AmigaConstants.PalLowResHeight);
+
+        public static RasterTiming Ntsc { get; } = new(
+            AmigaConstants.A500NtscCpuCyclesPerColorClock,
+            AmigaConstants.A500NtscShortLineColorClocks,
+            AmigaConstants.A500NtscLongLineColorClocks,
+            true,
+            AmigaConstants.A500NtscShortRasterLines,
+            AmigaConstants.A500NtscLongRasterLines,
+            28_636_360,
+            AmigaConstants.NtscLowResStandardWidth,
+            AmigaConstants.NtscLowResStandardHeight,
+            AmigaConstants.NtscLowResWidth,
+            AmigaConstants.NtscLowResHeight);
+
+        public static RasterTiming For(VideoStandard standard)
+            => standard == VideoStandard.Ntsc ? Ntsc : Pal;
+
+        public int ColorClocksPerLine => ShortLineColorClocks;
+
+        public int MaximumColorClocksPerLine => Math.Max(ShortLineColorClocks, LongLineColorClocks);
 
         public int CpuCyclesPerLine => CpuCyclesPerColorClock * ColorClocksPerLine;
+
+        public int MaximumCpuCyclesPerLine => CpuCyclesPerColorClock * MaximumColorClocksPerLine;
+
+        public long CpuClockHz => MasterClockHz / 4;
+
+        public long PaulaClockHz => MasterClockHz / 8;
+
+        public long CpuCyclesPerCiaTick => CpuCyclesPerColorClock * 5L;
+
+        public int PresentationHighResWidth => PresentationLowResWidth * 2;
+
+        public int PresentationSuperHighResWidth => PresentationLowResWidth * 4;
+
+        public int PresentationHighResHeight => PresentationLowResHeight * 2;
+
+        public double VBlankHz => CpuClockHz / (double)GetFrameCycles(LongFrameLines);
+
+        public bool IsCanonicalPal =>
+            CpuCyclesPerColorClock == AmigaConstants.A500PalCpuCyclesPerColorClock &&
+            ShortLineColorClocks == AmigaConstants.A500PalColorClocksPerRasterLine &&
+            LongLineColorClocks == AmigaConstants.A500PalColorClocksPerRasterLine &&
+            LongFrameLines == AmigaConstants.A500PalLongRasterLines &&
+            !AlternatingLineLengths;
+
+        public bool IsCanonicalNtsc =>
+            CpuCyclesPerColorClock == AmigaConstants.A500NtscCpuCyclesPerColorClock &&
+            ShortLineColorClocks == AmigaConstants.A500NtscShortLineColorClocks &&
+            LongLineColorClocks == AmigaConstants.A500NtscLongLineColorClocks &&
+            LongFrameLines == AmigaConstants.A500NtscLongRasterLines &&
+            AlternatingLineLengths;
+
+        public int GetColorClocksForLine(int line)
+            => AlternatingLineLengths && (line & 1) != 0
+                ? LongLineColorClocks
+                : ShortLineColorClocks;
+
+        public long GetFrameCycles(int rasterLines)
+        {
+            if (!AlternatingLineLengths)
+            {
+                return (long)rasterLines * CpuCyclesPerLine;
+            }
+
+            var shortLines = (rasterLines + 1) / 2;
+            var longLines = rasterLines / 2;
+            return ((long)shortLines * ShortLineColorClocks +
+                ((long)longLines * LongLineColorClocks)) * CpuCyclesPerColorClock;
+        }
     }
 
     internal static class AmigaConstants
@@ -50,6 +132,12 @@ namespace CopperMod.Amiga.Core
         public const ushort IntreqExternal = 0x2000;
         public const int PaulaChannelCount = 4;
         public const int A500PalMinimumAudioDmaPeriod = 124;
+        public const int A500NtscPaulaTicksPerSecond = 3_579_545;
+        public const int A500NtscCpuCyclesPerColorClock = 2;
+        public const int A500NtscShortLineColorClocks = 227;
+        public const int A500NtscLongLineColorClocks = 228;
+        public const int A500NtscShortRasterLines = 262;
+        public const int A500NtscLongRasterLines = 263;
         public const int DefaultChipRamSize = 1 * 1024 * 1024;
         public const int MaxChipRamSize = 2 * 1024 * 1024;
         public const uint ChipRamCpuDecodeSize = 0x0020_0000;
@@ -69,6 +157,11 @@ namespace CopperMod.Amiga.Core
         public const int PalLowResWidth = 358;
         public const int PalLowResHeight = 285;
         public const int PalHighResWidth = 716;
+        public const int PalSuperHighResWidth = 1432;
         public const int PalHighResHeight = 570;
+        public const int NtscLowResStandardWidth = 320;
+        public const int NtscLowResStandardHeight = 200;
+        public const int NtscLowResWidth = 362;
+        public const int NtscLowResHeight = 241;
     }
 }

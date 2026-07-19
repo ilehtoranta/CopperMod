@@ -431,7 +431,10 @@ public sealed class AmigaBlitterConformanceMatrixTests
 			.Where(access => access.Request.Requester == AmigaBusRequester.Blitter && access.Request.Kind == AmigaBusAccessKind.Blitter)
 			.ToArray();
 		Assert.Equal(row.ExpectedMicroOps, blitterDma.Length);
-		Assert.Equal(expectedCompletion - AgnusChipSlotScheduler.SlotCycles, blitterDma[^1].GrantedCycle);
+		Assert.True(
+			blitterDma[^1].GrantedCycle == expectedCompletion - AgnusChipSlotScheduler.SlotCycles,
+			$"{row}: start={startCycle},expectedCompletion={expectedCompletion}," +
+			$" grants=[{string.Join(',', blitterDma.Select(access => access.GrantedCycle))}]");
 	}
 
 	[Fact]
@@ -560,6 +563,42 @@ public sealed class AmigaBlitterConformanceMatrixTests
 				access.Request.IsWrite &&
 				access.Request.Address == destination);
 		Assert.True(finalWrite.GrantedCycle > fetchCycle);
+	}
+
+	[Fact]
+	public void BOnlyInternalPhasePausesAtMandatoryRefreshSlot()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true);
+		WriteWord(bus, SourceB, 0x1234);
+		ConfigureAreaBlit(bus, 0x04CA);
+		EnableBlitterDma(bus);
+
+		var lineStart = (long)AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		bus.WriteWord(0x00DFF058, 0x0041, lineStart - 6);
+		var firstDmaCycle = bus.Blitter.CaptureSnapshot().NextDmaCycle;
+
+		bus.AdvanceDmaTo(lineStart + 3);
+		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
+
+		bus.AdvanceDmaTo(lineStart + 4);
+		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
+
+		var completionCycle = bus.Blitter.GetPredictedCompletionCycle();
+		Assert.Equal(
+			lineStart + 2 + (8 * AgnusChipSlotScheduler.SlotCycles),
+			completionCycle);
+		bus.AdvanceDmaTo(completionCycle);
+		Assert.True(bus.Blitter.CaptureSnapshot().Busy);
+		completionCycle = bus.Blitter.CaptureSnapshot().CurrentCycle;
+		Assert.Equal(lineStart + 4 + (8 * AgnusChipSlotScheduler.SlotCycles), completionCycle);
+		bus.AdvanceDmaTo(completionCycle);
+		var snapshot = bus.Blitter.CaptureSnapshot();
+		Assert.False(snapshot.Busy);
+		Assert.Equal(completionCycle, snapshot.CurrentCycle);
+		var dma = Assert.Single(bus.BusAccesses, access =>
+			access.Request.Requester == AmigaBusRequester.Blitter &&
+			access.Request.Kind == AmigaBusAccessKind.Blitter);
+		Assert.Equal(firstDmaCycle, dma.GrantedCycle);
 	}
 
 	[Fact]
@@ -802,7 +841,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		Assert.Equal(-1, firstIdleReadCycle);
 		Assert.Equal(0, bus.Paula.Intreq & AmigaConstants.IntreqBlitter);
 
-		bus.Blitter.AdvanceTo(cycle + 100_000);
+		bus.AdvanceDmaTo(cycle + 100_000);
 		var finalWrite = bus.BusAccesses
 			.Where(access => access.Request.Requester == AmigaBusRequester.Blitter &&
 				access.Request.Kind == AmigaBusAccessKind.Blitter &&
@@ -1047,7 +1086,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 		var beforeSchedulerWakeVersion = bus.Blitter.SchedulerWakeVersion;
 		var firstStepCycle = bus.Blitter.CaptureSnapshot().CurrentCycle + 4;
 
-		bus.Blitter.AdvanceTo(firstStepCycle);
+		bus.AdvanceDmaTo(firstStepCycle);
 		var snapshot = bus.Blitter.CaptureSnapshot();
 
 		Assert.True(snapshot.Busy);
@@ -1211,7 +1250,7 @@ public sealed class AmigaBlitterConformanceMatrixTests
 
 	private static void RunBlitterUntilIdle(AmigaBus bus, long cycle = 1_000_000)
 	{
-		bus.Blitter.AdvanceTo(cycle);
+		bus.AdvanceDmaTo(cycle);
 		Assert.False(bus.Blitter.CaptureSnapshot().Busy);
 	}
 

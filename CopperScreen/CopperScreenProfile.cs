@@ -32,6 +32,7 @@ internal sealed class CopperScreenProfile
 		string id,
 		string displayName,
 		string description,
+		AmigaChipset chipset,
 		int chipRamSize,
 		int expansionRamSize,
 		uint expansionRamBase,
@@ -43,6 +44,7 @@ internal sealed class CopperScreenProfile
 		M68kBackendKind cpuBackend,
 		FloppyDriveAudioOptions floppyDriveAudio,
 		CopperScreenKickstartSource kickstartSource,
+		KickstartVersion kickstartVersion,
 		string? kickstartRomPath,
 		IReadOnlyList<CopperScreenMediaDriveSettings> mediaDrives,
 		IReadOnlyList<CopperScreenHardfileSettings> hardDrives,
@@ -54,6 +56,7 @@ internal sealed class CopperScreenProfile
 		Id = id;
 		DisplayName = displayName;
 		Description = description;
+		Chipset = chipset;
 		ChipRamSize = chipRamSize;
 		ExpansionRamSize = expansionRamSize;
 		ExpansionRamBase = expansionRamBase;
@@ -65,6 +68,7 @@ internal sealed class CopperScreenProfile
 		CpuBackend = cpuBackend;
 		FloppyDriveAudio = floppyDriveAudio;
 		KickstartSource = kickstartSource;
+		KickstartVersion = kickstartVersion;
 		KickstartRomPath = kickstartRomPath;
 		MediaDrives = mediaDrives;
 		HardDrives = hardDrives;
@@ -79,6 +83,8 @@ internal sealed class CopperScreenProfile
 	public string DisplayName { get; }
 
 	public string Description { get; }
+
+	public AmigaChipset Chipset { get; }
 
 	public int ChipRamSize { get; }
 
@@ -102,6 +108,8 @@ internal sealed class CopperScreenProfile
 
 	public CopperScreenKickstartSource KickstartSource { get; }
 
+	public KickstartVersion KickstartVersion { get; }
+
 	public string? KickstartRomPath { get; }
 
 	public IReadOnlyList<CopperScreenMediaDriveSettings> MediaDrives { get; }
@@ -120,14 +128,20 @@ internal sealed class CopperScreenProfile
 
 	public bool BootsWithoutDisk => KickstartSource == CopperScreenKickstartSource.DiagRom;
 
-	public MachineProfile MachineProfile => ExpansionRamSize == 0
-		? MachineProfile.A500Pal512KChipOnlyBoot
-		: MachineProfile.A500Pal512KBoot;
+	public MachineProfile MachineProfile => Chipset.Agnus == AgnusModel.Ecs &&
+		Chipset.Denise == DeniseModel.Ecs
+		? Chipset.VideoStandard == VideoStandard.Ntsc
+			? MachineProfile.A500PlusEcsNtsc
+			: MachineProfile.A500PlusEcsPal
+		: ExpansionRamSize == 0
+			? MachineProfile.A500Pal512KChipOnlyBoot
+			: MachineProfile.A500Pal512KBoot;
 
 	public MachineOptions CreateMachineOptions()
 	{
 		return MachineOptions
 			.ForProfile(MachineProfile)
+			.WithChipset(Chipset)
 			.WithChipRam(ChipRamSize)
 			.WithExpansionRam(ExpansionRamSize, ExpansionRamBase)
 			.WithRealFastRam(RealFastRamSize, RealFastRamBase)
@@ -240,10 +254,16 @@ internal sealed class CopperScreenProfile
 		var displayName = Required(config.DisplayName, "displayName");
 		var machine = config.Machine ?? throw new InvalidOperationException("The profile is missing machine settings.");
 		var kickstart = config.Kickstart ?? throw new InvalidOperationException("The profile is missing kickstart settings.");
-		if (!string.Equals(machine.Model, "A500PAL", StringComparison.OrdinalIgnoreCase))
+		if (!string.Equals(machine.Model, "A500PAL", StringComparison.OrdinalIgnoreCase) &&
+			!string.Equals(machine.Model, "A500Plus", StringComparison.OrdinalIgnoreCase))
 		{
 			throw new InvalidOperationException($"Unsupported machine model '{machine.Model}'.");
 		}
+
+		var chipset = new AmigaChipset(
+			ParseAgnusModel(machine.Agnus),
+			ParseDeniseModel(machine.Denise),
+			ParseVideoStandard(machine.VideoStandard));
 
 		var chipRamSize = CheckedKilobytes(machine.ChipRamKb, "machine.chipRamKb");
 		var expansionRamSize = CheckedKilobytes(machine.PseudoFastRamKb, "machine.pseudoFastRamKb");
@@ -268,6 +288,7 @@ internal sealed class CopperScreenProfile
 		}
 
 		var kickstartSource = ParseKickstartSource(kickstart.Source);
+		var kickstartVersion = ParseKickstartVersion(kickstart.Version);
 		var description = string.IsNullOrWhiteSpace(config.Description)
 			? displayName
 			: config.Description.Trim();
@@ -276,6 +297,7 @@ internal sealed class CopperScreenProfile
 			id,
 			displayName,
 			description,
+			chipset,
 			chipRamSize,
 			expansionRamSize,
 			expansionRamBase,
@@ -287,6 +309,7 @@ internal sealed class CopperScreenProfile
 			cpuBackend,
 			floppyDriveAudio,
 			kickstartSource,
+			kickstartVersion,
 			string.IsNullOrWhiteSpace(kickstart.Path) ? null : kickstart.Path.Trim(),
 			mediaDrives,
 			hardDrives,
@@ -317,7 +340,9 @@ internal sealed class CopperScreenProfile
 		CopperScreenPresentationOptions? presentationOptions = null,
 		string? kickstartRomPath = null,
 		bool autoStartWorkbenchStartupSequence = true,
-		long rtgVramSize = 0)
+		long rtgVramSize = 0,
+		AmigaChipset? chipset = null,
+		KickstartVersion kickstartVersion = KickstartVersion.Kickstart13)
 	{
 		if (floppyDriveCount is < 1 or > 4)
 		{
@@ -328,6 +353,7 @@ internal sealed class CopperScreenProfile
 			Required(id, "id"),
 			Required(displayName, "displayName"),
 			string.IsNullOrWhiteSpace(description) ? Required(displayName, "displayName") : description.Trim(),
+			chipset ?? AmigaChipset.OcsPal,
 			chipRamSize,
 			expansionRamSize,
 			expansionRamBase,
@@ -339,6 +365,7 @@ internal sealed class CopperScreenProfile
 			cpuBackend,
 			floppyDriveAudio,
 			kickstartSource,
+			kickstartVersion,
 			string.IsNullOrWhiteSpace(kickstartRomPath) ? null : kickstartRomPath.Trim(),
 			mediaDrives,
 			hardDrives,
@@ -464,6 +491,64 @@ internal sealed class CopperScreenProfile
 			"kickstart13rom" or "kickstart13" => CopperScreenKickstartSource.Kickstart13Rom,
 			"diagrom" or "diagromv2" => CopperScreenKickstartSource.DiagRom,
 			_ => throw new InvalidOperationException($"Unsupported kickstart source '{source}'.")
+		};
+	}
+
+	private static KickstartVersion ParseKickstartVersion(string? value)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return KickstartVersion.Kickstart13;
+		}
+
+		var version = value.Trim();
+		return version.StartsWith("2", StringComparison.Ordinal)
+			? KickstartVersion.Kickstart20
+			: KickstartVersion.Kickstart13;
+	}
+
+	private static AgnusModel ParseAgnusModel(string? value)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return AgnusModel.Ocs;
+		}
+
+		return value.Trim().ToLowerInvariant() switch
+		{
+			"ocs" => AgnusModel.Ocs,
+			"ecs" => AgnusModel.Ecs,
+			_ => throw new InvalidOperationException($"Unsupported Agnus model '{value}'.")
+		};
+	}
+
+	private static DeniseModel ParseDeniseModel(string? value)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return DeniseModel.Ocs;
+		}
+
+		return value.Trim().ToLowerInvariant() switch
+		{
+			"ocs" => DeniseModel.Ocs,
+			"ecs" => DeniseModel.Ecs,
+			_ => throw new InvalidOperationException($"Unsupported Denise model '{value}'.")
+		};
+	}
+
+	private static VideoStandard ParseVideoStandard(string? value)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return VideoStandard.Pal;
+		}
+
+		return value.Trim().ToLowerInvariant() switch
+		{
+			"pal" => VideoStandard.Pal,
+			"ntsc" => VideoStandard.Ntsc,
+			_ => throw new InvalidOperationException($"Unsupported video standard '{value}'.")
 		};
 	}
 
@@ -768,6 +853,7 @@ internal sealed class CopperScreenProfile
 			DefaultProfileId,
 			"Expanded A500 + CopperStart",
 			"A500 PAL, 512 KB chip RAM, 512 KB pseudo-fast RAM at $C00000, CopperStart Kickstart 1.3 shim.",
+			AmigaChipset.OcsPal,
 			AmigaConstants.A500BootChipRamSize,
 			AmigaConstants.A500BootPseudoFastRamSize,
 			AmigaConstants.A500BootPseudoFastRamBase,
@@ -779,6 +865,7 @@ internal sealed class CopperScreenProfile
 			M68kBackendKind.AccurateM68000,
 			FloppyDriveAudioOptions.Default,
 			CopperScreenKickstartSource.CopperStart,
+			KickstartVersion.Kickstart13,
 			null,
 			Array.Empty<CopperScreenMediaDriveSettings>(),
 			Array.Empty<CopperScreenHardfileSettings>(),
@@ -823,6 +910,12 @@ internal sealed class CopperScreenProfile
 	private sealed class MachineFile
 	{
 		public string? Model { get; set; }
+
+		public string? Agnus { get; set; }
+
+		public string? Denise { get; set; }
+
+		public string? VideoStandard { get; set; }
 
 		public int ChipRamKb { get; set; }
 

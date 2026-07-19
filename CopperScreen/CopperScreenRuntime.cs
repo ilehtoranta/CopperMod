@@ -101,9 +101,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 	private const int MaxQueuedPresentationFrames = 2;
 	private const int DisplayFrameMilliseconds = 20;
 	private const int MaxSteadyAudioWaitMilliseconds = 5;
-	private static readonly long DisplayFrameStopwatchTicks = Math.Max(
-		1,
-		(long)Math.Round(Stopwatch.Frequency / AmigaConstants.A500PalVBlankHz));
+	private readonly long _displayFrameStopwatchTicks;
 	private readonly CopperScreenEmulator _emulator;
 	private readonly ICopperScreenAudioOutput? _audio;
 	private readonly bool _disposeAudio;
@@ -144,6 +142,9 @@ internal sealed class CopperScreenRuntime : IDisposable
 	private CopperScreenRuntime(CopperScreenEmulator emulator, ICopperScreenAudioOutput? audio, bool disposeAudio)
 	{
 		_emulator = emulator ?? throw new ArgumentNullException(nameof(emulator));
+		_displayFrameStopwatchTicks = Math.Max(
+			1,
+			(long)Math.Round(Stopwatch.Frequency / _emulator.VideoVBlankHz));
 		_audio = audio;
 		_disposeAudio = disposeAudio;
 		_audioBuffer = new float[_emulator.AudioFramesPerAppFrame(AudioSampleRate) * AudioChannels];
@@ -670,7 +671,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 	internal static bool ShouldThrottleSteadyAudioRefill(int queuedAudioBuffers, int framesToRender)
 		=> framesToRender == 1 && queuedAudioBuffers >= CriticalQueuedAudioBuffers;
 
-	internal static long SteadyAudioFrameStopwatchTicks => DisplayFrameStopwatchTicks;
+	internal long SteadyAudioFrameStopwatchTicks => _displayFrameStopwatchTicks;
 
 	internal static int CalculateSteadyAudioWaitMilliseconds(long remainingStopwatchTicks)
 	{
@@ -692,13 +693,13 @@ internal sealed class CopperScreenRuntime : IDisposable
 	{
 		var now = Stopwatch.GetTimestamp();
 		if (_nextSteadyAudioFrameTimestamp <= 0 ||
-			now - _nextSteadyAudioFrameTimestamp > DisplayFrameStopwatchTicks)
+				now - _nextSteadyAudioFrameTimestamp > _displayFrameStopwatchTicks)
 		{
-			_nextSteadyAudioFrameTimestamp = now + DisplayFrameStopwatchTicks;
+			_nextSteadyAudioFrameTimestamp = now + _displayFrameStopwatchTicks;
 			return;
 		}
 
-		_nextSteadyAudioFrameTimestamp += DisplayFrameStopwatchTicks;
+		_nextSteadyAudioFrameTimestamp += _displayFrameStopwatchTicks;
 	}
 
 	private CopperScreenCommandResult SetEmulatorError(string message)

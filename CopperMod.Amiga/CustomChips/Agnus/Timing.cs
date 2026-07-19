@@ -482,21 +482,90 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         public bool IsLongFrame { get; }
 
         public static AgnusBeamPosition FromCycle(long cycle)
+            => FromCycle(cycle, RasterTiming.Pal);
+
+        public static AgnusBeamPosition FromCycle(long cycle, RasterTiming timing)
         {
             cycle = Math.Max(0, cycle);
-            var cycleInFrame = cycle % AmigaConstants.A500PalCpuCyclesPerFrame;
-            var frameStartCycle = cycle - cycleInFrame;
-            var line = Math.Clamp(
-                (int)(cycleInFrame / AmigaConstants.A500PalCpuCyclesPerRasterLine),
-                0,
-                AmigaConstants.A500PalRasterLines - 1);
-            var lineCycle = cycleInFrame - (line * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+            var longFrameCycles = timing.GetFrameCycles(timing.LongFrameLines);
+            var shortFrameCycles = timing.GetFrameCycles(timing.ShortFrameLines);
+            long frameStartCycle;
+            int frame;
+            int rasterLines;
+            long frameCycles;
+
+            if (!timing.AlternatingLineLengths)
+            {
+                frameCycles = longFrameCycles;
+                frame = (int)Math.Min(int.MaxValue, cycle / frameCycles);
+                frameStartCycle = frame * frameCycles;
+                rasterLines = timing.LongFrameLines;
+            }
+            else
+            {
+                var fieldPairCycles = longFrameCycles + shortFrameCycles;
+                var pairs = cycle / fieldPairCycles;
+                var remainder = cycle - (pairs * fieldPairCycles);
+                var isLongFrame = remainder < longFrameCycles;
+                frame = (int)Math.Min(int.MaxValue, (pairs * 2) + (isLongFrame ? 0 : 1));
+                frameStartCycle = (pairs * fieldPairCycles) + (isLongFrame ? 0 : longFrameCycles);
+                frameCycles = isLongFrame ? longFrameCycles : shortFrameCycles;
+                rasterLines = isLongFrame ? timing.LongFrameLines : timing.ShortFrameLines;
+            }
+
+            var cycleInFrame = cycle - frameStartCycle;
+            var line = 0;
+            var lineCycle = cycleInFrame;
+            if (!timing.AlternatingLineLengths)
+            {
+                line = Math.Clamp((int)(cycleInFrame / timing.CpuCyclesPerLine), 0, rasterLines - 1);
+                lineCycle = cycleInFrame - ((long)line * timing.CpuCyclesPerLine);
+            }
+            else
+            {
+                var shortLineCycles = (long)timing.ShortLineColorClocks * timing.CpuCyclesPerColorClock;
+                var longLineCycles = (long)timing.LongLineColorClocks * timing.CpuCyclesPerColorClock;
+                var pairCycles = shortLineCycles + longLineCycles;
+                var pairs = cycleInFrame / pairCycles;
+                var remainder = cycleInFrame - (pairs * pairCycles);
+                line = (int)Math.Min(int.MaxValue, pairs * 2);
+                if (remainder >= shortLineCycles)
+                {
+                    line++;
+                }
+
+                line = Math.Clamp(line, 0, rasterLines - 1);
+                lineCycle = cycleInFrame - GetDefaultLineOffset(timing, line);
+            }
+
+            var lineCycles = timing.GetColorClocksForLine(line) * timing.CpuCyclesPerColorClock;
             var horizontal = Math.Clamp(
-                (int)(lineCycle / AmigaConstants.A500PalCpuCyclesPerColorClock),
+                (int)(lineCycle / timing.CpuCyclesPerColorClock),
                 0,
-                AmigaConstants.A500PalColorClocksPerRasterLine - 1);
-            var frame = (int)Math.Min(int.MaxValue, cycle / AmigaConstants.A500PalCpuCyclesPerFrame);	// Max 81 years
-            return new AgnusBeamPosition(cycle, frameStartCycle, frame, line, horizontal);
+                (lineCycles / timing.CpuCyclesPerColorClock) - 1);
+            return new AgnusBeamPosition(
+                cycle,
+                frameStartCycle,
+                frame,
+                line,
+                horizontal,
+                rasterLines,
+                frameCycles,
+                rasterLines == timing.LongFrameLines);
+        }
+
+        private static long GetDefaultLineOffset(RasterTiming timing, int line)
+        {
+            if (!timing.AlternatingLineLengths)
+            {
+                return (long)line * timing.CpuCyclesPerLine;
+            }
+
+            var shortLineCycles = (long)timing.ShortLineColorClocks * timing.CpuCyclesPerColorClock;
+            var longLineCycles = (long)timing.LongLineColorClocks * timing.CpuCyclesPerColorClock;
+            var pairs = line / 2;
+            return (pairs * (shortLineCycles + longLineCycles)) +
+                ((line & 1) != 0 ? shortLineCycles : 0);
         }
     }
 
@@ -509,6 +578,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         private long _frameStartCycle;
         private int _frameNumber;
         private int _rasterLines;
+        private bool _programmedGeometry;
+        private bool _fieldLengthForced;
 
         public AgnusBeamClock(RasterTiming timing)
         {
@@ -521,6 +592,10 @@ namespace CopperMod.Amiga.CustomChips.Agnus
 
         public int LineCycles => _lineCycles;
 
+        public int MaximumLineCycles => _programmedGeometry
+            ? _lineCycles
+            : _timing.MaximumCpuCyclesPerLine;
+
         public void Reset()
         {
             _frameStartCycle = 0;
@@ -529,6 +604,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             _longRasterLines = _timing.LongFrameLines;
             _shortRasterLines = _timing.ShortFrameLines;
             _rasterLines = _longRasterLines;
+            _programmedGeometry = false;
+            _fieldLengthForced = false;
         }
 
         public AgnusBeamPosition GetPosition(long cycle)
@@ -536,10 +613,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             cycle = Math.Max(0, cycle);
             if (cycle < _frameStartCycle)
             {
-                var frameCyclesForHistoricalPosition = GetFrameCycles(_rasterLines);
-                var historicalFrameNumber = (int)Math.Min(int.MaxValue, cycle / frameCyclesForHistoricalPosition);
-                var historicalFrameStart = historicalFrameNumber * frameCyclesForHistoricalPosition;
-                return CreatePosition(cycle, historicalFrameStart, historicalFrameNumber, _rasterLines);
+                LocateDefaultFrame(cycle, out var historicalFrameStart, out var historicalFrameNumber, out var historicalLines);
+                return CreatePosition(cycle, historicalFrameStart, historicalFrameNumber, historicalLines);
             }
 
             EnsureFrameContains(cycle);
@@ -554,12 +629,12 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         {
             var frameCycles = GetFrameCycles(rasterLines);
             var cycleInFrame = cycle - frameStartCycle;
-            var line = Math.Clamp((int)(cycleInFrame / _lineCycles), 0, rasterLines - 1);
-            var lineCycle = cycleInFrame - ((long)line * _lineCycles);
+            GetLineAndCycle(cycleInFrame, rasterLines, out var line, out var lineCycle);
+            var lineCycles = GetLineCycles(line);
             var horizontal = Math.Clamp(
                 (int)(lineCycle / _timing.CpuCyclesPerColorClock),
                 0,
-                (_lineCycles / _timing.CpuCyclesPerColorClock) - 1);
+                (lineCycles / _timing.CpuCyclesPerColorClock) - 1);
             return new AgnusBeamPosition(
                 cycle,
                 frameStartCycle,
@@ -576,6 +651,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             cycle = Math.Max(0, cycle);
             _ = GetPosition(cycle);
             _rasterLines = (value & 0x8000) != 0 ? _longRasterLines : _shortRasterLines;
+            _fieldLengthForced = true;
             EnsureFrameContains(cycle);
         }
 
@@ -587,8 +663,10 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             _longRasterLines = Math.Max(1, frameLines);
             _shortRasterLines = _longRasterLines;
             _rasterLines = _longRasterLines;
+            _programmedGeometry = true;
+            _fieldLengthForced = true;
             _frameStartCycle = cycle -
-                ((long)Math.Min(position.BeamLine, _rasterLines - 1) * _lineCycles) -
+                GetLineOffsetCycles(Math.Min(position.BeamLine, _rasterLines - 1)) -
                 ((long)Math.Min(position.BeamHorizontal, colorClocksPerLine - 1) * _timing.CpuCyclesPerColorClock);
             _frameNumber = position.FrameNumber;
         }
@@ -597,9 +675,9 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         {
             cycle = Math.Max(0, cycle);
             var position = GetPosition(cycle);
-            var clocksPerLine = _lineCycles / _timing.CpuCyclesPerColorClock;
+            var clocksPerLine = GetLineCycles(position.BeamLine) / _timing.CpuCyclesPerColorClock;
             horizontal = Math.Clamp(horizontal, 0, clocksPerLine - 1);
-            _frameStartCycle = cycle - ((long)position.BeamLine * _lineCycles) -
+            _frameStartCycle = cycle - GetLineOffsetCycles(position.BeamLine) -
                 ((long)horizontal * _timing.CpuCyclesPerColorClock);
             _frameNumber = position.FrameNumber;
         }
@@ -611,7 +689,40 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         }
 
         public long GetFrameStopCycle(long frameStartCycle)
-            => Math.Max(0, frameStartCycle) + GetFrameCycles(_rasterLines);
+        {
+            frameStartCycle = Math.Max(0, frameStartCycle);
+            var position = GetPosition(frameStartCycle);
+            return frameStartCycle + position.FrameCycles;
+        }
+
+        public int GetLineCyclesAt(long cycle)
+        {
+            var position = GetPosition(cycle);
+            return GetLineCycles(position.BeamLine);
+        }
+
+        public long GetLineStartCycle(long cycle)
+        {
+            var position = GetPosition(cycle);
+            return position.FrameStartCycle + GetLineOffsetCycles(position.BeamLine);
+        }
+
+        public long GetLineStartCycle(long frameStartCycle, int line)
+            => Math.Max(0, frameStartCycle) + GetLineOffsetCycles(Math.Max(0, line));
+
+        public long GetNextLineStartCycle(long cycle)
+        {
+            var position = GetPosition(cycle);
+            if (position.BeamLine + 1 < position.RasterLines)
+            {
+                return position.FrameStartCycle + GetLineOffsetCycles(position.BeamLine + 1);
+            }
+
+            return position.FrameStartCycle + position.FrameCycles;
+        }
+
+        public long GetLineStopCycle(long cycle)
+            => GetNextLineStartCycle(cycle) - 1;
 
         private void EnsureFrameContains(long cycle)
         {
@@ -630,11 +741,101 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 {
                     _frameNumber++;
                 }
+
+                if (!_programmedGeometry && !_fieldLengthForced)
+                {
+                    _rasterLines = GetDefaultRasterLines(_frameNumber);
+                }
+
+                frameCycles = GetFrameCycles(_rasterLines);
             }
         }
 
         private long GetFrameCycles(int rasterLines)
-            => (long)rasterLines * _lineCycles;
+            => _programmedGeometry
+                ? (long)rasterLines * _lineCycles
+                : _timing.GetFrameCycles(rasterLines);
+
+        private int GetLineCycles(int line)
+            => _programmedGeometry
+                ? _lineCycles
+                : _timing.GetColorClocksForLine(line) * _timing.CpuCyclesPerColorClock;
+
+        private long GetLineOffsetCycles(int line)
+        {
+            if (_programmedGeometry || !_timing.AlternatingLineLengths)
+            {
+                return (long)line * _lineCycles;
+            }
+
+            var pairs = line / 2;
+            var offset = (long)pairs *
+                (_timing.ShortLineColorClocks + _timing.LongLineColorClocks) *
+                _timing.CpuCyclesPerColorClock;
+            if ((line & 1) != 0)
+            {
+                offset += (long)_timing.ShortLineColorClocks * _timing.CpuCyclesPerColorClock;
+            }
+
+            return offset;
+        }
+
+        private void GetLineAndCycle(long cycleInFrame, int rasterLines, out int line, out long lineCycle)
+        {
+            if (_programmedGeometry || !_timing.AlternatingLineLengths)
+            {
+                line = Math.Clamp((int)(cycleInFrame / _lineCycles), 0, rasterLines - 1);
+                lineCycle = cycleInFrame - ((long)line * _lineCycles);
+                return;
+            }
+
+            var shortCycles = (long)_timing.ShortLineColorClocks * _timing.CpuCyclesPerColorClock;
+            var longCycles = (long)_timing.LongLineColorClocks * _timing.CpuCyclesPerColorClock;
+            var pairCycles = shortCycles + longCycles;
+            var pairs = cycleInFrame / pairCycles;
+            var remainder = cycleInFrame - (pairs * pairCycles);
+            line = (int)Math.Min(int.MaxValue, pairs * 2);
+            if (remainder >= shortCycles)
+            {
+                line++;
+                remainder -= shortCycles;
+            }
+
+            line = Math.Clamp(line, 0, rasterLines - 1);
+            lineCycle = cycleInFrame - GetLineOffsetCycles(line);
+        }
+
+        private int GetDefaultRasterLines(int frameNumber)
+            => !_timing.AlternatingLineLengths || (frameNumber & 1) == 0
+                ? _timing.LongFrameLines
+                : _timing.ShortFrameLines;
+
+        private void LocateDefaultFrame(
+            long cycle,
+            out long frameStartCycle,
+            out int frameNumber,
+            out int rasterLines)
+        {
+            if (_programmedGeometry || _fieldLengthForced || !_timing.AlternatingLineLengths)
+            {
+                var frameCycles = GetFrameCycles(_rasterLines);
+                frameNumber = (int)Math.Min(int.MaxValue, cycle / frameCycles);
+                frameStartCycle = frameNumber * frameCycles;
+                rasterLines = _rasterLines;
+                return;
+            }
+
+            var longFrameCycles = _timing.GetFrameCycles(_timing.LongFrameLines);
+            var shortFrameCycles = _timing.GetFrameCycles(_timing.ShortFrameLines);
+            var fieldPairCycles = longFrameCycles + shortFrameCycles;
+            var pairs = cycle / fieldPairCycles;
+            var remainder = cycle - (pairs * fieldPairCycles);
+            var longField = remainder < longFrameCycles;
+            var frame = pairs * 2 + (longField ? 0 : 1);
+            frameNumber = (int)Math.Min(int.MaxValue, frame);
+            frameStartCycle = pairs * fieldPairCycles + (longField ? 0 : longFrameCycles);
+            rasterLines = longField ? _timing.LongFrameLines : _timing.ShortFrameLines;
+        }
     }
 
     internal sealed class ZeroWaitBusArbiter : IAmigaBusArbiter
@@ -671,8 +872,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
     internal static class AgnusHrmOcsSlotTable
     {
         public const int RefreshSlotsPerLine = 4;
-        // Internal slot coordinates precede WinUAE's externally reported Agnus
-        // hpos by three CCKs, mapping physical refresh hpos 3/5/7/9 to 0/2/4/6.
+        // Internal slot coordinates precede externally visible Agnus HPOS by
+        // three CCKs, mapping physical refresh HPOS 3/5/7/9 to 0/2/4/6.
         public const int FirstRefreshHorizontal = 0x00;
         public const int LastRefreshHorizontal = 0x06;
         public const int DiskSlotsPerLine = 3;
@@ -770,7 +971,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             return candidate;
         }
 
-        private static bool TryGetPaulaHorizontal(int channel, out int horizontal)
+        internal static bool TryGetPaulaHorizontal(int channel, out int horizontal)
         {
             if ((uint)channel < AudioSlotsPerLine)
             {
@@ -785,11 +986,12 @@ namespace CopperMod.Amiga.CustomChips.Agnus
     internal sealed class AgnusHrmSlotEngine : IAgnusChipSlotTiming
     {
         private const int SlotCycles = AgnusChipSlotScheduler.SlotCycles;
-        private const int SlotsPerFrame = AmigaConstants.A500PalCpuCyclesPerFrame / SlotCycles;
         private const int SlotTableFrames = 2;
-        private readonly AgnusHrmCommittedSlot[] _slots = new AgnusHrmCommittedSlot[SlotsPerFrame * SlotTableFrames];
-        private readonly AgnusHrmCommittedSlotKey[] _slotKeys = new AgnusHrmCommittedSlotKey[SlotsPerFrame * SlotTableFrames];
-        private readonly AgnusHrmCommittedSlotDebug[]? _slotDebug;
+        private readonly RasterTiming _timing;
+        private int _slotTableSpanSlots;
+        private AgnusHrmCommittedSlot[] _slots;
+        private AgnusHrmCommittedSlotKey[] _slotKeys;
+        private AgnusHrmCommittedSlotDebug[]? _slotDebug;
         private Action<AgnusSlotScheduleAuditEntry>? _slotScheduleAuditSink;
         private readonly long[] _slotGrantCountsByOwner = new long[AgnusChipSlotOwners.Count];
         private readonly int[] _deniedFixedSlotCountsByOwner = new int[AgnusChipSlotOwners.Count];
@@ -814,14 +1016,12 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         private uint _pendingCpuSlotRequestAddress;
         private long _pendingCpuSlotRequestCycle;
         private bool _pendingCpuSlotRequestIsWrite;
-        private int _pendingCpuSlotRequestBlitterMisses;
         private int _deniedFixedSlotCount;
         private int _niceBlitterCpuMisses;
         private long _slotGrantCount;
         private long _slotScheduleAuditSequence;
         private long _currentCycle;
-        private long _nextRefreshCommitCycle =
-            AgnusHrmOcsSlotTable.FirstRefreshHorizontal * AgnusChipSlotScheduler.SlotCycles;
+        private long _nextRefreshCommitCycle;
         private AgnusBeamPosition _beam;
         private bool _beamValid;
         private AgnusSlotAuditSource _slotScheduleAuditSource;
@@ -830,19 +1030,34 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         private int _slotScheduleAuditSourceC = -1;
 
         public AgnusHrmSlotEngine(bool captureSlotDebug = false)
+            : this(RasterTiming.Pal, captureSlotDebug)
         {
+        }
+
+        public AgnusHrmSlotEngine(RasterTiming timing, bool captureSlotDebug = false)
+        {
+            _timing = timing;
+            _slotTableSpanSlots = GetSlotTableSpanSlots(timing);
+            _slots = new AgnusHrmCommittedSlot[_slotTableSpanSlots];
+            _slotKeys = new AgnusHrmCommittedSlotKey[_slotTableSpanSlots];
             _slotDebug = captureSlotDebug
-                ? new AgnusHrmCommittedSlotDebug[SlotsPerFrame * SlotTableFrames]
+                ? new AgnusHrmCommittedSlotDebug[_slotTableSpanSlots]
                 : null;
+            _nextRefreshCommitCycle =
+                AgnusHrmOcsSlotTable.FirstRefreshHorizontal * AgnusChipSlotScheduler.SlotCycles;
         }
 
         private AgnusHrmSlotEngine(AgnusHrmSlotEngine source)
         {
+            _timing = source._timing;
+            _slotTableSpanSlots = source._slotTableSpanSlots;
+            _slots = new AgnusHrmCommittedSlot[_slotTableSpanSlots];
+            _slotKeys = new AgnusHrmCommittedSlotKey[_slotTableSpanSlots];
             Array.Copy(source._slots, _slots, source._slots.Length);
             Array.Copy(source._slotKeys, _slotKeys, source._slotKeys.Length);
             if (source._slotDebug != null)
             {
-                _slotDebug = new AgnusHrmCommittedSlotDebug[source._slotDebug.Length];
+                _slotDebug = new AgnusHrmCommittedSlotDebug[_slotTableSpanSlots];
                 Array.Copy(source._slotDebug, _slotDebug, source._slotDebug.Length);
             }
 
@@ -869,7 +1084,6 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             _pendingCpuSlotRequestAddress = source._pendingCpuSlotRequestAddress;
             _pendingCpuSlotRequestCycle = source._pendingCpuSlotRequestCycle;
             _pendingCpuSlotRequestIsWrite = source._pendingCpuSlotRequestIsWrite;
-            _pendingCpuSlotRequestBlitterMisses = source._pendingCpuSlotRequestBlitterMisses;
             _deniedFixedSlotCount = source._deniedFixedSlotCount;
             _niceBlitterCpuMisses = source._niceBlitterCpuMisses;
             _slotGrantCount = source._slotGrantCount;
@@ -884,11 +1098,107 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             _slotScheduleAuditSourceC = source._slotScheduleAuditSourceC;
             BlitterPriorityEnabled = source.BlitterPriorityEnabled;
             BeamPositionProvider = source.BeamPositionProvider;
+            LineStartCycleProvider = source.LineStartCycleProvider;
+            NextLineStartCycleProvider = source.NextLineStartCycleProvider;
         }
 
         public bool BlitterPriorityEnabled { get; set; }
 
         public Func<long, AgnusBeamPosition>? BeamPositionProvider { get; set; }
+
+        public Func<long, long>? LineStartCycleProvider { get; set; }
+
+        public Func<long, long>? NextLineStartCycleProvider { get; set; }
+
+        private int GetHorizontal(long slotCycle)
+            => BeamPositionProvider?.Invoke(slotCycle).BeamHorizontal ??
+                AgnusBeamPosition.FromCycle(slotCycle, _timing).BeamHorizontal;
+
+        private bool IsCopperAccessSlot(long slotCycle)
+            => (GetHorizontal(slotCycle) & 1) == 0;
+
+        internal bool IsMandatoryRefreshSlot(long slotCycle)
+            => AgnusHrmOcsSlotTable.GetFixedOwner(GetHorizontal(slotCycle)) == AgnusChipSlotOwner.Refresh;
+
+        internal bool IsCpuAccessibleSlot(long slotCycle)
+            => (GetHorizontal(slotCycle) & 1) != 0;
+
+        internal bool IsFixedDmaSlotForOwner(AgnusChipSlotOwner owner, long slotCycle, int channel = -1)
+        {
+            if (owner == AgnusChipSlotOwner.Bitplane)
+            {
+                return true;
+            }
+
+            var horizontal = GetHorizontal(slotCycle);
+            if (owner == AgnusChipSlotOwner.Paula &&
+                AgnusHrmOcsSlotTable.TryGetPaulaHorizontal(channel, out var paulaHorizontal))
+            {
+                return horizontal == paulaHorizontal;
+            }
+
+            return AgnusHrmOcsSlotTable.GetFixedOwner(horizontal) == owner;
+        }
+
+        internal long FindNextFixedDmaSlot(long requestedCycle, AgnusChipSlotOwner owner, int channel = -1)
+        {
+            var candidate = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle));
+            if (owner is not (AgnusChipSlotOwner.Refresh or AgnusChipSlotOwner.Disk or
+                AgnusChipSlotOwner.Paula or AgnusChipSlotOwner.Sprite))
+            {
+                return candidate;
+            }
+
+            while (!IsFixedDmaSlotForOwner(owner, candidate, channel))
+            {
+                candidate += SlotCycles;
+            }
+
+            return candidate;
+        }
+
+        internal void UpdateGeometry(long frameCycles)
+        {
+            var requiredSlots = GetSlotTableSpanSlots(frameCycles);
+            if (requiredSlots <= _slotTableSpanSlots)
+            {
+                return;
+            }
+
+            var oldSlots = _slots;
+            var oldKeys = _slotKeys;
+            var oldDebug = _slotDebug;
+            var oldSpanSlots = _slotTableSpanSlots;
+            var newSlots = new AgnusHrmCommittedSlot[requiredSlots];
+            var newKeys = new AgnusHrmCommittedSlotKey[requiredSlots];
+            var newDebug = oldDebug == null ? null : new AgnusHrmCommittedSlotDebug[requiredSlots];
+            var currentSlot = Math.Max(0, _currentCycle / SlotCycles);
+            var firstSlot = Math.Max(0, currentSlot - oldSpanSlots);
+            var lastSlot = currentSlot + oldSpanSlots;
+            for (var absoluteSlot = firstSlot; absoluteSlot <= lastSlot; absoluteSlot++)
+            {
+                var oldIndex = (int)(absoluteSlot % oldSpanSlots);
+                var slotCycle = absoluteSlot * SlotCycles;
+                var slot = oldSlots[oldIndex];
+                if (!slot.Valid || !slot.IsForSlot(slotCycle))
+                {
+                    continue;
+                }
+
+                var newIndex = (int)(absoluteSlot % requiredSlots);
+                newSlots[newIndex] = slot;
+                newKeys[newIndex] = oldKeys[oldIndex];
+                if (oldDebug != null)
+                {
+                    newDebug![newIndex] = oldDebug[oldIndex];
+                }
+            }
+
+            _slotTableSpanSlots = requiredSlots;
+            _slots = newSlots;
+            _slotKeys = newKeys;
+            _slotDebug = newDebug;
+        }
 
         internal AgnusSlotAuditSource SlotScheduleAuditSource
         {
@@ -932,7 +1242,6 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             _pendingCpuSlotRequestSize = size;
             _pendingCpuSlotRequestCycle = requestedCycle;
             _pendingCpuSlotRequestIsWrite = isWrite;
-            _pendingCpuSlotRequestBlitterMisses = 0;
         }
 
         public void ClearPendingCpuSlotRequest()
@@ -944,8 +1253,9 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             _pendingCpuSlotRequestSize = default;
             _pendingCpuSlotRequestCycle = 0;
             _pendingCpuSlotRequestIsWrite = false;
-            _pendingCpuSlotRequestBlitterMisses = 0;
         }
+
+        internal bool PendingCpuSlotRequestActive => _pendingCpuSlotRequestActive;
 
         public void SetSlotScheduleAuditSink(Action<AgnusSlotScheduleAuditEntry>? sink)
         {
@@ -992,7 +1302,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             var lastSlot = FloorToSlot(Math.Max(firstSlot, _currentCycle));
             var earliestSlot = Math.Max(
                 0,
-                lastSlot - ((long)((SlotsPerFrame * SlotTableFrames) - 1) * SlotCycles));
+                lastSlot - ((long)(_slotTableSpanSlots - 1) * SlotCycles));
             var startSlot = Math.Max(firstSlot, earliestSlot);
             for (var slotCycle = startSlot; slotCycle <= lastSlot; slotCycle += SlotCycles)
             {
@@ -1112,7 +1422,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             }
 
             var owner = GetOwner(request.Requester);
-            var granted = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(request.RequestedCycle, owner, request.Channel);
+            var granted = FindNextFixedDmaSlot(request.RequestedCycle, owner, request.Channel);
             return TryCommitFixedSlot(request, owner, granted, out result);
         }
 
@@ -1127,9 +1437,9 @@ namespace CopperMod.Amiga.CustomChips.Agnus
 
             var owner = GetOwner(request.Requester);
             var granted = AgnusChipSlotScheduler.AlignToSlot(request.RequestedCycle);
-            if (!AgnusHrmOcsSlotTable.IsFixedDmaSlotForOwner(owner, granted, request.Channel))
+            if (!IsFixedDmaSlotForOwner(owner, granted, request.Channel))
             {
-                var fixedOwner = AgnusHrmOcsSlotTable.GetFixedOwner(AgnusHrmOcsSlotTable.GetHorizontal(granted));
+                var fixedOwner = AgnusHrmOcsSlotTable.GetFixedOwner(GetHorizontal(granted));
                 result = new AmigaBusAccessResult(request, granted, granted);
                 _lastDeniedFixedSlot = new AgnusChipSlotSnapshot(owner, request.Kind, request.Address, request.RequestedCycle, granted, denied: true);
                 _lastDeniedFixedSlotBlocker = new AgnusChipSlotSnapshot(fixedOwner, request.Kind, request.Address, request.RequestedCycle, granted, denied: false);
@@ -1302,6 +1612,67 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             result = new AmigaBusAccessResult(request, slotCycle, slotCycle + SlotCycles);
             _lastReservation = result;
             _lastGrantedSlot = new AgnusChipSlotSnapshot(AgnusChipSlotOwner.Blitter, request.Kind, request.Address, request.RequestedCycle, slotCycle, denied: false);
+            AdvanceTo(result.CompletedCycle);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool TryReservePredictedBlitterDmaWordExactSlot(
+            uint address,
+            long requestedCycle,
+            long slotCycle,
+            bool isWrite,
+            out AmigaBusAccessResult result)
+        {
+            System.Diagnostics.Debug.Assert(requestedCycle >= 0);
+            System.Diagnostics.Debug.Assert(slotCycle >= requestedCycle);
+            System.Diagnostics.Debug.Assert(
+                slotCycle == AgnusChipSlotScheduler.AlignToSlot(slotCycle));
+            System.Diagnostics.Debug.Assert(!IsMandatoryRefreshSlot(slotCycle));
+            System.Diagnostics.Debug.Assert(
+                !PendingCpuRequestClaimsBlitterCandidate(slotCycle),
+                "Pending CPU arbitration must use the canonical exact-slot path.");
+
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Blitter,
+                AmigaBusAccessKind.Blitter,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite);
+            if (TryGetSlot(slotCycle, out var existing) &&
+                !SlotMatchesRequest(slotCycle, existing, request) &&
+                existing.Priority >= AgnusChipSlotPriority.Blitter)
+            {
+                result = new AmigaBusAccessResult(request, slotCycle, slotCycle);
+                _lastDeniedFixedSlot = new AgnusChipSlotSnapshot(
+                    AgnusChipSlotOwner.Blitter,
+                    request.Kind,
+                    request.Address,
+                    request.RequestedCycle,
+                    slotCycle,
+                    denied: true);
+                _lastDeniedFixedSlotBlocker = GetSlotSnapshot(slotCycle, existing, denied: false);
+                RecordDeniedFixedSlot(AgnusChipSlotOwner.Blitter, existing.Owner);
+                AdvanceTo(slotCycle);
+                return false;
+            }
+
+            CommitSlot(
+                slotCycle,
+                request,
+                AgnusChipSlotOwner.Blitter,
+                AgnusChipSlotPriority.Blitter);
+            result = new AmigaBusAccessResult(request, slotCycle, slotCycle + SlotCycles);
+            _lastReservation = result;
+            _lastGrantedSlot = new AgnusChipSlotSnapshot(
+                AgnusChipSlotOwner.Blitter,
+                request.Kind,
+                request.Address,
+                request.RequestedCycle,
+                slotCycle,
+                denied: false);
             AdvanceTo(result.CompletedCycle);
             return true;
         }
@@ -1549,7 +1920,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             var niceBlitterCpuMisses = _niceBlitterCpuMisses;
             while (true)
             {
-                if (AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(candidate))
+                if (IsMandatoryRefreshSlot(candidate))
                 {
                     niceBlitterCpuMisses = 0;
                     candidate += SlotCycles;
@@ -1625,7 +1996,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             for (var slot = 0; slot < slotCount; slot++)
             {
                 var slotCycle = firstSlot + (slot * slotStride);
-                if (AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle))
+                if (IsMandatoryRefreshSlot(slotCycle))
                 {
                     return false;
                 }
@@ -1744,7 +2115,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
             while (true)
             {
-                if (!AgnusHrmOcsSlotTable.IsCopperAccessSlot(candidate))
+                if (!IsCopperAccessSlot(candidate))
                 {
                     candidate += SlotCycles;
                     continue;
@@ -1766,13 +2137,80 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         {
             System.Diagnostics.Debug.Assert(cycle >= 0, "Agnus slot cycles must be non-negative.");
             var slotCycle = AgnusChipSlotScheduler.AlignToSlot(cycle);
-            return AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle) || TryGetSlot(slotCycle, out _);
+            return IsMandatoryRefreshSlot(slotCycle) || TryGetSlot(slotCycle, out _);
+        }
+
+        internal bool CanReserveBlitterDmaWordAt(
+            uint address,
+            long requestedCycle,
+            long slotCycle,
+            bool isWrite,
+            out bool matchesExistingRequest)
+        {
+            matchesExistingRequest = false;
+            slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, slotCycle));
+            if (slotCycle < requestedCycle ||
+                IsMandatoryRefreshSlot(slotCycle) ||
+                PendingCpuRequestClaimsBlitterCandidate(slotCycle))
+            {
+                return false;
+            }
+
+            if (!TryGetSlot(slotCycle, out var existing))
+            {
+                return true;
+            }
+
+            matchesExistingRequest = SlotMatchesRequest(
+                slotCycle,
+                existing,
+                AmigaBusRequester.Blitter,
+                AmigaBusAccessKind.Blitter,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite);
+            return matchesExistingRequest || existing.Priority < AgnusChipSlotPriority.Blitter;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool CanReserveBlitterDmaWordAtAlignedWithoutFixedOrPendingCpu(
+            uint address,
+            long requestedCycle,
+            long slotCycle,
+            bool isWrite)
+        {
+            System.Diagnostics.Debug.Assert(
+                slotCycle == AgnusChipSlotScheduler.AlignToSlot(slotCycle));
+            System.Diagnostics.Debug.Assert(!IsMandatoryRefreshSlot(slotCycle));
+            if (slotCycle < requestedCycle)
+            {
+                return false;
+            }
+
+            if (!TryGetSlot(slotCycle, out var existing))
+            {
+                return true;
+            }
+
+            return existing.Priority < AgnusChipSlotPriority.Blitter ||
+                SlotMatchesRequest(
+                    slotCycle,
+                    existing,
+                    AmigaBusRequester.Blitter,
+                    AmigaBusAccessKind.Blitter,
+                    AmigaBusAccessTarget.ChipRam,
+                    address,
+                    AmigaBusAccessSize.Word,
+                    requestedCycle,
+                    isWrite);
         }
 
         internal bool TryGetCommittedSlotOwner(long cycle, out AgnusChipSlotOwner owner)
         {
             var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, cycle));
-            if (AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle))
+            if (IsMandatoryRefreshSlot(slotCycle))
             {
                 owner = AgnusChipSlotOwner.Refresh;
                 return true;
@@ -1792,7 +2230,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         {
             System.Diagnostics.Debug.Assert(cycle >= 0, "Agnus slot cycles must be non-negative.");
             var slotCycle = AgnusChipSlotScheduler.AlignToSlot(cycle);
-            if (AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle))
+            if (IsMandatoryRefreshSlot(slotCycle))
             {
                 return true;
             }
@@ -1990,7 +2428,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             {
                 if (!_beamValid)
                 {
-                    _beam = BeamPositionProvider?.Invoke(_currentCycle) ?? AgnusBeamPosition.FromCycle(_currentCycle);
+                    _beam = BeamPositionProvider?.Invoke(_currentCycle) ?? AgnusBeamPosition.FromCycle(_currentCycle, _timing);
                     _beamValid = true;
                 }
 
@@ -2003,11 +2441,11 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             AmigaBusAccessResult baseResult,
             AgnusChipSlotOwner owner)
         {
-            var candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(Math.Max(baseResult.GrantedCycle, request.RequestedCycle), owner, request.Channel);
+            var candidate = FindNextFixedDmaSlot(Math.Max(baseResult.GrantedCycle, request.RequestedCycle), owner, request.Channel);
             AmigaBusAccessResult result;
             while (!TryCommitFixedSlot(request, owner, candidate, out result))
             {
-                candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(candidate + SlotCycles, owner, request.Channel);
+                candidate = FindNextFixedDmaSlot(candidate + SlotCycles, owner, request.Channel);
             }
 
             var completed = Math.Max(baseResult.CompletedCycle, result.CompletedCycle);
@@ -2034,7 +2472,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 requestedCycle,
                 isWrite: false,
                 channel);
-            var candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(requestedCycle, AgnusChipSlotOwner.Paula, channel);
+            var candidate = FindNextFixedDmaSlot(requestedCycle, AgnusChipSlotOwner.Paula, channel);
             AmigaBusAccessResult result;
             while (!TryCommitFixedSingleWordSlot(
                 request,
@@ -2043,7 +2481,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 AgnusChipSlotPriority.Paula,
                 out result))
             {
-                candidate = AgnusHrmOcsSlotTable.FindNextFixedDmaSlot(candidate + SlotCycles, AgnusChipSlotOwner.Paula, channel);
+                candidate = FindNextFixedDmaSlot(candidate + SlotCycles, AgnusChipSlotOwner.Paula, channel);
             }
 
             return result;
@@ -2127,7 +2565,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
             while (true)
             {
-                if (RequiresEvenSlot(owner) && !AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(candidate))
+                if (RequiresEvenSlot(owner) && !IsCpuAccessibleSlot(candidate))
                 {
                     candidate += SlotCycles;
                     continue;
@@ -2216,23 +2654,13 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                     _pendingCpuSlotRequestIsWrite);
             if (!cpuCanUseSlot)
             {
-                _pendingCpuSlotRequestBlitterMisses = 0;
                 return false;
             }
 
-            if (BlitterPriorityEnabled)
-            {
-                return false;
-            }
-
-            _pendingCpuSlotRequestBlitterMisses++;
-            if (_pendingCpuSlotRequestBlitterMisses < 3)
-            {
-                return false;
-            }
-
-            _pendingCpuSlotRequestBlitterMisses = 0;
-            return true;
+            // A nice blitter yields a slot it has not committed yet. The
+            // three-miss rule applies only when CPU arbitration encounters
+            // blitter reservations that predate the pending CPU request.
+            return !BlitterPriorityEnabled;
         }
 
         private long FindFreeCpuSingleSlot(long requestedCycle, AmigaBusAccessRequest request)
@@ -2368,7 +2796,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             for (var slot = 0; slot < slotCount; slot++)
             {
                 var slotCycle = firstSlot + (slot * slotStride);
-                if (RequiresEvenSlot(owner) && !AgnusHrmOcsSlotTable.IsCpuAccessibleSlot(slotCycle))
+                if (RequiresEvenSlot(owner) && !IsCpuAccessibleSlot(slotCycle))
                 {
                     return false;
                 }
@@ -2509,12 +2937,13 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             return cycle - (cycle % SlotCycles);
         }
 
-        private static long GetNextRefreshSlotAtOrAfter(long cycle)
+        private long GetNextRefreshSlotAtOrAfter(long cycle)
         {
             cycle = FloorToSlot(Math.Max(0, cycle));
-            var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
-            var lineStart = cycle - (cycle % lineCycles);
-            var horizontal = (int)((cycle - lineStart) / SlotCycles);
+            var beam = BeamPositionProvider?.Invoke(cycle) ?? AgnusBeamPosition.FromCycle(cycle, _timing);
+            var lineStart = LineStartCycleProvider?.Invoke(cycle) ??
+                cycle - ((long)beam.BeamHorizontal * SlotCycles);
+            var horizontal = GetHorizontal(cycle);
             var refreshHorizontal = horizontal <= AgnusHrmOcsSlotTable.FirstRefreshHorizontal
                 ? AgnusHrmOcsSlotTable.FirstRefreshHorizontal
                 : horizontal <= AgnusHrmOcsSlotTable.LastRefreshHorizontal
@@ -2522,7 +2951,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                     : -1;
             return refreshHorizontal >= 0
                 ? lineStart + ((long)refreshHorizontal * SlotCycles)
-                : lineStart + lineCycles;
+                : NextLineStartCycleProvider?.Invoke(cycle) ??
+                    lineStart + ((long)_timing.GetColorClocksForLine(beam.BeamLine) * SlotCycles);
         }
 
         private void CommitSlot(
@@ -2718,11 +3148,22 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 : _slotKeys[index].ToSnapshot(slot.Owner, slot.Kind, slotCycle, denied);
         }
 
-        private static int GetSlotIndex(long slotCycle)
+        private int GetSlotIndex(long slotCycle)
         {
             System.Diagnostics.Debug.Assert(slotCycle >= 0, "Agnus slot cycles must be non-negative.");
             var absoluteSlot = slotCycle / SlotCycles;
-            return (int)(absoluteSlot % (SlotsPerFrame * SlotTableFrames));
+            return (int)(absoluteSlot % (long)_slotTableSpanSlots);
+        }
+
+        private static int GetSlotTableSpanSlots(RasterTiming timing)
+        {
+            return GetSlotTableSpanSlots(timing.GetFrameCycles(timing.LongFrameLines));
+        }
+
+        private static int GetSlotTableSpanSlots(long frameCycles)
+        {
+            var frameSlots = (frameCycles + SlotCycles - 1) / SlotCycles;
+            return Math.Max(1, checked((int)frameSlots * SlotTableFrames));
         }
 
         private static bool UsesChipSlot(AmigaBusAccessRequest request)
@@ -3278,6 +3719,25 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 out bitplaneFetches,
                 out spriteFetches,
                 out completedSafeCopper);
+            if (result == OcsCpuWaitLiveSlotResult.Processed)
+            {
+                _chipSlots.AdvanceTo(targetCycle);
+                _currentCycle = Math.Max(_currentCycle, targetCycle);
+            }
+
+            return result;
+        }
+
+        internal OcsCpuWaitLiveSlotResult AdvanceBlitterFixedSlotTo(
+            long targetCycle,
+            out int bitplaneFetches,
+            out int spriteFetches)
+        {
+            System.Diagnostics.Debug.Assert(targetCycle >= 0, "Agnus blitter slot cycles must be non-negative.");
+            var result = _bus.Display.AdvanceBlitterFixedSlot(
+                targetCycle,
+                out bitplaneFetches,
+                out spriteFetches);
             if (result == OcsCpuWaitLiveSlotResult.Processed)
             {
                 _chipSlots.AdvanceTo(targetCycle);

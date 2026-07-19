@@ -104,7 +104,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (_liveCopper.Waiting)
             {
-                var blitterReadyCycle = GetCopperBlitterReadyCycle(_liveCopper.WaitSecond, _liveCopper.Cycle);
+                var blitterReadyCycle = GetObservedLiveCopperBlitterReadyCycle();
                 if (blitterReadyCycle <= _liveCopper.Cycle)
                 {
                     var cachedWaitCycle = GetCachedLiveCopperWaitCycle();
@@ -157,6 +157,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return _liveCopperWaitCycle;
         }
 
+        private long GetObservedLiveCopperBlitterReadyCycle()
+        {
+            if ((_liveCopper.WaitSecond & 0x8000) != 0)
+            {
+                return _liveCopper.Cycle;
+            }
+
+            if (_bus.Blitter.Busy)
+            {
+                _liveCopper.WaitObservedBlitterBusy = true;
+                return Math.Max(_liveCopper.Cycle, _bus.Blitter.GetPredictedCompletionCycle());
+            }
+
+            return _liveCopper.WaitObservedBlitterBusy
+                ? Math.Max(_liveCopper.Cycle, _bus.Blitter.LastCompletionCycle)
+                : _liveCopper.Cycle;
+        }
+
+
         private void StepLiveCopper(long targetCycle)
         {
             if (_liveCopper.PendingMove)
@@ -188,15 +207,22 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (_liveCopper.Waiting)
             {
-                var blitterReadyCycle = GetCopperBlitterReadyCycle(_liveCopper.WaitSecond, _liveCopper.Cycle);
+                var blitterReadyCycle = GetObservedLiveCopperBlitterReadyCycle();
                 if (blitterReadyCycle > _liveCopper.Cycle)
                 {
-                    _bus.Blitter.AdvanceTo(Math.Min(blitterReadyCycle, targetCycle));
-                    _liveCopper.Cycle = Math.Min(blitterReadyCycle, targetCycle);
+                    var advanceCycle = Math.Min(blitterReadyCycle, targetCycle);
+                    _bus.SynchronizeBlitterThrough(advanceCycle);
+                    _liveCopper.Cycle = advanceCycle;
                     if (_liveCopper.Cycle < blitterReadyCycle)
                     {
                         return;
                     }
+
+                    if (_bus.Blitter.Busy)
+                    {
+                        return;
+                    }
+
                 }
 
                 long waitCycle;
@@ -222,7 +248,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return;
                 }
 
-                var resumeCycle = waitCycle + CopperHpToCpuCycles(CopperWaitWakeHpUnits);
+                var resumeCycle = waitCycle + CopperHpToCpuCycles(GetCopperWaitWakeHpUnits(
+                    _liveCopper.WaitSecond,
+                    _liveCopper.WaitObservedBlitterBusy));
                 if (resumeCycle > targetCycle)
                 {
                     _liveCopper.Cycle = resumeCycle;
@@ -307,13 +335,91 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private CopperInstructionLatch LoadLiveCopperInstruction(uint pc, long fetchCycle)
         {
+            RecordLiveCopperBitplaneRgaCollision(fetchCycle);
             var first = _bus.ReadLiveCopperDmaWord(pc, fetchCycle, out var firstAccess);
             var secondRequestCycle = GetCopperSecondWordRequestCycle(firstAccess);
+            RecordLiveCopperBitplaneRgaCollision(secondRequestCycle);
             var second = _bus.ReadLiveCopperDmaWord(AddDmaPointerOffset(pc, 2), secondRequestCycle, out var secondAccess);
-            return new CopperInstructionLatch(first, firstAccess, second, secondAccess);
+            return new CopperInstructionLatch(first, firstAccess, second, secondAccess, CopperHpCycles);
         }
 
-        private static long GetCopperSecondWordRequestCycle(AmigaBusAccessResult firstAccess)
+        private void RecordLiveCopperBitplaneRgaCollision(long copperRequestCycle)
+        {
+            var row = GetOutputRowForCycle(_liveFrameStartCycle, copperRequestCycle);
+            if (!IsLiveLineValid(row))
+            {
+                return;
+            }
+
+            var state = _liveLineStates[row];
+            if (state.PlaneCount <= 0 || state.FetchWords <= 0)
+            {
+                return;
+            }
+
+            for (var word = 0; word < state.FetchWords; word++)
+            {
+                for (var slot = 0; slot < state.FetchSlotStride; slot++)
+                {
+                    if (!TryGetBitplanePlaneForFetchSlot(slot, state.PlaneCount, state.FetchResolution, out var plane) ||
+                        (state.PlaneHasRowMask & (1 << plane)) == 0)
+                    {
+                        continue;
+                    }
+
+                    var horizontal = state.DataFetchStart + (word * state.FetchSlotStride) + slot;
+                    if (horizontal <= OcsDdfHardStopHorizontal)
+                    {
+                        continue;
+                    }
+
+                    var fetch = AgnusChipSlotScheduler.AlignToSlot(
+                        state.LineStartCycle + ((long)horizontal * CopperHpCycles));
+                    if (fetch == copperRequestCycle)
+                    {
+                        _liveBitplaneCopperCollisionMasks[GetLiveBitplaneMaskIndex(row, plane)] |= (UInt128)1 << word;
+                    }
+                }
+            }
+        }
+
+        private void CommitLateBitplaneRgaCollisionsOnDisable(ushort register, ushort value, long dataCycle)
+        {
+            if (register != 0x100 ||
+                GetAgnusBitplaneFetchPlaneCount(_bplcon0) <= 0 ||
+                GetAgnusBitplaneFetchPlaneCount(value) > 0)
+            {
+                return;
+            }
+
+            CommitLateBitplaneRgaCollisionsForPreviousRow(dataCycle);
+        }
+
+        private void CommitLateBitplaneRgaCollisionsForPreviousRow(long dataCycle)
+        {
+            var row = GetOutputRowForCycle(_liveFrameStartCycle, dataCycle) - 1;
+            if ((uint)row >= LowResOutputHeight)
+            {
+                return;
+            }
+
+            for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
+            {
+                var mask = _liveBitplaneCopperCollisionMasks[GetLiveBitplaneMaskIndex(row, plane)];
+                for (var word = 0; word < MaxBitplaneFetchWords; word++)
+                {
+                    if ((mask & ((UInt128)1 << word)) == 0)
+                    {
+                        continue;
+                    }
+
+                    _liveBitplaneWords[GetLiveBitplaneWordIndex(row, plane, word)] = 0;
+                    _displayTimeline.RecordBitplaneFetch(row, plane, word, 0, granted: false);
+                }
+            }
+        }
+
+        private long GetCopperSecondWordRequestCycle(AmigaBusAccessResult firstAccess)
             => Math.Max(
                 firstAccess.CompletedCycle,
                 firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperInstructionDataHpUnits));
@@ -394,6 +500,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
                 }
 
+                CommitLateBitplaneRgaCollisionsOnDisable(register, value, dataCycle);
                 ApplyCopperMove(register, value, dataCycle, applyHardwareSideEffects: true);
                 if (affectsDisplay)
                 {
@@ -411,6 +518,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     _liveCopper.JumpTo(_copperListPointer2, dataCycle);
                 }
+
+                // A Copper MOVE can invalidate fixed DMA ownership even when it is
+                // executed outside the current blitter advancement scope.
+                _liveWakeVersion++;
             }
 
             _liveCopper.Cycle = instructionStopCycle;
@@ -440,7 +551,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 AmigaBusRequester.Copper,
                 register,
                 cycle,
-                CustomRegisterScheduleClassifier.IsScheduleAffectingCustomWrite(register));
+                CustomRegisterScheduleClassifier.GetPotentialImpact(_chipset, register));
         }
 
         private long GetNextLiveLineStateCycle()
@@ -489,7 +600,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     while (_liveNextFetchSlot < state.FetchSlotStride)
                     {
-                        if (TryGetBitplanePlaneForFetchSlot(_liveNextFetchSlot, planeCount, state.FetchSlotStride, out var plane))
+                        if (TryGetBitplanePlaneForFetchSlot(_liveNextFetchSlot, planeCount, state.FetchResolution, out var plane))
                         {
                             _liveNextFetchPlane = plane;
                             return true;

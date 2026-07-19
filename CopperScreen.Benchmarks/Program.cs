@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using CopperMod.Amiga;
+using CopperMod.Amiga.CustomChips.Blitter;
 using CopperScreen;
 
 const int SampleRate = 44_100;
@@ -11,7 +12,9 @@ const int Channels = 2;
 const int OpcodeDispatchDefaultMemorySize = 1 << 20;
 const int OpcodeDispatchTransformMemorySize = 1 << 24;
 
-if (Move16AlignmentBenchmark.TryRun(args) || AmigaFastRamBenchmark.TryRun(args))
+if (Move16AlignmentBenchmark.TryRun(args) ||
+    AmigaFastRamBenchmark.TryRun(args) ||
+    EcsTimingBenchmark.TryRun(args))
 {
     return;
 }
@@ -87,7 +90,7 @@ if (options.DiskDivergenceTrace)
     return;
 }
 
-Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuBusBatchVerify={options.DeferredCpuBusBatchVerify}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
+Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, BlitterAdvance={options.BlitterAdvanceMode.ToString().ToLowerInvariant()}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuBusBatchVerify={options.DeferredCpuBusBatchVerify}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
 WriteBenchmarkHeader();
 
 foreach (var workload in workloads)
@@ -407,8 +410,15 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
             "missing",
             default,
             Array.Empty<AmigaDiskTraceEvent>(),
+            false,
+            0,
             "missing disk image");
     }
+
+    var benchmarkBus = GetMachine(emulator).Bus;
+    benchmarkBus.SetBlitterAdvanceMode(options.BlitterAdvanceMode);
+    benchmarkBus.Blitter.SetBoundedFixedSlotExecutionEnabledForTest(
+        options.BlitterAdvanceMode == BlitterAdvanceMode.Bounded);
 
     var audio = new float[emulator.AudioFramesPerAppFrame(SampleRate) * Channels];
     using var audioAudit = CreateAudioAuditWriter(options, workload);
@@ -707,6 +717,8 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         FormatCpuBackendName(emulator.CpuBackendName, options.OpcodeDispatch),
         emulator.JitCounters,
         options.DiskDivergenceTrace ? CaptureDiskTrace(emulator) : Array.Empty<AmigaDiskTraceEvent>(),
+        emulator.CopperStartRuntimeHandoffActive,
+        emulator.CopperStartRuntimeHandoffCount,
         CaptureStatusText(emulator));
 }
 
@@ -1323,18 +1335,18 @@ static FrameProfile ProfileFrames(CopperScreenEmulator emulator, int frames)
 
         machine.Bus.AdvanceRasterTo(targetCycle);
         machine.Bus.AdvanceCiasTo(targetCycle);
-        machine.Bus.Paula.AdvanceTo(targetCycle);
-        machine.Bus.Disk.AdvanceTo(targetCycle);
+        machine.Bus.SynchronizePaulaThrough(targetCycle);
+        machine.Bus.SynchronizeDiskThrough(targetCycle);
 
         phaseStart = Stopwatch.GetTimestamp();
         if (machine.Bus.LiveAgnusDmaEnabled)
         {
-            machine.Bus.Agnus.AdvanceTo(targetCycle);
+            machine.Bus.SynchronizeLiveDisplayThrough(targetCycle);
         }
 
         agnusTicks += Stopwatch.GetTimestamp() - phaseStart;
-        machine.Bus.Blitter.AdvanceTo(targetCycle);
-        machine.Bus.Paula.AdvanceTo(targetCycle);
+        machine.Bus.AdvanceDmaTo(targetCycle);
+        machine.Bus.SynchronizePaulaThrough(targetCycle);
 
         phaseStart = Stopwatch.GetTimestamp();
         machine.Bus.Display.RenderFrame(
@@ -1462,6 +1474,7 @@ static HardwareSpecializationSummary CaptureSpecializationSummary(CopperScreenEm
         .GetValue(emulator)!;
     var blitterSnapshot = machine.Bus.Blitter.CaptureSnapshot();
     var blitter = blitterSnapshot.SpecializationCounters;
+    var advance = blitterSnapshot.AdvanceCounters;
     var disk = machine.Bus.Disk.CaptureSnapshot().SpecializationCounters;
     return new HardwareSpecializationSummary(
         blitter.KernelHits,
@@ -1481,6 +1494,23 @@ static HardwareSpecializationSummary CaptureSpecializationSummary(CopperScreenEm
         blitter.DOnlyRowWords,
         blitter.AToDRowWords,
         blitter.RowPipelineFallbacks,
+        advance.Calls,
+        advance.IdleExits,
+        advance.HorizonExits,
+        advance.BoundedAttempts,
+        advance.BoundedUses,
+        advance.SlotsExamined,
+        advance.MicroOpsCompleted,
+        advance.WordsCompleted,
+        advance.DeniedSlots,
+        advance.DisplayPreparations,
+        advance.PaulaSlots,
+        advance.DiskSlots,
+        advance.Barriers,
+        advance.Fallbacks,
+        advance.VerifyMatches,
+        advance.VerifyMismatches,
+        advance.FirstMismatch,
         blitterSnapshot.TopPatterns,
         disk.PreparedTrackHits,
         disk.PreparedTrackMisses,
@@ -2009,7 +2039,8 @@ static string FormatAudioSummary(AudioSummary summary)
 static string FormatStatusWithScheduler(BenchmarkRunResult result)
 {
     var scheduler = result.Scheduler;
-    return $"{FormatCounterText(result.StatusText)} | scheduler last={scheduler.LastDrainCycle}, drains={scheduler.DrainCount}, max-frame-drains={result.MaxFrameSchedulerDrains}, bus-drains={scheduler.BusAccessDrainCount}, same-cycle={scheduler.SameCycleDrainCount}, line-cache=hit:{scheduler.RasterlineCacheHits},miss:{scheduler.RasterlineCacheMisses},rebuild:{scheduler.RasterlineCacheRebuilds},inv:{scheduler.RasterlineCacheInvalidations}, wake-agenda=hit:{scheduler.WakeAgendaCacheHits},miss:{scheduler.WakeAgendaCacheMisses},skip:{scheduler.WakeAgendaDrainSkips},inv:{scheduler.WakeAgendaInvalidations}, cpuevent=hit:{scheduler.CpuVisibleNoEventCacheHits},miss:{scheduler.CpuVisibleNoEventCacheMisses},inv:{scheduler.CpuVisibleNoEventCacheInvalidations}, copperq=slot:{scheduler.CopperQuiescentSlotContendedAccesses},customw:{scheduler.CopperQuiescentCustomRegisterWrites},cpuw:{scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw:{scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain:{scheduler.CopperQuiescentSchedulerDrains},pred:{scheduler.CopperQuiescentShadowPredictions}/{scheduler.CopperQuiescentShadowMatches}/{scheduler.CopperQuiescentShadowUnsupported}/{scheduler.CopperQuiescentShadowMismatches},fast:{scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}/{scheduler.CopperQuiescentFastPathVerificationMismatches}, cpubatch={FormatDeferredCpuBusBatchSummary(scheduler)}, events=raster:{scheduler.RasterEvents},cia:{scheduler.CiaEvents},paula:{scheduler.PaulaEvents},disk:{scheduler.DiskEvents},agnus:{scheduler.AgnusEvents},blitter:{scheduler.BlitterEvents}";
+    var boundaryMode = result.CopperStartRuntimeHandoffActive ? "runtime" : "boot";
+    return $"{FormatCounterText(result.StatusText)} | boundary={boundaryMode}/{result.CopperStartRuntimeHandoffCount}, scheduler last={scheduler.LastDrainCycle}, drains={scheduler.DrainCount}, max-frame-drains={result.MaxFrameSchedulerDrains}, bus-drains={scheduler.BusAccessDrainCount}, same-cycle={scheduler.SameCycleDrainCount}, line-cache=hit:{scheduler.RasterlineCacheHits},miss:{scheduler.RasterlineCacheMisses},rebuild:{scheduler.RasterlineCacheRebuilds},inv:{scheduler.RasterlineCacheInvalidations}, wake-agenda=hit:{scheduler.WakeAgendaCacheHits},miss:{scheduler.WakeAgendaCacheMisses},skip:{scheduler.WakeAgendaDrainSkips},inv:{scheduler.WakeAgendaInvalidations}, cpuevent=hit:{scheduler.CpuVisibleNoEventCacheHits},miss:{scheduler.CpuVisibleNoEventCacheMisses},inv:{scheduler.CpuVisibleNoEventCacheInvalidations}, copperq=slot:{scheduler.CopperQuiescentSlotContendedAccesses},customw:{scheduler.CopperQuiescentCustomRegisterWrites},cpuw:{scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw:{scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain:{scheduler.CopperQuiescentSchedulerDrains},pred:{scheduler.CopperQuiescentShadowPredictions}/{scheduler.CopperQuiescentShadowMatches}/{scheduler.CopperQuiescentShadowUnsupported}/{scheduler.CopperQuiescentShadowMismatches},fast:{scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}/{scheduler.CopperQuiescentFastPathVerificationMismatches}, cpubatch={FormatDeferredCpuBusBatchSummary(scheduler)}, events=raster:{scheduler.RasterEvents},cia:{scheduler.CiaEvents},paula:{scheduler.PaulaEvents},disk:{scheduler.DiskEvents},agnus:{scheduler.AgnusEvents},blitter:{scheduler.BlitterEvents}";
 }
 
 static void LaunchWorkbenchPathIfNeeded(CopperScreenEmulator emulator, BenchmarkWorkload workload)
@@ -2388,6 +2419,8 @@ static string FormatSpecializationSummary(HardwareSpecializationSummary summary)
         $"bltQueue={summary.BlitterSlotQueueAttempts}/{summary.BlitterSlotQueueEnabledBlits}/{summary.BlitterSlotQueueUnsupportedBlits}/{summary.BlitterSlotQueueWords}/{summary.BlitterSlotQueueCommittedOps}," +
         $"bltRes={summary.BlitterSpecializedReservations}," +
         $"bltRow={summary.BlitterRowPipelineAttempts}/{summary.BlitterRowPipelineUsed}/{summary.BlitterRowPipelineWords}/{summary.BlitterRowPipelineCompletions}/{summary.BlitterDOnlyRowWords}/{summary.BlitterAToDRowWords}/{summary.BlitterRowPipelineFallbacks}," +
+        $"bltAdvance={summary.BlitterAdvanceCalls}/{summary.BlitterAdvanceIdleExits}/{summary.BlitterAdvanceHorizonExits}/{summary.BlitterAdvanceBoundedAttempts}/{summary.BlitterAdvanceBoundedUses}/{summary.BlitterAdvanceSlotsExamined}/{summary.BlitterAdvanceMicroOps}/{summary.BlitterAdvanceWords}/{summary.BlitterAdvanceDeniedSlots}/{summary.BlitterAdvanceDisplayPreparations}/{summary.BlitterAdvancePaulaSlots}/{summary.BlitterAdvanceDiskSlots}/{summary.BlitterAdvanceBarriers}/{summary.BlitterAdvanceFallbacks}/{summary.BlitterAdvanceVerifyMatches}/{summary.BlitterAdvanceVerifyMismatches}," +
+        $"bltAdvanceFirst={FormatCounterText(summary.BlitterAdvanceFirstMismatch)}," +
         $"bltTop={FormatBlitterTopPatterns(summary.BlitterTopPatterns)}," +
         $"dskPrep={summary.DiskPreparedTrackHits}/{summary.DiskPreparedTrackMisses}," +
         $"dskWin={summary.DiskRollingWindowHits}/{summary.DiskRollingWindowMisses}," +
@@ -2578,6 +2611,23 @@ internal readonly record struct HardwareSpecializationSummary(
     long BlitterDOnlyRowWords,
     long BlitterAToDRowWords,
     long BlitterRowPipelineFallbacks,
+    long BlitterAdvanceCalls,
+    long BlitterAdvanceIdleExits,
+    long BlitterAdvanceHorizonExits,
+    long BlitterAdvanceBoundedAttempts,
+    long BlitterAdvanceBoundedUses,
+    long BlitterAdvanceSlotsExamined,
+    long BlitterAdvanceMicroOps,
+    long BlitterAdvanceWords,
+    long BlitterAdvanceDeniedSlots,
+    long BlitterAdvanceDisplayPreparations,
+    long BlitterAdvancePaulaSlots,
+    long BlitterAdvanceDiskSlots,
+    long BlitterAdvanceBarriers,
+    long BlitterAdvanceFallbacks,
+    long BlitterAdvanceVerifyMatches,
+    long BlitterAdvanceVerifyMismatches,
+    string BlitterAdvanceFirstMismatch,
     BlitterPatternEntry[] BlitterTopPatterns,
     long DiskPreparedTrackHits,
     long DiskPreparedTrackMisses,
@@ -2624,6 +2674,8 @@ internal readonly record struct BenchmarkRunResult(
     string CpuBackend,
     M68kJitCounters Jit,
     AmigaDiskTraceEvent[] DiskTrace,
+    bool CopperStartRuntimeHandoffActive,
+    long CopperStartRuntimeHandoffCount,
     string StatusText);
 
 internal readonly record struct BenchmarkOptions(
@@ -2666,6 +2718,7 @@ internal readonly record struct BenchmarkOptions(
     bool DeferredCpuBusBatchVerify,
     bool CpuWaitSlotReference,
     bool HardwareSpecialization,
+    BlitterAdvanceMode BlitterAdvanceMode,
     bool StopOnDebugSnapshot,
     int PauseBeforeMeasureMilliseconds,
     string? DumpDebugSnapshotPath,
@@ -2714,6 +2767,7 @@ internal readonly record struct BenchmarkOptions(
         var deferredCpuBusBatchVerify = false;
         var cpuWaitSlotReference = false;
         var hardwareSpecialization = false;
+        var blitterAdvanceMode = BlitterAdvanceMode.Reference;
         var stopOnDebugSnapshot = false;
         var pauseBeforeMeasureMilliseconds = 0;
         string? dumpDebugSnapshotPath = null;
@@ -2960,6 +3014,10 @@ internal readonly record struct BenchmarkOptions(
             {
                 hardwareSpecialization = true;
             }
+            else if (string.Equals(args[i], "--blitter-advance-mode", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                blitterAdvanceMode = ParseBlitterAdvanceMode(args[++i]);
+            }
             else if (string.Equals(args[i], "--stop-on-debug-snapshot", StringComparison.OrdinalIgnoreCase))
             {
                 stopOnDebugSnapshot = true;
@@ -3026,6 +3084,7 @@ internal readonly record struct BenchmarkOptions(
             deferredCpuBusBatchVerify,
             cpuWaitSlotReference,
             hardwareSpecialization,
+            blitterAdvanceMode,
             stopOnDebugSnapshot,
             Math.Max(0, pauseBeforeMeasureMilliseconds),
             dumpDebugSnapshotPath,
@@ -3047,6 +3106,16 @@ internal readonly record struct BenchmarkOptions(
             "kind" or "kindtable" or "table" => M68kOpcodePlanDispatch.KindTable,
             "packed" or "packedplan" => M68kOpcodePlanDispatch.PackedPlan,
             _ => null
+        };
+
+    private static BlitterAdvanceMode ParseBlitterAdvanceMode(string value)
+        => value.Trim().ToLowerInvariant() switch
+        {
+            "reference" => BlitterAdvanceMode.Reference,
+            "bounded" => BlitterAdvanceMode.Bounded,
+            "verify" => BlitterAdvanceMode.Verify,
+            _ => throw new ArgumentException(
+                $"Unsupported blitter advance mode '{value}'. Expected reference, bounded, or verify.")
         };
 }
 

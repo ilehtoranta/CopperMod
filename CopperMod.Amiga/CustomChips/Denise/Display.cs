@@ -10,10 +10,21 @@ using System.Runtime.InteropServices;
 
 namespace CopperMod.Amiga.CustomChips.Denise
 {
+    internal enum DeniseResolution : byte
+    {
+        LowRes,
+        HighRes,
+        SuperHighRes
+    }
+
     internal sealed partial class Display
     {
         private const int MaxPendingWrites = 65536;
         private const int StandardHStart = 0x81 - AmigaConstants.PalLowResOverscanBorderX;
+        // Left overscan exposes the bitplane shifter's comparator-$80 pixel.
+        // A standard-or-later DIW clips that pre-roll and begins at comparator
+        // $81. DDF retains this physical phase in both lowres and hires.
+        private const int StandardBitplanePrerollOrigin = AmigaConstants.PalLowResOverscanBorderX - 1;
         private const int StandardVStart = 0x2C - AmigaConstants.PalLowResOverscanBorderY;
         private const ushort DefaultDiwStart = AgnusRegisterBank.DefaultDiwStart;
         private const ushort DefaultDiwStop = AgnusRegisterBank.DefaultDiwStop;
@@ -25,26 +36,40 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private const ushort DmaconCopperEnable = 0x0080;
         private const ushort DmaconSpriteEnable = 0x0020;
         private const ushort DmaconWritableMask = 0x07FF;
-        // SPRxPOS stores H8-H1 and SPRxCTL stores H0; after reconstruction,
-        // the normal visible left edge is comparator coordinate $80.
-        private const int StandardSpriteHorizontalOffset = 128 - AmigaConstants.PalLowResOverscanBorderX;
-        private const int MaxBitplaneFetchWords = 64;
+        private const ushort EcsBplcon3WritableMask = 0x0037;
+        private const ushort EcsDiwHighWritableMask = 0x2F2F;
+        private const ushort Bplcon0EcsEnable = 0x0001;
+        private const ushort Bplcon0SuperHires = 0x0040;
+        private const ushort Bplcon3ExternalBlankEnable = 0x0001;
+        private const ushort Bplcon3BorderSpriteEnable = 0x0002;
+        private const ushort Bplcon3ZdClockEnable = 0x0004;
+        private const ushort Bplcon3BorderNotTransparent = 0x0010;
+        private const ushort Bplcon3BorderBlank = 0x0020;
+        // SPRxPOS stores H8-H1 and SPRxCTL stores H0. OCS comparator $81
+        // aligns with the standard visible left edge; $80 is one low-res
+        // pixel earlier in the overscan capture.
+        private const int StandardSpriteHorizontalOffset = 129 - AmigaConstants.PalLowResOverscanBorderX;
+        private const int MaxLowResWidth = AmigaConstants.NtscLowResWidth;
+        private const int MaxBitplaneFetchWords = 128;
         private const byte Playfield1PriorityMask = 0x01;
         private const byte Playfield2PriorityMask = 0x02;
         private const byte NormalPlayfieldPriorityMask = 0x04;
         private const int LowResOutputHeight = AmigaConstants.PalLowResHeight;
         private const int LastCopperHorizontal = 0xE2;
-        private const int CopperHorizontalUnitsPerLine = 227;
+        private const int OcsDdfHardStopHorizontal = 0xD8;
+        private const int CanonicalCopperHorizontalUnitsPerLine = 227;
         private const int CopperInstructionDataHpUnits = 2;
         private const int CopperMoveHpUnits = 4;
         private const int CopperSkipHpUnits = 6;
         // A satisfied WAIT is observed on the following Copper phase. The next
         // instruction's first DMA word is available one Copper memory cycle later.
         private const int CopperWaitWakeHpUnits = 5;
+        private const int CopperBfdNoBusyWakeHpUnits = 3;
         private const int CopperWaitLineEndBlackoutHpUnits = 4;
-        private const int LineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
-        private const int CopperHpCycles = AmigaConstants.A500PalCpuCyclesPerColorClock;
+        private const int CanonicalLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        private const int CanonicalCopperHpCycles = AmigaConstants.A500PalCpuCyclesPerColorClock;
         private const int PaletteColorCount = 64;
+        private const int MaxDeniseSamplesPerLowResSpan = 4;
         private const int MaxPaletteFrameSpans = MaxPendingWrites;
         private const int MaxBitplaneDataSpans = MaxPendingWrites;
         private const int MaxSpriteFrameCommands = 256;
@@ -65,17 +90,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private const int MaxCapturedCopperDisplayWrites = 65536;
         private static readonly int[] LowResBitplaneFetchSlotsByPlane = [7, 3, 5, 1, 6, 2];
         private static readonly int[] HighResBitplaneFetchSlotsByPlane = [3, 1, 2, 0];
+        private static readonly int[] SuperHighResBitplaneFetchSlotsByPlane = [1, 0];
         private static readonly sbyte[] LowResBitplanePlanesByFetchSlot = [-1, 3, 5, 1, -1, 2, 4, 0];
         private static readonly sbyte[] HighResBitplanePlanesByFetchSlot = [3, 1, 2, 0];
+        private static readonly sbyte[] SuperHighResBitplanePlanesByFetchSlot = [1, 0];
         private readonly AmigaBus _bus;
         private readonly AgnusRegisterBank _agnusRegisters;
+        private readonly AmigaChipset _chipset;
+        private readonly RasterTiming _timing;
+        private readonly int _lowResWidth;
+        private readonly int _lowResHeight;
         private readonly bool _liveDmaEnabled;
         private readonly List<PendingCustomWrite> _pendingWrites = new List<PendingCustomWrite>(MaxPendingWrites);
         private readonly ushort[] _colors = new ushort[32];
         private readonly uint[] _convertedColors = new uint[PaletteColorCount];
         private readonly uint[] _bitplanePointers = new uint[6];
         private readonly int[] _bitplaneBaseRows = new int[6];
-        private byte[] _playfieldPriorityMasks = new byte[AmigaConstants.PalLowResWidth * LowResOutputHeight];
+        private byte[] _playfieldPriorityMasks = new byte[MaxLowResWidth * LowResOutputHeight * MaxDeniseSamplesPerLowResSpan];
+        private byte[] _playfieldSampleColorIndexes = new byte[MaxLowResWidth * LowResOutputHeight * MaxDeniseSamplesPerLowResSpan];
+        private uint[] _compositionSampleColors = new uint[MaxLowResWidth * LowResOutputHeight * MaxDeniseSamplesPerLowResSpan];
         private readonly ushort[,] _renderPlaneWords = new ushort[6, MaxBitplaneFetchWords];
         private readonly bool[] _renderPlaneHasRow = new bool[6];
         private readonly ushort[] _bitplaneDataRegisters = new ushort[6];
@@ -89,8 +122,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private readonly List<PaletteFrameSpan> _paletteFrameSpans = new List<PaletteFrameSpan>(MaxPaletteFrameSpans);
         private readonly List<BitplaneDataSpan> _bitplaneDataSpans = new List<BitplaneDataSpan>(MaxBitplaneDataSpans);
         private readonly uint[] _paletteFrameSpanColors = new uint[MaxPaletteFrameSpans * PaletteColorCount];
-        private readonly byte[] _timelineFastPathColorIndexes = new byte[AmigaConstants.PalLowResWidth];
-        private readonly byte[] _timelineFastPathPriorityMasks = new byte[AmigaConstants.PalLowResWidth];
+        private readonly ushort[] _paletteFrameSpanEncodedColors = new ushort[MaxPaletteFrameSpans * 32];
+        private readonly byte[] _timelineFastPathColorIndexes = new byte[MaxLowResWidth];
+        private readonly byte[] _timelineFastPathPriorityMasks = new byte[MaxLowResWidth];
         private readonly SavedDisplayState _savedDisplayState = new SavedDisplayState();
         private readonly SavedDisplayState _liveFrameInitialState = new SavedDisplayState();
         private readonly SavedDisplayState _archivedFrameInitialState = new SavedDisplayState();
@@ -106,6 +140,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private ushort _bplcon0;
         private ushort _bplcon1;
         private ushort _bplcon2;
+        private ushort _bplcon3;
+        private ushort _diwHigh;
+        private bool _diwHighValid;
+        private ushort _agnusDiwHigh;
+        private bool _agnusDiwHighValid;
+        private DisplayWindow _agnusDisplayWindow;
+        private DisplayWindow _deniseDisplayWindow;
+        private DataFetchWindow _dataFetchWindow;
         private ushort _copcon;
         private ushort _dmacon;
         private short _bpl1mod;
@@ -117,6 +159,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private bool _displayWindowVerticallyOpen;
         private int _displayWindowStateLine;
         private bool _liveDisplayWindowVerticallyOpen;
+        private bool _liveDeniseDisplayWindowVerticallyOpen;
         private int _liveDisplayWindowStateLine;
         private int _lastBitplaneNonZeroPixels;
         private int _lastBitplaneRows;
@@ -160,7 +203,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private long _renderFrameStartCycle;
         private readonly LiveLineState[] _liveLineStates = new LiveLineState[LowResOutputHeight];
         private readonly ushort[] _liveBitplaneWords = new ushort[LowResOutputHeight * LiveBitplaneWordsPerRow];
-        private readonly ulong[] _liveBitplaneWordMasks = new ulong[LowResOutputHeight * LiveBitplanePlaneCount];
+        private readonly UInt128[] _liveBitplaneWordMasks = new UInt128[LowResOutputHeight * LiveBitplanePlaneCount];
+        // Bitplane requests are decided one CCK before ordinary RGA requests.
+        // Keep post-hard-stop Copper collisions separate until the following
+        // control transition decides whether Denise retains or clears the latch.
+        private readonly UInt128[] _liveBitplaneCopperCollisionMasks = new UInt128[LowResOutputHeight * LiveBitplanePlaneCount];
         private readonly ushort[] _liveSpriteWords = new ushort[LowResOutputHeight * LiveSpriteWordsPerRow];
         private readonly byte[] _liveSpriteWordMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
         private readonly RowDmaPlan[] _rowDmaPlans = new RowDmaPlan[LowResOutputHeight];
@@ -195,8 +242,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private readonly LiveRasterlinePredictionStatus[] _predictedRasterlinePlanStatuses = new LiveRasterlinePredictionStatus[LowResOutputHeight];
         private readonly LiveRasterlineDmaDescriptor[] _liveRasterlineDmaDescriptors = new LiveRasterlineDmaDescriptor[LowResOutputHeight];
         private BoundedWriteLog? _copperDisplayWrites;
-        private DisplayFrameTimeline _displayTimeline = new DisplayFrameTimeline();
-        private DisplayFrameTimeline _archivedDisplayTimeline = new DisplayFrameTimeline();
+        private DisplayFrameTimeline _displayTimeline;
+        private DisplayFrameTimeline _archivedDisplayTimeline;
         private readonly ushort[] _archivedPaletteSnapshotColors = new ushort[MaxLivePaletteSnapshots * 32];
         private readonly uint[] _archivedPaletteSnapshotConvertedColors = new uint[MaxLivePaletteSnapshots * PaletteColorCount];
         private long _archivedFrameWritesStartCycle = long.MinValue;
@@ -349,10 +396,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int _lastRowDmaPlanInvalidationRows;
         private int _lastRowDmaPlanMismatchRows;
 
-        public Display(AmigaBus bus, AgnusRegisterBank agnusRegisters, bool liveDmaEnabled = true)
+        public Display(
+            AmigaBus bus,
+            AgnusRegisterBank agnusRegisters,
+            AmigaChipset chipset,
+            bool liveDmaEnabled = true)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _agnusRegisters = agnusRegisters ?? throw new ArgumentNullException(nameof(agnusRegisters));
+            _chipset = chipset;
+            _timing = bus.RasterTiming;
+            _lowResWidth = Math.Min(MaxLowResWidth, _timing.PresentationLowResWidth);
+            _lowResHeight = Math.Min(LowResOutputHeight, _timing.PresentationLowResHeight);
+            _displayTimeline = new DisplayFrameTimeline(_lowResWidth);
+            _archivedDisplayTimeline = new DisplayFrameTimeline(_lowResWidth);
             _liveDmaEnabled = liveDmaEnabled;
             for (var i = 0; i < _sprites.Length; i++)
             {
@@ -369,9 +426,21 @@ namespace CopperMod.Amiga.CustomChips.Denise
             Reset();
         }
 
-        public int Width => AmigaConstants.PalHighResWidth;
+        private int LowResWidth => _lowResWidth;
 
-        public int Height => AmigaConstants.PalHighResHeight;
+        private int ActiveLowResOutputHeight => _lowResHeight;
+
+        private int CopperHorizontalUnitsPerLine => _timing.MaximumColorClocksPerLine;
+
+        private int CopperHpCycles => _timing.CpuCyclesPerColorClock;
+
+        private int LineCycles => _timing.MaximumCpuCyclesPerLine;
+
+        public int Width => _chipset.Denise == DeniseModel.Ecs
+            ? _timing.PresentationSuperHighResWidth
+            : _timing.PresentationHighResWidth;
+
+        public int Height => _timing.PresentationHighResHeight;
 
         public bool InterlaceEnabled => (_bplcon0 & 0x0004) != 0;
 
@@ -413,8 +482,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _bplcon0,
                 _bplcon1,
                 _bplcon2,
+                _bplcon3,
                 _diwStart,
                 _diwStop,
+                _diwHigh,
+                _diwHighValid,
                 _ddfStart,
                 _ddfStop,
                 _bpl1mod,
@@ -531,7 +603,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _lastArchiveRejectMissingSpriteDmacon,
                 _lastArchiveRejectMissingSpriteBplcon0,
                 _lastArchiveRejectMissingSpritePreviousStatusA,
-                _lastArchiveRejectMissingSpritePreviousStatusB);
+                _lastArchiveRejectMissingSpritePreviousStatusB,
+                _agnusDiwHigh,
+                _agnusDiwHighValid,
+                _agnusDisplayWindow,
+                _deniseDisplayWindow,
+                _dataFetchWindow);
         }
 
         public void Reset()
@@ -553,6 +630,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _bplcon0 = 0;
             _bplcon1 = 0;
             _bplcon2 = 0;
+            _bplcon3 = 0;
+            _diwHigh = 0;
+            _diwHighValid = false;
+            _agnusDiwHigh = _agnusRegisters.DiwHigh;
+            _agnusDiwHighValid = _agnusRegisters.DiwHighValid;
+            RefreshDisplayGeometry();
             _copcon = _agnusRegisters.CopperControl;
             _dmacon = 0;
             _bpl1mod = _agnusRegisters.BitplaneModulo1;
@@ -564,6 +647,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _displayWindowVerticallyOpen = false;
             _displayWindowStateLine = 0;
             _liveDisplayWindowVerticallyOpen = false;
+            _liveDeniseDisplayWindowVerticallyOpen = false;
             _liveDisplayWindowStateLine = 0;
             _currentRenderRow = -1;
             ResetFrameCounters();
@@ -591,7 +675,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             if (xStop < 0)
             {
-                xStop = AmigaConstants.PalLowResWidth;
+                xStop = LowResWidth;
             }
 
             if (!useTimedWrites)
@@ -604,8 +688,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             rowStart = Math.Clamp(rowStart, 0, LowResOutputHeight);
             rowStop = Math.Clamp(rowStop, rowStart, LowResOutputHeight);
-            xStart = Math.Clamp(xStart, 0, AmigaConstants.PalLowResWidth);
-            xStop = Math.Clamp(xStop, xStart, AmigaConstants.PalLowResWidth);
+            xStart = Math.Clamp(xStart, 0, LowResWidth);
+            xStop = Math.Clamp(xStop, xStart, LowResWidth);
             for (var row = rowStart; row < rowStop; row++)
             {
                 _currentRenderRow = row;
@@ -623,7 +707,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _currentRenderRow = -1;
         }
 
-        private static long GetOutputRowStartCycle(long frameStartCycle, int row)
+        private long GetOutputRowStartCycle(long frameStartCycle, int row)
         {
             return GetLineStartCycle(frameStartCycle, StandardVStart + row);
         }
@@ -698,8 +782,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             row = Math.Clamp(row, 0, LowResOutputHeight - 1);
             var lineStart = GetOutputRowStartCycle(_renderFrameStartCycle, row);
-            var wordStride = GetBitplaneFetchSlotStride(IsHighResolutionEnabled());
-            var planeSlot = GetBitplaneFetchSlot(plane, wordStride);
+            var fetchResolution = GetAgnusFetchResolution(_bplcon0);
+            var wordStride = GetResolutionFetchSlotStride(fetchResolution);
+            var planeSlot = GetBitplaneFetchSlot(plane, fetchResolution);
             var fetchHorizontal = GetDataFetchStartValue() + (word * wordStride) + planeSlot;
             var fetchCycle = AgnusChipSlotScheduler.AlignToSlot(lineStart + ((long)fetchHorizontal * CopperHpCycles));
             if (!_bus.TryReadDisplayDmaWordForPresentation(
@@ -743,7 +828,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var plane = latch.Plane;
             var word = latch.Word;
             _liveBitplaneWords[GetLiveBitplaneWordIndex(row, plane, word)] = latch.Value;
-            _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)] |= 1UL << word;
+            _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)] |= (UInt128)1 << word;
             if (latch.Granted)
             {
                 _liveBitplaneDmaFetches++;
@@ -819,6 +904,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (_renderingLiveCapture && !recordLiveCapture)
             {
+                if (word == 1 && TryGetPriorLiveSpriteDatb(row, spriteIndex, out value))
+                {
+                    return true;
+                }
+
                 value = 0;
                 return false;
             }
@@ -844,7 +934,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _previousLiveSpriteFrameStartCycle == _renderFrameStartCycle &&
                 _previousLiveSpriteFrameCommands.Count > 0)
             {
-                return TryReadPreviousLiveSpriteWord(row, spriteIndex, word, out value, out var denied) && !denied;
+                return TryReadPreviousLiveSpriteWord(row, spriteIndex, word, out value, out _);
             }
 
             if (!IsSpriteDmaSlotAvailable(spriteIndex, word))
@@ -952,10 +1042,37 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var maskIndex = GetLiveSpriteMaskIndex(row, spriteIndex);
             var bit = (byte)(1 << word);
             denied = (_previousLiveSpriteDeniedMasks[maskIndex] & bit) != 0;
-            value = denied
-                ? (ushort)0
-                : _previousLiveSpriteWords[GetLiveSpriteWordIndex(row, spriteIndex, word)];
+            if (denied && word == 1 && TryGetPriorPreviousLiveSpriteDatb(row, spriteIndex, out value))
+            {
+                denied = false;
+                return true;
+            }
+
+            value = denied ? (ushort)0 : _previousLiveSpriteWords[GetLiveSpriteWordIndex(row, spriteIndex, word)];
             return true;
+        }
+
+        private bool TryGetPriorPreviousLiveSpriteDatb(int row, int spriteIndex, out ushort value)
+        {
+            for (var priorRow = row - 1; priorRow >= 0; priorRow--)
+            {
+                if (!HasPreviousLiveSpriteWord(priorRow, spriteIndex, 1))
+                {
+                    continue;
+                }
+
+                var maskIndex = GetLiveSpriteMaskIndex(priorRow, spriteIndex);
+                if ((_previousLiveSpriteDeniedMasks[maskIndex] & 0x02) != 0)
+                {
+                    continue;
+                }
+
+                value = _previousLiveSpriteWords[GetLiveSpriteWordIndex(priorRow, spriteIndex, 1)];
+                return true;
+            }
+
+            value = 0;
+            return false;
         }
 
         private bool HasPreviousLiveSpriteWord(int row, int spriteIndex, int word)
@@ -972,28 +1089,39 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return (_previousLiveSpriteWordMasks[maskIndex] & bit) != 0;
         }
 
-        private static int GetBitplaneFetchSlotStride(bool highResolution)
-            => highResolution ? 4 : 8;
-
-        private static int GetBitplaneFetchSlot(int plane, int fetchSlotStride)
+        private static int GetBitplaneFetchSlot(int plane, DeniseResolution fetchResolution)
         {
-            if (fetchSlotStride <= 4)
+            if (fetchResolution == DeniseResolution.SuperHighRes)
+            {
+                return (uint)plane < (uint)SuperHighResBitplaneFetchSlotsByPlane.Length
+                    ? SuperHighResBitplaneFetchSlotsByPlane[plane]
+                    : GetResolutionFetchSlotStride(fetchResolution) - 1;
+            }
+
+            if (fetchResolution == DeniseResolution.HighRes)
             {
                 return (uint)plane < (uint)HighResBitplaneFetchSlotsByPlane.Length
                     ? HighResBitplaneFetchSlotsByPlane[plane]
-                    : fetchSlotStride - 1;
+                    : GetResolutionFetchSlotStride(fetchResolution) - 1;
             }
 
             return (uint)plane < (uint)LowResBitplaneFetchSlotsByPlane.Length
                 ? LowResBitplaneFetchSlotsByPlane[plane]
-                : fetchSlotStride - 1;
+                : GetResolutionFetchSlotStride(fetchResolution) - 1;
         }
 
-        private static bool TryGetBitplanePlaneForFetchSlot(int slot, int planeCount, int fetchSlotStride, out int plane)
+        private static bool TryGetBitplanePlaneForFetchSlot(
+            int slot,
+            int planeCount,
+            DeniseResolution fetchResolution,
+            out int plane)
         {
-            var planesByFetchSlot = fetchSlotStride <= 4
-                ? HighResBitplanePlanesByFetchSlot
-                : LowResBitplanePlanesByFetchSlot;
+            var planesByFetchSlot = fetchResolution switch
+            {
+                DeniseResolution.SuperHighRes => SuperHighResBitplanePlanesByFetchSlot,
+                DeniseResolution.HighRes => HighResBitplanePlanesByFetchSlot,
+                _ => LowResBitplanePlanesByFetchSlot
+            };
             if ((uint)slot < (uint)planesByFetchSlot.Length)
             {
                 plane = planesByFetchSlot[slot];
@@ -1081,7 +1209,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var mask = _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)];
-            if ((mask & (1UL << word)) == 0)
+            if ((mask & ((UInt128)1 << word)) == 0)
             {
                 return false;
             }
@@ -1113,9 +1241,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     continue;
                 }
 
-                var expectedMask = state.FetchWords >= 64
-                    ? ulong.MaxValue
-                    : (1UL << state.FetchWords) - 1UL;
+                var expectedMask = GetBitplaneWordMask(state.FetchWords);
                 for (var plane = 0; plane < state.PlaneCount; plane++)
                 {
                     var actualMask = _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)];
@@ -1129,12 +1255,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return true;
         }
 
-        private static long GetFirstLiveBitplaneFetchCycleForRendering(int row, LiveLineState state)
+        private long GetFirstLiveBitplaneFetchCycleForRendering(int row, LiveLineState state)
         {
             var planeCount = Math.Max(0, state.PlaneCount);
             for (var slot = 0; slot < state.FetchSlotStride; slot++)
             {
-                if (TryGetBitplanePlaneForFetchSlot(slot, planeCount, state.FetchSlotStride, out _))
+                if (TryGetBitplanePlaneForFetchSlot(slot, planeCount, state.FetchResolution, out _))
                 {
                     var fetchHorizontal = state.DataFetchStart + slot;
                     return AgnusChipSlotScheduler.AlignToSlot(state.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles));
@@ -1156,7 +1282,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
                 {
-                    count += BitOperations.PopCount(_liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)]);
+                    count += PopCount(_liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)]);
                 }
             }
 
@@ -1184,6 +1310,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
             {
                 _liveBitplaneWordMasks[offset + plane] = 0;
+                _liveBitplaneCopperCollisionMasks[offset + plane] = 0;
             }
         }
 
@@ -1192,6 +1319,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             row = Math.Clamp(row, 0, LowResOutputHeight);
             var offset = row * LiveBitplanePlaneCount;
             Array.Clear(_liveBitplaneWordMasks, offset, _liveBitplaneWordMasks.Length - offset);
+            Array.Clear(_liveBitplaneCopperCollisionMasks, offset, _liveBitplaneCopperCollisionMasks.Length - offset);
         }
 
         private void ClearLiveSpriteWordMasksFrom(int row)
@@ -1289,12 +1417,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private long GetSpriteDmaFetchCycle(int row, int spriteIndex, int word)
             => GetSpriteDmaFetchCycle(_renderFrameStartCycle, row, spriteIndex, word);
 
-        private static long GetSpriteDmaFetchCycle(long frameStartCycle, int row, int spriteIndex, int word)
+        private long GetSpriteDmaFetchCycle(long frameStartCycle, int row, int spriteIndex, int word)
         {
             var lineStart = GetOutputRowStartCycle(frameStartCycle, row);
-            var firstSpriteHorizontal = AgnusHrmOcsSlotTable.FirstSpriteHorizontal;
-            var horizontal = firstSpriteHorizontal + (Math.Clamp(spriteIndex, 0, 7) * 4) + (Math.Clamp(word, 0, 1) * 2);
-            return AgnusChipSlotScheduler.AlignToSlot(lineStart + ((long)horizontal * CopperHpCycles));
+            var firstSpriteSlot = _bus.FindNextFixedDmaSlot(lineStart, AgnusChipSlotOwner.Sprite);
+            var horizontalOffset = (Math.Clamp(spriteIndex, 0, 7) * 4) +
+                (Math.Clamp(word, 0, 1) * 2);
+            return firstSpriteSlot + ((long)horizontalOffset * CopperHpCycles);
         }
 
         private bool TryGetLiveSpriteDmaSlot(long slotCycle, out int row, out int spriteIndex, out int word)
@@ -1314,13 +1443,22 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var horizontal = (int)((slotCycle - GetLineStartCycle(_liveFrameStartCycle, line)) / CopperHpCycles);
-            var firstSpriteHorizontal = AgnusHrmOcsSlotTable.FirstSpriteHorizontal;
-            var spriteOffset = horizontal - firstSpriteHorizontal;
-            if (spriteOffset < 0 || spriteOffset >= _sprites.Length * 4)
+            var lineStart = GetLineStartCycle(_liveFrameStartCycle, line);
+            if (!_bus.IsFixedDmaSlotForOwner(AgnusChipSlotOwner.Sprite, slotCycle))
             {
                 return false;
             }
+
+            var firstSpriteSlot = _bus.FindNextFixedDmaSlot(lineStart, AgnusChipSlotOwner.Sprite);
+            var spriteOffsetCycles = slotCycle - firstSpriteSlot;
+            if (spriteOffsetCycles < 0 ||
+                spriteOffsetCycles >= _sprites.Length * 4 * CopperHpCycles ||
+                spriteOffsetCycles % CopperHpCycles != 0)
+            {
+                return false;
+            }
+
+            var spriteOffset = (int)(spriteOffsetCycles / CopperHpCycles);
 
             var wordOffset = spriteOffset & 0x03;
             if (wordOffset != 0 && wordOffset != 2)
@@ -1340,11 +1478,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            if (!IsSpriteDmaChannelAvailable(spriteIndex))
+            if (!IsSpriteDmaSlotAvailable(spriteIndex, word))
             {
                 if (WouldLiveSpriteSlotFetchIfChannelAvailable(row, spriteIndex))
                 {
-                    RecordTimelineSpriteDataFetch(row, spriteIndex, word, 0, granted: false);
+                    var deniedValue = word == 1 ? _sprites[spriteIndex].DataB : (ushort)0;
+                    if (word == 1)
+                    {
+                        StoreLiveCapturedSpriteWord(row, spriteIndex, word, deniedValue);
+                    }
+
+                    RecordTimelineSpriteDataFetch(row, spriteIndex, word, deniedValue, granted: false);
                 }
 
                 return false;
@@ -1417,10 +1561,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 recordLiveCapture: true);
             if (!captured &&
                 word == 1 &&
-                !IsSpriteDmaSlotAvailable(spriteIndex, word) &&
-                TryGetPriorLiveSpriteDatb(row, spriteIndex, out var priorDatb))
+                !IsSpriteDmaSlotAvailable(spriteIndex, word))
             {
-                value = priorDatb;
+                value = TryGetPriorLiveSpriteDatb(row, spriteIndex, out var priorDatb)
+                    ? priorDatb
+                    : _sprites[spriteIndex].DataB;
+                StoreLiveCapturedSpriteWord(row, spriteIndex, word, value);
             }
 
             var granted = captured && _bus.IsHrmChipSlotReserved(slotCycle);
@@ -1565,36 +1711,56 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             if (xStop < 0)
             {
-                xStop = AmigaConstants.PalLowResWidth;
+                xStop = LowResWidth;
             }
 
             rowStart = Math.Clamp(rowStart, 0, LowResOutputHeight);
             rowStop = Math.Clamp(rowStop, rowStart, LowResOutputHeight);
-            xStart = Math.Clamp(xStart, 0, AmigaConstants.PalLowResWidth);
-            xStop = Math.Clamp(xStop, xStart, AmigaConstants.PalLowResWidth);
-            var color = ConvertColor(_colors[0]);
+            xStart = Math.Clamp(xStart, 0, LowResWidth);
+            xStop = Math.Clamp(xStop, xStart, LowResWidth);
+            var window = GetEffectiveDisplayWindow();
+            var ecsExtensionsEnabled = AreEcsDeniseExtensionsEnabled(_bplcon0);
+            var borderColor = ecsExtensionsEnabled && (_bplcon3 & Bplcon3BorderBlank) != 0
+                ? 0xFF00_0000u
+                : ConvertColor(_colors[0]);
+            if (ecsExtensionsEnabled && (_bplcon3 & Bplcon3BorderNotTransparent) == 0)
+            {
+                borderColor &= 0x00FF_FFFFu;
+            }
+
+            var displayColor = ConvertColor(_colors[0]);
+            var windowXStart = GetDisplayWindowOutputXStart(window);
+            var windowXStop = GetDisplayWindowOutputXStop(window);
+            var windowYStart = GetDisplayWindowOutputYStart(window);
+            var windowYStop = GetDisplayWindowOutputYStop(window);
             for (var y = rowStart; y < rowStop; y++)
             {
-                foreach (var outputY in EnumerateOutputRows(y))
+                var insideVertical = y >= windowYStart && y < windowYStop;
+                for (var x = xStart; x < xStop; x++)
                 {
-                    if (IsRenderingHighResolutionWidth())
-                    {
-                        bgra.Slice((outputY * _renderWidth) + (xStart * 2), (xStop - xStart) * 2).Fill(color);
-                    }
-                    else
-                    {
-                        bgra.Slice((outputY * _renderWidth) + xStart, xStop - xStart).Fill(color);
-                    }
+                    var inside = insideVertical && x >= windowXStart && x < windowXStop;
+                    WriteLowResolutionOutputPixel(bgra, x, y, inside ? displayColor : borderColor);
                 }
             }
         }
+
+        private static UInt128 GetBitplaneWordMask(int wordCount)
+            => wordCount >= 128
+                ? UInt128.MaxValue
+                : wordCount <= 0 ? 0 : ((UInt128)1 << wordCount) - 1;
+
+        private static int PopCount(UInt128 value)
+            => BitOperations.PopCount((ulong)value) + BitOperations.PopCount((ulong)(value >> 64));
+
+        private bool AreEcsDeniseExtensionsEnabled(ushort bplcon0)
+            => _chipset.Denise == DeniseModel.Ecs && (bplcon0 & Bplcon0EcsEnable) != 0;
 
         private void CapturePaletteFrameSpans(int rowStart, int rowStop, int xStart, int xStop)
         {
             rowStart = Math.Clamp(rowStart, 0, LowResOutputHeight);
             rowStop = Math.Clamp(rowStop, rowStart, LowResOutputHeight);
-            xStart = Math.Clamp(xStart, 0, AmigaConstants.PalLowResWidth);
-            xStop = Math.Clamp(xStop, xStart, AmigaConstants.PalLowResWidth);
+            xStart = Math.Clamp(xStart, 0, LowResWidth);
+            xStop = Math.Clamp(xStop, xStart, LowResWidth);
             if (rowStart >= rowStop || xStart >= xStop)
             {
                 return;
@@ -1608,9 +1774,21 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return;
                 }
 
-                var colorOffset = _paletteFrameSpans.Count * PaletteColorCount;
+                var spanIndex = _paletteFrameSpans.Count;
+                var colorOffset = spanIndex * PaletteColorCount;
+                var encodedColorOffset = spanIndex * _colors.Length;
                 Array.Copy(_convertedColors, 0, _paletteFrameSpanColors, colorOffset, PaletteColorCount);
-                _paletteFrameSpans.Add(new PaletteFrameSpan(row, xStart, xStop, colorOffset, _bplcon0, _bplcon2, window));
+                Array.Copy(_colors, 0, _paletteFrameSpanEncodedColors, encodedColorOffset, _colors.Length);
+                _paletteFrameSpans.Add(new PaletteFrameSpan(
+                    row,
+                    xStart,
+                    xStop,
+                    colorOffset,
+                    encodedColorOffset,
+                    _bplcon0,
+                    _bplcon2,
+                    _bplcon3,
+                    window));
             }
         }
 
@@ -1807,7 +1985,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var wrappedX = ((horizontal + CopperHorizontalUnitsPerLine - DefaultDdfStart) * 2) + pixelDelay;
             var wrappedRow = row - 1;
             if ((uint)wrappedRow < (uint)LowResOutputHeight &&
-                (uint)wrappedX < (uint)AmigaConstants.PalLowResWidth &&
+                (uint)wrappedX < (uint)LowResWidth &&
                 IsLiveLineValid(wrappedRow) &&
                 _displayTimeline.HasLine(wrappedRow))
             {
@@ -1856,22 +2034,32 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             var snapshot = _displayTimeline.AddStateSnapshot();
             snapshot.LineStartCycle = GetOutputRowStartCycle(_liveFrameStartCycle, row);
+            snapshot.Resolution = GetDeniseResolution(_bplcon0);
+            snapshot.FetchResolution = _dataFetchWindow.Resolution;
             snapshot.Bplcon0 = _bplcon0;
             snapshot.Bplcon1 = _bplcon1;
             snapshot.Bplcon2 = _bplcon2;
+            snapshot.Bplcon3 = _bplcon3;
             snapshot.DiwStart = _diwStart;
             snapshot.DiwStop = _diwStop;
+            snapshot.DiwHigh = _diwHigh;
+            snapshot.DiwHighValid = _diwHighValid;
+            snapshot.AgnusDiwHigh = _agnusDiwHigh;
+            snapshot.AgnusDiwHighValid = _agnusDiwHighValid;
+            snapshot.AgnusDisplayWindow = _agnusDisplayWindow;
+            snapshot.DeniseDisplayWindow = _deniseDisplayWindow;
             snapshot.DdfStart = _ddfStart;
             snapshot.DdfStop = _ddfStop;
+            snapshot.DataFetchWindow = _dataFetchWindow;
             snapshot.Dmacon = _dmacon;
             snapshot.Bpl1Mod = _bpl1mod;
             snapshot.Bpl2Mod = _bpl2mod;
-            snapshot.DisplayWindowVerticallyOpen = _liveDisplayWindowVerticallyOpen;
+            snapshot.DisplayWindowVerticallyOpen = _liveDeniseDisplayWindowVerticallyOpen;
             snapshot.PlaneCount = GetAgnusBitplaneFetchPlaneCount();
             snapshot.DecodePlaneCount = GetDeniseBitplaneDecodePlaneCount();
             snapshot.FetchWords = GetDataFetchWordCount();
-            snapshot.DataFetchStart = GetDataFetchStartValue();
-            snapshot.FetchSlotStride = GetBitplaneFetchSlotStride(IsHighResolutionEnabled());
+            snapshot.DataFetchStart = _dataFetchWindow.Start;
+            snapshot.FetchSlotStride = DisplayGeometryDecoder.GetDataFetchSlotStride(_dataFetchWindow);
             snapshot.PaletteSnapshotIndex = CaptureLivePaletteSnapshot();
             Array.Copy(fallbackState.BitplanePointers, snapshot.BitplanePointers, fallbackState.BitplanePointers.Length);
             Array.Copy(fallbackState.BitplaneBaseRows, snapshot.BitplaneBaseRows, fallbackState.BitplaneBaseRows.Length);
@@ -1920,7 +2108,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            if (offset is 0x02E or 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or 0x100 or 0x102 or 0x104 or 0x108 or 0x10A)
+            if (offset is 0x02E or 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or 0x100 or 0x102 or 0x104 or 0x106 or 0x108 or 0x10A or 0x1E4)
             {
                 return false;
             }
@@ -2026,13 +2214,23 @@ namespace CopperMod.Amiga.CustomChips.Denise
             saved.CopperListPointer = _copperListPointer;
             saved.CopperListPointer2 = _copperListPointer2;
             saved.Copcon = _copcon;
+            saved.Resolution = GetDeniseResolution(_bplcon0);
+            saved.FetchResolution = GetAgnusFetchResolution(_bplcon0);
             saved.DiwStart = _diwStart;
             saved.DiwStop = _diwStop;
+            saved.DiwHigh = _diwHigh;
+            saved.DiwHighValid = _diwHighValid;
+            saved.AgnusDiwHigh = _agnusDiwHigh;
+            saved.AgnusDiwHighValid = _agnusDiwHighValid;
+            saved.AgnusDisplayWindow = _agnusDisplayWindow;
+            saved.DeniseDisplayWindow = _deniseDisplayWindow;
             saved.DdfStart = _ddfStart;
             saved.DdfStop = _ddfStop;
+            saved.DataFetchWindow = _dataFetchWindow;
             saved.Bplcon0 = _bplcon0;
             saved.Bplcon1 = _bplcon1;
             saved.Bplcon2 = _bplcon2;
+            saved.Bplcon3 = _bplcon3;
             saved.Dmacon = _dmacon;
             saved.Bpl1Mod = _bpl1mod;
             saved.Bpl2Mod = _bpl2mod;
@@ -2049,13 +2247,23 @@ namespace CopperMod.Amiga.CustomChips.Denise
             destination.CopperListPointer = source.CopperListPointer;
             destination.CopperListPointer2 = source.CopperListPointer2;
             destination.Copcon = source.Copcon;
+            destination.Resolution = source.Resolution;
+            destination.FetchResolution = source.FetchResolution;
             destination.DiwStart = source.DiwStart;
             destination.DiwStop = source.DiwStop;
+            destination.DiwHigh = source.DiwHigh;
+            destination.DiwHighValid = source.DiwHighValid;
+            destination.AgnusDiwHigh = source.AgnusDiwHigh;
+            destination.AgnusDiwHighValid = source.AgnusDiwHighValid;
+            destination.AgnusDisplayWindow = source.AgnusDisplayWindow;
+            destination.DeniseDisplayWindow = source.DeniseDisplayWindow;
             destination.DdfStart = source.DdfStart;
             destination.DdfStop = source.DdfStop;
+            destination.DataFetchWindow = source.DataFetchWindow;
             destination.Bplcon0 = source.Bplcon0;
             destination.Bplcon1 = source.Bplcon1;
             destination.Bplcon2 = source.Bplcon2;
+            destination.Bplcon3 = source.Bplcon3;
             destination.Dmacon = source.Dmacon;
             destination.Bpl1Mod = source.Bpl1Mod;
             destination.Bpl2Mod = source.Bpl2Mod;
@@ -2074,11 +2282,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _copcon = saved.Copcon;
             _diwStart = saved.DiwStart;
             _diwStop = saved.DiwStop;
+            _diwHigh = saved.DiwHigh;
+            _diwHighValid = saved.DiwHighValid;
+            _agnusDiwHigh = saved.AgnusDiwHigh;
+            _agnusDiwHighValid = saved.AgnusDiwHighValid;
+            _agnusDisplayWindow = saved.AgnusDisplayWindow;
+            _deniseDisplayWindow = saved.DeniseDisplayWindow;
             _ddfStart = saved.DdfStart;
             _ddfStop = saved.DdfStop;
+            _dataFetchWindow = saved.DataFetchWindow;
             _bplcon0 = saved.Bplcon0;
             _bplcon1 = saved.Bplcon1;
             _bplcon2 = saved.Bplcon2;
+            _bplcon3 = saved.Bplcon3;
             _dmacon = saved.Dmacon;
             _bpl1mod = saved.Bpl1Mod;
             _bpl2mod = saved.Bpl2Mod;
@@ -2094,11 +2310,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             _diwStart = state.DiwStart;
             _diwStop = state.DiwStop;
+            _diwHigh = state.DiwHigh;
+            _diwHighValid = state.DiwHighValid;
+            _agnusDiwHigh = state.AgnusDiwHigh;
+            _agnusDiwHighValid = state.AgnusDiwHighValid;
+            _agnusDisplayWindow = state.AgnusDisplayWindow;
+            _deniseDisplayWindow = state.DeniseDisplayWindow;
             _ddfStart = state.DdfStart;
             _ddfStop = state.DdfStop;
+            _dataFetchWindow = state.DataFetchWindow;
             _bplcon0 = state.Bplcon0;
             _bplcon1 = state.Bplcon1;
             _bplcon2 = state.Bplcon2;
+            _bplcon3 = state.Bplcon3;
             _dmacon = state.Dmacon;
             _bpl1mod = state.Bpl1Mod;
             _bpl2mod = state.Bpl2Mod;
@@ -2181,14 +2405,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private readonly struct PaletteFrameSpan
         {
-            public PaletteFrameSpan(int row, int xStart, int xStop, int colorOffset, ushort bplcon0, ushort bplcon2, DisplayWindow window)
+            public PaletteFrameSpan(
+                int row,
+                int xStart,
+                int xStop,
+                int colorOffset,
+                int encodedColorOffset,
+                ushort bplcon0,
+                ushort bplcon2,
+                ushort bplcon3,
+                DisplayWindow window)
             {
                 Row = row;
                 XStart = xStart;
                 XStop = xStop;
                 ColorOffset = colorOffset;
+                EncodedColorOffset = encodedColorOffset;
                 Bplcon0 = bplcon0;
                 Bplcon2 = bplcon2;
+                Bplcon3 = bplcon3;
                 Window = window;
             }
 
@@ -2200,9 +2435,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public int ColorOffset { get; }
 
+            public int EncodedColorOffset { get; }
+
             public ushort Bplcon0 { get; }
 
             public ushort Bplcon2 { get; }
+
+            public ushort Bplcon3 { get; }
 
             public DisplayWindow Window { get; }
 
@@ -2269,26 +2508,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
         }
 
-        private readonly struct DisplayWindow
-        {
-            public DisplayWindow(int x, int y, int width, int height)
-            {
-                X = x;
-                Y = y;
-                Width = width;
-                Height = height;
-            }
-
-            public int X { get; }
-
-            public int Y { get; }
-
-            public int Width { get; }
-
-            public int Height { get; }
-
-        }
-
         private struct CopperPresentationState
         {
             public CopperPresentationState(uint pc, long cycle, bool pendingStart = false)
@@ -2311,6 +2530,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 PendingSkipCycle = 0;
                 WaitFirst = 0;
                 WaitSecond = 0;
+                WaitObservedBlitterBusy = false;
             }
 
             public uint Pc;
@@ -2349,11 +2569,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public ushort WaitSecond;
 
+            public bool WaitObservedBlitterBusy;
+
             public void Wait(ushort first, ushort second)
             {
                 Waiting = true;
                 WaitFirst = first;
                 WaitSecond = second;
+                WaitObservedBlitterBusy = false;
             }
 
             public void JumpTo(uint pc, long cycle)
@@ -2374,6 +2597,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 PendingSkipFirst = 0;
                 PendingSkipSecond = 0;
                 PendingSkipCycle = 0;
+                WaitObservedBlitterBusy = false;
             }
 
             public void StartFrom(uint pc)
@@ -2388,17 +2612,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 ushort first,
                 AmigaBusAccessResult firstAccess,
                 ushort second,
-                AmigaBusAccessResult secondAccess)
+                AmigaBusAccessResult secondAccess,
+                int copperHpCycles)
             {
                 First = first;
                 Second = second;
                 DataCycle = secondAccess.GrantedCycle;
                 MoveStopCycle = Math.Max(
                     secondAccess.CompletedCycle,
-                    firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperMoveHpUnits));
+                    firstAccess.RequestedCycle + ((long)CopperMoveHpUnits * copperHpCycles));
                 ControlStopCycle = Math.Max(
                     secondAccess.CompletedCycle,
-                    firstAccess.RequestedCycle + CopperHpToCpuCycles(CopperSkipHpUnits));
+                    firstAccess.RequestedCycle + ((long)CopperSkipHpUnits * copperHpCycles));
             }
 
             public ushort First { get; }
@@ -2443,6 +2668,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             public SpriteDescriptor(
                 int x,
+                int superHighResSampleOffset,
                 int yStart,
                 int yStop,
                 bool attached,
@@ -2452,6 +2678,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 ushort manualDataB)
             {
                 X = x;
+                SuperHighResSampleOffset = superHighResSampleOffset;
                 YStart = yStart;
                 YStop = yStop;
                 Attached = attached;
@@ -2462,6 +2689,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             public int X { get; }
+
+            public int SuperHighResSampleOffset { get; }
 
             public int YStart { get; }
 
@@ -2480,6 +2709,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public bool HasSameRenderingAs(SpriteDescriptor other)
             {
                 return X == other.X &&
+                    SuperHighResSampleOffset == other.SuperHighResSampleOffset &&
                     YStart == other.YStart &&
                     YStop == other.YStop &&
                     Attached == other.Attached &&
@@ -2492,12 +2722,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public SpriteDescriptor WithYStop(int yStop)
             {
-                return new SpriteDescriptor(X, YStart, yStop, Attached, DataAddress, IsDma, ManualDataA, ManualDataB);
+                return new SpriteDescriptor(X, SuperHighResSampleOffset, YStart, yStop, Attached, DataAddress, IsDma, ManualDataA, ManualDataB);
             }
 
             public SpriteDescriptor WithYStart(int yStart)
             {
-                return new SpriteDescriptor(X, yStart, YStop, Attached, DataAddress, IsDma, ManualDataA, ManualDataB);
+                return new SpriteDescriptor(X, SuperHighResSampleOffset, yStart, YStop, Attached, DataAddress, IsDma, ManualDataA, ManualDataB);
             }
         }
 
@@ -2590,14 +2820,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             public int Generation;
             public long LineStartCycle;
+            public DeniseResolution Resolution;
+            public DeniseResolution FetchResolution;
             public ushort Bplcon0;
             public ushort Bplcon1;
             public ushort Bplcon2;
+            public ushort Bplcon3;
             public ushort DiwStart;
             public ushort DiwStop;
+            public ushort DiwHigh;
+            public bool DiwHighValid;
+            public ushort AgnusDiwHigh;
+            public bool AgnusDiwHighValid;
+            public DisplayWindow AgnusDisplayWindow;
+            public DisplayWindow DeniseDisplayWindow;
             public bool DisplayWindowVerticallyOpen;
+            public bool DeniseDisplayWindowVerticallyOpen;
             public ushort DdfStart;
             public ushort DdfStop;
+            public DataFetchWindow DataFetchWindow;
             public ushort Dmacon;
             public short Bpl1Mod;
             public short Bpl2Mod;
@@ -2617,6 +2858,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private sealed class DisplayFrameTimeline
         {
             private readonly DisplayLineTimeline[] _lines = new DisplayLineTimeline[LowResOutputHeight];
+            private readonly int _lowResWidth;
             private readonly List<DisplayTimelineState> _states = new List<DisplayTimelineState>(1024);
             private readonly List<SpriteFrameCommand> _spriteFrameCommands = new List<SpriteFrameCommand>(MaxSpriteFrameCommands * 8);
             private readonly List<BitplaneDataSpan> _bitplaneDataSpans = new List<BitplaneDataSpan>(MaxBitplaneDataSpans);
@@ -2625,8 +2867,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             private int _generation = 1;
             private int _stateCount;
 
-            public DisplayFrameTimeline()
+            public DisplayFrameTimeline(int lowResWidth)
             {
+                _lowResWidth = lowResWidth;
                 for (var i = 0; i < _lines.Length; i++)
                 {
                     _lines[i] = new DisplayLineTimeline();
@@ -2782,11 +3025,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     left.Bplcon0 == right.Bplcon0 &&
                     left.Bplcon1 == right.Bplcon1 &&
                     left.Bplcon2 == right.Bplcon2 &&
+                    left.Bplcon3 == right.Bplcon3 &&
                     left.DiwStart == right.DiwStart &&
                     left.DiwStop == right.DiwStop &&
+                    left.DiwHigh == right.DiwHigh &&
+                    left.DiwHighValid == right.DiwHighValid &&
+                    left.AgnusDiwHigh == right.AgnusDiwHigh &&
+                    left.AgnusDiwHighValid == right.AgnusDiwHighValid &&
+                    left.AgnusDisplayWindow == right.AgnusDisplayWindow &&
+                    left.DeniseDisplayWindow == right.DeniseDisplayWindow &&
                     left.DisplayWindowVerticallyOpen == right.DisplayWindowVerticallyOpen &&
                     left.DdfStart == right.DdfStart &&
                     left.DdfStop == right.DdfStop &&
+                    left.DataFetchWindow == right.DataFetchWindow &&
                     left.Dmacon == right.Dmacon &&
                     left.Bpl1Mod == right.Bpl1Mod &&
                     left.Bpl2Mod == right.Bpl2Mod &&
@@ -2885,7 +3136,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 line.Clear();
                 line.Generation = _generation;
                 line.Valid = true;
-                line.Segments.Add(new DisplayLineSegment(0, AmigaConstants.PalLowResWidth, stateIndex));
+                line.Segments.Add(new DisplayLineSegment(0, _lowResWidth, stateIndex));
                 SegmentCount++;
             }
 
@@ -2915,8 +3166,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     line.UnsafeIsCopper = isCopper;
                 }
 
-                x = Math.Clamp(x, 0, AmigaConstants.PalLowResWidth);
-                if (x >= AmigaConstants.PalLowResWidth)
+                x = Math.Clamp(x, 0, _lowResWidth);
+                if (x >= _lowResWidth)
                 {
                     return;
                 }
@@ -2925,7 +3176,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     SegmentCount -= line.SegmentCount;
                     line.Segments.Clear();
-                    line.Segments.Add(new DisplayLineSegment(0, AmigaConstants.PalLowResWidth, stateIndex));
+                    line.Segments.Add(new DisplayLineSegment(0, _lowResWidth, stateIndex));
                     SegmentCount++;
                     _planarChunkCache.Clear();
                     return;
@@ -2955,7 +3206,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     line.Segments.RemoveRange(insertIndex, line.SegmentCount - insertIndex);
                 }
 
-                line.Segments.Add(new DisplayLineSegment(x, AmigaConstants.PalLowResWidth, stateIndex));
+                line.Segments.Add(new DisplayLineSegment(x, _lowResWidth, stateIndex));
                 SegmentCount++;
                 _planarChunkCache.Clear();
             }
@@ -2975,7 +3226,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return;
                 }
 
-                var bit = 1UL << word;
+                var bit = (UInt128)1 << word;
                 var index = (plane * MaxBitplaneFetchWords) + word;
                 line.BitplaneWords[index] = value;
                 line.BitplaneFetchMasks[plane] |= bit;
@@ -3004,7 +3255,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return TimelineFetchStatus.NotAttempted;
                 }
 
-                var bit = 1UL << word;
+                var bit = (UInt128)1 << word;
                 if ((line.BitplaneFetchMasks[plane] & bit) == 0)
                 {
                     return TimelineFetchStatus.NotAttempted;
@@ -3195,8 +3446,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             public readonly List<DisplayLineSegment> Segments = new List<DisplayLineSegment>(4);
             public readonly ushort[] BitplaneWords = new ushort[LiveBitplaneWordsPerRow];
-            public readonly ulong[] BitplaneFetchMasks = new ulong[LiveBitplanePlaneCount];
-            public readonly ulong[] BitplaneDeniedMasks = new ulong[LiveBitplanePlaneCount];
+            public readonly UInt128[] BitplaneFetchMasks = new UInt128[LiveBitplanePlaneCount];
+            public readonly UInt128[] BitplaneDeniedMasks = new UInt128[LiveBitplanePlaneCount];
             public readonly ushort[] SpriteWords = new ushort[LiveSpriteWordsPerRow];
             public readonly byte[] SpriteFetchMasks = new byte[LiveSpriteChannelCount];
             public readonly byte[] SpriteDeniedMasks = new byte[LiveSpriteChannelCount];
@@ -3248,14 +3499,24 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public int Index { get; }
 
             public long LineStartCycle;
+            public DeniseResolution Resolution;
+            public DeniseResolution FetchResolution;
             public ushort Bplcon0;
             public ushort Bplcon1;
             public ushort Bplcon2;
+            public ushort Bplcon3;
             public ushort DiwStart;
             public ushort DiwStop;
+            public ushort DiwHigh;
+            public bool DiwHighValid;
+            public ushort AgnusDiwHigh;
+            public bool AgnusDiwHighValid;
+            public DisplayWindow AgnusDisplayWindow;
+            public DisplayWindow DeniseDisplayWindow;
             public bool DisplayWindowVerticallyOpen;
             public ushort DdfStart;
             public ushort DdfStop;
+            public DataFetchWindow DataFetchWindow;
             public ushort Dmacon;
             public short Bpl1Mod;
             public short Bpl2Mod;
@@ -3427,13 +3688,23 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public uint CopperListPointer;
             public uint CopperListPointer2;
             public ushort Copcon;
+            public DeniseResolution Resolution;
+            public DeniseResolution FetchResolution;
             public ushort Bplcon0;
             public ushort Bplcon1;
             public ushort Bplcon2;
+            public ushort Bplcon3;
             public ushort DiwStart;
             public ushort DiwStop;
+            public ushort DiwHigh;
+            public bool DiwHighValid;
+            public ushort AgnusDiwHigh;
+            public bool AgnusDiwHighValid;
+            public DisplayWindow AgnusDisplayWindow;
+            public DisplayWindow DeniseDisplayWindow;
             public ushort DdfStart;
             public ushort DdfStop;
+            public DataFetchWindow DataFetchWindow;
             public ushort Dmacon;
             public short Bpl1Mod;
             public short Bpl2Mod;
@@ -3612,9 +3883,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 long lineStartCycle,
                 long lineStopCycle,
                 bool displayWindowVerticallyOpen,
+                DeniseResolution resolution,
+                DeniseResolution fetchResolution,
                 ushort bplcon0,
                 ushort bplcon1,
                 ushort bplcon2,
+                ushort bplcon3,
+                ushort diwHigh,
+                bool diwHighValid,
+                ushort agnusDiwHigh,
+                bool agnusDiwHighValid,
+                DisplayWindow agnusDisplayWindow,
+                DisplayWindow deniseDisplayWindow,
+                DataFetchWindow dataFetchWindow,
                 ushort dmacon,
                 short bpl1Mod,
                 short bpl2Mod,
@@ -3637,9 +3918,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 LineStartCycle = lineStartCycle;
                 LineStopCycle = lineStopCycle;
                 DisplayWindowVerticallyOpen = displayWindowVerticallyOpen;
+                Resolution = resolution;
+                FetchResolution = fetchResolution;
                 Bplcon0 = bplcon0;
                 Bplcon1 = bplcon1;
                 Bplcon2 = bplcon2;
+                Bplcon3 = bplcon3;
+                DiwHigh = diwHigh;
+                DiwHighValid = diwHighValid;
+                AgnusDiwHigh = agnusDiwHigh;
+                AgnusDiwHighValid = agnusDiwHighValid;
+                AgnusDisplayWindow = agnusDisplayWindow;
+                DeniseDisplayWindow = deniseDisplayWindow;
+                DataFetchWindow = dataFetchWindow;
                 Dmacon = dmacon;
                 Bpl1Mod = bpl1Mod;
                 Bpl2Mod = bpl2Mod;
@@ -3668,11 +3959,31 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public bool DisplayWindowVerticallyOpen { get; }
 
+            public DeniseResolution Resolution { get; }
+
+            public DeniseResolution FetchResolution { get; }
+
             public ushort Bplcon0 { get; }
 
             public ushort Bplcon1 { get; }
 
             public ushort Bplcon2 { get; }
+
+            public ushort Bplcon3 { get; }
+
+            public ushort DiwHigh { get; }
+
+            public bool DiwHighValid { get; }
+
+            public ushort AgnusDiwHigh { get; }
+
+            public bool AgnusDiwHighValid { get; }
+
+            public DisplayWindow AgnusDisplayWindow { get; }
+
+            public DisplayWindow DeniseDisplayWindow { get; }
+
+            public DataFetchWindow DataFetchWindow { get; }
 
             public ushort Dmacon { get; }
 
@@ -3867,8 +4178,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ushort bplcon0,
             ushort bplcon1,
             ushort bplcon2,
+            ushort bplcon3,
             ushort diwStart,
             ushort diwStop,
+            ushort diwHigh,
+            bool diwHighValid,
             ushort ddfStart,
             ushort ddfStop,
             short bpl1mod,
@@ -3985,13 +4299,21 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ushort lastArchiveRejectMissingSpriteDmacon,
             ushort lastArchiveRejectMissingSpriteBplcon0,
             int lastArchiveRejectMissingSpritePreviousStatusA,
-            int lastArchiveRejectMissingSpritePreviousStatusB)
+            int lastArchiveRejectMissingSpritePreviousStatusB,
+            ushort agnusDiwHigh,
+            bool agnusDiwHighValid,
+            DisplayWindow agnusDisplayWindow,
+            DisplayWindow deniseDisplayWindow,
+            DataFetchWindow dataFetchWindow)
         {
             Bplcon0 = bplcon0;
             Bplcon1 = bplcon1;
             Bplcon2 = bplcon2;
+            Bplcon3 = bplcon3;
             DiwStart = diwStart;
             DiwStop = diwStop;
+            DiwHigh = diwHigh;
+            DiwHighValid = diwHighValid;
             DdfStart = ddfStart;
             DdfStop = ddfStop;
             Bpl1Mod = bpl1mod;
@@ -4109,6 +4431,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             LastArchiveRejectMissingSpriteBplcon0 = lastArchiveRejectMissingSpriteBplcon0;
             LastArchiveRejectMissingSpritePreviousStatusA = lastArchiveRejectMissingSpritePreviousStatusA;
             LastArchiveRejectMissingSpritePreviousStatusB = lastArchiveRejectMissingSpritePreviousStatusB;
+            AgnusDiwHigh = agnusDiwHigh;
+            AgnusDiwHighValid = agnusDiwHighValid;
+            AgnusDisplayWindow = agnusDisplayWindow;
+            DeniseDisplayWindow = deniseDisplayWindow;
+            DataFetchWindow = dataFetchWindow;
         }
 
         public ushort Bplcon0 { get; }
@@ -4117,9 +4444,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         public ushort Bplcon2 { get; }
 
+        public ushort Bplcon3 { get; }
+
         public ushort DiwStart { get; }
 
         public ushort DiwStop { get; }
+
+        public ushort DiwHigh { get; }
+
+        public bool DiwHighValid { get; }
+
+        public ushort AgnusDiwHigh { get; }
+
+        public bool AgnusDiwHighValid { get; }
+
+        public DisplayWindow AgnusDisplayWindow { get; }
+
+        public DisplayWindow DeniseDisplayWindow { get; }
+
+        public DataFetchWindow DataFetchWindow { get; }
 
         public ushort DdfStart { get; }
 

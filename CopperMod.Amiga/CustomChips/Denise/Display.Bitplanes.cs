@@ -14,7 +14,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             if (xClipStop < 0)
             {
-                xClipStop = AmigaConstants.PalLowResWidth;
+                xClipStop = LowResWidth;
             }
 
             var decodePlaneCount = GetDeniseBitplaneDecodePlaneCount();
@@ -37,20 +37,27 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var planeHasRow = _renderPlaneHasRow;
             var window = GetEffectiveDisplayWindow();
             var fetchWords = GetDataFetchWordCount();
-            if (window.Width <= 0 || window.Height <= 0 || fetchWords <= 0)
+            var windowXStart = GetDisplayWindowOutputXStart(window);
+            var windowXStop = GetDisplayWindowOutputXStop(window);
+            var windowYStart = GetDisplayWindowOutputYStart(window);
+            var windowYStop = GetDisplayWindowOutputYStop(window);
+            if (windowXStop <= windowXStart || windowYStop <= windowYStart || fetchWords <= 0)
             {
                 return;
             }
 
-            var highResolution = IsHighResolutionEnabled();
+            var resolution = GetDeniseResolution(_bplcon0);
+            var highResolution = resolution == DeniseResolution.HighRes;
+            var superHighResolution = resolution == DeniseResolution.SuperHighRes;
             var fetchPixels = fetchWords * 16;
-            var drawPixels = highResolution ? fetchPixels / 2 : fetchPixels;
+            var samplesPerLowResSpan = GetResolutionSamplesPerLowResSpan(resolution);
+            var drawPixels = fetchPixels / samplesPerLowResSpan;
             var originX = GetDataFetchStartX(window);
-            var clipLeft = Math.Max(Math.Max(0, window.X), xClipStart);
-            var clipRight = Math.Min(Math.Min(AmigaConstants.PalLowResWidth, window.X + window.Width), xClipStop);
-            var rowStart = Math.Max(Math.Max(0, bandStart), window.Y);
-            var rowStop = Math.Min(Math.Min(LowResOutputHeight, bandStop), window.Y + window.Height);
-            var holdAndModify = !highResolution && (_bplcon0 & 0x0800) != 0 && planeCount >= 6;
+            var clipLeft = Math.Max(Math.Max(0, windowXStart), xClipStart);
+            var clipRight = Math.Min(Math.Min(LowResWidth, windowXStop), xClipStop);
+            var rowStart = Math.Max(Math.Max(0, bandStart), windowYStart);
+            var rowStop = Math.Min(Math.Min(LowResOutputHeight, bandStop), windowYStop);
+            var holdAndModify = !superHighResolution && !highResolution && (_bplcon0 & 0x0800) != 0 && planeCount >= 6;
             var dualPlayfield = IsDualPlayfieldEnabled();
             var zeroScroll = (_bplcon1 & 0x00FF) == 0;
             var renderHighWidth = IsRenderingHighResolutionWidth();
@@ -94,7 +101,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         var planeSourceY = displaySourceY;
                         var liveCapturedMask = _renderingLiveCapture
                             ? _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(y, plane)]
-                            : 0UL;
+                            : (UInt128)0;
                         planeHasRow[plane] = bitplaneDmaEnabled && (displaySourceY >= 0 || liveCapturedMask != 0);
                         var rowAddress = AddDmaPointerOffset(
                             _bitplanePointers[plane],
@@ -107,7 +114,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                                 continue;
                             }
 
-                            if ((liveCapturedMask & (1UL << word)) != 0 &&
+                            if ((liveCapturedMask & ((UInt128)1 << word)) != 0 &&
                                 TryReadLiveCapturedBitplaneWord(y, plane, word, out var captured))
                             {
                                 planeWords[plane, word] = captured;
@@ -127,9 +134,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         : Math.Max(clipLeft, Math.Max(0, originX));
                     var xStop = hasBitplaneDataSpans
                         ? clipRight
-                        : Math.Min(clipRight, Math.Min(AmigaConstants.PalLowResWidth, originX + drawPixels + (highResolution ? 8 : 16)));
+                        : Math.Min(
+                            clipRight,
+                            Math.Min(
+                                LowResWidth,
+                                originX + drawPixels + (PlanarChunkPixels / samplesPerLowResSpan)));
                     var hamColor = _colors[0];
-                    if (!highResolution && !dualPlayfield && !holdAndModify && zeroScroll)
+                    if (!superHighResolution && !highResolution && !dualPlayfield && !holdAndModify && zeroScroll)
                     {
                         for (var x = xStart; x < xStop; x++)
                         {
@@ -184,6 +195,39 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                     for (var x = xStart; x < xStop; x++)
                     {
+                        if (superHighResolution)
+                        {
+                            var color0 = GetSuperHighResolutionColorIndex(planeWords, planeHasRow, planeCount, x, y, originX, fetchPixels, 0);
+                            var color1 = GetSuperHighResolutionColorIndex(planeWords, planeHasRow, planeCount, x, y, originX, fetchPixels, 1);
+                            var color2 = GetSuperHighResolutionColorIndex(planeWords, planeHasRow, planeCount, x, y, originX, fetchPixels, 2);
+                            var color3 = GetSuperHighResolutionColorIndex(planeWords, planeHasRow, planeCount, x, y, originX, fetchPixels, 3);
+                            var combined = color0 | color1 | color2 | color3;
+                            var mask0 = GetSuperHighResolutionPlayfieldPriorityMask(color0, dualPlayfield);
+                            var mask1 = GetSuperHighResolutionPlayfieldPriorityMask(color1, dualPlayfield);
+                            var mask2 = GetSuperHighResolutionPlayfieldPriorityMask(color2, dualPlayfield);
+                            var mask3 = GetSuperHighResolutionPlayfieldPriorityMask(color3, dualPlayfield);
+                            SetPlayfieldSampleState(x, y, 0, color0, mask0);
+                            SetPlayfieldSampleState(x, y, 1, color1, mask1);
+                            SetPlayfieldSampleState(x, y, 2, color2, mask2);
+                            SetPlayfieldSampleState(x, y, 3, color3, mask3);
+                            if (combined != 0)
+                            {
+                                RecordBitplanePixel(combined, (byte)(mask0 | mask1 | mask2 | mask3), x, y);
+                            }
+
+                            var pair01 = ConvertSuperHighResolutionColorPair(color0, color1);
+                            var pair23 = ConvertSuperHighResolutionColorPair(color2, color3);
+                            WriteSuperHighResolutionOutputPixels(
+                                bgra,
+                                x,
+                                y,
+                                pair01.Left,
+                                pair01.Right,
+                                pair23.Left,
+                                pair23.Right);
+                            continue;
+                        }
+
                         if (highResolution)
                         {
                             var leftColorIndex = GetBitplaneColorIndex(planeWords, planeHasRow, planeCount, x, originX, fetchPixels, hiresSubPixel: 0);
@@ -366,6 +410,127 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return colorIndex;
         }
 
+        private int GetSuperHighResolutionColorIndex(
+            ushort[,] planeWords,
+            bool[] planeHasRow,
+            int planeCount,
+            int x,
+            int y,
+            int originX,
+            int fetchPixels,
+            int subpixel)
+        {
+            for (var i = _bitplaneDataSpans.Count - 1; i >= 0; i--)
+            {
+                var span = _bitplaneDataSpans[i];
+                if (!span.Contains(x, y))
+                {
+                    continue;
+                }
+
+                var manualIndex = 0;
+                for (var plane = 0; plane < Math.Min(planeCount, 2); plane++)
+                {
+                    var relative = ((x - span.XStart) * 4) + subpixel - GetPlaneHorizontalScroll(plane);
+                    if ((uint)relative < 16)
+                    {
+                        manualIndex |= ((span.GetWord(plane) >> (15 - relative)) & 1) << plane;
+                    }
+                }
+
+                return manualIndex;
+            }
+
+            var colorIndex = 0;
+            for (var plane = 0; plane < Math.Min(planeCount, 2); plane++)
+            {
+                if (!planeHasRow[plane])
+                {
+                    continue;
+                }
+
+                var relative = ((x - originX) * 4) + subpixel - GetPlaneHorizontalScroll(plane);
+                if ((uint)relative >= (uint)fetchPixels)
+                {
+                    continue;
+                }
+
+                var word = relative >> 4;
+                colorIndex |= ((planeWords[plane, word] >> (15 - (relative & 0x0F))) & 1) << plane;
+            }
+
+            return colorIndex;
+        }
+
+        private static byte GetSuperHighResolutionPlayfieldPriorityMask(int rawColorIndex, bool dualPlayfield)
+        {
+            if (rawColorIndex == 0)
+            {
+                return 0;
+            }
+
+            if (!dualPlayfield)
+            {
+                return NormalPlayfieldPriorityMask;
+            }
+
+            var mask = (byte)0;
+            if ((rawColorIndex & 1) != 0)
+            {
+                mask |= Playfield1PriorityMask;
+            }
+
+            if ((rawColorIndex & 2) != 0)
+            {
+                mask |= Playfield2PriorityMask;
+            }
+
+            return mask;
+        }
+
+        private (uint Left, uint Right) ConvertSuperHighResolutionColorPair(int leftIndex, int rightIndex)
+        {
+            var colorRegister = ((rightIndex & 3) << 2) | (leftIndex & 3);
+            var encoded = _colors[colorRegister];
+            return (ConvertSuperHighResolutionComponentColor(encoded, highPair: true),
+                ConvertSuperHighResolutionComponentColor(encoded, highPair: false));
+        }
+
+        private (uint Left, uint Right) ConvertSuperHighResolutionSpriteColorPair(
+            int leftIndex,
+            int rightIndex,
+            int x,
+            int y)
+        {
+            var colorRegister = 16 + ((rightIndex & 3) << 2) + (leftIndex & 3);
+            var encoded = GetSuperHighResolutionEncodedColor(colorRegister, x, y);
+            return (ConvertSuperHighResolutionComponentColor(encoded, highPair: true),
+                ConvertSuperHighResolutionComponentColor(encoded, highPair: false));
+        }
+
+        private ushort GetSuperHighResolutionEncodedColor(int colorRegister, int x, int y)
+        {
+            for (var i = _paletteFrameSpans.Count - 1; i >= 0; i--)
+            {
+                var span = _paletteFrameSpans[i];
+                if (span.Contains(x, y))
+                {
+                    return _paletteFrameSpanEncodedColors[span.EncodedColorOffset + colorRegister];
+                }
+            }
+
+            return _colors[colorRegister];
+        }
+
+        private static uint ConvertSuperHighResolutionComponentColor(ushort encoded, bool highPair)
+        {
+            var shift = highPair ? 2 : 0;
+            var r = (uint)(((encoded >> (8 + shift)) & 3) * 85);
+            var g = (uint)(((encoded >> (4 + shift)) & 3) * 85);
+            var b = (uint)(((encoded >> shift) & 3) * 85);
+            return 0xFF00_0000u | (r << 16) | (g << 8) | b;
+        }
+
         private int ApplyUndocumentedNormalPlayfieldPriorityQuirk(int colorIndex, int planeCount)
         {
             if (planeCount >= 5 && GetPlayfield2Priority() >= 5 && (colorIndex & 0x10) != 0)
@@ -467,13 +632,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (xStop < 0)
             {
-                xStop = AmigaConstants.PalLowResWidth;
+                xStop = LowResWidth;
             }
 
             rowStart = Math.Clamp(rowStart, 0, LowResOutputHeight);
             rowStop = Math.Clamp(rowStop, rowStart, LowResOutputHeight);
-            xStart = Math.Clamp(xStart, 0, AmigaConstants.PalLowResWidth);
-            xStop = Math.Clamp(xStop, xStart, AmigaConstants.PalLowResWidth);
+            xStart = Math.Clamp(xStart, 0, LowResWidth);
+            xStop = Math.Clamp(xStop, xStart, LowResWidth);
             for (var i = _bitplaneDataSpans.Count - 1; i >= 0; i--)
             {
                 var span = _bitplaneDataSpans[i];
@@ -592,8 +757,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int GetDataFetchStartX(DisplayWindow window)
         {
             var ddfStart = GetDataFetchStartValue();
-            var defaultStart = IsHighResolutionEnabled() ? DefaultHighResDdfStart : DefaultDdfStart;
-            var defaultOrigin = Math.Clamp(window.X, 0, AmigaConstants.PalLowResOverscanBorderX);
+            var resolution = GetDeniseResolution(_bplcon0);
+            var highResolution = resolution == DeniseResolution.HighRes;
+            var superHighResolution = resolution == DeniseResolution.SuperHighRes;
+            var defaultStart = highResolution || superHighResolution
+                ? DefaultHighResDdfStart
+                : DefaultDdfStart;
+            var defaultOrigin = superHighResolution
+                ? Math.Clamp(GetDisplayWindowOutputXStart(window), 0, AmigaConstants.PalLowResOverscanBorderX)
+                : GetDisplayWindowOutputXStart(window) < AmigaConstants.PalLowResOverscanBorderX
+                    ? StandardBitplanePrerollOrigin
+                    : AmigaConstants.PalLowResOverscanBorderX;
             return defaultOrigin + ((ddfStart - defaultStart) * 2);
         }
 
@@ -607,38 +781,50 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private DisplayWindow GetDisplayWindow()
         {
-            var hStart = _diwStart & 0x00FF;
-            var hStop = (_diwStop & 0x00FF) + 0x100;
-
-            var vStart = GetDisplayWindowStartLine();
-            var vStop = GetDisplayWindowStopLine(vStart);
-
-            return new DisplayWindow(
-                hStart - StandardHStart,
-                vStart - StandardVStart,
-                hStop - hStart,
-                vStop - vStart);
+            return _deniseDisplayWindow;
         }
 
         private int GetDisplayWindowStartLine()
         {
-            return (_diwStart >> 8) & 0x00FF;
+            return _deniseDisplayWindow.VerticalStart;
         }
 
         private int GetDisplayWindowStopLine(int vStart)
         {
-            var vStop = (_diwStop >> 8) & 0x00FF;
-            if (vStop < 0x80)
-            {
-                vStop += 0x100;
-            }
+            return _deniseDisplayWindow.VerticalStop;
+        }
 
-            if (vStop <= vStart)
-            {
-                vStop += 0x100;
-            }
+        private static int GetDisplayWindowOutputXStart(DisplayWindow window)
+            => window.HorizontalStart - StandardHStart;
 
-            return vStop;
+        private static int GetDisplayWindowOutputXStop(DisplayWindow window)
+            => window.HorizontalStop - StandardHStart;
+
+        private static int GetDisplayWindowOutputYStart(DisplayWindow window)
+            => window.VerticalStart - StandardVStart;
+
+        private static int GetDisplayWindowOutputYStop(DisplayWindow window)
+            => window.VerticalStop - StandardVStart;
+
+        private void RefreshDisplayGeometry()
+        {
+            _agnusDisplayWindow = DisplayGeometryDecoder.DecodeDisplayWindow(
+                _chipset.Agnus,
+                _diwStart,
+                _diwStop,
+                _agnusDiwHigh,
+                _agnusDiwHighValid);
+            _deniseDisplayWindow = DisplayGeometryDecoder.DecodeDisplayWindow(
+                _chipset.Denise,
+                _diwStart,
+                _diwStop,
+                _diwHigh,
+                _diwHighValid);
+            _dataFetchWindow = DisplayGeometryDecoder.DecodeDataFetchWindow(
+                _chipset.Agnus,
+                _bplcon0,
+                _ddfStart,
+                _ddfStop);
         }
 
         private DisplayWindow GetEffectiveDisplayWindow()
@@ -657,6 +843,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void ResetLiveDisplayWindowStateTracking()
         {
             _liveDisplayWindowVerticallyOpen = false;
+            _liveDeniseDisplayWindowVerticallyOpen = false;
             _liveDisplayWindowStateLine = 0;
         }
 
@@ -672,7 +859,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
-            targetLine = Math.Clamp(targetLine, 0, AmigaConstants.A500PalRasterLines - 1);
+            targetLine = Math.Clamp(targetLine, 0, _timing.LongFrameLines - 1);
             while (_displayWindowStateLine <= targetLine)
             {
                 var vStart = GetDisplayWindowStartLine();
@@ -698,11 +885,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void AdvanceLiveDisplayWindowStateToLine(int targetLine)
         {
-            targetLine = Math.Clamp(targetLine, 0, AmigaConstants.A500PalRasterLines - 1);
+            targetLine = Math.Clamp(targetLine, 0, _timing.LongFrameLines - 1);
             while (_liveDisplayWindowStateLine <= targetLine)
             {
-                var vStart = GetDisplayWindowStartLine();
-                var vStop = GetDisplayWindowStopLine(vStart);
+                var vStart = _agnusDisplayWindow.VerticalStart;
+                var vStop = _agnusDisplayWindow.VerticalStop;
                 if (_liveDisplayWindowStateLine == vStop)
                 {
                     _liveDisplayWindowVerticallyOpen = false;
@@ -713,42 +900,70 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     _liveDisplayWindowVerticallyOpen = true;
                 }
 
+                if (_liveDisplayWindowStateLine == _deniseDisplayWindow.VerticalStop)
+                {
+                    _liveDeniseDisplayWindowVerticallyOpen = false;
+                }
+
+                if (_liveDisplayWindowStateLine == _deniseDisplayWindow.VerticalStart)
+                {
+                    _liveDeniseDisplayWindowVerticallyOpen = true;
+                }
+
                 _liveDisplayWindowStateLine++;
             }
         }
 
         private int GetDataFetchWordCount()
         {
-            var ddfStart = GetDataFetchStartValue();
-            var ddfStop = GetDataFetchStopValue();
-            if (ddfStop < ddfStart)
+            return DisplayGeometryDecoder.GetDataFetchWordCount(
+                _dataFetchWindow,
+                _ddfStart,
+                _ddfStop,
+                MaxBitplaneFetchWords);
+        }
+
+        private static bool IsSuperHighResolutionRequested(ushort bplcon0)
+            => (bplcon0 & (0x8000 | Bplcon0SuperHires)) == Bplcon0SuperHires;
+
+        internal static DeniseResolution GetDeniseResolution(DeniseModel deniseModel, ushort bplcon0)
+        {
+            if ((bplcon0 & 0x8000) != 0)
             {
-                return 0;
+                return DeniseResolution.HighRes;
             }
 
-            if (IsHighResolutionEnabled())
+            return deniseModel == DeniseModel.Ecs && IsSuperHighResolutionRequested(bplcon0)
+                ? DeniseResolution.SuperHighRes
+                : DeniseResolution.LowRes;
+        }
+
+        private DeniseResolution GetDeniseResolution(ushort bplcon0)
+            => GetDeniseResolution(_chipset.Denise, bplcon0);
+
+        private DeniseResolution GetAgnusFetchResolution(ushort bplcon0)
+        {
+            return DisplayGeometryDecoder.GetDataFetchResolution(_chipset.Agnus, bplcon0);
+        }
+
+        private static int GetResolutionSamplesPerLowResSpan(DeniseResolution resolution)
+            => resolution switch
             {
-                var fetchWords = ((ddfStop - ddfStart) / 4) + 2;
-                if (ddfStart == DefaultHighResDdfStart && ddfStop == DefaultDdfStop)
-                {
-                    fetchWords++;
-                }
+                DeniseResolution.SuperHighRes => 4,
+                DeniseResolution.HighRes => 2,
+                _ => 1
+            };
 
-                return Math.Clamp(fetchWords, 0, MaxBitplaneFetchWords);
-            }
+        private static int GetResolutionFetchSlotStride(DeniseResolution resolution)
+            => resolution switch
+            {
+                DeniseResolution.SuperHighRes => 2,
+                DeniseResolution.HighRes => 4,
+                _ => 8
+            };
 
-            return Math.Clamp(((ddfStop - ddfStart) / 8) + 1, 0, MaxBitplaneFetchWords);
-        }
-
-        private bool IsHighResolutionEnabled()
-        {
-            return (_bplcon0 & 0x8000) != 0;
-        }
-
-        private static bool IsHighResolutionEnabled(ushort bplcon0)
-        {
-            return (bplcon0 & 0x8000) != 0;
-        }
+        private int GetBitplaneFetchSlotStrideForBplcon0(ushort bplcon0)
+            => GetResolutionFetchSlotStride(GetAgnusFetchResolution(bplcon0));
 
         private int GetRequestedBitplaneCount()
             => GetRequestedBitplaneCount(_bplcon0);
@@ -759,7 +974,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int GetAgnusBitplaneFetchPlaneCount()
             => GetAgnusBitplaneFetchPlaneCount(_bplcon0);
 
-        private static int GetAgnusBitplaneFetchPlaneCount(ushort bplcon0)
+        private int GetAgnusBitplaneFetchPlaneCount(ushort bplcon0)
+            => GetAgnusBitplaneFetchPlaneCount(
+                _chipset.Agnus,
+                _chipset.Denise,
+                GetAgnusFetchResolution(bplcon0),
+                bplcon0);
+
+        internal static int GetAgnusBitplaneFetchPlaneCount(
+            AgnusModel agnusModel,
+            DeniseModel deniseModel,
+            DeniseResolution resolution,
+            ushort bplcon0)
         {
             var requested = GetRequestedBitplaneCount(bplcon0);
             if (requested <= 0)
@@ -767,12 +993,22 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return 0;
             }
 
-            if (IsHighResolutionEnabled(bplcon0))
+            if (agnusModel != AgnusModel.Ecs && resolution == DeniseResolution.SuperHighRes)
+            {
+                resolution = DeniseResolution.LowRes;
+            }
+
+            if (agnusModel == AgnusModel.Ecs && resolution == DeniseResolution.SuperHighRes)
+            {
+                return Math.Min(requested, SuperHighResBitplaneFetchSlotsByPlane.Length);
+            }
+
+            if (resolution == DeniseResolution.HighRes)
             {
                 return Math.Min(requested, HighResBitplaneFetchSlotsByPlane.Length);
             }
 
-            return requested == 7
+            return deniseModel == DeniseModel.Ocs && requested == 7
                 ? 4
                 : Math.Min(requested, LiveBitplanePlaneCount);
         }
@@ -780,14 +1016,39 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int GetDeniseBitplaneDecodePlaneCount()
             => GetDeniseBitplaneDecodePlaneCount(_bplcon0);
 
-        private static int GetDeniseBitplaneDecodePlaneCount(ushort bplcon0)
+        private int GetDeniseBitplaneDecodePlaneCount(ushort bplcon0)
+            => GetDeniseBitplaneDecodePlaneCount(
+                _chipset.Denise,
+                GetDeniseResolution(bplcon0),
+                bplcon0);
+
+        internal static int GetDeniseBitplaneDecodePlaneCount(
+            DeniseModel deniseModel,
+            DeniseResolution resolution,
+            ushort bplcon0)
         {
             var requested = GetRequestedBitplaneCount(bplcon0);
+            if (deniseModel != DeniseModel.Ecs && resolution == DeniseResolution.SuperHighRes)
+            {
+                resolution = DeniseResolution.LowRes;
+            }
+
+            if (resolution == DeniseResolution.SuperHighRes)
+            {
+                return Math.Min(requested, 2);
+            }
+
+            if (resolution == DeniseResolution.HighRes)
+            {
+                return Math.Min(requested, 4);
+            }
+
             return Math.Clamp(requested, 0, LiveBitplanePlaneCount);
         }
 
-        private static bool IsLatchedOnlyOcsBpu7Plane(ushort bplcon0, int plane)
-            => !IsHighResolutionEnabled(bplcon0) &&
+        private bool IsLatchedOnlyOcsBpu7Plane(ushort bplcon0, int plane)
+            => _chipset.Denise == DeniseModel.Ocs &&
+                GetDeniseResolution(bplcon0) == DeniseResolution.LowRes &&
                 GetRequestedBitplaneCount(bplcon0) == 7 &&
                 plane >= 4 &&
                 plane < LiveBitplanePlaneCount;
@@ -814,20 +1075,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private int GetDataFetchStartValue()
         {
-            return _ddfStart & (IsHighResolutionEnabled() ? 0x00FC : 0x00F8);
+            return _dataFetchWindow.Start;
         }
 
         private int GetDataFetchStopValue()
         {
-            if (IsHighResolutionEnabled())
-            {
-                return _ddfStop & 0x00FC;
-            }
-
-            var blockStart = _ddfStop & 0x00F8;
-            return (_ddfStop & 0x0004) != 0
-                ? blockStart + 8
-                : blockStart;
+            return _dataFetchWindow.Stop;
         }
 
 

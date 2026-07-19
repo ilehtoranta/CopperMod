@@ -35,8 +35,9 @@ namespace CopperMod.Amiga.CustomChips.Cia
         public const long CpuCyclesPerCiaTick = AmigaConstants.A500PalCpuCyclesPerCiaTick;
 
         private readonly byte[] _registers = new byte[16];
-        private readonly CiaTimer _timerA = new CiaTimer(isTimerB: false);
-        private readonly CiaTimer _timerB = new CiaTimer(isTimerB: true);
+        private readonly CiaTimer _timerA;
+        private readonly CiaTimer _timerB;
+        private readonly long _cpuCyclesPerCiaTick;
         private int _todCounter;
         private int _todAlarm;
         private int _todReadLatch;
@@ -46,8 +47,16 @@ namespace CopperMod.Amiga.CustomChips.Cia
         private ulong _wakeVersion;
 
         public Cia(AmigaCiaId id)
+            : this(id, RasterTiming.Pal)
+        {
+        }
+
+        public Cia(AmigaCiaId id, RasterTiming timing)
         {
             Id = id;
+            _cpuCyclesPerCiaTick = timing.CpuCyclesPerCiaTick;
+            _timerA = new CiaTimer(false, _cpuCyclesPerCiaTick);
+            _timerB = new CiaTimer(true, _cpuCyclesPerCiaTick);
         }
 
         public AmigaCiaId Id { get; }
@@ -60,7 +69,7 @@ namespace CopperMod.Amiga.CustomChips.Cia
 
         public ushort TimerBLatch => _timerB.Latch;
 
-        public long TimerAIntervalCycles => _timerA.LatchTicks * CpuCyclesPerCiaTick;
+        public long TimerAIntervalCycles => _timerA.LatchTicks * _cpuCyclesPerCiaTick;
 
         internal ulong WakeVersion => _wakeVersion;
 
@@ -383,11 +392,13 @@ namespace CopperMod.Amiga.CustomChips.Cia
         private sealed class CiaTimer
         {
             private readonly bool _isTimerB;
+            private readonly long _cpuCyclesPerCiaTick;
             private long _nextTickCycle;
 
-            public CiaTimer(bool isTimerB)
+            public CiaTimer(bool isTimerB, long cpuCyclesPerCiaTick)
             {
                 _isTimerB = isTimerB;
+                _cpuCyclesPerCiaTick = cpuCyclesPerCiaTick;
             }
 
             public ushort Latch { get; private set; }
@@ -464,7 +475,7 @@ namespace CopperMod.Amiga.CustomChips.Cia
                     return null;
                 }
 
-                var cycle = _nextTickCycle + ((Counter - 1L) * CpuCyclesPerCiaTick);
+                var cycle = _nextTickCycle + ((Counter - 1L) * _cpuCyclesPerCiaTick);
                 return cycle <= maxCycle ? cycle : null;
             }
 
@@ -480,8 +491,8 @@ namespace CopperMod.Amiga.CustomChips.Cia
                     return null;
                 }
 
-                var first = _nextTickCycle + ((Counter - 1L) * CpuCyclesPerCiaTick);
-                var cycle = first + ((long)eventCount - 1L) * LatchTicks * CpuCyclesPerCiaTick;
+                var first = _nextTickCycle + ((Counter - 1L) * _cpuCyclesPerCiaTick);
+                var cycle = first + ((long)eventCount - 1L) * LatchTicks * _cpuCyclesPerCiaTick;
                 return cycle <= maxCycle ? cycle : null;
             }
 
@@ -497,12 +508,12 @@ namespace CopperMod.Amiga.CustomChips.Cia
                     return;
                 }
 
-                var underflowCycle = _nextTickCycle + ((Counter - 1L) * CpuCyclesPerCiaTick);
+                var underflowCycle = _nextTickCycle + ((Counter - 1L) * _cpuCyclesPerCiaTick);
                 if (underflowCycle <= targetCycle)
                 {
                     cia.SetPending(interruptMask, underflowCycle, interruptEvents, queueOnlyWhenNew: true);
                     var latchTicks = LatchTicks;
-                    var intervalCycles = (long)latchTicks * CpuCyclesPerCiaTick;
+                    var intervalCycles = (long)latchTicks * _cpuCyclesPerCiaTick;
                     var underflows = OneShot
                         ? 1L
                         : 1L + ((targetCycle - underflowCycle) / intervalCycles);
@@ -515,7 +526,7 @@ namespace CopperMod.Amiga.CustomChips.Cia
                         interruptEvents);
                     Counter = latchTicks;
                     var lastUnderflowCycle = underflowCycle + ((underflows - 1L) * intervalCycles);
-                    _nextTickCycle = lastUnderflowCycle + CpuCyclesPerCiaTick;
+                    _nextTickCycle = lastUnderflowCycle + _cpuCyclesPerCiaTick;
                     if (OneShot)
                     {
                         Control = (byte)(Control & ~0x01);
@@ -528,9 +539,9 @@ namespace CopperMod.Amiga.CustomChips.Cia
                     return;
                 }
 
-                var ticks = (int)(((targetCycle - _nextTickCycle) / CpuCyclesPerCiaTick) + 1);
+                var ticks = (int)(((targetCycle - _nextTickCycle) / _cpuCyclesPerCiaTick) + 1);
                 Counter = Math.Max(0, Counter - ticks);
-                _nextTickCycle += ticks * CpuCyclesPerCiaTick;
+                _nextTickCycle += ticks * _cpuCyclesPerCiaTick;
             }
 
             public void CountExternalEvent(
@@ -600,9 +611,9 @@ namespace CopperMod.Amiga.CustomChips.Cia
                 _nextTickCycle = NextCiaTickAfter(cycle);
             }
 
-            private static long NextCiaTickAfter(long cycle)
+            private long NextCiaTickAfter(long cycle)
             {
-                return ((cycle / CpuCyclesPerCiaTick) + 1) * CpuCyclesPerCiaTick;
+                return ((cycle / _cpuCyclesPerCiaTick) + 1) * _cpuCyclesPerCiaTick;
             }
         }
     }

@@ -119,9 +119,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
-            if (CustomRegisterScheduleClassifier.IsDisplayBusScheduleAffectingWrite(offset))
+            var impact = CustomRegisterScheduleClassifier.GetPotentialEventScheduleImpact(
+                _chipset,
+                offset);
+            if (CustomRegisterScheduleClassifier.AffectsEventSchedule(impact))
             {
-                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle);
+                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle, impact);
             }
 
             if (_pendingWrites.Count >= MaxPendingWrites)
@@ -143,7 +146,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             // Slot preparation can run ahead of captured display state. A timing write
             // must release those future reservations even when no captured rows rewind.
-            var changedSlotOwners = CustomRegisterScheduleClassifier.GetPreparedDisplaySlotOwnerChanges(offset, value);
+            var changedSlotOwners = CustomRegisterScheduleClassifier.GetPreparedDisplaySlotOwnerChanges(
+                _chipset,
+                offset,
+                value);
             if (changedSlotOwners != AgnusLiveDisplaySlotOwnerMask.None)
             {
                 _bus.ClearLiveDisplayDmaSlotsFrom(cycle, changedSlotOwners);
@@ -189,7 +195,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return offset is 0x02E or
                 0x080 or 0x082 or 0x084 or 0x086 or 0x088 or 0x08A or
                 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or
-                0x100 or 0x102 or 0x104 or 0x108 or 0x10A ||
+                0x100 or 0x102 or 0x104 or 0x106 or 0x108 or 0x10A or 0x1E4 ||
                 (offset >= 0x0E0 && offset <= 0x0F6) ||
                 (offset >= 0x110 && offset <= 0x11A) ||
                 (offset >= 0x120 && offset < 0x180) ||
@@ -266,9 +272,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var expectedMask = state.FetchWords >= 64
-                ? ulong.MaxValue
-                : (1UL << state.FetchWords) - 1UL;
+            var expectedMask = GetBitplaneWordMask(state.FetchWords);
             var planeCount = Math.Clamp(state.PlaneCount, 0, LiveBitplanePlaneCount);
             for (var plane = 0; plane < planeCount; plane++)
             {
@@ -957,7 +961,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return offset is 0x02E or
                 0x080 or 0x082 or 0x084 or 0x086 or 0x088 or 0x08A or
                 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or
-                0x100 or 0x102 or 0x104 or 0x108 or 0x10A ||
+                0x100 or 0x102 or 0x104 or 0x106 or 0x108 or 0x10A or 0x1E4 ||
                 (offset >= 0x0E0 && offset <= 0x0F6) ||
                 (offset >= 0x110 && offset <= 0x11A) ||
                 (offset >= 0x120 && offset < 0x180) ||
@@ -1137,7 +1141,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 FinalizeLiveRasterlinePlanLine();
                 _liveRasterlinePlanRow = row;
                 _liveRasterlinePlanLineStartCycle = GetOutputRowStartCycle(_liveFrameStartCycle, row);
-                _liveRasterlinePlanLineStopCycle = _liveRasterlinePlanLineStartCycle + LineCycles - 1;
+                _liveRasterlinePlanLineStopCycle = _liveRasterlinePlanLineStartCycle +
+                    _bus.GetLineCyclesAt(_liveRasterlinePlanLineStartCycle) - 1;
                 _liveRasterlinePlanLastCycle = long.MinValue;
                 _liveRasterlinePlanLineEventCount = 0;
                 _liveRasterlinePlanLineValid = true;
@@ -1185,7 +1190,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            row = (int)((cycle - _liveFrameStartCycle) / LineCycles) - StandardVStart;
+            row = _bus.GetBeamPosition(cycle).BeamLine - StandardVStart;
             return (uint)row < (uint)LowResOutputHeight;
         }
 
@@ -1266,7 +1271,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var lineStart = GetOutputRowStartCycle(_liveFrameStartCycle, row);
-            var lineStop = lineStart + LineCycles - 1;
+            var lineStop = lineStart + _bus.GetLineCyclesAt(lineStart) - 1;
             if (IsLiveCopperDmaEnabled())
             {
                 MarkPredictedRasterlinePlanUnsupported(row, LiveRasterlinePredictionStatus.UnsupportedCopper);
@@ -1309,10 +1314,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 lineStart,
                 lineStop,
                 state.DisplayWindowVerticallyOpen,
-                state.Bplcon0,
-                state.Bplcon1,
-                state.Bplcon2,
-                state.Dmacon,
+                state.Resolution,
+                state.FetchResolution,
+                 state.Bplcon0,
+                 state.Bplcon1,
+                 state.Bplcon2,
+                 state.Bplcon3,
+                 state.DiwHigh,
+                 state.DiwHighValid,
+                 state.AgnusDiwHigh,
+                 state.AgnusDiwHighValid,
+                 state.AgnusDisplayWindow,
+                 state.DeniseDisplayWindow,
+                 state.DataFetchWindow,
+                 state.Dmacon,
                 state.Bpl1Mod,
                 state.Bpl2Mod,
                 state.PlaneCount,
@@ -1374,7 +1389,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var planeCount = Math.Max(0, state.PlaneCount);
             for (; slot < state.FetchSlotStride; slot++)
             {
-                if (TryGetBitplanePlaneForFetchSlot(slot, planeCount, state.FetchSlotStride, out plane))
+                if (TryGetBitplanePlaneForFetchSlot(slot, planeCount, state.FetchResolution, out plane))
                 {
                     return true;
                 }

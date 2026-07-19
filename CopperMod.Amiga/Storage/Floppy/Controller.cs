@@ -984,18 +984,12 @@ namespace CopperMod.Amiga.Storage.Floppy
         private const int MaxDmaTraceEntries = 4096;
         private const int DiskRevolutionsPerSecond = 5;
         private const double DiskStreamPositionQuantum = 1e-6;
-        private static readonly double FastDiskCyclesPerBit = AmigaConstants.A500PalCpuClockHz / 500_000.0;
-        private static readonly long DiskWordEqualHoldCycles = Math.Max(
-            1,
-            (long)Math.Round(AmigaConstants.A500PalCpuClockHz / 500_000.0));
-        private static readonly long DiskIndexPulseCycles = Math.Max(
-            1,
-            (long)Math.Round(AmigaConstants.A500PalCpuClockHz / DiskRevolutionsPerSecond));
-        private static readonly long DiskMotorReadyDelayCycles = Math.Max(
-            1,
-            (long)Math.Round(AmigaConstants.A500PalCpuClockHz * 0.5));
 
         private readonly AmigaBus _bus;
+        private readonly double _fastDiskCyclesPerBit;
+        private readonly long _diskWordEqualHoldCycles;
+        private readonly long _diskIndexPulseCycles;
+        private readonly long _diskMotorReadyDelayCycles;
         private readonly bool _specializationEnabled;
         private readonly AmigaFloppyDrive[] _drives;
         private readonly DiskTrackEventPlan?[] _diskInputPlans;
@@ -1098,6 +1092,11 @@ namespace CopperMod.Amiga.Storage.Floppy
             }
 
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+            var cpuClockHz = _bus.RasterTiming.CpuClockHz;
+            _fastDiskCyclesPerBit = cpuClockHz / 500_000.0;
+            _diskWordEqualHoldCycles = Math.Max(1, (long)Math.Round(cpuClockHz / 500_000.0));
+            _diskIndexPulseCycles = Math.Max(1, (long)Math.Round((double)cpuClockHz / DiskRevolutionsPerSecond));
+            _diskMotorReadyDelayCycles = Math.Max(1, (long)Math.Round(cpuClockHz * 0.5));
             _specializationEnabled = enableSpecialization;
             ConnectedDriveCount = connectedDriveCount;
             Drive0 = new AmigaFloppyDrive();
@@ -1109,7 +1108,7 @@ namespace CopperMod.Amiga.Storage.Floppy
             _diskInputPlans = new DiskTrackEventPlan?[MaxFloppyDriveCount];
             _diskInputPlanEventIndexes = new int[MaxFloppyDriveCount];
             _traceRecorder = AmigaDiskTraceRecorder.IsEnvironmentEnabled()
-                ? new AmigaDiskTraceRecorder()
+                ? new AmigaDiskTraceRecorder(_bus.RasterTiming)
                 : null;
             Reset();
         }
@@ -2219,9 +2218,11 @@ namespace CopperMod.Amiga.Storage.Floppy
         {
             _currentCycle = Math.Max(_currentCycle, cycle);
             offset = (ushort)(offset & 0x01FE);
-            if (CustomRegisterScheduleClassifier.IsDiskBusScheduleAffectingWrite(offset))
+            var impact = CustomRegisterScheduleClassifier.GetPotentialImpact(_bus.Chipset, offset) &
+                HardwareScheduleImpact.Disk;
+            if (impact != HardwareScheduleImpact.None)
             {
-                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle);
+                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle, impact);
             }
 
             switch (offset)
@@ -2557,7 +2558,9 @@ namespace CopperMod.Amiga.Storage.Floppy
                         distanceBits = track.BitLength;
                     }
 
-                    next = stream.Cycle + CyclesForBits(distanceBits, cyclesPerBit);
+                    next = distanceBits >= track.BitLength - DiskStreamPositionQuantum
+                        ? stream.Cycle + _diskIndexPulseCycles
+                        : stream.Cycle + CyclesForBits(distanceBits, cyclesPerBit);
                 }
             }
             catch (InvalidOperationException)
@@ -2577,25 +2580,23 @@ namespace CopperMod.Amiga.Storage.Floppy
         {
             if (!IsDriveConnected(driveIndex))
             {
-                return DiskIndexPulseCycles;
+                return _diskIndexPulseCycles;
             }
 
             var drive = _drives[driveIndex];
             if (drive.Disk == null)
             {
-                return DiskIndexPulseCycles;
+                return _diskIndexPulseCycles;
             }
 
             try
             {
                 var track = drive.ReadEncodedTrack(drive.Cylinder, drive.Head);
-                return track.BitLength > 0
-                    ? CyclesForBits(track.BitLength, GetDiskRotationCyclesPerBit(track.BitLength))
-                    : DiskIndexPulseCycles;
+                return _diskIndexPulseCycles;
             }
             catch (InvalidOperationException)
             {
-                return DiskIndexPulseCycles;
+                return _diskIndexPulseCycles;
             }
         }
 
@@ -2618,16 +2619,16 @@ namespace CopperMod.Amiga.Storage.Floppy
             _nextIndexPulseCycle = next;
         }
 
-        private static bool IsDriveReady(AmigaFloppyDrive drive, long cycle)
+        private bool IsDriveReady(AmigaFloppyDrive drive, long cycle)
         {
             return drive.Disk != null &&
                 drive.MotorOn &&
-                cycle >= drive.MotorOnCycle + DiskMotorReadyDelayCycles;
+                cycle >= drive.MotorOnCycle + _diskMotorReadyDelayCycles;
         }
 
-        private static long GetDriveReadyCycle(AmigaFloppyDrive drive)
+        private long GetDriveReadyCycle(AmigaFloppyDrive drive)
         {
-            return drive.MotorOnCycle + DiskMotorReadyDelayCycles;
+            return drive.MotorOnCycle + _diskMotorReadyDelayCycles;
         }
 
         private DiskStreamState GetActiveDmaStream()
@@ -3526,20 +3527,20 @@ namespace CopperMod.Amiga.Storage.Floppy
 
             if ((_bus.Paula.Adkcon & AdkconFast) != 0)
             {
-                return FastDiskCyclesPerBit;
+                return _fastDiskCyclesPerBit;
             }
 
-            return AmigaConstants.A500PalCpuClockHz / (trackBitLength * DiskRevolutionsPerSecond);
+            return _bus.RasterTiming.CpuClockHz / (trackBitLength * DiskRevolutionsPerSecond);
         }
 
-        private static double GetDiskRotationCyclesPerBit(int trackBitLength)
+        private double GetDiskRotationCyclesPerBit(int trackBitLength)
         {
             if (trackBitLength <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(trackBitLength), trackBitLength, "Encoded track bit length must be positive.");
             }
 
-            return AmigaConstants.A500PalCpuClockHz / (trackBitLength * DiskRevolutionsPerSecond);
+            return _bus.RasterTiming.CpuClockHz / (trackBitLength * DiskRevolutionsPerSecond);
         }
 
         private void AdvanceStreamTo(DiskStreamState stream, int trackBitLength, double cyclesPerBit, long cycle)
@@ -3692,7 +3693,7 @@ namespace CopperMod.Amiga.Storage.Floppy
                 case DiskTrackEventKind.SyncMatch:
                     _dskbytrWordEqualUntilCycle = Math.Max(
                         _dskbytrWordEqualUntilCycle,
-                        diskEvent.Cycle + DiskWordEqualHoldCycles);
+                        diskEvent.Cycle + _diskWordEqualHoldCycles);
                     AppendDivergenceTrace(
                         AmigaDiskTraceEventKind.DiskInterruptWrite,
                         diskEvent.Cycle,

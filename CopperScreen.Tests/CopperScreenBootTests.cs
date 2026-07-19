@@ -1511,10 +1511,9 @@ public sealed class CopperScreenBootTests
 		Assert.True(CopperScreenRuntime.ShouldThrottleSteadyAudioRefill(4, 1));
 
 		var expectedFrameTicks = (long)Math.Round(Stopwatch.Frequency / AmigaConstants.A500PalVBlankHz);
-		Assert.InRange(CopperScreenRuntime.SteadyAudioFrameStopwatchTicks, expectedFrameTicks - 1, expectedFrameTicks + 1);
 		Assert.Equal(0, CopperScreenRuntime.CalculateSteadyAudioWaitMilliseconds(0));
 		Assert.Equal(0, CopperScreenRuntime.CalculateSteadyAudioWaitMilliseconds(Stopwatch.Frequency / 2000));
-		Assert.InRange(CopperScreenRuntime.CalculateSteadyAudioWaitMilliseconds(CopperScreenRuntime.SteadyAudioFrameStopwatchTicks), 1, 5);
+		Assert.InRange(CopperScreenRuntime.CalculateSteadyAudioWaitMilliseconds(expectedFrameTicks), 1, 5);
 	}
 
 	[Fact]

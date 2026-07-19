@@ -23,6 +23,7 @@ namespace CopperScreen;
 
 internal sealed class MainWindow : Window
 {
+	private const int PresentationCropBorderY = 16;
 	private const int StatusUpdateIntervalMilliseconds = 250;
 	private const double DebuggerPanelWidth = 1120;
 	private const double DebuggerLeftColumnWidth = 500;
@@ -196,7 +197,9 @@ internal sealed class MainWindow : Window
 		_gamepadHost.ControllersChanged += OnGamepadControllersChanged;
 		_applyPendingGamepadInputsAction = ApplyPendingGamepadInputs;
 
-		_presenter = new FramebufferPresenter(AmigaConstants.PalHighResWidth, AmigaConstants.PalHighResHeight)
+		_presenter = new FramebufferPresenter(
+			_runtime?.Width ?? AmigaConstants.PalHighResWidth,
+			_runtime?.Height ?? AmigaConstants.PalHighResHeight)
 		{
 			Focusable = true,
 			Cursor = new Cursor(StandardCursorType.None),
@@ -804,6 +807,7 @@ internal sealed class MainWindow : Window
 		RefreshDebuggerUi(state.DebugSnapshot);
 		if (state.FrameNumber != _presentedFrames)
 		{
+			_presenter.EnsureDimensions(_runtime.Width, _runtime.Height);
 			_presenter.Update(frameLease.Framebuffer);
 			_lastPresenterUpdateMilliseconds = _presenter.LastUpdateMilliseconds;
 			_presentedFrames = state.FrameNumber;
@@ -3464,12 +3468,18 @@ internal sealed class MainWindow : Window
 	{
 		if (_showFullOverscan)
 		{
-			var viewport = FullOverscanPresentationViewport;
+			var viewport = new PixelRect(0, 0, _presenter.PixelWidth, _presenter.PixelHeight);
 			_presenter.SetSourceViewport(viewport.X, viewport.Y, viewport.Width, viewport.Height);
 		}
 		else
 		{
-			var viewport = CroppedPresentationViewport;
+			var horizontalScale = Math.Max(1, _presenter.PixelWidth / AmigaConstants.PalLowResWidth);
+			var verticalScale = Math.Max(1, _presenter.PixelHeight / AmigaConstants.PalLowResHeight);
+			var viewport = new PixelRect(
+				AmigaConstants.PalLowResOverscanBorderX * horizontalScale,
+				PresentationCropBorderY * verticalScale,
+				AmigaConstants.PalLowResStandardWidth * horizontalScale,
+				AmigaConstants.PalLowResStandardHeight * verticalScale);
 			_presenter.SetSourceViewport(viewport.X, viewport.Y, viewport.Width, viewport.Height);
 		}
 
@@ -3482,7 +3492,7 @@ internal sealed class MainWindow : Window
 	internal static PixelRect CroppedPresentationViewport { get; } =
 		new(
 			AmigaConstants.PalLowResOverscanBorderX * 2,
-			AmigaConstants.PalLowResOverscanBorderY * 2,
+			PresentationCropBorderY * 2,
 			AmigaConstants.PalLowResStandardWidth * 2,
 			AmigaConstants.PalLowResStandardHeight * 2);
 

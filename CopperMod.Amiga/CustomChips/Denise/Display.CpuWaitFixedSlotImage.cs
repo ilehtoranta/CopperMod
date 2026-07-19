@@ -70,14 +70,33 @@ namespace CopperMod.Amiga.CustomChips.Denise
             => $"{SlotCount}@{FirstSlotCycle}->{LastSlotCycle}/0x{Hash:X16}/{FirstOwner}->{LastOwner}";
     }
 
+    internal struct BlitterFixedSlotImageCursor
+    {
+        internal int Generation;
+        internal ulong WakeVersion;
+        internal int BeamLine;
+        internal long LineStart;
+        internal bool Valid;
+
+        internal void Clear()
+        {
+            Generation = 0;
+            WakeVersion = 0;
+            BeamLine = -1;
+            LineStart = 0;
+            Valid = false;
+        }
+    }
+
     internal sealed partial class Display
     {
-        private const int CpuWaitFixedSlotsPerLine = LineCycles / AgnusChipSlotScheduler.SlotCycles;
+        private const int CpuWaitFixedSlotsPerLine = CanonicalLineCycles / AgnusChipSlotScheduler.SlotCycles;
         private readonly byte[] _cpuWaitFixedSlotOwners =
             new byte[AmigaConstants.A500PalRasterLines * CpuWaitFixedSlotsPerLine];
         private readonly int[] _cpuWaitFixedSlotGenerations = new int[AmigaConstants.A500PalRasterLines];
         private readonly int[] _cpuWaitFixedSlotSignatures = new int[AmigaConstants.A500PalRasterLines];
         private readonly long[] _cpuWaitFixedSlotLineStarts = new long[AmigaConstants.A500PalRasterLines];
+        private readonly bool[] _cpuWaitFixedSlotImageHasSpriteOwners = new bool[AmigaConstants.A500PalRasterLines];
         private long _cpuWaitFixedSlotImageBuilds;
         private long _cpuWaitFixedSlotImageHits;
         private long _cpuWaitFixedSlotImageMisses;
@@ -88,6 +107,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private long _cpuWaitFixedSlotImageUnsupportedPendingWrite;
         private long _cpuWaitFixedSlotImageUnsupportedRasterlinePlan;
         private long _cpuWaitFixedSlotImageUnsupportedSpriteState;
+        private bool _cpuWaitFixedSlotImageDiagnosticsEnabled;
 
         internal long CpuWaitFixedSlotImageBuilds => _cpuWaitFixedSlotImageBuilds;
         internal long CpuWaitFixedSlotImageHits => _cpuWaitFixedSlotImageHits;
@@ -99,6 +119,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
         internal long CpuWaitFixedSlotImageUnsupportedPendingWrite => _cpuWaitFixedSlotImageUnsupportedPendingWrite;
         internal long CpuWaitFixedSlotImageUnsupportedRasterlinePlan => _cpuWaitFixedSlotImageUnsupportedRasterlinePlan;
         internal long CpuWaitFixedSlotImageUnsupportedSpriteState => _cpuWaitFixedSlotImageUnsupportedSpriteState;
+
+        internal void SetCpuWaitFixedSlotImageDiagnosticsEnabled(bool enabled)
+            => _cpuWaitFixedSlotImageDiagnosticsEnabled = enabled;
 
         internal void ResetCpuWaitFixedSlotImageDiagnostics()
         {
@@ -120,12 +143,26 @@ namespace CopperMod.Amiga.CustomChips.Denise
             out CpuWaitFixedSlotOwner owner,
             out CpuWaitFixedSlotImageUnsupported unsupported)
         {
+            if (!_timing.IsCanonicalPal)
+            {
+                owner = CpuWaitFixedSlotOwner.Free;
+                unsupported = CpuWaitFixedSlotImageUnsupported.Frame;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImageUnsupportedFrame++;
+                }
+                return false;
+            }
+
             slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, slotCycle));
-            if (AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(slotCycle))
+            if (_bus.IsMandatoryRefreshSlot(slotCycle))
             {
                 owner = CpuWaitFixedSlotOwner.Refresh;
                 unsupported = CpuWaitFixedSlotImageUnsupported.None;
-                _cpuWaitFixedSlotImagePredictedSlots++;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImagePredictedSlots++;
+                }
                 return true;
             }
 
@@ -133,11 +170,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 owner = CpuWaitFixedSlotOwner.Free;
                 unsupported = CpuWaitFixedSlotImageUnsupported.Frame;
-                _cpuWaitFixedSlotImageUnsupportedFrame++;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImageUnsupportedFrame++;
+                }
                 return false;
             }
 
-            if (!TryEnsureCpuWaitFixedSlotImage(beamLine, lineStart, row, out unsupported))
+            if (!TryEnsureCpuWaitFixedSlotImage(
+                    beamLine,
+                    lineStart,
+                    row,
+                    lineStart + LineCycles - 1,
+                    out unsupported))
             {
                 owner = CpuWaitFixedSlotOwner.Free;
                 return false;
@@ -146,7 +191,134 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var slot = (int)((slotCycle - lineStart) / AgnusChipSlotScheduler.SlotCycles);
             owner = (CpuWaitFixedSlotOwner)_cpuWaitFixedSlotOwners[
                 (beamLine * CpuWaitFixedSlotsPerLine) + slot];
-            _cpuWaitFixedSlotImagePredictedSlots++;
+            if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+            {
+                _cpuWaitFixedSlotImagePredictedSlots++;
+            }
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool TryGetBlitterFixedSlotOwner(
+            long slotCycle,
+            ref BlitterFixedSlotImageCursor cursor,
+            out CpuWaitFixedSlotOwner owner,
+            out CpuWaitFixedSlotImageUnsupported unsupported)
+        {
+            if (!_timing.IsCanonicalPal)
+            {
+                owner = CpuWaitFixedSlotOwner.Free;
+                unsupported = CpuWaitFixedSlotImageUnsupported.Frame;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImageUnsupportedFrame++;
+                }
+                cursor.Clear();
+                return false;
+            }
+
+            slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, slotCycle));
+            if (_bus.IsMandatoryRefreshSlot(slotCycle))
+            {
+                owner = CpuWaitFixedSlotOwner.Refresh;
+                unsupported = CpuWaitFixedSlotImageUnsupported.None;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImagePredictedSlots++;
+                }
+                return true;
+            }
+
+            return TryGetBlitterFixedDisplaySlotOwner(
+                slotCycle,
+                ref cursor,
+                out owner,
+                out unsupported);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool TryGetBlitterFixedDisplaySlotOwner(
+            long slotCycle,
+            ref BlitterFixedSlotImageCursor cursor,
+            out CpuWaitFixedSlotOwner owner,
+            out CpuWaitFixedSlotImageUnsupported unsupported)
+        {
+            if (!_timing.IsCanonicalPal)
+            {
+                owner = CpuWaitFixedSlotOwner.Free;
+                unsupported = CpuWaitFixedSlotImageUnsupported.Frame;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImageUnsupportedFrame++;
+                }
+                cursor.Clear();
+                return false;
+            }
+
+            System.Diagnostics.Debug.Assert(
+                slotCycle == AgnusChipSlotScheduler.AlignToSlot(slotCycle),
+                "Blitter display candidate must already be aligned to an Agnus slot.");
+            System.Diagnostics.Debug.Assert(
+                !_bus.IsMandatoryRefreshSlot(slotCycle),
+                "Mandatory refresh must be rejected before display ownership lookup.");
+
+            if (cursor.Valid &&
+                cursor.Generation == _liveGeneration &&
+                cursor.WakeVersion == _liveWakeVersion &&
+                slotCycle >= cursor.LineStart &&
+                slotCycle < cursor.LineStart + LineCycles)
+            {
+                var slot = (int)((slotCycle - cursor.LineStart) / AgnusChipSlotScheduler.SlotCycles);
+                owner = (CpuWaitFixedSlotOwner)_cpuWaitFixedSlotOwners[
+                    (cursor.BeamLine * CpuWaitFixedSlotsPerLine) + slot];
+                unsupported = CpuWaitFixedSlotImageUnsupported.None;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImageHits++;
+                    _cpuWaitFixedSlotImagePredictedSlots++;
+                }
+                return true;
+            }
+
+            cursor.Clear();
+            if (!TryGetCpuWaitFixedSlotLine(slotCycle, out var beamLine, out var lineStart, out var row))
+            {
+                owner = CpuWaitFixedSlotOwner.Free;
+                unsupported = CpuWaitFixedSlotImageUnsupported.Frame;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImageUnsupportedFrame++;
+                }
+                return false;
+            }
+
+            if (!TryEnsureCpuWaitFixedSlotImage(
+                    beamLine,
+                    lineStart,
+                    row,
+                    slotCycle,
+                    out unsupported))
+            {
+                owner = CpuWaitFixedSlotOwner.Free;
+                return false;
+            }
+
+            var ownerSlot = (int)((slotCycle - lineStart) / AgnusChipSlotScheduler.SlotCycles);
+            owner = (CpuWaitFixedSlotOwner)_cpuWaitFixedSlotOwners[
+                (beamLine * CpuWaitFixedSlotsPerLine) + ownerSlot];
+            if (!_cpuWaitFixedSlotImageHasSpriteOwners[beamLine])
+            {
+                cursor.Generation = _liveGeneration;
+                cursor.WakeVersion = _liveWakeVersion;
+                cursor.BeamLine = beamLine;
+                cursor.LineStart = lineStart;
+                cursor.Valid = true;
+            }
+
+            if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+            {
+                _cpuWaitFixedSlotImagePredictedSlots++;
+            }
             return true;
         }
 
@@ -176,20 +348,26 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int beamLine,
             long lineStart,
             int row,
+            long barrierHorizon,
             out CpuWaitFixedSlotImageUnsupported unsupported)
         {
-            var lineStop = lineStart + LineCycles - 1;
-            if (GetNextLiveCopperBarrierCycle() <= lineStop)
+            if (GetNextLiveCopperBarrierCycle() <= barrierHorizon)
             {
                 unsupported = CpuWaitFixedSlotImageUnsupported.Copper;
-                _cpuWaitFixedSlotImageUnsupportedCopper++;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImageUnsupportedCopper++;
+                }
                 return false;
             }
 
-            if (GetNextLivePendingWriteCycle() <= lineStop)
+            if (GetNextLivePendingWriteCycle() <= barrierHorizon)
             {
                 unsupported = CpuWaitFixedSlotImageUnsupported.PendingWrite;
-                _cpuWaitFixedSlotImageUnsupportedPendingWrite++;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImageUnsupportedPendingWrite++;
+                }
                 return false;
             }
 
@@ -202,7 +380,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 plan.Signature != ComputeRowDmaPlanSignature(state))
             {
                 unsupported = CpuWaitFixedSlotImageUnsupported.RasterlinePlan;
-                _cpuWaitFixedSlotImageUnsupportedRasterlinePlan++;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImageUnsupportedRasterlinePlan++;
+                }
                 return false;
             }
 
@@ -212,30 +393,40 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _cpuWaitFixedSlotLineStarts[beamLine] == lineStart)
             {
                 unsupported = CpuWaitFixedSlotImageUnsupported.None;
-                _cpuWaitFixedSlotImageHits++;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImageHits++;
+                }
                 return true;
             }
 
             if (plan.SpriteCount > 0 && _liveNextSpriteRow < row)
             {
                 unsupported = CpuWaitFixedSlotImageUnsupported.SpriteState;
-                _cpuWaitFixedSlotImageUnsupportedSpriteState++;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImageUnsupportedSpriteState++;
+                }
                 return false;
             }
 
-            _cpuWaitFixedSlotImageMisses++;
-            if (_cpuWaitFixedSlotGenerations[beamLine] != 0)
+            if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
             {
-                _cpuWaitFixedSlotImageInvalidations++;
+                _cpuWaitFixedSlotImageMisses++;
+                if (_cpuWaitFixedSlotGenerations[beamLine] != 0)
+                {
+                    _cpuWaitFixedSlotImageInvalidations++;
+                }
             }
 
             var ownerBase = beamLine * CpuWaitFixedSlotsPerLine;
             Array.Clear(_cpuWaitFixedSlotOwners, ownerBase, CpuWaitFixedSlotsPerLine);
+            _cpuWaitFixedSlotImageHasSpriteOwners[beamLine] = false;
             var bitplaneEnd = plan.BitplaneStart + plan.BitplaneCount;
             for (var index = plan.BitplaneStart; index < bitplaneEnd; index++)
             {
                 var entry = _rowDmaBitplaneEntries[index];
-                if (entry.RowPresent && IsCpuWaitFixedImagePendingBitplaneEntry(row, entry))
+                if (entry.RowPresent)
                 {
                     SetCpuWaitFixedSlotOwner(ownerBase, lineStart, entry.GetCycle(state.LineStartCycle), CpuWaitFixedSlotOwner.BitplaneRead);
                 }
@@ -249,31 +440,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     WouldCpuWaitFixedImageSpriteFetch(row, entry.SpriteIndex, entry.Word))
                 {
                     SetCpuWaitFixedSlotOwner(ownerBase, lineStart, entry.Cycle, CpuWaitFixedSlotOwner.SpriteRead);
+                    _cpuWaitFixedSlotImageHasSpriteOwners[beamLine] = true;
                 }
             }
 
             _cpuWaitFixedSlotGenerations[beamLine] = _liveGeneration;
             _cpuWaitFixedSlotSignatures[beamLine] = signature;
             _cpuWaitFixedSlotLineStarts[beamLine] = lineStart;
-            _cpuWaitFixedSlotImageBuilds++;
+            if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+            {
+                _cpuWaitFixedSlotImageBuilds++;
+            }
             unsupported = CpuWaitFixedSlotImageUnsupported.None;
             return true;
-        }
-
-        private bool IsCpuWaitFixedImagePendingBitplaneEntry(int row, RowDmaBitplaneEntry entry)
-        {
-            if (row > _liveNextFetchRow)
-            {
-                return true;
-            }
-
-            if (row < _liveNextFetchRow)
-            {
-                return false;
-            }
-
-            return entry.Word > _liveNextFetchWord ||
-                entry.Word == _liveNextFetchWord && entry.Slot >= _liveNextFetchSlot;
         }
 
         private bool IsCpuWaitFixedImagePendingSpriteEntry(int row, RowDmaSpriteEntry entry)

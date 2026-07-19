@@ -19,6 +19,20 @@ namespace CopperMod.Amiga.Bus
         internal void NotifyHardwareWorkScheduled(long cycle)
             => _hardwareScheduler.NotifyWorkScheduled(cycle);
 
+        internal void SynchronizeBlitterThrough(long targetCycle)
+            => _hardwareScheduler.SynchronizeBlitterThrough(targetCycle);
+
+        internal void SynchronizePaulaThrough(long targetCycle)
+            => _hardwareScheduler.SynchronizePaulaThrough(targetCycle);
+
+        internal void SynchronizeDiskThrough(long targetCycle)
+            => _hardwareScheduler.SynchronizeDiskThrough(targetCycle);
+
+        internal void SynchronizeLiveDisplayThrough(long targetCycle)
+            => _hardwareScheduler.DrainTo(
+                targetCycle,
+                AmigaHardwareEventMask.Agnus | AmigaHardwareEventMask.ForceCatchUp);
+
         public void AdvanceRasterTo(long targetCycle)
             => _hardwareScheduler.DrainTo(
                 targetCycle,
@@ -37,7 +51,7 @@ namespace CopperMod.Amiga.Bus
             {
                 CiaB.IncrementTod(_nextHorizontalSyncCycle, _pendingCiaInterrupts);
                 _nextHorizontalSyncIndex++;
-                _nextHorizontalSyncCycle += _lineCycles;
+                _nextHorizontalSyncCycle = GetNextHorizontalSyncCycle(_nextHorizontalSyncCycle);
             }
 
             if (targetCycle < _nextVerticalBlankCycle)
@@ -56,26 +70,26 @@ namespace CopperMod.Amiga.Bus
         private void UpdateBeamPosition(long targetCycle)
         {
             var beam = _beamClock.GetPosition(targetCycle);
-            var horizontal = EncodeVhposrHorizontal(beam.BeamHorizontal);
+            var horizontal = EncodeVhposrHorizontal(beam.BeamHorizontal, targetCycle);
             Paula.SetBeamPosition(beam.BeamLine, horizontal, beam.IsLongFrame);
         }
 
         private void ResetHorizontalSyncCounter()
         {
             _nextHorizontalSyncIndex = 1;
-            _nextHorizontalSyncCycle = Math.Max(1, _lineCycles);
+            _nextHorizontalSyncCycle = Math.Max(1, GetNextHorizontalSyncCycle(0));
         }
 
         private void RecalculateRasterEvents(long cycle)
         {
             var beam = _beamClock.GetPosition(cycle);
-            var lineStart = beam.FrameStartCycle + ((long)beam.BeamLine * _lineCycles);
+            var lineStart = _beamClock.GetLineStartCycle(cycle);
             var hsyncOffset = _agnusRegisters.VariableHSyncEnabled
                 ? (long)_agnusRegisters.HSyncStart * _rasterTiming.CpuCyclesPerColorClock
-                : _lineCycles;
+                : _beamClock.GetLineCyclesAt(cycle);
             _nextHorizontalSyncCycle = lineStart + hsyncOffset;
             if (_nextHorizontalSyncCycle <= cycle)
-                _nextHorizontalSyncCycle = cycle + _lineCycles;
+                _nextHorizontalSyncCycle = GetNextHorizontalSyncCycle(cycle);
             _nextHorizontalSyncIndex = beam.BeamLine + 1;
             _nextVerticalBlankCycle = GetNextVerticalBlankCycle(cycle);
             _rasterlineScheduleCache.Reset();
@@ -90,10 +104,22 @@ namespace CopperMod.Amiga.Bus
             var line = _agnusRegisters.VariableVBlankEnabled
                 ? _agnusRegisters.VBlankStart
                 : _agnusRegisters.VSyncStart;
-            var candidate = beam.FrameStartCycle + ((long)line * _lineCycles);
+            var candidate = _beamClock.GetLineStartCycle(beam.FrameStartCycle, line);
             if (candidate <= cycle)
-                candidate = _beamClock.GetNextFrameStartCycle(cycle) + ((long)line * _lineCycles);
+                candidate = _beamClock.GetLineStartCycle(_beamClock.GetNextFrameStartCycle(cycle), line);
             return candidate;
+        }
+
+        private long GetNextHorizontalSyncCycle(long cycle)
+        {
+            var nextLineStart = _beamClock.GetNextLineStartCycle(cycle);
+            if (!_agnusRegisters.VariableHSyncEnabled)
+            {
+                return nextLineStart;
+            }
+
+            return nextLineStart +
+                ((long)_agnusRegisters.HSyncStart * _rasterTiming.CpuCyclesPerColorClock);
         }
 
         internal AgnusBeamPosition GetBeamPosition(long cycle)
@@ -104,6 +130,21 @@ namespace CopperMod.Amiga.Bus
 
         internal long GetNextFrameStartCycle(long cycle)
             => _beamClock.GetNextFrameStartCycle(cycle);
+
+        internal long GetLineStartCycle(long cycle)
+            => _beamClock.GetLineStartCycle(cycle);
+
+        internal long GetLineStartCycle(long frameStartCycle, int line)
+            => _beamClock.GetLineStartCycle(frameStartCycle, line);
+
+        internal long GetLineStopCycle(long cycle)
+            => _beamClock.GetLineStopCycle(cycle);
+
+        internal long GetNextLineStartCycle(long cycle)
+            => _beamClock.GetNextLineStartCycle(cycle);
+
+        internal int GetLineCyclesAt(long cycle)
+            => _beamClock.GetLineCyclesAt(cycle);
 
         public void AdvanceCiasTo(long targetCycle)
             => _hardwareScheduler.DrainTo(
@@ -168,21 +209,30 @@ namespace CopperMod.Amiga.Bus
             AmigaBusRequester requester,
             ushort offset,
             long cycle,
-            bool scheduleAffecting)
+            HardwareScheduleImpact impact)
             => _hardwareScheduler.RecordCopperQuiescentCustomRegisterWrite(
                 requester,
                 offset,
                 cycle,
-                scheduleAffecting);
+                impact);
 
         public void SetHardwareSchedulerHostProfilingEnabled(bool enabled)
         {
             _hardwareScheduler.HostProfilingEnabled = enabled;
             _deferredCpuWaitDiagnosticsEnabled = enabled || _deferredCpuBusBatchVerifyEnabled;
+            Display.SetCpuWaitFixedSlotImageDiagnosticsEnabled(
+                enabled || _deferredCpuBusBatchVerifyEnabled);
+            Blitter.SetAdvanceProfilingEnabled(enabled);
         }
 
         public void ResetHardwareSchedulerHostProfile()
-            => _hardwareScheduler.ResetHostProfile();
+        {
+            _hardwareScheduler.ResetHostProfile();
+            Blitter.ResetAdvanceProfileCounters();
+        }
+
+        internal void SetBlitterAdvanceMode(BlitterAdvanceMode mode)
+            => Blitter.AdvanceMode = mode;
 
         internal void SetSlotScheduleAuditSink(Action<AgnusSlotScheduleAuditEntry>? sink)
             => _hrmSlotEngine.SetSlotScheduleAuditSink(sink);
@@ -225,27 +275,6 @@ namespace CopperMod.Amiga.Bus
 
         internal AmigaRasterlineScheduleCacheSnapshot CaptureRasterlineScheduleCacheSnapshot()
             => _rasterlineScheduleCache.CaptureSnapshot();
-
-        internal void AdvanceDmaCoreTo(long targetCycle, bool advanceLiveAgnus, bool advancePassiveDiskInput)
-        {
-            if (advanceLiveAgnus && LiveAgnusDmaEnabled)
-            {
-                Agnus.AdvanceTo(targetCycle);
-            }
-
-            Paula.AdvanceTo(targetCycle);
-            if (advancePassiveDiskInput)
-            {
-                Disk.AdvanceTo(targetCycle);
-            }
-            else
-            {
-                Disk.AdvanceEventsTo(targetCycle);
-            }
-
-            Blitter.AdvanceTo(targetCycle);
-            Paula.AdvanceTo(targetCycle);
-        }
 
         internal void AdvanceCiaTimersCoreTo(long targetCycle)
         {

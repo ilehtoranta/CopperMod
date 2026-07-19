@@ -78,7 +78,9 @@ namespace CopperMod.Amiga.Runtime
         A500PalCustPlayback,
         A500PalFullEmulationSkeleton,
         A500Pal512KChipOnlyBoot,
-        A500Pal512KBoot
+        A500Pal512KBoot,
+        A500PlusEcsPal,
+        A500PlusEcsNtsc
     }
 
     internal sealed class MachineOptions
@@ -160,6 +162,22 @@ namespace CopperMod.Amiga.Runtime
                 options.ExpansionRamSize = AmigaConstants.A500BootPseudoFastRamSize;
                 options.FloppyDriveCount = 2;
                 options.RealTimeClockEnabled = true;
+            }
+            else if (profile == MachineProfile.A500PlusEcsPal)
+            {
+                options.Chipset = AmigaChipset.EcsPal;
+                options.ChipRamSize = 1024 * 1024;
+                options.FloppyDriveCount = 2;
+                options.RealTimeClockEnabled = true;
+                options.KickstartConfiguration = KickstartConfiguration.HostShim20;
+            }
+            else if (profile == MachineProfile.A500PlusEcsNtsc)
+            {
+                options.Chipset = AmigaChipset.EcsNtsc;
+                options.ChipRamSize = 1024 * 1024;
+                options.FloppyDriveCount = 2;
+                options.RealTimeClockEnabled = true;
+                options.KickstartConfiguration = KickstartConfiguration.HostShim20;
             }
 
             return options;

@@ -5,9 +5,92 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace CopperMod.Amiga.CustomChips.Blitter
 {
+    internal enum BlitterAdvanceMode : byte
+    {
+        Reference,
+        Bounded,
+        Verify
+    }
+
+    internal readonly struct BlitterAdvanceCounters
+    {
+        public BlitterAdvanceCounters(
+            long calls,
+            long idleExits,
+            long horizonExits,
+            long boundedAttempts,
+            long boundedUses,
+            long slotsExamined,
+            long microOpsCompleted,
+            long wordsCompleted,
+            long deniedSlots,
+            long displayPreparations,
+            long paulaSlots,
+            long diskSlots,
+            long barriers,
+            long fallbacks,
+            long verifyMatches,
+            long verifyMismatches,
+            string firstMismatch)
+        {
+            Calls = calls;
+            IdleExits = idleExits;
+            HorizonExits = horizonExits;
+            BoundedAttempts = boundedAttempts;
+            BoundedUses = boundedUses;
+            SlotsExamined = slotsExamined;
+            MicroOpsCompleted = microOpsCompleted;
+            WordsCompleted = wordsCompleted;
+            DeniedSlots = deniedSlots;
+            DisplayPreparations = displayPreparations;
+            PaulaSlots = paulaSlots;
+            DiskSlots = diskSlots;
+            Barriers = barriers;
+            Fallbacks = fallbacks;
+            VerifyMatches = verifyMatches;
+            VerifyMismatches = verifyMismatches;
+            FirstMismatch = firstMismatch;
+        }
+
+        public long Calls { get; }
+
+        public long IdleExits { get; }
+
+        public long HorizonExits { get; }
+
+        public long BoundedAttempts { get; }
+
+        public long BoundedUses { get; }
+
+        public long SlotsExamined { get; }
+
+        public long MicroOpsCompleted { get; }
+
+        public long WordsCompleted { get; }
+
+        public long DeniedSlots { get; }
+
+        public long DisplayPreparations { get; }
+
+        public long PaulaSlots { get; }
+
+        public long DiskSlots { get; }
+
+        public long Barriers { get; }
+
+        public long Fallbacks { get; }
+
+        public long VerifyMatches { get; }
+
+        public long VerifyMismatches { get; }
+
+        public string FirstMismatch { get; }
+    }
+
     internal readonly struct BlitterSpecializationCounters
     {
         public BlitterSpecializationCounters(
@@ -503,6 +586,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         public AmigaBlitterSnapshot(
             bool busy,
             bool zero,
+            ushort bltcon0,
+            ushort bltcon1,
             long currentCycle,
             uint sourceA,
             uint sourceB,
@@ -517,10 +602,13 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             long lastDmaCycle,
             int completedMicroOps,
             BlitterSpecializationCounters specializationCounters,
+            BlitterAdvanceCounters advanceCounters,
             BlitterPatternEntry[] topPatterns)
         {
             Busy = busy;
             Zero = zero;
+            Bltcon0 = bltcon0;
+            Bltcon1 = bltcon1;
             CurrentCycle = currentCycle;
             SourceA = sourceA;
             SourceB = sourceB;
@@ -535,12 +623,17 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             LastDmaCycle = lastDmaCycle;
             CompletedMicroOps = completedMicroOps;
             SpecializationCounters = specializationCounters;
+            AdvanceCounters = advanceCounters;
             TopPatterns = topPatterns;
         }
 
         public bool Busy { get; }
 
         public bool Zero { get; }
+
+        public ushort Bltcon0 { get; }
+
+        public ushort Bltcon1 { get; }
 
         public long CurrentCycle { get; }
 
@@ -569,6 +662,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         public int CompletedMicroOps { get; }
 
         public BlitterSpecializationCounters SpecializationCounters { get; }
+
+        public BlitterAdvanceCounters AdvanceCounters { get; }
 
         public BlitterPatternEntry[] TopPatterns { get; }
     }
@@ -732,9 +827,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private const ushort Bltcon1LineAul = 0x0004;
         private const ushort Bltcon1LineSign = 0x0040;
         private const ushort BltSize = 0x058;
+        private const ushort Bltcon0Low = 0x05A;
         private const ushort BltSizeVertical = 0x05C;
         private const ushort BltSizeHorizontal = 0x05E;
         private const int LegacyMaximumWidthWords = 64;
+        private const int BOnlyFinalPipelineDrainSlots = 8;
         private const int LegacyMaximumHeight = 1024;
         private const int EcsMaximumWidthWords = 2048;
         private const int EcsMaximumHeight = 32768;
@@ -802,6 +899,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private bool _fillExclusive;
         private bool _fillCarryInitial;
         private bool _fillCarry;
+        private int _areaWordCycles = 4;
         private int _lineIndex;
         private int _lineLength;
         private int _lineBit;
@@ -817,6 +915,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private int _lineDestinationRowStride;
         private int _lineBPatternStride;
         private long _lastDmaCycle;
+        private long _lastCompletionCycle;
+        private readonly List<long> _completionCycles = new List<long>();
         private int _completedMicroOps;
         private bool _completionPending;
         private ulong _wakeVersion;
@@ -834,6 +934,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private BlitterDmaRollbackSnapshot _dmaRollbackSnapshot;
         private bool _dmaRollbackSnapshotActive;
         private bool _areaMicroOpActive;
+        private bool _areaMicroOpOwnedByBoundedAdvance;
         private int _areaMicroOpIndex;
         private long _areaMicroOpStepStart;
         private long _areaMicroOpStepEnd;
@@ -847,7 +948,18 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private ushort _areaMicroOpOutput;
         private bool _areaMicroOpOutputReady;
         private bool _areaMicroOpFinalWord;
+        private bool _lineMicroOpActive;
+        private int _lineMicroOpIndex;
+        private int _lineMicroOpCount;
+        private long _lineMicroOpStepEnd;
+        private long _lineMicroOpNextReadCycle;
+        private long _lineMicroOpNextCycle;
+        private ushort _lineMicroOpSourceC;
+        private ushort _lineMicroOpOutput;
+        private bool _lineMicroOpOutputReady;
+        private bool _lineMicroOpDraw;
         private long _cpuWaitExactSlotCycle = -1;
+        private bool _orderedSlotDisplayPrepared;
         private bool _areaSlotQueueEnabled;
         private int _areaSlotQueueOpCount;
         private BlitterSlotQueueKind _areaSlotQueueKind;
@@ -864,12 +976,35 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private long _dOnlyRowWords;
         private long _aToDRowWords;
         private long _rowPipelineFallbacks;
+        private BlitterAdvanceMode _advanceMode;
+        private bool _boundedFixedSlotExecutionEnabled;
+        private bool _boundedExtendedModesEnabled;
+        private BlitterFixedSlotImageCursor _boundedFixedSlotImageCursor;
+        private bool _advanceProfilingEnabled;
+        private long _advanceCalls;
+        private long _advanceIdleExits;
+        private long _advanceHorizonExits;
+        private long _advanceBoundedAttempts;
+        private long _advanceBoundedUses;
+        private long _advanceSlotsExamined;
+        private long _advanceMicroOpsCompleted;
+        private long _advanceWordsCompleted;
+        private long _advanceDeniedSlots;
+        private long _advanceDisplayPreparations;
+        private long _advancePaulaSlots;
+        private long _advanceDiskSlots;
+        private long _advanceBarriers;
+        private long _advanceFallbacks;
+        private long _advanceVerifyMatches;
+        private long _advanceVerifyMismatches;
+        private string _advanceFirstMismatch = string.Empty;
 
         public Blitter(AmigaBus bus, bool enableSpecialization = false)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _specializationEnabled = enableSpecialization;
             _patternLoggingEnabled = false;
+            _advanceMode = BlitterAdvanceMode.Reference;
         }
 
         public ushort DmaconStatusBits
@@ -960,6 +1095,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _lineDestinationRowStride = 0;
             _lineBPatternStride = 0;
             _lastDmaCycle = 0;
+            _lastCompletionCycle = 0;
+            _completionCycles.Clear();
             _completedMicroOps = 0;
             _completionPending = false;
             _wakeVersion++;
@@ -974,9 +1111,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _sourceCLatch = default;
             _destinationDLatch = default;
             ClearAreaMicroOpState();
+            ClearLineMicroOpState();
             _areaSlotQueueEnabled = false;
             _areaSlotQueueOpCount = 0;
             _areaSlotQueueKind = BlitterSlotQueueKind.None;
+            _boundedFixedSlotImageCursor.Clear();
             _slotQueueAttempts = 0;
             _slotQueueEnabledBlits = 0;
             _slotQueueUnsupportedBlits = 0;
@@ -990,6 +1129,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _dOnlyRowWords = 0;
             _aToDRowWords = 0;
             _rowPipelineFallbacks = 0;
+            ResetAdvanceProfileCounters();
             _patternCounts.Clear();
         }
 
@@ -998,6 +1138,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             return new AmigaBlitterSnapshot(
                 _busy,
                 _zeroFlag,
+                _bltcon0,
+                _bltcon1,
                 _currentCycle,
                 _lineMode ? _sourceA : _workSourceA,
                 _workSourceB,
@@ -1012,8 +1154,65 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 _lastDmaCycle,
                 _completedMicroOps,
                 CaptureSpecializationCounters(),
+                CaptureAdvanceCounters(),
                 CaptureTopPatterns(8));
         }
+
+        internal BlitterAdvanceMode AdvanceMode
+        {
+            get => _advanceMode;
+            set => _advanceMode = value;
+        }
+
+        internal void SetBoundedFixedSlotExecutionEnabledForTest(bool enabled)
+            => _boundedFixedSlotExecutionEnabled = enabled;
+
+        internal void SetBoundedExtendedModesEnabledForTest(bool enabled)
+            => _boundedExtendedModesEnabled = enabled;
+
+        internal void SetAdvanceProfilingEnabled(bool enabled)
+            => _advanceProfilingEnabled = enabled;
+
+        internal void ResetAdvanceProfileCounters()
+        {
+            _advanceCalls = 0;
+            _advanceIdleExits = 0;
+            _advanceHorizonExits = 0;
+            _advanceBoundedAttempts = 0;
+            _advanceBoundedUses = 0;
+            _advanceSlotsExamined = 0;
+            _advanceMicroOpsCompleted = 0;
+            _advanceWordsCompleted = 0;
+            _advanceDeniedSlots = 0;
+            _advanceDisplayPreparations = 0;
+            _advancePaulaSlots = 0;
+            _advanceDiskSlots = 0;
+            _advanceBarriers = 0;
+            _advanceFallbacks = 0;
+            _advanceVerifyMatches = 0;
+            _advanceVerifyMismatches = 0;
+            _advanceFirstMismatch = string.Empty;
+        }
+
+        private BlitterAdvanceCounters CaptureAdvanceCounters()
+            => new BlitterAdvanceCounters(
+                _advanceCalls,
+                _advanceIdleExits,
+                _advanceHorizonExits,
+                _advanceBoundedAttempts,
+                _advanceBoundedUses,
+                _advanceSlotsExamined,
+                _advanceMicroOpsCompleted,
+                _advanceWordsCompleted,
+                _advanceDeniedSlots,
+                _advanceDisplayPreparations,
+                _advancePaulaSlots,
+                _advanceDiskSlots,
+                _advanceBarriers,
+                _advanceFallbacks,
+                _advanceVerifyMatches,
+                _advanceVerifyMismatches,
+                _advanceFirstMismatch);
 
         private BlitterSpecializationCounters CaptureSpecializationCounters()
         {
@@ -1048,18 +1247,20 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         {
             System.Diagnostics.Debug.Assert(cycle >= 0, "Blitter register write cycles must be non-negative.");
             offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
-            if ((offset is BltSizeVertical or BltSizeHorizontal) && !_bus.AgnusRegisters.IsEcs)
+            if ((offset is Bltcon0Low or BltSizeVertical or BltSizeHorizontal) &&
+                !_bus.AgnusRegisters.IsEcs)
             {
                 return;
             }
 
-            if (CustomRegisterScheduleClassifier.IsBlitterBusScheduleAffectingWrite(offset))
+            var impact = CustomRegisterScheduleClassifier.GetPotentialImpact(_bus.Chipset, offset) &
+                HardwareScheduleImpact.Blitter;
+            if (impact != HardwareScheduleImpact.None)
             {
-                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle);
+                _bus.NotifyCustomRegisterScheduleChanged(offset, cycle, impact);
             }
 
             var schedulerWake = CaptureSchedulerWakeSignature();
-            AdvanceTo(cycle);
             try
             {
                 if (offset == BltSize)
@@ -1118,6 +1319,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             {
                 case 0x040:
                     _bltcon0 = value;
+                    break;
+                case Bltcon0Low:
+                    _bltcon0 = (ushort)((_bltcon0 & 0xFF00) | (value & 0x00FF));
                     break;
                 case 0x042:
                     _bltcon1 = value;
@@ -1186,21 +1390,27 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 (offset >= 0x060 && offset <= 0x066);
         }
 
-        public void AdvanceTo(long targetCycle)
+        // The scheduler owns admission and calls this only after
+        // HasAdvanceWorkThrough(targetCycle) succeeds.
+        internal void ExecuteAdmittedWorkThrough(long targetCycle)
         {
             System.Diagnostics.Debug.Assert(targetCycle >= 0, "Blitter advance cycles must be non-negative.");
+            System.Diagnostics.Debug.Assert(_busy, "Admitted blitter work requires an active blit.");
+            System.Diagnostics.Debug.Assert(
+                HasAdvanceWorkThrough(targetCycle),
+                "Admitted blitter work must be due at the requested cycle.");
+            if (_advanceProfilingEnabled)
+            {
+                _advanceCalls++;
+            }
+
             var previousCycle = _currentCycle;
             var previousBusy = _busy;
             var previousCompletionPending = _completionPending;
             var schedulerWake = CaptureSchedulerWakeSignature();
+            var boundedAreaScope = default(BlitterDmaAdvanceScope);
             try
             {
-                if (!_busy)
-                {
-                    _currentCycle = Math.Max(_currentCycle, targetCycle);
-                    return;
-                }
-
                 while (_busy)
                 {
                     if (_completionPending)
@@ -1223,21 +1433,88 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     var stepEndCycle = GetCurrentStepEndCycle();
                     if (stepEndCycle > targetCycle)
                     {
+                        if (_advanceProfilingEnabled)
+                        {
+                            _advanceHorizonExits++;
+                        }
+
                         return;
                     }
 
                     if (_lineMode)
                     {
-                        StepLinePixel(targetCycle);
+                        if (_advanceMode == BlitterAdvanceMode.Bounded && CanUseBoundedLineMicroOps)
+                        {
+                            if (_advanceProfilingEnabled)
+                            {
+                                _advanceBoundedAttempts++;
+                            }
+
+                            if (!AdvanceBoundedLineMicroOpTo(targetCycle))
+                            {
+                                if (_advanceProfilingEnabled)
+                                {
+                                    _advanceFallbacks++;
+                                }
+
+                                return;
+                            }
+
+                            if (_advanceProfilingEnabled)
+                            {
+                                _advanceBoundedUses++;
+                            }
+                        }
+                        else
+                        {
+                            _boundedFixedSlotImageCursor.Clear();
+                            if (_advanceProfilingEnabled && _advanceMode != BlitterAdvanceMode.Reference)
+                            {
+                                _advanceBoundedAttempts++;
+                                _advanceFallbacks++;
+                            }
+
+                            StepLinePixel(targetCycle);
+                        }
+                    }
+                    else if (_advanceMode == BlitterAdvanceMode.Bounded && CanUseBoundedAreaMicroOps)
+                    {
+                        if (_advanceProfilingEnabled)
+                        {
+                            _advanceBoundedAttempts++;
+                        }
+
+                        if (!AdvanceBoundedAreaMicroOpTo(targetCycle, ref boundedAreaScope))
+                        {
+                            if (_advanceProfilingEnabled)
+                            {
+                                _advanceFallbacks++;
+                            }
+
+                            return;
+                        }
+
+                        if (_advanceProfilingEnabled)
+                        {
+                            _advanceBoundedUses++;
+                        }
                     }
                     else
                     {
+                        _boundedFixedSlotImageCursor.Clear();
+                        if (_advanceProfilingEnabled && _advanceMode != BlitterAdvanceMode.Reference)
+                        {
+                            _advanceBoundedAttempts++;
+                            _advanceFallbacks++;
+                        }
+
                         StepAreaWord(targetCycle);
                     }
                 }
             }
             finally
             {
+                RecordBoundedAdvanceScope(ref boundedAreaScope);
                 if (_currentCycle != previousCycle ||
                     _busy != previousBusy ||
                     _completionPending != previousCompletionPending)
@@ -1273,7 +1550,10 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
 
             var remainingWords = Math.Max(0, ((_height - _rowY - 1) * _widthWords) + (_widthWords - _wordX));
-            return _currentCycle + ((long)remainingWords * GetAreaWordCycles());
+            var finalPipelineDrain = IsBOnlyAreaBlit()
+                ? (long)BOnlyFinalPipelineDrainSlots * ChipSlotCycles
+                : 0;
+            return _currentCycle + ((long)remainingWords * GetAreaWordCycles()) + finalPipelineDrain;
         }
 
         public long? GetNextWakeCandidateCycle(long currentCycle, long targetCycle)
@@ -1297,6 +1577,29 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             return completionCycle <= currentCycle ? currentCycle + 1 : completionCycle;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool HasAdvanceWorkThrough(long targetCycle)
+        {
+            if (!_busy)
+            {
+                return false;
+            }
+
+            if (_completionPending)
+            {
+                return _currentCycle <= targetCycle;
+            }
+
+            // A disabled DMA blit still has to follow the caller's time horizon so
+            // re-enabling DMA cannot resume it in the past.
+            if (RequiresDmaForCurrentBlit() && !IsBlitterDmaEnabled())
+            {
+                return _currentCycle < targetCycle;
+            }
+
+            return GetCurrentStepEndCycle() <= targetCycle;
+        }
+
         private SchedulerWakeSignature CaptureSchedulerWakeSignature()
             => _busy
                 ? new SchedulerWakeSignature(_completionPending, GetPredictedCompletionCycle())
@@ -1310,19 +1613,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
         }
 
-        public long AdvanceThroughCpuStall(long requestedCycle)
-        {
-            if (!ShouldStallCpu())
-            {
-                return requestedCycle;
-            }
-
-            var releaseCycle = GetCurrentStepEndCycle();
-            AdvanceTo(releaseCycle);
-            return Math.Max(requestedCycle, _currentCycle);
-        }
-
         internal bool CpuStallActive => ShouldStallCpu();
+
+        internal long CpuStallReleaseCycle => ShouldStallCpu()
+            ? GetCurrentStepEndCycle()
+            : _currentCycle;
 
         internal long CurrentCycle => _currentCycle;
 
@@ -1336,6 +1631,31 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 (_useA || _useB || _useC || _useD) &&
                 RequiresDmaForCurrentBlit() &&
                 IsBlitterDmaEnabled());
+
+        private bool CanUseBoundedAreaMicroOps
+            => (_areaMicroOpActive && _areaMicroOpOwnedByBoundedAdvance) ||
+                (!_areaMicroOpActive &&
+                _busy &&
+                !_completionPending &&
+                !_lineMode &&
+                (_boundedExtendedModesEnabled || (!_fillEnabled && !_descending)) &&
+                _areaSlotQueueOpCount != 0 &&
+                RequiresDmaForCurrentBlit() &&
+                IsBlitterDmaEnabled() &&
+                (_boundedFixedSlotExecutionEnabled ||
+                    !_bus.RequiresCanonicalBlitterDisplayPreparation));
+
+        private bool CanUseBoundedLineMicroOps
+            => _boundedExtendedModesEnabled &&
+                !_lineMicroOpActive &&
+                _busy &&
+                !_completionPending &&
+                _lineMode &&
+                _useC &&
+                RequiresDmaForCurrentBlit() &&
+                IsBlitterDmaEnabled() &&
+                (_boundedFixedSlotExecutionEnabled ||
+                    !_bus.RequiresCanonicalBlitterDisplayPreparation);
 
         internal bool TryRunCpuWaitSlotScratch(
             AgnusHrmSlotEngine slots,
@@ -1452,6 +1772,27 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
         }
 
+        internal void AdvanceCpuWaitAreaMicroOpsBefore(long targetCycle)
+        {
+            var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, _currentCycle));
+            try
+            {
+                while (slotCycle < targetCycle &&
+                    _busy &&
+                    CanUseCpuWaitAreaMicroOps)
+                {
+                    _cpuWaitExactSlotCycle = slotCycle;
+                    AdvanceAreaMicroOpTo(slotCycle);
+
+                    slotCycle += ChipSlotCycles;
+                }
+            }
+            finally
+            {
+                _cpuWaitExactSlotCycle = -1;
+            }
+        }
+
         private void TriggerBlit(int widthWords, int height, long cycle)
         {
             if (_busy)
@@ -1470,7 +1811,6 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             System.Diagnostics.Debug.Assert(cycle >= 0, "Blitter start cycles must be non-negative.");
             System.Diagnostics.Debug.Assert(widthWords > 0, "Blitter width must be positive.");
             System.Diagnostics.Debug.Assert(height > 0, "Blitter height must be positive.");
-            AdvanceTo(cycle);
             if (_busy)
             {
                 return;
@@ -1482,11 +1822,13 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _busy = true;
             _completionPending = false;
             _lastDmaCycle = 0;
+            _lastCompletionCycle = 0;
             _completedMicroOps = 0;
             _areaSlotQueueEnabled = false;
             _areaSlotQueueOpCount = 0;
             _areaSlotQueueKind = BlitterSlotQueueKind.None;
             ClearAreaMicroOpState();
+            ClearLineMicroOpState();
             _currentCycle = _bus.NextChipSlotCycle(Math.Max(_currentCycle, cycle) + ChipSlotCycles);
             _bus.NotifyHardwareWorkScheduled(_currentCycle);
             _previousA = 0;
@@ -1531,6 +1873,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _fillExclusive = (_bltcon1 & Bltcon1ExclusiveFill) != 0;
             _fillCarryInitial = (_bltcon1 & Bltcon1FillCarryIn) != 0;
             _fillCarry = _fillCarryInitial;
+            _areaWordCycles = CalculateAreaWordCycles();
             _areaKernelState = new BlitterAreaKernelState
             {
                 PreviousA = _previousA,
@@ -1540,29 +1883,14 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _activeKernel = _specializationEnabled
                 ? _kernelCache.GetOrCreate(CreateAreaKernelKey())
                 : default;
+            BuildAreaMicroOpSequence();
             TryBuildAreaSlotQueue();
             RecordBlitterPattern();
         }
 
-        private void TryBuildAreaSlotQueue()
+        private void BuildAreaMicroOpSequence()
         {
-            _areaSlotQueueEnabled = false;
             _areaSlotQueueOpCount = 0;
-            _areaSlotQueueKind = BlitterSlotQueueKind.None;
-            if (!_specializationEnabled)
-            {
-                return;
-            }
-
-            _slotQueueAttempts++;
-            if (_lineMode ||
-                _fillEnabled ||
-                (!_useA && !_useB && !_useC && !_useD))
-            {
-                _slotQueueUnsupportedBlits++;
-                return;
-            }
-
             if (_useA)
             {
                 _areaSlotQueueOps[_areaSlotQueueOpCount++] = BlitterSlotQueueOp.ReadA;
@@ -1581,6 +1909,25 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             if (_useD)
             {
                 _areaSlotQueueOps[_areaSlotQueueOpCount++] = BlitterSlotQueueOp.WriteD;
+            }
+        }
+
+        private void TryBuildAreaSlotQueue()
+        {
+            _areaSlotQueueEnabled = false;
+            _areaSlotQueueKind = BlitterSlotQueueKind.None;
+            if (!_specializationEnabled)
+            {
+                return;
+            }
+
+            _slotQueueAttempts++;
+            if (_lineMode ||
+                _fillEnabled ||
+                _areaSlotQueueOpCount == 0)
+            {
+                _slotQueueUnsupportedBlits++;
+                return;
             }
 
             _areaSlotQueueEnabled = true;
@@ -1801,13 +2148,17 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             var rawA = _activeDataA;
             if (_useA)
             {
-                _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, nextReadCycle);
+                var requestCycle = nextReadCycle;
+                _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, requestCycle);
                 var access = _sourceALatch.BusAccess;
                 if (!TryConsumeSourceDmaLatch(ref _sourceALatch, out rawA))
                 {
                     return;
                 }
 
+                var stall = access.GrantedCycle - requestCycle;
+                stepEnd += stall;
+                nextCycle += stall;
                 nextReadCycle = access.CompletedCycle;
                 nextCycle = Math.Max(nextCycle, access.CompletedCycle);
             }
@@ -1815,13 +2166,17 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             var rawB = _activeDataB;
             if (_useB)
             {
-                _sourceBLatch = LoadSourceDmaLatch(BlitterDmaSource.B, ref _workSourceB, _step, nextReadCycle);
+                var requestCycle = nextReadCycle;
+                _sourceBLatch = LoadSourceDmaLatch(BlitterDmaSource.B, ref _workSourceB, _step, requestCycle);
                 var access = _sourceBLatch.BusAccess;
                 if (!TryConsumeSourceDmaLatch(ref _sourceBLatch, out rawB))
                 {
                     return;
                 }
 
+                var stall = access.GrantedCycle - requestCycle;
+                stepEnd += stall;
+                nextCycle += stall;
                 nextReadCycle = access.CompletedCycle;
                 nextCycle = Math.Max(nextCycle, access.CompletedCycle);
             }
@@ -1829,13 +2184,17 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             var rawC = _activeDataC;
             if (_useC)
             {
-                _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, ref _workSourceC, _step, nextReadCycle);
+                var requestCycle = nextReadCycle;
+                _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, ref _workSourceC, _step, requestCycle);
                 var access = _sourceCLatch.BusAccess;
                 if (!TryConsumeSourceDmaLatch(ref _sourceCLatch, out rawC))
                 {
                     return;
                 }
 
+                var stall = access.GrantedCycle - requestCycle;
+                stepEnd += stall;
+                nextCycle += stall;
                 _activeDataC = rawC;
                 nextReadCycle = access.CompletedCycle;
                 nextCycle = Math.Max(nextCycle, access.CompletedCycle);
@@ -1847,6 +2206,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             {
                 _zeroFlag = false;
             }
+
+            ExtendBOnlyInternalPhaseForRefresh(nextReadCycle, ref stepEnd, ref nextCycle);
 
             var internalCompletionCycle = Math.Max(stepEnd, nextReadCycle);
             if (_useD)
@@ -1905,11 +2266,389 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             return true;
         }
 
+        private bool AdvanceBoundedAreaMicroOpTo(
+            long targetCycle,
+            ref BlitterDmaAdvanceScope scope)
+        {
+            if (!_areaMicroOpActive && !BeginAreaMicroOpWord())
+            {
+                return false;
+            }
+
+            if (_areaMicroOpIndex >= GetAreaMicroOpCount())
+            {
+                if (_areaMicroOpNextCycle > targetCycle)
+                {
+                    return false;
+                }
+
+                FinishAreaMicroOpWord(targetCycle);
+                return true;
+            }
+
+            if (!_boundedFixedSlotExecutionEnabled)
+            {
+                return AdvanceAdmittedAreaMicroOpWord(targetCycle);
+            }
+
+            _areaMicroOpOwnedByBoundedAdvance = true;
+            scope.Initialize(GetAreaMicroOpRequestCycle(GetAreaMicroOp(_areaMicroOpIndex)));
+            var plannedGrantCycles = default(BlitterAreaWordGrantPlan);
+            if (!TryBuildBoundedAreaWordPlan(
+                    ref plannedGrantCycles,
+                    out var requiresOrderedDynamicDma))
+            {
+                _boundedFixedSlotImageCursor.Clear();
+                if (requiresOrderedDynamicDma)
+                {
+                    ResetBoundedFixedDmaScope(ref scope);
+                    return AdvanceBoundedAreaWordOrdered(targetCycle, ref scope);
+                }
+
+                scope.Barrier = true;
+                ResetBoundedFixedDmaScope(ref scope);
+                return AdvanceAdmittedAreaMicroOpWord(targetCycle);
+            }
+
+            while (_areaMicroOpIndex < GetAreaMicroOpCount())
+            {
+                var op = GetAreaMicroOp(_areaMicroOpIndex);
+                var requestCycle = GetAreaMicroOpRequestCycle(op);
+                var grantCycle = plannedGrantCycles.Get(_areaMicroOpIndex);
+                if (!PrepareBoundedFixedDmaSlot(
+                        grantCycle,
+                        ref scope,
+                        out var liveResult))
+                {
+                    _boundedFixedSlotImageCursor.Clear();
+                    if (liveResult == OcsCpuWaitLiveSlotResult.CopperBarrier)
+                    {
+                        scope.Barrier = true;
+                    }
+
+                    ResetBoundedFixedDmaScope(ref scope);
+                    return AdvanceAdmittedAreaMicroOpWord(targetCycle);
+                }
+
+                _cpuWaitExactSlotCycle = grantCycle;
+                _orderedSlotDisplayPrepared = true;
+                if (!ExecuteAreaMicroOp(op, requestCycle))
+                {
+                    RecordBoundedAdvanceDenial(op, requestCycle, grantCycle);
+                    _cpuWaitExactSlotCycle = -1;
+                    _orderedSlotDisplayPrepared = false;
+                    scope.Barrier = true;
+                    ResetBoundedFixedDmaScope(ref scope);
+                    return AdvanceAdmittedAreaMicroOpWord(targetCycle);
+                }
+
+                _cpuWaitExactSlotCycle = -1;
+                _orderedSlotDisplayPrepared = false;
+                _areaMicroOpIndex++;
+            }
+
+            FinishAreaMicroOpWord(targetCycle);
+            return true;
+        }
+
+        private bool AdvanceBoundedAreaWordOrdered(
+            long targetCycle,
+            ref BlitterDmaAdvanceScope scope)
+        {
+            while (_areaMicroOpIndex < GetAreaMicroOpCount())
+            {
+                var op = GetAreaMicroOp(_areaMicroOpIndex);
+                var requestCycle = GetAreaMicroOpRequestCycle(op);
+                var committed = false;
+                for (var attempt = 0; attempt < 512; attempt++)
+                {
+                    if (!TryPrepareBoundedOrderedDmaSlot(
+                            GetAreaMicroOpAddress(op),
+                            requestCycle,
+                            op == BlitterSlotQueueOp.WriteD,
+                            ref scope,
+                            out var grantCycle))
+                    {
+                        return FallBackBoundedAreaWord(
+                            targetCycle,
+                            ref scope,
+                            barrier: true);
+                    }
+
+                    _cpuWaitExactSlotCycle = grantCycle;
+                    _orderedSlotDisplayPrepared = true;
+                    if (ExecuteAreaMicroOp(op, requestCycle))
+                    {
+                        _cpuWaitExactSlotCycle = -1;
+                        _orderedSlotDisplayPrepared = false;
+                        _areaMicroOpIndex++;
+                        committed = true;
+                        break;
+                    }
+
+                    RecordBoundedAdvanceDenial(op, requestCycle, grantCycle);
+                    _cpuWaitExactSlotCycle = -1;
+                    _orderedSlotDisplayPrepared = false;
+                }
+
+                if (!committed)
+                {
+                    return FallBackBoundedAreaWord(
+                        targetCycle,
+                        ref scope,
+                        barrier: true);
+                }
+            }
+
+            FinishAreaMicroOpWord(targetCycle);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private bool FallBackBoundedAreaWord(
+            long targetCycle,
+            ref BlitterDmaAdvanceScope scope,
+            bool barrier)
+        {
+            _cpuWaitExactSlotCycle = -1;
+            _orderedSlotDisplayPrepared = false;
+            _boundedFixedSlotImageCursor.Clear();
+            scope.Barrier |= barrier;
+            ResetBoundedFixedDmaScope(ref scope);
+            return AdvanceAdmittedAreaMicroOpWord(targetCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ResetBoundedFixedDmaScope(ref BlitterDmaAdvanceScope scope)
+        {
+            scope.Initialized = false;
+            scope.CurrentSlot = 0;
+        }
+
+        private void RecordBoundedAdvanceScope(ref BlitterDmaAdvanceScope scope)
+        {
+            if (!_advanceProfilingEnabled)
+            {
+                return;
+            }
+
+            _advanceSlotsExamined += scope.SlotsExamined;
+            _advanceDisplayPreparations += scope.DisplayPreparations;
+            _advancePaulaSlots += scope.PaulaSlots;
+            _advanceDiskSlots += scope.DiskSlots;
+            if (scope.Barrier)
+            {
+                _advanceBarriers++;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void RecordBoundedAdvanceDenial(
+            BlitterSlotQueueOp op,
+            long requestedCycle,
+            long plannedGrantCycle)
+        {
+            if (!_advanceProfilingEnabled || _advanceFirstMismatch.Length != 0)
+            {
+                return;
+            }
+
+            _advanceFirstMismatch =
+                $"bounded-denied/op={op}/req={requestedCycle}/planned={plannedGrantCycle}/" +
+                _bus.DescribeBlitterFixedSlotPrediction(plannedGrantCycle);
+        }
+
+        private bool TryBuildBoundedAreaWordPlan(
+            ref BlitterAreaWordGrantPlan grantCycles,
+            out bool requiresOrderedDynamicDma)
+        {
+            requiresOrderedDynamicDma = false;
+            var nextReadCycle = _areaMicroOpNextReadCycle;
+            var stepEndCycle = _areaMicroOpStepEnd;
+            var lastCompletionCycle = _areaMicroOpStepStart;
+            for (var index = _areaMicroOpIndex; index < GetAreaMicroOpCount(); index++)
+            {
+                var op = GetAreaMicroOp(index);
+                var requestCycle = op == BlitterSlotQueueOp.WriteD
+                    ? Math.Max(nextReadCycle, stepEndCycle - ChipSlotCycles)
+                    : nextReadCycle;
+                if (!_bus.TryPredictBlitterFixedSlotGrantCandidate(
+                        GetAreaMicroOpAddress(op),
+                        requestCycle,
+                        op == BlitterSlotQueueOp.WriteD,
+                        ref _boundedFixedSlotImageCursor,
+                        out var grantCycle,
+                        out _,
+                        out _))
+                {
+                    return false;
+                }
+
+                grantCycles.Set(index, grantCycle);
+                lastCompletionCycle = grantCycle + ChipSlotCycles;
+                if (op != BlitterSlotQueueOp.WriteD)
+                {
+                    var stallCycles = grantCycle - requestCycle;
+                    stepEndCycle += stallCycles;
+                    nextReadCycle = lastCompletionCycle;
+                }
+            }
+
+            if (!_bus.CanAdvanceBlitterFixedDisplayScopeThrough(lastCompletionCycle))
+            {
+                return false;
+            }
+
+            var hasDynamicDma = _bus.HasBlitterDynamicDmaWorkThrough(lastCompletionCycle);
+            requiresOrderedDynamicDma = hasDynamicDma &&
+                !_bus.RequiresCanonicalBlitterDisplayPreparation;
+            return !hasDynamicDma;
+        }
+
+        private bool PrepareBoundedFixedDmaSlot(
+            long grantedCycle,
+            ref BlitterDmaAdvanceScope scope,
+            out OcsCpuWaitLiveSlotResult liveResult)
+        {
+            var firstExaminedSlot = Math.Max(scope.CurrentSlot, grantedCycle);
+            if (grantedCycle >= firstExaminedSlot)
+            {
+                scope.SlotsExamined +=
+                    ((grantedCycle - firstExaminedSlot) / ChipSlotCycles) + 1;
+            }
+
+            liveResult = _bus.AdvanceFixedDmaBeforeBlitterSlotInScope(
+                grantedCycle,
+                out var bitplaneFetches,
+                out var spriteFetches);
+            if (bitplaneFetches != 0 || spriteFetches != 0)
+            {
+                scope.DisplayPreparations++;
+            }
+
+            scope.CurrentSlot = grantedCycle + ChipSlotCycles;
+            return liveResult != OcsCpuWaitLiveSlotResult.CopperBarrier;
+        }
+
+        private bool TryPrepareBoundedOrderedDmaSlot(
+            uint address,
+            long requestedCycle,
+            bool isWrite,
+            ref BlitterDmaAdvanceScope scope,
+            out long grantedCycle)
+        {
+            if (!_bus.TryPredictBlitterFixedSlotGrantCandidate(
+                    address,
+                    requestedCycle,
+                    isWrite,
+                    ref _boundedFixedSlotImageCursor,
+                    out grantedCycle,
+                    out _,
+                    out _))
+            {
+                scope.Barrier = true;
+                return false;
+            }
+
+            if (!_bus.CanAdvanceBlitterFixedDisplayScopeThrough(grantedCycle + ChipSlotCycles))
+            {
+                scope.Barrier = true;
+                return false;
+            }
+
+            var firstExaminedSlot = Math.Max(
+                scope.CurrentSlot,
+                AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle)));
+            if (grantedCycle >= firstExaminedSlot)
+            {
+                scope.SlotsExamined +=
+                    ((grantedCycle - firstExaminedSlot) / ChipSlotCycles) + 1;
+            }
+
+            var liveResult = _bus.AdvanceOrderedDmaBeforeBlitterSlot(
+                grantedCycle,
+                out var bitplaneFetches,
+                out var spriteFetches,
+                out var advancedPaula,
+                out var advancedDisk);
+            if (advancedPaula)
+            {
+                scope.PaulaSlots++;
+            }
+
+            if (advancedDisk)
+            {
+                scope.DiskSlots++;
+            }
+
+            if (bitplaneFetches != 0 || spriteFetches != 0)
+            {
+                scope.DisplayPreparations++;
+            }
+
+            scope.CurrentSlot = grantedCycle + ChipSlotCycles;
+            if (liveResult != OcsCpuWaitLiveSlotResult.CopperBarrier)
+            {
+                return true;
+            }
+
+            scope.Barrier = true;
+            return false;
+        }
+
+        private uint GetAreaMicroOpAddress(BlitterSlotQueueOp op)
+            => GetEffectiveBlitterAddress(op switch
+            {
+                BlitterSlotQueueOp.ReadA => _workSourceA,
+                BlitterSlotQueueOp.ReadB => _workSourceB,
+                BlitterSlotQueueOp.ReadC => _workSourceC,
+                BlitterSlotQueueOp.WriteD => _workDestinationD,
+                _ => 0
+            });
+
+        private bool AdvanceAdmittedAreaMicroOpWord(long targetCycle)
+        {
+            // AdvanceTo has already admitted this word from its nominal step end.
+            // Scalar StepAreaWord then completes every DMA operation, even when
+            // contention pushes a later request beyond targetCycle.
+            while (true)
+            {
+                if (!_areaMicroOpActive && !BeginAreaMicroOpWord())
+                {
+                    return false;
+                }
+
+                while (_areaMicroOpIndex < GetAreaMicroOpCount())
+                {
+                    var op = GetAreaMicroOp(_areaMicroOpIndex);
+                    var requestCycle = GetAreaMicroOpRequestCycle(op);
+                    if (!ExecuteAreaMicroOp(op, requestCycle))
+                    {
+                        break;
+                    }
+
+                    _areaMicroOpIndex++;
+                }
+
+                if (_areaMicroOpActive && _areaMicroOpIndex >= GetAreaMicroOpCount())
+                {
+                    FinishAreaMicroOpWord(targetCycle);
+                    return true;
+                }
+
+                // A denied generic reservation rolls the word back exactly like
+                // StepAreaWord. Retry only when the scalar outer loop would still
+                // admit the word at the updated cycle.
+                if (_areaMicroOpActive || GetCurrentStepEndCycle() > targetCycle)
+                {
+                    return false;
+                }
+            }
+        }
+
         private bool BeginAreaMicroOpWord()
         {
             if (_lineMode ||
-                _fillEnabled ||
-                _descending ||
                 (! _useA && !_useB && !_useC && !_useD))
             {
                 return false;
@@ -1917,9 +2656,16 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
             BeginDmaRollbackSnapshot();
             _areaMicroOpActive = true;
+            _areaMicroOpOwnedByBoundedAdvance = false;
             _areaMicroOpIndex = 0;
             _areaMicroOpStepStart = _currentCycle;
             _areaMicroOpStepEnd = _areaMicroOpStepStart + GetAreaWordCycles();
+            if (_fillEnabled)
+            {
+                _areaMicroOpStepEnd += GetAreaFillIdlePhaseDelay(
+                    _areaMicroOpStepStart,
+                    _areaMicroOpStepEnd);
+            }
             _areaMicroOpNextReadCycle = _areaMicroOpStepStart;
             _areaMicroOpNextCycle = _areaMicroOpStepEnd;
             _areaMicroOpInternalCompletionCycle = _areaMicroOpStepEnd;
@@ -1934,65 +2680,10 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         }
 
         private int GetAreaMicroOpCount()
-        {
-            var count = 0;
-            if (_useA)
-            {
-                count++;
-            }
-
-            if (_useB)
-            {
-                count++;
-            }
-
-            if (_useC)
-            {
-                count++;
-            }
-
-            if (_useD)
-            {
-                count++;
-            }
-
-            return count;
-        }
+            => _areaSlotQueueOpCount;
 
         private BlitterSlotQueueOp GetAreaMicroOp(int index)
-        {
-            if (_useA)
-            {
-                if (index == 0)
-                {
-                    return BlitterSlotQueueOp.ReadA;
-                }
-
-                index--;
-            }
-
-            if (_useB)
-            {
-                if (index == 0)
-                {
-                    return BlitterSlotQueueOp.ReadB;
-                }
-
-                index--;
-            }
-
-            if (_useC)
-            {
-                if (index == 0)
-                {
-                    return BlitterSlotQueueOp.ReadC;
-                }
-
-                index--;
-            }
-
-            return BlitterSlotQueueOp.WriteD;
-        }
+            => _areaSlotQueueOps[index];
 
         private long GetAreaMicroOpRequestCycle(BlitterSlotQueueOp op)
             => op == BlitterSlotQueueOp.WriteD
@@ -2012,6 +2703,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                         return false;
                     }
 
+                    AccountAreaMicroOpReadWait(requestCycle, access.CompletedCycle);
                     _areaMicroOpNextReadCycle = access.CompletedCycle;
                     _areaMicroOpNextCycle = Math.Max(_areaMicroOpNextCycle, access.CompletedCycle);
                     return true;
@@ -2026,6 +2718,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                         return false;
                     }
 
+                    AccountAreaMicroOpReadWait(requestCycle, access.CompletedCycle);
                     _areaMicroOpNextReadCycle = access.CompletedCycle;
                     _areaMicroOpNextCycle = Math.Max(_areaMicroOpNextCycle, access.CompletedCycle);
                     return true;
@@ -2041,6 +2734,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     }
 
                     _activeDataC = _areaMicroOpRawC;
+                    AccountAreaMicroOpReadWait(requestCycle, access.CompletedCycle);
                     _areaMicroOpNextReadCycle = access.CompletedCycle;
                     _areaMicroOpNextCycle = Math.Max(_areaMicroOpNextCycle, access.CompletedCycle);
                     return true;
@@ -2062,6 +2756,19 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 default:
                     return false;
             }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void AccountAreaMicroOpReadWait(long requestedCycle, long completedCycle)
+        {
+            var waitCycles = completedCycle - (requestedCycle + ChipSlotCycles);
+            if (waitCycles <= 0)
+            {
+                return;
+            }
+
+            _areaMicroOpStepEnd += waitCycles;
+            _areaMicroOpNextCycle += waitCycles;
         }
 
         private void EnsureAreaMicroOpOutputReady()
@@ -2087,6 +2794,10 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private void FinishAreaMicroOpWord(long targetCycle)
         {
+            ExtendBOnlyInternalPhaseForRefresh(
+                _areaMicroOpNextReadCycle,
+                ref _areaMicroOpStepEnd,
+                ref _areaMicroOpNextCycle);
             if (!_areaMicroOpOutputReady)
             {
                 EnsureAreaMicroOpOutputReady();
@@ -2103,19 +2814,315 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private void ClearAreaMicroOpState()
         {
             _areaMicroOpActive = false;
+            _areaMicroOpOwnedByBoundedAdvance = false;
             _areaMicroOpIndex = 0;
-            _areaMicroOpStepStart = 0;
-            _areaMicroOpStepEnd = 0;
-            _areaMicroOpNextReadCycle = 0;
-            _areaMicroOpNextCycle = 0;
-            _areaMicroOpInternalCompletionCycle = 0;
-            _areaMicroOpRawA = 0;
-            _areaMicroOpRawB = 0;
-            _areaMicroOpRawC = 0;
-            _areaMicroOpMask = 0;
-            _areaMicroOpOutput = 0;
-            _areaMicroOpOutputReady = false;
-            _areaMicroOpFinalWord = false;
+        }
+
+        private bool AdvanceBoundedLineMicroOpTo(long targetCycle)
+        {
+            if (!_lineMicroOpActive && !BeginLineMicroOpPixel())
+            {
+                return false;
+            }
+
+            if (_lineMicroOpIndex >= _lineMicroOpCount)
+            {
+                if (_lineMicroOpNextCycle > targetCycle)
+                {
+                    return false;
+                }
+
+                FinishLineMicroOpPixel(targetCycle);
+                return true;
+            }
+
+            if (!_boundedFixedSlotExecutionEnabled)
+            {
+                return AdvanceAdmittedLineMicroOpPixel(targetCycle);
+            }
+
+            var scope = new BlitterDmaAdvanceScope(
+                GetLineMicroOpRequestCycle(_lineMicroOpIndex));
+            try
+            {
+                while (_lineMicroOpIndex < _lineMicroOpCount)
+                {
+                    var requestCycle = GetLineMicroOpRequestCycle(_lineMicroOpIndex);
+                    var write = _lineMicroOpIndex == _lineMicroOpCount - 1;
+                    if (!TryPrepareBoundedDmaSlot(
+                            GetLineMicroOpAddress(_lineMicroOpIndex),
+                            requestCycle,
+                            write,
+                            ref scope,
+                            out var grantCycle))
+                    {
+                        return AdvanceAdmittedLineMicroOpPixel(targetCycle);
+                    }
+
+                    _cpuWaitExactSlotCycle = grantCycle;
+                    _orderedSlotDisplayPrepared = true;
+                    if (!ExecuteLineMicroOp(_lineMicroOpIndex, requestCycle))
+                    {
+                        _cpuWaitExactSlotCycle = -1;
+                        _orderedSlotDisplayPrepared = false;
+                        scope.Barrier = true;
+                        return AdvanceAdmittedLineMicroOpPixel(targetCycle);
+                    }
+
+                    _cpuWaitExactSlotCycle = -1;
+                    _orderedSlotDisplayPrepared = false;
+                    _lineMicroOpIndex++;
+                }
+
+                FinishLineMicroOpPixel(targetCycle);
+                return true;
+            }
+            finally
+            {
+                _cpuWaitExactSlotCycle = -1;
+                _orderedSlotDisplayPrepared = false;
+                if (_advanceProfilingEnabled)
+                {
+                    _advanceSlotsExamined += scope.SlotsExamined;
+                    _advanceDisplayPreparations += scope.DisplayPreparations;
+                    _advancePaulaSlots += scope.PaulaSlots;
+                    _advanceDiskSlots += scope.DiskSlots;
+                    if (scope.Barrier)
+                    {
+                        _advanceBarriers++;
+                    }
+                }
+            }
+        }
+
+        private uint GetLineMicroOpAddress(int index)
+        {
+            if (_useB && index < 2)
+            {
+                return GetEffectiveBlitterAddress(_workSourceB);
+            }
+
+            var sourceCIndex = _useB ? 2 : 0;
+            if (index == sourceCIndex)
+            {
+                return GetEffectiveBlitterAddress(_workSourceC);
+            }
+
+            return GetEffectiveBlitterAddress(_lineIndex == 0
+                ? _workDestinationD
+                : _workSourceC);
+        }
+
+        private bool AdvanceAdmittedLineMicroOpPixel(long targetCycle)
+        {
+            while (true)
+            {
+                if (!_lineMicroOpActive && !BeginLineMicroOpPixel())
+                {
+                    return false;
+                }
+
+                while (_lineMicroOpIndex < _lineMicroOpCount)
+                {
+                    var requestCycle = GetLineMicroOpRequestCycle(_lineMicroOpIndex);
+                    if (!ExecuteLineMicroOp(_lineMicroOpIndex, requestCycle))
+                    {
+                        break;
+                    }
+
+                    _lineMicroOpIndex++;
+                }
+
+                if (_lineMicroOpActive && _lineMicroOpIndex >= _lineMicroOpCount)
+                {
+                    FinishLineMicroOpPixel(targetCycle);
+                    return true;
+                }
+
+                if (_lineMicroOpActive || GetCurrentStepEndCycle() > targetCycle)
+                {
+                    return false;
+                }
+            }
+        }
+
+        private bool AdvanceLineMicroOpTo(long targetCycle)
+        {
+            if (!_lineMicroOpActive && !BeginLineMicroOpPixel())
+            {
+                return false;
+            }
+
+            if (_lineMicroOpIndex < _lineMicroOpCount)
+            {
+                var requestCycle = GetLineMicroOpRequestCycle(_lineMicroOpIndex);
+                if (requestCycle > targetCycle || !ExecuteLineMicroOp(_lineMicroOpIndex, requestCycle))
+                {
+                    return false;
+                }
+
+                _lineMicroOpIndex++;
+                return true;
+            }
+
+            if (_lineMicroOpNextCycle > targetCycle)
+            {
+                return false;
+            }
+
+            FinishLineMicroOpPixel(targetCycle);
+            return true;
+        }
+
+        private bool BeginLineMicroOpPixel()
+        {
+            if (!_lineMode || !_useC)
+            {
+                return false;
+            }
+
+            BeginDmaRollbackSnapshot();
+            _lineMicroOpActive = true;
+            _lineMicroOpIndex = 0;
+            _lineMicroOpStepEnd = _currentCycle + GetLinePixelCycles();
+            _lineMicroOpNextReadCycle = _useB ? _currentCycle : _currentCycle + ChipSlotCycles;
+            _lineMicroOpNextCycle = _lineMicroOpStepEnd;
+            _lineMicroOpSourceC = 0;
+            _lineMicroOpOutput = 0;
+            _lineMicroOpOutputReady = false;
+            _lineMicroOpDraw = !_lineSingleDot || _lineY != _lineLastDrawnY;
+            _lineMicroOpCount = _lineMicroOpDraw ? (_useB ? 4 : 2) : 0;
+            return true;
+        }
+
+        private long GetLineMicroOpRequestCycle(int index)
+            => index == _lineMicroOpCount - 1
+                ? Math.Max(_lineMicroOpNextReadCycle, _lineMicroOpStepEnd - ChipSlotCycles)
+                : _lineMicroOpNextReadCycle;
+
+        private bool ExecuteLineMicroOp(int index, long requestCycle)
+        {
+            if (_useB && index < 2)
+            {
+                _sourceBLatch = LoadLineBPatternLatch(requestCycle);
+                var access = _sourceBLatch.BusAccess;
+                if (!TryConsumeSourceDmaLatch(
+                        ref _sourceBLatch,
+                        out var value))
+                {
+                    return false;
+                }
+
+                if (index == 1)
+                {
+                    _dataB = value;
+                    _workSourceB = _bus.AddChipDmaPointerOffset(_workSourceB, _lineBPatternStride);
+                }
+
+                AccountLineMicroOpReadWait(requestCycle, access.CompletedCycle);
+                _lineMicroOpNextReadCycle = access.CompletedCycle;
+                _lineMicroOpNextCycle = Math.Max(_lineMicroOpNextCycle, access.CompletedCycle);
+                return true;
+            }
+
+            var sourceCIndex = _useB ? 2 : 0;
+            if (index == sourceCIndex)
+            {
+                _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, _workSourceC, requestCycle);
+                var access = _sourceCLatch.BusAccess;
+                if (!TryConsumeSourceDmaLatch(ref _sourceCLatch, out _lineMicroOpSourceC))
+                {
+                    return false;
+                }
+
+                AccountLineMicroOpReadWait(requestCycle, access.CompletedCycle);
+                _lineMicroOpNextReadCycle = access.CompletedCycle;
+                _lineMicroOpNextCycle = Math.Max(_lineMicroOpNextCycle, access.CompletedCycle);
+                return true;
+            }
+
+            EnsureLineMicroOpOutputReady();
+            var destination = _lineIndex == 0 ? _workDestinationD : _workSourceC;
+            _destinationDLatch = CreateDestinationDmaLatch(_lineMicroOpOutput);
+            if (!TryCommitDestinationDmaLatch(
+                    destination,
+                    ref _destinationDLatch,
+                    requestCycle,
+                    out var write))
+            {
+                return false;
+            }
+
+            _lineMicroOpNextCycle = Math.Max(_lineMicroOpNextCycle, write.CompletedCycle);
+            _lineLastDrawnY = _lineY;
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void AccountLineMicroOpReadWait(long requestedCycle, long completedCycle)
+        {
+            var waitCycles = completedCycle - (requestedCycle + ChipSlotCycles);
+            if (waitCycles <= 0)
+            {
+                return;
+            }
+
+            _lineMicroOpStepEnd += waitCycles;
+            _lineMicroOpNextCycle += waitCycles;
+        }
+
+        private void EnsureLineMicroOpOutputReady()
+        {
+            if (_lineMicroOpOutputReady)
+            {
+                return;
+            }
+
+            var lineMask = RotateRight(_dataA, _lineBit);
+            var textureBit = (_dataB & (0x8000 >> ((_shiftB + _lineIndex) & 0x0F))) != 0;
+            var texture = textureBit ? (ushort)0xFFFF : (ushort)0;
+            _lineMicroOpOutput = ExecuteLineFromSourceLatches(lineMask, texture, _lineMicroOpSourceC);
+            if (_lineMicroOpOutput != 0)
+            {
+                _zeroFlag = false;
+            }
+
+            _lineMicroOpOutputReady = true;
+        }
+
+        private void FinishLineMicroOpPixel(long targetCycle)
+        {
+            _currentCycle = _lineMicroOpNextCycle;
+            ClearLineMicroOpState();
+            EndDmaRollbackSnapshot();
+            if (_advanceProfilingEnabled)
+            {
+                _advanceWordsCompleted++;
+            }
+
+            _lineIndex++;
+            _rowY = _lineIndex;
+            if (_lineIndex >= _lineLength)
+            {
+                CompleteBlit(deferInterrupt: _currentCycle > targetCycle);
+                return;
+            }
+
+            StepLineAddress();
+        }
+
+        private void ClearLineMicroOpState()
+        {
+            _lineMicroOpActive = false;
+            _lineMicroOpIndex = 0;
+            _lineMicroOpCount = 0;
+            _lineMicroOpStepEnd = 0;
+            _lineMicroOpNextReadCycle = 0;
+            _lineMicroOpNextCycle = 0;
+            _lineMicroOpSourceC = 0;
+            _lineMicroOpOutput = 0;
+            _lineMicroOpOutputReady = false;
+            _lineMicroOpDraw = false;
         }
 
         private void StepAreaWordFromSlotQueue(long targetCycle)
@@ -2152,13 +3159,17 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 {
                     case BlitterSlotQueueOp.ReadA:
                     {
-                        _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, nextReadCycle);
+                        var requestCycle = nextReadCycle;
+                        _sourceALatch = LoadSourceDmaLatch(BlitterDmaSource.A, ref _workSourceA, _step, requestCycle);
                         var access = _sourceALatch.BusAccess;
                         if (!TryConsumeSourceDmaLatch(ref _sourceALatch, out rawA))
                         {
                             return;
                         }
 
+                        var stall = access.GrantedCycle - requestCycle;
+                        stepEnd += stall;
+                        nextCycle += stall;
                         nextReadCycle = access.CompletedCycle;
                         nextCycle = Math.Max(nextCycle, access.CompletedCycle);
                         _slotQueueCommittedOps++;
@@ -2167,13 +3178,17 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
                     case BlitterSlotQueueOp.ReadB:
                     {
-                        _sourceBLatch = LoadSourceDmaLatch(BlitterDmaSource.B, ref _workSourceB, _step, nextReadCycle);
+                        var requestCycle = nextReadCycle;
+                        _sourceBLatch = LoadSourceDmaLatch(BlitterDmaSource.B, ref _workSourceB, _step, requestCycle);
                         var access = _sourceBLatch.BusAccess;
                         if (!TryConsumeSourceDmaLatch(ref _sourceBLatch, out rawB))
                         {
                             return;
                         }
 
+                        var stall = access.GrantedCycle - requestCycle;
+                        stepEnd += stall;
+                        nextCycle += stall;
                         nextReadCycle = access.CompletedCycle;
                         nextCycle = Math.Max(nextCycle, access.CompletedCycle);
                         _slotQueueCommittedOps++;
@@ -2182,13 +3197,17 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
                     case BlitterSlotQueueOp.ReadC:
                     {
-                        _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, ref _workSourceC, _step, nextReadCycle);
+                        var requestCycle = nextReadCycle;
+                        _sourceCLatch = LoadSourceDmaLatch(BlitterDmaSource.C, ref _workSourceC, _step, requestCycle);
                         var access = _sourceCLatch.BusAccess;
                         if (!TryConsumeSourceDmaLatch(ref _sourceCLatch, out rawC))
                         {
                             return;
                         }
 
+                        var stall = access.GrantedCycle - requestCycle;
+                        stepEnd += stall;
+                        nextCycle += stall;
                         _activeDataC = rawC;
                         nextReadCycle = access.CompletedCycle;
                         nextCycle = Math.Max(nextCycle, access.CompletedCycle);
@@ -2232,6 +3251,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     _zeroFlag = false;
                 }
 
+                ExtendBOnlyInternalPhaseForRefresh(nextReadCycle, ref stepEnd, ref nextCycle);
                 internalCompletionCycle = Math.Max(stepEnd, nextReadCycle);
             }
 
@@ -2241,6 +3261,44 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 : nextCycle;
             EndDmaRollbackSnapshot();
             AdvanceAreaPosition(targetCycle);
+        }
+
+        private void ExtendBOnlyInternalPhaseForRefresh(
+            long dmaCompletionCycle,
+            ref long stepEnd,
+            ref long nextCycle)
+        {
+            if (_useA || !_useB || _useC || _useD || dmaCompletionCycle >= stepEnd)
+            {
+                return;
+            }
+
+            var slotCycle = AgnusChipSlotScheduler.AlignToSlot(dmaCompletionCycle);
+            while (slotCycle < stepEnd)
+            {
+                if (IsBlitterSequencerPausedSlot(slotCycle))
+                {
+                    stepEnd += ChipSlotCycles;
+                    nextCycle += ChipSlotCycles;
+                }
+
+                slotCycle += ChipSlotCycles;
+            }
+        }
+
+        private bool IsBlitterSequencerPausedSlot(long slotCycle)
+        {
+            if (_bus.IsMandatoryRefreshSlot(slotCycle))
+            {
+                return true;
+            }
+
+            return _bus.TryGetCommittedAgnusSlotOwner(slotCycle, out var owner) &&
+                owner is AgnusChipSlotOwner.Copper or
+                    AgnusChipSlotOwner.Paula or
+                    AgnusChipSlotOwner.Disk or
+                    AgnusChipSlotOwner.Sprite or
+                    AgnusChipSlotOwner.Bitplane;
         }
 
         private void StepAreaWordQueuedWriteD(long targetCycle)
@@ -2381,6 +3439,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private void AdvanceAreaPosition(long targetCycle)
         {
+            if (_advanceProfilingEnabled)
+            {
+                _advanceWordsCompleted++;
+            }
+
             _wordX++;
             if (_wordX < _widthWords)
             {
@@ -2391,6 +3454,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _rowY++;
             if (_rowY >= _height)
             {
+                if (IsBOnlyAreaBlit())
+                {
+                    _currentCycle += BOnlyFinalPipelineDrainSlots * ChipSlotCycles;
+                }
+
                 CompleteBlit(deferInterrupt: _currentCycle > targetCycle);
                 return;
             }
@@ -2638,6 +3706,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private void FinishCompletedBlit()
         {
+            _lastCompletionCycle = _currentCycle;
+            if (_bus.BusAccessCaptureEnabled)
+            {
+                _completionCycles.Add(_currentCycle);
+            }
             _busy = false;
             _bus.RequestHardwareInterrupt(AmigaConstants.IntreqBlitter, _currentCycle);
             ApplyDeferredRegisterWrites();
@@ -2653,6 +3726,16 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _deferredRestartHeight = 0;
             StartBlit(widthWords, height, _currentCycle);
         }
+
+        private bool IsBOnlyAreaBlit()
+            => !_lineMode && !_useA && _useB && !_useC && !_useD;
+
+        internal long LastCompletionCycle => _lastCompletionCycle;
+
+        internal IReadOnlyList<long> CompletionCycles => _completionCycles;
+
+
+
 
         private bool IsActiveRowPipeline()
             => _areaSlotQueueEnabled &&
@@ -2692,7 +3775,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             return _busy && RequiresDmaForCurrentBlit() && IsBlitterDmaEnabled() && (_bus.Paula.Dmacon & DmaBlitterNasty) != 0;
         }
 
-        private int GetAreaWordCycles()
+        private int CalculateAreaWordCycles()
         {
             var ticks = 4;
             if (_useB)
@@ -2712,6 +3795,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
             return ticks;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int GetAreaWordCycles() => _areaWordCycles;
 
         private long GetAreaFillIdlePhaseDelay(long stepStart, long stepEnd)
         {
@@ -2744,6 +3830,10 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         {
             _lastDmaCycle = access.GrantedCycle;
             _completedMicroOps++;
+            if (_advanceProfilingEnabled)
+            {
+                _advanceMicroOpsCompleted++;
+            }
         }
 
         private void BeginDmaRollbackSnapshot()
@@ -2772,6 +3862,20 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private void RollbackDmaStepToDeniedCycle(long deniedCycle)
         {
+            if (_cpuWaitExactSlotCycle >= 0 && (_areaMicroOpActive || _lineMicroOpActive))
+            {
+                _sourceALatch = default;
+                _sourceBLatch = default;
+                _sourceCLatch = default;
+                _destinationDLatch = default;
+                if (_advanceProfilingEnabled)
+                {
+                    _advanceDeniedSlots++;
+                }
+
+                return;
+            }
+
             if (_dmaRollbackSnapshotActive)
             {
                 _workSourceA = _dmaRollbackSnapshot.WorkSourceA;
@@ -2880,6 +3984,18 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private BlitterDmaReadLatch LoadSourceDmaLatch(BlitterDmaSource source, uint address, long cycle)
         {
             var effectiveAddress = GetEffectiveBlitterAddress(address);
+            var predictedGrant = 0L;
+            var firstBlockedCycle = -1L;
+            var firstBlockedOwner = CpuWaitFixedSlotOwner.Free;
+            var verifySupported = _advanceMode == BlitterAdvanceMode.Verify &&
+                _cpuWaitExactSlotCycle < 0 &&
+                _bus.TryPredictBlitterFixedSlotGrant(
+                    effectiveAddress,
+                    cycle,
+                    isWrite: false,
+                    out predictedGrant,
+                    out firstBlockedCycle,
+                    out firstBlockedOwner);
             var reservation = _cpuWaitExactSlotCycle >= 0
                 ? ReserveSourceDmaLatchAtCpuWaitSlot(effectiveAddress, cycle)
                 : _specializationEnabled
@@ -2889,6 +4005,15 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     AmigaBusAccessKind.Blitter,
                     effectiveAddress,
                     cycle);
+            RecordAdvanceGrantVerification(
+                verifySupported,
+                predictedGrant,
+                reservation.Access.GrantedCycle,
+                effectiveAddress,
+                isWrite: false,
+                cycle,
+                firstBlockedCycle,
+                firstBlockedOwner);
             if (_specializationEnabled)
             {
                 _specializedReservations++;
@@ -2904,11 +4029,23 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private AmigaDmaWordReservation ReserveSourceDmaLatchAtCpuWaitSlot(uint effectiveAddress, long cycle)
         {
+            if (_orderedSlotDisplayPrepared)
+            {
+                _ = _bus.TryReservePredictedBlitterChipWordExactSlot(
+                    effectiveAddress,
+                    cycle,
+                    _cpuWaitExactSlotCycle,
+                    isWrite: false,
+                    out var predictedReservation);
+                return predictedReservation;
+            }
+
             _ = _bus.TryReserveBlitterChipWordExactSlot(
                 effectiveAddress,
                 cycle,
                 _cpuWaitExactSlotCycle,
                 isWrite: false,
+                displayPrepared: false,
                 out var reservation);
             return reservation;
         }
@@ -2987,6 +4124,18 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private AmigaDmaWordReservation CommitDestinationDmaLatch(uint address, ref BlitterDmaWriteLatch latch, long cycle)
         {
             var effectiveAddress = GetEffectiveBlitterAddress(address);
+            var predictedGrant = 0L;
+            var firstBlockedCycle = -1L;
+            var firstBlockedOwner = CpuWaitFixedSlotOwner.Free;
+            var verifySupported = _advanceMode == BlitterAdvanceMode.Verify &&
+                _cpuWaitExactSlotCycle < 0 &&
+                _bus.TryPredictBlitterFixedSlotGrant(
+                    effectiveAddress,
+                    cycle,
+                    isWrite: true,
+                    out predictedGrant,
+                    out firstBlockedCycle,
+                    out firstBlockedOwner);
             var reservation = _cpuWaitExactSlotCycle >= 0
                 ? ReserveDestinationDmaLatchAtCpuWaitSlot(effectiveAddress, cycle)
                 : _specializationEnabled
@@ -2996,6 +4145,15 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     AmigaBusAccessKind.Blitter,
                     effectiveAddress,
                     cycle);
+            RecordAdvanceGrantVerification(
+                verifySupported,
+                predictedGrant,
+                reservation.Access.GrantedCycle,
+                effectiveAddress,
+                isWrite: true,
+                cycle,
+                firstBlockedCycle,
+                firstBlockedOwner);
             if (_specializationEnabled)
             {
                 _specializedReservations++;
@@ -3013,15 +4171,196 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             return reservation;
         }
 
+        private void RecordAdvanceGrantVerification(
+            bool supported,
+            long predictedGrant,
+            long actualGrant,
+            uint address,
+            bool isWrite,
+            long requestedCycle,
+            long firstBlockedCycle,
+            CpuWaitFixedSlotOwner firstBlockedOwner)
+        {
+            if (_advanceMode != BlitterAdvanceMode.Verify || !supported)
+            {
+                return;
+            }
+
+            if (predictedGrant == actualGrant)
+            {
+                _advanceVerifyMatches++;
+                return;
+            }
+
+            _advanceVerifyMismatches++;
+            if (_advanceFirstMismatch.Length == 0)
+            {
+                _advanceFirstMismatch =
+                    $"req={requestedCycle},addr=0x{address:X8},write={isWrite},pred={predictedGrant},actual={actualGrant}," +
+                    $"firstBlocked={firstBlockedCycle}/{firstBlockedOwner}," +
+                    _bus.DescribeBlitterFixedSlotPrediction(actualGrant);
+            }
+        }
+
         private AmigaDmaWordReservation ReserveDestinationDmaLatchAtCpuWaitSlot(uint effectiveAddress, long cycle)
         {
+            if (_orderedSlotDisplayPrepared)
+            {
+                _ = _bus.TryReservePredictedBlitterChipWordExactSlot(
+                    effectiveAddress,
+                    cycle,
+                    _cpuWaitExactSlotCycle,
+                    isWrite: true,
+                    out var predictedReservation);
+                return predictedReservation;
+            }
+
             _ = _bus.TryReserveBlitterChipWordExactSlot(
                 effectiveAddress,
                 cycle,
                 _cpuWaitExactSlotCycle,
                 isWrite: true,
+                displayPrepared: false,
                 out var reservation);
             return reservation;
+        }
+
+        private bool TryPrepareBoundedDmaSlot(
+            uint address,
+            long requestedCycle,
+            bool isWrite,
+            ref BlitterDmaAdvanceScope scope,
+            out long grantedCycle)
+        {
+            if (!_bus.TryPredictBlitterFixedSlotGrant(
+                    address,
+                    requestedCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out _,
+                    out _))
+            {
+                scope.Barrier = true;
+                return false;
+            }
+
+            var firstExaminedSlot = Math.Max(
+                scope.CurrentSlot,
+                AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle)));
+            if (grantedCycle >= firstExaminedSlot)
+            {
+                scope.SlotsExamined +=
+                    ((grantedCycle - firstExaminedSlot) / ChipSlotCycles) + 1;
+            }
+
+            var liveResult = _bus.AdvanceOrderedDmaBeforeBlitterSlot(
+                grantedCycle,
+                out var bitplaneFetches,
+                out var spriteFetches,
+                out var advancedPaula,
+                out var advancedDisk);
+            if (advancedPaula)
+            {
+                scope.PaulaSlots++;
+            }
+
+            if (advancedDisk)
+            {
+                scope.DiskSlots++;
+            }
+
+            if (liveResult == OcsCpuWaitLiveSlotResult.CopperBarrier)
+            {
+                scope.Barrier = true;
+                return false;
+            }
+
+            if (bitplaneFetches != 0 || spriteFetches != 0)
+            {
+                scope.DisplayPreparations++;
+            }
+
+            scope.CurrentSlot = grantedCycle + ChipSlotCycles;
+            return true;
+        }
+
+        private ref struct BlitterDmaAdvanceScope
+        {
+            public BlitterDmaAdvanceScope(long requestCycle)
+            {
+                CurrentSlot = 0;
+                SlotsExamined = 0;
+                DisplayPreparations = 0;
+                PaulaSlots = 0;
+                DiskSlots = 0;
+                Initialized = false;
+                Barrier = false;
+                Initialize(requestCycle);
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void Initialize(long requestCycle)
+            {
+                if (Initialized)
+                {
+                    return;
+                }
+
+                CurrentSlot = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestCycle));
+                Initialized = true;
+            }
+
+            public long CurrentSlot;
+
+            public long SlotsExamined;
+
+            public long DisplayPreparations;
+
+            public long PaulaSlots;
+
+            public long DiskSlots;
+
+            public bool Initialized;
+
+            public bool Barrier;
+        }
+
+        private struct BlitterAreaWordGrantPlan
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public readonly long Get(int index)
+                => index switch
+                {
+                    0 => Grant0,
+                    1 => Grant1,
+                    2 => Grant2,
+                    _ => Grant3
+                };
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void Set(int index, long cycle)
+            {
+                switch (index)
+                {
+                    case 0:
+                        Grant0 = cycle;
+                        break;
+                    case 1:
+                        Grant1 = cycle;
+                        break;
+                    case 2:
+                        Grant2 = cycle;
+                        break;
+                    default:
+                        Grant3 = cycle;
+                        break;
+                }
+            }
+
+            private long Grant0;
+            private long Grant1;
+            private long Grant2;
+            private long Grant3;
         }
 
         private uint AddModulo(uint pointer, short modulo, bool descending)
@@ -3307,6 +4646,10 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
             private void FinishWord()
             {
+                _owner.ExtendBOnlyInternalPhaseForRefresh(
+                    _nextReadCycle,
+                    ref _stepEnd,
+                    ref _nextCycle);
                 if (!_outputReady)
                 {
                     EnsureOutputReady();

@@ -30,15 +30,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _renderWidth = Width;
                 _renderHeight = Height;
             }
-            else if (bgra.Length >= Width * LowResOutputHeight)
+            else if (bgra.Length >= Width * ActiveLowResOutputHeight)
             {
                 _renderWidth = Width;
-                _renderHeight = LowResOutputHeight;
+                _renderHeight = ActiveLowResOutputHeight;
             }
-            else if (bgra.Length >= AmigaConstants.PalLowResWidth * LowResOutputHeight)
+            else if (bgra.Length >= LowResWidth * ActiveLowResOutputHeight)
             {
-                _renderWidth = AmigaConstants.PalLowResWidth;
-                _renderHeight = LowResOutputHeight;
+                _renderWidth = LowResWidth;
+                _renderHeight = ActiveLowResOutputHeight;
             }
             else
             {
@@ -54,7 +54,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     _liveFrameStartCycle != frameStartCycle ||
                     _liveCapturedThroughCycle < frameCaptureStopCycle)
                 {
-                    _bus.Agnus.AdvanceTo(frameCaptureStopCycle);
+                    _bus.SynchronizeLiveDisplayThrough(frameCaptureStopCycle);
                 }
 
                 if (TryRenderLiveCapturedFrame(bgra, frameStartCycle, frameStopCycle))
@@ -104,7 +104,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
                 else
                 {
-                    RenderRows(bgra, 0, LowResOutputHeight, frameStartCycle, useTimedWrites);
+                    RenderRows(bgra, 0, ActiveLowResOutputHeight, frameStartCycle, useTimedWrites);
                 }
 
                 renderCompleted = true;
@@ -268,10 +268,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private int GetTimelineRowStop(long frameStartCycle, long frameStopCycle)
         {
-            var rowStop = LowResOutputHeight;
+            var rowStop = ActiveLowResOutputHeight;
             if (frameStopCycle < GetFrameStopCycle(frameStartCycle))
             {
-                rowStop = Math.Clamp(GetOutputRowForCycle(frameStartCycle, frameStopCycle) + 1, 0, LowResOutputHeight);
+                rowStop = Math.Clamp(GetOutputRowForCycle(frameStartCycle, frameStopCycle) + 1, 0, ActiveLowResOutputHeight);
             }
 
             return rowStop;
@@ -349,7 +349,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
 
                     var yStart = Math.Max(Math.Max(sprite.YStart, command.Row), 0);
-                    var yStop = Math.Min(Math.Min(sprite.YStop, rowStop), LowResOutputHeight);
+                    var yStop = Math.Min(Math.Min(sprite.YStop, rowStop), ActiveLowResOutputHeight);
                     for (var y = yStart; y < yStop; y++)
                     {
                         if (checkFrameStop &&
@@ -432,7 +432,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
 
                     var yStart = Math.Max(Math.Max(sprite.YStart, command.Row), 0);
-                    var yStop = Math.Min(Math.Min(sprite.YStop, rowStop), LowResOutputHeight);
+                    var yStop = Math.Min(Math.Min(sprite.YStop, rowStop), ActiveLowResOutputHeight);
                     for (var y = yStart; y < yStop; y++)
                     {
                         if (checkFrameStop &&
@@ -668,7 +668,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var horizontal = AgnusHrmOcsSlotTable.FirstSpriteHorizontal + (spriteIndex * 4) + (word * 2);
+            var lineStart = GetOutputRowStartCycle(_renderFrameStartCycle, row);
+            var firstSpriteSlot = _bus.FindNextFixedDmaSlot(lineStart, AgnusChipSlotOwner.Sprite);
+            var firstSpriteHorizontal = (int)((firstSpriteSlot - lineStart) / CopperHpCycles);
+            var horizontal = firstSpriteHorizontal + (spriteIndex * 4) + (word * 2);
             var x = GetCopperOutputX(horizontal);
             for (var i = 0; i < line.SegmentCount; i++)
             {
@@ -753,11 +756,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             _diwStart = state.DiwStart;
             _diwStop = state.DiwStop;
+            _diwHigh = state.DiwHigh;
+            _diwHighValid = state.DiwHighValid;
+            _agnusDiwHigh = state.AgnusDiwHigh;
+            _agnusDiwHighValid = state.AgnusDiwHighValid;
+            _agnusDisplayWindow = state.AgnusDisplayWindow;
+            _deniseDisplayWindow = state.DeniseDisplayWindow;
             _ddfStart = state.DdfStart;
             _ddfStop = state.DdfStop;
+            _dataFetchWindow = state.DataFetchWindow;
             _bplcon0 = state.Bplcon0;
             _bplcon1 = state.Bplcon1;
             _bplcon2 = state.Bplcon2;
+            _bplcon3 = state.Bplcon3;
             _dmacon = state.Dmacon;
             _bpl1mod = state.Bpl1Mod;
             _bpl2mod = state.Bpl2Mod;
@@ -795,7 +806,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             DisplayTimelineState? firstState = null;
-            var lineXStart = AmigaConstants.PalLowResWidth;
+            var lineXStart = LowResWidth;
             var lineXStop = 0;
             for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
             {
@@ -865,11 +876,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return left.Bplcon0 == right.Bplcon0 &&
                 left.Bplcon1 == right.Bplcon1 &&
                 left.Bplcon2 == right.Bplcon2 &&
+                left.Bplcon3 == right.Bplcon3 &&
                 left.DiwStart == right.DiwStart &&
                 left.DiwStop == right.DiwStop &&
+                left.DiwHigh == right.DiwHigh &&
+                left.DiwHighValid == right.DiwHighValid &&
+                left.AgnusDiwHigh == right.AgnusDiwHigh &&
+                left.AgnusDiwHighValid == right.AgnusDiwHighValid &&
+                left.AgnusDisplayWindow == right.AgnusDisplayWindow &&
+                left.DeniseDisplayWindow == right.DeniseDisplayWindow &&
                 left.DisplayWindowVerticallyOpen == right.DisplayWindowVerticallyOpen &&
                 left.DdfStart == right.DdfStart &&
                 left.DdfStop == right.DdfStop &&
+                left.DataFetchWindow == right.DataFetchWindow &&
                 left.Dmacon == right.Dmacon &&
                 left.Bpl1Mod == right.Bpl1Mod &&
                 left.Bpl2Mod == right.Bpl2Mod &&
@@ -897,7 +916,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool IsTimelineLowResLineFastPathSupported(int row, DisplayLineSegment segment, DisplayTimelineState state)
         {
-            if ((state.Bplcon0 & 0x8804) != 0 ||
+            if (state.Resolution == DeniseResolution.SuperHighRes ||
+                (state.Bplcon0 & 0x8804) != 0 ||
                 HasBitplaneDataSpanInBand(row, row + 1, segment.XStart, segment.XStop))
             {
                 return false;
@@ -943,21 +963,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var window = GetEffectiveDisplayWindow();
-            if (window.Width <= 0 || window.Height <= 0)
+            var windowXStart = GetDisplayWindowOutputXStart(window);
+            var windowXStop = GetDisplayWindowOutputXStop(window);
+            var windowYStart = GetDisplayWindowOutputYStart(window);
+            var windowYStop = GetDisplayWindowOutputYStop(window);
+            if (windowXStop <= windowXStart || windowYStop <= windowYStart)
             {
                 return true;
             }
 
-            var rowStart = Math.Max(0, window.Y);
-            var rowStop = Math.Min(LowResOutputHeight, window.Y + window.Height);
+            var rowStart = Math.Max(0, windowYStart);
+            var rowStop = Math.Min(ActiveLowResOutputHeight, windowYStop);
             if (row < rowStart || row >= rowStop)
             {
                 return true;
             }
 
             var originX = GetDataFetchStartX(window);
-            var clipLeft = Math.Max(Math.Max(0, window.X), xStart);
-            var clipRight = Math.Min(Math.Min(AmigaConstants.PalLowResWidth, window.X + window.Width), xStop);
+            var clipLeft = Math.Max(Math.Max(0, windowXStart), xStart);
+            var clipRight = Math.Min(Math.Min(LowResWidth, windowXStop), xStop);
             if (clipRight <= clipLeft)
             {
                 return true;
@@ -1047,7 +1071,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return !hasBitplaneDataSpans;
             }
 
-            var highResolution = IsHighResolutionEnabled(state.Bplcon0);
+            if (state.Resolution == DeniseResolution.SuperHighRes)
+            {
+                return false;
+            }
+
+            var highResolution = state.Resolution == DeniseResolution.HighRes;
             var dualPlayfield = (state.Bplcon0 & 0x0400) != 0;
             if ((state.Bplcon0 & 0x0800) != 0 ||
                 (!highResolution && (state.Bplcon0 & 0x0004) != 0) ||
@@ -1060,7 +1089,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var planeCount = Math.Clamp(state.DecodePlaneCount, 0, LiveBitplanePlaneCount);
             var fetchWords = Math.Clamp(state.FetchWords, 0, MaxBitplaneFetchWords);
             var window = GetEffectiveDisplayWindow();
-            if (window.Width <= 0 || window.Height <= 0 || fetchWords <= 0)
+            var windowXStart = GetDisplayWindowOutputXStart(window);
+            var windowXStop = GetDisplayWindowOutputXStop(window);
+            var windowYStart = GetDisplayWindowOutputYStart(window);
+            var windowYStop = GetDisplayWindowOutputYStop(window);
+            if (windowXStop <= windowXStart || windowYStop <= windowYStart || fetchWords <= 0)
             {
                 return true;
             }
@@ -1068,10 +1101,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var fetchPixels = fetchWords * PlanarChunkPixels;
             var drawPixels = highResolution ? fetchPixels / 2 : fetchPixels;
             var originX = GetDataFetchStartX(window);
-            var clipLeft = Math.Max(Math.Max(0, window.X), segment.XStart);
-            var clipRight = Math.Min(Math.Min(AmigaConstants.PalLowResWidth, window.X + window.Width), segment.XStop);
-            var rowStart = Math.Max(0, window.Y);
-            var rowStop = Math.Min(LowResOutputHeight, window.Y + window.Height);
+            var clipLeft = Math.Max(Math.Max(0, windowXStart), segment.XStart);
+            var clipRight = Math.Min(Math.Min(LowResWidth, windowXStop), segment.XStop);
+            var rowStart = Math.Max(0, windowYStart);
+            var rowStop = Math.Min(ActiveLowResOutputHeight, windowYStop);
             if (row < rowStart || row >= rowStop || clipRight <= clipLeft)
             {
                 return true;
@@ -1336,7 +1369,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return true;
         }
 
-        private static bool TryGetTimelineBitplaneWord(
+        private bool TryGetTimelineBitplaneWord(
             int row,
             int plane,
             int word,
@@ -1792,7 +1825,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void RenderLiveCapturedRows(Span<uint> bgra)
         {
-            for (var row = 0; row < LowResOutputHeight; row++)
+            for (var row = 0; row < ActiveLowResOutputHeight; row++)
             {
                 var state = _liveLineStates[row];
                 if (!IsLiveLineValid(row))
@@ -1802,10 +1835,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 ApplyLiveLineStateForRendering(state);
-                _displayWindowVerticallyOpen = state.DisplayWindowVerticallyOpen;
+                _displayWindowVerticallyOpen = state.DeniseDisplayWindowVerticallyOpen;
                 _displayWindowStateLine = StandardVStart + row + 1;
                 _currentRenderRow = row;
-                CapturePaletteFrameSpans(row, row + 1, 0, AmigaConstants.PalLowResWidth);
+                CapturePaletteFrameSpans(row, row + 1, 0, LowResWidth);
                 FillRows(bgra, row, row + 1);
                 RenderBitplanes(bgra, row, row + 1);
             }
@@ -1916,8 +1949,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void RenderPresentationTrailingRows(Span<uint> bgra, long frameStartCycle, long frameStopCycle, bool useTimedWrites)
         {
             var finalLine = GetBeamLineForCycle(frameStartCycle, Math.Max(frameStartCycle, frameStopCycle - 1));
-            var firstTrailingRow = Math.Clamp(finalLine - StandardVStart + 1, 0, LowResOutputHeight);
-            if (firstTrailingRow >= LowResOutputHeight)
+            var firstTrailingRow = Math.Clamp(finalLine - StandardVStart + 1, 0, ActiveLowResOutputHeight);
+            if (firstTrailingRow >= ActiveLowResOutputHeight)
             {
                 return;
             }
@@ -1925,13 +1958,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             RenderRows(
                 bgra,
                 firstTrailingRow,
-                LowResOutputHeight,
+                ActiveLowResOutputHeight,
                 frameStartCycle,
                 useTimedWrites,
                 applyPendingWrites: false);
         }
 
-        private static int GetCopperFrameInstructionLimit(long frameStartCycle, long frameStopCycle)
+        private int GetCopperFrameInstructionLimit(long frameStartCycle, long frameStopCycle)
         {
             var frameCycles = Math.Max(1, frameStopCycle - frameStartCycle);
             var minimumInstructionCycles = CopperHpToCpuCycles(CopperMoveHpUnits);
@@ -1988,6 +2021,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     ref copper);
             }
 
+            if ((copper.WaitSecond & 0x8000) == 0 && _bus.Blitter.Busy)
+            {
+                copper.WaitObservedBlitterBusy = true;
+            }
+
             var blitterReadyCycle = GetCopperBlitterReadyCycle(copper.WaitSecond, copper.Cycle);
             if (!TryGetCopperWaitCycle(
                 copper.WaitFirst,
@@ -2030,14 +2068,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     useTimedWrites,
                     renderCursorPixelDelay,
                     toPixelDelay: 0);
-                _bus.Blitter.AdvanceTo(readyCycle);
+                _bus.SynchronizeBlitterThrough(readyCycle);
                 renderCursorCycle = Math.Max(renderCursorCycle, readyCycle);
                 renderCursorPixelDelay = 0;
                 copper.Cycle = Math.Max(copper.Cycle, readyCycle);
                 return copper.Cycle < frameStopCycle;
             }
 
-            var resumeCycle = waitCycle + CopperHpToCpuCycles(CopperWaitWakeHpUnits);
+            var resumeCycle = waitCycle + CopperHpToCpuCycles(GetCopperWaitWakeHpUnits(
+                copper.WaitSecond,
+                copper.WaitObservedBlitterBusy));
             RenderPresentationSpan(
                 bgra,
                 frameStartCycle,
@@ -2060,8 +2100,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return currentCycle;
             }
 
-            return Math.Max(currentCycle, _bus.Blitter.GetPredictedCompletionCycle());
+            var predicted = _bus.Blitter.GetPredictedCompletionCycle();
+            return predicted > currentCycle
+                ? predicted
+                : currentCycle + AgnusChipSlotScheduler.SlotCycles;
         }
+
 
         private void StepCopperInstruction(
             Span<uint> bgra,
@@ -2152,7 +2196,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var first = ReadCopperWordForPresentation(pc, fetchCycle, out var firstAccess);
             var secondRequestCycle = GetCopperSecondWordRequestCycle(firstAccess);
             var second = ReadCopperWordForPresentation(AddDmaPointerOffset(pc, 2), secondRequestCycle, out var secondAccess);
-            return new CopperInstructionLatch(first, firstAccess, second, secondAccess);
+            return new CopperInstructionLatch(first, firstAccess, second, secondAccess, CopperHpCycles);
         }
 
         private bool TryPeekPendingWrite(out PendingCustomWrite write)
@@ -2218,7 +2262,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var visibleStartCycle = GetLineStartCycle(frameStartCycle, StandardVStart);
-            var visibleStopCycle = GetLineStartCycle(frameStartCycle, StandardVStart + LowResOutputHeight);
+            var visibleStopCycle = GetLineStartCycle(frameStartCycle, StandardVStart + ActiveLowResOutputHeight);
             var clippedStart = Math.Max(fromCycle, visibleStartCycle);
             var clippedStop = Math.Min(toCycle, visibleStopCycle);
             if (clippedStop <= clippedStart)
@@ -2226,8 +2270,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
-            var firstLine = Math.Clamp(GetBeamLineForCycle(frameStartCycle, clippedStart), StandardVStart, StandardVStart + LowResOutputHeight - 1);
-            var lastLine = Math.Clamp(GetBeamLineForCycle(frameStartCycle, clippedStop - 1), StandardVStart, StandardVStart + LowResOutputHeight - 1);
+            var firstLine = Math.Clamp(GetBeamLineForCycle(frameStartCycle, clippedStart), StandardVStart, StandardVStart + ActiveLowResOutputHeight - 1);
+            var lastLine = Math.Clamp(GetBeamLineForCycle(frameStartCycle, clippedStop - 1), StandardVStart, StandardVStart + ActiveLowResOutputHeight - 1);
             for (var line = firstLine; line <= lastLine; line++)
             {
                 var lineStart = GetLineStartCycle(frameStartCycle, line);
@@ -2247,7 +2291,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     ? GetOutputXForCycle(frameStartCycle, segmentStart, fromPixelDelay)
                     : GetOutputXForCycle(frameStartCycle, segmentStart);
                 var xStop = segmentStop >= lineStop
-                    ? AmigaConstants.PalLowResWidth
+                    ? LowResWidth
                     : GetOutputXForCycle(frameStartCycle, segmentStop);
                 if (toPixelDelay != 0 &&
                     segmentStop == clippedStop &&
@@ -2308,7 +2352,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var targetVertical = target & verticalMask;
             var targetHorizontal = target & horizontalMask;
             var zeroStartHorizontal = -2;
-            for (var line = startLine; line < AmigaConstants.A500PalRasterLines; line++)
+            for (var line = startLine; line < _timing.LongFrameLines; line++)
             {
                 var horizontalStart = line == startLine ? startHorizontal : 0;
                 var vertical = (((line & 0xFF) << 8) & verticalMask);
@@ -2390,7 +2434,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return mask is 0x00FE or 0x00FC or 0x00F8 or 0x00F0 or 0x00E0 or 0x00C0 or 0x0080 or 0x0000;
         }
 
-        private static bool TryGetFullMaskCopperWaitCycle(
+        private bool TryGetFullMaskCopperWaitCycle(
             ushort target,
             long frameStartCycle,
             long currentCycle,
@@ -2401,7 +2445,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             var targetVertical = (target >> 8) & 0xFF;
             var targetHorizontal = target & 0xFE;
-            for (var line = startLine; line < AmigaConstants.A500PalRasterLines;)
+            for (var line = startLine; line < _timing.LongFrameLines;)
             {
                 var vertical = line & 0xFF;
                 int horizontal;
@@ -2454,7 +2498,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return false;
         }
 
-        private static bool IsCopperWaitReleaseBlockedAtLineEnd(ushort target, int mask, int line, int horizontal)
+        private bool IsCopperWaitReleaseBlockedAtLineEnd(ushort target, int mask, int line, int horizontal)
         {
             if (horizontal + CopperWaitLineEndBlackoutHpUnits < CopperHorizontalUnitsPerLine)
             {
@@ -2466,7 +2510,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return (preBlackoutBeam & mask) >= (target & mask);
         }
 
-        private static bool IsCopperComparisonSatisfied(
+        private bool IsCopperComparisonSatisfied(
             ushort first,
             ushort second,
             long frameStartCycle,
@@ -2481,93 +2525,83 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private static long CopperHpToCpuCycles(int hpUnits)
         {
             System.Diagnostics.Debug.Assert(hpUnits > 0, "Copper HP cycle conversion expects positive units.");
-            return hpUnits * CopperHpCycles;
+            return hpUnits * AgnusChipSlotScheduler.SlotCycles;
         }
 
-        private static long GetLineStartCycle(long frameStartCycle, int line)
+        private static int GetCopperWaitWakeHpUnits(ushort waitSecond, bool observedBlitterBusy)
+            => (waitSecond & 0x8000) == 0 && !observedBlitterBusy
+                ? CopperBfdNoBusyWakeHpUnits
+                : CopperWaitWakeHpUnits;
+
+
+        private long GetLineStartCycle(long frameStartCycle, int line)
         {
-            return frameStartCycle + ((long)line * LineCycles);
+            return _bus.GetLineStartCycle(frameStartCycle, line);
         }
 
-        private static long GetCycleForCopperBeam(long frameStartCycle, int line, int horizontal)
+        private long GetCycleForCopperBeam(long frameStartCycle, int line, int horizontal)
         {
             return GetLineStartCycle(frameStartCycle, line) + ((long)horizontal * CopperHpCycles);
         }
 
-        private static int GetBeamLineForCycle(long frameStartCycle, long cycle)
+        private int GetBeamLineForCycle(long frameStartCycle, long cycle)
         {
-            if (cycle <= frameStartCycle)
-            {
-                return 0;
-            }
-
-            var line = Math.Clamp((int)((cycle - frameStartCycle) / LineCycles), 0, AmigaConstants.A500PalRasterLines - 1);
-            while (line + 1 < AmigaConstants.A500PalRasterLines && GetLineStartCycle(frameStartCycle, line + 1) <= cycle)
-            {
-                line++;
-            }
-
-            while (line > 0 && GetLineStartCycle(frameStartCycle, line) > cycle)
-            {
-                line--;
-            }
-
-            return line;
+            _ = frameStartCycle;
+            return _bus.GetBeamPosition(cycle).BeamLine;
         }
 
-        private static int GetCopperHorizontalForCycle(long frameStartCycle, long cycle)
+        private int GetCopperHorizontalForCycle(long frameStartCycle, long cycle)
         {
             GetCopperBeamPositionForCycle(frameStartCycle, cycle, out _, out var horizontal);
             return horizontal;
         }
 
-        private static void GetCopperBeamPositionForCycle(long frameStartCycle, long cycle, out int line, out int horizontal)
+        private void GetCopperBeamPositionForCycle(long frameStartCycle, long cycle, out int line, out int horizontal)
         {
-            if (cycle <= frameStartCycle)
-            {
-                line = 0;
-                horizontal = 0;
-                return;
-            }
-
-            var frameCycle = cycle - frameStartCycle;
-            line = (int)(frameCycle / LineCycles);
-            if (line >= AmigaConstants.A500PalRasterLines)
-            {
-                line = AmigaConstants.A500PalRasterLines - 1;
-            }
-
-            var lineCycle = frameCycle - ((long)line * LineCycles);
-            horizontal = (int)(lineCycle / CopperHpCycles);
+            _ = frameStartCycle;
+            var beam = _bus.GetBeamPosition(cycle);
+            line = beam.BeamLine;
+            horizontal = beam.BeamHorizontal;
             if (horizontal > LastCopperHorizontal)
             {
                 horizontal = LastCopperHorizontal;
             }
         }
 
-        private static int GetOutputRowForCycle(long frameStartCycle, long cycle)
+        private int GetOutputRowForCycle(long frameStartCycle, long cycle)
         {
             return GetBeamLineForCycle(frameStartCycle, cycle) - StandardVStart;
         }
 
-        private static int GetOutputXForCycle(long frameStartCycle, long cycle)
+        private int GetOutputXForCycle(long frameStartCycle, long cycle)
         {
             return GetCopperOutputX(GetCopperHorizontalForCycle(frameStartCycle, cycle));
         }
 
-        private static int GetOutputXForCycle(long frameStartCycle, long cycle, int pixelDelay)
+        private int GetOutputXForCycle(long frameStartCycle, long cycle, int pixelDelay)
         {
             return GetCopperOutputX(GetCopperHorizontalForCycle(frameStartCycle, cycle), pixelDelay);
         }
 
-        private static int GetCopperOutputX(int horizontal)
+        private int GetCopperOutputX(int horizontal)
         {
             return GetCopperOutputX(horizontal, 0);
         }
 
-        private static int GetCopperOutputX(int horizontal, int pixelDelay)
+        private int GetCopperOutputX(int horizontal, int pixelDelay)
         {
-            return Math.Clamp(((horizontal - DefaultDdfStart) * 2) + pixelDelay, 0, AmigaConstants.PalLowResWidth);
+            return GetCopperOutputXForPresentation(horizontal, pixelDelay, LowResWidth);
+        }
+
+        internal static int GetCopperOutputXForPresentation(int horizontal, int pixelDelay, int outputWidth)
+        {
+            var beamX = (horizontal - DefaultDdfStart) * 2;
+            if (beamX < 0 && horizontal >= DefaultDdfStart - 8)
+            {
+                return Math.Clamp(pixelDelay, 0, outputWidth);
+            }
+
+            return Math.Clamp(beamX + pixelDelay, 0, outputWidth);
         }
 
         private bool IsCopperBlitterFinishedForWait(ushort second)

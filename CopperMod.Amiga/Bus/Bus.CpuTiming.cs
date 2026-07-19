@@ -834,14 +834,12 @@ namespace CopperMod.Amiga.Bus
             var scratchAudit = default(DeferredCpuWaitScratchAudit);
             var cpuGrantCommitted = false;
             var deferredPreparationUsed = false;
-            var deferredBatchExitAttempted = false;
             var deferredFixedImageUsed = false;
             var verifyDeferredFixedImage = false;
             var deferredFixedImageTimeline = default(CpuWaitFixedSlotTimelineSignature);
             if (!slotContendedClean &&
                 ShouldAttemptDeferredCpuWaitWindowFastPath(grantRequestCycle))
             {
-                deferredBatchExitAttempted = true;
                 _deferredCpuBatchExitChipAccessCycle = -1;
                 _deferredCpuWaitWindowFastPathAttempts++;
                 if (_captureBusAccesses ||
@@ -893,6 +891,29 @@ namespace CopperMod.Amiga.Bus
                             ref scratchAudit);
                     }
 
+                    var advanceResult = _hardwareScheduler.AdvanceUntilCpuGrant(
+                        kind,
+                        target,
+                        address,
+                        size,
+                        grantRequestCycle,
+                        isWrite,
+                        out grantedCycle,
+                        out completedCycle);
+                    if (advanceResult == CpuWaitGrantAdvanceResult.Granted)
+                    {
+                        secondWordCycle = grantedCycle;
+                        cpuGrantCommitted = true;
+                        deferredPreparationUsed = true;
+                    }
+                    else if (advanceResult == CpuWaitGrantAdvanceResult.ReferenceContinuation)
+                    {
+                        _deferredCpuWaitWindowFastPathRejectedDynamicDma++;
+                    }
+                    else
+                    {
+                        _deferredCpuWaitWindowFastPathRejectedUnstable++;
+                    }
                 }
                 else if (Display.HasLiveDisplayWork())
                 {
@@ -925,56 +946,29 @@ namespace CopperMod.Amiga.Bus
                 }
                 else
                 {
-                    // The ordered wait executor is still measurement-only. Its
-                    // scheduler state can be internally consistent while the
-                    // resulting CPU-visible state diverges from the reference
-                    // drain path, so fall through to the shared reference grant.
-                    _deferredCpuWaitWindowFastPathRejectedUnstable++;
-                }
-            }
-
-            if (!cpuGrantCommitted &&
-                !_captureBusAccesses &&
-                size != AmigaBusAccessSize.Long &&
-                target is (AmigaBusAccessTarget.ChipRam or
-                    AmigaBusAccessTarget.ExpansionRam or
-                    AmigaBusAccessTarget.RealTimeClock) &&
-                Blitter.Busy &&
-                Blitter.CanUseCpuWaitAreaMicroOps &&
-                !HasUnsupportedCpuWaitSlotWorkThrough(grantRequestCycle + LineCycles))
-            {
-                if (ShouldRunDeferredCpuWaitSlotShadowAudit && !scratchAudit.BlitterAttempted)
-                {
-                    BeginDeferredCpuWaitScratchAudit(
+                    var advanceResult = _hardwareScheduler.AdvanceUntilCpuGrant(
                         kind,
                         target,
                         address,
                         size,
-                        requestedCycle,
                         grantRequestCycle,
                         isWrite,
-                        scratchWrite,
-                        ref scratchAudit);
-                }
-
-                var advanceResult = _hardwareScheduler.AdvanceUntilCpuGrant(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    grantRequestCycle,
-                    isWrite,
-                    out grantedCycle,
-                    out completedCycle);
-                if (advanceResult == CpuWaitGrantAdvanceResult.Granted)
-                {
-                    secondWordCycle = grantedCycle;
-                    cpuGrantCommitted = true;
-                    deferredPreparationUsed = deferredBatchExitAttempted;
-                }
-                else if (deferredBatchExitAttempted)
-                {
-                    _deferredCpuWaitWindowFastPathRejectedUnstable++;
+                        out grantedCycle,
+                        out completedCycle);
+                    if (advanceResult == CpuWaitGrantAdvanceResult.Granted)
+                    {
+                        secondWordCycle = grantedCycle;
+                        cpuGrantCommitted = true;
+                        deferredPreparationUsed = true;
+                    }
+                    else if (advanceResult == CpuWaitGrantAdvanceResult.ReferenceContinuation)
+                    {
+                        _deferredCpuWaitWindowFastPathRejectedDynamicDma++;
+                    }
+                    else
+                    {
+                        _deferredCpuWaitWindowFastPathRejectedUnstable++;
+                    }
                 }
             }
 
@@ -999,7 +993,7 @@ namespace CopperMod.Amiga.Bus
 
             if (!cpuGrantCommitted && Blitter.Busy)
             {
-                grantRequestCycle = Blitter.AdvanceThroughCpuStall(grantRequestCycle);
+                grantRequestCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(grantRequestCycle);
             }
 
             grantRequestCycle = Math.Max(0, grantRequestCycle);
@@ -1253,6 +1247,179 @@ namespace CopperMod.Amiga.Bus
                 out bitplaneFetches,
                 out spriteFetches,
                 out completedSafeCopper);
+
+        internal OcsCpuWaitLiveSlotResult AdvanceOrderedDmaBeforeBlitterSlot(
+            long slotCycle,
+            out int bitplaneFetches,
+            out int spriteFetches,
+            out bool advancedPaula,
+            out bool advancedDisk)
+            => _hardwareScheduler.AdvanceOrderedDmaBeforeBlitterSlot(
+                slotCycle,
+                out bitplaneFetches,
+                out spriteFetches,
+                out advancedPaula,
+                out advancedDisk);
+
+        internal bool RequiresCanonicalBlitterDisplayPreparation
+            => LiveAgnusDmaEnabled && Display.HasLiveDisplayWork();
+
+        internal OcsCpuWaitLiveSlotResult AdvanceBlitterFixedSlot(
+            long slotCycle,
+            out int bitplaneFetches,
+            out int spriteFetches)
+            => Agnus.AdvanceBlitterFixedSlotTo(
+                slotCycle,
+                out bitplaneFetches,
+                out spriteFetches);
+
+        internal OcsCpuWaitLiveSlotResult AdvanceFixedDmaBeforeBlitterSlotInScope(
+            long slotCycle,
+            out int bitplaneFetches,
+            out int spriteFetches)
+            => _hardwareScheduler.AdvanceFixedDmaBeforeBlitterSlotInScope(
+                slotCycle,
+                out bitplaneFetches,
+                out spriteFetches);
+
+        internal bool TryPredictBlitterFixedSlotGrant(
+            uint address,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle,
+            out long firstBlockedCycle,
+            out CpuWaitFixedSlotOwner firstBlockedOwner)
+        {
+            if (!TryPredictBlitterFixedSlotGrantCandidate(
+                    address,
+                    requestedCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out firstBlockedCycle,
+                    out firstBlockedOwner))
+            {
+                return false;
+            }
+
+            return CanAdvanceBlitterFixedSlotScopeThrough(
+                grantedCycle + AgnusChipSlotScheduler.SlotCycles);
+        }
+
+        internal bool TryPredictBlitterFixedSlotGrantCandidate(
+            uint address,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle,
+            out long firstBlockedCycle,
+            out CpuWaitFixedSlotOwner firstBlockedOwner)
+        {
+            var cursor = default(BlitterFixedSlotImageCursor);
+            return TryPredictBlitterFixedSlotGrantCandidate(
+                address,
+                requestedCycle,
+                isWrite,
+                ref cursor,
+                out grantedCycle,
+                out firstBlockedCycle,
+                out firstBlockedOwner);
+        }
+
+        internal bool TryPredictBlitterFixedSlotGrantCandidate(
+            uint address,
+            long requestedCycle,
+            bool isWrite,
+            ref BlitterFixedSlotImageCursor cursor,
+            out long grantedCycle,
+            out long firstBlockedCycle,
+            out CpuWaitFixedSlotOwner firstBlockedOwner)
+        {
+            requestedCycle = Math.Max(0, requestedCycle);
+            grantedCycle = 0;
+            firstBlockedCycle = -1;
+            firstBlockedOwner = CpuWaitFixedSlotOwner.Free;
+            if (_hrmSlotEngine.PendingCpuSlotRequestActive)
+            {
+                return false;
+            }
+
+            var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
+            var hasLiveDisplay = LiveAgnusDmaEnabled && Display.HasLiveDisplayWork();
+            for (var attempt = 0; attempt < 512; attempt++, candidate += AgnusChipSlotScheduler.SlotCycles)
+            {
+                if (IsMandatoryRefreshSlot(candidate))
+                {
+                    if (firstBlockedCycle < 0)
+                    {
+                        firstBlockedCycle = candidate;
+                        firstBlockedOwner = CpuWaitFixedSlotOwner.Refresh;
+                    }
+
+                    continue;
+                }
+
+                if (!_hrmSlotEngine.CanReserveBlitterDmaWordAtAlignedWithoutFixedOrPendingCpu(
+                        address,
+                        requestedCycle,
+                        candidate,
+                        isWrite))
+                {
+                    continue;
+                }
+
+                if (hasLiveDisplay && !Display.HasLiveDmaCapturedThrough(candidate))
+                {
+                    if (!Display.TryGetBlitterFixedDisplaySlotOwner(
+                            candidate,
+                            ref cursor,
+                            out var owner,
+                            out _))
+                    {
+                        return false;
+                    }
+
+                    if (owner != CpuWaitFixedSlotOwner.Free)
+                    {
+                        if (firstBlockedCycle < 0)
+                        {
+                            firstBlockedCycle = candidate;
+                            firstBlockedOwner = owner;
+                        }
+
+                        continue;
+                    }
+                }
+
+                grantedCycle = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
+        internal bool CanAdvanceBlitterFixedSlotScopeThrough(long targetCycle)
+            => !HasBlitterDynamicDmaWorkThrough(targetCycle) &&
+                CanAdvanceBlitterFixedDisplayScopeThrough(targetCycle);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool HasBlitterDynamicDmaWorkThrough(long targetCycle)
+            => Disk.ActiveDma ||
+                Disk.HasSlotDmaWakeSourceThrough(targetCycle) ||
+                Paula.HasDmaWorkThrough(targetCycle);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool CanAdvanceBlitterFixedDisplayScopeThrough(long targetCycle)
+            => !LiveAgnusDmaEnabled ||
+                Display.GetNextBlitterFixedSlotBarrierCycle(targetCycle) > targetCycle;
+
+        internal string DescribeBlitterFixedSlotPrediction(long cycle)
+        {
+            _hrmSlotEngine.TryGetCommittedSlotOwner(cycle, out var committedOwner);
+            var hasFixedOwner = Display.TryGetCpuWaitFixedSlotOwner(
+                cycle,
+                out var fixedOwner,
+                out var unsupported);
+            return $"slot={cycle},hrm={committedOwner},fixed={(hasFixedOwner ? fixedOwner : CpuWaitFixedSlotOwner.Free)},unsupported={unsupported}";
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void SynchronizeHrmBlitterPriority()
@@ -1944,7 +2111,7 @@ namespace CopperMod.Amiga.Bus
                 _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite, size);
                 if (Blitter.Busy)
                 {
-                    requestedCycle = Blitter.AdvanceThroughCpuStall(requestedCycle);
+                    requestedCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(requestedCycle);
                 }
             }
 

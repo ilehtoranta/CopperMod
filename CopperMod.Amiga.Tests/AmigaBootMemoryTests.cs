@@ -97,6 +97,101 @@ public sealed class AmigaBootMemoryTests
 	private const uint MemfClear = 0x0001_0000;
 
 	[Fact]
+	public void NativeCopperStartTakeoverPreparesRuntimeBoundaryExactlyOnce()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine)
+		{
+			AutoRunStartupSequence = true,
+			AutoStartWorkbenchDefaultTool = true
+		};
+		boot.StartBootFromDisk(CreateBootableDisk());
+
+		Assert.False(boot.TryPrepareCopperStartRuntimeHandoff());
+		CompleteInitialHostTrackdiskRead(machine);
+		machine.Cpu.State.ProgramCounter = 0x0000_2000;
+		machine.Bus.WriteLong(2 * 4, 0);
+		machine.Bus.WriteLong(4, 0);
+		machine.Bus.WriteLong((24 + 1) * 4, 0);
+
+		Assert.True(boot.TryPrepareCopperStartRuntimeHandoff());
+		Assert.Equal(1, boot.CopperStartRuntimeHandoffCount);
+		Assert.NotEqual(0u, machine.Bus.ReadLong(2 * 4));
+		Assert.NotEqual(0u, machine.Bus.ReadLong(4));
+		Assert.NotEqual(0u, machine.Bus.ReadLong((24 + 1) * 4));
+		Assert.False(boot.TryPrepareCopperStartRuntimeHandoff());
+		Assert.Equal(1, boot.CopperStartRuntimeHandoffCount);
+	}
+
+	[Fact]
+	public void NativeCopperStartTakeoverRequiresLoadedProgramAndResetsWithBootState()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		CompleteInitialHostTrackdiskRead(machine);
+
+		machine.Cpu.State.ProgramCounter = 0;
+		Assert.False(boot.TryPrepareCopperStartRuntimeHandoff());
+		machine.Cpu.State.ProgramCounter = AmigaBootController.BootBlockAddress + 0x20;
+		Assert.False(boot.TryPrepareCopperStartRuntimeHandoff());
+		machine.Cpu.State.ProgramCounter = 0x0000_2000;
+		Assert.True(boot.TryPrepareCopperStartRuntimeHandoff());
+
+		boot.StartBootFromDisk(CreateBootableDisk());
+		Assert.Equal(0, boot.CopperStartRuntimeHandoffCount);
+		Assert.False(boot.TryPrepareCopperStartRuntimeHandoff());
+	}
+
+	[Theory]
+	[InlineData("_dosBootContinuationStarted")]
+	[InlineData("_startupSequenceActive")]
+	[InlineData("_kickstartRomBootActive")]
+	public void CopperStartRuntimeTakeoverRejectsActiveHostOrRomOrchestration(string activeStateField)
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		CompleteInitialHostTrackdiskRead(machine);
+		machine.Cpu.State.ProgramCounter = 0x0000_2000;
+		SetPrivateBoolean(boot, activeStateField, true);
+
+		Assert.False(boot.TryPrepareCopperStartRuntimeHandoff());
+		Assert.Equal(0, boot.CopperStartRuntimeHandoffCount);
+	}
+
+	[Fact]
+	public void CopperStartRuntimeTakeoverRejectsPendingWorkbenchLaunch()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		CompleteInitialHostTrackdiskRead(machine);
+		machine.Cpu.State.ProgramCounter = 0x0000_2000;
+		var request = new AmigaProgramLaunchRequest(
+			"C:Program",
+			projectPath: null,
+			currentDirectory: string.Empty,
+			toolTypes: Array.Empty<string>(),
+			stackSize: 4096,
+			cliArguments: null);
+		typeof(AmigaBootController)
+			.GetProperty(nameof(AmigaBootController.PendingWorkbenchLaunchRequest))!
+			.SetValue(boot, request);
+
+		Assert.False(boot.TryPrepareCopperStartRuntimeHandoff());
+		Assert.Equal(0, boot.CopperStartRuntimeHandoffCount);
+	}
+
+	[Fact]
 	public void WorkbenchCliArgumentsPreserveNumericLanguageSelection()
 	{
 		var arguments = AmigaBootController.BuildCliArguments(new[]
@@ -146,6 +241,33 @@ public sealed class AmigaBootMemoryTests
 		var currentTask = bus.ReadLong(AmigaKickstartHost.ExecLibraryBase + ExecThisTaskOffset);
 		Assert.Equal(currentTaskAddress, currentTask);
 		Assert.Equal(bus.ReadLong(AmigaKickstartHost.ExecLibraryBase + ExecTaskTrapCodeOffset), bus.ReadLong(currentTask + TaskTrapCodeOffset));
+		Assert.NotEqual(0u, bus.ReadLong(0x90));
+	}
+
+	[Fact]
+	public void A500PlusHostShim20BootsDeterministicallyWithOneMiBChipRam()
+	{
+		var machine = StartBootShim(MachineProfile.A500PlusEcsPal);
+		var bus = machine.Bus;
+		var listAddress = AmigaKickstartHost.ExecLibraryBase + ExecMemListOffset;
+		var privateBase = (uint)bus.ChipRam.Length - PrivateMetadataSize;
+		var chipHeader = privateBase + ChipOnlyMemHeaderOffset;
+
+		Assert.Equal(AmigaChipset.EcsPal, bus.Chipset);
+		Assert.Equal(1024 * 1024, bus.ChipRam.Length);
+		Assert.Equal(KickstartBackendKind.HostShim, machine.Kickstart.Configuration.Backend);
+		Assert.Equal(KickstartVersion.Kickstart20, machine.Kickstart.Configuration.Version);
+		Assert.Equal(chipHeader, bus.ReadLong(listAddress));
+		AssertMemoryHeader(
+			bus,
+			chipHeader,
+			listAddress + 4,
+			listAddress,
+			MemfPublic | MemfChip,
+			ChipPublicLowerAddress,
+			privateBase,
+			"chip");
+		Assert.False(machine.Cpu.State.GetFlag(M68kCpuState.Supervisor));
 		Assert.NotEqual(0u, bus.ReadLong(0x90));
 	}
 
@@ -876,6 +998,56 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteWord(visible + 0x14, 17);
 		bus.WriteWord(visible + 0x16, 7);
 		boot.CyberGraphics.RegisterRastPort(rastPort, screen);
+		Assert.True(patches.TryGetRastPortClipFragments(rastPort, 0, 0, 8, 4, out var processFragments));
+		Assert.Equal(2, processFragments.Count);
+		Assert.Equal(backingBitMap, processFragments[0].BitMapAddress);
+		Assert.Equal((0, 0, 0, 0, 3, 4), (
+			processFragments[0].RequestX,
+			processFragments[0].RequestY,
+			processFragments[0].BitMapX,
+			processFragments[0].BitMapY,
+			processFragments[0].Width,
+			processFragments[0].Height));
+		Assert.Equal(screenBitMap, processFragments[1].BitMapAddress);
+		Assert.Equal((5, 0, 15, 4, 3, 4), (
+			processFragments[1].RequestX,
+			processFragments[1].RequestY,
+			processFragments[1].BitMapX,
+			processFragments[1].BitMapY,
+			processFragments[1].Width,
+			processFragments[1].Height));
+
+		var process = new M68kCpuState();
+		process.A[1] = rastPort;
+		process.D[0] = 0;
+		process.D[1] = 0;
+		process.D[2] = 8;
+		process.D[3] = 4;
+		process.D[4] = 0;
+		process.D[5] = 16;
+		Assert.True(boot.CyberGraphics.Invoke(-228, process));
+		Assert.Equal(24u, process.D[0]);
+		for (var y = 0; y < 4; y++)
+		{
+			Assert.Equal(new byte[] { 16, 16, 16 }, Enumerable.Range(0, 3)
+				.Select(x => bus.ReadByte(backing.GuestBaseAddress + (uint)(y * backing.BytesPerRow + x))));
+			var screenValues = Enumerable.Range(0, 32)
+				.Select(x => bus.ReadByte(screen.GuestBaseAddress + (uint)((y + 4) * screen.BytesPerRow + x)))
+				.ToArray();
+			Assert.True(screenValues.Skip(15).Take(3).SequenceEqual(new byte[] { 16, 16, 16 }), string.Join(",", screenValues));
+			Assert.All(Enumerable.Range(10, 5), x =>
+				Assert.Equal((byte)0, bus.ReadByte(screen.GuestBaseAddress + (uint)((y + 4) * screen.BytesPerRow + x))));
+		}
+
+		process = new M68kCpuState();
+		process.A[1] = rastPort;
+		process.D[2] = 1;
+		process.D[3] = 1;
+		process.D[4] = 0;
+		process.D[5] = 16;
+		process.D[0] = 20;
+		Assert.True(boot.CyberGraphics.Invoke(-228, process));
+		Assert.Equal(0u, process.D[0]);
 
 		var fill = new M68kCpuState();
 		fill.A[1] = rastPort;
@@ -900,6 +1072,18 @@ public sealed class AmigaBootMemoryTests
 
 		bus.ClearMemory(screen.GuestBaseAddress, screen.BytesPerRow * screen.Height);
 		bus.ClearMemory(backing.GuestBaseAddress, backing.BytesPerRow * backing.Height);
+		var highWordFill = new M68kCpuState();
+		highWordFill.A[1] = rastPort;
+		highWordFill.D[0] = 0x0001_0000;
+		highWordFill.D[1] = 0;
+		highWordFill.D[2] = 0x0001_0007;
+		highWordFill.D[3] = 3;
+		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-306, highWordFill));
+		Assert.All(Enumerable.Range(0, backing.BytesPerRow * backing.Height),
+			offset => Assert.Equal((byte)0, bus.ReadByte(backing.GuestBaseAddress + (uint)offset)));
+		Assert.All(Enumerable.Range(0, screen.BytesPerRow * screen.Height),
+			offset => Assert.Equal((byte)0, bus.ReadByte(screen.GuestBaseAddress + (uint)offset)));
+
 		var move = new M68kCpuState();
 		move.A[1] = rastPort;
 		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-240, move));
@@ -2041,6 +2225,29 @@ public sealed class AmigaBootMemoryTests
 		}
 
 		return bus.TryInvokeHostTrap(address, bus.ReadWord(address + 2), state);
+	}
+
+	private static void CompleteInitialHostTrackdiskRead(Machine machine)
+	{
+		var bus = machine.Bus;
+		var io = AmigaBootController.BootIoRequestAddress;
+		bus.WriteWord(io + BootIoCommandOffset, AmigaBootController.CmdRead);
+		bus.WriteLong(io + BootIoLengthOffset, 1024);
+		bus.WriteLong(io + BootIoDataOffset, AmigaBootController.BootBlockAddress);
+		bus.WriteLong(io + BootIoOffsetOffset, 0);
+		var state = new M68kCpuState();
+		state.A[1] = io;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -456), state));
+		Assert.Equal(0u, state.D[0]);
+	}
+
+	private static void SetPrivateBoolean(AmigaBootController boot, string fieldName, bool value)
+	{
+		var field = typeof(AmigaBootController).GetField(
+			fieldName,
+			BindingFlags.Instance | BindingFlags.NonPublic);
+		Assert.NotNull(field);
+		field.SetValue(boot, value);
 	}
 
 	private static void WriteCopperColorList(AmigaBus bus, uint address, ushort color)

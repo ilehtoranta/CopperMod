@@ -39,6 +39,11 @@ namespace CopperMod.Amiga.Bus
                 return agnusValue;
             }
 
+            if (Display.TryReadWord(offset, out var displayValue))
+            {
+                return displayValue;
+            }
+
             switch (offset)
             {
                 case 0x002:
@@ -86,8 +91,7 @@ namespace CopperMod.Amiga.Bus
             {
                 value = capturedLatch;
             }
-            else if (!CustomRegisterScheduleClassifier.IsOcsReadableRegister(offset) &&
-                !_agnusRegisters.IsReadable(offset))
+            else if (!CustomRegisterScheduleClassifier.IsReadableRegister(_chipset, offset))
             {
                 WriteCustomWord(AmigaBusRequester.Cpu, offset, capturedLatch, grantedCycle);
                 value = dmaValueVisible ? capturedLatch : (ushort)0xFFFF;
@@ -114,8 +118,7 @@ namespace CopperMod.Amiga.Bus
             {
                 value = capturedByte;
             }
-            else if (!CustomRegisterScheduleClassifier.IsOcsReadableRegister(wordOffset) &&
-                !_agnusRegisters.IsReadable(wordOffset))
+            else if (!CustomRegisterScheduleClassifier.IsReadableRegister(_chipset, wordOffset))
             {
                 WriteCustomByte(AmigaBusRequester.Cpu, offset, capturedByte, grantedCycle);
                 value = dmaValueVisible ? capturedByte : (byte)0xFF;
@@ -175,26 +178,27 @@ namespace CopperMod.Amiga.Bus
         private void CalculateBeamPosition(long targetCycle, out ushort vposr, out ushort vhposr)
         {
             var beam = _beamClock.GetPosition(targetCycle);
-            var horizontal = EncodeVhposrHorizontal(beam.BeamHorizontal);
+            var horizontal = EncodeVhposrHorizontal(beam.BeamHorizontal, targetCycle);
             var registerLine = beam.BeamLine;
             vposr = (ushort)(((beam.IsLongFrame ? 1 : 0) << 15) | ((registerLine >> 8) & 0x0001));
             vhposr = (ushort)(((registerLine & 0x00FF) << 8) | horizontal);
         }
 
-        private int EncodeVhposrHorizontal(int beamHorizontal)
+        private int EncodeVhposrHorizontal(int beamHorizontal, long cycle)
         {
             var physicalHorizontal = Math.Clamp(beamHorizontal, 0, 0xE2);
             // Internal RGA slot coordinates precede externally visible Agnus
             // HPOS by three CCKs. VHPOSR then returns the position after the
-            // access (WinUAE: GETHPOS followed by one incpos()).
-            return (int)((physicalHorizontal + 4) % Math.Max(1, _lineCycles / _rasterTiming.CpuCyclesPerColorClock));
+            // register access advances the horizontal counter once.
+            return (int)((physicalHorizontal + 4) % Math.Max(
+                1,
+                _beamClock.GetLineCyclesAt(cycle) / _rasterTiming.CpuCyclesPerColorClock));
         }
 
         private uint ReadRawLong(uint address)
         {
             return ((uint)ReadRawWord(address) << 16) | ReadRawWord(address + 2);
         }
-
 
 
         private void WriteCpuCustomRegisterLongSplit(
@@ -248,7 +252,7 @@ namespace CopperMod.Amiga.Bus
             _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite: true, AmigaBusAccessSize.Long);
             if (Blitter.Busy)
             {
-                grantRequestCycle = Blitter.AdvanceThroughCpuStall(grantRequestCycle);
+                grantRequestCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(grantRequestCycle);
             }
 
             grantRequestCycle = Math.Max(0, grantRequestCycle);
@@ -275,7 +279,7 @@ namespace CopperMod.Amiga.Bus
             var secondSearchCycle = firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles;
             if (Blitter.Busy)
             {
-                secondSearchCycle = Blitter.AdvanceThroughCpuStall(secondSearchCycle);
+                secondSearchCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(secondSearchCycle);
             }
 
             GrantCpuCustomRegisterLongWriteWordPhase(
@@ -426,6 +430,7 @@ namespace CopperMod.Amiga.Bus
                 GetDisplayWriteCycle(in write),
                 write.Offset,
                 write.Value));
+            _hardwareScheduler.SynchronizeBlitterThrough(write.Cycle);
             Blitter.WriteRegister(write.Offset, write.Value, write.Cycle);
             Disk.WriteRegister(write.Offset, write.Value, write.Cycle);
             _hardwareScheduler.NotifyWorkScheduled(write.Cycle);
@@ -446,6 +451,7 @@ namespace CopperMod.Amiga.Bus
             return write.Cycle + (6 * AgnusChipSlotScheduler.SlotCycles);
         }
 
+
         private void ApplyAgnusRegisterWrite(ushort offset, ushort value, long cycle)
         {
             var writeCycle = Math.Max(0, cycle);
@@ -459,6 +465,9 @@ namespace CopperMod.Amiga.Bus
             if (offset == AgnusRegisterBank.Vposw)
             {
                 _beamClock.ApplyVposw(value, writeCycle);
+                _hrmSlotEngine.UpdateGeometry(_beamClock.GetPosition(writeCycle).FrameCycles);
+                _lineCycles = _beamClock.MaximumLineCycles;
+                RecalculateRasterEvents(writeCycle);
             }
             else if (result.TimingChanged)
             {
@@ -474,13 +483,22 @@ namespace CopperMod.Amiga.Bus
                         _agnusRegisters.EffectiveFrameLines(_rasterTiming, oldBeam.IsLongFrame),
                         writeCycle);
                 }
-                _lineCycles = _beamClock.LineCycles;
+                _hrmSlotEngine.UpdateGeometry(_beamClock.GetPosition(writeCycle).FrameCycles);
+                _lineCycles = _beamClock.MaximumLineCycles;
+                RecalculateRasterEvents(writeCycle);
+            }
+            else if (result.RasterEventsChanged)
+            {
                 RecalculateRasterEvents(writeCycle);
             }
 
             _nextVerticalBlankCycle = GetNextVerticalBlankCycle(writeCycle);
             _hardwareScheduler.NotifyWorkScheduled(_nextVerticalBlankCycle);
-            NotifyCustomRegisterScheduleChanged(offset, writeCycle);
+            NotifyCustomRegisterScheduleChanged(
+                offset,
+                writeCycle,
+                CustomRegisterScheduleClassifier.GetPotentialImpact(_chipset, offset) &
+                    HardwareScheduleImpact.Raster);
         }
 
         private void BeginCustomRegisterWrite(in CustomRegisterWriteContext write)
@@ -490,7 +508,7 @@ namespace CopperMod.Amiga.Bus
                 _customRegisterWriteRequester = write.Requester;
                 _customRegisterWriteOffset = write.Offset;
                 _customRegisterWriteCycle = Math.Max(0, write.Cycle);
-                _customRegisterWriteAffectsSchedule = false;
+                _customRegisterWriteImpact = HardwareScheduleImpact.None;
             }
 
             _customRegisterWriteContextDepth++;
@@ -509,24 +527,27 @@ namespace CopperMod.Amiga.Bus
                 return;
             }
 
-            var affectsSchedule = _customRegisterWriteAffectsSchedule ||
-                !CustomRegisterScheduleClassifier.IsKnownBusScheduleBenignWrite(_customRegisterWriteOffset);
+            var impact = _customRegisterWriteImpact |
+                CustomRegisterScheduleClassifier.GetPotentialImpact(_chipset, _customRegisterWriteOffset);
             _hardwareScheduler.RecordCopperQuiescentCustomRegisterWrite(
                 _customRegisterWriteRequester,
                 _customRegisterWriteOffset,
                 _customRegisterWriteCycle,
-                affectsSchedule);
-            _customRegisterWriteAffectsSchedule = false;
+                impact);
+            _customRegisterWriteImpact = HardwareScheduleImpact.None;
         }
 
-        internal void NotifyCustomRegisterScheduleChanged(ushort offset, long cycle)
+        internal void NotifyCustomRegisterScheduleChanged(
+            ushort offset,
+            long cycle,
+            HardwareScheduleImpact impact)
         {
             offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
             if (_customRegisterWriteContextDepth > 0 &&
                 offset == _customRegisterWriteOffset &&
                 Math.Max(0, cycle) == _customRegisterWriteCycle)
             {
-                _customRegisterWriteAffectsSchedule = true;
+                _customRegisterWriteImpact |= impact;
             }
         }
 

@@ -11,6 +11,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
     {
         public bool TryReadByte(ushort offset, out byte value)
         {
+            if (_chipset.Denise == DeniseModel.Ecs && offset == (ushort)CustomRegister.DeniseId)
+            {
+                value = 0x00;
+                return true;
+            }
+
+            if (_chipset.Denise == DeniseModel.Ecs && offset == (ushort)CustomRegister.DeniseId + 1)
+            {
+                value = 0xFC;
+                return true;
+            }
+
             if (offset == 0x00E)
             {
                 value = 0x80;
@@ -27,9 +39,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return false;
         }
 
+        public bool TryReadWord(ushort offset, out ushort value)
+        {
+            if (_chipset.Denise == DeniseModel.Ecs &&
+                (offset & 0x01FE) == (ushort)CustomRegister.DeniseId)
+            {
+                value = 0x00FC;
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
         private void ApplyWrite(ushort offset, ushort value, long cycle = long.MinValue)
         {
-            if (offset == 0x096)
+            offset &= 0x01FE;
+            switch ((CustomRegister)offset)
+            {
+            case CustomRegister.Dmacon:
             {
                 var bitplaneDmaWasEnabled = IsBitplaneDmaEnabled(_dmacon);
                 var liveCopperDmaWasEnabled = IsLiveCopperDmaEnabled();
@@ -57,110 +85,135 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 return;
             }
-
-            if (offset == 0x100)
+            case CustomRegister.Bplcon0:
             {
+                var impact = CustomRegisterScheduleClassifier.GetChangedImpact(
+                    _chipset,
+                    offset,
+                    _bplcon0,
+                    value);
+                if (impact == HardwareScheduleImpact.None)
+                {
+                    return;
+                }
+
                 var oldPlaneCount = GetAgnusBitplaneFetchPlaneCount();
                 var newPlaneCount = GetAgnusBitplaneFetchPlaneCount(value);
-                AnchorActiveBitplanePointersToCurrentRow(oldPlaneCount);
-                _bplcon0 = value;
+                if ((impact & HardwareScheduleImpact.Bitplane) != 0)
+                {
+                    AnchorActiveBitplanePointersToCurrentRow(oldPlaneCount);
+                }
 
-                if (newPlaneCount > oldPlaneCount && IsBitplaneDmaEnabledForRendering())
+                _bplcon0 = value;
+                if ((impact & HardwareScheduleImpact.Bitplane) != 0)
+                {
+                    RefreshDisplayGeometry();
+                }
+
+                if ((impact & HardwareScheduleImpact.Bitplane) != 0 &&
+                    newPlaneCount > oldPlaneCount &&
+                    IsBitplaneDmaEnabledForRendering())
                 {
                     SetBitplaneBaseRows(oldPlaneCount, newPlaneCount, GetCurrentBitplaneBaseRow());
                 }
 
                 return;
             }
-
-            if (offset == 0x102)
-            {
+            case CustomRegister.Bplcon1:
                 _bplcon1 = value;
                 return;
-            }
-
-            if (offset == 0x104)
-            {
+            case CustomRegister.Bplcon2:
                 _bplcon2 = value;
                 return;
-            }
-
-            if (offset == 0x02E)
-            {
+            case CustomRegister.Bplcon3:
+                if (_chipset.Denise == DeniseModel.Ecs)
+                {
+                    var impact = CustomRegisterScheduleClassifier.GetChangedImpact(
+                        _chipset,
+                        offset,
+                        _bplcon3,
+                        value);
+                    if (impact != HardwareScheduleImpact.None)
+                    {
+                        _bplcon3 = (ushort)(value & EcsBplcon3WritableMask);
+                    }
+                }
+                return;
+            case CustomRegister.Copcon:
                 _copcon = value;
                 return;
-            }
-
-            if (offset == 0x080)
-            {
+            case CustomRegister.Cop1lch:
                 _copperListPointer = WriteDmaPointerHigh(_copperListPointer, value);
                 return;
-            }
-
-            if (offset == 0x082)
-            {
+            case CustomRegister.Cop1lcl:
                 _copperListPointer = WriteDmaPointerLow(_copperListPointer, value);
                 return;
-            }
-
-            if (offset == 0x084)
-            {
+            case CustomRegister.Cop2lch:
                 _copperListPointer2 = WriteDmaPointerHigh(_copperListPointer2, value);
                 return;
-            }
-
-            if (offset == 0x086)
-            {
+            case CustomRegister.Cop2lcl:
                 _copperListPointer2 = WriteDmaPointerLow(_copperListPointer2, value);
                 return;
-            }
-
-            if (offset is 0x088 or 0x08A)
-            {
+            case CustomRegister.Copjmp1:
+            case CustomRegister.Copjmp2:
                 return;
-            }
-
-            if (offset == 0x08E)
+            case CustomRegister.Diwstrt:
             {
                 AnchorActiveBitplanePointersToCurrentRow();
                 _diwStart = value;
+                _diwHighValid = false;
+                _agnusDiwHighValid = false;
+                RefreshDisplayGeometry();
                 RebaseInactiveBitplaneRowsToDisplayWindow();
                 return;
             }
-
-            if (offset == 0x090)
+            case CustomRegister.Diwstop:
             {
                 AnchorActiveBitplanePointersToCurrentRow();
                 _diwStop = value;
+                _diwHighValid = false;
+                _agnusDiwHighValid = false;
+                RefreshDisplayGeometry();
                 RebaseInactiveBitplaneRowsToDisplayWindow();
                 return;
             }
-
-            if (offset == 0x092)
-            {
+            case CustomRegister.Ddfstrt:
                 AnchorActiveBitplanePointersToCurrentRow();
                 _ddfStart = value;
+                RefreshDisplayGeometry();
                 return;
-            }
-
-            if (offset == 0x094)
-            {
+            case CustomRegister.Ddfstop:
                 AnchorActiveBitplanePointersToCurrentRow();
                 _ddfStop = value;
+                RefreshDisplayGeometry();
                 return;
-            }
-
-            if (offset == 0x108)
-            {
+            case CustomRegister.Bpl1mod:
                 AnchorActiveBitplanePointersToCurrentRow();
                 _bpl1mod = unchecked((short)value);
                 return;
-            }
-
-            if (offset == 0x10A)
-            {
+            case CustomRegister.Bpl2mod:
                 AnchorActiveBitplanePointersToCurrentRow();
                 _bpl2mod = unchecked((short)value);
+                return;
+            case CustomRegister.Diwhigh:
+                if (_chipset.Agnus == AgnusModel.Ecs || _chipset.Denise == DeniseModel.Ecs)
+                {
+                    AnchorActiveBitplanePointersToCurrentRow();
+                    if (_chipset.Agnus == AgnusModel.Ecs)
+                    {
+                        _agnusDiwHigh = (ushort)(value & AgnusRegisterBank.DiwhighWritableMask);
+                        _agnusDiwHighValid = true;
+                    }
+
+                    if (_chipset.Denise == DeniseModel.Ecs)
+                    {
+                        _diwHigh = (ushort)(value & EcsDiwHighWritableMask);
+                        _diwHighValid = true;
+                    }
+
+                    RefreshDisplayGeometry();
+                    RebaseInactiveBitplaneRowsToDisplayWindow();
+                }
                 return;
             }
 
@@ -233,8 +286,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
-            var pixelCount = IsHighResolutionEnabled() ? 8 : 16;
-            var xStop = Math.Min(AmigaConstants.PalLowResWidth, xStart + pixelCount);
+            var pixelCount = PlanarChunkPixels /
+                GetResolutionSamplesPerLowResSpan(GetDeniseResolution(_bplcon0));
+            var xStop = Math.Min(LowResWidth, xStart + pixelCount);
             if (xStop <= xStart)
             {
                 return;
@@ -282,7 +336,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            xStart = Math.Clamp(xStart, 0, AmigaConstants.PalLowResWidth);
+            xStart = Math.Clamp(xStart, 0, LowResWidth);
             return true;
         }
 
@@ -327,7 +381,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private int GetCurrentBitplaneBaseRow()
         {
-            var windowY = GetDisplayWindow().Y;
+            var windowY = GetDisplayWindowOutputYStart(_agnusDisplayWindow);
             if (_renderingCopperFrame)
             {
                 if (_currentCopperRow == 0 && windowY < 0)
@@ -372,7 +426,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var horizontal = GetCopperHorizontalForCycle(frameStartCycle, cycle);
             var fetchStart = GetDataFetchStartValue();
             var fetchStop = GetDataFetchStopValue();
-            var fetchUnit = IsHighResolutionEnabled() ? 4 : 8;
+            var fetchUnit = GetResolutionFetchSlotStride(GetAgnusFetchResolution(_bplcon0));
             return horizontal >= fetchStart && horizontal <= fetchStop - fetchUnit;
         }
 
@@ -400,7 +454,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
-            if (!TryGetCurrentOutputRow(out var row) || row < GetDisplayWindow().Y)
+            if (!TryGetCurrentOutputRow(out var row) || row < GetDisplayWindowOutputYStart(_agnusDisplayWindow))
             {
                 return;
             }
@@ -442,12 +496,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
-            if (TryGetCurrentOutputRow(out var row) && row >= GetDisplayWindow().Y)
+            if (TryGetCurrentOutputRow(out var row) && row >= GetDisplayWindowOutputYStart(_agnusDisplayWindow))
             {
                 return;
             }
 
-            SetBitplaneBaseRows(0, planeCount, GetDisplayWindow().Y);
+            SetBitplaneBaseRows(0, planeCount, GetDisplayWindowOutputYStart(_agnusDisplayWindow));
         }
 
         private void RebaseActiveBitplaneRowsToLiveFrameStart()
@@ -458,7 +512,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
-            SetBitplaneBaseRows(0, planeCount, GetDisplayWindow().Y);
+            SetBitplaneBaseRows(0, planeCount, GetDisplayWindowOutputYStart(_agnusDisplayWindow));
         }
 
         private bool TryGetCurrentOutputRow(out int row)
@@ -602,28 +656,28 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _lastBitplaneNonZeroPixels = 0;
             _lastBitplaneRows = 0;
             _lastBitplaneWords = 0;
-            _lastBitplaneMinX = AmigaConstants.PalLowResWidth;
+            _lastBitplaneMinX = LowResWidth;
             _lastBitplaneMinY = LowResOutputHeight;
             _lastBitplaneMaxX = -1;
             _lastBitplaneMaxY = -1;
             _lastNormalPlayfieldNonZeroPixels = 0;
-            _lastNormalPlayfieldMinX = AmigaConstants.PalLowResWidth;
+            _lastNormalPlayfieldMinX = LowResWidth;
             _lastNormalPlayfieldMinY = LowResOutputHeight;
             _lastNormalPlayfieldMaxX = -1;
             _lastNormalPlayfieldMaxY = -1;
             _lastPlayfield1NonZeroPixels = 0;
-            _lastPlayfield1MinX = AmigaConstants.PalLowResWidth;
+            _lastPlayfield1MinX = LowResWidth;
             _lastPlayfield1MinY = LowResOutputHeight;
             _lastPlayfield1MaxX = -1;
             _lastPlayfield1MaxY = -1;
             _lastPlayfield2NonZeroPixels = 0;
-            _lastPlayfield2MinX = AmigaConstants.PalLowResWidth;
+            _lastPlayfield2MinX = LowResWidth;
             _lastPlayfield2MinY = LowResOutputHeight;
             _lastPlayfield2MaxX = -1;
             _lastPlayfield2MaxY = -1;
             Array.Clear(_lastBitplaneColorCounts);
             _lastSpriteNonZeroPixels = 0;
-            _lastSpriteMinX = AmigaConstants.PalLowResWidth;
+            _lastSpriteMinX = LowResWidth;
             _lastSpriteMinY = LowResOutputHeight;
             _lastSpriteMaxX = -1;
             _lastSpriteMaxY = -1;
@@ -649,25 +703,47 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void ResetPlayfieldPriorityMasks()
         {
-            var length = AmigaConstants.PalLowResWidth * LowResOutputHeight;
+            var length = MaxLowResWidth * LowResOutputHeight * MaxDeniseSamplesPerLowResSpan;
             if (_playfieldPriorityMasks.Length != length)
             {
                 _playfieldPriorityMasks = new byte[length];
+                _playfieldSampleColorIndexes = new byte[length];
+                _compositionSampleColors = new uint[length];
                 return;
             }
 
             Array.Clear(_playfieldPriorityMasks);
+            Array.Clear(_playfieldSampleColorIndexes);
+            Array.Clear(_compositionSampleColors);
         }
 
         private void SetPlayfieldPriorityMask(int x, int y, byte mask)
         {
-            if ((uint)x >= (uint)AmigaConstants.PalLowResWidth || (uint)y >= (uint)LowResOutputHeight)
+            if ((uint)x >= (uint)LowResWidth || (uint)y >= (uint)LowResOutputHeight)
             {
                 return;
             }
 
-            _playfieldPriorityMasks[(y * AmigaConstants.PalLowResWidth) + x] = mask;
+            var offset = GetCompositionSampleOffset(x, y, 0);
+            _playfieldPriorityMasks.AsSpan(offset, MaxDeniseSamplesPerLowResSpan).Fill(mask);
         }
+
+        private void SetPlayfieldSampleState(int x, int y, int sample, int colorIndex, byte mask)
+        {
+            if ((uint)x >= (uint)LowResWidth ||
+                (uint)y >= (uint)LowResOutputHeight ||
+                (uint)sample >= MaxDeniseSamplesPerLowResSpan)
+            {
+                return;
+            }
+
+            var offset = GetCompositionSampleOffset(x, y, sample);
+            _playfieldPriorityMasks[offset] = mask;
+            _playfieldSampleColorIndexes[offset] = (byte)colorIndex;
+        }
+
+        private static int GetCompositionSampleOffset(int x, int y, int sample)
+            => (((y * MaxLowResWidth) + x) * MaxDeniseSamplesPerLowResSpan) + sample;
 
 
     }

@@ -69,10 +69,31 @@ public sealed class CopperScreenArchitectureTests
 			8 * 1024 * 1024);
 		AssertProfile("diagnostic-hrm-copperstart", MachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.CopperStart, 512 * 1024, 2);
 
+		Assert.True(CopperScreenProfile.TryLoad("a500-plus-ecs-pal", AppContext.BaseDirectory, out var a500Plus, out var a500PlusError), a500PlusError);
+		Assert.Equal(MachineProfile.A500PlusEcsPal, a500Plus.MachineProfile);
+		Assert.Equal(AmigaChipset.EcsPal, a500Plus.Chipset);
+		Assert.Equal(1024 * 1024, a500Plus.ChipRamSize);
+		Assert.Equal(0, a500Plus.ExpansionRamSize);
+		Assert.True(a500Plus.RtcEnabled);
+		Assert.Equal(2, a500Plus.FloppyDriveCount);
+		Assert.Equal(KickstartVersion.Kickstart20, a500Plus.KickstartVersion);
+		var a500PlusOptions = a500Plus.CreateMachineOptions();
+		Assert.Equal(AmigaChipset.EcsPal, a500PlusOptions.Chipset);
+		Assert.Same(KickstartConfiguration.HostShim20, a500PlusOptions.KickstartConfiguration);
+
 		Assert.True(CopperScreenProfile.TryLoad("diagrom", AppContext.BaseDirectory, out var diagRom, out var diagRomError), diagRomError);
 		Assert.Equal("expanded-diagrom", diagRom.Id);
 		Assert.Equal("ROM/DiagROM/diagrom-a500.rom", diagRom.KickstartRomPath);
 		Assert.True(diagRom.BootsWithoutDisk);
+	}
+
+	[Fact]
+	public void MissingChipsetProfileFieldsRemainBackwardCompatibleOcsPal()
+	{
+		Assert.True(CopperScreenProfile.TryLoad("expanded-copperstart", AppContext.BaseDirectory, out var profile, out var error), error);
+
+		Assert.Equal(AmigaChipset.OcsPal, profile.Chipset);
+		Assert.Equal(AmigaChipset.OcsPal, profile.CreateMachineOptions().Chipset);
 	}
 
 	[Fact]

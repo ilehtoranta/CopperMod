@@ -177,17 +177,7 @@ namespace CopperMod.Amiga.Bus
 
         private long GetLineEndCycle(long targetCycle)
         {
-            var lineCycles = _bus.LineCycles;
-            if (lineCycles <= 1)
-            {
-                return targetCycle;
-            }
-
-            var lineCycle = targetCycle % lineCycles;
-            var cyclesUntilLineEnd = lineCycles - lineCycle - 1;
-            return cyclesUntilLineEnd <= 0
-                ? targetCycle
-                : targetCycle + cyclesUntilLineEnd;
+            return Math.Max(targetCycle, _bus.GetLineStopCycle(targetCycle));
         }
 
         private void InvalidateWakeAgenda()
