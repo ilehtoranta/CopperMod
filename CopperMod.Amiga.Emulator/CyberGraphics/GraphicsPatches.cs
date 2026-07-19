@@ -357,24 +357,44 @@ namespace CopperMod.Amiga
             if (!destinationIsRtg)
             {
                 var planarPixels = CyberGraphics.BlitRtgToPlanar(
-                    state.A[0], S(state.D[0]), S(state.D[1]),
-                    state.A[1], S(state.D[2]), S(state.D[3]),
-                    S(state.D[4]), S(state.D[5]), (byte)state.D[6], (byte)state.D[7]);
-                state.D[0] = planarPixels == 0 ? 0u : 1u;
+                    state.A[0], Long(state.D[0]), Long(state.D[1]),
+                    state.A[1], Long(state.D[2]), Long(state.D[3]),
+                    Long(state.D[4]), Long(state.D[5]), (byte)state.D[6], (byte)state.D[7]);
+                state.D[0] = GetBltBitMapResult(state.A[0], state.A[1], planarPixels);
                 return true;
             }
 
             var pixels = sourceIsRtg
                 ? CyberGraphics.BlitRtgToRtg(
-                    state.A[0], S(state.D[0]), S(state.D[1]),
-                    state.A[1], S(state.D[2]), S(state.D[3]),
-                    S(state.D[4]), S(state.D[5]), (byte)state.D[6], (byte)state.D[7])
+                    state.A[0], Long(state.D[0]), Long(state.D[1]),
+                    state.A[1], Long(state.D[2]), Long(state.D[3]),
+                    Long(state.D[4]), Long(state.D[5]), (byte)state.D[6], (byte)state.D[7])
                 : CyberGraphics.BlitPlanarToRtg(
-                    state.A[0], S(state.D[0]), S(state.D[1]),
-                    state.A[1], S(state.D[2]), S(state.D[3]),
-                    S(state.D[4]), S(state.D[5]), (byte)state.D[6], (byte)state.D[7]);
-            state.D[0] = pixels == 0 ? 0u : 1u;
+                    state.A[0], Long(state.D[0]), Long(state.D[1]),
+                    state.A[1], Long(state.D[2]), Long(state.D[3]),
+                    Long(state.D[4]), Long(state.D[5]), (byte)state.D[6], (byte)state.D[7]);
+            state.D[0] = GetBltBitMapResult(state.A[0], state.A[1], pixels);
             return true;
+        }
+
+        private uint GetBltBitMapResult(uint sourceBitMap, uint destinationBitMap, int writtenPixels)
+        {
+            if (writtenPixels == 0)
+            {
+                return 0;
+            }
+
+            if (CyberGraphics.TryGetBitMapSurface(destinationBitMap, out var destination))
+            {
+                return checked((uint)destination.Depth);
+            }
+
+            if (CyberGraphics.TryGetBitMapSurface(sourceBitMap, out var source))
+            {
+                return checked((uint)source.Depth);
+            }
+
+            return 1;
         }
 
         private bool TryPatchClipBlit(M68kCpuState state)
@@ -427,7 +447,7 @@ namespace CopperMod.Amiga
                 return false;
             }
 
-            var count = (int)Math.Min(state.D[0], 256u);
+            var count = Math.Clamp(unchecked((int)state.D[0]), 0, 256);
             if (count <= 0 || state.A[1] == 0 || !_machine.Bus.IsMappedMemoryRange(state.A[1], count * 2))
             {
                 return true;
@@ -546,7 +566,7 @@ namespace CopperMod.Amiga
                 ? _machine.Bus.ReadByte(rastPort + RastPortMaskOffset)
                 : (byte)0xFF;
 
-        private static int S(uint value)
-            => unchecked((short)(ushort)value);
+        private static int Long(uint value)
+            => unchecked((int)value);
     }
 }

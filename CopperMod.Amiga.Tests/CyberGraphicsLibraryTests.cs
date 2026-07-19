@@ -20,7 +20,7 @@ public sealed class CyberGraphicsLibraryTests
 		Assert.Equal(640, surface.BytesPerRow);
 		var state = new M68kCpuState();
 		state.A[0] = bitMap;
-		state.D[0] = CyberGraphicsLibrary.CyberMapAttrIsLinearMemory;
+		state.D[1] = CyberGraphicsLibrary.CyberMapAttrIsLinearMemory;
 		Assert.True(library.Invoke(-96, state));
 		Assert.Equal(uint.MaxValue, state.D[0]);
 
@@ -609,10 +609,12 @@ public sealed class CyberGraphicsLibraryTests
 
         var state = new M68kCpuState();
         state.A[0] = BitMap;
-        state.D[0] = CyberGraphicsLibrary.CyberMapAttrIsCyberGfx;
+        state.D[0] = 0xCAFE_0000;
+        state.D[1] = CyberGraphicsLibrary.CyberMapAttrIsCyberGfx;
         Assert.True(library.Invoke(-96, state));
         Assert.Equal(uint.MaxValue, state.D[0]);
-        state.D[0] = CyberGraphicsLibrary.CyberMapAttrXMod;
+        state.D[0] = 0xBEEF_0000;
+        state.D[1] = CyberGraphicsLibrary.CyberMapAttrXMod;
         Assert.True(library.Invoke(-96, state));
         Assert.Equal(16u, state.D[0]);
 
@@ -669,6 +671,98 @@ public sealed class CyberGraphicsLibraryTests
         Assert.True(library.Invoke(-216, state));
         Assert.Equal(1u, state.D[0]);
         Assert.Equal(0x0088_1018u, ReadRgb(library, RastPort, 0, 0));
+    }
+
+    [Fact]
+    public void BltTemplateAlphaUsesSignedWordArgumentsAndIgnoresHighRegisterWords()
+    {
+        var bus = CreateBus();
+        var library = new CyberGraphicsLibrary(bus);
+        var surface = new CyberGraphicsSurface(1, 1, CyberGraphicsPixelFormat.Argb32)
+        {
+            DrawColor = 0x0010_2030u
+        };
+        library.RegisterRastPort(RastPort, surface);
+        WriteArgb(library, RastPort, 0, 0, 0);
+
+        const uint alphaTemplate = MemoryBase + 0x7000;
+        bus.WriteByte(alphaTemplate, 0x80, 0);
+        var state = new M68kCpuState();
+        state.A[0] = alphaTemplate;
+        state.A[1] = RastPort;
+        state.D[0] = 0x1234_0000;
+        state.D[1] = 0x5678_0001;
+        state.D[2] = 0x9ABC_0000;
+        state.D[3] = 0xDEF0_0000;
+        state.D[4] = 1;
+        state.D[5] = 1;
+
+        Assert.True(library.Invoke(-222, state));
+        Assert.Equal(0x8008_1018u, ReadArgb(library, RastPort, 0, 0));
+    }
+
+    [Fact]
+    public void BltBitMapAlphaOnlyPublishesTheBooleanResultForRastPortVariant()
+    {
+        var bus = CreateBus();
+        var library = new CyberGraphicsLibrary(bus);
+        var source = new CyberGraphicsSurface(1, 1, CyberGraphicsPixelFormat.Argb32);
+        var destination = new CyberGraphicsSurface(1, 1, CyberGraphicsPixelFormat.Argb32);
+        library.RegisterBitMap(BitMap, source);
+        library.RegisterBitMap(BitMap + 0x100, destination);
+        library.RegisterRastPort(RastPort, destination);
+        WriteArgb(library, RastPort, 0, 0, 0xFF00_0000u);
+
+        var state = new M68kCpuState();
+        state.A[0] = BitMap;
+        state.A[1] = BitMap + 0x100;
+        state.D[0] = 0;
+        state.D[1] = 0;
+        state.D[2] = 0;
+        state.D[3] = 0;
+        state.D[4] = 1;
+        state.D[5] = 1;
+        Assert.True(library.Invoke(-234, state));
+        Assert.Equal(0u, state.D[0]);
+
+        state = new M68kCpuState();
+        state.A[0] = BitMap;
+        state.A[1] = RastPort;
+        state.D[0] = 0;
+        state.D[1] = 0;
+        state.D[2] = 0;
+        state.D[3] = 0;
+        state.D[4] = 1;
+        state.D[5] = 1;
+        Assert.True(library.Invoke(-240, state));
+        Assert.Equal(1u, state.D[0]);
+    }
+
+    [Fact]
+    public void ScalePixelArrayAlphaDoesNotPublishAResult()
+    {
+        var bus = CreateBus();
+        var library = new CyberGraphicsLibrary(bus);
+        var surface = new CyberGraphicsSurface(2, 2, CyberGraphicsPixelFormat.Argb32);
+        library.RegisterRastPort(RastPort, surface);
+        var source = MemoryBase + 0x7100;
+        bus.WriteLong(source, 0x80FF_0000u, 0);
+
+        var state = new M68kCpuState();
+        state.A[0] = source;
+        state.A[1] = RastPort;
+        state.D[0] = 1;
+        state.D[1] = 1;
+        state.D[2] = 4;
+        state.D[3] = 0;
+        state.D[4] = 0;
+        state.D[5] = 2;
+        state.D[6] = 2;
+        state.D[7] = 0xFFFF_FFFFu;
+
+        Assert.True(library.Invoke(-252, state));
+        Assert.Equal(1u, state.D[0]);
+        Assert.Equal(0x80FF_0000u, ReadArgb(library, RastPort, 0, 0));
     }
 
     [Theory]

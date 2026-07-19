@@ -946,13 +946,15 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                     state.D[0] = ProcessPixelArray(state);
                     break;
                 case CyberGraphicsFunction.BltBitMapAlpha:
-                    state.D[0] = BltBitMapAlpha(state, destinationIsRastPort: false);
+                    _ = BltBitMapAlpha(state, destinationIsRastPort: false);
                     break;
                 case CyberGraphicsFunction.BltBitMapRastPortAlpha:
-                    state.D[0] = BltBitMapAlpha(state, destinationIsRastPort: true);
+                    state.D[0] = BltBitMapAlpha(state, destinationIsRastPort: true) != 0
+                        ? 1u
+                        : 0u;
                     break;
                 case CyberGraphicsFunction.ScalePixelArrayAlpha:
-                    state.D[0] = ScalePixelArray(state, alpha: true);
+                    _ = ScalePixelArray(state, alpha: true);
                     break;
                 case CyberGraphicsFunction.ScaleMapRastPortAlpha:
                     state.D[0] = ScaleMapRastPortAlpha(state);

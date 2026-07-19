@@ -704,7 +704,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             if (!_bitmaps.TryGetValue(state.A[0], out var source) ||
                 !TryGetRastPortSurface(state.A[1], out var destination))
             {
-                return 0;
+                return uint.MaxValue;
             }
 
             if (state.D[0] > int.MaxValue || state.D[1] > int.MaxValue ||
@@ -712,7 +712,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                 state.D[4] > int.MaxValue || state.D[5] > int.MaxValue ||
                 state.D[6] > int.MaxValue || state.D[7] > int.MaxValue)
             {
-                return 0;
+                return uint.MaxValue;
             }
 
             var sourceX = (int)state.D[0];
@@ -725,7 +725,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             var destinationHeight = checked((int)Math.Min(state.D[7], int.MaxValue));
             if (sourceWidth <= 0 || sourceHeight <= 0 || destinationWidth <= 0 || destinationHeight <= 0)
             {
-                return 0;
+                return uint.MaxValue;
             }
 
             var useSourceAlpha = GetTagData(state.A[2], BltUseSourceAlpha, 1) != 0;
@@ -733,7 +733,6 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             var destinationAlpha = GetTagData(state.A[2], BltDestinationAlpha, 0);
             var outputWidth = Math.Min(destinationWidth, Math.Max(0, destination.Width - destinationX));
             var outputHeight = Math.Min(destinationHeight, Math.Max(0, destination.Height - destinationY));
-            uint count = 0;
             for (var y = 0; y < outputHeight; y++)
             {
                 var sy = sourceY + (y * sourceHeight / destinationHeight);
@@ -750,11 +749,10 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                     var sourceColor = ReadSurfaceArgb(source, sx, sy);
                     var destinationColor = ReadSurfaceArgb(destination, dx, dy);
                     WriteSurfaceArgb(destination, dx, dy, Blend(destinationColor, sourceColor, globalAlpha, useSourceAlpha, destinationAlpha));
-                    count++;
                 }
             }
 
-            return count;
+            return 0;
         }
 
         private uint TransformRectangle(

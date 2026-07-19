@@ -164,6 +164,43 @@ namespace CopperMod.Amiga
             return fragments;
         }
 
+        bool ICyberGraphicsGuestServices.TryGetRastPortClipFragments(
+            uint rastPortAddress,
+            int x,
+            int y,
+            int width,
+            int height,
+            out IReadOnlyList<CyberGraphicsClipFragment> fragments)
+        {
+            fragments = Array.Empty<CyberGraphicsClipFragment>();
+            if (!TryGetRastPortBitMap(rastPortAddress, out _))
+            {
+                return false;
+            }
+
+            var clipFragments = GetRastPortClipFragments(
+                rastPortAddress,
+                x,
+                y,
+                x + width - 1,
+                y + height - 1);
+            var result = new List<CyberGraphicsClipFragment>(clipFragments.Count);
+            foreach (var fragment in clipFragments)
+            {
+                result.Add(new CyberGraphicsClipFragment(
+                    fragment.BitMap,
+                    fragment.RequestLeft,
+                    fragment.RequestTop,
+                    fragment.BitMapLeft,
+                    fragment.BitMapTop,
+                    fragment.Width,
+                    fragment.Height));
+            }
+
+            fragments = result;
+            return true;
+        }
+
         private void FillRastPortRect(
             uint rastPort,
             int left,
@@ -284,12 +321,12 @@ namespace CopperMod.Amiga
             uint destinationRastPort,
             uint maskPlane = 0)
         {
-            var sourceX = unchecked((short)(ushort)state.D[0]);
-            var sourceY = unchecked((short)(ushort)state.D[1]);
-            var destinationX = unchecked((short)(ushort)state.D[2]);
-            var destinationY = unchecked((short)(ushort)state.D[3]);
-            var width = unchecked((short)(ushort)state.D[4]);
-            var height = unchecked((short)(ushort)state.D[5]);
+            var sourceX = Long(state.D[0]);
+            var sourceY = Long(state.D[1]);
+            var destinationX = Long(state.D[2]);
+            var destinationY = Long(state.D[3]);
+            var width = Long(state.D[4]);
+            var height = Long(state.D[5]);
             if (width <= 0 || height <= 0)
             {
                 return 0;
@@ -339,12 +376,12 @@ namespace CopperMod.Amiga
             uint sourceRastPort,
             uint destinationRastPort)
         {
-            var sourceX = unchecked((short)(ushort)state.D[0]);
-            var sourceY = unchecked((short)(ushort)state.D[1]);
-            var destinationX = unchecked((short)(ushort)state.D[2]);
-            var destinationY = unchecked((short)(ushort)state.D[3]);
-            var width = unchecked((short)(ushort)state.D[4]);
-            var height = unchecked((short)(ushort)state.D[5]);
+            var sourceX = Long(state.D[0]);
+            var sourceY = Long(state.D[1]);
+            var destinationX = Long(state.D[2]);
+            var destinationY = Long(state.D[3]);
+            var width = Long(state.D[4]);
+            var height = Long(state.D[5]);
             if (width <= 0 || height <= 0)
             {
                 return 0;

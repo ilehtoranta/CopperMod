@@ -2838,16 +2838,20 @@ namespace CopperMod.Amiga
         {
             var pixels = CyberGraphics.BlitPlanarToRtg(
                 state.A[0],
-                unchecked((short)(ushort)state.D[0]),
-                unchecked((short)(ushort)state.D[1]),
+                Long(state.D[0]),
+                Long(state.D[1]),
                 state.A[1],
-                unchecked((short)(ushort)state.D[2]),
-                unchecked((short)(ushort)state.D[3]),
-                unchecked((short)(ushort)state.D[4]),
-                unchecked((short)(ushort)state.D[5]),
+                Long(state.D[2]),
+                Long(state.D[3]),
+                Long(state.D[4]),
+                Long(state.D[5]),
                 (byte)state.D[6],
                 (byte)state.D[7]);
-            return pixels == 0 ? 0u : 1u;
+            return pixels == 0
+                ? 0u
+                : CyberGraphics.TryGetBitMapSurface(state.A[1], out var destination)
+                    ? checked((uint)destination.Depth)
+                    : 1u;
         }
 
         private uint HostGraphicsClipBlit(M68kCpuState state)
@@ -2878,13 +2882,13 @@ namespace CopperMod.Amiga
         {
             var pixels = CyberGraphics.BlitPlanarToRtg(
                 sourceBitMap,
-                unchecked((short)(ushort)state.D[0]),
-                unchecked((short)(ushort)state.D[1]),
+                Long(state.D[0]),
+                Long(state.D[1]),
                 destinationBitMap,
-                unchecked((short)(ushort)state.D[2]),
-                unchecked((short)(ushort)state.D[3]),
-                unchecked((short)(ushort)state.D[4]),
-                unchecked((short)(ushort)state.D[5]),
+                Long(state.D[2]),
+                Long(state.D[3]),
+                Long(state.D[4]),
+                Long(state.D[5]),
                 (byte)state.D[6],
                 0xFF);
             return pixels == 0 ? 0u : 1u;
@@ -3255,7 +3259,10 @@ namespace CopperMod.Amiga
         {
             var viewPort = state.A[0];
             var colors = state.A[1];
-            var count = (int)Math.Min(state.D[0], (uint)_syntheticPalette.Length);
+            var count = Math.Clamp(
+                unchecked((int)state.D[0]),
+                0,
+                _syntheticPalette.Length);
             if (!IsSyntheticViewPort(viewPort) ||
                 colors == 0 ||
                 count <= 0 ||
@@ -3276,8 +3283,8 @@ namespace CopperMod.Amiga
         private void HostGraphicsSetRgb4(M68kCpuState state)
         {
             var viewPort = state.A[0];
-            var index = (int)(state.D[0] & 0x1F);
-            if (!IsSyntheticViewPort(viewPort) || (uint)index >= _syntheticPalette.Length)
+            var index = state.D[0];
+            if (!IsSyntheticViewPort(viewPort) || index >= (uint)_syntheticPalette.Length)
             {
                 return;
             }
@@ -3291,7 +3298,7 @@ namespace CopperMod.Amiga
         }
 
         private uint HostGraphicsTextLength(M68kCpuState state)
-            => (uint)Math.Max(0, unchecked((int)state.D[0])) * 8u;
+            => Math.Min(state.D[0], 512u) * 8u;
 
         private void HostGraphicsSetFont(M68kCpuState state)
         {
@@ -3339,8 +3346,8 @@ namespace CopperMod.Amiga
 
             var x0 = ReadSignedWordOrDefault(rastPort + RastPortCurrentXOffset, 0);
             var y0 = ReadSignedWordOrDefault(rastPort + RastPortCurrentYOffset, 0);
-            var x1 = unchecked((short)(ushort)state.D[0]);
-            var y1 = unchecked((short)(ushort)state.D[1]);
+            var x1 = Long(state.D[0]);
+            var y1 = Long(state.D[1]);
             DrawRastPortLine(rastPort, x0, y0, x1, y1, ReadRastPortFgPen(rastPort));
             _machine.Bus.WriteWord(rastPort + RastPortCurrentXOffset, unchecked((ushort)x1));
             _machine.Bus.WriteWord(rastPort + RastPortCurrentYOffset, unchecked((ushort)y1));
@@ -3392,10 +3399,10 @@ namespace CopperMod.Amiga
             {
                 FillRastPortRect(
                     state.A[1],
-                    unchecked((short)(ushort)state.D[0]),
-                    unchecked((short)(ushort)state.D[1]),
-                    unchecked((short)(ushort)state.D[2]),
-                    unchecked((short)(ushort)state.D[3]),
+                    Long(state.D[0]),
+                    Long(state.D[1]),
+                    Long(state.D[2]),
+                    Long(state.D[3]),
                     ReadRastPortFgPen(state.A[1]));
             }
         }
