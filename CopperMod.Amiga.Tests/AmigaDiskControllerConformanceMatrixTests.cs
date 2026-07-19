@@ -1250,6 +1250,45 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
+	public void SelectedDiskInputIsChunkInvariantAcrossTrackRevolutions()
+	{
+		const int trackByteLength = 8;
+		var revolutionCycles = DiskByteCycleCount(trackByteLength, trackByteLength);
+		var inputEnd = (revolutionCycles * 3) + DiskByteCycleCount(trackByteLength, 5);
+
+		var direct = RunSelectedInputAdvance(inputEnd);
+		var split = RunSelectedInputAdvance(
+			Math.Max(1, revolutionCycles - 1),
+			revolutionCycles,
+			revolutionCycles + 1,
+			revolutionCycles * 2,
+			inputEnd);
+
+		Assert.Equal(direct, split);
+	}
+
+	[Fact]
+	public void SelectedDiskInputAllocatesZeroAcrossTrackRevolutionsAfterWarmup()
+	{
+		const int trackByteLength = 8;
+		var bus = CreateBusWithTrackBytes(WordsToBytes(SyncWord, 0xABCD, 0x1357, 0x2468));
+		SelectDriveAndStartMotor(bus, drive: 0);
+		var readyCycle = AdvanceToMotorReady(bus);
+		var revolutionCycles = DiskByteCycleCount(trackByteLength, trackByteLength);
+		bus.AdvanceDmaTo(readyCycle + revolutionCycles);
+
+		GC.Collect();
+		GC.WaitForPendingFinalizers();
+		GC.Collect();
+
+		var before = GC.GetAllocatedBytesForCurrentThread();
+		bus.AdvanceDmaTo(readyCycle + (revolutionCycles * 5));
+		var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+		Assert.Equal(0, allocated);
+	}
+
+	[Fact]
 	public void CpuBatchWakeCandidateIncludesNextDskbytrInputAdvance()
 	{
 		var trackBytes = new byte[] { 0x12, 0x34, 0x56 };

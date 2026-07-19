@@ -992,8 +992,7 @@ namespace CopperMod.Amiga.Storage.Floppy
         private readonly long _diskMotorReadyDelayCycles;
         private readonly bool _specializationEnabled;
         private readonly AmigaFloppyDrive[] _drives;
-        private readonly DiskTrackEventPlan?[] _diskInputPlans;
-        private readonly int[] _diskInputPlanEventIndexes;
+        private readonly DiskTrackEventPlan[] _diskInputPlans;
         private readonly List<AmigaDiskDmaTraceEntry> _dmaTrace = new List<AmigaDiskDmaTraceEntry>(MaxDmaTraceEntries);
         private readonly AmigaDiskTraceRecorder? _traceRecorder;
         private long _currentCycle;
@@ -1105,8 +1104,11 @@ namespace CopperMod.Amiga.Storage.Floppy
             Drive3 = new AmigaFloppyDrive();
             _drives = [Drive0, Drive1, Drive2, Drive3];
             _streams = [.. Enumerable.Range(0, MaxFloppyDriveCount).Select(_ => new DiskStreamState())];
-            _diskInputPlans = new DiskTrackEventPlan?[MaxFloppyDriveCount];
-            _diskInputPlanEventIndexes = new int[MaxFloppyDriveCount];
+            _diskInputPlans = new DiskTrackEventPlan[MaxFloppyDriveCount];
+            for (var driveIndex = 0; driveIndex < _diskInputPlans.Length; driveIndex++)
+            {
+                _diskInputPlans[driveIndex] = new DiskTrackEventPlan();
+            }
             _traceRecorder = AmigaDiskTraceRecorder.IsEnvironmentEnabled()
                 ? new AmigaDiskTraceRecorder(_bus.RasterTiming)
                 : null;
@@ -3657,14 +3659,12 @@ namespace CopperMod.Amiga.Storage.Floppy
                 var track = drive.ReadEncodedTrack(drive.Cylinder, drive.Head);
                 var preparedTrack = GetPreparedTrack(drive, stream, track);
                 var publishThrough = Math.Min(cycle, plan.EndCycle);
-                var eventIndex = _diskInputPlanEventIndexes[driveIndex];
-                while (eventIndex < plan.Events.Length && plan.Events[eventIndex].Cycle <= publishThrough)
+                while (plan.TryPeekNext(stream.SyncCacheOffsets, out var diskEvent) && diskEvent.Cycle <= publishThrough)
                 {
-                    PublishDiskInputEvent(plan.Events[eventIndex], preparedTrack);
-                    eventIndex++;
+                    PublishDiskInputEvent(diskEvent, preparedTrack);
+                    plan.AdvanceNext(diskEvent.Kind);
                 }
 
-                _diskInputPlanEventIndexes[driveIndex] = eventIndex;
                 SetStreamPosition(
                     _streams[driveIndex],
                     GetPlanStreamPositionAt(plan, publishThrough),
@@ -3718,23 +3718,20 @@ namespace CopperMod.Amiga.Storage.Floppy
             var plan = GetOrCreateDiskInputPlan(driveIndex);
             if (plan != null)
             {
-                for (var index = _diskInputPlanEventIndexes[driveIndex]; index < plan.Events.Length; index++)
+                var stream = _streams[driveIndex];
+                var hasNextByte = plan.TryPeekNextByteAfter(cycle, out var nextByte);
+                var hasNextSync = plan.TryPeekNextSyncAfter(cycle, stream.SyncCacheOffsets, out var nextSync);
+                if (hasNextByte)
                 {
-                    var diskEvent = plan.Events[index];
-                    if (diskEvent.Cycle <= cycle)
-                    {
-                        continue;
-                    }
+                    nextInputAdvanceCycle = Math.Min(nextInputAdvanceCycle, nextByte.Cycle);
+                }
 
-                    nextInputAdvanceCycle = Math.Min(nextInputAdvanceCycle, diskEvent.Cycle);
-                    if (diskEvent.Kind == DiskTrackEventKind.SyncMatch)
+                if (hasNextSync)
+                {
+                    nextInputAdvanceCycle = Math.Min(nextInputAdvanceCycle, nextSync.Cycle);
+                    if (!hasNextByte || nextSync.Cycle < nextByte.Cycle)
                     {
-                        nextSyncAdvanceCycle = Math.Min(nextSyncAdvanceCycle, diskEvent.Cycle);
-                    }
-
-                    if (diskEvent.Kind == DiskTrackEventKind.ByteReady)
-                    {
-                        break;
+                        nextSyncAdvanceCycle = Math.Min(nextSyncAdvanceCycle, nextSync.Cycle);
                     }
                 }
             }
@@ -3761,43 +3758,20 @@ namespace CopperMod.Amiga.Storage.Floppy
             var syncMode = GetInputSyncMode();
             var cyclesPerBit = GetDiskDmaCyclesPerBit(track.BitLength);
             var plan = _diskInputPlans[driveIndex];
-            if (plan != null &&
-                plan.Matches(driveIndex, drive, track, syncMode, _dsksync, _bus.Paula.Adkcon, cyclesPerBit) &&
+            if (plan.Matches(driveIndex, drive, track, syncMode, _dsksync, _bus.Paula.Adkcon, cyclesPerBit) &&
                 stream.Cycle >= plan.StartCycle &&
                 stream.Cycle <= plan.EndCycle)
             {
                 return plan;
             }
 
-            plan = BuildDiskInputPlan(driveIndex, drive, stream, preparedTrack, track, syncMode, cyclesPerBit);
-            _diskInputPlans[driveIndex] = plan;
-            _diskInputPlanEventIndexes[driveIndex] = 0;
-            return plan;
-        }
-
-        private DiskTrackEventPlan BuildDiskInputPlan(
-            int driveIndex,
-            AmigaFloppyDrive drive,
-            DiskStreamState stream,
-            AmigaPreparedTrack preparedTrack,
-            AmigaEncodedTrack track,
-            AmigaDiskSyncMode syncMode,
-            double cyclesPerBit)
-        {
-            var events = new List<DiskTrackEvent>(Math.Max(16, track.BitLength / 8));
             var startCycle = stream.Cycle;
             var startPosition = stream.Position;
-            var endPositionAbsolute = startPosition + track.BitLength;
-
-            AppendByteReadyEvents(preparedTrack, startCycle, startPosition, endPositionAbsolute, cyclesPerBit, events);
-            AppendSyncMatchEvents(drive, stream, preparedTrack, startCycle, startPosition, endPositionAbsolute, cyclesPerBit, syncMode, events);
-            events.Sort(static (left, right) =>
-            {
-                var cycleOrder = left.Cycle.CompareTo(right.Cycle);
-                return cycleOrder != 0 ? cycleOrder : left.Kind.CompareTo(right.Kind);
-            });
-
-            return new DiskTrackEventPlan(
+            var syncBitCount = GetSyncBitCount(syncMode);
+            var syncOffsetCount = track.BitLength < syncBitCount
+                ? 0
+                : GetSyncOffsets(drive, stream, preparedTrack, track.BitLength, syncMode);
+            plan.Initialize(
                 driveIndex,
                 drive.Cylinder,
                 drive.Head,
@@ -3811,86 +3785,10 @@ namespace CopperMod.Amiga.Storage.Floppy
                 startCycle,
                 startPosition,
                 startCycle + CyclesForBits(track.BitLength, cyclesPerBit),
-                events.ToArray());
-        }
-
-        private void AppendByteReadyEvents(
-            AmigaPreparedTrack track,
-            long startCycle,
-            double startPosition,
-            double endPositionAbsolute,
-            double cyclesPerBit,
-            List<DiskTrackEvent> events)
-        {
-            var completedBefore = (long)Math.Floor(startPosition / 8.0);
-            var completedAfter = (long)Math.Floor(endPositionAbsolute / 8.0);
-            for (var completed = completedBefore + 1; completed <= completedAfter; completed++)
-            {
-                var eventCycle = startCycle + CyclesForBits((completed * 8.0) - startPosition, cyclesPerBit);
-                var byteStartBit = Mod((int)((completed - 1) * 8), track.BitLength);
-                var hasWord = completed >= 2;
-                var wordStartBit = Mod((int)((completed - 2) * 8), track.BitLength);
-                events.Add(DiskTrackEvent.ByteReady(
-                    eventCycle,
-                    byteStartBit,
-                    hasWord,
-                    hasWord ? wordStartBit : 0));
-            }
-        }
-
-        private void AppendSyncMatchEvents(
-            AmigaFloppyDrive drive,
-            DiskStreamState stream,
-            AmigaPreparedTrack track,
-            long startCycle,
-            double startPosition,
-            double endPositionAbsolute,
-            double cyclesPerBit,
-            AmigaDiskSyncMode syncMode,
-            List<DiskTrackEvent> events)
-        {
-            var length = track.BitLength;
-            var syncBitCount = GetSyncBitCount(syncMode);
-            if (length < syncBitCount)
-            {
-                return;
-            }
-
-            var syncOffsetCount = GetSyncOffsets(drive, stream, track, length, syncMode);
-            if (syncOffsetCount <= 0)
-            {
-                return;
-            }
-
-            var startOffset = (int)Math.Floor(startPosition - syncBitCount) + 1;
-            var syncOffsetIndex = startOffset <= 0
-                ? 0
-                : LowerBound(stream.SyncCacheOffsets, syncOffsetCount, startOffset);
-            var rotationBase = 0.0;
-            if (syncOffsetIndex >= syncOffsetCount)
-            {
-                syncOffsetIndex = 0;
-                rotationBase = length;
-            }
-
-            while (true)
-            {
-                var completionPosition = rotationBase + stream.SyncCacheOffsets[syncOffsetIndex] + syncBitCount;
-                if (completionPosition <= startPosition)
-                {
-                    AdvanceSyncCompletionCursor(syncOffsetCount, length, ref syncOffsetIndex, ref rotationBase);
-                    continue;
-                }
-
-                if (completionPosition > endPositionAbsolute)
-                {
-                    break;
-                }
-
-                events.Add(DiskTrackEvent.SyncMatch(
-                    startCycle + CyclesForBits(completionPosition - startPosition, cyclesPerBit)));
-                AdvanceSyncCompletionCursor(syncOffsetCount, length, ref syncOffsetIndex, ref rotationBase);
-            }
+                syncBitCount,
+                syncOffsetCount,
+                stream.SyncCacheOffsets);
+            return plan;
         }
 
         private static double GetPlanStreamPositionAt(DiskTrackEventPlan plan, long cycle)
@@ -4442,8 +4340,10 @@ namespace CopperMod.Amiga.Storage.Floppy
 
         private void InvalidateDiskInputPlans()
         {
-            Array.Clear(_diskInputPlans, 0, _diskInputPlans.Length);
-            Array.Clear(_diskInputPlanEventIndexes, 0, _diskInputPlanEventIndexes.Length);
+            foreach (var plan in _diskInputPlans)
+            {
+                plan.Clear();
+            }
         }
 
         private void ClearDiskInputPlan(int driveIndex)
@@ -4453,8 +4353,7 @@ namespace CopperMod.Amiga.Storage.Floppy
                 return;
             }
 
-            _diskInputPlans[driveIndex] = null;
-            _diskInputPlanEventIndexes[driveIndex] = 0;
+            _diskInputPlans[driveIndex].Clear();
         }
 
         private int FindSyncOffset(
@@ -4565,7 +4464,20 @@ namespace CopperMod.Amiga.Storage.Floppy
 
         private sealed class DiskTrackEventPlan
         {
-            public DiskTrackEventPlan(
+            // Byte-ready completions are regular and sync completions are already indexed
+            // by track position, so retain one cursor for each ordered stream instead of
+            // materializing and sorting every event in a revolution.
+            private long _nextByteCompletion;
+            private long _lastByteCompletion;
+            private int _syncBitCount;
+            private int _syncOffsetCount;
+            private int _syncOffsetIndex;
+            private double _syncRotationBase;
+            private double _endPositionAbsolute;
+
+            public bool IsValid { get; private set; }
+
+            public void Initialize(
                 int driveIndex,
                 int cylinder,
                 int head,
@@ -4579,8 +4491,11 @@ namespace CopperMod.Amiga.Storage.Floppy
                 long startCycle,
                 double startPosition,
                 long endCycle,
-                DiskTrackEvent[] events)
+                int syncBitCount,
+                int syncOffsetCount,
+                ReadOnlySpan<int> syncOffsets)
             {
+                IsValid = true;
                 DriveIndex = driveIndex;
                 Cylinder = cylinder;
                 Head = head;
@@ -4594,36 +4509,194 @@ namespace CopperMod.Amiga.Storage.Floppy
                 StartCycle = startCycle;
                 StartPosition = startPosition;
                 EndCycle = endCycle;
-                Events = events;
+                _endPositionAbsolute = startPosition + trackBitLength;
+                _nextByteCompletion = (long)Math.Floor(startPosition / 8.0) + 1;
+                _lastByteCompletion = (long)Math.Floor(_endPositionAbsolute / 8.0);
+                _syncBitCount = syncBitCount;
+                _syncOffsetCount = syncOffsetCount;
+                _syncOffsetIndex = 0;
+                _syncRotationBase = 0;
+
+                if (_syncOffsetCount > 0)
+                {
+                    var startOffset = (int)Math.Floor(startPosition - syncBitCount) + 1;
+                    _syncOffsetIndex = startOffset <= 0
+                        ? 0
+                        : LowerBound(syncOffsets, syncOffsetCount, startOffset);
+                    if (_syncOffsetIndex >= syncOffsetCount)
+                    {
+                        _syncOffsetIndex = 0;
+                        _syncRotationBase = trackBitLength;
+                    }
+
+                    SkipSyncCompletionsThrough(startPosition, syncOffsets, ref _syncOffsetIndex, ref _syncRotationBase);
+                }
             }
 
-            public int DriveIndex { get; }
+            public int DriveIndex { get; private set; }
 
-            public int Cylinder { get; }
+            public int Cylinder { get; private set; }
 
-            public int Head { get; }
+            public int Head { get; private set; }
 
-            public int TrackBitLength { get; }
+            public int TrackBitLength { get; private set; }
 
-            public int TrackStartBit { get; }
+            public int TrackStartBit { get; private set; }
 
-            public AmigaTrackFeatures TrackFeatures { get; }
+            public AmigaTrackFeatures TrackFeatures { get; private set; }
 
-            public ushort Sync { get; }
+            public ushort Sync { get; private set; }
 
-            public ushort AdkconRelevant { get; }
+            public ushort AdkconRelevant { get; private set; }
 
-            public AmigaDiskSyncMode SyncMode { get; }
+            public AmigaDiskSyncMode SyncMode { get; private set; }
 
-            public double CyclesPerBit { get; }
+            public double CyclesPerBit { get; private set; }
 
-            public long StartCycle { get; }
+            public long StartCycle { get; private set; }
 
-            public double StartPosition { get; }
+            public double StartPosition { get; private set; }
 
-            public long EndCycle { get; }
+            public long EndCycle { get; private set; }
 
-            public DiskTrackEvent[] Events { get; }
+            public void Clear()
+            {
+                IsValid = false;
+            }
+
+            public bool TryPeekNext(ReadOnlySpan<int> syncOffsets, out DiskTrackEvent diskEvent)
+            {
+                var hasByte = TryCreateByteEvent(_nextByteCompletion, out var byteEvent);
+                var hasSync = TryCreateSyncEvent(_syncOffsetIndex, _syncRotationBase, syncOffsets, out var syncEvent);
+                if (!hasByte && !hasSync)
+                {
+                    diskEvent = default;
+                    return false;
+                }
+
+                // The materialized plan sorted by cycle and then by kind. Preserve its
+                // byte-before-sync ordering when both cursors land on the same cycle.
+                diskEvent = !hasSync || (hasByte && byteEvent.Cycle <= syncEvent.Cycle)
+                    ? byteEvent
+                    : syncEvent;
+                return true;
+            }
+
+            public bool TryPeekNextByteAfter(long cycle, out DiskTrackEvent diskEvent)
+            {
+                for (var completion = _nextByteCompletion; completion <= _lastByteCompletion; completion++)
+                {
+                    _ = TryCreateByteEvent(completion, out diskEvent);
+                    if (diskEvent.Cycle > cycle)
+                    {
+                        return true;
+                    }
+                }
+
+                diskEvent = default;
+                return false;
+            }
+
+            public bool TryPeekNextSyncAfter(
+                long cycle,
+                ReadOnlySpan<int> syncOffsets,
+                out DiskTrackEvent diskEvent)
+            {
+                var syncOffsetIndex = _syncOffsetIndex;
+                var syncRotationBase = _syncRotationBase;
+                while (TryCreateSyncEvent(syncOffsetIndex, syncRotationBase, syncOffsets, out diskEvent))
+                {
+                    if (diskEvent.Cycle > cycle)
+                    {
+                        return true;
+                    }
+
+                    AdvanceSyncCompletionCursor(
+                        _syncOffsetCount,
+                        TrackBitLength,
+                        ref syncOffsetIndex,
+                        ref syncRotationBase);
+                }
+
+                diskEvent = default;
+                return false;
+            }
+
+            public void AdvanceNext(DiskTrackEventKind kind)
+            {
+                if (kind == DiskTrackEventKind.ByteReady)
+                {
+                    _nextByteCompletion++;
+                    return;
+                }
+
+                AdvanceSyncCompletionCursor(
+                    _syncOffsetCount,
+                    TrackBitLength,
+                    ref _syncOffsetIndex,
+                    ref _syncRotationBase);
+            }
+
+            private bool TryCreateByteEvent(long completion, out DiskTrackEvent diskEvent)
+            {
+                if (completion > _lastByteCompletion)
+                {
+                    diskEvent = default;
+                    return false;
+                }
+
+                var eventCycle = StartCycle + CyclesForBits((completion * 8.0) - StartPosition, CyclesPerBit);
+                var byteStartBit = Mod((int)((completion - 1) * 8), TrackBitLength);
+                var hasWord = completion >= 2;
+                var wordStartBit = Mod((int)((completion - 2) * 8), TrackBitLength);
+                diskEvent = DiskTrackEvent.ByteReady(
+                    eventCycle,
+                    byteStartBit,
+                    hasWord,
+                    hasWord ? wordStartBit : 0);
+                return true;
+            }
+
+            private bool TryCreateSyncEvent(
+                int syncOffsetIndex,
+                double syncRotationBase,
+                ReadOnlySpan<int> syncOffsets,
+                out DiskTrackEvent diskEvent)
+            {
+                if (_syncOffsetCount <= 0)
+                {
+                    diskEvent = default;
+                    return false;
+                }
+
+                var completionPosition = syncRotationBase + syncOffsets[syncOffsetIndex] + _syncBitCount;
+                if (completionPosition > _endPositionAbsolute)
+                {
+                    diskEvent = default;
+                    return false;
+                }
+
+                diskEvent = DiskTrackEvent.SyncMatch(
+                    StartCycle + CyclesForBits(completionPosition - StartPosition, CyclesPerBit));
+                return true;
+            }
+
+            private void SkipSyncCompletionsThrough(
+                double position,
+                ReadOnlySpan<int> syncOffsets,
+                ref int syncOffsetIndex,
+                ref double syncRotationBase)
+            {
+                while (_syncOffsetCount > 0 &&
+                    syncRotationBase + syncOffsets[syncOffsetIndex] + _syncBitCount <= position)
+                {
+                    AdvanceSyncCompletionCursor(
+                        _syncOffsetCount,
+                        TrackBitLength,
+                        ref syncOffsetIndex,
+                        ref syncRotationBase);
+                }
+            }
 
             public bool Matches(
                 int driveIndex,
@@ -4633,7 +4706,8 @@ namespace CopperMod.Amiga.Storage.Floppy
                 ushort sync,
                 ushort adkcon,
                 double cyclesPerBit)
-                => DriveIndex == driveIndex &&
+                => IsValid &&
+                    DriveIndex == driveIndex &&
                     Cylinder == drive.Cylinder &&
                     Head == drive.Head &&
                     TrackBitLength == track.BitLength &&
