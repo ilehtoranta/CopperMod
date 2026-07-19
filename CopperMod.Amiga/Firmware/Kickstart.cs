@@ -17,7 +17,9 @@ namespace CopperMod.Amiga.Firmware
     internal enum KickstartVersion
     {
         Kickstart13,
-        Kickstart20
+        Kickstart20,
+        Kickstart30,
+        Kickstart31
     }
 
     internal sealed class KickstartConfiguration
@@ -48,9 +50,14 @@ namespace CopperMod.Amiga.Firmware
 
         public ReadOnlyMemory<byte> RomImage { get; }
 
-        public string Description => Backend == KickstartBackendKind.HostShim
-            ? Version == KickstartVersion.Kickstart13 ? "HostShim Kickstart 1.3" : "HostShim Kickstart 2.0"
-            : Version == KickstartVersion.Kickstart13 ? "ROM Kickstart 1.3" : "ROM Kickstart 2.0";
+        public string Description => $"{(Backend == KickstartBackendKind.HostShim ? "HostShim" : "ROM")} Kickstart {Version switch
+        {
+            KickstartVersion.Kickstart13 => "1.3",
+            KickstartVersion.Kickstart20 => "2.0",
+            KickstartVersion.Kickstart30 => "3.0",
+            KickstartVersion.Kickstart31 => "3.1",
+            _ => throw new ArgumentOutOfRangeException(nameof(Version))
+        }}";
 
         public static KickstartConfiguration FromRomImage(
             KickstartVersion version,
