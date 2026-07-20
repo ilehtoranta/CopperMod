@@ -7,6 +7,35 @@ namespace CopperScreen.Tests;
 public sealed class FramebufferPresenterTests
 {
 	[Fact]
+	public void CopyBgraRowsCopiesTightlyPackedFrame()
+	{
+		var source = new[]
+		{
+			unchecked((int)0xFF010203),
+			unchecked((int)0xFF040506),
+			unchecked((int)0xFF070809),
+			unchecked((int)0xFF0A0B0C),
+			unchecked((int)0xFF0D0E0F)
+		};
+		const int width = 2;
+		const int height = 2;
+		const int strideBytes = width * sizeof(int);
+		var destination = Marshal.AllocHGlobal(strideBytes * height);
+		try
+		{
+			FramebufferPresenter.CopyBgraRows(source, width, height, destination, strideBytes);
+
+			var copied = new int[width * height];
+			Marshal.Copy(destination, copied, 0, copied.Length);
+			Assert.Equal(source[..copied.Length], copied);
+		}
+		finally
+		{
+			Marshal.FreeHGlobal(destination);
+		}
+	}
+
+	[Fact]
 	public void CopyBgraRowsPreservesDestinationStridePadding()
 	{
 		var source = new[]

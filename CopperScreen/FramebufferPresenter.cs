@@ -324,6 +324,12 @@ internal sealed class FramebufferPresenter : Control
 			throw new ArgumentException("The destination row stride is too small for the framebuffer width.", nameof(destinationRowBytes));
 		}
 
+		if (destinationRowBytes == sourceRowBytes)
+		{
+			Marshal.Copy(bgra, 0, destination, checked(width * height));
+			return;
+		}
+
 		for (var y = 0; y < height; y++)
 		{
 			Marshal.Copy(
