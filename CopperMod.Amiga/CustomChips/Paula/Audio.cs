@@ -37,6 +37,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
         private ushort _vposr;
         private ushort _vhposr;
         private ushort _lastCpuActiveInterruptBits;
+        private ulong _cpuInterruptVisibilityVersion;
         private long _copperInterruptRecognitionCycle = long.MinValue;
         private int _interruptSourcePendingWriteIndex;
         private ulong _registerWakeVersion;
@@ -104,6 +105,8 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
         internal ulong RegisterWakeVersion => _registerWakeVersion;
 
+        internal ulong CpuInterruptVisibilityVersion => _cpuInterruptVisibilityVersion;
+
         public ushort ActiveInterruptBits
         {
             get
@@ -130,6 +133,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
             _vposr = 0;
             _vhposr = 0;
             _lastCpuActiveInterruptBits = 0;
+            _cpuInterruptVisibilityVersion = 0;
             _copperInterruptRecognitionCycle = long.MinValue;
             _interruptSourcePendingWriteIndex = 0;
             InvalidateRegisterWakeCandidateCache();
@@ -1099,6 +1103,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
             }
 
             _lastCpuActiveInterruptBits = active;
+            _cpuInterruptVisibilityVersion++;
         }
 
         private static int GetHighestInterruptLevel(ushort active)

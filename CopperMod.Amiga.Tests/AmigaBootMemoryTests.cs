@@ -1598,6 +1598,56 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void ExecAllocVecTracksItsGuestAllocationForFreeVec()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var before = InvokeAvailMem(bus, MemfPublic);
+		var alloc = new M68kCpuState();
+		alloc.D[0] = 64;
+		alloc.D[1] = MemfPublic | MemfClear;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -684), alloc));
+		Assert.NotEqual(0u, alloc.D[0]);
+		Assert.Equal(0u, bus.ReadLong(alloc.D[0]));
+		var free = new M68kCpuState();
+		free.A[1] = alloc.D[0];
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -690), free));
+		Assert.Equal(before, InvokeAvailMem(bus, MemfPublic));
+	}
+
+	[Fact]
+	public void ExecMemoryPoolReleasesGuestPuddlesOnDelete()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var before = InvokeAvailMem(bus, MemfPublic);
+		var create = new M68kCpuState(); create.D[0] = MemfPublic | MemfClear; create.D[1] = 256; create.D[2] = 128;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -696), create));
+		Assert.NotEqual(0u, create.D[0]);
+		var alloc = new M68kCpuState(); alloc.A[0] = create.D[0]; alloc.D[0] = 64;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -708), alloc));
+		Assert.NotEqual(0u, alloc.D[0]);
+		Assert.Equal(0u, bus.ReadLong(alloc.D[0]));
+		var delete = new M68kCpuState(); delete.A[0] = create.D[0];
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -702), delete));
+		Assert.Equal(before, InvokeAvailMem(bus, MemfPublic));
+	}
+
+	[Fact]
+	public void ExecCopyMemHandlesOverlappingGuestRanges()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint source = 0x4000;
+		bus.WriteByte(source, 1, 0); bus.WriteByte(source + 1, 2, 0); bus.WriteByte(source + 2, 3, 0);
+		var state = new M68kCpuState(); state.A[0] = source; state.A[1] = source + 1; state.D[0] = 3;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -624), state));
+		Assert.Equal((byte)1, bus.ReadByte(source + 1));
+		Assert.Equal((byte)2, bus.ReadByte(source + 2));
+		Assert.Equal((byte)3, bus.ReadByte(source + 3));
+	}
+
+	[Fact]
 	public void RomExecMessagePortLvosUseGuestPortAndMessageLinks()
 	{
 		var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithLiveAgnusDma(false));

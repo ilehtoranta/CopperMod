@@ -228,7 +228,7 @@ internal sealed class CopperScreenStartupOptions
 
 			if (IsOption(arg, "--jit"))
 			{
-				cpuBackendOverride = M68kBackendKind.JitM68000;
+				error ??= "The --jit option is temporarily unavailable. Use --cpu accurateM68000.";
 				continue;
 			}
 

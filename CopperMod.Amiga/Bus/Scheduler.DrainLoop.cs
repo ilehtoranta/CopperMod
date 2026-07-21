@@ -621,12 +621,14 @@ namespace CopperMod.Amiga.Bus
         private void ProcessEventsAt(long cycle, AmigaHardwareEventMask mask)
         {
             Debug.Assert(cycle >= 0, "Hardware scheduler event cycles must be non-negative.");
-            InvalidateWakeAgenda();
+            InvalidateWakeAgenda(invalidateCpuVisibility: false);
+            var visibilityDirty = CpuVisibilityDirtySource.None;
             if ((mask & AmigaHardwareEventMask.Raster) != 0 &&
                 _bus.GetNextRasterEventCycle(cycle, cycle) <= cycle)
             {
                 _bus.AdvanceRasterCoreTo(cycle);
                 _rasterEvents++;
+                visibilityDirty |= CpuVisibilityDirtySource.Raster;
             }
 
             if ((mask & AmigaHardwareEventMask.CiaTimers) != 0 &&
@@ -634,6 +636,7 @@ namespace CopperMod.Amiga.Bus
             {
                 _bus.AdvanceCiaTimersCoreTo(cycle);
                 _ciaEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
 
             if ((mask & AmigaHardwareEventMask.PaulaRegister) != 0 &&
@@ -641,6 +644,7 @@ namespace CopperMod.Amiga.Bus
             {
                 _bus.Paula.AdvanceRegisterObservableTo(cycle);
                 _paulaEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
 
             if ((mask & AmigaHardwareEventMask.PaulaDma) != 0 &&
@@ -648,11 +652,11 @@ namespace CopperMod.Amiga.Bus
             {
                 _bus.Paula.AdvanceDmaObservableTo(cycle);
                 _paulaEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
 
             if ((mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
-                HasDiskWakeSourceThrough(cycle, mask) &&
-                HasDiskWorkThrough(cycle, mask))
+                ShouldPublishDiskThrough(cycle, mask))
             {
                 if ((mask & (AmigaHardwareEventMask.ForceCatchUp | AmigaHardwareEventMask.DiskPassiveInput)) != 0)
                 {
@@ -665,6 +669,7 @@ namespace CopperMod.Amiga.Bus
 
                 InvalidateDiskWakeFalseCache();
                 _diskEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
 
             if ((mask & AmigaHardwareEventMask.Agnus) != 0 &&
@@ -672,6 +677,7 @@ namespace CopperMod.Amiga.Bus
             {
                 _bus.AdvanceAgnusCoreTo(cycle);
                 _agnusEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
 
             if ((mask & AmigaHardwareEventMask.Blitter) != 0 &&
@@ -679,7 +685,10 @@ namespace CopperMod.Amiga.Bus
             {
                 SynchronizeBlitterThrough(cycle);
                 _blitterEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
+
+            _bus.CausalBusExecutor.InvalidateCpuVisibilityAgenda(visibilityDirty);
         }
 
         private void ProcessSlotContendedEventsAt(long cycle)
@@ -857,7 +866,7 @@ namespace CopperMod.Amiga.Bus
                 (forceCatchUp || _bus.GetNextRasterEventCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle))
             {
                 _bus.AdvanceRasterCoreTo(targetCycle);
-                InvalidateWakeAgenda();
+                InvalidateWakeAgenda(AmigaHardwareEventMask.Raster);
             }
 
             if ((mask & AmigaHardwareEventMask.CiaTimers) != 0 &&
@@ -884,7 +893,7 @@ namespace CopperMod.Amiga.Bus
 
             if ((mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
                 (forceCatchUp ||
-                    (HasDiskWakeSourceThrough(targetCycle, mask) && HasDiskWorkThrough(targetCycle, mask))))
+                    ShouldPublishDiskThrough(targetCycle, mask)))
             {
                 if (forceCatchUp || (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0)
                 {
@@ -932,8 +941,7 @@ namespace CopperMod.Amiga.Bus
             }
 
             return (mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
-                HasDiskWakeSourceThrough(cycle, mask) &&
-                HasDiskWorkThrough(cycle, mask);
+                ShouldPublishDiskThrough(cycle, mask);
         }
 
         private bool HasSlotContendedSameCycleWork(long cycle)

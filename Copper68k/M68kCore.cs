@@ -2114,7 +2114,6 @@ namespace Copper68k
 
             return _deferredCpuInstructionTiming != null &&
                 maxInstructions > 1 &&
-                !_hasPendingPrefetch &&
                 !State.Halted &&
                 !State.Stopped &&
                 IsCurrentPrefetchDeferredCpuBusBatchEligible();
@@ -2173,7 +2172,7 @@ namespace Copper68k
                     !State.Stopped &&
                     State.Cycles < batchTargetCycle)
                 {
-                    if (!IsCurrentPrefetchDeferredCpuBusBatchEligible())
+                    if (!EnsureDeferredCpuBusBatchPrefetchReady())
                     {
                         reason = M68kDeferredCpuBusBatchExitReason.PcLeftFastWindow;
                         break;
@@ -2243,13 +2242,38 @@ namespace Copper68k
 
                 if (deferredCpuInstructionTiming.IsDeferredCpuBusBatchActive)
                 {
-                    if (reason == M68kDeferredCpuBusBatchExitReason.Completed &&
+                    // A data-bus transfer may consume the last completed prefetch
+                    // and leave only its cancellable ROM/Fast successor. Scalar
+                    // retirement materializes that first word before returning;
+                    // normalize the same empty-queue shape at any clean batch
+                    // boundary. The eligibility check prevents a Chip RAM fetch.
+                    var hasEmptyPendingPrefetch =
+                        _prefetchCount == 0 &&
+                        _hasPendingPrefetch &&
+                        _pendingPrefetchAddress == State.ProgramCounter;
+                    var mustMaterializeEmptyPrefetch =
+                        hasEmptyPendingPrefetch &&
+                        reason is M68kDeferredCpuBusBatchExitReason.Completed or
+                            M68kDeferredCpuBusBatchExitReason.MaxInstructions;
+                    if ((reason == M68kDeferredCpuBusBatchExitReason.Completed ||
+                            mustMaterializeEmptyPrefetch) &&
                         completedWithoutException &&
                         !State.Halted &&
                         !State.Stopped &&
-                        !IsCurrentPrefetchDeferredCpuBusBatchEligible())
+                        !EnsureDeferredCpuBusBatchPrefetchReady())
                     {
                         reason = M68kDeferredCpuBusBatchExitReason.PcLeftFastWindow;
+                    }
+                    else if (mustMaterializeEmptyPrefetch && _prefetchCount != 0)
+                    {
+                        // Match scalar retirement after materializing the empty
+                        // queue: the completed transfer occupies the bus tail,
+                        // and the following word remains cancellable.
+                        var retireCycle = _cpuBusCycle -
+                            (_m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0);
+                        State.Cycles = Math.Max(State.Cycles, retireCycle);
+                        _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, retireCycle);
+                        TopUpPrefetchAtRetirement();
                     }
 
                     var cycle = State.Cycles;
@@ -4900,6 +4924,37 @@ namespace Copper68k
                 _prefetchAddress == State.ProgramCounter &&
                 _prefetchDeferredCpuBusBatchEligible0;
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool EnsureDeferredCpuBusBatchPrefetchReady()
+        {
+            if (_prefetchCount < 2 &&
+                _hasPendingPrefetch &&
+                _pendingPrefetchAddress == unchecked(
+                    State.ProgramCounter + (uint)(_prefetchCount * 2)))
+            {
+                if (_instructionFetchWindowBus == null ||
+                    (!_instructionFetchWindow.ContainsWord(_pendingPrefetchAddress) &&
+                        !TryGetInstructionFetchWindow(
+                            _instructionFetchWindowBus,
+                            _pendingPrefetchAddress,
+                            out _instructionFetchWindow)) ||
+                    _deferredCpuInstructionTiming?.IsDeferredCpuBusBatchEligibleInstructionFetchWindow(
+                        in _instructionFetchWindow) != true)
+                {
+                    return false;
+                }
+
+                if (_prefetchCount == 0)
+                {
+                    _prefetchAddress = State.ProgramCounter;
+                }
+
+                TopUpPrefetchOne();
+            }
+
+            return IsCurrentPrefetchDeferredCpuBusBatchEligible();
+        }
+
         private sealed class NoOpInstructionBoundary : IM68kInstructionBoundary
         {
             public static NoOpInstructionBoundary Instance { get; } = new NoOpInstructionBoundary();
@@ -4975,6 +5030,7 @@ namespace Copper68k
                 {
                     var token = FetchLong();
                     var returnProgramCounter = State.ProgramCounter;
+                    FlushDeferredCpuTimingBoundary();
                     if (_bus.TryInvokeHostGateway(GetCpuBusAddress(instructionPc), token, State))
                     {
                         AddInstructionCycles(16);
@@ -7224,6 +7280,7 @@ namespace Copper68k
 
         public void Reset(uint programCounter, uint stackPointer)
         {
+            FlushDeferredCpuTimingBoundary();
             Array.Clear(State.D);
             Array.Clear(State.A);
             SetProgramCounterAndFlushPrefetch(programCounter);
@@ -8096,6 +8153,7 @@ namespace Copper68k
                         return true;
                     }
 
+                    FlushDeferredCpuTimingBoundary();
                     _bus.ResetExternalDevices(State.Cycles);
                     AddInstructionCycles(132);
                     return true;
@@ -8110,6 +8168,7 @@ namespace Copper68k
                     }
 
                     State.StatusRegister = FetchWord();
+                    FlushDeferredCpuTimingBoundary();
                     State.Stopped = true;
                     AddInstructionCycles(4);
                     return true;
@@ -11553,6 +11612,8 @@ namespace Copper68k
 
         protected void RaiseException(int vector, uint stackedProgramCounter, int cycles)
         {
+            FlushDeferredCpuTimingBoundary();
+
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
@@ -11568,6 +11629,23 @@ namespace Copper68k
             PushWord(savedStatusRegister);
             SetProgramCounterAndFlushPrefetch(ReadLong(GetExceptionVectorAddress(vector)));
             AddInstructionCycles(cycles);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void FlushDeferredCpuTimingBoundary()
+        {
+            if (_deferredCpuInstructionTiming?.IsDeferredCpuBusBatchActive != true)
+            {
+                return;
+            }
+
+            var boundaryCycle = Math.Max(
+                Math.Max(State.Cycles, _cpuRetireBusCycle),
+                _instructionCycleFloor);
+            _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref boundaryCycle);
+            State.Cycles = Math.Max(State.Cycles, boundaryCycle);
+            _cpuBusCycle = Math.Max(_cpuBusCycle, boundaryCycle);
+            _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, boundaryCycle);
         }
 
         private void RaiseAddressError(

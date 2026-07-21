@@ -35,6 +35,11 @@ namespace CopperMod.Amiga.Bus
                 includeActiveDmaProgress: true);
         }
 
+        private bool ShouldPublishDiskThrough(long cycle, AmigaHardwareEventMask mask)
+            => HasDiskWakeSourceThrough(cycle, mask) &&
+                (((mask & AmigaHardwareEventMask.DiskPassiveInput) != 0) ||
+                    HasDiskWorkThrough(cycle, mask));
+
         private bool HasDiskWakeSourceThrough(long targetCycle, AmigaHardwareEventMask mask)
         {
             var includePassiveInput = (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0;

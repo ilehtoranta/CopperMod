@@ -44,22 +44,6 @@ public sealed class CopperScreenArchitectureTests
 		AssertProfile("expanded-kickstart13", MachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.Kickstart13Rom, 512 * 1024, 2);
 		AssertProfile("expanded-diagrom", MachineProfile.A500Pal512KBoot, CopperScreenKickstartSource.DiagRom, 512 * 1024, 2);
 		AssertProfile(
-			"expanded-jit-realfast-copperstart",
-			MachineProfile.A500Pal512KBoot,
-			CopperScreenKickstartSource.CopperStart,
-			512 * 1024,
-			2,
-			M68kBackendKind.JitM68000,
-			2 * 1024 * 1024);
-		AssertProfile(
-			"expanded-jit-realfast-kickstart13",
-			MachineProfile.A500Pal512KBoot,
-			CopperScreenKickstartSource.Kickstart13Rom,
-			512 * 1024,
-			2,
-			M68kBackendKind.JitM68000,
-			2 * 1024 * 1024);
-		AssertProfile(
 			"expanded-m68040-jit-kickstart-rom",
 			MachineProfile.A500Pal512KBoot,
 			CopperScreenKickstartSource.KickstartRom,
@@ -939,9 +923,10 @@ public sealed class CopperScreenArchitectureTests
 			new[] { "--profile", "expanded-copperstart", "--jit" },
 			AppContext.BaseDirectory);
 
-		Assert.Null(options.Error);
+		Assert.NotNull(options.Error);
+		Assert.Contains("temporarily unavailable", options.Error, StringComparison.OrdinalIgnoreCase);
 		Assert.Equal(M68kBackendKind.AccurateM68000, options.Profile.CpuBackend);
-		Assert.Equal(M68kBackendKind.JitM68000, options.CpuBackendOverride);
+		Assert.Null(options.CpuBackendOverride);
 
 		var explicitOptions = CopperScreenStartupOptions.Parse(
 			new[] { "--cpu", "interpreter" },

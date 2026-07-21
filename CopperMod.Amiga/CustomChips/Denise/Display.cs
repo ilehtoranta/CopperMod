@@ -110,6 +110,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private const int MaxRasterlinePresentationEvents = 256;
         private const int MaxLiveRasterlinePlanEvents = 64;
         private const int MaxCapturedCopperDisplayWrites = 65536;
+        private const int MaxCapturedCopperWaitTransitions = 4096;
         private static readonly ulong[] PlanarByteExpansion = CreatePlanarByteExpansion();
         private static readonly int[] LowResBitplaneFetchSlotsByPlane = [7, 3, 5, 1, 6, 2];
         private static readonly int[] HighResBitplaneFetchSlotsByPlane = [3, 1, 2, 0];
@@ -260,6 +261,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private readonly int[] _predictedRasterlinePlanEventCounts = new int[RasterlineRingSize];
         private readonly LiveRasterlinePredictionStatus[] _predictedRasterlinePlanStatuses = new LiveRasterlinePredictionStatus[RasterlineRingSize];
         private BoundedWriteLog? _copperDisplayWrites;
+        private List<CopperWaitTransitionTrace>? _copperWaitTransitions;
+        private List<CopperPresentationTransitionTrace>? _copperPresentationTransitions;
+        private List<RenderedCopperTimelineSegmentTrace>? _renderedCopperTimelineSegments;
+        private List<RenderedCopperPixelTrace>? _renderedCopperPixelTraces;
         private DisplayFrameTimeline _displayTimeline;
         private bool _renderingLiveCapture;
         private bool _advancingLiveDma;
@@ -293,6 +298,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private long _liveCycle;
         private long _liveFrameStartCycle;
         private long _liveCapturedThroughCycle;
+        private long _liveCausalDisplayStateThroughCycle;
+        private long _liveFinalizedPresentationThroughCycle;
         private int _liveNextLineStateRow;
         private LiveBitplaneFetchTimeline _liveBitplaneFetchTimeline;
         private int _liveNextFetchRow
@@ -470,6 +477,41 @@ namespace CopperMod.Amiga.CustomChips.Denise
         internal IReadOnlyList<CustomRegisterWrite> CopperDisplayWrites
             => _copperDisplayWrites ?? (IReadOnlyList<CustomRegisterWrite>)Array.Empty<CustomRegisterWrite>();
 
+        internal IReadOnlyList<CopperWaitTransitionTrace> CopperWaitTransitions
+            => _copperWaitTransitions ?? (IReadOnlyList<CopperWaitTransitionTrace>)Array.Empty<CopperWaitTransitionTrace>();
+
+        internal IReadOnlyList<CopperPresentationTransitionTrace> CopperPresentationTransitions
+            => _copperPresentationTransitions ?? (IReadOnlyList<CopperPresentationTransitionTrace>)Array.Empty<CopperPresentationTransitionTrace>();
+
+        internal IReadOnlyList<RenderedCopperTimelineSegmentTrace> RenderedCopperTimelineSegments
+            => _renderedCopperTimelineSegments ?? (IReadOnlyList<RenderedCopperTimelineSegmentTrace>)Array.Empty<RenderedCopperTimelineSegmentTrace>();
+
+        internal IReadOnlyList<RenderedCopperPixelTrace> RenderedCopperPixelTraces
+            => _renderedCopperPixelTraces ?? (IReadOnlyList<RenderedCopperPixelTrace>)Array.Empty<RenderedCopperPixelTrace>();
+
+        internal CopperTimelineSegmentTrace[] CaptureCopperTimelineSegments(int row)
+        {
+            if (!_displayTimeline.HasLine(row))
+            {
+                return Array.Empty<CopperTimelineSegmentTrace>();
+            }
+
+            var line = _displayTimeline.GetLine(row);
+            var result = new CopperTimelineSegmentTrace[line.SegmentCount];
+            for (var index = 0; index < line.SegmentCount; index++)
+            {
+                var segment = line.Segments[index];
+                var state = _displayTimeline.GetState(segment.StateIndex);
+                result[index] = new CopperTimelineSegmentTrace(
+                    segment.XStart,
+                    segment.XStop,
+                    state.PaletteSnapshotIndex,
+                    _livePaletteSnapshots.GetEncodedColor(state.PaletteSnapshotIndex, 0));
+            }
+
+            return result;
+        }
+
         internal int BitplaneDataSpanCount => _bitplaneDataSpans.Count;
 
         internal int PaletteFrameSnapshotCount => _paletteFrameSnapshots.Count;
@@ -538,6 +580,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         internal long LiveExecutionCycle => _liveCycle;
 
         internal long LiveCapturedThroughCycle => _liveCapturedThroughCycle;
+
+        internal long LiveCausalDisplayStateThroughCycle => _liveCausalDisplayStateThroughCycle;
+
+        internal long LiveFinalizedPresentationThroughCycle => _liveFinalizedPresentationThroughCycle;
 
         internal long LiveCpuVisibleWorkCycleCacheHits => _liveCpuVisibleWorkCycleCacheHits;
 
@@ -665,6 +711,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             _pendingWrites.Clear();
             _copperDisplayWrites?.Clear();
+            _copperWaitTransitions?.Clear();
+            _copperPresentationTransitions?.Clear();
+            _renderedCopperTimelineSegments?.Clear();
+            _renderedCopperPixelTraces?.Clear();
             _pendingIndex = 0;
             ClearPaletteFrameSpans();
             Array.Clear(_bitplanePointers);
@@ -1914,6 +1964,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var x = GetOutputXForCycle(_liveFrameStartCycle, cycle, pixelDelay);
+            if (isCopper && _bus.BusAccessCaptureEnabled)
+            {
+                var transitions = _copperPresentationTransitions ??=
+                    new List<CopperPresentationTransitionTrace>(256);
+                if (transitions.Count < MaxCapturedCopperWaitTransitions)
+                {
+                    transitions.Add(new CopperPresentationTransitionTrace(
+                        cycle,
+                        row,
+                        x,
+                        offset,
+                        _colors[offset >= 0x180 && offset < 0x1C0 ? (offset - 0x180) >> 1 : 0]));
+                }
+            }
             var snapshotIndex = CaptureTimelineStateSnapshot(row, GetLiveLineState(row));
             _displayTimeline.RecordDisplayChange(
                 row,
@@ -2641,6 +2705,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 WaitRestartIncomingRgaBlocked = false;
                 WaitStartCarryPending = false;
                 WaitStartCarrySkipCount = 0;
+                ArmWaitStartTailAfterMove = false;
+                PendingWaitStartTail = false;
+                WaitRunFirst = 0;
+                WaitRunSecond = 0;
+                SatisfiedWaitRunCount = 0;
+                HasWaitRun = false;
             }
 
             public uint Pc;
@@ -2704,8 +2774,61 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public byte WaitStartCarrySkipCount;
 
+            public bool ArmWaitStartTailAfterMove;
+
+            public bool PendingWaitStartTail;
+
+            public ushort WaitRunFirst;
+
+            public ushort WaitRunSecond;
+
+            public byte SatisfiedWaitRunCount;
+
+            public bool HasWaitRun;
+
+            public void CompleteMove(long stopCycle)
+            {
+                Cycle = stopCycle;
+                if (ArmWaitStartTailAfterMove)
+                {
+                    PendingWaitStartTail = true;
+                    ArmWaitStartTailAfterMove = false;
+                }
+            }
+
+            public long ConsumeWaitStartTail(ushort firstWord, long secondRequestCycle)
+            {
+                if (!PendingWaitStartTail)
+                {
+                    return secondRequestCycle;
+                }
+
+                PendingWaitStartTail = false;
+                return (firstWord & 1) == 0
+                    ? secondRequestCycle + (2L * AgnusChipSlotScheduler.SlotCycles)
+                    : secondRequestCycle;
+            }
+
             public void Wait(ushort first, ushort second)
             {
+                if (HasWaitRun && WaitRunFirst == first && WaitRunSecond == second)
+                {
+                    SatisfiedWaitRunCount++;
+                    if ((first & 0x0004) == 0 &&
+                        SatisfiedWaitRunCount > 0 &&
+                        (SatisfiedWaitRunCount & 1) == 0)
+                    {
+                        PendingWaitStartTail = true;
+                    }
+                }
+                else
+                {
+                    WaitRunFirst = first;
+                    WaitRunSecond = second;
+                    SatisfiedWaitRunCount = 0;
+                    HasWaitRun = true;
+                }
+
                 WaitRestartStage = CopperWaitRestartStage.WaitingForComparison;
                 WaitFirst = first;
                 WaitSecond = second;
@@ -2739,6 +2862,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 WaitRestartIncomingRgaBlocked = false;
                 WaitStartCarryPending = false;
                 WaitStartCarrySkipCount = 0;
+                ArmWaitStartTailAfterMove = false;
+                PendingWaitStartTail = false;
+                WaitRunFirst = 0;
+                WaitRunSecond = 0;
+                SatisfiedWaitRunCount = 0;
+                HasWaitRun = false;
                 PendingStart = false;
                 SuppressNextMove = false;
                 PendingInstructionSecondWord = false;
@@ -4533,4 +4662,44 @@ namespace CopperMod.Amiga.CustomChips.Denise
         public int LastArchiveRejectMissingSpritePreviousStatusB { get; }
     }
 
+    internal readonly record struct CopperWaitTransitionTrace(
+        uint Pc,
+        ushort WaitFirst,
+        ushort WaitSecond,
+        long ComparisonCycle,
+        long SatisfiedCycle,
+        long RestartCycle,
+        bool CarryPending,
+        byte CarrySkipCount,
+        bool RestartIncomingRgaBlocked);
+
+    internal readonly record struct CopperPresentationTransitionTrace(
+        long Cycle,
+        int Row,
+        int X,
+        ushort Offset,
+        ushort Value);
+
+    internal readonly record struct CopperTimelineSegmentTrace(
+        int XStart,
+        int XStop,
+        int PaletteSnapshotIndex,
+        ushort Color0);
+
+    internal readonly record struct RenderedCopperTimelineSegmentTrace(
+        int Row,
+        int XStart,
+        int XStop,
+        int PaletteSnapshotIndex,
+        ushort Color0);
+
+    internal readonly record struct RenderedCopperPixelTrace(
+        int Row,
+        byte Stage,
+        uint X217,
+        uint X218,
+        uint X219,
+        uint X220,
+        uint X221,
+        uint X222);
 }

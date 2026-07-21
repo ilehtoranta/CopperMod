@@ -506,7 +506,14 @@ CopperMod.Amiga/References
 GeneratedAudio
 CopperMod.Amiga.Emulator/Docs
 CopperMod.Sid/Docs
+!CopperMod.Sid/Docs/
+CopperMod.Sid/Docs/*
+!CopperMod.Sid/Docs/SidReferenceMeasuredProfile.md
 CopperScreen/ROM
 CopperMod.Sid/$refBase.wav
 CopperScreen/Sounds
 benchmark-results
+.artifacts
+*.nettrace
+*.tsv
+*.etlx

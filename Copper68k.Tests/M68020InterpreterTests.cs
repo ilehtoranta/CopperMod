@@ -4737,6 +4737,42 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(3, bus.InstructionFetchWords);
 		Assert.True(cpu.Timing.InstructionCache.Enabled);
 	}
+
+	[Fact]
+	public void InstructionCacheRetainsGuestCodeUntilCacrFlush()
+	{
+		const uint cacheableCodeBase = 0x0020_0000;
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(
+			bus,
+			cacheableCodeBase,
+			0x4E7B, 0x0002, // MOVEC D0,CACR: enable the instruction cache
+			0x4E71, // NOP: cached with the branch below
+			0x60FC, // BRA.S back to the NOP
+			0x4E7B, 0x0002); // MOVEC D0,CACR: explicit cache flush
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(cacheableCodeBase, 0x3000);
+		cpu.State.D[0] = 0x0000_0001;
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		Assert.Equal(cacheableCodeBase + 4, cpu.State.ProgramCounter);
+
+		// A data write changes RAM but the current I-cache line remains guest-visible.
+		bus.WriteWord(cacheableCodeBase + 4, 0x7207); // MOVEQ #7,D1
+		cpu.ExecuteInstruction();
+		Assert.Equal(0u, cpu.State.D[1]);
+
+		// CACR bit 3 clears the instruction cache. The next fetch must observe RAM.
+		cpu.State.ProgramCounter = cacheableCodeBase + 8;
+		cpu.State.D[0] = 0x0000_0009;
+		cpu.ExecuteInstruction();
+		cpu.State.ProgramCounter = cacheableCodeBase + 4;
+		cpu.ExecuteInstruction();
+		Assert.Equal(7u, cpu.State.D[1]);
+	}
+
 	[Fact]
 	public void EnabledInstructionCacheDoesNotCacheChipRamFetches()
 	{

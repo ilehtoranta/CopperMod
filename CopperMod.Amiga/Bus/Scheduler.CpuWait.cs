@@ -140,7 +140,14 @@ namespace CopperMod.Amiga.Bus
                         return CpuWaitGrantAdvanceResult.Granted;
                     }
 
-                    candidate += AgnusChipSlotScheduler.SlotCycles;
+                    // A Copper-owned half of the HRM pair consumes the adjacent
+                    // CPU opportunity as well. The reference allocator skips the
+                    // whole pair; the chronological retry loop must do the same
+                    // after materializing the Copper slot.
+                    candidate += _bus.TryGetCommittedAgnusSlotOwner(candidate, out var deniedOwner) &&
+                        deniedOwner == AgnusChipSlotOwner.Copper
+                            ? 2 * AgnusChipSlotScheduler.SlotCycles
+                            : AgnusChipSlotScheduler.SlotCycles;
                 }
             }
             finally

@@ -4,6 +4,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 
 namespace CopperMod.Amiga.CustomChips.Denise
 {
@@ -59,6 +60,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             try
             {
                 ApplyPendingWrites(cycle);
+                MarkLiveCausalDisplayCommit(cycle);
                 if (IsLiveLineValid(row))
                 {
                     InvalidateRowDmaPlan(row);
@@ -335,6 +337,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         IsBitplaneRgaDecisionPhase(waitCycle) || IsBitplaneRgaOutputPhase(waitCycle);
                     _liveCopper.WaitStartCarrySkipCount = (byte)(overlapsAdjacentRgaStage ? 2 : 0);
                     _liveCopper.WaitStartCarryPending = incomingRgaBlocked;
+                    _liveCopper.ArmWaitStartTailAfterMove =
+                        incomingRgaBlocked && (_liveCopper.WaitFirst & 0x0004) == 0;
                     restartIncomingRgaBlocked =
                         _bus.CausalBusExecutor.GetNextEligibleCopperControlPhase(
                             resumeCycle,
@@ -352,12 +356,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         restartIncomingRgaBlocked = true;
                         _liveCopper.WaitStartCarryPending = false;
                     }
+
                 }
                 else
                 {
                     _liveCopper.WaitStartCarryPending = false;
                     _liveCopper.WaitStartCarrySkipCount = 0;
                 }
+                CaptureCopperWaitTransition(
+                    comparisonStartCycle,
+                    resumeCycle,
+                    waitCycle,
+                    restartIncomingRgaBlocked);
                 if (resumeCycle > targetCycle)
                 {
                     _liveCopper.ArmWaitRestart(resumeCycle, restartIncomingRgaBlocked);
@@ -391,9 +401,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 var secondAddress = AddDmaPointerOffset(_liveCopper.Pc, 2);
+                var secondWordEarliestCycle = _liveCopper.ConsumeWaitStartTail(
+                    first,
+                    GetCopperSecondWordRequestCycle(firstAccess));
                 var secondRequestCycle = _bus.CausalBusExecutor.PredictCopperWordCycle(
                     secondAddress,
-                    GetCopperSecondWordRequestCycle(firstAccess));
+                    secondWordEarliestCycle);
                 if (secondRequestCycle > targetCycle)
                 {
                     _liveCopper.PendingInstructionSecondWord = true;
@@ -476,7 +489,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     ApplyLiveCopperMove(register, instruction.Second, dataCycle, instruction.MoveStopCycle, suppressMove);
                 }
 
-                _liveCopper.Cycle = instruction.MoveStopCycle;
+                _liveCopper.CompleteMove(instruction.MoveStopCycle);
                 return;
             }
 
@@ -830,7 +843,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ApplyLiveCopperMove(register, value, dataCycle, stopCycle, suppressMove);
             if (!_liveCopper.Stopped)
             {
-                _liveCopper.Cycle = stopCycle;
+                _liveCopper.CompleteMove(stopCycle);
             }
 
             InvalidateLiveDisplayEventCycle();
@@ -898,6 +911,35 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             (_copperDisplayWrites ??= new BoundedWriteLog(MaxCapturedCopperDisplayWrites))
                 .Add(new CustomRegisterWrite(cycle, register, value));
+        }
+
+        private void CaptureCopperWaitTransition(
+            long comparisonCycle,
+            long restartCycle,
+            long satisfiedCycle,
+            bool restartIncomingRgaBlocked)
+        {
+            if (!_bus.BusAccessCaptureEnabled)
+            {
+                return;
+            }
+
+            var transitions = _copperWaitTransitions ??= new List<CopperWaitTransitionTrace>(256);
+            if (transitions.Count >= MaxCapturedCopperWaitTransitions)
+            {
+                return;
+            }
+
+            transitions.Add(new CopperWaitTransitionTrace(
+                _liveCopper.Pc,
+                _liveCopper.WaitFirst,
+                _liveCopper.WaitSecond,
+                comparisonCycle,
+                satisfiedCycle,
+                restartCycle,
+                _liveCopper.WaitStartCarryPending,
+                _liveCopper.WaitStartCarrySkipCount,
+                restartIncomingRgaBlocked));
         }
 
         private void RecordCopperQuiescentCopperMove(long cycle, ushort register)

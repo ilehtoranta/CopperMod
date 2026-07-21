@@ -11,106 +11,12 @@ public sealed class M68kJitCoreTests
 	private const uint M68040InstructionCacheEnable = 0x0000_0001;
 
 	[Fact]
-	public void FactoryCreatesJitBackend()
+	public void AmigaFactoryRejectsM68000JitBackend()
 	{
-		var bus = new AmigaBus();
+		var exception = Assert.Throws<NotSupportedException>(() =>
+			AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, new AmigaBus()));
 
-		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, bus);
-		var jit = Assert.IsType<M68kJitCore>(cpu);
-
-		Assert.True(GetPrivateBool(jit, "_v2Enabled"));
-		Assert.True(GetPrivateBool(jit, "_v2BusAccessEnabled"));
-		Assert.True(GetPrivateBool(jit, "_v2BusGraphEnabled"));
-	}
-
-	[Fact]
-	public void FactoryM68000JitUsesV2BusGraphForMemoryLoop()
-	{
-		var bus = CreateCodeBus();
-		WriteWords(bus, FastCodeBase, 0x2010, 0x60FC); // MOVE.L (A0),D0; BRA.S MOVE
-		bus.WriteLong(0x2000, 0x1234_5678);
-		var jit = Assert.IsType<M68kJitCore>(
-			AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, bus));
-		jit.Reset(FastCodeBase, 0x4000);
-		jit.State.A[0] = 0x2000;
-
-		var executed = jit.ExecuteInstructions(220, jit.State.Cycles + 100_000, new PureBatchBoundary());
-
-		Assert.Equal(220, executed);
-		Assert.Equal(0x1234_5678u, jit.State.D[0]);
-		Assert.True(jit.Counters.V2TraceHits > 0);
-		Assert.True(jit.Counters.V2BusAccessBatchExecutions > 0);
-		Assert.True(jit.Counters.V2BusAccessBatchInstructions > 0);
-	}
-
-	[Fact]
-	public void M68000JitTasChipRamLosesWriteBack()
-	{
-		var bus = new AmigaBus();
-		Write(bus.ChipRam, 0x1000, 0x4A, 0xD0); // TAS (A0)
-		bus.ChipRam[0x2000] = 0x01;
-		using var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, bus);
-		cpu.Reset(0x1000, 0x3000);
-		cpu.State.A[0] = 0x2000;
-
-		cpu.ExecuteInstruction();
-
-		Assert.Equal(0x01, bus.ChipRam[0x2000]);
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
-	}
-
-	[Fact]
-	public void HardwareSpecializedM68000JitFallbackPreservesExactPrefetchBusPhases()
-	{
-		var interpreterBus = new AmigaBus(captureBusAccesses: true, enableHardwareSpecialization: true);
-		var jitBus = new AmigaBus(captureBusAccesses: true, enableHardwareSpecialization: true);
-		Write(interpreterBus.ChipRam, 0x1000,
-			0x3A, 0x13, // MOVE.W (A3),D5
-			0x34, 0xC5, // MOVE.W D5,(A2)+
-			0x60, 0xFA); // BRA.S loop
-		Write(jitBus.ChipRam, 0x1000,
-			0x3A, 0x13,
-			0x34, 0xC5,
-			0x60, 0xFA);
-		var interpreter = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, interpreterBus);
-		var jit = Assert.IsType<M68kJitCore>(
-			AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, jitBus));
-		interpreter.Reset(0x1000, 0x4000);
-		jit.Reset(0x1000, 0x4000);
-		interpreter.State.A[2] = jit.State.A[2] = 0x2000;
-		interpreter.State.A[3] = jit.State.A[3] = 0x00DFF006;
-
-		for (var instruction = 0; instruction < 30; instruction++)
-		{
-			interpreter.ExecuteInstruction();
-			jit.ExecuteInstruction();
-		}
-
-		var interpreterPhases = interpreterBus.CpuBusPhases
-			.Select(phase => (
-				phase.CpuPhase.InstructionProgramCounter,
-				phase.CpuPhase.Address,
-				phase.CpuPhase.RequestedCycle,
-				phase.CpuPhase.CompletedCycle,
-				phase.CpuPhase.AccessKind,
-				phase.CpuPhase.IsWrite))
-			.ToArray();
-		var jitPhases = jitBus.CpuBusPhases
-			.Select(phase => (
-				phase.CpuPhase.InstructionProgramCounter,
-				phase.CpuPhase.Address,
-				phase.CpuPhase.RequestedCycle,
-				phase.CpuPhase.CompletedCycle,
-				phase.CpuPhase.AccessKind,
-				phase.CpuPhase.IsWrite))
-			.ToArray();
-
-		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
-		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
-		Assert.Equal(interpreterPhases, jitPhases);
-		Assert.Equal(30, jit.Counters.FallbackInstructions);
-		Assert.Equal(0, jit.Counters.TraceHits);
+		Assert.Contains("temporarily unavailable", exception.Message, StringComparison.OrdinalIgnoreCase);
 	}
 
 	[Fact]
@@ -377,7 +283,6 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Theory]
-	[InlineData((int)M68kBackendKind.JitM68000)]
 	[InlineData((int)M68kBackendKind.JitM68040)]
 	public void WarmCompiledRegisterLoopDoesNotAllocate(int backendValue)
 	{

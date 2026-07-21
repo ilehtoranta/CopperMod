@@ -315,7 +315,9 @@ namespace Copper68k
     {
         private readonly uint[] _tags;
         private readonly bool[] _valid;
+        private readonly ushort[] _instructionWords;
         private readonly int _lineSize;
+        private readonly int _wordsPerLine;
 
         public M68kInstructionCache(int byteSize = 256, int lineSize = 4)
         {
@@ -329,9 +331,16 @@ namespace Copper68k
                 throw new ArgumentOutOfRangeException(nameof(lineSize));
             }
 
+            if ((lineSize & 1) != 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(lineSize));
+            }
+
             _lineSize = lineSize;
+            _wordsPerLine = lineSize / 2;
             _tags = new uint[Math.Max(1, byteSize / lineSize)];
             _valid = new bool[_tags.Length];
+            _instructionWords = new ushort[_tags.Length * _wordsPerLine];
         }
 
         public bool Enabled { get; private set; }
@@ -382,6 +391,61 @@ namespace Copper68k
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Returns a word from a previously captured instruction-cache line.
+        /// A cache hit deliberately returns the captured guest bytes rather than
+        /// rereading backing memory: a 68020+ write is not visible to instruction
+        /// execution until a guest cache-control operation discards that line.
+        /// </summary>
+        public bool TryReadInstructionWord(uint address, out ushort value)
+        {
+            value = 0;
+            if (!Enabled)
+            {
+                return false;
+            }
+
+            var lineAddress = address & ~((uint)_lineSize - 1u);
+            var index = GetIndex(lineAddress);
+            if (!_valid[index] || _tags[index] != lineAddress)
+            {
+                return false;
+            }
+
+            var wordOffset = (int)((address - lineAddress) >> 1);
+            if ((uint)wordOffset >= (uint)_wordsPerLine)
+            {
+                return false;
+            }
+
+            value = _instructionWords[(index * _wordsPerLine) + wordOffset];
+            return true;
+        }
+
+        /// <summary>
+        /// Captures one complete instruction-cache line from the guest-visible
+        /// code reader. Frozen caches retain their existing contents on a miss.
+        /// </summary>
+        public void CaptureInstructionLine(uint address, IM68kCodeReader codeReader)
+        {
+            if (!Enabled || Frozen)
+            {
+                return;
+            }
+
+            var lineAddress = address & ~((uint)_lineSize - 1u);
+            var index = GetIndex(lineAddress);
+            var wordBase = index * _wordsPerLine;
+            for (var word = 0; word < _wordsPerLine; word++)
+            {
+                _instructionWords[wordBase + word] = codeReader.ReadHostWord(
+                    unchecked(lineAddress + (uint)(word * 2)));
+            }
+
+            _tags[index] = lineAddress;
+            _valid[index] = true;
         }
 
         public void Clear()
@@ -469,9 +533,20 @@ namespace Copper68k
                 ? M68030TimingModel.GetPlan(key)
                 : M68020TimingModel.GetPlan(key);
 
-        public bool ProbeInstructionCache(uint address)
-            => _profile.IsInstructionCacheableAddress(address) &&
-                InstructionCache.Probe(address);
+        public bool TryReadInstructionCacheWord(uint address, out ushort value)
+        {
+            value = 0;
+            return _profile.IsInstructionCacheableAddress(address) &&
+                InstructionCache.TryReadInstructionWord(address, out value);
+        }
+
+        public void CaptureInstructionCacheLine(uint address, IM68kCodeReader codeReader)
+        {
+            if (_profile.IsInstructionCacheableAddress(address))
+            {
+                InstructionCache.CaptureInstructionLine(address, codeReader);
+            }
+        }
 
         public bool ProbeDataCache(uint address)
             => DataCache?.Probe(address) == true;
@@ -1004,12 +1079,12 @@ namespace Copper68k
             out bool requiresSynchronization,
             out long completedMachineCycle)
         {
-            if (_codeReader is not null && _timing.ProbeInstructionCache(address))
+            if (_codeReader is not null && _timing.TryReadInstructionCacheWord(address, out var cachedValue))
             {
                 cacheHit = true;
                 requiresSynchronization = false;
                 completedMachineCycle = _state.Cycles;
-                return _codeReader.ReadHostWord(address);
+                return cachedValue;
             }
 
             if (CanUseFastInstructionFetch(address, M68kBusAccessKind.CpuInstructionFetch) &&
@@ -1018,7 +1093,9 @@ namespace Copper68k
                 cacheHit = false;
                 requiresSynchronization = false;
                 completedMachineCycle = _state.Cycles;
-                return _codeReader.ReadHostWord(address);
+                var directValue = _codeReader.ReadHostWord(address);
+                _timing.CaptureInstructionCacheLine(address, _codeReader);
+                return directValue;
             }
 
             cacheHit = false;
@@ -1028,6 +1105,10 @@ namespace Copper68k
             _timing.RecordPostedBusCompletion(cycle);
             requiresSynchronization = true;
             completedMachineCycle = cycle;
+            if (_codeReader is not null)
+            {
+                _timing.CaptureInstructionCacheLine(address, _codeReader);
+            }
             return value;
         }
 

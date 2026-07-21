@@ -92,9 +92,13 @@ namespace CopperMod.Amiga
         private const uint MemfPublic = 0x0000_0001;
         private const uint MemfChip = 0x0000_0002;
         private const uint MemfFast = 0x0000_0004;
+        private const uint Memf24BitDma = 0x0000_0200;
+        private const uint MemfKick = 0x0000_0400;
         private const uint MemfClear = 0x0001_0000;
         private const uint MemfLargest = 0x0002_0000;
+        private const uint MemfReverse = 0x0004_0000;
         private const uint MemfTotal = 0x0008_0000;
+        private const uint MemfNoExpunge = 0x8000_0000;
         private const uint AbsExecBaseAddress = 0x0000_0004;
         private const uint BootChipPublicLowerAddress = 0x0000_0400;
         private const uint BootSupervisorStackTopAddress = 0x0000_0400;
@@ -320,6 +324,9 @@ namespace CopperMod.Amiga
         private CopperStartExecListServices? _execListServices;
         private readonly CopperStartTaskScheduler _taskScheduler = new CopperStartTaskScheduler();
         private readonly ExecTaskServices _execTaskServices;
+        private readonly ExecPortServices _execPortServices;
+        private readonly ExecMemoryServices _execMemoryServices;
+        private readonly ExecPoolServices _execPoolServices;
         private uint _activeExecBase;
         private KickstartRomExecTakeoverState _kickstartRomExecTakeoverState;
         private readonly RuntimeInstructionBoundary _runtimeInstructionBoundary;
@@ -328,6 +335,9 @@ namespace CopperMod.Amiga
         {
             _machine = machine ?? throw new ArgumentNullException(nameof(machine));
             _execTaskServices = new ExecTaskServices(this);
+            _execPortServices = new ExecPortServices(this);
+            _execMemoryServices = new ExecMemoryServices(this);
+            _execPoolServices = new ExecPoolServices(this);
             _diskDma = diskDma ?? new ImmediateDiskDmaEngine();
             _instructionBoundary = new BootInstructionBoundary(this);
             _runtimeInstructionBoundary = new RuntimeInstructionBoundary(this);
@@ -554,6 +564,7 @@ namespace CopperMod.Amiga
             _romExecServices = null;
             _romExecLibraryServices = null;
             _execListServices = null;
+            _execPoolServices.Reset();
             _activeExecBase = 0;
             _kickstartRomExecTakeoverState = KickstartRomExecTakeoverState.Disabled;
             _diagnostics.Clear();
@@ -1894,51 +1905,53 @@ namespace CopperMod.Amiga
 
         private void HostAllocMem(M68kCpuState state)
         {
-            var size = (int)Math.Min(state.D[0], int.MaxValue);
-            var flags = state.D[1];
-            state.D[0] = AllocateMemoryFromMemList(Math.Max(4, size), flags);
+            _execMemoryServices.AllocMem(state);
+        }
+
+        private void RecordAllocDiagnostic(int size, uint flags, uint address)
+        {
             if (_hostAllocationDiagnosticCount < 16)
             {
                 _diagnostics.Add(new AmigaBootDiagnostic(
                     "AMIGA_BOOT_ALLOC_MEM",
-                    $"AllocMem requested 0x{size:X} bytes with flags 0x{flags:X8} and returned 0x{state.D[0]:X8}."));
+                    $"AllocMem requested 0x{size:X} bytes with flags 0x{flags:X8} and returned 0x{address:X8}."));
                 _hostAllocationDiagnosticCount++;
             }
         }
 
         private void HostAllocMemAndStore(M68kCpuState state)
         {
-            HostAllocMem(state);
-            if (state.A[0] != 0)
-            {
-                _machine.Bus.WriteLong(state.A[0], state.D[0], state.Cycles);
-            }
+            _execMemoryServices.AllocMemAndStore(state);
         }
 
         private void HostAvailMem(M68kCpuState state)
         {
-            state.D[0] = QueryAvailableMemory(state.D[1]);
+            _execMemoryServices.AvailMem(state);
         }
 
         private void HostAllocAbs(M68kCpuState state)
         {
-            var size = (int)Math.Min(state.D[0], int.MaxValue);
-            var location = state.A[1];
-            state.D[0] = AllocateAbsoluteMemoryFromMemList(Math.Max(4, size), location);
+            _execMemoryServices.AllocAbs(state);
+        }
+
+        private void RecordAllocAbsDiagnostic(int size, uint location, uint address)
+        {
             if (_hostAllocationDiagnosticCount < 16)
             {
                 _diagnostics.Add(new AmigaBootDiagnostic(
                     "AMIGA_BOOT_ALLOC_ABS",
-                    $"AllocAbs requested 0x{size:X} bytes at 0x{location:X8} and returned 0x{state.D[0]:X8}."));
+                    $"AllocAbs requested 0x{size:X} bytes at 0x{location:X8} and returned 0x{address:X8}."));
                 _hostAllocationDiagnosticCount++;
             }
         }
 
         private void HostFreeMem(M68kCpuState state)
         {
-            var address = state.A[1];
-            var size = (int)Math.Min(state.D[0], int.MaxValue);
-            FreeMemoryToMemList(address, size);
+            _execMemoryServices.FreeMem(state);
+        }
+
+        private void RecordFreeDiagnostic(uint address, int size)
+        {
             if (_hostFreeDiagnosticCount < 16)
             {
                 _diagnostics.Add(new AmigaBootDiagnostic(
@@ -1946,8 +1959,6 @@ namespace CopperMod.Amiga
                     $"FreeMem released 0x{size:X} bytes at 0x{address:X8}."));
                 _hostFreeDiagnosticCount++;
             }
-
-            state.D[0] = 0;
         }
 
         private void HostOpenLibrary(M68kCpuState state)
@@ -2358,6 +2369,10 @@ namespace CopperMod.Amiga
             {
                 -168 => HostExecAddIntServer(state),
                 -174 => HostExecRemIntServer(state),
+                -186 => _execMemoryServices.Allocate(state),
+                -192 => _execMemoryServices.Deallocate(state),
+                -222 => _execMemoryServices.AllocEntry(state),
+                -228 => _execMemoryServices.FreeEntry(state),
                 -294 => HostExecFindTask(state),
                 -282 => _execTaskServices.AddTask(state),
                 -288 => _execTaskServices.RemTask(state),
@@ -2390,6 +2405,15 @@ namespace CopperMod.Amiga
                 -378 => HostExecReplyMsg(state),
                 -384 => HostExecWaitPort(state),
                 -390 => HostExecFindPort(state),
+                -534 => _execMemoryServices.TypeOfMem(state),
+                -624 => _execMemoryServices.CopyMem(state),
+                -630 => _execMemoryServices.CopyMemQuick(state),
+                -684 => _execMemoryServices.AllocVec(state),
+                -690 => _execMemoryServices.FreeVec(state),
+                -696 => _execPoolServices.CreatePool(state),
+                -702 => _execPoolServices.DeletePool(state),
+                -708 => _execPoolServices.AllocPooled(state),
+                -714 => _execPoolServices.FreePooled(state),
                 _ => 0
             };
         }
@@ -5242,9 +5266,7 @@ namespace CopperMod.Amiga
         {
             if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
             {
-                var queuedMessage = RemoveFirstPortMessage(state.A[0]);
-                ClearPortSignalIfQueueEmpty(state.A[0]);
-                return queuedMessage;
+                return _execPortServices.GetMsg(state);
             }
 
             if (_syntheticIntuiMessages.Count <= 0)
@@ -5274,12 +5296,7 @@ namespace CopperMod.Amiga
             EnsureExecList(port + MsgPortMsgListOffset);
             if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
             {
-                var portList = GetActiveExecBase() + ExecPortListOffset;
-                EnsureExecList(portList);
-                if (!ContainsExecNode(portList, port))
-                {
-                    AddTailExecList(portList, port);
-                }
+                return _execPortServices.AddPort(state);
             }
             return 0;
         }
@@ -5290,7 +5307,7 @@ namespace CopperMod.Amiga
             if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active &&
                 IsValidExecPort(port) && ContainsExecNode(GetActiveExecBase() + ExecPortListOffset, port))
             {
-                RemoveExecNode(port);
+                _ = _execPortServices.RemPort(state);
             }
             _execPortsByAddress.Remove(port);
             return 0;
@@ -5304,6 +5321,11 @@ namespace CopperMod.Amiga
                 (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active && !ContainsExecNode(GetActiveExecBase() + ExecPortListOffset, port)))
             {
                 return 0;
+            }
+
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                return _execPortServices.PutMsg(state);
             }
 
             EnsureExecList(port + MsgPortMsgListOffset);
@@ -5338,7 +5360,7 @@ namespace CopperMod.Amiga
         {
             if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
             {
-                return FindNameInExecList(GetActiveExecBase() + ExecPortListOffset, state.A[1]);
+                return _execPortServices.FindPort(state);
             }
 
             var name = ReadNullTerminatedString(state.A[1], 96);
@@ -5616,18 +5638,7 @@ namespace CopperMod.Amiga
         {
             if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
             {
-                var port = state.A[0];
-                var list = port + MsgPortMsgListOffset;
-                if (IsValidExecPort(port) && _machine.Bus.ReadLong(list) != list + 4)
-                {
-                    return _machine.Bus.ReadLong(list);
-                }
-                if (IsValidExecPort(port))
-                {
-                    var bit = _machine.Bus.ReadByte(port + MsgPortSigBitOffset);
-                    if (bit < 32) WriteTaskSignals(GetCurrentTaskAddress(), TaskSigWaitOffset, 1u << bit);
-                }
-                return 0;
+                return _execPortServices.WaitPort(state);
             }
 
             if (_syntheticIntuiMessages.Count > 0)
@@ -7374,6 +7385,48 @@ namespace CopperMod.Amiga
             _machine.Bus.WriteLong(lower + MemChunkBytesOffset, freeBytes);
         }
 
+        private uint AllocateFromMemoryHeader(uint headerAddress, int byteCount, uint flags)
+        {
+            if (byteCount <= 0 || !_machine.Bus.IsMappedMemoryRange(headerAddress, MemHeaderFreeOffset + 4)) return 0;
+            var size = Align((uint)byteCount, 8);
+            var previousLinkAddress = headerAddress + MemHeaderFirstChunkOffset;
+            var chunkAddress = _machine.Bus.ReadLong(previousLinkAddress);
+            while (chunkAddress != 0)
+            {
+                var next = _machine.Bus.ReadLong(chunkAddress + MemChunkNextOffset);
+                var bytes = _machine.Bus.ReadLong(chunkAddress + MemChunkBytesOffset);
+                if (bytes >= size)
+                {
+                    uint address; uint allocated;
+                    if ((flags & MemfReverse) != 0 && bytes - size >= 8)
+                    {
+                        address = chunkAddress + bytes - size; allocated = size;
+                        _machine.Bus.WriteLong(chunkAddress + MemChunkBytesOffset, bytes - size);
+                    }
+                    else if (bytes - size < 8)
+                    {
+                        address = chunkAddress; allocated = bytes;
+                        _machine.Bus.WriteLong(previousLinkAddress, next);
+                    }
+                    else
+                    {
+                        address = chunkAddress; allocated = size;
+                        var remaining = chunkAddress + size;
+                        _machine.Bus.WriteLong(previousLinkAddress, remaining);
+                        _machine.Bus.WriteLong(remaining + MemChunkNextOffset, next);
+                        _machine.Bus.WriteLong(remaining + MemChunkBytesOffset, bytes - size);
+                    }
+                    var free = _machine.Bus.ReadLong(headerAddress + MemHeaderFreeOffset);
+                    _machine.Bus.WriteLong(headerAddress + MemHeaderFreeOffset, free >= allocated ? free - allocated : 0);
+                    if ((flags & MemfClear) != 0) _machine.Bus.ClearMemory(address, checked((int)allocated));
+                    return address;
+                }
+                previousLinkAddress = chunkAddress + MemChunkNextOffset;
+                chunkAddress = next;
+            }
+            return 0;
+        }
+
         private uint AllocateMemoryFromMemList(int byteCount, uint flags)
         {
             if (!_memoryListInstalled || byteCount <= 0)
@@ -7384,6 +7437,8 @@ namespace CopperMod.Amiga
             var size = Align((uint)byteCount, 8);
             foreach (var headerAddress in EnumerateCompatibleMemoryHeaders(flags))
             {
+                var allocatedFromHeader = AllocateFromMemoryHeader(headerAddress, byteCount, flags);
+                if (allocatedFromHeader != 0) return allocatedFromHeader;
                 var previousLinkAddress = headerAddress + MemHeaderFirstChunkOffset;
                 var chunkAddress = _machine.Bus.ReadLong(previousLinkAddress);
                 while (chunkAddress != 0)
@@ -7394,7 +7449,13 @@ namespace CopperMod.Amiga
                     {
                         uint allocatedAddress;
                         uint allocatedBytes;
-                        if (chunkBytes - size < 8)
+                        if ((flags & MemfReverse) != 0 && chunkBytes - size >= 8)
+                        {
+                            allocatedAddress = chunkAddress + chunkBytes - size;
+                            allocatedBytes = size;
+                            _machine.Bus.WriteLong(chunkAddress + MemChunkBytesOffset, chunkBytes - size);
+                        }
+                        else if (chunkBytes - size < 8)
                         {
                             allocatedAddress = chunkAddress;
                             allocatedBytes = chunkBytes;
@@ -7622,6 +7683,10 @@ namespace CopperMod.Amiga
         private bool IsMemoryHeaderCompatible(uint headerAddress, uint flags)
         {
             var attributes = _machine.Bus.ReadWord(headerAddress + MemHeaderAttributesOffset);
+            var lower = _machine.Bus.ReadLong(headerAddress + MemHeaderLowerOffset);
+            var upper = _machine.Bus.ReadLong(headerAddress + MemHeaderUpperOffset);
+            if ((flags & Memf24BitDma) != 0 && (lower >= 0x0100_0000 || upper > 0x0100_0000)) return false;
+            if ((flags & MemfKick) != 0 && (attributes & MemfKick) == 0) return false;
             if ((flags & MemfChip) != 0)
             {
                 return (attributes & MemfChip) != 0;
@@ -7633,6 +7698,19 @@ namespace CopperMod.Amiga
             }
 
             return (attributes & MemfPublic) != 0;
+        }
+
+        private uint TypeOfGuestMemory(uint address)
+        {
+            var listAddress = GetActiveExecBase() + ExecMemListOffset;
+            for (var header = _machine.Bus.ReadLong(listAddress); header != 0 && header != listAddress + 4; header = _machine.Bus.ReadLong(header))
+            {
+                if (!_machine.Bus.IsMappedMemoryRange(header, MemHeaderUpperOffset + 4)) return 0;
+                var lower = _machine.Bus.ReadLong(header + MemHeaderLowerOffset);
+                var upper = _machine.Bus.ReadLong(header + MemHeaderUpperOffset);
+                if (address >= lower && address < upper) return _machine.Bus.ReadWord(header + MemHeaderAttributesOffset);
+            }
+            return 0;
         }
 
         private uint AllocateProgramMemory(int byteCount)
@@ -7952,6 +8030,12 @@ namespace CopperMod.Amiga
             public uint InterruptAddress { get; }
 
             public uint DataAddress { get; }
+        }
+
+        private void DeallocateToMemoryHeader(uint headerAddress, uint address, int byteCount)
+        {
+            if (headerAddress == 0 || byteCount <= 0 || FindOwningMemoryHeader(address, Align((uint)byteCount, 8)) != headerAddress) return;
+            FreeMemoryToMemList(address, byteCount);
         }
 
         private bool MatchesNullTerminatedString(string? cached, uint address, int maxLength, string value)

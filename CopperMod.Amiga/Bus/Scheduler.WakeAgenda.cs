@@ -180,8 +180,17 @@ namespace CopperMod.Amiga.Bus
             return Math.Max(targetCycle, _bus.GetLineStopCycle(targetCycle));
         }
 
-        private void InvalidateWakeAgenda()
+        private void InvalidateWakeAgenda(
+            AmigaHardwareEventMask changedMask = AmigaHardwareEventMask.All,
+            bool invalidateCpuVisibility = true)
         {
+            if (invalidateCpuVisibility)
+            {
+                _bus.CausalBusExecutor.InvalidateCpuVisibilityAgenda(
+                    changedMask == AmigaHardwareEventMask.Raster
+                        ? CpuVisibilityDirtySource.Raster
+                        : CpuVisibilityDirtySource.All);
+            }
             var hadValidEntry = _slotContendedWakeAgenda.Valid || _interruptPollWakeAgenda.Valid;
             _slotContendedWakeAgenda = default;
             _interruptPollWakeAgenda = default;

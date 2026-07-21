@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace CopperMod.Amiga.Bus
 {
@@ -444,12 +445,49 @@ namespace CopperMod.Amiga.Bus
             int cpuInterruptMask,
             out M68kTraceBatchWakeSource wakeSource,
             out AmigaDiskController.SchedulerWakeReason diskWakeReason)
-            => _hardwareScheduler.GetNextCpuVisibleEventCycle(
+        {
+            var shadowEnabled = _agnusBusExecutor.CpuVisibilityShadowEnabled;
+            var legacyStart = shadowEnabled ? Stopwatch.GetTimestamp() : 0;
+            var cycle = _hardwareScheduler.GetNextCpuVisibleEventCycle(
                 currentCycle,
                 targetCycle,
                 cpuInterruptMask,
                 out wakeSource,
                 out diskWakeReason);
+            if (shadowEnabled)
+            {
+                var legacyTicks = Stopwatch.GetTimestamp() - legacyStart;
+                var executorStart = Stopwatch.GetTimestamp();
+                var horizon = _agnusBusExecutor.GetNextCpuVisibilityHorizon(
+                    currentCycle,
+                    targetCycle,
+                    cpuInterruptMask);
+                var executorTicks = Stopwatch.GetTimestamp() - executorStart;
+                _agnusBusExecutor.RecordCpuVisibilityShadow(
+                    currentCycle,
+                    targetCycle,
+                    cycle,
+                    wakeSource,
+                    diskWakeReason,
+                    in horizon);
+                _agnusBusExecutor.RecordCpuVisibilityQueryTicks(
+                    legacyTicks,
+                    executorTicks);
+            }
+
+            return cycle;
+        }
+
+        internal CpuVisibilityHorizon GetNextCpuVisibilityHorizon(
+            long currentCycle,
+            long targetCycle,
+            int cpuInterruptMask = -1,
+            long externalBoundaryCycle = long.MaxValue)
+            => _agnusBusExecutor.GetNextCpuVisibilityHorizon(
+                currentCycle,
+                targetCycle,
+                cpuInterruptMask,
+                externalBoundaryCycle);
 
         private static long MinStoppedWakeCandidate(
             long candidate,

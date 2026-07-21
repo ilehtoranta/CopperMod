@@ -65,7 +65,7 @@ namespace CopperMod.Amiga.Bus
         bool IM68kDeferredCpuInstructionTiming.IsDeferredCpuBusBatchActive => _deferredCpuBusBatchActive;
 
         bool IM68kDeferredCpuInstructionTiming.IsInternalNoBusWindowEnabled =>
-            _deferredCpuBusBatchEnabled && !_captureBusAccesses;
+            _deferredCpuInternalNoBusWindowEnabled && !_captureBusAccesses;
 
         bool IM68kDeferredCpuInstructionTiming.IsDeferredCpuBusBatchEligibleInstructionFetchWindow(
             in M68kInstructionFetchWindow window)
@@ -80,10 +80,29 @@ namespace CopperMod.Amiga.Bus
         {
             batchTargetCycle = currentCycle;
             wakeSource = M68kTraceBatchWakeSource.TargetCycle;
-            if (!_deferredCpuBusBatchEnabled ||
-                _captureBusAccesses ||
+            if (_captureBusAccesses ||
                 _deferredCpuBusBatchActive)
             {
+                return false;
+            }
+
+            if (!_deferredCpuBusBatchEnabled)
+            {
+                if (_agnusBusExecutor.CpuVisibilityShadowEnabled)
+                {
+                    currentCycle = Math.Max(0, currentCycle);
+                    var diagnosticTarget = targetCycle.HasValue
+                        ? Math.Max(currentCycle + 1, targetCycle.Value)
+                        : currentCycle + DeferredCpuBusBatchDefaultCycleWindow;
+                    var diagnosticInterruptMask = (state.StatusRegister >> 8) & 0x07;
+                    _ = GetNextCpuBatchWakeCandidateCycle(
+                        currentCycle,
+                        diagnosticTarget,
+                        diagnosticInterruptMask,
+                        out _,
+                        out _);
+                }
+
                 return false;
             }
 
@@ -93,12 +112,13 @@ namespace CopperMod.Amiga.Bus
                 ? Math.Max(currentCycle + 1, targetCycle.Value)
                 : currentCycle + DeferredCpuBusBatchDefaultCycleWindow;
             var interruptMask = (state.StatusRegister >> 8) & 0x07;
-            batchTargetCycle = GetNextCpuBatchWakeCandidateCycle(
+            var horizon = _agnusBusExecutor.GetNextCpuVisibilityHorizon(
                 currentCycle,
                 requestedTarget,
-                interruptMask,
-                out wakeSource,
-                out var diskWakeReason);
+                interruptMask);
+            batchTargetCycle = horizon.Cycle;
+            wakeSource = AgnusBusExecutor.MapLegacyReason(horizon.Reason);
+            var diskWakeReason = horizon.DiskReason;
             if (batchTargetCycle - currentCycle < DeferredCpuBusBatchMinimumHorizonCycles)
             {
                 return false;
@@ -106,6 +126,7 @@ namespace CopperMod.Amiga.Bus
 
             _deferredCpuBusBatchActive = true;
             _deferredCpuBusBatchHasTargetCycle = targetCycle.HasValue;
+            _deferredCpuBusBatchTargetCycle = batchTargetCycle;
             _deferredCpuInstructionTimingActive = !_captureBusAccesses;
             _deferredCpuDataAccessCount = 0;
             _deferredCpuDataLongShapeBits = 0;
@@ -149,7 +170,7 @@ namespace CopperMod.Amiga.Bus
             int cycles,
             M68kInternalNoBusWindowKind kind)
         {
-            if (!_deferredCpuBusBatchEnabled ||
+            if (!_deferredCpuInternalNoBusWindowEnabled ||
                 _captureBusAccesses ||
                 cycles <= 0)
             {
@@ -205,7 +226,8 @@ namespace CopperMod.Amiga.Bus
         private bool CanKeepDeferredCpuBusBatchForAccess(
             AmigaBusAccessTarget target,
             AmigaBusAccessKind kind,
-            bool isWrite)
+            bool isWrite,
+            long cycle)
         {
             if (!_deferredCpuBusBatchActive)
             {
@@ -218,11 +240,96 @@ namespace CopperMod.Amiga.Bus
                     target == AmigaBusAccessTarget.ExpansionRam;
             }
 
+            if (_deferredCpuChipReadSegmentsEnabled &&
+                target == AmigaBusAccessTarget.ChipRam &&
+                kind == AmigaBusAccessKind.CpuDataRead &&
+                !_agnusBusExecutor.MayWriteChipRamBefore(
+                    Math.Max(cycle, _deferredCpuBusBatchTargetCycle)))
+            {
+                return true;
+            }
+
             return target == AmigaBusAccessTarget.Rom ||
                 target is AmigaBusAccessTarget.RealFastRam or AmigaBusAccessTarget.RtgVram ||
                 target == AmigaBusAccessTarget.ExpansionRam ||
                 (kind == AmigaBusAccessKind.CpuInstructionFetch &&
                     target == AmigaBusAccessTarget.HostTrap);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryJournalDeferredCpuChipWordWrite(
+            uint address,
+            ushort value,
+            ref long cycle)
+        {
+            if (!_deferredCpuBusBatchActive ||
+                _agnusBusExecutor.IsFlushingCpuEventJournal)
+            {
+                return false;
+            }
+
+            if (_agnusBusExecutor.HasPendingCpuWriteOverlap(address, 2))
+            {
+                EndDeferredCpuBusBatchCore(
+                    ref cycle,
+                    M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
+                return false;
+            }
+
+            if (!_agnusBusExecutor.TryEnqueueCpuChipWordWrite(
+                address,
+                value,
+                cycle,
+                CpuJournalInstructionPhase.Operand,
+                CpuJournalDependencyFlags.None,
+                out _))
+            {
+                EndDeferredCpuBusBatchCore(
+                    ref cycle,
+                    M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
+                return false;
+            }
+
+            cycle += AgnusChipSlotScheduler.SlotCycles;
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryJournalDeferredCpuChipLongWrite(
+            uint address,
+            uint value,
+            ref long cycle)
+        {
+            if (!_deferredCpuBusBatchActive ||
+                _agnusBusExecutor.IsFlushingCpuEventJournal)
+            {
+                return false;
+            }
+
+            if (_agnusBusExecutor.HasPendingCpuWriteOverlap(address, 4))
+            {
+                EndDeferredCpuBusBatchCore(
+                    ref cycle,
+                    M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
+                return false;
+            }
+
+            if (!_agnusBusExecutor.TryEnqueueCpuChipLongWrite(
+                address,
+                value,
+                cycle,
+                CpuJournalInstructionPhase.Operand,
+                out _,
+                out _))
+            {
+                EndDeferredCpuBusBatchCore(
+                    ref cycle,
+                    M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
+                return false;
+            }
+
+            cycle += 2 * AgnusChipSlotScheduler.SlotCycles;
+            return true;
         }
 
         private void RecordDeferredCpuBusBatchWakeSource(M68kTraceBatchWakeSource wakeSource)
@@ -331,6 +438,7 @@ namespace CopperMod.Amiga.Bus
             if (!_deferredCpuBusBatchActive)
             {
                 FlushDeferredCpuDataTiming(ref cycle);
+                _agnusBusExecutor.FlushCpuEventJournal(ref cycle);
                 _deferredCpuInstructionTimingActive = false;
                 return;
             }
@@ -342,6 +450,8 @@ namespace CopperMod.Amiga.Bus
                 {
                     FlushDeferredCpuDataTiming(ref cycle);
                 }
+
+                _agnusBusExecutor.FlushCpuEventJournal(ref cycle);
             }
             finally
             {
@@ -350,6 +460,7 @@ namespace CopperMod.Amiga.Bus
 
             _deferredCpuBusBatchActive = false;
             _deferredCpuBusBatchHasTargetCycle = false;
+            _deferredCpuBusBatchTargetCycle = 0;
             _deferredCpuInstructionTimingActive = false;
             var executionStarted = _deferredCpuBusBatchExecutionStarted;
             _deferredCpuBusBatchExecutionStarted = false;
@@ -401,6 +512,7 @@ namespace CopperMod.Amiga.Bus
             _deferredCpuDataReplayCycle = 0;
             _deferredCpuBusBatchActive = false;
             _deferredCpuBusBatchHasTargetCycle = false;
+            _deferredCpuBusBatchTargetCycle = 0;
             _endingDeferredCpuBusBatch = false;
             _deferredCpuBusBatchExecutionStarted = false;
             _deferredCpuBusBatchPendingWakeSource = M68kTraceBatchWakeSource.Unknown;
@@ -536,7 +648,7 @@ namespace CopperMod.Amiga.Bus
         {
             FlushDeferredCpuDataTiming(
                 ref cycle,
-                CanKeepDeferredCpuBusBatchForAccess(target, kind, isWrite));
+                CanKeepDeferredCpuBusBatchForAccess(target, kind, isWrite, cycle));
             AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
         }
 
@@ -687,7 +799,7 @@ namespace CopperMod.Amiga.Bus
             out long grantedCycle,
             out long secondWordCycle)
         {
-            if (!CanKeepDeferredCpuBusBatchForAccess(target, kind, isWrite))
+            if (!CanKeepDeferredCpuBusBatchForAccess(target, kind, isWrite, cycle))
             {
                 var deferInstructionFetchWindowExit =
                     _deferredCpuBusBatchActive &&
@@ -736,7 +848,7 @@ namespace CopperMod.Amiga.Bus
                     target == AmigaBusAccessTarget.ChipRam &&
                     grantedCycle <= ExecutedChipBusHorizon)
                 {
-                    cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                    AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                     goto RetryCausalCpuGrant;
                 }
 
@@ -760,7 +872,7 @@ namespace CopperMod.Amiga.Bus
                 if (target == AmigaBusAccessTarget.ChipRam &&
                     grantedCycle <= ExecutedChipBusHorizon)
                 {
-                    cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                    AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                     goto RetryCausalCpuGrant;
                 }
 
@@ -780,7 +892,7 @@ namespace CopperMod.Amiga.Bus
             if (target == AmigaBusAccessTarget.ChipRam &&
                 access.GrantedCycle <= ExecutedChipBusHorizon)
             {
-                cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                 goto RetryCausalCpuGrant;
             }
 

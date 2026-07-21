@@ -210,5 +210,17 @@ namespace CopperMod.Amiga.Bus
         string AgnusExecutorFirstShadowMismatch,
         long AgnusFixedPlanShadowMatches,
         long AgnusFixedPlanShadowMismatches,
-        string AgnusFixedPlanFirstShadowMismatch);
+        string AgnusFixedPlanFirstShadowMismatch,
+        long CpuVisibilityQueries,
+        long CpuVisibilityRootReads,
+        long CpuVisibilityLeafUpdates,
+        long CpuVisibilitySourceRefreshes,
+        long CpuVisibilityShadowMatches,
+        long CpuVisibilityShadowMismatches,
+        long CpuVisibilityPotentialCycles,
+        long CpuVisibilityPotentialInstructions,
+        long CpuVisibilityShortHorizonRejections,
+        long CpuVisibilityLegacyQueryTicks,
+        long CpuVisibilityExecutorQueryTicks,
+        string CpuVisibilityFirstShadowMismatch);
 }

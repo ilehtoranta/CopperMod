@@ -76,7 +76,7 @@ public sealed class CopperScreenBootTests
 		{
 			AmigaHardfile.CreateBlank(hardfilePath, 32L * 1024 * 1024);
 			using var emulator = CopperScreenEmulator.Create(
-				new[] { "--profile", "copperhdf", "--jit", "--kickstart-rom", romPath, "--hdf", hardfilePath },
+				new[] { "--profile", "copperhdf", "--cpu", "accuratem68000", "--kickstart-rom", romPath, "--hdf", hardfilePath },
 				AppContext.BaseDirectory);
 			var machine = GetMachine(emulator);
 

@@ -710,6 +710,7 @@ namespace CopperMod.Amiga.Bus
             HardwareScheduleImpact impact)
         {
             offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+            _agnusBusExecutor.InvalidateCpuVisibilityAgenda();
 
             // Until the unified executor is the production owner, legacy device
             // writes may legitimately be observed behind its diagnostic horizon.

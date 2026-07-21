@@ -228,7 +228,6 @@ public sealed class AutoconfigBusTests
 
 	[Theory]
 	[InlineData((int)M68kBackendKind.AccurateM68000)]
-	[InlineData((int)M68kBackendKind.JitM68000)]
 	[InlineData((int)M68kBackendKind.AccurateM68EC020)]
 	public void LinearRtgRejectsTwentyFourBitCpuProfiles(int backendValue)
 	{
@@ -276,7 +275,6 @@ public sealed class AutoconfigBusTests
 
 	[Theory]
 	[InlineData((int)M68kBackendKind.AccurateM68000)]
-	[InlineData((int)M68kBackendKind.JitM68000)]
 	[InlineData((int)M68kBackendKind.AccurateM68EC020)]
 	public void ZorroIIIRamRejectsTwentyFourBitCpuProfiles(int backendValue)
 	{

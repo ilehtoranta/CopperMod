@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+using System;
 using System.Runtime.CompilerServices;
 
 namespace CopperMod.Amiga.Runtime
@@ -21,37 +22,13 @@ namespace CopperMod.Amiga.Runtime
                 ? backend switch
                 {
                     M68kBackendKind.AccurateM68000 => M68kCoreFactory.CreateM68000Core(amigaBus, default(AmigaCpuDataAccess)),
-                    M68kBackendKind.JitM68000 => M68kJitCore.CreateM68000(
-                        amigaBus,
-                        (state, instructionFrequency, cpuModel) => CreateJitM68000Fallback(
-                            amigaBus,
-                            state,
-                            instructionFrequency,
-                            cpuModel)),
+                    // The MC68000 JIT shares write-tracking plumbing with the normal
+                    // Amiga path. Keep it unavailable until that contract is isolated.
+                    M68kBackendKind.JitM68000 => throw new NotSupportedException(
+                        "The Amiga MC68000 JIT is temporarily unavailable. Use AccurateM68000."),
                     _ => M68kCoreFactory.Default.Create(backend, bus)
                 }
                 : M68kCoreFactory.Default.Create(backend, bus);
-
-        private static IM68kCore CreateJitM68000Fallback(
-            AmigaBus bus,
-            M68kCpuState state,
-            M68kInstructionFrequencyMatrix instructionFrequency,
-            M68kJitCpuModel cpuModel)
-        {
-            if (cpuModel != M68kJitCpuModel.M68000)
-            {
-                throw new M68kEmulationException($"Unexpected Amiga M68k JIT fallback CPU model: {cpuModel}.");
-            }
-
-            return M68kCoreFactory.CreateM68000Core(
-                bus,
-                default(AmigaCpuDataAccess),
-                state,
-                instructionFrequency,
-                enableInstructionFetchWindow: false,
-                enableCpuBusPhaseTrace:
-                    ((IM68000BusCycleTiming)bus).RequiresExactM68000PipelineFallback);
-        }
     }
 
     internal readonly struct AmigaCpuDataAccess : IM68kCpuDataAccess<AmigaBus, AmigaCpuDataAccess>

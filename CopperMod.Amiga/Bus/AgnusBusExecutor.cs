@@ -55,6 +55,8 @@ namespace CopperMod.Amiga.Bus
 
         public readonly bool Pending => (Flags & AgnusBusIntentFlags.Pending) != 0;
 
+        public readonly bool IsWrite => (Flags & AgnusBusIntentFlags.Write) != 0;
+
         public void Clear() => this = default;
     }
 
@@ -206,13 +208,16 @@ namespace CopperMod.Amiga.Bus
 
     internal readonly struct CpuWordResult
     {
-        public CpuWordResult(ushort value, long completedCycle)
+        public CpuWordResult(ushort value, long grantedCycle, long completedCycle)
         {
             Value = value;
+            GrantedCycle = grantedCycle;
             CompletedCycle = completedCycle;
         }
 
         public ushort Value { get; }
+
+        public long GrantedCycle { get; }
 
         public long CompletedCycle { get; }
     }
@@ -272,13 +277,22 @@ namespace CopperMod.Amiga.Bus
     /// retains the proven HRM slot engine as its arbitration core while moving wake
     /// ownership and persistent request storage behind this boundary.
     /// </summary>
-    internal sealed class AgnusBusExecutor
+    internal sealed partial class AgnusBusExecutor
     {
         private const string ShadowEnvironmentVariable = "COPPERMOD_AMIGA_CAUSAL_AGNUS_SHADOW";
         private const string ProductionEnvironmentVariable = "COPPERMOD_AMIGA_CAUSAL_AGNUS_EXECUTOR";
         private readonly Bus _bus;
         private readonly AgnusHrmSlotEngine _slots;
         private readonly AgnusBusDeadlineAgenda _agenda = new AgnusBusDeadlineAgenda();
+        private readonly CpuEventJournal _cpuEventJournal;
+        private bool _flushingCpuEventJournal;
+        private ulong _chipWriteHazardDiskVersion = ulong.MaxValue;
+        private ulong _chipWriteHazardBlitterVersion = ulong.MaxValue;
+        private ulong _chipWriteHazardDiskDmaconVersion = ulong.MaxValue;
+        private ulong _chipWriteHazardBlitterDmaconVersion = ulong.MaxValue;
+        private long _diskChipWriteHazardCycle = long.MaxValue;
+        private long _blitterChipWriteHazardCycle = long.MaxValue;
+        private long _chipWriteHazardRefreshes;
         private readonly AgnusBusIntent[] _intents = new AgnusBusIntent[(int)AgnusBusAgendaSource.Count];
         private readonly AgnusBusIntent[] _paulaIntents = new AgnusBusIntent[AmigaConstants.PaulaChannelCount];
         private ulong _paulaVersion = ulong.MaxValue;
@@ -338,10 +352,14 @@ namespace CopperMod.Amiga.Bus
         private bool _queryCacheValid;
         private bool _advancing;
 
-        public AgnusBusExecutor(Bus bus, AgnusHrmSlotEngine slots)
+        public AgnusBusExecutor(
+            Bus bus,
+            AgnusHrmSlotEngine slots,
+            int cpuEventJournalCapacity = CpuEventJournal.DefaultCapacity)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _slots = slots ?? throw new ArgumentNullException(nameof(slots));
+            _cpuEventJournal = new CpuEventJournal(cpuEventJournalCapacity);
             RasterlinePlans = new AgnusRasterlineDmaPlanRing(
                 CustomChips.Denise.Display.MaxRowDmaBitplaneEntriesPerRow,
                 CustomChips.Denise.Display.MaxRowDmaSpriteEntriesPerRow);
@@ -440,6 +458,68 @@ namespace CopperMod.Amiga.Bus
 
         public long LastCpuGrantedCycle => _lastCpuGrantedCycle;
 
+        public CpuEventJournal CpuEventJournal => _cpuEventJournal;
+
+        public bool IsFlushingCpuEventJournal => _flushingCpuEventJournal;
+
+        public bool HasPendingCpuWriteOverlap(uint address, int byteCount)
+            => _cpuEventJournal.HasPendingOverlap(address, byteCount);
+
+        public long CpuJournalDeadlineCycle => _agenda.Get(AgnusBusAgendaSource.Cpu);
+
+        public long ChipRamWriteHazardRefreshes => _chipWriteHazardRefreshes;
+
+        public bool MayWriteChipRamBefore(long cycle)
+        {
+            if (cycle < 0)
+            {
+                return false;
+            }
+
+            if (_cpuEventJournal.Count != 0 && CpuJournalDeadlineCycle <= cycle)
+            {
+                return true;
+            }
+
+            ref readonly var cpu = ref _intents[(int)AgnusBusAgendaSource.Cpu];
+            ref readonly var disk = ref _intents[(int)AgnusBusAgendaSource.Disk];
+            ref readonly var blitter = ref _intents[(int)AgnusBusAgendaSource.Blitter];
+            if ((cpu.Pending && cpu.IsWrite && cpu.EarliestCycle <= cycle) ||
+                (disk.Pending && disk.IsWrite && disk.EarliestCycle <= cycle) ||
+                (blitter.Pending && blitter.IsWrite && blitter.EarliestCycle <= cycle))
+            {
+                return true;
+            }
+
+            RefreshChipRamWriteHazards();
+            return _diskChipWriteHazardCycle <= cycle ||
+                _blitterChipWriteHazardCycle <= cycle;
+        }
+
+        private void RefreshChipRamWriteHazards()
+        {
+            var diskVersion = _bus.Disk.SchedulerWakeVersion;
+            var dmaconVersion = _bus.Paula.RegisterWakeVersion;
+            if (_chipWriteHazardDiskVersion != diskVersion ||
+                _chipWriteHazardDiskDmaconVersion != dmaconVersion)
+            {
+                _chipWriteHazardDiskVersion = diskVersion;
+                _chipWriteHazardDiskDmaconVersion = dmaconVersion;
+                _diskChipWriteHazardCycle = _bus.Disk.GetChipRamWriteHazardCycle();
+                _chipWriteHazardRefreshes++;
+            }
+
+            var blitterVersion = _bus.Blitter.WakeVersion;
+            if (_chipWriteHazardBlitterVersion != blitterVersion ||
+                _chipWriteHazardBlitterDmaconVersion != dmaconVersion)
+            {
+                _chipWriteHazardBlitterVersion = blitterVersion;
+                _chipWriteHazardBlitterDmaconVersion = dmaconVersion;
+                _blitterChipWriteHazardCycle = _bus.Blitter.GetChipRamWriteHazardCycle();
+                _chipWriteHazardRefreshes++;
+            }
+        }
+
         public string FirstShadowMismatch => _firstShadowMismatch;
 
         public bool ShadowEnabled { get; } = ReadBooleanEnvironmentVariable(ShadowEnvironmentVariable, false);
@@ -455,6 +535,15 @@ namespace CopperMod.Amiga.Bus
         public void Reset()
         {
             _agenda.Reset();
+            ResetCpuVisibilityAgenda();
+            _cpuEventJournal.Reset();
+            _chipWriteHazardDiskVersion = ulong.MaxValue;
+            _chipWriteHazardBlitterVersion = ulong.MaxValue;
+            _chipWriteHazardDiskDmaconVersion = ulong.MaxValue;
+            _chipWriteHazardBlitterDmaconVersion = ulong.MaxValue;
+            _diskChipWriteHazardCycle = long.MaxValue;
+            _blitterChipWriteHazardCycle = long.MaxValue;
+            _chipWriteHazardRefreshes = 0;
             RasterlinePlans.Reset();
             DisplayControlState.Reset();
             Array.Clear(_intents);
@@ -540,12 +629,145 @@ namespace CopperMod.Amiga.Bus
             var cycle = request.RequestedCycle;
             if (request.IsWrite)
             {
-                _bus.WriteWord(request.Address, request.Value, ref cycle, request.Kind);
-                return new CpuWordResult(request.Value, cycle);
+                if (!_bus.TryWriteExactCpuDataWord(request.Address, request.Value, ref cycle))
+                {
+                    _bus.WriteWord(request.Address, request.Value, ref cycle, request.Kind);
+                }
+                return new CpuWordResult(
+                    request.Value,
+                    cycle - AgnusChipSlotScheduler.SlotCycles,
+                    cycle);
             }
 
-            var value = _bus.ReadWord(request.Address, ref cycle, request.Kind);
-            return new CpuWordResult(value, cycle);
+            var value = _bus.TryReadExactCpuDataWord(request.Address, ref cycle, out var exactValue)
+                ? exactValue
+                : _bus.ReadWord(request.Address, ref cycle, request.Kind);
+            return new CpuWordResult(
+                value,
+                cycle - AgnusChipSlotScheduler.SlotCycles,
+                cycle);
+        }
+
+        public bool TryEnqueueCpuChipWordWrite(
+            uint address,
+            ushort value,
+            long requestedCycle,
+            CpuJournalInstructionPhase phase,
+            CpuJournalDependencyFlags dependencies,
+            out ulong sequence)
+        {
+            var wasEmpty = _cpuEventJournal.Count == 0;
+            var accepted = _cpuEventJournal.TryEnqueue(
+                requestedCycle,
+                phase,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessKind.CpuDataWrite,
+                AmigaBusAccessSize.Word,
+                isWrite: true,
+                value,
+                dependencies | CpuJournalDependencyFlags.MemoryWrite,
+                out sequence);
+            if (accepted && wasEmpty)
+            {
+                SetDeadline(AgnusBusAgendaSource.Cpu, requestedCycle);
+            }
+
+            return accepted;
+        }
+
+        public bool TryEnqueueCpuChipLongWrite(
+            uint address,
+            uint value,
+            long requestedCycle,
+            CpuJournalInstructionPhase phase,
+            out ulong firstSequence,
+            out ulong secondSequence)
+        {
+            firstSequence = 0;
+            secondSequence = 0;
+            if (_cpuEventJournal.AvailableCount < 2)
+            {
+                return false;
+            }
+
+            if (!TryEnqueueCpuChipWordWrite(
+                address,
+                (ushort)(value >> 16),
+                requestedCycle,
+                phase,
+                CpuJournalDependencyFlags.LongWordFirstHalf,
+                out firstSequence))
+            {
+                return false;
+            }
+
+            return TryEnqueueCpuChipWordWrite(
+                address + 2,
+                (ushort)value,
+                requestedCycle + AgnusChipSlotScheduler.SlotCycles,
+                phase,
+                CpuJournalDependencyFlags.LongWordSecondHalf,
+                out secondSequence);
+        }
+
+        public long FlushCpuEventJournal()
+        {
+            var ignoredCycle = 0L;
+            return FlushCpuEventJournalCore(ref ignoredCycle, adjustCpuCycle: false);
+        }
+
+        public long FlushCpuEventJournal(ref long cpuCycle)
+            => FlushCpuEventJournalCore(ref cpuCycle, adjustCpuCycle: true);
+
+        private long FlushCpuEventJournalCore(ref long cpuCycle, bool adjustCpuCycle)
+        {
+            var completedCycle = -1L;
+            var accumulatedDelay = 0L;
+            _flushingCpuEventJournal = true;
+            try
+            {
+                while (_cpuEventJournal.Count != 0)
+                {
+                    ref var entry = ref _cpuEventJournal.Peek();
+                    if (entry.Target != AmigaBusAccessTarget.ChipRam ||
+                        entry.Size != AmigaBusAccessSize.Word ||
+                        !entry.IsWrite)
+                    {
+                        throw new InvalidOperationException(
+                            "Only CPU Chip RAM word writes are supported by the current journal stage.");
+                    }
+
+                    var virtualCompletedCycle = entry.RequestedCycle + AgnusChipSlotScheduler.SlotCycles;
+                    var requestedCycle = entry.RequestedCycle + accumulatedDelay;
+                    var request = new CpuWordRequest(
+                        entry.Address,
+                        requestedCycle,
+                        entry.Kind,
+                        isWrite: true,
+                        (ushort)entry.Value);
+                    var result = ExecuteCpuWord(in request);
+                    completedCycle = result.CompletedCycle;
+                    accumulatedDelay = result.CompletedCycle - virtualCompletedCycle;
+                    _cpuEventJournal.CommitHead(result.GrantedCycle, result.CompletedCycle);
+                    SetDeadline(
+                        AgnusBusAgendaSource.Cpu,
+                        _cpuEventJournal.Count == 0
+                            ? long.MaxValue
+                            : _cpuEventJournal.Peek().RequestedCycle + accumulatedDelay);
+                }
+            }
+            finally
+            {
+                _flushingCpuEventJournal = false;
+            }
+
+            if (adjustCpuCycle && accumulatedDelay > 0)
+            {
+                cpuCycle += accumulatedDelay;
+            }
+
+            return completedCycle;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

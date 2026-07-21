@@ -16,6 +16,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveCycle = 0;
             _liveFrameStartCycle = 0;
             _liveCapturedThroughCycle = -1;
+            _liveCausalDisplayStateThroughCycle = -1;
+            _liveFinalizedPresentationThroughCycle = -1;
             _liveNextLineStateRow = 0;
             _liveNextFetchRow = 0;
             _liveNextFetchWord = 0;
@@ -127,6 +129,31 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
+            if (!_advancingLiveDma &&
+                _liveFrameValid &&
+                cycle <= _liveFinalizedPresentationThroughCycle)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot schedule display register 0x{offset:X3} at cycle {cycle} " +
+                    $"behind the finalized presentation horizon {_liveFinalizedPresentationThroughCycle}.");
+            }
+
+            if (!_advancingLiveDma &&
+                _liveFrameValid &&
+                cycle < _liveCausalDisplayStateThroughCycle)
+            {
+                _ = _bus.TryGetCommittedAgnusSlotOwner(cycle, out var writeCycleOwner);
+                _ = _bus.TryGetCommittedAgnusSlotOwner(
+                    _liveCausalDisplayStateThroughCycle,
+                    out var horizonOwner);
+                throw new InvalidOperationException(
+                    $"Cannot schedule display register 0x{offset:X3} at cycle {cycle} " +
+                    $"behind the causal display horizon {_liveCausalDisplayStateThroughCycle}; " +
+                    $"coverage={_liveCapturedThroughCycle}, " +
+                    $"live={_liveCycle}, bus={_bus.ExecutedChipBusHorizon}, " +
+                    $"writeOwner={writeCycleOwner}, horizonOwner={horizonOwner}.");
+            }
+
             var impact = CustomRegisterScheduleClassifier.GetPotentialEventScheduleImpact(
                 _chipset,
                 offset);
@@ -163,16 +190,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _bus.ClearLiveDisplayDmaSlotsFrom(cycle, changedSlotOwners);
             }
 
-            if (!_advancingLiveDma && _liveFrameValid && cycle < _liveCapturedThroughCycle)
-            {
-                throw new InvalidOperationException(
-                    $"Cannot schedule display register 0x{offset:X3} at cycle {cycle} " +
-                    $"behind the executed display horizon {_liveCapturedThroughCycle}.");
-            }
         }
 
         internal void ScheduleWrite(long cycle, ushort offset, ushort value)
             => ScheduleWrite(new AgnusDisplayRegisterWrite(cycle, offset, value));
+
+        private void MarkLiveCausalDisplayCommit(long cycle)
+        {
+            if (_liveFrameValid && cycle >= _liveFrameStartCycle)
+            {
+                _liveCausalDisplayStateThroughCycle = Math.Max(
+                    _liveCausalDisplayStateThroughCycle,
+                    cycle);
+            }
+        }
 
         internal bool HasLiveDisplayWork()
         {
@@ -218,6 +249,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveFrameStartCycle = frameStartCycle;
             _liveCycle = frameStartCycle;
             _liveCapturedThroughCycle = frameStartCycle;
+            _liveCausalDisplayStateThroughCycle = frameStartCycle;
+            _liveFinalizedPresentationThroughCycle = frameStartCycle - 1;
             _liveNextLineStateRow = 0;
             _liveNextFetchRow = 0;
             _liveNextFetchWord = 0;
@@ -311,6 +344,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveFrameValid = true;
             _liveFrameStartCycle = frameStartCycle;
             _liveCapturedThroughCycle = frameStartCycle;
+            _liveCausalDisplayStateThroughCycle = frameStartCycle;
+            _liveFinalizedPresentationThroughCycle = frameStartCycle - 1;
             var savedAdvancingLiveDma = _advancingLiveDma;
             _advancingLiveDma = false;
             try

@@ -54,6 +54,10 @@ var allWorkloads = new[]
         LaunchPath: "C/SystemTakeover|Hired Guns|Hired Guns.info"),
     new BenchmarkWorkload("North & South CP intro", "North & South (1989)(Infogrames)(M5)[cr CP].zip", FireFrame: 260),
     new BenchmarkWorkload("Shadow of the Beast IPF", "Shadow of the Beast (1989)(Psygnosis)(US)(Disk 1 of 2).zip"),
+    new BenchmarkWorkload(
+        "Shadow of the Beast PNA host-exec",
+        "Shadow of the Beast (1989)(Psygnosis)(Disk 1 of 2)[cr PNA].zip",
+        Profile: "a500-kickstart31-host-exec.json"),
     new BenchmarkWorkload("Workbench 1.3", "Workbench v1.3 rev 34.20 (1988)(Commodore)(A500-A2000)(Disk 1 of 2)(Workbench)[m].zip"),
     new BenchmarkWorkload("Major Motion OK", "OK\\Major Motion (1988)(Microdeal).zip", LaunchPath: "major"),
     new BenchmarkWorkload("Lotus 2", "Lotus Turbo Challenge 2 (Magnetic Fields + Gremlin).zip"),
@@ -716,7 +720,7 @@ static void RunDiskDivergenceTrace(BenchmarkWorkload workload, BenchmarkOptions 
         };
         var jitOptions = options with
         {
-            CpuBackend = "jit",
+            CpuBackend = "jitm68040",
             InstructionMatrix = false
         };
 
@@ -943,6 +947,7 @@ static void WriteProgressIfNeeded(
     var machine = GetMachine(emulator);
     var disk = machine.Bus.Disk.CaptureSnapshot();
     var display = emulator.DisplaySnapshot;
+    var framebufferChecksum = CaptureFramebufferChecksum(emulator.Framebuffer);
     Console.Error.WriteLine(
         $"progress {workload.Name} {phase} frame={frame} ms={milliseconds:F2} " +
         $"cyl={disk.LastTransferCylinder}.{disk.LastTransferHead} driveCyl={disk.Cylinder}.{disk.Head} " +
@@ -952,9 +957,20 @@ static void WriteProgressIfNeeded(
         $"bplcon=0x{display.Bplcon0:X4}/0x{display.Bplcon1:X4}/0x{display.Bplcon2:X4} " +
         $"ddf=0x{display.DdfStart:X4}/0x{display.DdfStop:X4} diw=0x{display.DiwStart:X4}/0x{display.DiwStop:X4} " +
         $"mod={display.Bpl1Mod}/{display.Bpl2Mod} ptr={FormatHexArray(display.BitplanePointers)} base={FormatIntArray(display.BitplaneBaseRows)} " +
-        $"bplPix={display.LastBitplaneNonZeroPixels} sprPix={display.LastSpriteNonZeroPixels} spans={GetDisplay(emulator).BitplaneDataSpanCount} " +
+        $"bplPix={display.LastBitplaneNonZeroPixels} sprPix={display.LastSpriteNonZeroPixels} spans={GetDisplay(emulator).BitplaneDataSpanCount} fb=0x{framebufferChecksum:X8} " +
         $"copper={GetDisplay(emulator).LiveCopperStepCount} pending={GetDisplay(emulator).LivePendingWriteEventCount} " +
         $"status=\"{emulator.StatusText}\"");
+}
+
+static uint CaptureFramebufferChecksum(IReadOnlyList<int> framebuffer)
+{
+    var checksum = 2166136261u;
+    for (var i = 0; i < framebuffer.Count; i++)
+    {
+        checksum = (checksum ^ unchecked((uint)framebuffer[i])) * 16777619u;
+    }
+
+    return checksum;
 }
 
 static string FormatHexArray(IReadOnlyList<uint> values)
@@ -1363,7 +1379,7 @@ static BenchmarkWorkload[] FilterWorkloads(BenchmarkWorkload[] workloads, string
 
     if (count == 0)
     {
-        return workloads;
+        throw new ArgumentException($"No benchmark workload matches --only '{only}'.");
     }
 
     var result = new BenchmarkWorkload[count];
@@ -2035,7 +2051,7 @@ static string FormatStatusWithScheduler(BenchmarkRunResult result)
 {
     var scheduler = result.Scheduler;
     var boundaryMode = result.CopperStartRuntimeHandoffActive ? "runtime" : "boot";
-    return $"{FormatCounterText(result.StatusText)} | boundary={boundaryMode}/{result.CopperStartRuntimeHandoffCount}, scheduler last={scheduler.LastDrainCycle}, drains={scheduler.DrainCount}, max-frame-drains={result.MaxFrameSchedulerDrains}, bus-drains={scheduler.BusAccessDrainCount}, same-cycle={scheduler.SameCycleDrainCount}, line-cache=hit:{scheduler.RasterlineCacheHits},miss:{scheduler.RasterlineCacheMisses},rebuild:{scheduler.RasterlineCacheRebuilds},inv:{scheduler.RasterlineCacheInvalidations}, wake-agenda=hit:{scheduler.WakeAgendaCacheHits},miss:{scheduler.WakeAgendaCacheMisses},skip:{scheduler.WakeAgendaDrainSkips},inv:{scheduler.WakeAgendaInvalidations}, agnexec=agenda:{scheduler.AgnusExecutorAgendaReads}/{scheduler.AgnusExecutorAgendaUpdates},shadow:{scheduler.AgnusExecutorShadowMatches}/{scheduler.AgnusExecutorShadowMismatches},first:{FormatCounterText(scheduler.AgnusExecutorFirstShadowMismatch)},fixed:{scheduler.AgnusFixedPlanShadowMatches}/{scheduler.AgnusFixedPlanShadowMismatches},fixedFirst:{FormatCounterText(scheduler.AgnusFixedPlanFirstShadowMismatch)}, cpuevent=hit:{scheduler.CpuVisibleNoEventCacheHits},miss:{scheduler.CpuVisibleNoEventCacheMisses},inv:{scheduler.CpuVisibleNoEventCacheInvalidations}, copperq=slot:{scheduler.CopperQuiescentSlotContendedAccesses},customw:{scheduler.CopperQuiescentCustomRegisterWrites},cpuw:{scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw:{scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain:{scheduler.CopperQuiescentSchedulerDrains},pred:{scheduler.CopperQuiescentShadowPredictions}/{scheduler.CopperQuiescentShadowMatches}/{scheduler.CopperQuiescentShadowUnsupported}/{scheduler.CopperQuiescentShadowMismatches},fast:{scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}/{scheduler.CopperQuiescentFastPathVerificationMismatches}, cpubatch={FormatDeferredCpuBusBatchSummary(scheduler)}, events=raster:{scheduler.RasterEvents},cia:{scheduler.CiaEvents},paula:{scheduler.PaulaEvents},disk:{scheduler.DiskEvents},agnus:{scheduler.AgnusEvents},blitter:{scheduler.BlitterEvents}";
+    return $"{FormatCounterText(result.StatusText)} | boundary={boundaryMode}/{result.CopperStartRuntimeHandoffCount}, scheduler last={scheduler.LastDrainCycle}, drains={scheduler.DrainCount}, max-frame-drains={result.MaxFrameSchedulerDrains}, bus-drains={scheduler.BusAccessDrainCount}, same-cycle={scheduler.SameCycleDrainCount}, line-cache=hit:{scheduler.RasterlineCacheHits},miss:{scheduler.RasterlineCacheMisses},rebuild:{scheduler.RasterlineCacheRebuilds},inv:{scheduler.RasterlineCacheInvalidations}, wake-agenda=hit:{scheduler.WakeAgendaCacheHits},miss:{scheduler.WakeAgendaCacheMisses},skip:{scheduler.WakeAgendaDrainSkips},inv:{scheduler.WakeAgendaInvalidations}, agnexec=agenda:{scheduler.AgnusExecutorAgendaReads}/{scheduler.AgnusExecutorAgendaUpdates},shadow:{scheduler.AgnusExecutorShadowMatches}/{scheduler.AgnusExecutorShadowMismatches},first:{FormatCounterText(scheduler.AgnusExecutorFirstShadowMismatch)},fixed:{scheduler.AgnusFixedPlanShadowMatches}/{scheduler.AgnusFixedPlanShadowMismatches},fixedFirst:{FormatCounterText(scheduler.AgnusFixedPlanFirstShadowMismatch)}, visibility=q:{scheduler.CpuVisibilityQueries},root:{scheduler.CpuVisibilityRootReads},leaf:{scheduler.CpuVisibilityLeafUpdates},refresh:{scheduler.CpuVisibilitySourceRefreshes},shadow:{scheduler.CpuVisibilityShadowMatches}/{scheduler.CpuVisibilityShadowMismatches},cycles:{scheduler.CpuVisibilityPotentialCycles},first:{FormatCounterText(scheduler.CpuVisibilityFirstShadowMismatch)}, cpuevent=hit:{scheduler.CpuVisibleNoEventCacheHits},miss:{scheduler.CpuVisibleNoEventCacheMisses},inv:{scheduler.CpuVisibleNoEventCacheInvalidations}, copperq=slot:{scheduler.CopperQuiescentSlotContendedAccesses},customw:{scheduler.CopperQuiescentCustomRegisterWrites},cpuw:{scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw:{scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain:{scheduler.CopperQuiescentSchedulerDrains},pred:{scheduler.CopperQuiescentShadowPredictions}/{scheduler.CopperQuiescentShadowMatches}/{scheduler.CopperQuiescentShadowUnsupported}/{scheduler.CopperQuiescentShadowMismatches},fast:{scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}/{scheduler.CopperQuiescentFastPathVerificationMismatches}, cpubatch={FormatDeferredCpuBusBatchSummary(scheduler)}, events=raster:{scheduler.RasterEvents},cia:{scheduler.CiaEvents},paula:{scheduler.PaulaEvents},disk:{scheduler.DiskEvents},agnus:{scheduler.AgnusEvents},blitter:{scheduler.BlitterEvents}";
 }
 
 static void LaunchWorkbenchPathIfNeeded(CopperScreenEmulator emulator, BenchmarkWorkload workload)
@@ -2110,7 +2126,8 @@ static string FormatDeferredCpuBusBatchSummary(AmigaHardwareSchedulerSnapshot sc
     var fixedImage = $"fixedimg={scheduler.DeferredCpuWaitFixedImageAttempts}/{scheduler.DeferredCpuWaitFixedImageSupported}/{scheduler.DeferredCpuWaitFixedImageMatches}/{scheduler.DeferredCpuWaitFixedImageMismatches}/{scheduler.DeferredCpuWaitFixedImageUnsupported},cache={scheduler.DeferredCpuWaitFixedImageBuilds}/{scheduler.DeferredCpuWaitFixedImageHits}/{scheduler.DeferredCpuWaitFixedImageMisses}/{scheduler.DeferredCpuWaitFixedImageInvalidations},slots={scheduler.DeferredCpuWaitFixedImagePredictedSlots},unsup={scheduler.DeferredCpuWaitFixedImageUnsupportedFrame}/{scheduler.DeferredCpuWaitFixedImageUnsupportedCopper}/{scheduler.DeferredCpuWaitFixedImageUnsupportedPendingWrite}/{scheduler.DeferredCpuWaitFixedImageUnsupportedRasterlinePlan}/{scheduler.DeferredCpuWaitFixedImageUnsupportedSpriteState},first={scheduler.DeferredCpuWaitFixedImageFirstMismatch}";
     var fixedProduction = $"fixedprod={scheduler.DeferredCpuWaitFixedImageProductionAttempts}/{scheduler.DeferredCpuWaitFixedImageProductionUsed}/{scheduler.DeferredCpuWaitFixedImageProductionPreGrantDrainsSkipped}/{scheduler.DeferredCpuWaitFixedImageProductionPostGrantCatchups}/{scheduler.DeferredCpuWaitFixedImageProductionPredictedWaitCycles},fallback={scheduler.DeferredCpuWaitFixedImageProductionFallbackUnsupported}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackDynamicDma}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackFrame}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackCopper}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackPendingWrite}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackRasterlinePlan}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackSpriteState}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackUnstable},verify={scheduler.DeferredCpuWaitFixedImageProductionVerificationMatches}/{scheduler.DeferredCpuWaitFixedImageProductionVerificationMismatches},disabled={(scheduler.DeferredCpuWaitFixedImageProductionDisabled ? 1 : 0)},first={scheduler.DeferredCpuWaitFixedImageProductionFirstMismatch}";
     var blitterOverlap = $"bltoverlap={scheduler.DeferredCpuWaitBlitterOverlapAttempts}/{scheduler.DeferredCpuWaitBlitterOverlapSupported}/{scheduler.DeferredCpuWaitBlitterOverlapUnsupported}/{scheduler.DeferredCpuWaitBlitterOverlapNasty}";
-    return $"{batch},{exits},{wakes},{diskWakes},verify={scheduler.DeferredCpuBusBatchVerificationMismatches},{internalWindow},{waitWindow},{waitFast},{slotShadow},{fixedImage},{fixedProduction},{blitterOverlap}";
+    var visibility = $"viscost={scheduler.CpuVisibilityPotentialInstructions}/{scheduler.CpuVisibilityShortHorizonRejections}/{scheduler.CpuVisibilityLegacyQueryTicks}/{scheduler.CpuVisibilityExecutorQueryTicks}";
+    return $"{batch},{exits},{wakes},{diskWakes},verify={scheduler.DeferredCpuBusBatchVerificationMismatches},{internalWindow},{waitWindow},{waitFast},{slotShadow},{fixedImage},{fixedProduction},{blitterOverlap},{visibility}";
 }
 
 static string FormatHardwareProfile(AmigaHardwareSchedulerSnapshot scheduler)
@@ -2815,7 +2832,7 @@ internal readonly record struct BenchmarkOptions(
             }
             else if (string.Equals(args[i], "--jit", StringComparison.OrdinalIgnoreCase))
             {
-                cpuBackend = "jit";
+                throw new ArgumentException("The --jit benchmark backend is temporarily unavailable. Use --cpu accurateM68000 or --jit-m68040.");
             }
             else if (string.Equals(args[i], "--jit-fallback-attribution", StringComparison.OrdinalIgnoreCase))
             {

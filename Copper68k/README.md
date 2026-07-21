@@ -2,9 +2,9 @@
 
 Copper68k is a reusable C# Motorola 68000-family CPU emulation core extracted
 from CopperScreen and CopperMod. It provides interpreter backends for MC68000,
-MC68020, MC68030, and MC68040-style execution behind a small bus/core API, plus
-an opt-in MC68040 JIT backend for hosts that expose stable code snapshots and
-write invalidation.
+MC68010, 68EC020, MC68020, MC68030, and MC68040-style execution behind a small
+bus/core API, plus an opt-in MC68040 JIT backend for hosts that expose stable
+code snapshots and write invalidation.
 
 The package is intended for emulator projects that want to supply their own
 memory map, devices, interrupt sources, and host integration.
@@ -88,6 +88,7 @@ sealed class RamBus : IM68kBus
 Use `M68kCpuModel` to select the default interpreter backend:
 
 - `M68000`: base 68000 interpreter with 68000-style exception frames.
+- `M68010`: 68010-style core with VBR and a 24-bit external address bus.
 - `M68020`: 68020-style core with VBR, format-zero exception frames, and native-cycle timing state.
 - `M68EC020`: 68020-style core with a 24-bit external address bus and full 32-bit registers.
 - `M68030`: 68030-oriented interpreter profile.

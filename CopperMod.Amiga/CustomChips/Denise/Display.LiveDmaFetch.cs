@@ -221,9 +221,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             state.FetchWords = GetDataFetchWordCount();
             state.DataFetchStart = _dataFetchWindow.Start;
             state.FetchSlotStride = DisplayGeometryDecoder.GetDataFetchSlotStride(_dataFetchWindow);
-            // PaletteSnapshotIndex is the immutable presentation baseline captured
-            // at line start. Mid-line writes are represented by timeline snapshots;
-            // refreshing future DMA must not rewrite pixels preceding the write.
+            state.PaletteSnapshotIndex = CaptureLivePaletteSnapshot(row);
 
             var oldPlaneHasRowMask = state.PlaneHasRowMask;
             state.PlaneHasRowMask = 0;
@@ -1464,6 +1462,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void RecordLiveDisplayDmaCycle(long cycle)
         {
+            MarkLiveCausalDisplayCommit(cycle);
             if (_liveFirstDisplayDmaCycle < 0 || cycle < _liveFirstDisplayDmaCycle)
             {
                 _liveFirstDisplayDmaCycle = cycle;
@@ -1481,6 +1480,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 return;
             }
+
+            MarkLiveCausalDisplayCommit(lastCycle);
 
             if (_liveFirstDisplayDmaCycle < 0 || firstCycle < _liveFirstDisplayDmaCycle)
             {

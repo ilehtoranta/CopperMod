@@ -5,6 +5,33 @@ namespace CopperMod.Amiga.Tests;
 public sealed class CopperWaitControlPipelineTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FivePlaneWaitRunPreservesEveryMoveVisibilityCycle(bool enableHardwareSpecialization)
+    {
+        var bus = CreateFivePlaneBus(enableHardwareSpecialization);
+        const uint copperList = 0x2400;
+        WriteCopperList(bus, copperList,
+            (0x6241, 0xFFFE), (0x0180, 0x0F00), (0x0180, 0x0000),
+            (0x6261, 0xFFFE), (0x0180, 0x0FF0),
+            (0x6261, 0xFFFE), (0x0180, 0x0000),
+            (0x6281, 0xFFFE), (0x0180, 0x00FF),
+            (0x6281, 0xFFFE), (0x6281, 0xFFFE), (0x0180, 0x0000),
+            (0x62B1, 0xFFFE), (0x0180, 0x0F0F),
+            (0x62B1, 0xFFFE), (0x62B1, 0xFFFE), (0x62B1, 0xFFFE), (0x0180, 0x0000),
+            (0xFFFF, 0xFFFE));
+        SetCopperPointer(bus, copperList);
+        StartCopper(bus);
+        bus.AdvanceDmaTo(0x64 * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+
+        Assert.Equal(
+            new long[] { 44640, 44652, 44704, 44736, 44768, 44824, 44864, 44940 },
+            bus.Display.CopperDisplayWrites
+                .Where(write => write.Address == 0x180)
+                .Select(write => write.Cycle));
+    }
+
+    [Theory]
     [InlineData(0x6241, 44640)]
     [InlineData(0x6443, 45548)]
     public void IsolatedIncomingRgaUsesCopperControlPhasePolarity(
@@ -74,12 +101,13 @@ public sealed class CopperWaitControlPipelineTests
         Assert.Equal(new[] { firstInterval, secondInterval, thirdInterval }, intervals);
     }
 
-    private static AmigaBus CreateFivePlaneBus()
+    private static AmigaBus CreateFivePlaneBus(bool enableHardwareSpecialization = false)
     {
         var bus = new AmigaBus(
             captureBusAccesses: true,
             enableLiveAgnusDma: true,
-            enableLiveDisplayDma: true);
+            enableLiveDisplayDma: true,
+            enableHardwareSpecialization: enableHardwareSpecialization);
         bus.WriteWord(0x00DFF08E, 0x2C71);
         bus.WriteWord(0x00DFF090, 0x2CD1);
         bus.WriteWord(0x00DFF092, 0x0038);

@@ -39,6 +39,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             ConfigurePresentationDimensions(target.Length);
+            _renderedCopperTimelineSegments?.Clear();
+            _renderedCopperPixelTraces?.Clear();
             _boundPresentationTarget = target;
             _boundPresentationFrameStartCycle = frameStartCycle;
             _boundPresentationFrameStopCycle = Math.Min(frameStopCycle, GetFrameStopCycle(frameStartCycle));
@@ -218,6 +220,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
 
                     _nextBoundPresentationRow++;
+                    MarkFinalizedPresentationRow(row);
                 }
 
                 if (completing)
@@ -225,6 +228,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     while (_nextBoundPresentationRow < rowStop)
                     {
                         FillRows(target, _nextBoundPresentationRow, _nextBoundPresentationRow + 1);
+                        MarkFinalizedPresentationRow(_nextBoundPresentationRow);
                         _nextBoundPresentationRow++;
                     }
 
@@ -249,6 +253,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
         }
 
+        private void MarkFinalizedPresentationRow(int row)
+        {
+            var rowStopCycle = GetOutputRowStartCycle(
+                _boundPresentationFrameStartCycle,
+                row + 1) - 1;
+            _liveFinalizedPresentationThroughCycle = Math.Max(
+                _liveFinalizedPresentationThroughCycle,
+                rowStopCycle);
+        }
+
         private bool TryRenderBoundPresentationRow(Span<uint> target, int row, bool completing)
         {
             ClearPaletteFrameSpans();
@@ -263,9 +277,34 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
+            CaptureRenderedCopperPixelTrace(target, row, stage: 0);
+
             DuplicatePreparedPresentationRow(target, row, duplicateXStart, duplicateXStop);
             RenderTimelineSpritesRow(target, _displayTimeline, row);
+            CaptureRenderedCopperPixelTrace(target, row, stage: 1);
             return true;
+        }
+
+        private void CaptureRenderedCopperPixelTrace(Span<uint> target, int row, byte stage)
+        {
+            if (!_bus.BusAccessCaptureEnabled || row is < 68 or > 76)
+            {
+                return;
+            }
+
+            var scale = GetRenderHorizontalScale();
+            var outputY = IsRenderingHighResolutionHeight() ? row * 2 : row;
+            var start = (outputY * _renderWidth) + (217 * scale);
+            var traces = _renderedCopperPixelTraces ??= new List<RenderedCopperPixelTrace>(32);
+            traces.Add(new RenderedCopperPixelTrace(
+                row,
+                stage,
+                target[start],
+                target[start + scale],
+                target[start + (2 * scale)],
+                target[start + (3 * scale)],
+                target[start + (4 * scale)],
+                target[start + (5 * scale)]));
         }
 
         private bool TryRenderBoundPresentationPlayfieldRow(
@@ -289,6 +328,24 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var line = _displayTimeline.GetLine(row);
+            if (_bus.BusAccessCaptureEnabled)
+            {
+                var rendered = _renderedCopperTimelineSegments ??=
+                    new List<RenderedCopperTimelineSegmentTrace>(256);
+                for (var index = 0;
+                     index < line.SegmentCount && rendered.Count < MaxCapturedCopperWaitTransitions;
+                     index++)
+                {
+                    var segment = line.Segments[index];
+                    var state = _displayTimeline.GetState(segment.StateIndex);
+                    rendered.Add(new RenderedCopperTimelineSegmentTrace(
+                        row,
+                        segment.XStart,
+                        segment.XStop,
+                        state.PaletteSnapshotIndex,
+                        _livePaletteSnapshots.GetEncodedColor(state.PaletteSnapshotIndex, 0)));
+                }
+            }
             if (!line.UnsafeForTimelineRender && line.SegmentCount > 0)
             {
                 for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)

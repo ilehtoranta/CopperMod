@@ -1864,6 +1864,20 @@ namespace CopperMod.Amiga.Storage.Floppy
             return candidate;
         }
 
+        internal long GetChipRamWriteHazardCycle()
+        {
+            if (!IsDiskDmaControlEnabled())
+            {
+                return long.MaxValue;
+            }
+
+            var memoryWritePending = (_activeDma && !_activeDmaWriteMode) ||
+                _pendingReadDmaWords != 0;
+            return memoryWritePending
+                ? GetRawSlotDmaEligibilityCycle()
+                : long.MaxValue;
+        }
+
         internal bool HasSlotDmaWakeSourceThrough(long targetCycle)
         {
             if (targetCycle < _currentCycle)

@@ -1628,6 +1628,14 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             return GetPredictedCompletionCycle();
         }
 
+        internal long GetChipRamWriteHazardCycle()
+            => _busy &&
+                _useD &&
+                RequiresDmaForCurrentBlit() &&
+                IsBlitterDmaEnabled()
+                ? GetRawBusEligibilityCycle()
+                : long.MaxValue;
+
         internal long NormalizeRawBusEligibilityCycle(long rawCycle, long currentCycle)
         {
             if (rawCycle == long.MaxValue)

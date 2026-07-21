@@ -285,6 +285,7 @@ namespace CopperMod.Amiga.Bus
         private readonly bool _exactCpuChipSlotFastPathEnabled;
         private readonly bool _usePaulaDmaFixedSlotFastPath;
         private readonly bool _deferredCpuBusBatchEnabled;
+        private readonly bool _deferredCpuInternalNoBusWindowEnabled;
         private readonly bool _deferredCpuBusBatchVerifyEnabled;
         private readonly bool _deferredDmaReadsVerifyEnabled;
         private readonly bool _forceCpuWaitSlotReference;
@@ -314,6 +315,8 @@ namespace CopperMod.Amiga.Bus
         private long _deferredCpuDataReplayCycle;
         private bool _deferredCpuBusBatchActive;
         private bool _deferredCpuBusBatchHasTargetCycle;
+        private long _deferredCpuBusBatchTargetCycle;
+        private readonly bool _deferredCpuChipReadSegmentsEnabled;
         private bool _endingDeferredCpuBusBatch;
         private bool _deferredCpuBusBatchExecutionStarted;
         private M68kTraceBatchWakeSource _deferredCpuBusBatchPendingWakeSource;
@@ -436,7 +439,10 @@ namespace CopperMod.Amiga.Bus
             bool forceCpuWaitSlotReference = false,
             long rtgVramSize = 0,
             AmigaChipset? chipset = null,
-            bool verifyDeferredDmaReads = false)
+            bool verifyDeferredDmaReads = false,
+            bool enableDeferredCpuInternalNoBusWindow = false,
+            int cpuEventJournalCapacity = CpuEventJournal.DefaultCapacity,
+            bool enableDeferredCpuChipReadSegments = false)
         {
             var selectedChipset = chipset ?? AmigaChipset.OcsPal;
             if (selectedChipset.HasAgaComponent)
@@ -508,7 +514,6 @@ namespace CopperMod.Amiga.Bus
             _rtgVram = new RtgVramBackend(rtgVramSize);
             _autoconfigRtg = rtgVramSize == 0 ? null : new AutoconfigRtgBoard(_rtgVram);
             _rtgVram.AddressMapChanged += OnRtgVramAddressMapChanged;
-            _rtgVram.Written += OnRtgVramWritten;
             _hrmSlotEngine = new AgnusHrmSlotEngine(_rasterTiming, captureBusAccesses);
             _captureBusAccesses = captureBusAccesses;
             _liveAgnusDmaDefault = enableLiveAgnusDma;
@@ -539,6 +544,8 @@ namespace CopperMod.Amiga.Bus
             CopperQuiescentShadowPredictionEnabled = enableCopperQuiescentDiagnostics ||
                 verifyCopperQuiescentFastPath;
             _deferredCpuBusBatchEnabled = enableDeferredCpuBusBatch;
+            _deferredCpuChipReadSegmentsEnabled = enableDeferredCpuChipReadSegments;
+            _deferredCpuInternalNoBusWindowEnabled = enableDeferredCpuInternalNoBusWindow;
             _deferredCpuBusBatchVerifyEnabled = verifyDeferredCpuBusBatch;
             _deferredDmaReadsVerifyEnabled = verifyDeferredDmaReads && enableHardwareSpecialization;
             _deferredCpuWaitDiagnosticsEnabled = verifyDeferredCpuBusBatch;
@@ -561,7 +568,10 @@ namespace CopperMod.Amiga.Bus
             _autoconfig = new AutoconfigChain(autoconfigBoards);
             _autoconfig.BoardConfigured += OnAutoconfigBoardConfigured;
             _autoconfig.AddressMapChanged += OnAutoconfigAddressMapChanged;
-            _agnusBusExecutor = new AgnusBusExecutor(this, _hrmSlotEngine);
+            _agnusBusExecutor = new AgnusBusExecutor(
+                this,
+                _hrmSlotEngine,
+                cpuEventJournalCapacity);
             Display = new OcsDisplay(this, _agnusRegisters, selectedChipset, enableLiveDisplayDma);
             Display.SetCpuWaitFixedSlotImageDiagnosticsEnabled(verifyDeferredCpuBusBatch);
             _diagnosticChipSlots = _hrmSlotEngine;
@@ -986,12 +996,6 @@ namespace CopperMod.Amiga.Bus
         {
             InvalidateInstructionFetchWindows();
             RebuildCpuBusBankTable();
-        }
-
-        private void OnRtgVramWritten(uint address, int byteCount)
-        {
-            TouchCodePages(address, byteCount);
-            NotifyJitEligibleMemoryWritten(address, byteCount);
         }
 
         private void UpdateRtgVramActivation()
@@ -1732,6 +1736,12 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
+            if (region.Target == AmigaBusAccessTarget.ChipRam &&
+                TryJournalDeferredCpuChipWordWrite(address, value, ref cycle))
+            {
+                return true;
+            }
+
             AdvanceCpuAccessToCausalBusHorizon(region.Target, ref cycle);
 
             if (region.Target == AmigaBusAccessTarget.ExpansionRam &&
@@ -1763,6 +1773,12 @@ namespace CopperMod.Amiga.Bus
                 out var region))
             {
                 return false;
+            }
+
+            if (region.Target == AmigaBusAccessTarget.ChipRam &&
+                TryJournalDeferredCpuChipLongWrite(address, value, ref cycle))
+            {
+                return true;
             }
 
             AdvanceCpuAccessToCausalBusHorizon(region.Target, ref cycle);
@@ -2217,7 +2233,7 @@ namespace CopperMod.Amiga.Bus
                 AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: false);
                 if (IsCpuChipBusGrantOvertaken(target, grantedCycle))
                 {
-                    cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                    AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                     goto RetryCausalGrant;
                 }
 
@@ -2243,7 +2259,7 @@ namespace CopperMod.Amiga.Bus
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, arbitrationRequestedCycle, access.GrantedCycle, isWrite: false);
             if (IsCpuChipBusGrantOvertaken(target, access.GrantedCycle))
             {
-                cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                 goto RetryCausalGrant;
             }
 
@@ -2344,7 +2360,7 @@ namespace CopperMod.Amiga.Bus
             AdvanceDmaAfterCpuGrantIfNeeded(AmigaBusAccessTarget.CustomRegisters, address, requestedCycle, grantedCycle, isWrite: false);
             if (IsCpuChipBusGrantOvertaken(AmigaBusAccessTarget.CustomRegisters, grantedCycle))
             {
-                cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                AdvanceCpuAccessToCausalBusHorizon(AmigaBusAccessTarget.CustomRegisters, ref cycle);
                 goto RetryCausalGrant;
             }
 
@@ -2399,7 +2415,7 @@ namespace CopperMod.Amiga.Bus
             AdvanceDmaAfterCpuGrantIfNeeded(AmigaBusAccessTarget.CustomRegisters, address, requestedCycle, grantedCycle, isWrite: false);
             if (IsCpuChipBusGrantOvertaken(AmigaBusAccessTarget.CustomRegisters, grantedCycle))
             {
-                cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                AdvanceCpuAccessToCausalBusHorizon(AmigaBusAccessTarget.CustomRegisters, ref cycle);
                 goto RetryCausalGrant;
             }
 
@@ -2556,6 +2572,17 @@ namespace CopperMod.Amiga.Bus
         public void WriteWord(uint address, ushort value, ref long cycle, AmigaBusAccessKind accessKind)
         {
             var target = ClassifyTarget(address);
+            if (_deferredCpuBusBatchActive &&
+                !_agnusBusExecutor.IsFlushingCpuEventJournal &&
+                target == AmigaBusAccessTarget.ChipRam &&
+                accessKind == AmigaBusAccessKind.CpuDataWrite)
+            {
+                if (TryJournalDeferredCpuChipWordWrite(address, value, ref cycle))
+                {
+                    return;
+                }
+            }
+
             var requestedCycle = cycle;
             FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: true, ref cycle);
             if (_useFastZeroWaitAccesses)
@@ -2627,7 +2654,7 @@ namespace CopperMod.Amiga.Bus
                 AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: false);
                 if (IsCpuChipBusGrantOvertaken(target, grantedCycle))
                 {
-                    cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                    AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                     goto RetryCausalGrant;
                 }
 
@@ -2641,7 +2668,7 @@ namespace CopperMod.Amiga.Bus
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, arbitrationRequestedCycle, access.GrantedCycle, isWrite: false);
             if (IsCpuChipBusGrantOvertaken(target, access.GrantedCycle))
             {
-                cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                 goto RetryCausalGrant;
             }
 
@@ -3279,6 +3306,24 @@ namespace CopperMod.Amiga.Bus
         public uint MaskChipDmaAddress(uint address)
         {
             return _chipDmaAddressing.Mask(address);
+        }
+
+        /// <summary>
+        /// Performs an overlap-safe host-side copy when both guest ranges are
+        /// contiguous memory. Returns false for ranges that require bus access.
+        /// </summary>
+        public bool TryCopyMemory(uint sourceAddress, uint destinationAddress, int byteCount)
+        {
+            if (byteCount < 0 || !TryGetContiguousReadableSpan(sourceAddress, byteCount, out var source) ||
+                !TryGetContiguousWritableSpan(destinationAddress, byteCount, out var destination))
+            {
+                return false;
+            }
+
+            source.CopyTo(destination);
+            TouchCodePages(destinationAddress, byteCount);
+            NotifyJitEligibleMemoryWritten(destinationAddress, byteCount);
+            return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -5471,7 +5516,6 @@ namespace CopperMod.Amiga.Bus
             return ClassifyTarget(address) is
                 AmigaBusAccessTarget.ExpansionRam or
                 AmigaBusAccessTarget.RealFastRam or
-                AmigaBusAccessTarget.RtgVram or
                 AmigaBusAccessTarget.Rom;
         }
 
@@ -6027,7 +6071,7 @@ namespace CopperMod.Amiga.Bus
             var access = ArbitrateCpuWriteAndAdvance(target, address, AmigaBusAccessSize.Byte, cycle, accessKind, requestedCycle);
             if (IsCpuChipBusGrantOvertaken(target, access.GrantedCycle))
             {
-                cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                 goto RetryCausalGrant;
             }
 
@@ -6102,7 +6146,7 @@ namespace CopperMod.Amiga.Bus
             var access = ArbitrateCpuWriteAndAdvance(target, address, AmigaBusAccessSize.Word, cycle, accessKind, requestedCycle);
             if (IsCpuChipBusGrantOvertaken(target, access.GrantedCycle))
             {
-                cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                 goto RetryCausalGrant;
             }
 
@@ -6180,7 +6224,7 @@ namespace CopperMod.Amiga.Bus
             var access = ArbitrateCpuWriteAndAdvance(target, address, AmigaBusAccessSize.Long, cycle, accessKind, requestedCycle);
             if (IsCpuChipBusGrantOvertaken(target, access.GrantedCycle))
             {
-                cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                 goto RetryCausalGrant;
             }
 
@@ -6230,7 +6274,7 @@ namespace CopperMod.Amiga.Bus
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: true);
             if (IsCpuChipBusGrantOvertaken(target, grantedCycle))
             {
-                cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                 goto RetryCausalGrant;
             }
 
@@ -6270,7 +6314,7 @@ namespace CopperMod.Amiga.Bus
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: true);
             if (IsCpuChipBusGrantOvertaken(target, grantedCycle))
             {
-                cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                 goto RetryCausalGrant;
             }
 
@@ -6310,7 +6354,7 @@ namespace CopperMod.Amiga.Bus
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, grantedCycle, isWrite: true);
             if (IsCpuChipBusGrantOvertaken(target, grantedCycle))
             {
-                cycle = ExecutedChipBusHorizon + AgnusChipSlotScheduler.SlotCycles;
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
                 goto RetryCausalGrant;
             }
 
@@ -6883,8 +6927,12 @@ namespace CopperMod.Amiga.Bus
             if (target is AmigaBusAccessTarget.ChipRam or AmigaBusAccessTarget.CustomRegisters &&
                 cycle <= ExecutedChipBusHorizon)
             {
-                cycle = ExecutedChipBusHorizon +
-                    (_chipDataBusLatchRequester == AmigaBusRequester.Copper
+                var executedThrough = ExecutedChipBusHorizon;
+                var committedCopper =
+                    TryGetCommittedAgnusSlotOwner(executedThrough, out var committedOwner) &&
+                    committedOwner == AgnusChipSlotOwner.Copper;
+                cycle = executedThrough +
+                    (committedCopper || _chipDataBusLatchRequester == AmigaBusRequester.Copper
                         ? 2 * AgnusChipSlotScheduler.SlotCycles
                         : AgnusChipSlotScheduler.SlotCycles);
             }
@@ -6929,11 +6977,6 @@ namespace CopperMod.Amiga.Bus
                 return _realFastRam.GetCodePageGeneration(realFastOffset);
             }
 
-            if (_rtgVram.IsAllocatedAddress(address))
-            {
-                return _rtgVram.GetCodePageGeneration(address, CodeGenerationPageShift);
-            }
-
             return 0;
         }
 
@@ -6951,7 +6994,9 @@ namespace CopperMod.Amiga.Bus
 
         private void TouchCodePages(uint address, int byteCount)
         {
-            if (byteCount <= 0)
+            // Code-page generations exist only to guard active host JIT snapshots.
+            // Keep ordinary interpreter writes on the direct memory path.
+            if (JitEligibleMemoryWritten == null || byteCount <= 0)
             {
                 return;
             }
@@ -6970,29 +7015,23 @@ namespace CopperMod.Amiga.Bus
 
         private void TouchCodePage(uint address)
         {
-            var generation = NextCodeGeneration();
-            if (TryGetChipRamOffset(address, out var chipOffset))
+            if (JitEligibleMemoryWritten == null)
             {
-                _chipRam.SetCodePageGeneration(chipOffset, generation);
                 return;
             }
 
             if (TryGetExpansionRamOffset(address, out var expansionOffset))
             {
-                _expansionRam.SetCodePageGeneration(expansionOffset, generation);
+                _expansionRam.SetCodePageGeneration(expansionOffset, NextCodeGeneration());
                 return;
             }
 
             if (TryGetRealFastRamOffset(address, out var realFastOffset))
             {
-                _realFastRam.SetCodePageGeneration(realFastOffset, generation);
+                _realFastRam.SetCodePageGeneration(realFastOffset, NextCodeGeneration());
                 return;
             }
 
-            if (_rtgVram.IsAllocatedAddress(address))
-            {
-                _rtgVram.SetCodePageGeneration(address, CodeGenerationPageShift, generation);
-            }
         }
 
         private uint NextCodeGeneration()
@@ -7003,10 +7042,8 @@ namespace CopperMod.Amiga.Bus
                 return _codeGenerationClock;
             }
 
-            _chipRam.ClearCodePageGenerations();
             _expansionRam.ClearCodePageGenerations();
             _realFastRam.ClearCodePageGenerations();
-            _rtgVram.ClearCodePageGenerations();
             _codeGenerationClock = 1;
             return _codeGenerationClock;
         }

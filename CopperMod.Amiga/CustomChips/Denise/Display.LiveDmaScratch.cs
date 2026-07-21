@@ -1865,7 +1865,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 if (_copperFirstWordPending)
                 {
-                    var secondRequestCycle = _display.GetCopperSecondWordRequestCycle(_copperFirstWordAccess);
+                    var secondRequestCycle = Math.Max(
+                        _copper.Cycle,
+                        _display.GetCopperSecondWordRequestCycle(_copperFirstWordAccess));
                     if (secondRequestCycle > targetCycle)
                     {
                         return true;
@@ -2028,6 +2030,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             _display.IsBitplaneRgaOutputPhase(waitCycle);
                         _copper.WaitStartCarrySkipCount = (byte)(overlapsAdjacentRgaStage ? 2 : 0);
                         _copper.WaitStartCarryPending = incomingRgaBlocked;
+                        _copper.ArmWaitStartTailAfterMove =
+                            incomingRgaBlocked && (_copper.WaitFirst & 0x0004) == 0;
                         restartIncomingRgaBlocked =
                             _display._bus.CausalBusExecutor.GetNextEligibleCopperControlPhase(
                                 resumeCycle,
@@ -2045,6 +2049,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             restartIncomingRgaBlocked = true;
                             _copper.WaitStartCarryPending = false;
                         }
+
                     }
                     else
                     {
@@ -2133,7 +2138,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _copperFirstWord = ReadScratchChipWordAtCycle(pc, _copperFirstWordAccess.GrantedCycle);
                 RecordDma(_copperFirstWordAccess.GrantedCycle);
                 _copperFirstWordPending = true;
-                _copper.Cycle = _display.GetCopperSecondWordRequestCycle(_copperFirstWordAccess);
+                _copper.Cycle = _copper.ConsumeWaitStartTail(
+                    _copperFirstWord,
+                    _display.GetCopperSecondWordRequestCycle(_copperFirstWordAccess));
             }
 
             private void RecordCopperBitplaneRgaCollision(long copperRequestCycle)
@@ -2184,7 +2191,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
                 }
 
-                _copper.Cycle = instructionStopCycle;
+                _copper.CompleteMove(instructionStopCycle);
                 return true;
             }
 

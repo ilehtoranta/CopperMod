@@ -1326,9 +1326,17 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			seedCycle + DiskByteCycleCount(trackBytes.Length, 3),
 			cpuInterruptMask: 0,
 			out var reason);
+		_ = bus.GetNextCpuVisibilityHorizon(
+			seedCycle,
+			seedCycle + DiskByteCycleCount(trackBytes.Length, 3),
+			cpuInterruptMask: 0);
+		var agenda = bus.CausalBusExecutor.GetCpuVisibilityDeadlineForTest(
+			0, CpuVisibilityDeadlineSource.Disk);
 
 		Assert.Null(candidate);
 		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, reason);
+		Assert.Equal(long.MaxValue, agenda.Cycle);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, agenda.DiskReason);
 	}
 
 	[Fact]
@@ -1346,9 +1354,17 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			expectedReleaseCycle + 10,
 			cpuInterruptMask: 0,
 			out var reason);
+		_ = bus.GetNextCpuVisibilityHorizon(
+			Math.Max(0, completionCycle - 10),
+			expectedReleaseCycle + 10,
+			cpuInterruptMask: 0);
+		var agenda = bus.CausalBusExecutor.GetCpuVisibilityDeadlineForTest(
+			0, CpuVisibilityDeadlineSource.Disk);
 
 		Assert.Equal(expectedReleaseCycle, candidate);
 		Assert.Equal(AmigaDiskController.SchedulerWakeReason.ActiveDmaCompletion, reason);
+		Assert.Equal(expectedReleaseCycle, agenda.Cycle);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.ActiveDmaCompletion, agenda.DiskReason);
 	}
 
 	[Fact]
@@ -1401,9 +1417,14 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			completionCycle,
 			cpuInterruptMask: 0,
 			out var reason);
+		_ = bus.GetNextCpuVisibilityHorizon(0, completionCycle, cpuInterruptMask: 0);
+		var agenda = bus.CausalBusExecutor.GetCpuVisibilityDeadlineForTest(
+			0, CpuVisibilityDeadlineSource.Disk);
 
 		Assert.Null(candidate);
 		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, reason);
+		Assert.Equal(long.MaxValue, agenda.Cycle);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, agenda.DiskReason);
 	}
 
 	[Fact]
@@ -1429,11 +1450,16 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 			indexCycle,
 			cpuInterruptMask: 0,
 			out var enabledReason);
+		_ = enabled.GetNextCpuVisibilityHorizon(0, indexCycle, cpuInterruptMask: 0);
+		var enabledAgenda = enabled.CausalBusExecutor.GetCpuVisibilityDeadlineForTest(
+			0, CpuVisibilityDeadlineSource.Disk);
 
 		Assert.Null(disabledCandidate);
 		Assert.Equal(AmigaDiskController.SchedulerWakeReason.None, disabledReason);
 		Assert.Equal(indexCycle, enabledCandidate);
 		Assert.Equal(AmigaDiskController.SchedulerWakeReason.IndexPulse, enabledReason);
+		Assert.Equal(indexCycle, enabledAgenda.Cycle);
+		Assert.Equal(AmigaDiskController.SchedulerWakeReason.IndexPulse, enabledAgenda.DiskReason);
 	}
 
 	[Fact]

@@ -254,7 +254,19 @@ namespace CopperMod.Amiga.Bus
                 _bus.CausalBusExecutor.FirstShadowMismatch,
                 _bus.CausalBusExecutor.FixedPlanShadowMatches,
                 _bus.CausalBusExecutor.FixedPlanShadowMismatches,
-                _bus.CausalBusExecutor.FirstFixedPlanShadowMismatch);
+                _bus.CausalBusExecutor.FirstFixedPlanShadowMismatch,
+                _bus.CausalBusExecutor.CpuVisibilityQueries,
+                _bus.CausalBusExecutor.CpuVisibilityRootReads,
+                _bus.CausalBusExecutor.CpuVisibilityLeafUpdates,
+                _bus.CausalBusExecutor.CpuVisibilitySourceRefreshes,
+                _bus.CausalBusExecutor.CpuVisibilityShadowMatches,
+                _bus.CausalBusExecutor.CpuVisibilityShadowMismatches,
+                _bus.CausalBusExecutor.CpuVisibilityPotentialCycles,
+                _bus.CausalBusExecutor.CpuVisibilityPotentialInstructions,
+                _bus.CausalBusExecutor.CpuVisibilityShortHorizonRejections,
+                _bus.CausalBusExecutor.CpuVisibilityLegacyQueryTicks,
+                _bus.CausalBusExecutor.CpuVisibilityExecutorQueryTicks,
+                _bus.CausalBusExecutor.CpuVisibilityFirstShadowMismatch);
         }
 
         private bool TrySkipDrainWithRasterlineScheduleProfiled(long targetCycle, AmigaHardwareEventMask mask)
@@ -299,7 +311,8 @@ namespace CopperMod.Amiga.Bus
         private void ProcessEventsAtProfiled(long cycle, AmigaHardwareEventMask mask)
         {
             Debug.Assert(cycle >= 0, "Hardware scheduler event cycles must be non-negative.");
-            InvalidateWakeAgenda();
+            InvalidateWakeAgenda(invalidateCpuVisibility: false);
+            var visibilityDirty = CpuVisibilityDirtySource.None;
             if ((mask & AmigaHardwareEventMask.Raster) != 0 &&
                 _bus.GetNextRasterEventCycle(cycle, cycle) <= cycle)
             {
@@ -307,6 +320,7 @@ namespace CopperMod.Amiga.Bus
                 _bus.AdvanceRasterCoreTo(cycle);
                 _hostRasterTicks += Stopwatch.GetTimestamp() - start;
                 _rasterEvents++;
+                visibilityDirty |= CpuVisibilityDirtySource.Raster;
             }
 
             if ((mask & AmigaHardwareEventMask.CiaTimers) != 0 &&
@@ -316,6 +330,7 @@ namespace CopperMod.Amiga.Bus
                 _bus.AdvanceCiaTimersCoreTo(cycle);
                 _hostCiaTicks += Stopwatch.GetTimestamp() - start;
                 _ciaEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
 
             if ((mask & AmigaHardwareEventMask.PaulaRegister) != 0 &&
@@ -325,6 +340,7 @@ namespace CopperMod.Amiga.Bus
                 _bus.Paula.AdvanceRegisterObservableTo(cycle);
                 _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
                 _paulaEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
 
             if ((mask & AmigaHardwareEventMask.PaulaDma) != 0 &&
@@ -334,6 +350,7 @@ namespace CopperMod.Amiga.Bus
                 _bus.Paula.AdvanceDmaObservableTo(cycle);
                 _hostPaulaTicks += Stopwatch.GetTimestamp() - start;
                 _paulaEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
 
             if ((mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
@@ -353,6 +370,7 @@ namespace CopperMod.Amiga.Bus
                 _hostDiskTicks += Stopwatch.GetTimestamp() - start;
                 InvalidateDiskWakeFalseCache();
                 _diskEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
 
             if ((mask & AmigaHardwareEventMask.Agnus) != 0 &&
@@ -362,6 +380,7 @@ namespace CopperMod.Amiga.Bus
                 _bus.AdvanceAgnusCoreTo(cycle);
                 _hostAgnusTicks += Stopwatch.GetTimestamp() - start;
                 _agnusEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
 
             if ((mask & AmigaHardwareEventMask.Blitter) != 0 &&
@@ -371,7 +390,10 @@ namespace CopperMod.Amiga.Bus
                 SynchronizeBlitterThrough(cycle);
                 _hostBlitterTicks += Stopwatch.GetTimestamp() - start;
                 _blitterEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
             }
+
+            _bus.CausalBusExecutor.InvalidateCpuVisibilityAgenda(visibilityDirty);
         }
 
         private void ProcessSlotContendedEventsAtProfiled(long cycle)
@@ -450,7 +472,7 @@ namespace CopperMod.Amiga.Bus
                 var start = Stopwatch.GetTimestamp();
                 _bus.AdvanceRasterCoreTo(targetCycle);
                 _hostRasterTicks += Stopwatch.GetTimestamp() - start;
-                InvalidateWakeAgenda();
+                InvalidateWakeAgenda(AmigaHardwareEventMask.Raster);
             }
 
             if ((mask & AmigaHardwareEventMask.CiaTimers) != 0 &&
