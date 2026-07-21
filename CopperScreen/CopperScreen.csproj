@@ -7,6 +7,10 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageId>CopperScreen</PackageId>
+    <Version>1.1.0</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
+    <InformationalVersion>1.1.0</InformationalVersion>
     <Title>CopperScreen</Title>
     <Authors>CopperMod contributors</Authors>
     <Description>Slim Amiga 500 PAL emulator front-end backed by CopperMod.Amiga.</Description>
