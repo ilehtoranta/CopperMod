@@ -28,6 +28,13 @@ builds, and comparing emulator output across a corpus of Amiga software.
 The collaboration was especially useful in the Amiga work behind CopperScreen and
 its reusable components. Notable Build Week changes include:
 
+- **CRT-faithful ECS and interlace presentation.** CopperScreen now preserves its
+  full ECS superhires and overscan capture internally while presenting it with
+  pixel-aspect-correct LCD or CRT geometry. Its interlaced CRT mode uses a
+  host-side phosphor-persistence compositor, updated at monitor render cadence,
+  instead of an artificial alternating odd/even-field dimmer. The expensive path
+  is allocated and active only for interlaced CRT output; stable weave and normal
+  non-interlaced presentation retain the lightweight 50/60 Hz path.
 - **Native, managed IPF disk support.** `CopperDisk` provides what we believe is the
   first native C# implementation for reading SPS/CAPS IPF preservation images. It
   is MIT licensed, requires no native CAPS library, and feeds decoded track data
