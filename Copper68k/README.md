@@ -72,9 +72,9 @@ sealed class RamBus : IM68kBus
         WriteWord(address + 2, (ushort)value, ref cycle, accessKind);
     }
 
-    public bool HasHostTrapStub(uint address) => false;
+    public bool HasHostGateway(uint address) => false;
 
-    public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+    public bool TryInvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
         => false;
 
     public void ResetExternalDevices(long cycle)
@@ -132,8 +132,9 @@ cycle counter to model memory wait states.
 writes. This matters for bus errors, address errors, MMU translation, and
 device side effects.
 
-`HasHostTrapStub` and `TryInvokeHostTrap` are optional host integration hooks.
-Return `false` from both if your emulator does not use CopperMod host traps.
+`HasHostGateway` and `TryInvokeHostGateway` are optional host integration hooks.
+The private gateway instruction is `FF00` followed by a big-endian 32-bit opaque token.
+Return `false` from both if your emulator does not use CopperMod host gateways.
 
 ## Reset and Interrupts
 

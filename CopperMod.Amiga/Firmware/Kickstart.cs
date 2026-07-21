@@ -302,7 +302,7 @@ namespace CopperMod.Amiga.Firmware
             int displacement,
             Action<M68kCpuState> callback)
         {
-            bus.RegisterHostTrapStub(unchecked((uint)((int)libraryBase + displacement)), callback);
+            bus.RegisterHostGateway(unchecked((uint)((int)libraryBase + displacement)), callback);
         }
     }
 

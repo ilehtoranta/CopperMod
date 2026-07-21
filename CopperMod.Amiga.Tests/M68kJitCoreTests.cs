@@ -450,7 +450,7 @@ public sealed class M68kJitCoreTests
 		};
 		WriteWords(directBus, RealFastCodeBase, words);
 		WriteWords(slowBus, RealFastCodeBase, words);
-		slowBus.RegisterHostTrapStub((data & 0x00FF_0000u) + 0xF000u, _ => { });
+		slowBus.RegisterHostGateway((data & 0x00FF_0000u) + 0xF000u, _ => { });
 		var direct = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, directBus);
 		var slow = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, slowBus);
 		direct.Reset(RealFastCodeBase, 0x4000);
@@ -702,7 +702,7 @@ public sealed class M68kJitCoreTests
 			map.BankKinds[(bus.RealFastRamBase + 0x10000) >> map.BankShift]);
 
 		var bankKinds = map.BankKinds;
-		bus.RegisterHostTrapStub(bus.ExpansionRamBase + 0x100, _ => { });
+		bus.RegisterHostGateway(bus.ExpansionRamBase + 0x100, _ => { });
 
 		Assert.True(provider.TryGetJitDirectRamMap(out var rebuiltMap));
 		Assert.Same(bankKinds, rebuiltMap.BankKinds);
@@ -957,7 +957,7 @@ public sealed class M68kJitCoreTests
 			unchecked((ushort)trapAddress),
 			0x7207); // JSR trap; MOVEQ #7,D1
 		var hostHits = 0;
-		bus.RegisterHostTrapStub(trapAddress, state =>
+		bus.RegisterHostGateway(trapAddress, state =>
 		{
 			hostHits++;
 			state.D[0] = 0x1234_5678;
@@ -1164,7 +1164,7 @@ public sealed class M68kJitCoreTests
 		const uint root = 0x4000;
 		var bus = CreateRealFastCodeBus();
 		var hostHits = 0;
-		bus.RegisterHostTrapStub(physicalTrap, state =>
+		bus.RegisterHostGateway(physicalTrap, state =>
 		{
 			hostHits++;
 			state.ProgramCounter = logicalTrap + 8;
@@ -2017,7 +2017,7 @@ public sealed class M68kJitCoreTests
 	{
 		var bus = CreateRealFastCodeBus();
 		WriteWords(bus, RealFastCodeBase, 0x7001, 0x5280, 0x60FC);
-		bus.RegisterHostTrapStub(RealFastCodeBase, _ => { });
+		bus.RegisterHostGateway(RealFastCodeBase, _ => { });
 		Assert.True(bus.TryCaptureJitCodeSnapshot(RealFastCodeBase, 16, out var snapshot));
 		var reader = new M68kSnapshotCodeReader(snapshot);
 
@@ -2293,7 +2293,7 @@ public sealed class M68kJitCoreTests
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase + 4, 0x60FA); // BRA.S trap
 		var hostHits = 0;
-		bus.RegisterHostTrapStub(FastCodeBase, state =>
+		bus.RegisterHostGateway(FastCodeBase, state =>
 		{
 			hostHits++;
 			state.ProgramCounter = FastCodeBase + 4;
@@ -3115,7 +3115,7 @@ public sealed class M68kJitCoreTests
 		var batchAfterCount = boundary.BatchAfterCount;
 		WriteWords(bus, FastCodeBase + 4, 0x4E71);
 		var hostHits = 0;
-		bus.RegisterHostTrapStub(FastCodeBase, state =>
+		bus.RegisterHostGateway(FastCodeBase, state =>
 		{
 			hostHits++;
 			state.ProgramCounter = FastCodeBase + 4;
@@ -5808,11 +5808,11 @@ public sealed class M68kJitCoreTests
 		WriteWords(interpreterBus, FastCodeBase, 0x4E90, 0x60FC);
 		var jitHostHits = 0;
 		var interpreterHostHits = 0;
-		jitBus.RegisterHostTrapStub(hostTarget, state =>
+		jitBus.RegisterHostGateway(hostTarget, state =>
 		{
 			jitHostHits++;
 		});
-		interpreterBus.RegisterHostTrapStub(hostTarget, state =>
+		interpreterBus.RegisterHostGateway(hostTarget, state =>
 		{
 			interpreterHostHits++;
 		});

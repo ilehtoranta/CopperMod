@@ -443,7 +443,8 @@ internal static class CopperScreenProfileStore
 					},
 				Presentation = new PresentationFile
 				{
-					LacedMode = draft.PresentationOptions.LacedMode.ToString()
+					LacedMode = draft.PresentationOptions.LacedMode.ToString(),
+					PixelAspectMode = draft.PresentationOptions.PixelAspectMode.ToString()
 				}
 			};
 		}
@@ -637,7 +638,9 @@ internal static class CopperScreenProfileStore
 
 	private sealed class PresentationFile
 	{
-		public string LacedMode { get; set; } = CopperScreenLacedPresentationMode.CrtFlicker.ToString();
+		public string LacedMode { get; set; } = CopperScreenLacedPresentationMode.CrtPhosphor.ToString();
+
+		public string PixelAspectMode { get; set; } = CopperScreenPixelAspectMode.Lcd.ToString();
 	}
 
 	private sealed class InputPortsFile

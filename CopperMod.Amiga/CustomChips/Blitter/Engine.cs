@@ -1300,10 +1300,26 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     return;
                 }
 
+                if (offset == 0x096 && _busy && RequiresDmaForCurrentBlit())
+                {
+                    // A DMA-gated blit may have no scheduler wake while disabled.
+                    // Re-enable it at the write horizon, never at its stale start
+                    // cycle, so the first granted word is causally ordered.
+                    _currentCycle = Math.Max(_currentCycle, cycle);
+                }
+
                 ApplyRegisterWrite(offset, value);
                 if (offset == 0x040 && _busy && (value & 0x0100) == 0)
                 {
                     _useD = false;
+                    if (!_lineMode)
+                    {
+                        // BLTCON0 can suppress a destination cycle while a blit
+                        // is active.  The causal executor keeps the DMA sequence
+                        // explicitly, so remove any D operation that has not yet
+                        // reached its bus slot.
+                        BuildAreaMicroOpSequence();
+                    }
                 }
 
                 _wakeVersion++;
@@ -1413,6 +1429,12 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             var boundedAreaScope = default(BlitterDmaAdvanceScope);
             try
             {
+                if (RequiresDmaForCurrentBlit() && IsBlitterDmaEnabled())
+                {
+                    ExecuteCausalDmaThrough(targetCycle);
+                    return;
+                }
+
                 while (_busy)
                 {
                     if (_completionPending)
@@ -1566,6 +1588,15 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 return null;
             }
 
+            if (RequiresDmaForCurrentBlit() && IsBlitterDmaEnabled())
+            {
+                var dueCycle = GetNextCausalDmaTransitionCycle();
+                var causalCursor = Math.Max(currentCycle, _bus.ExecutedChipBusHorizon);
+                var candidate = AgnusChipSlotScheduler.AlignToSlot(
+                    Math.Max(dueCycle, causalCursor + 1));
+                return candidate <= targetCycle ? candidate : null;
+            }
+
             var completionCycle = GetPredictedCompletionCycle();
             if (completionCycle == long.MaxValue)
             {
@@ -1578,6 +1609,39 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
 
             return completionCycle <= currentCycle ? currentCycle + 1 : completionCycle;
+        }
+
+        internal long GetRawBusEligibilityCycle()
+        {
+            if (!_busy)
+            {
+                return long.MaxValue;
+            }
+
+            if (RequiresDmaForCurrentBlit())
+            {
+                return IsBlitterDmaEnabled()
+                    ? GetNextCausalDmaTransitionCycle()
+                    : long.MaxValue;
+            }
+
+            return GetPredictedCompletionCycle();
+        }
+
+        internal long NormalizeRawBusEligibilityCycle(long rawCycle, long currentCycle)
+        {
+            if (rawCycle == long.MaxValue)
+            {
+                return long.MaxValue;
+            }
+
+            if (RequiresDmaForCurrentBlit() && IsBlitterDmaEnabled())
+            {
+                var causalCursor = Math.Max(currentCycle, _bus.ExecutedChipBusHorizon);
+                return AgnusChipSlotScheduler.AlignToSlot(Math.Max(rawCycle, causalCursor + 1));
+            }
+
+            return rawCycle <= currentCycle ? currentCycle + 1 : rawCycle;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1600,7 +1664,230 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 return _currentCycle < targetCycle;
             }
 
+            if (RequiresDmaForCurrentBlit())
+            {
+                return GetNextCausalDmaTransitionCycle() <= targetCycle;
+            }
+
             return GetCurrentStepEndCycle() <= targetCycle;
+        }
+
+        private long GetNextCausalDmaTransitionCycle()
+        {
+            if (_completionPending)
+            {
+                return _currentCycle;
+            }
+
+            if (_lineMode)
+            {
+                if (!_lineMicroOpActive)
+                {
+                    // Starting a pixel is an internal transition.  Waking here
+                    // lets the exact request cycle be derived without reserving
+                    // or sampling a future slot.
+                    return _currentCycle;
+                }
+
+                return _lineMicroOpIndex < _lineMicroOpCount
+                    ? GetLineMicroOpRequestCycle(_lineMicroOpIndex)
+                    : _lineMicroOpNextCycle;
+            }
+
+            if (!_areaMicroOpActive)
+            {
+                return _currentCycle;
+            }
+
+            return _areaMicroOpIndex < GetAreaMicroOpCount()
+                ? GetAreaMicroOpRequestCycle(GetAreaMicroOp(_areaMicroOpIndex))
+                : GetAreaMicroOpFinishCycle();
+        }
+
+        private void ExecuteCausalDmaThrough(long targetCycle)
+        {
+            while (_busy)
+            {
+                if (_completionPending)
+                {
+                    if (_currentCycle > targetCycle)
+                    {
+                        return;
+                    }
+
+                    FinalizePendingCompletion();
+                    continue;
+                }
+
+                if (!IsBlitterDmaEnabled())
+                {
+                    _currentCycle = Math.Max(_currentCycle, targetCycle);
+                    return;
+                }
+
+                if (_lineMode)
+                {
+                    if (!_lineMicroOpActive && !BeginLineMicroOpPixel())
+                    {
+                        return;
+                    }
+
+                    if (_lineMicroOpIndex >= _lineMicroOpCount)
+                    {
+                        if (_lineMicroOpNextCycle > targetCycle)
+                        {
+                            return;
+                        }
+
+                        FinishLineMicroOpPixel(targetCycle);
+                        continue;
+                    }
+
+                    var lineRequestCycle = GetLineMicroOpRequestCycle(_lineMicroOpIndex);
+                    if (!TryExecuteCausalLineDmaSlot(lineRequestCycle, targetCycle))
+                    {
+                        return;
+                    }
+
+                    continue;
+                }
+
+                if (!_areaMicroOpActive && !BeginAreaMicroOpWord())
+                {
+                    return;
+                }
+
+                if (_areaMicroOpIndex >= GetAreaMicroOpCount())
+                {
+                    if (GetAreaMicroOpFinishCycle() > targetCycle)
+                    {
+                        return;
+                    }
+
+                    FinishAreaMicroOpWord(targetCycle);
+                    continue;
+                }
+
+                var op = GetAreaMicroOp(_areaMicroOpIndex);
+                var areaRequestCycle = GetAreaMicroOpRequestCycle(op);
+                if (!TryExecuteCausalAreaDmaSlot(op, areaRequestCycle, targetCycle))
+                {
+                    return;
+                }
+
+                continue;
+            }
+        }
+
+        private long GetAreaMicroOpFinishCycle()
+        {
+            var stepEnd = _areaMicroOpStepEnd;
+            var nextCycle = _areaMicroOpNextCycle;
+            ExtendBOnlyInternalPhaseForRefresh(
+                _areaMicroOpNextReadCycle,
+                ref stepEnd,
+                ref nextCycle);
+            var internalCompletionCycle = _areaMicroOpOutputReady
+                ? _areaMicroOpInternalCompletionCycle
+                : Math.Max(stepEnd, _areaMicroOpNextReadCycle);
+            return _areaMicroOpFinalWord && _useD
+                ? internalCompletionCycle
+                : nextCycle;
+        }
+
+        private bool TryExecuteCausalAreaDmaSlot(
+            BlitterSlotQueueOp op,
+            long requestCycle,
+            long targetCycle)
+        {
+            var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, targetCycle));
+            if (slotCycle != targetCycle || slotCycle < requestCycle)
+            {
+                return false;
+            }
+
+            if (_bus.AdvanceOrderedDmaBeforeBlitterSlot(
+                    slotCycle,
+                    out _,
+                    out _,
+                    out _,
+                    out _) == OcsCpuWaitLiveSlotResult.CopperBarrier)
+            {
+                return false;
+            }
+
+            if (_bus.IsMandatoryRefreshSlot(slotCycle))
+            {
+                return false;
+            }
+
+            _cpuWaitExactSlotCycle = slotCycle;
+            _orderedSlotDisplayPrepared = _bus.RequiresCanonicalBlitterDisplayPreparation;
+            try
+            {
+                if (!ExecuteAreaMicroOp(op, requestCycle))
+                {
+                    return false;
+                }
+
+                _areaMicroOpIndex++;
+                return true;
+            }
+            finally
+            {
+                _cpuWaitExactSlotCycle = -1;
+                _orderedSlotDisplayPrepared = false;
+            }
+        }
+
+        private bool TryExecuteCausalLineDmaSlot(long requestCycle, long targetCycle)
+        {
+            var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, targetCycle));
+            if (slotCycle != targetCycle || slotCycle < requestCycle)
+            {
+                return false;
+            }
+
+            if (_bus.AdvanceOrderedDmaBeforeBlitterSlot(
+                    slotCycle,
+                    out _,
+                    out _,
+                    out _,
+                    out _) == OcsCpuWaitLiveSlotResult.CopperBarrier)
+            {
+                return false;
+            }
+
+            if (_bus.IsMandatoryRefreshSlot(slotCycle))
+            {
+                return false;
+            }
+
+            _cpuWaitExactSlotCycle = slotCycle;
+            _orderedSlotDisplayPrepared = _bus.RequiresCanonicalBlitterDisplayPreparation;
+            try
+            {
+                if (!ExecuteLineMicroOp(_lineMicroOpIndex, requestCycle))
+                {
+                    return false;
+                }
+
+                _lineMicroOpIndex++;
+                return true;
+            }
+            finally
+            {
+                _cpuWaitExactSlotCycle = -1;
+                _orderedSlotDisplayPrepared = false;
+            }
+        }
+
+        internal void AdvanceDmaGateHorizonTo(long cycle)
+        {
+            if (_busy && RequiresDmaForCurrentBlit() && !IsBlitterDmaEnabled())
+            {
+                _currentCycle = Math.Max(_currentCycle, cycle);
+            }
         }
 
         private SchedulerWakeSignature CaptureSchedulerWakeSignature()
@@ -2641,7 +2928,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     return true;
                 }
 
-                // A denied generic reservation rolls the word back exactly like
+                // A denied generic slot execution rolls the word back exactly like
                 // StepAreaWord. Retry only when the scalar outer loop would still
                 // admit the word at the updated cycle.
                 if (_areaMicroOpActive || GetCurrentStepEndCycle() > targetCycle)
@@ -3813,7 +4100,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
             var delay = 0L;
             var idleCycle = stepEnd - (2 * ChipSlotCycles);
-            while (_bus.IsFixedDmaSlotReservedAfterPreparingLiveDisplay(idleCycle + delay))
+            while (_bus.IsFixedDmaSlotReservedOrPredicted(idleCycle + delay))
             {
                 delay += ChipSlotCycles;
             }
@@ -3975,7 +4262,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private BlitterDmaReadLatch LoadSourceDmaLatch(BlitterDmaSource source, ref uint pointer, int step, long cycle)
         {
             var latch = LoadSourceDmaLatch(source, GetEffectiveBlitterAddress(pointer), cycle);
-            if (latch.Reservation.Granted)
+            if (latch.Granted)
             {
                 pointer = _bus.AddChipDmaPointerOffset(pointer, step);
             }
@@ -4001,19 +4288,17 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     out predictedGrant,
                     out firstBlockedCycle,
                     out firstBlockedOwner);
-            var reservation = _cpuWaitExactSlotCycle >= 0
-                ? ReserveSourceDmaLatchAtCpuWaitSlot(effectiveAddress, cycle)
-                : _specializationEnabled
-                ? _bus.ReserveBlitterChipWord(effectiveAddress, cycle, isWrite: false)
-                : _bus.ReserveChipWordForDevice(
-                    AmigaBusRequester.Blitter,
-                    AmigaBusAccessKind.Blitter,
+            var execution = _cpuWaitExactSlotCycle >= 0
+                ? ExecuteSourceDmaLatchAtCpuWaitSlot(effectiveAddress, cycle)
+                : _bus.CausalBusExecutor.ExecuteBlitterWord(
                     effectiveAddress,
-                    cycle);
+                    cycle,
+                    isWrite: false,
+                    writeValue: 0);
             RecordAdvanceGrantVerification(
                 verifySupported,
                 predictedGrant,
-                reservation.Access.GrantedCycle,
+                execution.Access.GrantedCycle,
                 effectiveAddress,
                 isWrite: false,
                 cycle,
@@ -4024,42 +4309,32 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 _specializedReservations++;
             }
 
-            if (reservation.Granted)
+            if (execution.Granted)
             {
-                RecordBlitterDma(reservation.Access);
+                RecordBlitterDma(execution.Access);
             }
 
-            return new BlitterDmaReadLatch(source, reservation);
+            return new BlitterDmaReadLatch(source, execution.Granted, execution.Access, execution.Value);
         }
 
-        private AmigaDmaWordReservation ReserveSourceDmaLatchAtCpuWaitSlot(uint effectiveAddress, long cycle)
+        private AmigaDmaWordExecutionResult ExecuteSourceDmaLatchAtCpuWaitSlot(uint effectiveAddress, long cycle)
         {
-            if (_orderedSlotDisplayPrepared)
-            {
-                _ = _bus.TryReservePredictedBlitterChipWordExactSlot(
-                    effectiveAddress,
-                    cycle,
-                    _cpuWaitExactSlotCycle,
-                    isWrite: false,
-                    out var predictedReservation);
-                return predictedReservation;
-            }
-
-            _ = _bus.TryReserveBlitterChipWordExactSlot(
+            _ = _bus.CausalBusExecutor.TryExecuteBlitterWordExact(
                 effectiveAddress,
                 cycle,
                 _cpuWaitExactSlotCycle,
                 isWrite: false,
-                displayPrepared: false,
-                out var reservation);
-            return reservation;
+                writeValue: 0,
+                displayPrepared: _orderedSlotDisplayPrepared,
+                out var execution);
+            return execution;
         }
 
         private bool TryConsumeSourceDmaLatch(ref BlitterDmaReadLatch latch, out ushort value)
         {
-            if (!latch.Reservation.Granted)
+            if (!latch.Granted)
             {
-                RollbackDmaStepToDeniedCycle(latch.Reservation.GrantedCycle);
+                RollbackDmaStepToDeniedCycle(latch.BusAccess.GrantedCycle);
                 latch = default;
                 value = 0;
                 return false;
@@ -4071,8 +4346,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private ushort ConsumeSourceDmaLatch(ref BlitterDmaReadLatch latch)
         {
-            var reservation = latch.Reservation;
-            var value = _bus.CommitDmaWordRead(in reservation);
+            var value = latch.Value;
             latch = default;
             return value;
         }
@@ -4087,14 +4361,14 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             long cycle,
             out AmigaBusAccessResult access)
         {
-            var reservation = CommitDestinationDmaLatch(ref pointer, step, ref latch, cycle);
-            access = reservation.Access;
-            if (reservation.Granted)
+            var execution = CommitDestinationDmaLatch(ref pointer, step, ref latch, cycle);
+            access = execution.Access;
+            if (execution.Granted)
             {
                 return true;
             }
 
-            RollbackDmaStepToDeniedCycle(reservation.GrantedCycle);
+            RollbackDmaStepToDeniedCycle(execution.GrantedCycle);
             return false;
         }
 
@@ -4104,29 +4378,29 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             long cycle,
             out AmigaBusAccessResult access)
         {
-            var reservation = CommitDestinationDmaLatch(address, ref latch, cycle);
-            access = reservation.Access;
-            if (reservation.Granted)
+            var execution = CommitDestinationDmaLatch(address, ref latch, cycle);
+            access = execution.Access;
+            if (execution.Granted)
             {
                 return true;
             }
 
-            RollbackDmaStepToDeniedCycle(reservation.GrantedCycle);
+            RollbackDmaStepToDeniedCycle(execution.GrantedCycle);
             return false;
         }
 
-        private AmigaDmaWordReservation CommitDestinationDmaLatch(ref uint pointer, int step, ref BlitterDmaWriteLatch latch, long cycle)
+        private AmigaDmaWordExecutionResult CommitDestinationDmaLatch(ref uint pointer, int step, ref BlitterDmaWriteLatch latch, long cycle)
         {
-            var reservation = CommitDestinationDmaLatch(GetEffectiveBlitterAddress(pointer), ref latch, cycle);
-            if (reservation.Granted)
+            var execution = CommitDestinationDmaLatch(GetEffectiveBlitterAddress(pointer), ref latch, cycle);
+            if (execution.Granted)
             {
                 pointer = _bus.AddChipDmaPointerOffset(pointer, step);
             }
 
-            return reservation;
+            return execution;
         }
 
-        private AmigaDmaWordReservation CommitDestinationDmaLatch(uint address, ref BlitterDmaWriteLatch latch, long cycle)
+        private AmigaDmaWordExecutionResult CommitDestinationDmaLatch(uint address, ref BlitterDmaWriteLatch latch, long cycle)
         {
             var effectiveAddress = GetEffectiveBlitterAddress(address);
             var predictedGrant = 0L;
@@ -4141,19 +4415,13 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     out predictedGrant,
                     out firstBlockedCycle,
                     out firstBlockedOwner);
-            var reservation = _cpuWaitExactSlotCycle >= 0
-                ? ReserveDestinationDmaLatchAtCpuWaitSlot(effectiveAddress, cycle)
-                : _specializationEnabled
-                ? _bus.ReserveBlitterChipWord(effectiveAddress, cycle, isWrite: true)
-                : _bus.ReserveChipWordWriteForDevice(
-                    AmigaBusRequester.Blitter,
-                    AmigaBusAccessKind.Blitter,
-                    effectiveAddress,
-                    cycle);
+            var execution = _cpuWaitExactSlotCycle >= 0
+                ? ExecuteDestinationDmaLatchAtCpuWaitSlot(effectiveAddress, latch.Value, cycle)
+                : _bus.CausalBusExecutor.ExecuteBlitterWord(effectiveAddress, cycle, isWrite: true, latch.Value);
             RecordAdvanceGrantVerification(
                 verifySupported,
                 predictedGrant,
-                reservation.Access.GrantedCycle,
+                execution.Access.GrantedCycle,
                 effectiveAddress,
                 isWrite: true,
                 cycle,
@@ -4164,16 +4432,15 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 _specializedReservations++;
             }
 
-            if (!reservation.Granted)
+            if (!execution.Granted)
             {
                 latch = default;
-                return reservation;
+                return execution;
             }
 
-            _bus.CommitDmaWordWrite(in reservation, latch.Value);
-            RecordBlitterDma(reservation.Access);
+            RecordBlitterDma(execution.Access);
             latch = default;
-            return reservation;
+            return execution;
         }
 
         private void RecordAdvanceGrantVerification(
@@ -4207,27 +4474,20 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
         }
 
-        private AmigaDmaWordReservation ReserveDestinationDmaLatchAtCpuWaitSlot(uint effectiveAddress, long cycle)
+        private AmigaDmaWordExecutionResult ExecuteDestinationDmaLatchAtCpuWaitSlot(
+            uint effectiveAddress,
+            ushort value,
+            long cycle)
         {
-            if (_orderedSlotDisplayPrepared)
-            {
-                _ = _bus.TryReservePredictedBlitterChipWordExactSlot(
-                    effectiveAddress,
-                    cycle,
-                    _cpuWaitExactSlotCycle,
-                    isWrite: true,
-                    out var predictedReservation);
-                return predictedReservation;
-            }
-
-            _ = _bus.TryReserveBlitterChipWordExactSlot(
+            _ = _bus.CausalBusExecutor.TryExecuteBlitterWordExact(
                 effectiveAddress,
                 cycle,
                 _cpuWaitExactSlotCycle,
                 isWrite: true,
-                displayPrepared: false,
-                out var reservation);
-            return reservation;
+                writeValue: value,
+                displayPrepared: _orderedSlotDisplayPrepared,
+                out var execution);
+            return execution;
         }
 
         private bool TryPrepareBoundedDmaSlot(
@@ -4770,17 +5030,25 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private readonly struct BlitterDmaReadLatch
         {
-            public BlitterDmaReadLatch(BlitterDmaSource source, AmigaDmaWordReservation reservation)
+            public BlitterDmaReadLatch(
+                BlitterDmaSource source,
+                bool granted,
+                AmigaBusAccessResult busAccess,
+                ushort value)
             {
                 Source = source;
-                Reservation = reservation;
+                Granted = granted;
+                BusAccess = busAccess;
+                Value = value;
             }
 
             public BlitterDmaSource Source { get; }
 
-            public AmigaDmaWordReservation Reservation { get; }
+            public bool Granted { get; }
 
-            public AmigaBusAccessResult BusAccess => Reservation.Access;
+            public AmigaBusAccessResult BusAccess { get; }
+
+            public ushort Value { get; }
         }
 
         private readonly struct BlitterDmaWriteLatch

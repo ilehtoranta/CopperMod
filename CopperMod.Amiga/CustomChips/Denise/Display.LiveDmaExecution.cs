@@ -20,8 +20,21 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
+            var eventIterations = 0;
             while (true)
             {
+                if (++eventIterations > 1_000_000)
+                {
+                    throw new InvalidOperationException(
+                        $"Live display DMA did not converge within one physical frame: " +
+                        $"frameStart={_liveFrameStartCycle}, target={targetCycle}, live={_liveCycle}, " +
+                        $"captured={_liveCapturedThroughCycle}, pending={_pendingIndex}/{_pendingWrites.Count}, " +
+                        $"line={_liveNextLineStateRow}, bitplane={_liveNextFetchRow}/" +
+                        $"{_liveNextFetchPlane}/{_liveNextFetchWord}/{_liveNextFetchSlot}, " +
+                        $"sprite={_liveNextSpriteRow}/{_liveNextSpriteIndex}/{_liveNextSpriteWord}, " +
+                        $"copperSteps={_liveCopperStepCount}, bus={_bus.ExecutedChipBusHorizon}.");
+                }
+
                 SkipLiveRowsWithoutFetches();
                 SkipLiveSpriteSlotsWithoutFetches();
                 var nextLineStateCycle = GetNextLiveLineStateCycle();
@@ -59,23 +72,23 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
                 }
 
-                if (TryReplayLiveRasterlineDescriptorTo(
-                        targetCycle,
-                        includeCopper,
-                        nextLineStateCycle,
-                        nextBitplaneFetchCycle,
-                        nextSpriteFetchCycle,
-                        nextPendingWriteCycle))
-                {
-                    continue;
-                }
-
                 if (nextCycle > targetCycle)
                 {
                     break;
                 }
 
+                var wakeVersionBeforeAdvance = _liveWakeVersion;
                 AdvanceLiveDisplayStateTo(nextCycle, includeCopper);
+                if (_liveWakeVersion != wakeVersionBeforeAdvance)
+                {
+                    // A Copper MOVE can rebase prepared bitplane/sprite work
+                    // while advancing toward the event selected above.  That
+                    // selection is now stale; recompute it before executing a
+                    // batch so its stop cycle cannot precede the new cursor.
+                    InvalidateLiveWorkCycle();
+                    continue;
+                }
+
                 if (nextPendingWriteCycle == nextCycle)
                 {
                     RecordLiveRasterlinePlanEvent(
@@ -109,6 +122,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 if (nextSpriteFetchCycle == nextCycle)
                 {
                     var batchStopCycle = GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle, includeCopper);
+                    batchStopCycle = Math.Min(batchStopCycle, nextBitplaneFetchCycle);
                     RecordLiveRasterlinePlanEvent(
                         LiveRasterlinePlanEventKind.SpriteFetchBatch,
                         nextCycle,
@@ -122,6 +136,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 var bitplaneBatchStopCycle = GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle, includeCopper);
+                bitplaneBatchStopCycle = Math.Min(bitplaneBatchStopCycle, nextSpriteFetchCycle);
                 RecordLiveRasterlinePlanEvent(
                     LiveRasterlinePlanEventKind.BitplaneFetchBatch,
                     nextCycle,
@@ -136,7 +151,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             AdvanceLiveDisplayStateTo(targetCycle, includeCopper);
             _liveCycle = Math.Max(_liveCycle, targetCycle);
             _liveCapturedThroughCycle = Math.Max(_liveCapturedThroughCycle, targetCycle);
-            InvalidateLiveWorkCycle();
+            // Moving only the captured horizon does not change the next display
+            // request. Keep the versioned agenda and invalidate only the query
+            // result that is parameterized by current/target cycle.
+            InvalidateLiveWakeCandidateQueryCache();
         }
 
         private void AdvanceLiveRegisterEventsWithinFrame(long targetCycle, bool includeCopper)
@@ -188,7 +206,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             AdvanceLiveDisplayStateTo(targetCycle, includeCopper);
             _liveCycle = Math.Max(_liveCycle, targetCycle);
-            InvalidateLiveWorkCycle();
+            InvalidateLiveWakeCandidateQueryCache();
         }
 
         private long GetLiveDmaBatchStopCycle(long targetCycle, long nextLineStateCycle)
@@ -211,276 +229,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             return stopCycle;
-        }
-
-        private bool TryReplayLiveRasterlineDescriptorTo(
-            long targetCycle,
-            bool includeCopper,
-            long nextLineStateCycle,
-            long nextBitplaneFetchCycle,
-            long nextSpriteFetchCycle,
-            long nextPendingWriteCycle)
-        {
-            var nextReplayCycle = Math.Min(nextBitplaneFetchCycle, nextSpriteFetchCycle);
-            if (nextReplayCycle == long.MaxValue ||
-                nextReplayCycle > targetCycle ||
-                nextLineStateCycle <= nextReplayCycle ||
-                nextPendingWriteCycle <= nextReplayCycle)
-            {
-                return false;
-            }
-
-            if (IsLiveCopperDmaEnabled())
-            {
-                return false;
-            }
-
-            if (!includeCopper && GetNextLiveCopperBarrierCycle() <= nextReplayCycle)
-            {
-                return false;
-            }
-
-            var row = nextBitplaneFetchCycle <= nextSpriteFetchCycle
-                ? _liveNextFetchRow
-                : _liveNextSpriteRow;
-            if (!TryGetLiveRasterlineDmaDescriptor(row, out var descriptor))
-            {
-                return false;
-            }
-
-            var replayStopCycle = Math.Min(
-                descriptor.LineStopCycle,
-                GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle, includeCopper));
-            if (nextReplayCycle > replayStopCycle ||
-                HasPendingWriteInCycleRange(Math.Max(_liveCycle, descriptor.LineStartCycle), replayStopCycle))
-            {
-                _liveRasterlineDescriptorFallbackRows++;
-                return false;
-            }
-
-            if (nextSpriteFetchCycle <= nextBitplaneFetchCycle)
-            {
-                if (!descriptor.HasSpriteSlots)
-                {
-                    _liveRasterlineDescriptorFallbackRows++;
-                    return false;
-                }
-            }
-            else if (!descriptor.HasBitplaneFetches)
-            {
-                _liveRasterlineDescriptorFallbackRows++;
-                return false;
-            }
-
-            _liveRasterlineDescriptorReplayAttempts++;
-            AdvanceLiveDisplayStateTo(nextReplayCycle, includeCopper);
-            var replayed = false;
-            if (nextSpriteFetchCycle <= nextBitplaneFetchCycle)
-            {
-                RecordLiveRasterlinePlanEvent(
-                    LiveRasterlinePlanEventKind.SpriteFetchBatch,
-                    nextSpriteFetchCycle,
-                    _liveNextSpriteRow,
-                    replayStopCycle,
-                    _liveNextSpriteIndex,
-                    _liveNextSpriteWord,
-                    0);
-                replayed = ReplayLiveRasterlineDescriptorSpriteBatch(descriptor, replayStopCycle);
-            }
-            else
-            {
-                RecordLiveRasterlinePlanEvent(
-                    LiveRasterlinePlanEventKind.BitplaneFetchBatch,
-                    nextBitplaneFetchCycle,
-                    _liveNextFetchRow,
-                    replayStopCycle,
-                    _liveNextFetchPlane,
-                    _liveNextFetchWord,
-                    _liveNextFetchSlot);
-                replayed = ReplayLiveRasterlineDescriptorBitplaneBatch(descriptor, replayStopCycle);
-            }
-
-            if (replayed)
-            {
-                _liveRasterlineDescriptorReplayedRows++;
-                return true;
-            }
-
-            _liveRasterlineDescriptorFallbackRows++;
-            return false;
-        }
-
-        private bool TryGetLiveRasterlineDmaDescriptor(int row, out LiveRasterlineDmaDescriptor descriptor)
-        {
-            descriptor = default;
-            if ((uint)row >= (uint)LowResOutputHeight)
-            {
-                return false;
-            }
-
-            descriptor = _liveRasterlineDmaDescriptors[row];
-            return descriptor.IsValid(_liveGeneration, row) &&
-                IsLiveLineValid(row) &&
-                DoesLiveLineStateMatchDescriptor(row, descriptor);
-        }
-
-        private bool DoesLiveLineStateMatchDescriptor(int row, LiveRasterlineDmaDescriptor descriptor)
-        {
-            var state = _liveLineStates[row];
-            if (state.LineStartCycle != descriptor.LineStartCycle ||
-                state.DisplayWindowVerticallyOpen != descriptor.DisplayWindowVerticallyOpen ||
-                state.Resolution != descriptor.Resolution ||
-                state.FetchResolution != descriptor.FetchResolution ||
-                state.Bplcon0 != descriptor.Bplcon0 ||
-                state.Bplcon1 != descriptor.Bplcon1 ||
-                state.Bplcon2 != descriptor.Bplcon2 ||
-                state.Bplcon3 != descriptor.Bplcon3 ||
-                state.DiwHigh != descriptor.DiwHigh ||
-                state.DiwHighValid != descriptor.DiwHighValid ||
-                state.AgnusDiwHigh != descriptor.AgnusDiwHigh ||
-                state.AgnusDiwHighValid != descriptor.AgnusDiwHighValid ||
-                state.AgnusDisplayWindow != descriptor.AgnusDisplayWindow ||
-                state.DeniseDisplayWindow != descriptor.DeniseDisplayWindow ||
-                state.DataFetchWindow != descriptor.DataFetchWindow ||
-                state.Dmacon != descriptor.Dmacon ||
-                state.Bpl1Mod != descriptor.Bpl1Mod ||
-                state.Bpl2Mod != descriptor.Bpl2Mod ||
-                state.PlaneCount != descriptor.PlaneCount ||
-                state.FetchWords != descriptor.FetchWords ||
-                state.DataFetchStart != descriptor.DataFetchStart ||
-                state.FetchSlotStride != descriptor.FetchSlotStride ||
-                state.PlaneHasRowMask != descriptor.PlaneHasRowMask)
-            {
-                return false;
-            }
-
-            for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
-            {
-                if (state.BitplaneRowAddresses[plane] != descriptor.GetBitplaneRowAddress(plane))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private bool ReplayLiveRasterlineDescriptorBitplaneBatch(
-            LiveRasterlineDmaDescriptor descriptor,
-            long stopCycle)
-        {
-            if (TryCaptureLiveBitplaneFetchBatchWithRowPlan(stopCycle, out _, out var capturedByPlan))
-            {
-                return capturedByPlan;
-            }
-
-            var captured = false;
-            while (_liveNextFetchRow == descriptor.Row)
-            {
-                if (!TryGetNextDescriptorBitplaneFetch(
-                        descriptor,
-                        out var fetchCycle,
-                        out var plane,
-                        out var word,
-                        out var slot) ||
-                    fetchCycle > stopCycle)
-                {
-                    return captured;
-                }
-
-                _liveNextFetchPlane = plane;
-                _liveNextFetchWord = word;
-                _liveNextFetchSlot = slot;
-                CaptureLiveBitplaneFetch(descriptor.Row, plane, word, fetchCycle, _liveLineStates[descriptor.Row]);
-                AdvanceLiveFetchCursor();
-                captured = true;
-            }
-
-            return captured;
-        }
-
-        private bool TryGetNextDescriptorBitplaneFetch(
-            LiveRasterlineDmaDescriptor descriptor,
-            out long fetchCycle,
-            out int plane,
-            out int word,
-            out int slot)
-        {
-            fetchCycle = long.MaxValue;
-            plane = 0;
-            word = _liveNextFetchWord;
-            slot = _liveNextFetchSlot;
-            if (!descriptor.HasBitplaneFetches ||
-                _liveNextFetchRow != descriptor.Row ||
-                word >= descriptor.FetchWords)
-            {
-                return false;
-            }
-
-            var planeCount = Math.Max(0, descriptor.PlaneCount);
-            while (word < descriptor.FetchWords)
-            {
-                while (slot < descriptor.FetchSlotStride)
-                {
-                    if (TryGetBitplanePlaneForFetchSlot(slot, planeCount, descriptor.FetchResolution, out plane))
-                    {
-                        var fetchHorizontal = descriptor.DataFetchStart + (word * descriptor.FetchSlotStride) + slot;
-                        fetchCycle = AgnusChipSlotScheduler.AlignToSlot(
-                            descriptor.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles));
-                        return true;
-                    }
-
-                    slot++;
-                }
-
-                slot = 0;
-                word++;
-            }
-
-            return false;
-        }
-
-        private bool ReplayLiveRasterlineDescriptorSpriteBatch(
-            LiveRasterlineDmaDescriptor descriptor,
-            long stopCycle)
-        {
-            if (!descriptor.HasSpriteSlots)
-            {
-                return false;
-            }
-
-            if (TryCaptureLiveSpriteFetchBatchWithRowPlan(stopCycle, out _, out var capturedByPlan))
-            {
-                return capturedByPlan;
-            }
-
-            var captured = false;
-            while (_liveNextSpriteRow == descriptor.Row)
-            {
-                SkipLiveSpriteSlotsWithoutFetches();
-                if (_liveNextSpriteRow != descriptor.Row ||
-                    !IsLiveLineValid(_liveNextSpriteRow) ||
-                    !IsSpriteDmaEnabled())
-                {
-                    return captured;
-                }
-
-                var fetchCycle = GetNextLiveSpriteFetchCycle();
-                if (fetchCycle > stopCycle)
-                {
-                    return captured;
-                }
-
-                _ = TryCaptureKnownLiveSpriteDmaSlot(
-                    _liveNextSpriteRow,
-                    _liveNextSpriteIndex,
-                    _liveNextSpriteWord,
-                    fetchCycle);
-                AdvanceLiveSpriteFetchCursor();
-                captured = true;
-            }
-
-            return captured;
         }
 
         private long GetNextLiveCopperBarrierCycle()
@@ -557,24 +305,41 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return null;
             }
 
+            if (_liveCopper.RestartArmed || _liveCopper.ReadyToRequest)
+            {
+                return NormalizeCopperBatchBarrier(currentCycle, targetCycle, _liveCopper.Cycle);
+            }
+
             if (_liveCopper.Waiting)
             {
-                var blitterReadyCycle = GetCopperBlitterReadyCycle(_liveCopper.WaitSecond, _liveCopper.Cycle);
-                if (blitterReadyCycle > _liveCopper.Cycle)
+                var blitterReadyCycle = GetObservedLiveCopperBlitterReadyCycle();
+                if (blitterReadyCycle <= _liveCopper.Cycle)
                 {
-                    return NormalizeCopperBatchBarrier(currentCycle, targetCycle, blitterReadyCycle);
+                    var cachedWaitCycle = GetCachedLiveCopperWaitCycle();
+                    if (cachedWaitCycle == long.MaxValue)
+                    {
+                        return null;
+                    }
+
+                    return NormalizeCopperBatchBarrier(
+                        currentCycle,
+                        targetCycle,
+                        GetCopperWaitRestartArmCycle(
+                            cachedWaitCycle,
+                            _liveCopper.WaitSecond,
+                            _liveCopper.WaitObservedBlitterBusy));
                 }
 
                 if (!TryGetCopperWaitCycle(
                     _liveCopper.WaitFirst,
                     _liveCopper.WaitSecond,
                     _liveFrameStartCycle,
-                    _liveCopper.Cycle,
+                    Math.Max(_liveCopper.Cycle, blitterReadyCycle),
                     targetCycle + 1,
                     blitterFinished: true,
                     out var waitCycle))
                 {
-                    return null;
+                    return NormalizeCopperBatchBarrier(currentCycle, targetCycle, blitterReadyCycle);
                 }
 
                 // A WAIT has no CPU-visible effect while it is sleeping. Once it wakes,
@@ -583,9 +348,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return NormalizeCopperBatchBarrier(
                     currentCycle,
                     targetCycle,
-                    waitCycle + CopperHpToCpuCycles(GetCopperWaitWakeHpUnits(
+                    GetCopperWaitRestartArmCycle(
+                        Math.Min(waitCycle, blitterReadyCycle),
                         _liveCopper.WaitSecond,
-                        _liveCopper.WaitObservedBlitterBusy)));
+                        _liveCopper.WaitObservedBlitterBusy));
             }
 
             // Do not scan ahead through copper list memory here. The next copper
@@ -725,6 +491,45 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 currentCycle,
                 targetCycle,
                 nextCycle <= currentCycle ? currentCycle : nextCycle);
+        }
+
+        internal long GetRawLiveBusEligibilityCycle()
+        {
+            if (!_liveDmaEnabled || !_liveFrameValid || !HasLiveDisplayWork())
+            {
+                return long.MaxValue;
+            }
+
+            var currentCycle = Math.Max(_liveFrameStartCycle, _liveCapturedThroughCycle);
+            var targetCycle = Math.Max(currentCycle, GetLiveFrameStopCycle() - 1);
+            return GetNextLiveDisplayWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
+        }
+
+        internal ulong RawLiveBusEligibilityVersion
+        {
+            get
+            {
+                unchecked
+                {
+                    return (_liveWakeVersion * 1099511628211UL) ^ (ulong)_liveCapturedThroughCycle;
+                }
+            }
+        }
+
+        internal long NormalizeRawLiveBusEligibilityCycle(
+            long rawCycle,
+            long currentCycle,
+            long targetCycle)
+        {
+            if (targetCycle > _liveCapturedThroughCycle &&
+                GetNextLiveCpuVisibleWorkCycle() <= currentCycle)
+            {
+                return currentCycle;
+            }
+
+            return rawCycle == long.MaxValue
+                ? long.MaxValue
+                : rawCycle <= currentCycle ? currentCycle : rawCycle;
         }
 
         private long? CacheLiveDisplayWakeCandidate(long currentCycle, long targetCycle, long? candidate)

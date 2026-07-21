@@ -7,142 +7,136 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 
 namespace CopperMod.Amiga.CustomChips.Denise
 {
     internal sealed partial class Display
     {
-        public void RenderFrame(Span<uint> bgra)
+        public void BeginPresentationFrame(
+            PresentationFrameTarget target,
+            long frameStartCycle,
+            long frameStopCycle)
         {
-            RenderFrame(bgra, 0, long.MaxValue, useTimedWrites: false);
+            if (!target.IsBound)
+            {
+                throw new ArgumentException("A presentation target is required.", nameof(target));
+            }
+
+            if (_boundPresentationActive)
+            {
+                throw new InvalidOperationException("A presentation frame is already active.");
+            }
+
+            if (!_liveDmaEnabled || !_bus.LiveAgnusDmaEnabled)
+            {
+                throw new InvalidOperationException("Timed presentation requires live Agnus and display DMA.");
+            }
+
+            if (frameStopCycle <= frameStartCycle)
+            {
+                throw new ArgumentOutOfRangeException(nameof(frameStopCycle));
+            }
+
+            ConfigurePresentationDimensions(target.Length);
+            _boundPresentationTarget = target;
+            _boundPresentationFrameStartCycle = frameStartCycle;
+            _boundPresentationFrameStopCycle = Math.Min(frameStopCycle, GetFrameStopCycle(frameStartCycle));
+            _nextBoundPresentationRow = 0;
+            _boundPresentationActive = true;
+            _boundPresentationCompleted = false;
+            _renderFrameStartCycle = frameStartCycle;
+            _renderInterlaceField = InterlaceEnabled
+                ? GetInterlaceField(frameStartCycle)
+                : 0;
+            ResetFrameCounters();
+            ResetPlayfieldPriorityMasks();
+            ClearPaletteFrameSpans();
+            _bitplaneDataSpans.Clear();
+            // Register setup commonly happens before the presentation target is
+            // bound. Manual sprite data is already latched in Denise, so seed the
+            // line-local command stream from those latches without reading memory.
+            CaptureInitialManualSpriteFrameCommands();
+            ClearPresentationField(target.AsSpan());
+            RenderBoundPresentationLinesThrough(_liveCapturedThroughCycle, completing: false);
         }
 
-        public void RenderFrame(Span<uint> bgra, long frameStartCycle, long frameEndCycle)
+        private void ClearPresentationField(Span<uint> target)
         {
-            RenderFrame(bgra, frameStartCycle, frameEndCycle, useTimedWrites: true);
+            target = target.Slice(0, _renderWidth * _renderHeight);
+            if (!InterlaceEnabled || !IsRenderingHighResolutionHeight())
+            {
+                target.Fill(0xFF000000u);
+                return;
+            }
+
+            for (var row = _renderInterlaceField; row < _renderHeight; row += 2)
+            {
+                target.Slice(row * _renderWidth, _renderWidth).Fill(0xFF000000u);
+            }
         }
 
-        [HotPath]
-        private void RenderFrame(Span<uint> bgra, long frameStartCycle, long frameEndCycle, bool useTimedWrites)
+        public void CompletePresentationFrame(long frameStopCycle)
         {
-            if (bgra.Length >= Width * Height)
+            if (!_boundPresentationActive)
+            {
+                throw new InvalidOperationException("No presentation frame is active.");
+            }
+
+            try
+            {
+                var stopCycle = Math.Min(frameStopCycle, _boundPresentationFrameStopCycle);
+                var captureStop = Math.Max(_boundPresentationFrameStartCycle, stopCycle - 1);
+                if (!_boundPresentationCompleted && _liveCapturedThroughCycle < captureStop)
+                {
+                    _bus.SynchronizeLiveDisplayThrough(captureStop);
+                }
+
+                RenderBoundPresentationLinesThrough(captureStop, completing: true);
+                _boundPresentationCompleted = true;
+            }
+            finally
+            {
+                _boundPresentationActive = false;
+                _boundPresentationTarget = default;
+                _currentRenderRow = -1;
+                _renderingLiveCapture = false;
+                _enforceDmaForFrame = false;
+                _lastAppliedLivePaletteSnapshotIndex = -1;
+            }
+        }
+
+        public void AbortPresentationFrame()
+        {
+            _boundPresentationActive = false;
+            _boundPresentationCompleted = false;
+            _boundPresentationTarget = default;
+            _currentRenderRow = -1;
+            _renderingLiveCapture = false;
+            _enforceDmaForFrame = false;
+            _lastAppliedLivePaletteSnapshotIndex = -1;
+        }
+
+        private void ConfigurePresentationDimensions(int pixelCount)
+        {
+            if (pixelCount >= Width * Height)
             {
                 _renderWidth = Width;
                 _renderHeight = Height;
             }
-            else if (bgra.Length >= Width * ActiveLowResOutputHeight)
+            else if (pixelCount >= Width * ActiveLowResOutputHeight)
             {
                 _renderWidth = Width;
                 _renderHeight = ActiveLowResOutputHeight;
             }
-            else if (bgra.Length >= LowResWidth * ActiveLowResOutputHeight)
+            else if (pixelCount >= LowResWidth * ActiveLowResOutputHeight)
             {
                 _renderWidth = LowResWidth;
                 _renderHeight = ActiveLowResOutputHeight;
             }
             else
             {
-                throw new ArgumentException("The framebuffer is smaller than the PAL display.", nameof(bgra));
-            }
-
-            _bitplaneDataSpans.Clear();
-            if (useTimedWrites && _bus.LiveAgnusDmaEnabled)
-            {
-                var frameStopCycle = GetPresentationFrameStopCycle(frameStartCycle, frameEndCycle);
-                var frameCaptureStopCycle = Math.Max(frameStartCycle, frameStopCycle - 1);
-                if (!_liveFrameValid ||
-                    _liveFrameStartCycle != frameStartCycle ||
-                    _liveCapturedThroughCycle < frameCaptureStopCycle)
-                {
-                    _bus.SynchronizeLiveDisplayThrough(frameCaptureStopCycle);
-                }
-
-                if (TryRenderLiveCapturedFrame(bgra, frameStartCycle, frameStopCycle))
-                {
-                    return;
-                }
-
-                if (TryRenderArchivedTimelineFrame(bgra, frameStartCycle, frameStopCycle))
-                {
-                    return;
-                }
-
-                if (TryRenderArchivedFrameWriteReplay(bgra, frameStartCycle, frameStopCycle))
-                {
-                    return;
-                }
-            }
-
-            ApplyPendingWrites(useTimedWrites ? frameStartCycle : long.MaxValue);
-            var savedPresentationState = useTimedWrites ? SaveDisplayState() : null;
-            _renderInterlaceField = useTimedWrites && InterlaceEnabled
-                ? GetInterlaceField(frameStartCycle)
-                : 0;
-            ResetFrameCounters();
-            ResetPlayfieldPriorityMasks();
-            _spriteFrameCommands.Clear();
-            ClearPaletteFrameSpans();
-            _bitplaneDataSpans.Clear();
-            _enforceDmaForFrame = useTimedWrites;
-            _useTimedPresentationReads = useTimedWrites;
-            _renderFrameStartCycle = frameStartCycle;
-            _trackDisplayWindowState = useTimedWrites;
-            ResetDisplayWindowStateTracking();
-            bgra = bgra.Slice(0, _renderWidth * _renderHeight);
-
-            _captureSpriteFrameCommands = useTimedWrites || _copperListPointer != 0;
-            var renderCompleted = false;
-            try
-            {
-                if (useTimedWrites)
-                {
-                    RenderTimedPresentationFrame(bgra, frameStartCycle, GetPresentationFrameStopCycle(frameStartCycle, frameEndCycle));
-                }
-                else if (_copperListPointer != 0 && IsCopperDmaEnabled())
-                {
-                    RenderCopperFrame(bgra, frameStartCycle, GetFrameStopCycle(frameStartCycle), useTimedWrites);
-                }
-                else
-                {
-                    RenderRows(bgra, 0, ActiveLowResOutputHeight, frameStartCycle, useTimedWrites);
-                }
-
-                renderCompleted = true;
-            }
-            finally
-            {
-                if (!renderCompleted && savedPresentationState != null)
-                {
-                    RestoreDisplayState(savedPresentationState);
-                }
-
-                _captureSpriteFrameCommands = false;
-                _enforceDmaForFrame = false;
-                _trackDisplayWindowState = false;
-            }
-
-            if (useTimedWrites)
-            {
-                var pendingIndexBeforeFrameEnd = _pendingIndex;
-                ApplyPendingWrites(frameEndCycle);
-                if (savedPresentationState != null && _pendingIndex != pendingIndexBeforeFrameEnd)
-                {
-                    CaptureDisplayState(savedPresentationState);
-                }
-            }
-
-            try
-            {
-                RenderSprites(bgra);
-            }
-            finally
-            {
-                _useTimedPresentationReads = false;
-                _bus.ClearPresentationWriteHistory();
-                if (savedPresentationState != null)
-                {
-                    RestoreDisplayState(savedPresentationState);
-                }
+                throw new ArgumentException("The framebuffer is smaller than the active display.", nameof(pixelCount));
             }
         }
 
@@ -160,110 +154,295 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int GetInterlaceField(long frameStartCycle)
             => _bus.GetBeamPosition(frameStartCycle).FrameNumber & 1;
 
-        private bool TryRenderTimelineFrame(
-            Span<uint> bgra,
-            long frameStartCycle,
-            long frameStopCycle,
-            DisplayFrameTimeline timeline,
-            bool useArchivedPalette,
-            bool allowStatefulFallback,
-            bool archivedTimeline)
+        private void RenderBoundPresentationLinesThrough(
+            long capturedThroughCycle,
+            bool completing,
+            int minimumRenderStop = 0)
         {
-            if (!timeline.IsValidForFrame(frameStartCycle))
+            if (!_boundPresentationActive ||
+                _boundPresentationCompleted ||
+                !_boundPresentationTarget.IsBound ||
+                capturedThroughCycle < _boundPresentationFrameStartCycle)
             {
-                _lastTimelineFallbackCount++;
-                return false;
+                return;
             }
 
-            CompleteTimelineSpriteFetchOutcomes(timeline, frameStartCycle, frameStopCycle, allowExactCompletionReads: false);
-            _lastTimelineCoalescedSegmentCount += timeline.CoalesceEquivalentSegments();
-            if (!IsTimelineCompleteForRendering(
-                    timeline,
-                    frameStartCycle,
-                    frameStopCycle,
-                    requireCurrentFrameSafe: !archivedTimeline))
+            var rowStop = GetTimelineRowStop(
+                _boundPresentationFrameStartCycle,
+                _boundPresentationFrameStopCycle);
+            var renderStop = rowStop;
+            if (!completing)
             {
-                _lastTimelineFallbackCount++;
-                return false;
+                var observedRow = GetOutputRowForCycle(
+                    _boundPresentationFrameStartCycle,
+                    Math.Min(capturedThroughCycle, _boundPresentationFrameStopCycle - 1));
+                // A BPLCON0 transition in row N may resolve a post-hard-stop RGA
+                // collision in row N-1. Keep two rows live and finalize older rows.
+                renderStop = Math.Clamp(observedRow - 1, 0, rowStop);
             }
 
+            renderStop = Math.Max(
+                renderStop,
+                Math.Clamp(minimumRenderStop, 0, rowStop));
+
+            if (_nextBoundPresentationRow >= renderStop && !completing)
+            {
+                return;
+            }
+
+            var saved = SaveDisplayState();
             var savedCurrentRenderRow = _currentRenderRow;
             var savedTrackDisplayWindowState = _trackDisplayWindowState;
             var savedDisplayWindowVerticallyOpen = _displayWindowVerticallyOpen;
             var savedDisplayWindowStateLine = _displayWindowStateLine;
-            var savedRenderingArchivedTimeline = _renderingArchivedTimeline;
-            _renderingArchivedTimeline = useArchivedPalette;
+            var target = _boundPresentationTarget.AsSpan().Slice(0, _renderWidth * _renderHeight);
+            _renderingLiveCapture = true;
+            _enforceDmaForFrame = true;
             _trackDisplayWindowState = true;
+            _lastAppliedLivePaletteSnapshotIndex = -1;
             _bitplaneDataSpans.Clear();
-            timeline.CopyBitplaneDataSpansTo(_bitplaneDataSpans);
+            _displayTimeline.CopyBitplaneDataSpansTo(_bitplaneDataSpans);
+
             try
             {
-                var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
-                for (var row = 0; row < rowStop; row++)
+                while (_nextBoundPresentationRow < renderStop)
                 {
-                    var line = timeline.GetLine(row);
-                    if (TryRenderTimelineLowResLineFastPath(bgra, row, line, timeline))
+                    var row = _nextBoundPresentationRow;
+                    var mustFinalizeBeforeRingReuse = row < minimumRenderStop;
+                    if (!TryRenderBoundPresentationRow(
+                            target,
+                            row,
+                            completing || mustFinalizeBeforeRingReuse))
                     {
-                        _lastTimelineFastPathRowCount++;
-                        continue;
+                        break;
                     }
 
-                    _lastTimelineFastPathMissCount++;
-                    for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
+                    _nextBoundPresentationRow++;
+                }
+
+                if (completing)
+                {
+                    while (_nextBoundPresentationRow < rowStop)
                     {
-                        var segment = line.Segments[segmentIndex];
-                        if (segment.XStop <= segment.XStart)
-                        {
-                            continue;
-                        }
-
-                        var state = timeline.GetState(segment.StateIndex);
-                        ApplyTimelineStateForRendering(state);
-                        _displayWindowVerticallyOpen = state.DisplayWindowVerticallyOpen;
-                        _displayWindowStateLine = StandardVStart + row + 1;
-                        _currentRenderRow = row;
-                        CapturePaletteFrameSpans(row, row + 1, segment.XStart, segment.XStop);
-                        FillRows(bgra, row, row + 1, segment.XStart, segment.XStop);
-                        if (!TryRenderTimelineCachedBitplanes(bgra, row, segment, state, timeline))
-                        {
-                            _lastTimelineMissingBitplaneFallbackCount++;
-                            if (!allowStatefulFallback)
-                            {
-                                _lastTimelineFallbackCount++;
-                                return false;
-                            }
-
-                            RenderBitplanes(bgra, row, row + 1, segment.XStart, segment.XStop);
-                        }
+                        FillRows(target, _nextBoundPresentationRow, _nextBoundPresentationRow + 1);
+                        _nextBoundPresentationRow++;
                     }
-                }
 
-                RenderPresentationTrailingRows(bgra, frameStartCycle, frameStopCycle, useTimedWrites: true);
-                RenderTimelineSprites(bgra, timeline);
-                _lastTimelineSegmentCount = timeline.SegmentCount;
-                _lastTimelineSpriteCommandCount = timeline.SpriteCommandCount;
-                _lastPlanarChunkCacheHits = timeline.PlanarChunkCacheHits;
-                _lastPlanarChunkCacheMisses = timeline.PlanarChunkCacheMisses;
-                _lastSpriteDeniedFetchCount = timeline.RecalculateSpriteDeniedFetchCount();
-                if (archivedTimeline)
-                {
-                    _lastArchivedTimelineFrameCount++;
-                }
-                else
-                {
+                    _lastTimelineSegmentCount = _displayTimeline.SegmentCount;
+                    _lastTimelineSpriteCommandCount = _displayTimeline.SpriteCommandCount;
+                    _lastPlanarChunkCacheHits = _displayTimeline.PlanarChunkCacheHits;
+                    _lastPlanarChunkCacheMisses = _displayTimeline.PlanarChunkCacheMisses;
+                    _lastSpriteDeniedFetchCount = _displayTimeline.RecalculateSpriteDeniedFetchCount();
                     _lastActiveTimelineFrameCount++;
                 }
-
-                return true;
             }
             finally
             {
+                RestoreDisplayState(saved);
                 _currentRenderRow = savedCurrentRenderRow;
                 _trackDisplayWindowState = savedTrackDisplayWindowState;
                 _displayWindowVerticallyOpen = savedDisplayWindowVerticallyOpen;
                 _displayWindowStateLine = savedDisplayWindowStateLine;
-                _renderingArchivedTimeline = savedRenderingArchivedTimeline;
+                _renderingLiveCapture = false;
+                _enforceDmaForFrame = false;
+                _lastAppliedLivePaletteSnapshotIndex = -1;
             }
+        }
+
+        private bool TryRenderBoundPresentationRow(Span<uint> target, int row, bool completing)
+        {
+            ClearPaletteFrameSpans();
+            ResetPlayfieldPriorityMasks();
+            if (!TryRenderBoundPresentationPlayfieldRow(
+                    target,
+                    row,
+                    completing,
+                    out var duplicateXStart,
+                    out var duplicateXStop))
+            {
+                return false;
+            }
+
+            DuplicatePreparedPresentationRow(target, row, duplicateXStart, duplicateXStop);
+            RenderTimelineSpritesRow(target, _displayTimeline, row);
+            return true;
+        }
+
+        private bool TryRenderBoundPresentationPlayfieldRow(
+            Span<uint> target,
+            int row,
+            bool completing,
+            out int duplicateXStart,
+            out int duplicateXStop)
+        {
+            duplicateXStart = 0;
+            duplicateXStop = 0;
+            if (!_displayTimeline.HasLine(row))
+            {
+                if (!completing)
+                {
+                    return false;
+                }
+
+                FillRows(target, row, row + 1);
+                return true;
+            }
+
+            var line = _displayTimeline.GetLine(row);
+            if (!line.UnsafeForTimelineRender && line.SegmentCount > 0)
+            {
+                for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
+                {
+                    var segment = line.Segments[segmentIndex];
+                    var state = _displayTimeline.GetState(segment.StateIndex);
+                    if (!IsTimelineSegmentFetchComplete(row, state, _displayTimeline))
+                    {
+                        if (!completing)
+                        {
+                            return false;
+                        }
+
+                        break;
+                    }
+                }
+
+                if (TryRenderTimelineBorderLineFastPath(
+                        target,
+                        row,
+                        line,
+                        _displayTimeline,
+                        out duplicateXStart,
+                        out duplicateXStop))
+                {
+                    _lastTimelineFastPathRowCount++;
+                    return true;
+                }
+
+                if (TryRenderTimelineLowResLineFastPath(
+                        target,
+                        row,
+                        line,
+                        _displayTimeline,
+                        out duplicateXStart,
+                        out duplicateXStop))
+                {
+                    _lastTimelineFastPathRowCount++;
+                    return true;
+                }
+
+                _lastTimelineFastPathMissCount++;
+                var renderedSegment = false;
+                for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
+                {
+                    var segment = line.Segments[segmentIndex];
+                    if (segment.XStop <= segment.XStart)
+                    {
+                        continue;
+                    }
+
+                    var state = _displayTimeline.GetState(segment.StateIndex);
+                    ApplyTimelineStateForRendering(state);
+                    _displayWindowVerticallyOpen = state.DisplayWindowVerticallyOpen;
+                    _displayWindowStateLine = StandardVStart + row + 1;
+                    _currentRenderRow = row;
+                    CapturePaletteFrameSpans(row, row + 1, segment.XStart, segment.XStop);
+                    FillRows(target, row, row + 1, segment.XStart, segment.XStop);
+                    if (!TryRenderTimelineCachedBitplanes(target, row, segment, state, _displayTimeline))
+                    {
+                        _lastTimelineMissingBitplaneFallbackCount++;
+                        RenderBitplanes(target, row, row + 1, segment.XStart, segment.XStop);
+                    }
+
+                    renderedSegment = true;
+                }
+
+                if (renderedSegment)
+                {
+                    return true;
+                }
+            }
+
+            if (IsLiveLineValid(row))
+            {
+                var state = GetLiveLineState(row);
+                ApplyLiveLineStateForRendering(state);
+                _displayWindowVerticallyOpen = state.DeniseDisplayWindowVerticallyOpen;
+                _displayWindowStateLine = StandardVStart + row + 1;
+                _currentRenderRow = row;
+                CapturePaletteFrameSpans(row, row + 1, 0, LowResWidth);
+                FillRows(target, row, row + 1);
+                RenderBitplanes(target, row, row + 1);
+                return true;
+            }
+
+            if (!completing)
+            {
+                return false;
+            }
+
+            FillRows(target, row, row + 1);
+            return true;
+        }
+
+        private bool TryRenderTimelineBorderLineFastPath(
+            Span<uint> target,
+            int row,
+            DisplayLineTimeline line,
+            DisplayFrameTimeline timeline,
+            out int duplicateXStart,
+            out int duplicateXStop)
+        {
+            duplicateXStart = LowResWidth;
+            duplicateXStop = 0;
+            if (line.SegmentCount <= 0)
+            {
+                duplicateXStart = 0;
+                return false;
+            }
+
+            for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
+            {
+                var segment = line.Segments[segmentIndex];
+                if (segment.XStop <= segment.XStart)
+                {
+                    continue;
+                }
+
+                var state = timeline.GetState(segment.StateIndex);
+                if (state.DecodePlaneCount != 0 || state.Bplcon3 != 0)
+                {
+                    duplicateXStart = 0;
+                    duplicateXStop = 0;
+                    return false;
+                }
+            }
+
+            for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
+            {
+                var segment = line.Segments[segmentIndex];
+                if (segment.XStop <= segment.XStart)
+                {
+                    continue;
+                }
+
+                var state = timeline.GetState(segment.StateIndex);
+                FillTimelineLowResolutionSegment(
+                    target,
+                    row,
+                    segment.XStart,
+                    segment.XStop,
+                    state.PaletteSnapshotIndex);
+                duplicateXStart = Math.Min(duplicateXStart, segment.XStart);
+                duplicateXStop = Math.Max(duplicateXStop, segment.XStop);
+            }
+
+            if (duplicateXStop <= duplicateXStart)
+            {
+                duplicateXStart = 0;
+                duplicateXStop = 0;
+            }
+
+            return true;
         }
 
         private int GetTimelineRowStop(long frameStartCycle, long frameStopCycle)
@@ -271,347 +450,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var rowStop = ActiveLowResOutputHeight;
             if (frameStopCycle < GetFrameStopCycle(frameStartCycle))
             {
-                rowStop = Math.Clamp(GetOutputRowForCycle(frameStartCycle, frameStopCycle) + 1, 0, ActiveLowResOutputHeight);
+                rowStop = Math.Clamp(
+                    GetOutputRowForCycle(frameStartCycle, frameStopCycle) + 1,
+                    0,
+                    ActiveLowResOutputHeight);
             }
 
             return rowStop;
         }
 
-        private bool IsTimelineCompleteForRendering(
-            DisplayFrameTimeline timeline,
-            long frameStartCycle,
-            long frameStopCycle,
-            bool requireCurrentFrameSafe = true)
-        {
-            return GetTimelineRejectReason(timeline, frameStartCycle, frameStopCycle, requireCurrentFrameSafe) == TimelineRejectReason.None;
-        }
 
-        private TimelineRejectReason GetTimelineRejectReason(
-            DisplayFrameTimeline timeline,
-            long frameStartCycle,
-            long frameStopCycle,
-            bool requireCurrentFrameSafe = true)
-        {
-            if (requireCurrentFrameSafe && _liveTimelineUnsafeForFrame)
-            {
-                return TimelineRejectReason.UnsafeWrite;
-            }
 
-            if (timeline.SegmentCount > MaxTimelineSegmentsPerFrame)
-            {
-                return TimelineRejectReason.SegmentCapacity;
-            }
 
-            var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
-            var checkFrameStop = frameStopCycle < GetFrameStopCycle(frameStartCycle);
-            for (var row = 0; row < rowStop; row++)
-            {
-                if (checkFrameStop &&
-                    GetOutputRowStartCycle(frameStartCycle, row) >= frameStopCycle)
-                {
-                    break;
-                }
 
-                if (!timeline.HasLine(row))
-                {
-                    return TimelineRejectReason.MissingLine;
-                }
-
-                var line = timeline.GetLine(row);
-                if (line.UnsafeForTimelineRender || line.SegmentCount <= 0)
-                {
-                    return TimelineRejectReason.UnsafeLine;
-                }
-            }
-
-            if (!IsTimelineSpriteCompleteForRendering(timeline, frameStartCycle, frameStopCycle))
-            {
-                return TimelineRejectReason.MissingSpriteFetch;
-            }
-
-            return TimelineRejectReason.None;
-        }
-
-        private bool IsTimelineSpriteCompleteForRendering(DisplayFrameTimeline timeline, long frameStartCycle, long frameStopCycle)
-        {
-            var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
-            var checkFrameStop = frameStopCycle < GetFrameStopCycle(frameStartCycle);
-            for (var spriteIndex = 0; spriteIndex < _sprites.Length; spriteIndex++)
-            {
-                var commands = GetTimelineSpriteFrameCommands(spriteIndex, timeline);
-                for (var commandIndex = 0; commandIndex < commands.Count; commandIndex++)
-                {
-                    var command = commands[commandIndex];
-                    var sprite = command.Descriptor;
-                    if (!sprite.IsDma)
-                    {
-                        continue;
-                    }
-
-                    var yStart = Math.Max(Math.Max(sprite.YStart, command.Row), 0);
-                    var yStop = Math.Min(Math.Min(sprite.YStop, rowStop), ActiveLowResOutputHeight);
-                    for (var y = yStart; y < yStop; y++)
-                    {
-                        if (checkFrameStop &&
-                            GetOutputRowStartCycle(frameStartCycle, y) >= frameStopCycle)
-                        {
-                            break;
-                        }
-
-                        var statusA = timeline.GetSpriteFetchStatus(y, spriteIndex, 0);
-                        var statusB = timeline.GetSpriteFetchStatus(y, spriteIndex, 1);
-                        if (statusA == TimelineFetchStatus.NotAttempted ||
-                            statusB == TimelineFetchStatus.NotAttempted)
-                        {
-                            if (statusA == TimelineFetchStatus.NotAttempted &&
-                                IsTimelineSpriteSlotUnavailable(timeline, y, spriteIndex, 0))
-                            {
-                                timeline.RecordSpriteDataFetch(
-                                    y,
-                                    spriteIndex,
-                                    0,
-                                    0,
-                                    granted: false);
-                            }
-
-                            if (statusB == TimelineFetchStatus.NotAttempted &&
-                                IsTimelineSpriteSlotUnavailable(timeline, y, spriteIndex, 1))
-                            {
-                                timeline.RecordSpriteDataFetch(
-                                    y,
-                                    spriteIndex,
-                                    1,
-                                    0,
-                                    granted: false);
-                            }
-
-                            statusA = timeline.GetSpriteFetchStatus(y, spriteIndex, 0);
-                            statusB = timeline.GetSpriteFetchStatus(y, spriteIndex, 1);
-                            if (statusA != TimelineFetchStatus.NotAttempted &&
-                                statusB != TimelineFetchStatus.NotAttempted)
-                            {
-                                continue;
-                            }
-
-                            var missingWord = statusA == TimelineFetchStatus.NotAttempted ? 0 : 1;
-                            CaptureMissingSpriteRejectDiagnostic(
-                                spriteIndex,
-                                y,
-                                missingWord,
-                                statusA,
-                                statusB,
-                                command,
-                                timeline);
-                            return false;
-                        }
-                    }
-                }
-            }
-
-            return true;
-        }
-
-        private void CompleteTimelineSpriteFetchOutcomes(
-            DisplayFrameTimeline timeline,
-            long frameStartCycle,
-            long frameStopCycle,
-            bool allowExactCompletionReads)
-        {
-            var rowStop = GetTimelineRowStop(frameStartCycle, frameStopCycle);
-            var checkFrameStop = frameStopCycle < GetFrameStopCycle(frameStartCycle);
-            for (var spriteIndex = 0; spriteIndex < _sprites.Length; spriteIndex++)
-            {
-                var commands = GetTimelineSpriteFrameCommands(spriteIndex, timeline);
-                for (var commandIndex = 0; commandIndex < commands.Count; commandIndex++)
-                {
-                    var command = commands[commandIndex];
-                    var sprite = command.Descriptor;
-                    if (!sprite.IsDma)
-                    {
-                        continue;
-                    }
-
-                    var yStart = Math.Max(Math.Max(sprite.YStart, command.Row), 0);
-                    var yStop = Math.Min(Math.Min(sprite.YStop, rowStop), ActiveLowResOutputHeight);
-                    for (var y = yStart; y < yStop; y++)
-                    {
-                        if (checkFrameStop &&
-                            GetOutputRowStartCycle(frameStartCycle, y) >= frameStopCycle)
-                        {
-                            break;
-                        }
-
-                        for (var word = 0; word < LiveSpriteWordsPerChannel; word++)
-                        {
-                            var status = timeline.GetSpriteFetchStatus(y, spriteIndex, word);
-                            if (status == TimelineFetchStatus.Denied && word == 1)
-                            {
-                                var value = GetDeniedSpriteDataLatch(timeline, command, y, spriteIndex, word);
-                                if (value != timeline.GetSpriteWord(y, spriteIndex, word))
-                                {
-                                    timeline.RecordSpriteDataFetch(
-                                        y,
-                                        spriteIndex,
-                                        word,
-                                        value,
-                                        granted: false);
-                                }
-                            }
-
-                            if (status == TimelineFetchStatus.NotAttempted &&
-                                IsTimelineSpriteSlotUnavailable(timeline, y, spriteIndex, word))
-                            {
-                                var value = GetDeniedSpriteDataLatch(timeline, command, y, spriteIndex, word);
-                                timeline.RecordSpriteDataFetch(
-                                    y,
-                                    spriteIndex,
-                                    word,
-                                    value,
-                                    granted: false);
-                                continue;
-                            }
-
-                            if (allowExactCompletionReads &&
-                                timeline.GetSpriteFetchStatus(y, spriteIndex, word) == TimelineFetchStatus.NotAttempted)
-                            {
-                                CompleteTimelineSpriteFetchFromExactSlot(
-                                    timeline,
-                                    frameStartCycle,
-                                    frameStopCycle,
-                                    command,
-                                    y,
-                                    spriteIndex,
-                                    word);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        private void CompleteTimelineSpriteFetchFromExactSlot(
-            DisplayFrameTimeline timeline,
-            long frameStartCycle,
-            long frameStopCycle,
-            SpriteFrameCommand command,
-            int row,
-            int spriteIndex,
-            int word)
-        {
-            var fetchCycle = GetSpriteDmaFetchCycle(frameStartCycle, row, spriteIndex, word);
-            if (fetchCycle >= frameStopCycle)
-            {
-                return;
-            }
-
-            var sprite = command.Descriptor;
-            if (!sprite.IsDma ||
-                row < Math.Max(sprite.YStart, command.Row) ||
-                row >= sprite.YStop)
-            {
-                return;
-            }
-
-            var address = AddDmaPointerOffset(sprite.DataAddress, ((row - sprite.YStart) * 4) + (word * 2));
-            if (!_bus.TryReadDisplayDmaWordForPresentation(
-                    AmigaBusRequester.Sprite,
-                    AmigaBusAccessKind.Sprite,
-                    address,
-                    fetchCycle,
-                    out var value,
-                    out var access))
-            {
-                timeline.RecordSpriteDataFetch(
-                    row,
-                    spriteIndex,
-                    word,
-                    0,
-                    granted: false);
-                return;
-            }
-
-            RecordLiveDisplayDmaCycle(access.GrantedCycle);
-            timeline.RecordSpriteDataFetch(row, spriteIndex, word, value, granted: true);
-        }
-
-        private bool TryRecoverTimelineSpriteFetch(
-            DisplayFrameTimeline timeline,
-            long frameStartCycle,
-            long frameStopCycle,
-            SpriteFrameCommand command,
-            int row,
-            int spriteIndex,
-            int word)
-        {
-            _lastSpriteRecoveryAttemptCount++;
-            var fetchCycle = GetSpriteDmaFetchCycle(frameStartCycle, row, spriteIndex, word);
-            if (fetchCycle >= frameStopCycle)
-            {
-                return false;
-            }
-
-            if (IsTimelineSpriteSlotUnavailable(timeline, row, spriteIndex, word))
-            {
-                var deniedValue = GetDeniedSpriteDataLatch(timeline, command, row, spriteIndex, word);
-                timeline.RecordSpriteDataFetch(
-                    row,
-                    spriteIndex,
-                    word,
-                    deniedValue,
-                    granted: false);
-                return true;
-            }
-
-            var sprite = command.Descriptor;
-            if (!sprite.IsDma ||
-                row < Math.Max(sprite.YStart, command.Row) ||
-                row >= sprite.YStop)
-            {
-                return false;
-            }
-
-            var address = AddDmaPointerOffset(sprite.DataAddress, ((row - sprite.YStart) * 4) + (word * 2));
-            if (!_bus.TryReadDisplayDmaWordForPresentation(
-                    AmigaBusRequester.Sprite,
-                    AmigaBusAccessKind.Sprite,
-                    address,
-                    fetchCycle,
-                    out var value,
-                    out var access))
-            {
-                timeline.RecordSpriteDataFetch(
-                    row,
-                    spriteIndex,
-                    word,
-                    0,
-                    granted: false);
-                return true;
-            }
-
-            RecordLiveDisplayDmaCycle(access.GrantedCycle);
-            timeline.RecordSpriteDataFetch(row, spriteIndex, word, value, granted: true);
-            return true;
-        }
-
-        private static bool HasPriorTimelineSpriteDatb(
-            DisplayFrameTimeline timeline,
-            SpriteFrameCommand command,
-            int row,
-            int spriteIndex)
-            => TryGetPriorTimelineSpriteDatb(timeline, command, row, spriteIndex, out _);
-
-        private static ushort GetDeniedSpriteDataLatch(
-            DisplayFrameTimeline timeline,
-            SpriteFrameCommand command,
-            int row,
-            int spriteIndex,
-            int word)
-        {
-            return word == 1 &&
-                TryGetPriorTimelineSpriteDatb(timeline, command, row, spriteIndex, out var value)
-                    ? value
-                    : (ushort)0;
-        }
 
         private static bool TryGetPriorTimelineSpriteDatb(
             DisplayFrameTimeline timeline,
@@ -639,85 +490,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return valid;
         }
 
-        private bool IsTimelineSpriteSlotUnavailable(DisplayFrameTimeline timeline, int row, int spriteIndex, int word)
-        {
-            if (!TryGetTimelineStateForSpriteSlot(timeline, row, spriteIndex, word, out var state))
-            {
-                return false;
-            }
 
-            return !IsSpriteDmaEnabled(state.Dmacon) || !IsSpriteDmaSlotAvailable(state, spriteIndex, word);
-        }
 
-        private bool TryGetTimelineStateForSpriteSlot(
-            DisplayFrameTimeline timeline,
-            int row,
-            int spriteIndex,
-            int word,
-            out DisplayTimelineState state)
-        {
-            state = null!;
-            if (!timeline.HasLine(row))
-            {
-                return false;
-            }
-
-            var line = timeline.GetLine(row);
-            if (line.SegmentCount <= 0)
-            {
-                return false;
-            }
-
-            var lineStart = GetOutputRowStartCycle(_renderFrameStartCycle, row);
-            var firstSpriteSlot = GetFirstSpriteDmaSlotCycle(lineStart);
-            var firstSpriteHorizontal = (int)((firstSpriteSlot - lineStart) / CopperHpCycles);
-            var horizontal = firstSpriteHorizontal + (spriteIndex * 4) + (word * 2);
-            var x = GetCopperOutputX(horizontal);
-            for (var i = 0; i < line.SegmentCount; i++)
-            {
-                var segment = line.Segments[i];
-                if (x >= segment.XStart && x < segment.XStop)
-                {
-                    state = timeline.GetState(segment.StateIndex);
-                    return true;
-                }
-            }
-
-            state = timeline.GetState(line.Segments[line.SegmentCount - 1].StateIndex);
-            return true;
-        }
-
-        private void CaptureMissingSpriteRejectDiagnostic(
-            int spriteIndex,
-            int row,
-            int word,
-            TimelineFetchStatus statusA,
-            TimelineFetchStatus statusB,
-            SpriteFrameCommand command,
-            DisplayFrameTimeline timeline)
-        {
-            _lastArchiveRejectMissingSpriteIndex = spriteIndex;
-            _lastArchiveRejectMissingSpriteRow = row;
-            _lastArchiveRejectMissingSpriteWord = word;
-            _lastArchiveRejectMissingSpriteStatusA = (int)statusA;
-            _lastArchiveRejectMissingSpriteStatusB = (int)statusB;
-            _lastArchiveRejectMissingSpriteCommandRow = command.Row;
-            _lastArchiveRejectMissingSpriteYStart = command.Descriptor.YStart;
-            _lastArchiveRejectMissingSpriteYStop = command.Descriptor.YStop;
-            _lastArchiveRejectMissingSpritePreviousStatusA = row > 0
-                ? (int)timeline.GetSpriteFetchStatus(row - 1, spriteIndex, 0)
-                : -1;
-            _lastArchiveRejectMissingSpritePreviousStatusB = row > 0
-                ? (int)timeline.GetSpriteFetchStatus(row - 1, spriteIndex, 1)
-                : -1;
-            if (TryGetTimelineStateForSpriteSlot(timeline, row, spriteIndex, word, out var state))
-            {
-                _lastArchiveRejectMissingSpriteUsableChannels = GetUsableSpriteDmaChannelCount(state);
-                _lastArchiveRejectMissingSpriteDdfStart = state.DataFetchStart;
-                _lastArchiveRejectMissingSpriteDmacon = state.Dmacon;
-                _lastArchiveRejectMissingSpriteBplcon0 = state.Bplcon0;
-            }
-        }
 
         private bool IsTimelineSegmentFetchComplete(int row, DisplayTimelineState state, DisplayFrameTimeline timeline)
         {
@@ -742,7 +516,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 for (var word = 0; word < fetchWords; word++)
                 {
-                    if (timeline.GetBitplaneFetchStatus(row, plane, word) == TimelineFetchStatus.NotAttempted)
+                    if (TryMapTimelineBitplaneWord(state, plane, word, out var capturedWord) &&
+                        timeline.GetBitplaneFetchStatus(row, plane, capturedWord) == TimelineFetchStatus.NotAttempted)
                     {
                         return false;
                     }
@@ -752,7 +527,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return true;
         }
 
-        private void ApplyTimelineStateForRendering(DisplayTimelineState state)
+        private void ApplyTimelineStateForRendering(
+            DisplayTimelineState state,
+            bool copyBitplaneState = true,
+            bool copyPaletteState = true)
         {
             _diwStart = state.DiwStart;
             _diwStop = state.DiwStop;
@@ -772,29 +550,38 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _dmacon = state.Dmacon;
             _bpl1mod = state.Bpl1Mod;
             _bpl2mod = state.Bpl2Mod;
-            if (_lastAppliedLivePaletteSnapshotIndex != state.PaletteSnapshotIndex)
+            if (copyPaletteState &&
+                _lastAppliedLivePaletteSnapshotIndex != state.PaletteSnapshotIndex)
             {
-                var paletteSnapshots = _renderingArchivedTimeline
-                    ? _archivedPaletteSnapshots
-                    : _livePaletteSnapshots;
-                paletteSnapshots.CopyTo(
+                _livePaletteSnapshots.CopyTo(
                     state.PaletteSnapshotIndex,
                     _colors,
                     _convertedColors);
                 _lastAppliedLivePaletteSnapshotIndex = state.PaletteSnapshotIndex;
             }
 
-            Array.Copy(state.BitplanePointers, _bitplanePointers, _bitplanePointers.Length);
-            Array.Copy(state.BitplaneBaseRows, _bitplaneBaseRows, _bitplaneBaseRows.Length);
-            Array.Copy(state.BitplaneDataRegisters, _bitplaneDataRegisters, _bitplaneDataRegisters.Length);
+            if (copyBitplaneState)
+            {
+                Array.Copy(state.BitplanePointers, _bitplanePointers, _bitplanePointers.Length);
+                Array.Copy(state.BitplaneBaseRows, _bitplaneBaseRows, _bitplaneBaseRows.Length);
+                Array.Copy(
+                    state.BitplaneWordIndexOffsets,
+                    _renderBitplaneWordIndexOffsets,
+                    _renderBitplaneWordIndexOffsets.Length);
+                Array.Copy(state.BitplaneDataRegisters, _bitplaneDataRegisters, _bitplaneDataRegisters.Length);
+            }
         }
 
         private bool TryRenderTimelineLowResLineFastPath(
             Span<uint> bgra,
             int row,
             DisplayLineTimeline line,
-            DisplayFrameTimeline timeline)
+            DisplayFrameTimeline timeline,
+            out int duplicateXStart,
+            out int duplicateXStop)
         {
+            duplicateXStart = 0;
+            duplicateXStop = 0;
             if (line.SegmentCount <= 0)
             {
                 return false;
@@ -829,7 +616,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var indexState = firstState;
-            ApplyTimelineStateForRendering(indexState);
+            // The prepared path reads all bitplane indexing state directly from
+            // indexState. Copying the four eight-plane arrays for every palette
+            // segment dominated composition time on copper-heavy rasterlines.
+            ApplyTimelineStateForRendering(
+                indexState,
+                copyBitplaneState: false,
+                copyPaletteState: false);
             _displayWindowVerticallyOpen = indexState.DisplayWindowVerticallyOpen;
             _displayWindowStateLine = StandardVStart + row + 1;
             _currentRenderRow = row;
@@ -854,15 +647,53 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 var state = timeline.GetState(segment.StateIndex);
-                ApplyTimelineStateForRendering(state);
+                ApplyTimelineStateForRendering(
+                    state,
+                    copyBitplaneState: false,
+                    copyPaletteState: false);
                 _displayWindowVerticallyOpen = state.DisplayWindowVerticallyOpen;
                 _displayWindowStateLine = StandardVStart + row + 1;
                 _currentRenderRow = row;
-                CapturePaletteFrameSpans(row, row + 1, segment.XStart, segment.XStop);
-                FillRows(bgra, row, row + 1, segment.XStart, segment.XStop);
-                WritePreparedTimelineLowResFastBitplanes(bgra, row, segment.XStart, segment.XStop, dataFirstX, dataLastX);
+                CaptureLivePaletteFrameSpan(row, segment.XStart, segment.XStop, state);
+                if (dataLastX > dataFirstX)
+                {
+                    // The prepared writer produces both foreground pixels and
+                    // playfield color zero. Fill only the uncovered sides instead
+                    // of writing the active playfield twice.
+                    FillTimelineLowResolutionSegment(
+                        bgra,
+                        row,
+                        segment.XStart,
+                        Math.Min(segment.XStop, dataFirstX),
+                        state.PaletteSnapshotIndex);
+                    FillTimelineLowResolutionSegment(
+                        bgra,
+                        row,
+                        Math.Max(segment.XStart, dataLastX),
+                        segment.XStop,
+                        state.PaletteSnapshotIndex);
+                }
+                else
+                {
+                    FillTimelineLowResolutionSegment(
+                        bgra,
+                        row,
+                        segment.XStart,
+                        segment.XStop,
+                        state.PaletteSnapshotIndex);
+                }
+                WritePreparedTimelineLowResFastBitplanes(
+                    bgra,
+                    row,
+                    segment.XStart,
+                    segment.XStop,
+                    dataFirstX,
+                    dataLastX,
+                    state.PaletteSnapshotIndex);
             }
 
+            duplicateXStart = lineXStart;
+            duplicateXStop = lineXStop;
             return true;
         }
 
@@ -893,7 +724,23 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 left.DataFetchStart == right.DataFetchStart &&
                 left.FetchSlotStride == right.FetchSlotStride &&
                 left.PlaneHasRowMask == right.PlaneHasRowMask &&
+                HasSameBitplaneWordIndexOffsets(left, right) &&
                 HasSameBitplaneDataRegisters(left, right);
+        }
+
+        private static bool HasSameBitplaneWordIndexOffsets(
+            DisplayTimelineState left,
+            DisplayTimelineState right)
+        {
+            for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
+            {
+                if (left.BitplaneWordIndexOffsets[plane] != right.BitplaneWordIndexOffsets[plane])
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static bool HasSameBitplaneDataRegisters(DisplayTimelineState left, DisplayTimelineState right)
@@ -1043,13 +890,142 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int segmentXStart,
             int segmentXStop,
             int dataFirstX,
-            int dataLastX)
+            int dataLastX,
+            int paletteSnapshotIndex)
         {
             var xStart = Math.Max(segmentXStart, dataFirstX);
             var xStop = Math.Min(segmentXStop, dataLastX);
-            for (var x = xStart; x < xStop; x++)
+            if (xStop <= xStart)
             {
-                WriteLowResolutionOutputPixel(bgra, x, row, _convertedColors[_timelineFastPathColorIndexes[x]]);
+                return;
+            }
+
+            var scale = GetRenderHorizontalScale();
+            var outputY = IsRenderingHighResolutionHeight()
+                ? (row * 2) + (InterlaceEnabled ? _renderInterlaceField : 0)
+                : row;
+            var output = bgra.Slice(
+                (outputY * _renderWidth) + (xStart * scale),
+                (xStop - xStart) * scale);
+            WritePreparedLowResolutionColorRun(
+                output,
+                xStart,
+                xStop,
+                scale,
+                paletteSnapshotIndex);
+
+        }
+
+        private void DuplicatePreparedPresentationRow(
+            Span<uint> bgra,
+            int row,
+            int xStart,
+            int xStop)
+        {
+            if (!IsRenderingHighResolutionHeight() ||
+                InterlaceEnabled ||
+                xStop <= xStart)
+            {
+                return;
+            }
+
+            var scale = GetRenderHorizontalScale();
+            var pixelStart = xStart * scale;
+            var pixelCount = (xStop - xStart) * scale;
+            var outputY = row * 2;
+            bgra.Slice((outputY * _renderWidth) + pixelStart, pixelCount)
+                .CopyTo(bgra.Slice(((outputY + 1) * _renderWidth) + pixelStart, pixelCount));
+        }
+
+        private void FillTimelineLowResolutionSegment(
+            Span<uint> bgra,
+            int row,
+            int xStart,
+            int xStop,
+            int paletteSnapshotIndex)
+        {
+            xStart = Math.Clamp(xStart, 0, LowResWidth);
+            xStop = Math.Clamp(xStop, xStart, LowResWidth);
+            if ((uint)row >= (uint)LowResOutputHeight || xStart >= xStop)
+            {
+                return;
+            }
+
+            var encodedColor0 = _livePaletteSnapshots.GetEncodedColor(paletteSnapshotIndex, 0);
+            var displayColor = _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, 0);
+            var ecsExtensionsEnabled = AreEcsDeniseExtensionsEnabled(_bplcon0);
+            var borderColor = ecsExtensionsEnabled && (_bplcon3 & Bplcon3BorderBlank) != 0
+                ? 0xFF00_0000u
+                : ConvertColor(encodedColor0);
+            if (ecsExtensionsEnabled && (_bplcon3 & Bplcon3BorderNotTransparent) == 0)
+            {
+                borderColor &= 0x00FF_FFFFu;
+            }
+
+            var window = GetEffectiveDisplayWindow();
+            var windowXStart = GetDisplayWindowOutputXStart(window);
+            var windowXStop = GetDisplayWindowOutputXStop(window);
+            var windowYStart = GetDisplayWindowOutputYStart(window);
+            var windowYStop = GetDisplayWindowOutputYStop(window);
+            if (row < windowYStart || row >= windowYStop)
+            {
+                FillLowResolutionOutputRun(bgra, xStart, xStop, row, borderColor);
+                return;
+            }
+
+            var displayStart = Math.Clamp(windowXStart, xStart, xStop);
+            var displayStop = Math.Clamp(windowXStop, displayStart, xStop);
+            FillLowResolutionOutputRun(bgra, xStart, displayStart, row, borderColor);
+            FillLowResolutionOutputRun(bgra, displayStart, displayStop, row, displayColor);
+            FillLowResolutionOutputRun(bgra, displayStop, xStop, row, borderColor);
+        }
+
+        private void WritePreparedLowResolutionColorRun(
+            Span<uint> output,
+            int xStart,
+            int xStop,
+            int scale,
+            int paletteSnapshotIndex)
+        {
+            var source = _timelineFastPathColorIndexes;
+            var destinationIndex = 0;
+            var x = xStart;
+            if (Vector256.IsHardwareAccelerated && scale == 1)
+            {
+                for (; x + 8 <= xStop; x += 8)
+                {
+                    Vector256.Create(
+                        _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x]),
+                        _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x + 1]),
+                        _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x + 2]),
+                        _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x + 3]),
+                        _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x + 4]),
+                        _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x + 5]),
+                        _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x + 6]),
+                        _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x + 7]))
+                        .CopyTo(output.Slice(destinationIndex, 8));
+                    destinationIndex += 8;
+                }
+            }
+            else if (Vector256.IsHardwareAccelerated && scale == 2)
+            {
+                for (; x + 4 <= xStop; x += 4)
+                {
+                    var pixel0 = _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x]);
+                    var pixel1 = _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x + 1]);
+                    var pixel2 = _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x + 2]);
+                    var pixel3 = _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x + 3]);
+                    Vector256.Create(pixel0, pixel0, pixel1, pixel1, pixel2, pixel2, pixel3, pixel3)
+                        .CopyTo(output.Slice(destinationIndex, 8));
+                    destinationIndex += 8;
+                }
+            }
+
+            for (; x < xStop; x++)
+            {
+                var pixel = _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x]);
+                output.Slice(destinationIndex, scale).Fill(pixel);
+                destinationIndex += scale;
             }
         }
 
@@ -1113,6 +1089,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var renderHighHeight = IsRenderingHighResolutionHeight();
             var renderInterlace = (state.Bplcon0 & 0x0004) != 0;
             var lastX = Math.Min(clipRight, originX + drawPixels + (highResolution ? 8 : 16));
+            var cachedWord = -1;
+            var cachedChunk = default(PlanarChunkDecoded);
             if (highResolution)
             {
                 for (var x = Math.Max(clipLeft, originX); x < lastX; x++)
@@ -1125,14 +1103,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         var word = relativeSubPixel >> 4;
                         if ((uint)word < (uint)fetchWords)
                         {
-                            if (!TryGetTimelineDecodedChunk(row, word, state, planeCount, dualPlayfield: false, timeline, out var chunk))
+                            if (word != cachedWord)
                             {
-                                return false;
+                                if (!TryGetTimelineDecodedChunk(row, word, state, planeCount, dualPlayfield: false, timeline, out cachedChunk))
+                                {
+                                    return false;
+                                }
+
+                                cachedWord = word;
                             }
 
                             var offset = relativeSubPixel & 0x0F;
-                            leftColorIndex = chunk.GetColorIndex(offset);
-                            rightColorIndex = chunk.GetColorIndex(offset + 1);
+                            leftColorIndex = cachedChunk.GetColorIndex(offset);
+                            rightColorIndex = cachedChunk.GetColorIndex(offset + 1);
                         }
                     }
 
@@ -1201,14 +1184,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         continue;
                     }
 
-                    if (!TryGetTimelineDecodedChunk(row, word, state, planeCount, dualPlayfield, timeline, out var chunk))
+                    if (word != cachedWord)
                     {
-                        return false;
+                        if (!TryGetTimelineDecodedChunk(row, word, state, planeCount, dualPlayfield, timeline, out cachedChunk))
+                        {
+                            return false;
+                        }
+
+                        cachedWord = word;
                     }
 
                     var offset = scrolledRelativeX & 0x0F;
-                    colorIndex = chunk.GetColorIndex(offset);
-                    priorityMask = chunk.GetPriorityMask(offset);
+                    colorIndex = cachedChunk.GetColorIndex(offset);
+                    priorityMask = cachedChunk.GetPriorityMask(offset);
                 }
                 else if (dualPlayfield)
                 {
@@ -1378,15 +1366,31 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return true;
             }
 
-            var status = timeline.GetBitplaneFetchStatus(row, plane, word);
+            if (!TryMapTimelineBitplaneWord(state, plane, word, out var capturedWord))
+            {
+                data = 0;
+                return true;
+            }
+
+            var status = timeline.GetBitplaneFetchStatus(row, plane, capturedWord);
             if (status == TimelineFetchStatus.NotAttempted)
             {
                 data = 0;
                 return false;
             }
 
-            data = timeline.GetBitplaneWord(row, plane, word);
+            data = timeline.GetBitplaneWord(row, plane, capturedWord);
             return true;
+        }
+
+        private static bool TryMapTimelineBitplaneWord(
+            DisplayTimelineState state,
+            int plane,
+            int word,
+            out int capturedWord)
+        {
+            capturedWord = word + state.BitplaneWordIndexOffsets[plane];
+            return (uint)capturedWord < (uint)MaxBitplaneFetchWords;
         }
 
         private bool TryGetTimelineDecodedChunk(
@@ -1414,35 +1418,24 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     continue;
                 }
 
-                var status = timeline.GetBitplaneFetchStatus(row, plane, word);
+                if (!TryMapTimelineBitplaneWord(state, plane, word, out var capturedWord))
+                {
+                    words[plane] = 0;
+                    continue;
+                }
+
+                var status = timeline.GetBitplaneFetchStatus(row, plane, capturedWord);
                 if (status == TimelineFetchStatus.NotAttempted)
                 {
                     chunk = default;
                     return false;
                 }
 
-                words[plane] = timeline.GetBitplaneWord(row, plane, word);
+                words[plane] = timeline.GetBitplaneWord(row, plane, capturedWord);
             }
 
-            var key = new PlanarChunkKey(
-                state.Bplcon0,
-                state.Bplcon2,
-                planeCount,
-                dualPlayfield,
-                planeHasRowMask,
-                words[0],
-                words[1],
-                words[2],
-                words[3],
-                words[4],
-                words[5]);
-            if (timeline.TryGetPlanarChunk(key, out chunk))
-            {
-                return true;
-            }
-
+            timeline.RecordPlanarChunkDecode();
             chunk = DecodePlanarChunk(words, planeHasRowMask, planeCount, dualPlayfield);
-            timeline.StorePlanarChunk(key, chunk);
             return true;
         }
 
@@ -1452,23 +1445,28 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int planeCount,
             bool dualPlayfield)
         {
+            var rawColorIndexesLow = 0UL;
+            var rawColorIndexesHigh = 0UL;
+            for (var plane = 0; plane < planeCount; plane++)
+            {
+                if ((planeHasRowMask & (1 << plane)) == 0)
+                {
+                    continue;
+                }
+
+                rawColorIndexesLow |= PlanarByteExpansion[words[plane] >> 8] << plane;
+                rawColorIndexesHigh |= PlanarByteExpansion[words[plane] & 0xFF] << plane;
+            }
+
             var colorIndexesLow = 0UL;
             var colorIndexesHigh = 0UL;
             var priorityMasksLow = 0UL;
             var priorityMasksHigh = 0UL;
             for (var pixel = 0; pixel < PlanarChunkPixels; pixel++)
             {
-                var bit = 15 - pixel;
-                var rawColorIndex = 0;
-                for (var plane = 0; plane < planeCount; plane++)
-                {
-                    if ((planeHasRowMask & (1 << plane)) == 0)
-                    {
-                        continue;
-                    }
-
-                    rawColorIndex |= ((words[plane] >> bit) & 1) << plane;
-                }
+                var shift = (pixel & 7) * 8;
+                var packed = pixel < 8 ? rawColorIndexesLow : rawColorIndexesHigh;
+                var rawColorIndex = (int)((packed >> shift) & 0xFF);
 
                 if (dualPlayfield)
                 {
@@ -1519,295 +1517,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             priorityMasksHigh |= (ulong)priorityMask << shift;
         }
 
-        private bool TryRenderArchivedTimelineFrame(Span<uint> bgra, long frameStartCycle, long frameStopCycle)
-        {
-            if (!_archivedTimelineValid ||
-                _archivedTimelineFrameStartCycle != frameStartCycle ||
-                _archivedTimelineFrameStopCycle < frameStopCycle)
-            {
-                return false;
-            }
 
-            var saved = SaveDisplayState();
-            ResetFrameCounters();
-            ResetPlayfieldPriorityMasks();
-            _bitplaneDataSpans.Clear();
-            ClearPaletteFrameSpans();
-            _renderInterlaceField = InterlaceEnabled
-                ? GetInterlaceField(frameStartCycle)
-                : 0;
-            _renderFrameStartCycle = frameStartCycle;
-            _renderingLiveCapture = false;
-            _useTimedPresentationReads = true;
-            _enforceDmaForFrame = true;
-            _captureSpriteFrameCommands = false;
-            _lastAppliedLivePaletteSnapshotIndex = -1;
-            bgra = bgra.Slice(0, _renderWidth * _renderHeight);
-            var rendered = false;
 
-            try
-            {
-                rendered = TryRenderTimelineFrame(
-                    bgra,
-                    frameStartCycle,
-                    frameStopCycle,
-                    _archivedDisplayTimeline,
-                    useArchivedPalette: true,
-                    allowStatefulFallback: false,
-                    archivedTimeline: true);
-                return rendered;
-            }
-            finally
-            {
-                RestoreDisplayState(saved);
-                _renderingLiveCapture = false;
-                _useTimedPresentationReads = false;
-                _enforceDmaForFrame = false;
-                _lastAppliedLivePaletteSnapshotIndex = -1;
-                if (rendered)
-                {
-                    _bus.ClearPresentationWriteHistory();
-                }
-            }
-        }
-
-        private bool TryRenderLiveCapturedFrame(Span<uint> bgra, long frameStartCycle, long frameStopCycle)
-        {
-            if (!_liveFrameValid ||
-                _liveFrameStartCycle != frameStartCycle ||
-                _liveCapturedThroughCycle < Math.Max(frameStartCycle, frameStopCycle - 1))
-            {
-                return false;
-            }
-
-            if (!IsLiveCaptureCompleteForRendering(frameStopCycle) &&
-                !IsTimelineCompleteForRendering(_displayTimeline, frameStartCycle, frameStopCycle))
-            {
-                return false;
-            }
-
-            var saved = SaveDisplayState();
-            ResetFrameCounters();
-            ResetPlayfieldPriorityMasks();
-            _bitplaneDataSpans.Clear();
-            ClearPaletteFrameSpans();
-            _renderInterlaceField = InterlaceEnabled
-                ? GetInterlaceField(frameStartCycle)
-                : 0;
-            _renderFrameStartCycle = frameStartCycle;
-            _renderingLiveCapture = true;
-            _useTimedPresentationReads = true;
-            _enforceDmaForFrame = true;
-            _captureSpriteFrameCommands = false;
-            _lastAppliedLivePaletteSnapshotIndex = -1;
-            var savedTrackDisplayWindowState = _trackDisplayWindowState;
-            var savedDisplayWindowVerticallyOpen = _displayWindowVerticallyOpen;
-            var savedDisplayWindowStateLine = _displayWindowStateLine;
-            var savedRenderingCopperFrame = _renderingCopperFrame;
-            _trackDisplayWindowState = true;
-            bgra = bgra.Slice(0, _renderWidth * _renderHeight);
-            var renderedByTimeline = false;
-
-            try
-            {
-                renderedByTimeline = TryRenderTimelineFrame(
-                    bgra,
-                    frameStartCycle,
-                    frameStopCycle,
-                    _displayTimeline,
-                    useArchivedPalette: false,
-                    allowStatefulFallback: true,
-                    archivedTimeline: false);
-                if (!renderedByTimeline)
-                {
-                    if (!_liveTimelineUnsafeRequiresCapturedRows &&
-                        !_liveFrameHasLateDisplayWindowWrites &&
-                        _liveFrameInitialStateValid &&
-                        !_liveFrameWriteOverflowed)
-                    {
-                        RenderTimedWriteReplayFrame(
-                            bgra,
-                            frameStartCycle,
-                            frameStopCycle,
-                            _liveFrameInitialState,
-                            _liveFrameWrites);
-                        _renderingCopperFrame = savedRenderingCopperFrame;
-                    }
-                    else
-                    {
-                        RenderLiveCapturedRows(bgra);
-                    }
-                }
-
-                RestoreDisplayState(saved);
-                _trackDisplayWindowState = savedTrackDisplayWindowState;
-                _displayWindowVerticallyOpen = savedDisplayWindowVerticallyOpen;
-                _displayWindowStateLine = savedDisplayWindowStateLine;
-                if (!renderedByTimeline)
-                {
-                    RenderSprites(bgra);
-                }
-
-                _lastBitplaneDmaFetches = Math.Max(_liveBitplaneDmaFetches, CountLiveBitplaneFetches());
-                _lastSpriteDmaFetches = Math.Max(_lastSpriteDmaFetches, _liveSpriteDmaFetches);
-                _lastMissedSpriteDmaSlots = Math.Max(_lastMissedSpriteDmaSlots, _liveMissedSpriteDmaSlots);
-                if (_liveFirstDisplayDmaCycle >= 0 && (_lastFirstDisplayDmaCycle < 0 || _liveFirstDisplayDmaCycle < _lastFirstDisplayDmaCycle))
-                {
-                    _lastFirstDisplayDmaCycle = _liveFirstDisplayDmaCycle;
-                }
-
-                _lastLastDisplayDmaCycle = Math.Max(_lastLastDisplayDmaCycle, _liveLastDisplayDmaCycle);
-                return true;
-            }
-            finally
-            {
-                RestoreDisplayState(saved);
-                _renderingLiveCapture = false;
-                _useTimedPresentationReads = false;
-                _enforceDmaForFrame = false;
-                _renderingCopperFrame = savedRenderingCopperFrame;
-                _trackDisplayWindowState = savedTrackDisplayWindowState;
-                _displayWindowVerticallyOpen = savedDisplayWindowVerticallyOpen;
-                _displayWindowStateLine = savedDisplayWindowStateLine;
-                _lastAppliedLivePaletteSnapshotIndex = -1;
-                _bus.ClearPresentationWriteHistory();
-            }
-        }
-
-        private bool TryRenderArchivedFrameWriteReplay(Span<uint> bgra, long frameStartCycle, long frameStopCycle)
-        {
-            if (!_archivedFrameWritesValid ||
-                _archivedFrameWritesStartCycle != frameStartCycle ||
-                _archivedFrameWritesStopCycle < frameStopCycle)
-            {
-                return false;
-            }
-
-            var saved = SaveDisplayState();
-            ResetFrameCounters();
-            ResetPlayfieldPriorityMasks();
-            _bitplaneDataSpans.Clear();
-            ClearPaletteFrameSpans();
-            _renderInterlaceField = InterlaceEnabled
-                ? GetInterlaceField(frameStartCycle)
-                : 0;
-            _renderFrameStartCycle = frameStartCycle;
-            _renderingLiveCapture = false;
-            _useTimedPresentationReads = true;
-            _enforceDmaForFrame = true;
-            _captureSpriteFrameCommands = false;
-            _lastAppliedLivePaletteSnapshotIndex = -1;
-            var savedTrackDisplayWindowState = _trackDisplayWindowState;
-            var savedDisplayWindowVerticallyOpen = _displayWindowVerticallyOpen;
-            var savedDisplayWindowStateLine = _displayWindowStateLine;
-            var savedRenderingCopperFrame = _renderingCopperFrame;
-            _trackDisplayWindowState = true;
-            bgra = bgra.Slice(0, _renderWidth * _renderHeight);
-            var rendered = false;
-
-            try
-            {
-                RenderTimedWriteReplayFrame(
-                    bgra,
-                    frameStartCycle,
-                    frameStopCycle,
-                    _archivedFrameInitialState,
-                    _archivedFrameWrites);
-                RestoreDisplayState(saved);
-                _trackDisplayWindowState = savedTrackDisplayWindowState;
-                _displayWindowVerticallyOpen = savedDisplayWindowVerticallyOpen;
-                _displayWindowStateLine = savedDisplayWindowStateLine;
-                _renderingCopperFrame = savedRenderingCopperFrame;
-                RenderSprites(bgra);
-                rendered = true;
-                return true;
-            }
-            finally
-            {
-                RestoreDisplayState(saved);
-                _renderingLiveCapture = false;
-                _useTimedPresentationReads = false;
-                _enforceDmaForFrame = false;
-                _renderingCopperFrame = savedRenderingCopperFrame;
-                _trackDisplayWindowState = savedTrackDisplayWindowState;
-                _displayWindowVerticallyOpen = savedDisplayWindowVerticallyOpen;
-                _displayWindowStateLine = savedDisplayWindowStateLine;
-                _lastAppliedLivePaletteSnapshotIndex = -1;
-                if (rendered)
-                {
-                    _bus.ClearPresentationWriteHistory();
-                }
-            }
-        }
-
-        private void RenderTimedWriteReplayFrame(
-            Span<uint> bgra,
-            long frameStartCycle,
-            long frameStopCycle,
-            SavedDisplayState initialState,
-            List<PendingCustomWrite> writes)
-        {
-            RestoreDisplayState(initialState);
-            ResetDisplayWindowStateTracking();
-            _renderingCopperFrame = true;
-            _currentCopperRow = GetOutputRowForCycle(frameStartCycle, frameStartCycle);
-            var renderCursorCycle = frameStartCycle;
-            var renderCursorPixelDelay = 0;
-            for (var i = 0; i < writes.Count; i++)
-            {
-                var write = writes[i];
-                if (write.Cycle >= frameStopCycle)
-                {
-                    break;
-                }
-
-                if (write.Cycle <= frameStartCycle)
-                {
-                    continue;
-                }
-
-                var writePixelDelay = GetPresentationWritePixelDelay(write);
-                RenderPresentationSpan(
-                    bgra,
-                    frameStartCycle,
-                    renderCursorCycle,
-                    write.Cycle,
-                    useTimedWrites: true,
-                    renderCursorPixelDelay,
-                    writePixelDelay);
-                renderCursorCycle = Math.Max(renderCursorCycle, write.Cycle);
-                renderCursorPixelDelay = writePixelDelay;
-                ApplyLivePresentationReplayWrite(write, frameStartCycle);
-            }
-
-            RenderPresentationSpan(
-                bgra,
-                frameStartCycle,
-                renderCursorCycle,
-                frameStopCycle,
-                useTimedWrites: true,
-                renderCursorPixelDelay,
-                toPixelDelay: 0);
-            RenderPresentationTrailingRows(bgra, frameStartCycle, frameStopCycle, useTimedWrites: true);
-        }
-
-        private void ApplyLivePresentationReplayWrite(PendingCustomWrite write, long frameStartCycle)
-        {
-            _currentCopperRow = GetOutputRowForCycle(frameStartCycle, write.Cycle);
-            if (_trackDisplayWindowState)
-            {
-                AdvanceDisplayWindowStateToCycle(frameStartCycle, write.Cycle);
-            }
-
-            ApplyWrite(write.Offset, write.Value, write.Cycle);
-        }
-
-        private static int GetPresentationWritePixelDelay(PendingCustomWrite write)
-        {
-            return write.IsCopper
-                ? GetCopperWritePixelDelay(write.Offset)
-                : 0;
-        }
 
         private static int GetCopperWritePixelDelay(ushort offset)
         {
@@ -1818,275 +1529,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 : 0;
         }
 
-        private void RenderLiveCapturedRows(Span<uint> bgra)
-        {
-            for (var row = 0; row < ActiveLowResOutputHeight; row++)
-            {
-                var state = _liveLineStates[row];
-                if (!IsLiveLineValid(row))
-                {
-                    FillRows(bgra, row, row + 1);
-                    continue;
-                }
 
-                ApplyLiveLineStateForRendering(state);
-                _displayWindowVerticallyOpen = state.DeniseDisplayWindowVerticallyOpen;
-                _displayWindowStateLine = StandardVStart + row + 1;
-                _currentRenderRow = row;
-                CapturePaletteFrameSpans(row, row + 1, 0, LowResWidth);
-                FillRows(bgra, row, row + 1);
-                RenderBitplanes(bgra, row, row + 1);
-            }
 
-            _currentRenderRow = -1;
-        }
 
-        private void RenderTimedPresentationFrame(Span<uint> bgra, long frameStartCycle, long frameStopCycle)
-        {
-            RenderCopperFrame(bgra, frameStartCycle, frameStopCycle, useTimedWrites: true);
-        }
 
-        private void RenderCopperFrame(Span<uint> bgra, long frameStartCycle, long frameStopCycle, bool useTimedWrites)
-        {
-            _renderingCopperFrame = true;
-            _currentCopperRow = GetOutputRowForCycle(frameStartCycle, frameStartCycle);
-            var renderCursorCycle = frameStartCycle;
-            var renderCursorPixelDelay = 0;
-            var copper = new CopperPresentationState(_copperListPointer, frameStartCycle);
-            var safetyRemaining = GetCopperFrameInstructionLimit(frameStartCycle, frameStopCycle);
 
-            try
-            {
-                while (copper.Cycle < frameStopCycle)
-                {
-                    if (TryPeekPendingWrite(out var pending) && pending.Cycle <= copper.Cycle)
-                    {
-                        RenderPresentationSpan(
-                            bgra,
-                            frameStartCycle,
-                            renderCursorCycle,
-                            pending.Cycle,
-                            useTimedWrites,
-                            renderCursorPixelDelay,
-                            toPixelDelay: 0);
-                        renderCursorCycle = Math.Max(renderCursorCycle, pending.Cycle);
-                        renderCursorPixelDelay = 0;
-                        ApplyTimedPendingWrite(ref copper);
-                        continue;
-                    }
 
-                    if (copper.Stopped || !IsCopperDmaEnabled())
-                    {
-                        if (!TryAdvanceCopperToNextPendingWrite(
-                            bgra,
-                            frameStartCycle,
-                            frameStopCycle,
-                            useTimedWrites,
-                            ref renderCursorCycle,
-                            ref renderCursorPixelDelay,
-                            ref copper))
-                        {
-                            break;
-                        }
-
-                        continue;
-                    }
-
-                    if (copper.Waiting)
-                    {
-                        if (!TryAdvanceCopperWait(
-                            bgra,
-                            frameStartCycle,
-                            frameStopCycle,
-                            useTimedWrites,
-                            ref renderCursorCycle,
-                            ref renderCursorPixelDelay,
-                            ref copper))
-                        {
-                            break;
-                        }
-
-                        continue;
-                    }
-
-                    if (safetyRemaining-- <= 0)
-                    {
-                        break;
-                    }
-
-                    StepCopperInstruction(
-                        bgra,
-                        frameStartCycle,
-                        frameStopCycle,
-                        useTimedWrites,
-                        ref renderCursorCycle,
-                        ref renderCursorPixelDelay,
-                        ref copper);
-                }
-
-                RenderPresentationSpan(
-                    bgra,
-                    frameStartCycle,
-                    renderCursorCycle,
-                    frameStopCycle,
-                    useTimedWrites,
-                    renderCursorPixelDelay,
-                    toPixelDelay: 0);
-                RenderPresentationTrailingRows(bgra, frameStartCycle, frameStopCycle, useTimedWrites);
-            }
-            finally
-            {
-                _renderingCopperFrame = false;
-                _currentCopperRow = 0;
-            }
-        }
-
-        private void RenderPresentationTrailingRows(Span<uint> bgra, long frameStartCycle, long frameStopCycle, bool useTimedWrites)
-        {
-            var finalLine = GetBeamLineForCycle(frameStartCycle, Math.Max(frameStartCycle, frameStopCycle - 1));
-            var firstTrailingRow = Math.Clamp(finalLine - StandardVStart + 1, 0, ActiveLowResOutputHeight);
-            if (firstTrailingRow >= ActiveLowResOutputHeight)
-            {
-                return;
-            }
-
-            RenderRows(
-                bgra,
-                firstTrailingRow,
-                ActiveLowResOutputHeight,
-                frameStartCycle,
-                useTimedWrites,
-                applyPendingWrites: false);
-        }
-
-        private int GetCopperFrameInstructionLimit(long frameStartCycle, long frameStopCycle)
-        {
-            var frameCycles = Math.Max(1, frameStopCycle - frameStartCycle);
-            var minimumInstructionCycles = CopperHpToCpuCycles(CopperMoveHpUnits);
-            return (int)Math.Min(int.MaxValue, (frameCycles / minimumInstructionCycles) + 1024);
-        }
-
-        private bool TryAdvanceCopperToNextPendingWrite(
-            Span<uint> bgra,
-            long frameStartCycle,
-            long frameStopCycle,
-            bool useTimedWrites,
-            ref long renderCursorCycle,
-            ref int renderCursorPixelDelay,
-            ref CopperPresentationState copper)
-        {
-            if (!TryPeekPendingWrite(out var pending) || pending.Cycle >= frameStopCycle)
-            {
-                return false;
-            }
-
-            RenderPresentationSpan(
-                bgra,
-                frameStartCycle,
-                renderCursorCycle,
-                pending.Cycle,
-                useTimedWrites,
-                renderCursorPixelDelay,
-                toPixelDelay: 0);
-            renderCursorCycle = Math.Max(renderCursorCycle, pending.Cycle);
-            renderCursorPixelDelay = 0;
-            copper.Cycle = Math.Max(copper.Cycle, pending.Cycle);
-            ApplyTimedPendingWrite(ref copper);
-            return true;
-        }
-
-        private bool TryAdvanceCopperWait(
-            Span<uint> bgra,
-            long frameStartCycle,
-            long frameStopCycle,
-            bool useTimedWrites,
-            ref long renderCursorCycle,
-            ref int renderCursorPixelDelay,
-            ref CopperPresentationState copper)
-        {
-            if (!IsCopperDmaEnabled())
-            {
-                return TryAdvanceCopperToNextPendingWrite(
-                    bgra,
-                    frameStartCycle,
-                    frameStopCycle,
-                    useTimedWrites,
-                    ref renderCursorCycle,
-                    ref renderCursorPixelDelay,
-                    ref copper);
-            }
-
-            if ((copper.WaitSecond & 0x8000) == 0 && _bus.Blitter.Busy)
-            {
-                copper.WaitObservedBlitterBusy = true;
-            }
-
-            var blitterReadyCycle = GetCopperBlitterReadyCycle(copper.WaitSecond, copper.Cycle);
-            if (!TryGetCopperWaitCycle(
-                copper.WaitFirst,
-                copper.WaitSecond,
-                frameStartCycle,
-                Math.Max(copper.Cycle, blitterReadyCycle),
-                frameStopCycle,
-                blitterFinished: true,
-                out var waitCycle))
-            {
-                return false;
-            }
-
-            var nextWakeCycle = Math.Min(waitCycle, blitterReadyCycle);
-            if (TryPeekPendingWrite(out var pending) && pending.Cycle < nextWakeCycle)
-            {
-                RenderPresentationSpan(
-                    bgra,
-                    frameStartCycle,
-                    renderCursorCycle,
-                    pending.Cycle,
-                    useTimedWrites,
-                    renderCursorPixelDelay,
-                    toPixelDelay: 0);
-                renderCursorCycle = Math.Max(renderCursorCycle, pending.Cycle);
-                renderCursorPixelDelay = 0;
-                copper.Cycle = Math.Max(copper.Cycle, pending.Cycle);
-                ApplyTimedPendingWrite(ref copper);
-                return true;
-            }
-
-            if (blitterReadyCycle > copper.Cycle)
-            {
-                var readyCycle = Math.Min(blitterReadyCycle, frameStopCycle);
-                RenderPresentationSpan(
-                    bgra,
-                    frameStartCycle,
-                    renderCursorCycle,
-                    readyCycle,
-                    useTimedWrites,
-                    renderCursorPixelDelay,
-                    toPixelDelay: 0);
-                _bus.SynchronizeBlitterThrough(readyCycle);
-                renderCursorCycle = Math.Max(renderCursorCycle, readyCycle);
-                renderCursorPixelDelay = 0;
-                copper.Cycle = Math.Max(copper.Cycle, readyCycle);
-                return copper.Cycle < frameStopCycle;
-            }
-
-            var resumeCycle = waitCycle + CopperHpToCpuCycles(GetCopperWaitWakeHpUnits(
-                copper.WaitSecond,
-                copper.WaitObservedBlitterBusy));
-            RenderPresentationSpan(
-                bgra,
-                frameStartCycle,
-                renderCursorCycle,
-                Math.Min(resumeCycle, frameStopCycle),
-                useTimedWrites,
-                renderCursorPixelDelay,
-                toPixelDelay: 0);
-            renderCursorCycle = Math.Max(renderCursorCycle, Math.Min(resumeCycle, frameStopCycle));
-            renderCursorPixelDelay = 0;
-            copper.Cycle = Math.Max(copper.Cycle, resumeCycle);
-            copper.Waiting = false;
-            return copper.Cycle < frameStopCycle;
-        }
 
         private long GetCopperBlitterReadyCycle(ushort waitSecond, long currentCycle)
         {
@@ -2102,97 +1550,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
 
-        private void StepCopperInstruction(
-            Span<uint> bgra,
-            long frameStartCycle,
-            long frameStopCycle,
-            bool useTimedWrites,
-            ref long renderCursorCycle,
-            ref int renderCursorPixelDelay,
-            ref CopperPresentationState copper)
-        {
-            var instruction = LoadPresentationCopperInstruction(copper.Pc, Math.Min(copper.Cycle, frameStopCycle));
-            copper.Pc = AddDmaPointerOffset(copper.Pc, 4);
 
-            if (instruction.IsEnd)
-            {
-                copper.Stopped = true;
-                return;
-            }
-
-            if (instruction.IsMove)
-            {
-                var register = instruction.MoveRegister;
-                var writePixelDelay = GetCopperWritePixelDelay(register);
-                var clippedWritePixelDelay = instruction.DataCycle <= frameStopCycle ? writePixelDelay : 0;
-                RenderPresentationSpan(
-                    bgra,
-                    frameStartCycle,
-                    renderCursorCycle,
-                    Math.Min(instruction.DataCycle, frameStopCycle),
-                    useTimedWrites,
-                    renderCursorPixelDelay,
-                    clippedWritePixelDelay);
-                renderCursorCycle = Math.Max(renderCursorCycle, Math.Min(instruction.DataCycle, frameStopCycle));
-                renderCursorPixelDelay = clippedWritePixelDelay;
-                if (instruction.DataCycle <= frameStopCycle)
-                {
-                    var suppressMove = copper.SuppressNextMove;
-                    copper.SuppressNextMove = false;
-                    if (IsCopperDangerStopRegister(register))
-                    {
-                        copper.Stopped = true;
-                        copper.Cycle = instruction.MoveStopCycle;
-                        return;
-                    }
-
-                    if (!suppressMove && CanCopperWriteRegister(register))
-                    {
-                        _currentCopperRow = GetOutputRowForCycle(frameStartCycle, instruction.DataCycle);
-                        ApplyCopperMove(register, instruction.Second, instruction.DataCycle, applyHardwareSideEffects: false);
-                        if (register == 0x088)
-                        {
-                            copper.JumpTo(_copperListPointer, instruction.DataCycle);
-                        }
-                        else if (register == 0x08A)
-                        {
-                            copper.JumpTo(_copperListPointer2, instruction.DataCycle);
-                        }
-                    }
-                }
-
-                copper.Cycle = instruction.MoveStopCycle;
-                return;
-            }
-
-            if (instruction.IsWait)
-            {
-                copper.Cycle = instruction.ControlStopCycle;
-                copper.Wait(instruction.First, instruction.Second);
-                return;
-            }
-
-            if (instruction.ControlStopCycle <= frameStopCycle &&
-                IsCopperComparisonSatisfied(
-                instruction.First,
-                instruction.Second,
-                frameStartCycle,
-                instruction.ControlStopCycle,
-                IsCopperBlitterFinishedForWait(instruction.Second)))
-            {
-                copper.SuppressNextMove = true;
-            }
-
-            copper.Cycle = instruction.ControlStopCycle;
-        }
-
-        private CopperInstructionLatch LoadPresentationCopperInstruction(uint pc, long fetchCycle)
-        {
-            var first = ReadCopperWordForPresentation(pc, fetchCycle, out var firstAccess);
-            var secondRequestCycle = GetCopperSecondWordRequestCycle(firstAccess);
-            var second = ReadCopperWordForPresentation(AddDmaPointerOffset(pc, 2), secondRequestCycle, out var secondAccess);
-            return new CopperInstructionLatch(first, firstAccess, second, secondAccess, CopperHpCycles);
-        }
 
         private bool TryPeekPendingWrite(out PendingCustomWrite write)
         {
@@ -2206,32 +1564,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return false;
         }
 
-        private void ApplyTimedPendingWrite(ref CopperPresentationState copper)
-        {
-            if (_pendingIndex >= _pendingWrites.Count)
-            {
-                return;
-            }
-
-            var write = _pendingWrites[_pendingIndex++];
-            _currentCopperRow = GetOutputRowForCycle(_renderFrameStartCycle, write.Cycle);
-            if (_trackDisplayWindowState)
-            {
-                AdvanceDisplayWindowStateToCycle(_renderFrameStartCycle, write.Cycle);
-            }
-
-            ApplyWrite(write.Offset, write.Value, write.Cycle);
-            if (write.Offset == 0x088)
-            {
-                copper.JumpTo(_copperListPointer, write.Cycle);
-            }
-            else if (write.Offset == 0x08A)
-            {
-                copper.JumpTo(_copperListPointer2, write.Cycle);
-            }
-
-            CompactPendingWrites();
-        }
 
         private void CompactPendingWrites()
         {
@@ -2242,68 +1574,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
         }
 
-        private void RenderPresentationSpan(
-            Span<uint> bgra,
-            long frameStartCycle,
-            long fromCycle,
-            long toCycle,
-            bool useTimedWrites,
-            int fromPixelDelay = 0,
-            int toPixelDelay = 0)
-        {
-            if (toCycle <= fromCycle)
-            {
-                return;
-            }
-
-            var visibleStartCycle = GetLineStartCycle(frameStartCycle, StandardVStart);
-            var visibleStopCycle = GetLineStartCycle(frameStartCycle, StandardVStart + ActiveLowResOutputHeight);
-            var clippedStart = Math.Max(fromCycle, visibleStartCycle);
-            var clippedStop = Math.Min(toCycle, visibleStopCycle);
-            if (clippedStop <= clippedStart)
-            {
-                return;
-            }
-
-            var firstLine = Math.Clamp(GetBeamLineForCycle(frameStartCycle, clippedStart), StandardVStart, StandardVStart + ActiveLowResOutputHeight - 1);
-            var lastLine = Math.Clamp(GetBeamLineForCycle(frameStartCycle, clippedStop - 1), StandardVStart, StandardVStart + ActiveLowResOutputHeight - 1);
-            for (var line = firstLine; line <= lastLine; line++)
-            {
-                var lineStart = GetLineStartCycle(frameStartCycle, line);
-                var lineStop = GetLineStartCycle(frameStartCycle, line + 1);
-                var segmentStart = Math.Max(clippedStart, lineStart);
-                var segmentStop = Math.Min(clippedStop, lineStop);
-                if (segmentStop <= segmentStart)
-                {
-                    continue;
-                }
-
-                var row = line - StandardVStart;
-                var applyFromDelay = fromPixelDelay != 0 &&
-                    segmentStart == clippedStart &&
-                    clippedStart == fromCycle;
-                var xStart = applyFromDelay
-                    ? GetOutputXForCycle(frameStartCycle, segmentStart, fromPixelDelay)
-                    : GetOutputXForCycle(frameStartCycle, segmentStart);
-                var xStop = segmentStop >= lineStop
-                    ? LowResWidth
-                    : GetOutputXForCycle(frameStartCycle, segmentStop);
-                if (toPixelDelay != 0 &&
-                    segmentStop == clippedStop &&
-                    clippedStop == toCycle &&
-                    segmentStop < lineStop)
-                {
-                    xStop = GetOutputXForCycle(frameStartCycle, segmentStop, toPixelDelay);
-                }
-
-                if (xStop <= xStart)
-                {
-                    continue;
-                }
-
-                RenderRows(bgra, row, row + 1, frameStartCycle, useTimedWrites, xStart, xStop, applyPendingWrites: false);
-            }
-        }
 
         private bool TryGetCopperWaitCycle(
             ushort first,
@@ -2527,6 +1797,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             => (waitSecond & 0x8000) == 0 && !observedBlitterBusy
                 ? CopperBfdNoBusyWakeHpUnits
                 : CopperWaitWakeHpUnits;
+
+        private static long GetCopperWaitRestartArmCycle(
+            long waitCycle,
+            ushort waitSecond,
+            bool observedBlitterBusy)
+            => waitCycle + CopperHpToCpuCycles(GetCopperWaitWakeHpUnits(waitSecond, observedBlitterBusy)) -
+                (2L * AgnusChipSlotScheduler.SlotCycles);
 
 
         private long GetLineStartCycle(long frameStartCycle, int line)

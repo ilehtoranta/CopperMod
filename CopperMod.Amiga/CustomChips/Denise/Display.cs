@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace CopperMod.Amiga.CustomChips.Denise
@@ -87,24 +88,29 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private const int CanonicalCopperHpCycles = AmigaConstants.A500PalCpuCyclesPerColorClock;
         private const int PaletteColorCount = 64;
         private const int MaxDeniseSamplesPerLowResSpan = 4;
-        private const int MaxPaletteFrameSpans = MaxPendingWrites;
-        private const int MaxBitplaneDataSpans = MaxPendingWrites;
+        private const int RasterlineRingSize = AgnusRasterlineDmaPlanRing.LineCount;
+        private const int MaxPaletteFrameSpans = MaxRasterlinePresentationEvents;
+        private const int MaxBitplaneDataSpans = RasterlineRingSize * MaxRasterlinePresentationEvents;
         private const int MaxSpriteFrameCommands = 256;
-        private const int LiveBitplanePlaneCount = 6;
+        internal const int MaxBitplaneCapacity = 8;
+        internal const int OcsEcsMaxBitplaneCount = 6;
+        private const int LiveBitplanePlaneCount = MaxBitplaneCapacity;
         private const int LiveBitplaneWordsPerRow = LiveBitplanePlaneCount * MaxBitplaneFetchWords;
         private const int LiveSpriteChannelCount = 8;
         private const int LiveSpriteWordsPerChannel = 2;
         private const int LiveSpriteWordsPerRow = LiveSpriteChannelCount * LiveSpriteWordsPerChannel;
-        private const int MaxRowDmaBitplaneEntriesPerRow = LiveBitplanePlaneCount * MaxBitplaneFetchWords;
-        private const int MaxRowDmaSpriteEntriesPerRow = LiveSpriteChannelCount * LiveSpriteWordsPerChannel;
+        internal const int MaxRowDmaBitplaneEntriesPerRow = LiveBitplanePlaneCount * MaxBitplaneFetchWords;
+        internal const int MaxRowDmaSpriteEntriesPerRow = LiveSpriteChannelCount * LiveSpriteWordsPerChannel;
         private const byte RowDmaExecutedBitplaneMask = 0x01;
         private const byte RowDmaExecutedSpriteMask = 0x02;
         private const int MaxLivePaletteSnapshots = MaxPendingWrites;
         private const int MaxTimelineStateSnapshots = MaxPendingWrites;
         private const int PlanarChunkPixels = 16;
         private const int MaxTimelineSegmentsPerFrame = LowResOutputHeight + MaxPendingWrites;
+        private const int MaxRasterlinePresentationEvents = 256;
         private const int MaxLiveRasterlinePlanEvents = 64;
         private const int MaxCapturedCopperDisplayWrites = 65536;
+        private static readonly ulong[] PlanarByteExpansion = CreatePlanarByteExpansion();
         private static readonly int[] LowResBitplaneFetchSlotsByPlane = [7, 3, 5, 1, 6, 2];
         private static readonly int[] HighResBitplaneFetchSlotsByPlane = [3, 1, 2, 0];
         private static readonly int[] SuperHighResBitplaneFetchSlotsByPlane = [1, 0];
@@ -121,32 +127,31 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private readonly List<PendingCustomWrite> _pendingWrites = new List<PendingCustomWrite>(MaxPendingWrites);
         private readonly ushort[] _colors = new ushort[32];
         private readonly uint[] _convertedColors = new uint[PaletteColorCount];
-        private readonly uint[] _bitplanePointers = new uint[6];
-        private readonly int[] _bitplaneBaseRows = new int[6];
-        private byte[] _playfieldPriorityMasks = new byte[MaxLowResWidth * LowResOutputHeight * MaxDeniseSamplesPerLowResSpan];
-        private byte[] _playfieldSampleColorIndexes = new byte[MaxLowResWidth * LowResOutputHeight * MaxDeniseSamplesPerLowResSpan];
-        private uint[] _compositionSampleColors = new uint[MaxLowResWidth * LowResOutputHeight * MaxDeniseSamplesPerLowResSpan];
-        private readonly ushort[,] _renderPlaneWords = new ushort[6, MaxBitplaneFetchWords];
-        private readonly bool[] _renderPlaneHasRow = new bool[6];
-        private readonly ushort[] _bitplaneDataRegisters = new ushort[6];
-        private readonly bool[] _bitplaneDataRegisterWritten = new bool[6];
+        private readonly uint[] _bitplanePointers = new uint[MaxBitplaneCapacity];
+        private readonly int[] _bitplaneBaseRows = new int[MaxBitplaneCapacity];
+        private readonly byte[] _playfieldPriorityMasks = new byte[MaxLowResWidth * MaxDeniseSamplesPerLowResSpan];
+        private readonly byte[] _playfieldSampleColorIndexes = new byte[MaxLowResWidth * MaxDeniseSamplesPerLowResSpan];
+        private readonly uint[] _compositionSampleColors = new uint[MaxLowResWidth * MaxDeniseSamplesPerLowResSpan];
+        private readonly int[] _playfieldSampleGenerations = new int[MaxLowResWidth];
+        private int _playfieldSampleGeneration = 1;
+        private readonly ushort[,] _renderPlaneWords = new ushort[MaxBitplaneCapacity, MaxBitplaneFetchWords];
+        private readonly bool[] _renderPlaneHasRow = new bool[MaxBitplaneCapacity];
+        private readonly int[] _renderBitplaneWordIndexOffsets = new int[MaxBitplaneCapacity];
+        private readonly ushort[] _bitplaneDataRegisters = new ushort[MaxBitplaneCapacity];
+        private readonly bool[] _bitplaneDataRegisterWritten = new bool[MaxBitplaneCapacity];
         private BitplaneDmaReadLatch _bitplaneDmaReadLatch;
         private readonly SpriteState[] _sprites = new SpriteState[8];
         private readonly List<SpriteFrameCommand> _spriteFrameCommands = new List<SpriteFrameCommand>(MaxSpriteFrameCommands * 8);
         private readonly List<SpriteFrameCommand>[] _spriteCommandScratch = new List<SpriteFrameCommand>[8];
         private readonly bool[] _evenSpriteAttached = new bool[MaxSpriteFrameCommands];
         private readonly bool[] _oddSpriteAttached = new bool[MaxSpriteFrameCommands];
-        private readonly List<PaletteFrameSpan> _paletteFrameSpans = new List<PaletteFrameSpan>(LowResOutputHeight);
+        private readonly List<PaletteFrameSpan> _paletteFrameSpans = new List<PaletteFrameSpan>(MaxPaletteFrameSpans);
         private readonly int[] _paletteFrameSpanIndexByPixel;
-        private readonly PaletteSnapshotPool _paletteFrameSnapshots = new PaletteSnapshotPool();
+        private readonly PaletteSnapshotPool _paletteFrameSnapshots = new PaletteSnapshotPool(rasterlineRing: true);
         private readonly List<BitplaneDataSpan> _bitplaneDataSpans = new List<BitplaneDataSpan>(MaxBitplaneDataSpans);
         private readonly byte[] _timelineFastPathColorIndexes = new byte[MaxLowResWidth];
         private readonly byte[] _timelineFastPathPriorityMasks = new byte[MaxLowResWidth];
         private readonly SavedDisplayState _savedDisplayState = new SavedDisplayState();
-        private readonly SavedDisplayState _liveFrameInitialState = new SavedDisplayState();
-        private readonly SavedDisplayState _archivedFrameInitialState = new SavedDisplayState();
-        private readonly List<PendingCustomWrite> _liveFrameWrites = new List<PendingCustomWrite>(MaxPendingWrites);
-        private readonly List<PendingCustomWrite> _archivedFrameWrites = new List<PendingCustomWrite>(MaxPendingWrites);
         private int _pendingIndex;
         private uint _copperListPointer;
         private uint _copperListPointer2;
@@ -211,71 +216,68 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int _lastMissedSpriteDmaSlots;
         private long _lastFirstDisplayDmaCycle;
         private long _lastLastDisplayDmaCycle;
-        private bool _renderingCopperFrame;
-        private bool _captureSpriteFrameCommands;
         private bool _enforceDmaForFrame;
-        private bool _useTimedPresentationReads;
         private int _currentCopperRow;
         private int _currentRenderRow;
         private long _renderFrameStartCycle;
-        private readonly LiveLineState[] _liveLineStates = new LiveLineState[LowResOutputHeight];
-        private readonly ushort[] _liveBitplaneWords = new ushort[LowResOutputHeight * LiveBitplaneWordsPerRow];
-        private readonly UInt128[] _liveBitplaneWordMasks = new UInt128[LowResOutputHeight * LiveBitplanePlaneCount];
+        private PresentationFrameTarget _boundPresentationTarget;
+        private long _boundPresentationFrameStartCycle;
+        private long _boundPresentationFrameStopCycle;
+        private int _nextBoundPresentationRow;
+        private bool _boundPresentationActive;
+        private bool _boundPresentationCompleted;
+        private readonly LiveLineState[] _liveLineStates = new LiveLineState[RasterlineRingSize];
+        private readonly ushort[] _liveBitplaneWords = new ushort[RasterlineRingSize * LiveBitplaneWordsPerRow];
+        private readonly UInt128[] _liveBitplaneWordMasks = new UInt128[RasterlineRingSize * LiveBitplanePlaneCount];
         // Bitplane requests are decided one CCK before ordinary RGA requests.
         // Keep post-hard-stop Copper collisions separate until the following
         // control transition decides whether Denise retains or clears the latch.
-        private readonly UInt128[] _liveBitplaneCopperCollisionMasks = new UInt128[LowResOutputHeight * LiveBitplanePlaneCount];
-        private readonly ushort[] _liveSpriteWords = new ushort[LowResOutputHeight * LiveSpriteWordsPerRow];
-        private readonly byte[] _liveSpriteWordMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
-        private readonly RowDmaPlan[] _rowDmaPlans = new RowDmaPlan[LowResOutputHeight];
-        private readonly RowDmaBitplaneEntry[] _rowDmaBitplaneEntries = new RowDmaBitplaneEntry[LowResOutputHeight * MaxRowDmaBitplaneEntriesPerRow];
+        private readonly UInt128[] _liveBitplaneCopperCollisionMasks = new UInt128[RasterlineRingSize * LiveBitplanePlaneCount];
+        private readonly ushort[] _liveSpriteWords = new ushort[RasterlineRingSize * LiveSpriteWordsPerRow];
+        private readonly byte[] _liveSpriteWordMasks = new byte[RasterlineRingSize * LiveSpriteChannelCount];
+        private readonly AgnusRasterlineDmaPlanRing _agnusRasterlinePlans;
+        private readonly RowDmaPlan[] _rowDmaPlans;
+        private readonly RowDmaBitplaneEntry[] _rowDmaBitplaneEntries;
         private readonly ushort[] _rowDmaBitplaneBatchValues = new ushort[MaxRowDmaBitplaneEntriesPerRow];
         private readonly bool[] _rowDmaBitplaneBatchGranted = new bool[MaxRowDmaBitplaneEntriesPerRow];
-        private readonly RowDmaSpriteEntry[] _rowDmaSpriteEntries = new RowDmaSpriteEntry[LowResOutputHeight * MaxRowDmaSpriteEntriesPerRow];
-        private readonly byte[] _rowDmaExecutedMasks = new byte[LowResOutputHeight];
+        private readonly RowDmaSpriteEntry[] _rowDmaSpriteEntries;
+        private readonly byte[] _rowDmaExecutedMasks;
+        private readonly int[] _rowDmaBitplaneCursorIndices;
         private readonly bool[] _liveSpriteDmaExhausted = new bool[LiveSpriteChannelCount];
         private readonly LiveSpriteDmaState[] _liveSpriteDmaStates = new LiveSpriteDmaState[LiveSpriteChannelCount];
         private SpriteDmaReadLatch _spriteDmaReadLatch;
-        private PaletteSnapshotPool _livePaletteSnapshots = new PaletteSnapshotPool();
-        private readonly List<SpriteFrameCommand> _previousLiveSpriteFrameCommands = new(MaxSpriteFrameCommands * 8);
-        private readonly ushort[] _previousLiveSpriteWords = new ushort[LowResOutputHeight * LiveSpriteWordsPerRow];
-        private readonly byte[] _previousLiveSpriteWordMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
-        private readonly byte[] _previousLiveSpriteDeniedMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
-        private readonly List<SpriteFrameCommand> _carryLiveSpriteFrameCommands = new(MaxSpriteFrameCommands * 8);
-        private readonly ushort[] _carryLiveSpriteWords = new ushort[LowResOutputHeight * LiveSpriteWordsPerRow];
-        private readonly byte[] _carryLiveSpriteWordMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
-        private readonly byte[] _carryLiveSpriteDeniedMasks = new byte[LowResOutputHeight * LiveSpriteChannelCount];
-        private readonly LiveRasterlinePlanEvent[] _liveRasterlinePlanEvents = new LiveRasterlinePlanEvent[LowResOutputHeight * MaxLiveRasterlinePlanEvents];
-        private readonly int[] _liveRasterlinePlanEventCounts = new int[LowResOutputHeight];
-        private readonly bool[] _liveRasterlinePlanRowsTouched = new bool[LowResOutputHeight];
-        private readonly bool[] _liveRasterlinePlanRowsValid = new bool[LowResOutputHeight];
-        private readonly bool[] _liveRasterlinePlanRowsOverflowed = new bool[LowResOutputHeight];
-        private readonly int[] _liveRasterlinePlanWakeSearchIndices = new int[LowResOutputHeight];
-        private readonly bool[] _liveRasterlinePlanWakeSearchLineStateVisibility = new bool[LowResOutputHeight];
-        private readonly long[] _liveRasterlinePlanWakeSearchCycles = new long[LowResOutputHeight];
-        private readonly LiveRasterlinePlanEvent[] _predictedRasterlinePlanEvents = new LiveRasterlinePlanEvent[LowResOutputHeight * MaxLiveRasterlinePlanEvents];
-        private readonly int[] _predictedRasterlinePlanEventCounts = new int[LowResOutputHeight];
-        private readonly LiveRasterlinePredictionStatus[] _predictedRasterlinePlanStatuses = new LiveRasterlinePredictionStatus[LowResOutputHeight];
-        private readonly LiveRasterlineDmaDescriptor[] _liveRasterlineDmaDescriptors = new LiveRasterlineDmaDescriptor[LowResOutputHeight];
+        private PaletteSnapshotPool _livePaletteSnapshots = new PaletteSnapshotPool(rasterlineRing: true);
+        private readonly int[] _liveRasterlinePlanRows = new int[RasterlineRingSize];
+        private readonly LiveRasterlinePlanEvent[] _liveRasterlinePlanEvents = new LiveRasterlinePlanEvent[RasterlineRingSize * MaxLiveRasterlinePlanEvents];
+        private readonly int[] _liveRasterlinePlanEventCounts = new int[RasterlineRingSize];
+        private readonly bool[] _liveRasterlinePlanRowsTouched = new bool[RasterlineRingSize];
+        private readonly bool[] _liveRasterlinePlanRowsValid = new bool[RasterlineRingSize];
+        private readonly bool[] _liveRasterlinePlanRowsOverflowed = new bool[RasterlineRingSize];
+        private readonly int[] _liveRasterlinePlanWakeSearchIndices = new int[RasterlineRingSize];
+        private readonly bool[] _liveRasterlinePlanWakeSearchLineStateVisibility = new bool[RasterlineRingSize];
+        private readonly long[] _liveRasterlinePlanWakeSearchCycles = new long[RasterlineRingSize];
+        private readonly LiveRasterlinePlanEvent[] _predictedRasterlinePlanEvents = new LiveRasterlinePlanEvent[RasterlineRingSize * MaxLiveRasterlinePlanEvents];
+        private readonly int[] _predictedRasterlinePlanEventCounts = new int[RasterlineRingSize];
+        private readonly LiveRasterlinePredictionStatus[] _predictedRasterlinePlanStatuses = new LiveRasterlinePredictionStatus[RasterlineRingSize];
         private BoundedWriteLog? _copperDisplayWrites;
         private DisplayFrameTimeline _displayTimeline;
-        private DisplayFrameTimeline _archivedDisplayTimeline;
-        private PaletteSnapshotPool _archivedPaletteSnapshots = new PaletteSnapshotPool();
-        private long _archivedFrameWritesStartCycle = long.MinValue;
-        private long _archivedFrameWritesStopCycle = long.MinValue;
-        private bool _archivedFrameWritesValid;
         private bool _renderingLiveCapture;
         private bool _advancingLiveDma;
-        private long _previousLiveSpriteFrameStartCycle = long.MinValue;
         private bool _liveFrameValid;
         private int _liveGeneration = 1;
         private int _liveCurrentPaletteSnapshotIndex = -1;
+        private int _liveCurrentPaletteSnapshotRow = -1;
         private int _lastAppliedLivePaletteSnapshotIndex = -1;
         private bool _livePaletteSnapshotDirty = true;
         private bool _liveNextDisplayEventValid;
         private long _liveNextDisplayEventCycle;
         private bool _liveNextWorkCycleValid;
         private long _liveNextWorkCycle;
+        private bool _liveCpuVisibleWorkCycleValid;
+        private long _liveCpuVisibleWorkCycle;
+        private ulong _liveCpuVisibleWorkCycleVersion;
+        private long _liveCpuVisibleWorkCycleCacheHits;
+        private long _liveCpuVisibleWorkCycleRebuilds;
         private bool _liveDisplayWakeCandidateCacheValid;
         private long _liveDisplayWakeCandidateCacheCurrentCycle;
         private long _liveDisplayWakeCandidateCacheTargetCycle;
@@ -351,9 +353,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private long _copperQuiescentActiveStartCycle = -1;
         private long _copperQuiescentActiveEndCycle = -1;
         private CopperPresentationState _liveCopper;
-        private bool _liveFrameInitialStateValid;
-        private bool _liveFrameWriteOverflowed;
-        private bool _liveFrameHasLateDisplayWindowWrites;
         private bool _liveTimelineUnsafeForFrame;
         private bool _liveTimelineUnsafeRequiresCapturedRows;
         private ushort _liveTimelineUnsafeOffset;
@@ -363,7 +362,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int _lastTimelineMissingBitplaneFallbackCount;
         private int _lastTimelineSpriteCommandCount;
         private int _lastActiveTimelineFrameCount;
-        private int _lastArchivedTimelineFrameCount;
         private int _lastPlanarChunkCacheHits;
         private int _lastPlanarChunkCacheMisses;
         private int _lastTimelineCoalescedSegmentCount;
@@ -371,34 +369,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int _lastTimelineFastPathMissCount;
         private int _lastSpriteRecoveryAttemptCount;
         private int _lastSpriteDeniedFetchCount;
-        private int _lastArchiveRejectFrameIncomplete;
-        private int _lastArchiveRejectTimelineInvalid;
-        private int _lastArchiveRejectUnsafeWrite;
-        private int _lastArchiveRejectSegmentCapacity;
-        private int _lastArchiveRejectMissingLine;
-        private int _lastArchiveRejectUnsafeLine;
-        private int _lastArchiveRejectMissingBitplaneFetch;
-        private int _lastArchiveRejectMissingSpriteFetch;
-        private ushort _lastArchiveRejectUnsafeOffset;
-        private bool _lastArchiveRejectUnsafeIsCopper;
-        private int _lastArchiveRejectMissingSpriteIndex;
-        private int _lastArchiveRejectMissingSpriteRow;
-        private int _lastArchiveRejectMissingSpriteWord;
-        private int _lastArchiveRejectMissingSpriteStatusA;
-        private int _lastArchiveRejectMissingSpriteStatusB;
-        private int _lastArchiveRejectMissingSpriteCommandRow;
-        private int _lastArchiveRejectMissingSpriteYStart;
-        private int _lastArchiveRejectMissingSpriteYStop;
-        private int _lastArchiveRejectMissingSpriteUsableChannels;
-        private int _lastArchiveRejectMissingSpriteDdfStart;
-        private ushort _lastArchiveRejectMissingSpriteDmacon;
-        private ushort _lastArchiveRejectMissingSpriteBplcon0;
-        private int _lastArchiveRejectMissingSpritePreviousStatusA;
-        private int _lastArchiveRejectMissingSpritePreviousStatusB;
-        private bool _archivedTimelineValid;
-        private bool _renderingArchivedTimeline;
-        private long _archivedTimelineFrameStartCycle = long.MinValue;
-        private long _archivedTimelineFrameStopCycle = long.MinValue;
         private int _liveRasterlinePlanRow = -1;
         private long _liveRasterlinePlanLineStartCycle;
         private long _liveRasterlinePlanLineStopCycle;
@@ -427,13 +397,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int _predictedRasterlinePlanUnsupportedSpriteLines;
         private int _predictedRasterlinePlanUnsupportedInvalidStateLines;
         private int _predictedRasterlinePlanUnsupportedOverflowLines;
-        private int _liveRasterlineDescriptorBuilds;
-        private int _liveRasterlineDescriptorReplayAttempts;
-        private int _liveRasterlineDescriptorReplayedRows;
-        private int _liveRasterlineDescriptorFallbackRows;
-        private int _liveRasterlineDescriptorBitplaneRows;
-        private int _liveRasterlineDescriptorSpriteRows;
-        private int _liveRasterlineDescriptorMismatches;
         private int _lastRowDmaPlansBuilt;
         private int _lastRowDmaPlannedRowsExecuted;
         private int _lastRowDmaBitplaneEntriesExecuted;
@@ -451,12 +414,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _agnusRegisters = agnusRegisters ?? throw new ArgumentNullException(nameof(agnusRegisters));
             _chipset = chipset;
+            _agnusRasterlinePlans = bus.CausalBusExecutor.RasterlinePlans;
+            _rowDmaPlans = _agnusRasterlinePlans.Plans;
+            _rowDmaBitplaneEntries = _agnusRasterlinePlans.BitplaneEntries;
+            _rowDmaSpriteEntries = _agnusRasterlinePlans.SpriteEntries;
+            _rowDmaExecutedMasks = _agnusRasterlinePlans.ExecutedMasks;
+            _rowDmaBitplaneCursorIndices = _agnusRasterlinePlans.BitplaneCursorIndices;
             _timing = bus.RasterTiming;
             _lowResWidth = Math.Min(MaxLowResWidth, _timing.PresentationLowResWidth);
             _lowResHeight = Math.Min(LowResOutputHeight, _timing.PresentationLowResHeight);
-            _paletteFrameSpanIndexByPixel = new int[_lowResWidth * LowResOutputHeight];
+            _paletteFrameSpanIndexByPixel = new int[_lowResWidth];
             _displayTimeline = new DisplayFrameTimeline(_lowResWidth);
-            _archivedDisplayTimeline = new DisplayFrameTimeline(_lowResWidth);
             _liveDmaEnabled = liveDmaEnabled;
             for (var i = 0; i < _sprites.Length; i++)
             {
@@ -508,12 +476,72 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         internal int PaletteSnapshotReservedBytes
             => _paletteFrameSnapshots.ReservedBytes +
+                _livePaletteSnapshots.ReservedBytes;
+
+        internal int PresentationStateReservedBytes
+            => ReservedArrayBytes(_playfieldPriorityMasks) +
+                ReservedArrayBytes(_playfieldSampleColorIndexes) +
+                ReservedArrayBytes(_compositionSampleColors) +
+                ReservedArrayBytes(_playfieldSampleGenerations) +
+                (_renderPlaneWords.Length * sizeof(ushort)) +
+                ReservedArrayBytes(_renderPlaneHasRow) +
+                ReservedArrayBytes(_renderBitplaneWordIndexOffsets) +
+                ReservedArrayBytes(_bitplaneDataRegisters) +
+                ReservedArrayBytes(_liveLineStates) +
+                (_liveLineStates.Length * MaxBitplaneCapacity *
+                    ((sizeof(uint) * 2) + (sizeof(int) * 2) + sizeof(ushort))) +
+                ReservedArrayBytes(_liveBitplaneWords) +
+                ReservedArrayBytes(_liveBitplaneWordMasks) +
+                ReservedArrayBytes(_liveBitplaneCopperCollisionMasks) +
+                ReservedArrayBytes(_liveSpriteWords) +
+                ReservedArrayBytes(_liveSpriteWordMasks) +
+                ReservedArrayBytes(_rowDmaPlans) +
+                ReservedArrayBytes(_rowDmaBitplaneEntries) +
+                ReservedArrayBytes(_rowDmaBitplaneBatchValues) +
+                ReservedArrayBytes(_rowDmaBitplaneBatchGranted) +
+                ReservedArrayBytes(_rowDmaSpriteEntries) +
+                ReservedArrayBytes(_rowDmaExecutedMasks) +
+                ReservedArrayBytes(_rowDmaBitplaneCursorIndices) +
+                ReservedArrayBytes(_liveRasterlinePlanRows) +
+                ReservedArrayBytes(_liveRasterlinePlanEvents) +
+                ReservedArrayBytes(_predictedRasterlinePlanEvents) +
+                _paletteFrameSnapshots.ReservedBytes +
                 _livePaletteSnapshots.ReservedBytes +
-                _archivedPaletteSnapshots.ReservedBytes;
+                _displayTimeline.ReservedBytes;
+
+        private static int ReservedArrayBytes<T>(T[] values)
+            => values.Length * Unsafe.SizeOf<T>();
+
+        private static ulong[] CreatePlanarByteExpansion()
+        {
+            var expansion = new ulong[256];
+            for (var value = 0; value < expansion.Length; value++)
+            {
+                var packed = 0UL;
+                for (var pixel = 0; pixel < 8; pixel++)
+                {
+                    packed |= (ulong)((value >> (7 - pixel)) & 1) << (pixel * 8);
+                }
+
+                expansion[value] = packed;
+            }
+
+            return expansion;
+        }
 
         internal bool LiveDmaEnabled => _liveDmaEnabled;
 
+        internal AmigaBus AttachedBus => _bus;
+
         internal ulong LiveWakeVersion => _liveWakeVersion;
+
+        internal long LiveExecutionCycle => _liveCycle;
+
+        internal long LiveCapturedThroughCycle => _liveCapturedThroughCycle;
+
+        internal long LiveCpuVisibleWorkCycleCacheHits => _liveCpuVisibleWorkCycleCacheHits;
+
+        internal long LiveCpuVisibleWorkCycleRebuilds => _liveCpuVisibleWorkCycleRebuilds;
 
         public OcsDisplaySnapshot CaptureSnapshot()
         {
@@ -586,7 +614,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _lastTimelineMissingBitplaneFallbackCount,
                 _lastTimelineSpriteCommandCount,
                 _lastActiveTimelineFrameCount,
-                _lastArchivedTimelineFrameCount,
                 _lastPlanarChunkCacheHits,
                 _lastPlanarChunkCacheMisses,
                 _lastTimelineCoalescedSegmentCount,
@@ -615,13 +642,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _predictedRasterlinePlanUnsupportedSpriteLines,
                 _predictedRasterlinePlanUnsupportedInvalidStateLines,
                 _predictedRasterlinePlanUnsupportedOverflowLines,
-                _liveRasterlineDescriptorBuilds,
-                _liveRasterlineDescriptorReplayAttempts,
-                _liveRasterlineDescriptorReplayedRows,
-                _liveRasterlineDescriptorFallbackRows,
-                _liveRasterlineDescriptorBitplaneRows,
-                _liveRasterlineDescriptorSpriteRows,
-                _liveRasterlineDescriptorMismatches,
                 _lastRowDmaPlansBuilt,
                 _lastRowDmaPlannedRowsExecuted,
                 _lastRowDmaBitplaneEntriesExecuted,
@@ -634,30 +654,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _copperQuiescentMaxCycles,
                 _copperQuiescentActiveStartCycle,
                 _copperQuiescentActiveEndCycle,
-                _lastArchiveRejectFrameIncomplete,
-                _lastArchiveRejectTimelineInvalid,
-                _lastArchiveRejectUnsafeWrite,
-                _lastArchiveRejectSegmentCapacity,
-                _lastArchiveRejectMissingLine,
-                _lastArchiveRejectUnsafeLine,
-                _lastArchiveRejectMissingBitplaneFetch,
-                _lastArchiveRejectMissingSpriteFetch,
-                _lastArchiveRejectUnsafeOffset,
-                _lastArchiveRejectUnsafeIsCopper,
-                _lastArchiveRejectMissingSpriteIndex,
-                _lastArchiveRejectMissingSpriteRow,
-                _lastArchiveRejectMissingSpriteWord,
-                _lastArchiveRejectMissingSpriteStatusA,
-                _lastArchiveRejectMissingSpriteStatusB,
-                _lastArchiveRejectMissingSpriteCommandRow,
-                _lastArchiveRejectMissingSpriteYStart,
-                _lastArchiveRejectMissingSpriteYStop,
-                _lastArchiveRejectMissingSpriteUsableChannels,
-                _lastArchiveRejectMissingSpriteDdfStart,
-                _lastArchiveRejectMissingSpriteDmacon,
-                _lastArchiveRejectMissingSpriteBplcon0,
-                _lastArchiveRejectMissingSpritePreviousStatusA,
-                _lastArchiveRejectMissingSpritePreviousStatusB,
                 _agnusDiwHigh,
                 _agnusDiwHighValid,
                 _agnusDisplayWindow,
@@ -777,104 +773,22 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return GetLineStartCycle(frameStartCycle, StandardVStart + row);
         }
 
-        private ushort ReadChipWordForPresentation(uint address, int row)
-        {
-            if (!_useTimedPresentationReads)
-            {
-                return _bus.ReadChipWordForPresentation(address);
-            }
-
-            row = Math.Clamp(row, 0, LowResOutputHeight - 1);
-            return ReadChipWordForPresentationAtCycle(address, GetOutputRowStartCycle(_renderFrameStartCycle, row));
-        }
-
-        private ushort ReadChipWordForPresentationAtCycle(uint address, long cycle)
-        {
-            return _useTimedPresentationReads
-                ? _bus.ReadChipWordForPresentation(address, cycle)
-                : _bus.ReadChipWordForPresentation(address);
-        }
-
-        private ushort ReadCopperWordForPresentation(uint address, long cycle, out AmigaBusAccessResult access)
-        {
-            if (!_useTimedPresentationReads)
-            {
-                var request = new AmigaBusAccessRequest(
-                    AmigaBusRequester.Copper,
-                    AmigaBusAccessKind.Copper,
-                    AmigaBusAccessTarget.ChipRam,
-                    address,
-                    AmigaBusAccessSize.Word,
-                    cycle,
-                    isWrite: false);
-                access = new AmigaBusAccessResult(request, cycle, cycle);
-                return _bus.ReadChipWordForPresentation(address);
-            }
-
-            return _bus.ReadChipWordForPresentationWithArbitration(
-                AmigaBusRequester.Copper,
-                AmigaBusAccessKind.Copper,
-                address,
-                cycle,
-                out access);
-        }
-
-        private ushort ReadBitplaneWordForPresentation(uint address, int row, int plane, int word)
-        {
-            if (plane >= GetAgnusBitplaneFetchPlaneCount())
-            {
-                return IsLatchedOnlyOcsBpu7Plane(_bplcon0, plane)
-                    ? _bitplaneDataRegisters[plane]
-                    : (ushort)0;
-            }
-
-            if (IsLatchedOnlyOcsBpu7Plane(_bplcon0, plane))
-            {
-                return _bitplaneDataRegisters[plane];
-            }
-
-            if (_renderingLiveCapture && TryReadLiveCapturedBitplaneWord(row, plane, word, out var captured))
-            {
-                return captured;
-            }
-
-            if (!_useTimedPresentationReads)
-            {
-                var immediateValue = _bus.ReadChipWordForPresentation(address);
-                LoadBitplaneDataRegister(plane, immediateValue);
-                return immediateValue;
-            }
-
-            row = Math.Clamp(row, 0, LowResOutputHeight - 1);
-            var lineStart = GetOutputRowStartCycle(_renderFrameStartCycle, row);
-            var fetchResolution = GetAgnusFetchResolution(_bplcon0);
-            var wordStride = GetResolutionFetchSlotStride(fetchResolution);
-            var planeSlot = GetBitplaneFetchSlot(plane, fetchResolution);
-            var fetchHorizontal = GetDataFetchStartValue() + (word * wordStride) + planeSlot;
-            var fetchCycle = AgnusChipSlotScheduler.AlignToSlot(lineStart + ((long)fetchHorizontal * CopperHpCycles));
-            if (!_bus.TryReadDisplayDmaWordForPresentation(
-                    AmigaBusRequester.Bitplane,
-                    AmigaBusAccessKind.Bitplane,
-                    address,
-                    fetchCycle,
-                    out var value,
-                    out var access))
-            {
-                return 0;
-            }
-
-            _bitplaneDmaReadLatch = new BitplaneDmaReadLatch(row, plane, word, value, granted: true, access.GrantedCycle);
-            return ConsumePresentationBitplaneDmaLatch(ref _bitplaneDmaReadLatch);
-        }
-
         private BitplaneDmaReadLatch LoadLiveBitplaneDmaLatch(int row, int plane, int word, uint address, long fetchCycle)
         {
             var previousAuditSource = _bus.PushSlotScheduleAuditSource(AgnusSlotAuditSource.LiveBitplaneFetch, row, word, plane);
             try
             {
-                return _bus.TryReadRowBitplaneDmaWord(address, fetchCycle, out var value, out var grantedCycle)
-                    ? new BitplaneDmaReadLatch(row, plane, word, value, granted: true, grantedCycle)
-                    : BitplaneDmaReadLatch.Denied(row, plane, word, grantedCycle);
+                if (_bus.CausalBusExecutor.TryExecuteBitplaneWord(
+                    plane,
+                    address,
+                    fetchCycle,
+                    out var value,
+                    out var grantedCycle))
+                {
+                    return new BitplaneDmaReadLatch(row, plane, word, value, granted: true, grantedCycle);
+                }
+
+                return BitplaneDmaReadLatch.Denied(row, plane, word, grantedCycle);
             }
             finally
             {
@@ -909,22 +823,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             latch = default;
         }
 
-        private ushort ConsumePresentationBitplaneDmaLatch(ref BitplaneDmaReadLatch latch)
-        {
-            if (!latch.HasValue || !latch.Granted)
-            {
-                latch = default;
-                return 0;
-            }
-
-            _lastBitplaneDmaFetches++;
-            RecordDisplayDmaCycle(latch.GrantedCycle);
-            LoadBitplaneDataRegister(latch.Plane, latch.Value);
-            var value = latch.Value;
-            latch = default;
-            return value;
-        }
-
         private void LoadBitplaneDataRegister(int plane, ushort value)
         {
             if ((uint)plane >= (uint)_bitplaneDataRegisters.Length)
@@ -936,70 +834,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _bitplaneDataRegisterWritten[plane] = true;
         }
 
-        private bool TryReadSpriteWordForPresentation(
+        private bool TryCaptureLiveSpriteDmaWord(
             uint address,
             int row,
             int spriteIndex,
             int word,
             out ushort value)
-            => TryReadSpriteWordForPresentation(
-                address,
-                row,
-                spriteIndex,
-                word,
-                out value,
-                recordLiveCapture: false);
-
-        private bool TryReadSpriteWordForPresentation(
-            uint address,
-            int row,
-            int spriteIndex,
-            int word,
-            out ushort value,
-            bool recordLiveCapture)
         {
             row = Math.Clamp(row, 0, LowResOutputHeight - 1);
             spriteIndex = Math.Clamp(spriteIndex, 0, _sprites.Length - 1);
             word = Math.Clamp(word, 0, LiveSpriteWordsPerChannel - 1);
-            if ((_renderingLiveCapture || recordLiveCapture) &&
-                TryReadLiveCapturedSpriteWord(row, spriteIndex, word, out value))
+            if (TryReadLiveCapturedSpriteWord(row, spriteIndex, word, out value))
             {
                 return true;
-            }
-
-            if (_renderingLiveCapture && !recordLiveCapture)
-            {
-                if (word == 1 && TryGetPriorLiveSpriteDatb(row, spriteIndex, out value))
-                {
-                    return true;
-                }
-
-                value = 0;
-                return false;
-            }
-
-            if (!_useTimedPresentationReads && !recordLiveCapture)
-            {
-                _spriteDmaReadLatch = new SpriteDmaReadLatch(
-                    row,
-                    spriteIndex,
-                    word,
-                    _bus.ReadChipWordForPresentation(address),
-                    granted: true,
-                    grantedCycle: 0);
-                return ConsumeSpriteDmaReadLatch(
-                    ref _spriteDmaReadLatch,
-                    recordDmaFetch: false,
-                    recordLiveCapture: false,
-                    out value);
-            }
-
-            if (!recordLiveCapture &&
-                _useTimedPresentationReads &&
-                _previousLiveSpriteFrameStartCycle == _renderFrameStartCycle &&
-                _previousLiveSpriteFrameCommands.Count > 0)
-            {
-                return TryReadPreviousLiveSpriteWord(row, spriteIndex, word, out value, out _);
             }
 
             if (!IsSpriteDmaSlotAvailable(spriteIndex, word))
@@ -1008,34 +855,42 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return ConsumeSpriteDmaReadLatch(
                     ref _spriteDmaReadLatch,
                     recordDmaFetch: false,
-                    recordLiveCapture,
+                    recordLiveCapture: true,
                     out value);
             }
 
             var fetchCycle = GetSpriteDmaFetchCycle(row, spriteIndex, word);
-            var alreadyCaptured = recordLiveCapture && _bus.IsHrmChipSlotReserved(fetchCycle);
+            var alreadyCaptured = _bus.IsHrmChipSlotReserved(fetchCycle);
             _spriteDmaReadLatch = LoadSpriteDmaReadLatch(row, spriteIndex, word, address, fetchCycle);
             if (!_spriteDmaReadLatch.Granted)
             {
                 return ConsumeSpriteDmaReadLatch(
                     ref _spriteDmaReadLatch,
                     recordDmaFetch: false,
-                    recordLiveCapture,
+                    recordLiveCapture: true,
                     out value);
             }
 
             return ConsumeSpriteDmaReadLatch(
                 ref _spriteDmaReadLatch,
                 recordDmaFetch: !alreadyCaptured,
-                recordLiveCapture,
+                recordLiveCapture: true,
                 out value);
         }
 
         private SpriteDmaReadLatch LoadSpriteDmaReadLatch(int row, int spriteIndex, int word, uint address, long fetchCycle)
         {
-            return _bus.TryReadRowSpriteDmaWordForPresentation(address, fetchCycle, out var value, out var grantedCycle)
-                ? new SpriteDmaReadLatch(row, spriteIndex, word, value, granted: true, grantedCycle)
-                : SpriteDmaReadLatch.Denied(row, spriteIndex, word, grantedCycle);
+            if (_bus.CausalBusExecutor.TryExecuteSpriteWord(
+                spriteIndex,
+                address,
+                fetchCycle,
+                out var value,
+                out var grantedCycle))
+            {
+                return new SpriteDmaReadLatch(row, spriteIndex, word, value, granted: true, grantedCycle);
+            }
+
+            return SpriteDmaReadLatch.Denied(row, spriteIndex, word, grantedCycle);
         }
 
         private bool ConsumeSpriteDmaReadLatch(
@@ -1087,71 +942,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 _sprites[spriteIndex].DataB = value;
             }
-        }
-
-        private bool TryReadPreviousLiveSpriteWord(
-            int row,
-            int spriteIndex,
-            int word,
-            out ushort value,
-            out bool denied)
-        {
-            value = 0;
-            denied = false;
-            if (_previousLiveSpriteFrameStartCycle != _renderFrameStartCycle ||
-                !HasPreviousLiveSpriteWord(row, spriteIndex, word))
-            {
-                return false;
-            }
-
-            var maskIndex = GetLiveSpriteMaskIndex(row, spriteIndex);
-            var bit = (byte)(1 << word);
-            denied = (_previousLiveSpriteDeniedMasks[maskIndex] & bit) != 0;
-            if (denied && word == 1 && TryGetPriorPreviousLiveSpriteDatb(row, spriteIndex, out value))
-            {
-                denied = false;
-                return true;
-            }
-
-            value = denied ? (ushort)0 : _previousLiveSpriteWords[GetLiveSpriteWordIndex(row, spriteIndex, word)];
-            return true;
-        }
-
-        private bool TryGetPriorPreviousLiveSpriteDatb(int row, int spriteIndex, out ushort value)
-        {
-            for (var priorRow = row - 1; priorRow >= 0; priorRow--)
-            {
-                if (!HasPreviousLiveSpriteWord(priorRow, spriteIndex, 1))
-                {
-                    continue;
-                }
-
-                var maskIndex = GetLiveSpriteMaskIndex(priorRow, spriteIndex);
-                if ((_previousLiveSpriteDeniedMasks[maskIndex] & 0x02) != 0)
-                {
-                    continue;
-                }
-
-                value = _previousLiveSpriteWords[GetLiveSpriteWordIndex(priorRow, spriteIndex, 1)];
-                return true;
-            }
-
-            value = 0;
-            return false;
-        }
-
-        private bool HasPreviousLiveSpriteWord(int row, int spriteIndex, int word)
-        {
-            if ((uint)row >= (uint)LowResOutputHeight ||
-                (uint)spriteIndex >= LiveSpriteChannelCount ||
-                (uint)word >= LiveSpriteWordsPerChannel)
-            {
-                return false;
-            }
-
-            var maskIndex = GetLiveSpriteMaskIndex(row, spriteIndex);
-            var bit = (byte)(1 << word);
-            return (_previousLiveSpriteWordMasks[maskIndex] & bit) != 0;
         }
 
         private static int GetBitplaneFetchSlot(int plane, DeniseResolution fetchResolution)
@@ -1283,6 +1073,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return true;
         }
 
+        internal bool TryGetCapturedBitplaneWord(int row, int plane, int word, out ushort value)
+            => TryReadLiveCapturedBitplaneWord(row, plane, word, out value);
+
         private bool IsLiveCaptureCompleteForRendering(long frameStopCycle)
         {
             for (var row = 0; row < LowResOutputHeight; row++)
@@ -1292,7 +1085,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     continue;
                 }
 
-                var state = _liveLineStates[row];
+                var state = GetLiveLineState(row);
                 if (state.PlaneCount <= 0 ||
                     state.FetchWords <= 0 ||
                     !state.DisplayWindowVerticallyOpen ||
@@ -1356,42 +1149,49 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool IsLiveLineValid(int row)
         {
-            return (uint)row < (uint)LowResOutputHeight && _liveLineStates[row].Generation == _liveGeneration;
+            if ((uint)row >= (uint)LowResOutputHeight)
+            {
+                return false;
+            }
+
+            var state = _liveLineStates[GetRasterlineRingSlot(row)];
+            return state.Row == row && state.Generation == _liveGeneration;
         }
+
+        private LiveLineState GetLiveLineState(int row)
+        {
+            var state = _liveLineStates[GetRasterlineRingSlot(row)];
+            if (state.Row != row)
+            {
+                state.Row = row;
+                state.Generation = 0;
+            }
+
+            return state;
+        }
+
+        private static int GetRasterlineRingSlot(int row)
+            => Math.Abs(row % RasterlineRingSize);
 
         private static int GetLiveBitplaneWordIndex(int row, int plane, int word)
         {
-            return (row * LiveBitplaneWordsPerRow) + (plane * MaxBitplaneFetchWords) + word;
+            return (GetRasterlineRingSlot(row) * LiveBitplaneWordsPerRow) +
+                (plane * MaxBitplaneFetchWords) + word;
         }
 
         private static int GetLiveBitplaneMaskIndex(int row, int plane)
         {
-            return (row * LiveBitplanePlaneCount) + plane;
+            return (GetRasterlineRingSlot(row) * LiveBitplanePlaneCount) + plane;
         }
 
         private void ClearLiveBitplaneWordMasks(int row)
         {
-            var offset = row * LiveBitplanePlaneCount;
+            var offset = GetRasterlineRingSlot(row) * LiveBitplanePlaneCount;
             for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
             {
                 _liveBitplaneWordMasks[offset + plane] = 0;
                 _liveBitplaneCopperCollisionMasks[offset + plane] = 0;
             }
-        }
-
-        private void ClearLiveBitplaneWordMasksFrom(int row)
-        {
-            row = Math.Clamp(row, 0, LowResOutputHeight);
-            var offset = row * LiveBitplanePlaneCount;
-            Array.Clear(_liveBitplaneWordMasks, offset, _liveBitplaneWordMasks.Length - offset);
-            Array.Clear(_liveBitplaneCopperCollisionMasks, offset, _liveBitplaneCopperCollisionMasks.Length - offset);
-        }
-
-        private void ClearLiveSpriteWordMasksFrom(int row)
-        {
-            row = Math.Clamp(row, 0, LowResOutputHeight);
-            var offset = row * LiveSpriteChannelCount;
-            Array.Clear(_liveSpriteWordMasks, offset, _liveSpriteWordMasks.Length - offset);
         }
 
         private void ResetLiveSpriteDmaStates(int controlRow)
@@ -1471,12 +1271,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private static int GetLiveSpriteWordIndex(int row, int spriteIndex, int word)
         {
-            return (row * LiveSpriteWordsPerRow) + (spriteIndex * LiveSpriteWordsPerChannel) + word;
+            return (GetRasterlineRingSlot(row) * LiveSpriteWordsPerRow) +
+                (spriteIndex * LiveSpriteWordsPerChannel) + word;
         }
 
         private static int GetLiveSpriteMaskIndex(int row, int spriteIndex)
         {
-            return (row * LiveSpriteChannelCount) + spriteIndex;
+            return (GetRasterlineRingSlot(row) * LiveSpriteChannelCount) + spriteIndex;
         }
 
         private long GetSpriteDmaFetchCycle(int row, int spriteIndex, int word)
@@ -1623,13 +1424,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var address = AddDmaPointerOffset(state.Descriptor.DataAddress, ((row - state.Descriptor.YStart) * 4) + (word * 2));
-            var captured = TryReadSpriteWordForPresentation(
+            EnsureActiveRowSpriteDmaPlanCurrent(row);
+            _bus.CausalBusExecutor.RecordFixedPlanShadow(slotCycle, AgnusChipSlotOwner.Sprite, _dmacon);
+            var captured = TryCaptureLiveSpriteDmaWord(
                 address,
                 row,
                 spriteIndex,
                 word,
-                out var value,
-                recordLiveCapture: true);
+                out var value);
             if (!captured &&
                 word == 1 &&
                 !IsSpriteDmaSlotAvailable(spriteIndex, word))
@@ -1640,7 +1442,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 StoreLiveCapturedSpriteWord(row, spriteIndex, word, value);
             }
 
-            var granted = captured && _bus.IsHrmChipSlotReserved(slotCycle);
+            var granted = captured;
             RecordTimelineSpriteDataFetch(row, spriteIndex, word, value, granted);
             return granted;
         }
@@ -1673,16 +1475,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int word,
             long slotCycle)
         {
+            EnsureActiveRowSpriteDmaPlanCurrent(row);
+            _bus.CausalBusExecutor.RecordFixedPlanShadow(slotCycle, AgnusChipSlotOwner.Sprite, _dmacon);
             if (word == 0)
             {
-                if (!TryReadSpriteWordForPresentation(state.ControlAddress, row, spriteIndex, 0, out var pos, recordLiveCapture: true))
+                if (!TryCaptureLiveSpriteDmaWord(state.ControlAddress, row, spriteIndex, 0, out var pos))
                 {
                     return false;
                 }
 
                 state.PendingPos = pos;
                 state.HasPendingPos = true;
-                return _bus.IsHrmChipSlotReserved(slotCycle);
+                return true;
             }
 
             if (!state.HasPendingPos)
@@ -1690,12 +1494,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            if (!TryReadSpriteWordForPresentation(AddDmaPointerOffset(state.ControlAddress, 2), row, spriteIndex, 1, out var ctl, recordLiveCapture: true))
+            if (!TryCaptureLiveSpriteDmaWord(AddDmaPointerOffset(state.ControlAddress, 2), row, spriteIndex, 1, out var ctl))
             {
                 return false;
             }
 
-            var slotGranted = _bus.IsHrmChipSlotReserved(slotCycle);
+            var slotGranted = true;
             var pendingPos = state.PendingPos;
             state.PendingPos = 0;
             state.HasPendingPos = false;
@@ -1747,7 +1551,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             state.Active = true;
             state.LastVisibleStop = Math.Max(state.LastVisibleStop, descriptor.YStop);
             state.ControlAddress = nextControlAddress;
-            state.ControlRow = Math.Clamp(descriptor.YStop + 1, 0, LowResOutputHeight);
+            state.ControlRow = Math.Clamp(descriptor.YStop, 0, LowResOutputHeight);
             return slotGranted;
         }
 
@@ -1807,11 +1611,27 @@ namespace CopperMod.Amiga.CustomChips.Denise
             for (var y = rowStart; y < rowStop; y++)
             {
                 var insideVertical = y >= windowYStart && y < windowYStop;
-                for (var x = xStart; x < xStop; x++)
+                if (!insideVertical)
                 {
-                    var inside = insideVertical && x >= windowXStart && x < windowXStop;
-                    WriteLowResolutionOutputPixel(bgra, x, y, inside ? displayColor : borderColor);
+                    FillLowResolutionOutputRun(bgra, xStart, xStop, y, borderColor);
+                    continue;
                 }
+
+                var displayStart = Math.Clamp(windowXStart, xStart, xStop);
+                var displayStop = Math.Clamp(windowXStop, displayStart, xStop);
+                FillLowResolutionOutputRun(bgra, xStart, displayStart, y, borderColor);
+                FillLowResolutionOutputRun(bgra, displayStart, displayStop, y, displayColor);
+                FillLowResolutionOutputRun(bgra, displayStop, xStop, y, borderColor);
+            }
+        }
+
+        private void EnsureActiveRowSpriteDmaPlanCurrent(int row)
+        {
+            var ringSlot = GetRasterlineRingSlot(row);
+            var plan = _rowDmaPlans[ringSlot];
+            if (plan.Valid && plan.Row == row && plan.Dmacon != _dmacon)
+            {
+                PatchActiveRowSpriteDmaPlan(row);
             }
         }
 
@@ -1840,7 +1660,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return -1;
             }
 
-            var spanIndex = _paletteFrameSpanIndexByPixel[(y * LowResWidth) + x];
+            var spanIndex = _paletteFrameSpanIndexByPixel[x];
             if ((uint)spanIndex >= (uint)_paletteFrameSpans.Count)
             {
                 return -1;
@@ -1883,15 +1703,52 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var spanIndex = _paletteFrameSpans.Count;
                 _paletteFrameSpans.Add(new PaletteFrameSpan(
                     paletteSnapshotIndex,
+                    livePaletteSnapshot: false,
                     _bplcon0,
                     _bplcon2,
                     _bplcon3,
                     window));
                 _paletteFrameSpanIndexByPixel.AsSpan(
-                    (row * LowResWidth) + xStart,
+                    xStart,
                     xStop - xStart).Fill(spanIndex);
             }
         }
+
+        private void CaptureLivePaletteFrameSpan(
+            int row,
+            int xStart,
+            int xStop,
+            DisplayTimelineState state)
+        {
+            xStart = Math.Clamp(xStart, 0, LowResWidth);
+            xStop = Math.Clamp(xStop, xStart, LowResWidth);
+            if ((uint)row >= (uint)LowResOutputHeight ||
+                xStart >= xStop ||
+                _paletteFrameSpans.Count >= MaxPaletteFrameSpans)
+            {
+                return;
+            }
+
+            var spanIndex = _paletteFrameSpans.Count;
+            _paletteFrameSpans.Add(new PaletteFrameSpan(
+                state.PaletteSnapshotIndex,
+                livePaletteSnapshot: true,
+                state.Bplcon0,
+                state.Bplcon2,
+                state.Bplcon3,
+                state.DeniseDisplayWindow));
+            _paletteFrameSpanIndexByPixel.AsSpan(xStart, xStop - xStart).Fill(spanIndex);
+        }
+
+        private ushort GetPaletteFrameSpanEncodedColor(in PaletteFrameSpan span, int colorIndex)
+            => span.LivePaletteSnapshot
+                ? _livePaletteSnapshots.GetEncodedColor(span.PaletteSnapshotIndex, colorIndex)
+                : _paletteFrameSnapshots.GetEncodedColor(span.PaletteSnapshotIndex, colorIndex);
+
+        private uint GetPaletteFrameSpanConvertedColor(in PaletteFrameSpan span, int colorIndex)
+            => span.LivePaletteSnapshot
+                ? _livePaletteSnapshots.GetConvertedColor(span.PaletteSnapshotIndex, colorIndex)
+                : _paletteFrameSnapshots.GetConvertedColor(span.PaletteSnapshotIndex, colorIndex);
 
         private void ApplyPendingWrites(long cycle)
         {
@@ -1908,13 +1765,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     AdvanceDisplayWindowStateToCycle(_renderFrameStartCycle, write.Cycle);
                 }
 
-                if (_advancingLiveDma &&
-                    write.Cycle > _liveFrameStartCycle &&
-                    write.Offset is 0x08E or 0x090)
-                {
-                    _liveFrameHasLateDisplayWindowWrites = true;
-                }
-
                 if (_advancingLiveDma)
                 {
                     EnsureTimelineLineStartedBeforeDisplayWrite(write.Cycle);
@@ -1925,6 +1775,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 RefreshLiveFrameInitialStateAfterFrameStartWrite(write.Cycle);
                 if (_advancingLiveDma)
                 {
+                    // Timeline snapshots must see the post-write row addresses and
+                    // plane mask. The outer event loop refresh is too late because
+                    // RecordTimelineDisplayWrite captures its state immediately.
+                    RefreshLiveLineStateAfterDisplayStateChange(write.Cycle, write.Offset);
                     RecordLiveFrameWrite(write.Cycle, write.Offset, write.Value);
                     RecordTimelineDisplayWrite(write.Cycle, write.Offset, isCopper: false);
                 }
@@ -1947,11 +1801,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void RefreshLiveFrameInitialStateAfterFrameStartWrite(long cycle)
         {
-            if (_liveFrameValid &&
-                _liveFrameInitialStateValid &&
-                cycle <= _liveFrameStartCycle)
+            if (_liveFrameValid && cycle <= _liveFrameStartCycle)
             {
-                CaptureDisplayState(_liveFrameInitialState);
                 if (_liveCapturedThroughCycle <= _liveFrameStartCycle)
                 {
                     _liveCopper = CreateLiveCopperFrameStartState(_liveFrameStartCycle);
@@ -1972,6 +1823,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
+            _displayTimeline.BeginLineStateSnapshots(row);
             var snapshotIndex = CaptureTimelineStateSnapshot(row, state);
             _displayTimeline.StartLine(row, snapshotIndex);
         }
@@ -1996,7 +1848,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (IsLiveLineValid(row))
             {
-                RecordTimelineLineStart(row, _liveLineStates[row]);
+                RecordTimelineLineStart(row, GetLiveLineState(row));
                 return;
             }
 
@@ -2062,7 +1914,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var x = GetOutputXForCycle(_liveFrameStartCycle, cycle, pixelDelay);
-            var snapshotIndex = CaptureTimelineStateSnapshot(row, _liveLineStates[row]);
+            var snapshotIndex = CaptureTimelineStateSnapshot(row, GetLiveLineState(row));
             _displayTimeline.RecordDisplayChange(
                 row,
                 x,
@@ -2092,7 +1944,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 var wrappedSnapshotIndex = CaptureTimelineStateSnapshot(
                     wrappedRow,
-                    _liveLineStates[row]);
+                    GetLiveLineState(row));
                 _displayTimeline.RecordDisplayChange(
                     wrappedRow,
                     wrappedX,
@@ -2108,32 +1960,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
         }
 
-        private static bool TryFindFirstUnsafeTimelineLine(DisplayFrameTimeline timeline, out ushort offset, out bool isCopper)
-        {
-            for (var row = 0; row < LowResOutputHeight; row++)
-            {
-                if (!timeline.HasLine(row))
-                {
-                    continue;
-                }
-
-                var line = timeline.GetLine(row);
-                if (line.UnsafeForTimelineRender)
-                {
-                    offset = line.UnsafeOffset;
-                    isCopper = line.UnsafeIsCopper;
-                    return true;
-                }
-            }
-
-            offset = 0;
-            isCopper = false;
-            return false;
-        }
-
         private int CaptureTimelineStateSnapshot(int row, LiveLineState fallbackState)
         {
-            var snapshot = _displayTimeline.AddStateSnapshot();
+            var snapshot = _displayTimeline.AddStateSnapshot(row);
             snapshot.LineStartCycle = GetOutputRowStartCycle(_liveFrameStartCycle, row);
             snapshot.Resolution = GetDeniseResolution(_bplcon0);
             snapshot.FetchResolution = _dataFetchWindow.Resolution;
@@ -2161,11 +1990,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
             snapshot.FetchWords = GetDataFetchWordCount();
             snapshot.DataFetchStart = _dataFetchWindow.Start;
             snapshot.FetchSlotStride = DisplayGeometryDecoder.GetDataFetchSlotStride(_dataFetchWindow);
-            snapshot.PaletteSnapshotIndex = CaptureLivePaletteSnapshot();
-            Array.Copy(fallbackState.BitplanePointers, snapshot.BitplanePointers, fallbackState.BitplanePointers.Length);
-            Array.Copy(fallbackState.BitplaneBaseRows, snapshot.BitplaneBaseRows, fallbackState.BitplaneBaseRows.Length);
-            Array.Copy(fallbackState.BitplaneRowAddresses, snapshot.BitplaneRowAddresses, fallbackState.BitplaneRowAddresses.Length);
-            Array.Copy(_bitplaneDataRegisters, snapshot.BitplaneDataRegisters, _bitplaneDataRegisters.Length);
+            snapshot.PaletteSnapshotIndex = CaptureLivePaletteSnapshot(row);
+            for (var plane = 0; plane < MaxBitplaneCapacity; plane++)
+            {
+                snapshot.BitplanePointers[plane] = fallbackState.BitplanePointers[plane];
+                snapshot.BitplaneBaseRows[plane] = fallbackState.BitplaneBaseRows[plane];
+                snapshot.BitplaneRowAddresses[plane] = fallbackState.BitplaneRowAddresses[plane];
+                snapshot.BitplaneWordIndexOffsets[plane] = fallbackState.BitplaneWordIndexOffsets[plane];
+                snapshot.BitplaneDataRegisters[plane] = _bitplaneDataRegisters[plane];
+            }
             snapshot.PlaneHasRowMask = fallbackState.PlaneHasRowMask;
 
             return snapshot.Index;
@@ -2204,7 +2037,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            if (offset >= 0x110 && offset <= 0x11A)
+            if (offset >= 0x110 && offset <= 0x11E)
             {
                 return false;
             }
@@ -2244,7 +2077,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private static bool IsTimelineBitplanePointerWrite(ushort offset)
         {
             offset = (ushort)(offset & 0x01FE);
-            return offset >= 0x0E0 && offset <= 0x0F6;
+            return offset >= 0x0E0 && offset <= 0x0FE;
         }
 
         private static int GetTimelineCpuWritePixelDelay(ushort offset)
@@ -2438,6 +2271,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             Array.Copy(state.BitplanePointers, _bitplanePointers, _bitplanePointers.Length);
             Array.Copy(state.BitplaneBaseRows, _bitplaneBaseRows, _bitplaneBaseRows.Length);
+            Array.Copy(
+                state.BitplaneWordIndexOffsets,
+                _renderBitplaneWordIndexOffsets,
+                _renderBitplaneWordIndexOffsets.Length);
         }
 
         private readonly struct DualPlayfieldPixel
@@ -2511,6 +2348,22 @@ namespace CopperMod.Amiga.CustomChips.Denise
             private const int InitialSnapshotCapacity = 16;
             private ushort[] _encodedColors = Array.Empty<ushort>();
             private uint[] _convertedColors = Array.Empty<uint>();
+            private readonly bool _rasterlineRing;
+            private readonly int[] _rasterlineRows = new int[RasterlineRingSize];
+            private readonly int[] _rasterlineCounts = new int[RasterlineRingSize];
+
+            public PaletteSnapshotPool(bool rasterlineRing = false)
+            {
+                _rasterlineRing = rasterlineRing;
+                Array.Fill(_rasterlineRows, -1);
+                if (rasterlineRing)
+                {
+                    _encodedColors = new ushort[
+                        RasterlineRingSize * MaxRasterlinePresentationEvents * EncodedColorCount];
+                    _convertedColors = new uint[
+                        RasterlineRingSize * MaxRasterlinePresentationEvents * PaletteColorCount];
+                }
+            }
 
             public int Count { get; private set; }
 
@@ -2521,6 +2374,62 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public void Clear()
             {
                 Count = 0;
+                Array.Fill(_rasterlineRows, -1);
+                Array.Clear(_rasterlineCounts);
+            }
+
+            public int GetOrAddForRasterline(
+                int row,
+                ReadOnlySpan<ushort> encodedColors,
+                ReadOnlySpan<uint> convertedColors)
+            {
+                if (!_rasterlineRing)
+                {
+                    return GetOrAdd(
+                        encodedColors,
+                        convertedColors,
+                        MaxRasterlinePresentationEvents);
+                }
+
+                var slot = GetRasterlineRingSlot(row);
+                if (_rasterlineRows[slot] != row)
+                {
+                    _rasterlineRows[slot] = row;
+                    _rasterlineCounts[slot] = 0;
+                }
+
+                var count = _rasterlineCounts[slot];
+                var baseIndex = slot * MaxRasterlinePresentationEvents;
+                if (count > 0)
+                {
+                    var lastIndex = baseIndex + count - 1;
+                    if (encodedColors.SequenceEqual(GetEncodedColors(lastIndex)) &&
+                        convertedColors.SequenceEqual(GetConvertedColors(lastIndex)))
+                    {
+                        return lastIndex;
+                    }
+                }
+
+                if (count >= MaxRasterlinePresentationEvents)
+                {
+                    return baseIndex + MaxRasterlinePresentationEvents - 1;
+                }
+
+                var index = baseIndex + count;
+                _rasterlineCounts[slot] = count + 1;
+                Count++;
+                var encodedStart = index * EncodedColorCount;
+                for (var color = 0; color < EncodedColorCount; color++)
+                {
+                    _encodedColors[encodedStart + color] = encodedColors[color];
+                }
+
+                var convertedStart = index * PaletteColorCount;
+                for (var color = 0; color < PaletteColorCount; color++)
+                {
+                    _convertedColors[convertedStart + color] = convertedColors[color];
+                }
+                return index;
             }
 
             public int GetOrAdd(
@@ -2562,7 +2471,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return;
                 }
 
-                var index = Math.Clamp(requestedIndex, 0, Count - 1);
+                var index = _rasterlineRing
+                    ? Math.Clamp(requestedIndex, 0, (RasterlineRingSize * MaxRasterlinePresentationEvents) - 1)
+                    : Math.Clamp(requestedIndex, 0, Count - 1);
                 GetEncodedColors(index).CopyTo(encodedColors);
                 GetConvertedColors(index).CopyTo(convertedColors);
             }
@@ -2600,12 +2511,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             public PaletteFrameSpan(
                 int paletteSnapshotIndex,
+                bool livePaletteSnapshot,
                 ushort bplcon0,
                 ushort bplcon2,
                 ushort bplcon3,
                 DisplayWindow window)
             {
                 PaletteSnapshotIndex = paletteSnapshotIndex;
+                LivePaletteSnapshot = livePaletteSnapshot;
                 Bplcon0 = bplcon0;
                 Bplcon2 = bplcon2;
                 Bplcon3 = bplcon3;
@@ -2613,6 +2526,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             public int PaletteSnapshotIndex { get; }
+
+            public bool LivePaletteSnapshot { get; }
 
             public ushort Bplcon0 { get; }
 
@@ -2631,6 +2546,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             private readonly ushort _word3;
             private readonly ushort _word4;
             private readonly ushort _word5;
+            private readonly ushort _word6;
+            private readonly ushort _word7;
 
             public BitplaneDataSpan(
                 int row,
@@ -2641,7 +2558,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 ushort word2,
                 ushort word3,
                 ushort word4,
-                ushort word5)
+                ushort word5,
+                ushort word6,
+                ushort word7)
             {
                 Row = row;
                 XStart = xStart;
@@ -2652,6 +2571,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _word3 = word3;
                 _word4 = word4;
                 _word5 = word5;
+                _word6 = word6;
+                _word7 = word7;
             }
 
             public int Row { get; }
@@ -2675,9 +2596,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     3 => _word3,
                     4 => _word4,
                     5 => _word5,
+                    6 => _word6,
+                    7 => _word7,
                     _ => 0
                 };
             }
+        }
+
+        private enum CopperWaitRestartStage : byte
+        {
+            None,
+            WaitingForComparison,
+            RestartArmed,
+            ReadyToRequest
         }
 
         private struct CopperPresentationState
@@ -2687,9 +2618,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 Pc = pc;
                 Cycle = cycle;
                 Stopped = false;
-                Waiting = false;
+                WaitRestartStage = CopperWaitRestartStage.None;
                 PendingStart = pendingStart;
                 SuppressNextMove = false;
+                PendingInstructionSecondWord = false;
+                PendingInstructionFirst = 0;
+                PendingInstructionFirstAccess = default;
+                PendingInstructionSecondWordCycle = 0;
                 PendingMove = false;
                 PendingMoveRegister = 0;
                 PendingMoveValue = 0;
@@ -2703,6 +2638,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 WaitFirst = 0;
                 WaitSecond = 0;
                 WaitObservedBlitterBusy = false;
+                WaitRestartIncomingRgaBlocked = false;
+                WaitStartCarryPending = false;
+                WaitStartCarrySkipCount = 0;
             }
 
             public uint Pc;
@@ -2711,11 +2649,28 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public bool Stopped;
 
-            public bool Waiting;
+            public CopperWaitRestartStage WaitRestartStage;
+
+            public readonly bool Waiting
+                => WaitRestartStage == CopperWaitRestartStage.WaitingForComparison;
+
+            public readonly bool RestartArmed
+                => WaitRestartStage == CopperWaitRestartStage.RestartArmed;
+
+            public readonly bool ReadyToRequest
+                => WaitRestartStage == CopperWaitRestartStage.ReadyToRequest;
 
             public bool PendingStart;
 
             public bool SuppressNextMove;
+
+            public bool PendingInstructionSecondWord;
+
+            public ushort PendingInstructionFirst;
+
+            public AmigaBusAccessResult PendingInstructionFirstAccess;
+
+            public long PendingInstructionSecondWordCycle;
 
             public bool PendingMove;
 
@@ -2743,12 +2698,36 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public bool WaitObservedBlitterBusy;
 
+            public bool WaitRestartIncomingRgaBlocked;
+
+            public bool WaitStartCarryPending;
+
+            public byte WaitStartCarrySkipCount;
+
             public void Wait(ushort first, ushort second)
             {
-                Waiting = true;
+                WaitRestartStage = CopperWaitRestartStage.WaitingForComparison;
                 WaitFirst = first;
                 WaitSecond = second;
                 WaitObservedBlitterBusy = false;
+            }
+
+            public void ArmWaitRestart(long cycle, bool incomingRgaBlocked)
+            {
+                Cycle = cycle;
+                WaitRestartIncomingRgaBlocked = incomingRgaBlocked;
+                WaitRestartStage = CopperWaitRestartStage.RestartArmed;
+            }
+
+            public void AdvanceWaitRestartStage(long nextCycle)
+            {
+                WaitRestartStage = WaitRestartStage switch
+                {
+                    CopperWaitRestartStage.RestartArmed => CopperWaitRestartStage.ReadyToRequest,
+                    CopperWaitRestartStage.ReadyToRequest => CopperWaitRestartStage.None,
+                    _ => WaitRestartStage
+                };
+                Cycle = nextCycle;
             }
 
             public void JumpTo(uint pc, long cycle)
@@ -2756,9 +2735,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 Pc = pc;
                 Cycle = cycle;
                 Stopped = false;
-                Waiting = false;
+                WaitRestartStage = CopperWaitRestartStage.None;
+                WaitRestartIncomingRgaBlocked = false;
+                WaitStartCarryPending = false;
+                WaitStartCarrySkipCount = 0;
                 PendingStart = false;
                 SuppressNextMove = false;
+                PendingInstructionSecondWord = false;
+                PendingInstructionFirst = 0;
+                PendingInstructionFirstAccess = default;
+                PendingInstructionSecondWordCycle = 0;
                 PendingMove = false;
                 PendingMoveRegister = 0;
                 PendingMoveValue = 0;
@@ -2990,7 +2976,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private sealed class LiveLineState
         {
+            public int Row = -1;
             public int Generation;
+            public int DmaPlanVersion;
             public long LineStartCycle;
             public DeniseResolution Resolution;
             public DeniseResolution FetchResolution;
@@ -3021,23 +3009,36 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public int FetchSlotStride;
             public int PaletteSnapshotIndex;
             public byte PlaneHasRowMask;
-            public readonly uint[] BitplanePointers = new uint[6];
-            public readonly int[] BitplaneBaseRows = new int[6];
-            public readonly uint[] BitplaneRowAddresses = new uint[6];
-            public readonly ushort[] BitplaneDataRegisters = new ushort[6];
+            public ulong BitplaneRgaDecision0;
+            public ulong BitplaneRgaDecision1;
+            public ulong BitplaneRgaDecision2;
+            public ulong BitplaneRgaDecision3;
+            public ulong BitplaneRgaIncoming0;
+            public ulong BitplaneRgaIncoming1;
+            public ulong BitplaneRgaIncoming2;
+            public ulong BitplaneRgaIncoming3;
+            public ulong BitplaneRgaOutput0;
+            public ulong BitplaneRgaOutput1;
+            public ulong BitplaneRgaOutput2;
+            public ulong BitplaneRgaOutput3;
+            public readonly uint[] BitplanePointers = new uint[MaxBitplaneCapacity];
+            public readonly int[] BitplaneBaseRows = new int[MaxBitplaneCapacity];
+            public readonly uint[] BitplaneRowAddresses = new uint[MaxBitplaneCapacity];
+            public readonly int[] BitplaneWordIndexOffsets = new int[MaxBitplaneCapacity];
+            public readonly ushort[] BitplaneDataRegisters = new ushort[MaxBitplaneCapacity];
         }
 
         private sealed class DisplayFrameTimeline
         {
-            private readonly DisplayLineTimeline[] _lines = new DisplayLineTimeline[LowResOutputHeight];
+            private readonly DisplayLineTimeline[] _lines = new DisplayLineTimeline[RasterlineRingSize];
             private readonly int _lowResWidth;
-            private readonly List<DisplayTimelineState> _states = new List<DisplayTimelineState>(1024);
+            private readonly DisplayTimelineState[] _states =
+                new DisplayTimelineState[RasterlineRingSize * MaxRasterlinePresentationEvents];
+            private readonly int[] _lineStateCounts = new int[RasterlineRingSize];
             private readonly List<SpriteFrameCommand> _spriteFrameCommands = new List<SpriteFrameCommand>(MaxSpriteFrameCommands * 8);
             private readonly List<BitplaneDataSpan> _bitplaneDataSpans = new List<BitplaneDataSpan>(MaxBitplaneDataSpans);
-            private readonly Dictionary<PlanarChunkKey, PlanarChunkDecoded> _planarChunkCache = new Dictionary<PlanarChunkKey, PlanarChunkDecoded>(4096);
             private long _frameStartCycle;
             private int _generation = 1;
-            private int _stateCount;
 
             public DisplayFrameTimeline(int lowResWidth)
             {
@@ -3045,6 +3046,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 for (var i = 0; i < _lines.Length; i++)
                 {
                     _lines[i] = new DisplayLineTimeline();
+                }
+
+                for (var i = 0; i < _states.Length; i++)
+                {
+                    _states[i] = new DisplayTimelineState(i);
                 }
             }
 
@@ -3058,12 +3064,39 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public int SpriteDeniedFetchCount { get; private set; }
 
+            public int ReservedBytes
+            {
+                get
+                {
+                    var bytes = ReservedArrayBytes(_lines) +
+                        ReservedArrayBytes(_states) +
+                        ReservedArrayBytes(_lineStateCounts) +
+                        (_spriteFrameCommands.Capacity * Unsafe.SizeOf<SpriteFrameCommand>()) +
+                        (_bitplaneDataSpans.Capacity * Unsafe.SizeOf<BitplaneDataSpan>());
+                    for (var i = 0; i < _lines.Length; i++)
+                    {
+                        var line = _lines[i];
+                        bytes += (line.Segments.Capacity * Unsafe.SizeOf<DisplayLineSegment>()) +
+                            ReservedArrayBytes(line.BitplaneWords) +
+                            ReservedArrayBytes(line.BitplaneFetchMasks) +
+                            ReservedArrayBytes(line.BitplaneDeniedMasks) +
+                            ReservedArrayBytes(line.SpriteWords) +
+                            ReservedArrayBytes(line.SpriteFetchMasks) +
+                            ReservedArrayBytes(line.SpriteDeniedMasks);
+                    }
+
+                    bytes += _states.Length * MaxBitplaneCapacity *
+                        ((sizeof(uint) * 2) + (sizeof(int) * 2) + sizeof(ushort));
+                    return bytes;
+                }
+            }
+
             public int RecalculateSpriteDeniedFetchCount()
             {
                 var count = 0;
-                for (var row = 0; row < _lines.Length; row++)
+                for (var slot = 0; slot < _lines.Length; slot++)
                 {
-                    var line = _lines[row];
+                    var line = _lines[slot];
                     if (line.Generation != _generation || !line.Valid)
                     {
                         continue;
@@ -3087,10 +3120,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 PlanarChunkCacheHits = 0;
                 PlanarChunkCacheMisses = 0;
                 SpriteDeniedFetchCount = 0;
-                _stateCount = 0;
+                Array.Clear(_lineStateCounts);
                 _spriteFrameCommands.Clear();
                 _bitplaneDataSpans.Clear();
-                _planarChunkCache.Clear();
                 _generation++;
                 if (_generation != int.MaxValue)
                 {
@@ -3112,10 +3144,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public void InvalidateFromRow(int row)
             {
                 row = Math.Clamp(row, 0, LowResOutputHeight);
-                for (var i = row; i < _lines.Length; i++)
+                for (var i = 0; i < _lines.Length; i++)
                 {
                     var line = _lines[i];
-                    if (line.Generation != _generation)
+                    if (line.Generation != _generation || line.Row < row)
                     {
                         continue;
                     }
@@ -3140,15 +3172,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
                 }
 
-                _planarChunkCache.Clear();
             }
 
             public int CoalesceEquivalentSegments()
             {
                 var removed = 0;
-                for (var row = 0; row < _lines.Length; row++)
+                for (var slot = 0; slot < _lines.Length; slot++)
                 {
-                    var line = _lines[row];
+                    var line = _lines[slot];
                     if (line.Generation != _generation || !line.Valid || line.SegmentCount <= 1)
                     {
                         continue;
@@ -3185,7 +3216,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 if (removed > 0)
                 {
                     SegmentCount -= removed;
-                    _planarChunkCache.Clear();
                 }
 
                 return removed;
@@ -3219,46 +3249,52 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     left.DataFetchStart == right.DataFetchStart &&
                     left.FetchSlotStride == right.FetchSlotStride &&
                     left.PlaneHasRowMask == right.PlaneHasRowMask &&
+                    HasSameBitplaneWordIndexOffsets(left, right) &&
                     HasSameBitplaneDataRegisters(left, right);
             }
 
-            public DisplayTimelineState AddStateSnapshot()
+            public void BeginLineStateSnapshots(int row)
             {
-                if (_stateCount >= MaxTimelineStateSnapshots)
-                {
-                    if (_states.Count == 0)
-                    {
-                        _states.Add(new DisplayTimelineState(0));
-                    }
+                _lineStateCounts[GetRasterlineRingSlot(row)] = 0;
+            }
 
-                    return _states[Math.Max(0, Math.Min(_stateCount - 1, _states.Count - 1))];
+            public DisplayTimelineState AddStateSnapshot(int row)
+            {
+                var slot = GetRasterlineRingSlot(row);
+                var count = _lineStateCounts[slot];
+                if (count >= MaxRasterlinePresentationEvents)
+                {
+                    count = MaxRasterlinePresentationEvents - 1;
+                }
+                else
+                {
+                    _lineStateCounts[slot] = count + 1;
                 }
 
-                if (_stateCount >= _states.Count)
-                {
-                    _states.Add(new DisplayTimelineState(_states.Count));
-                }
-
-                var state = _states[_stateCount];
-                _stateCount++;
-                return state;
+                return _states[(slot * MaxRasterlinePresentationEvents) + count];
             }
 
             public DisplayTimelineState GetState(int index)
             {
-                return _states[Math.Clamp(index, 0, Math.Max(0, _stateCount - 1))];
+                return _states[Math.Clamp(index, 0, _states.Length - 1)];
             }
 
             public DisplayLineTimeline GetLine(int row)
             {
-                return _lines[Math.Clamp(row, 0, LowResOutputHeight - 1)];
+                return _lines[GetRasterlineRingSlot(Math.Clamp(row, 0, LowResOutputHeight - 1))];
             }
 
             public bool HasLine(int row)
             {
-                return (uint)row < (uint)_lines.Length &&
-                    _lines[row].Generation == _generation &&
-                    _lines[row].Valid;
+                if ((uint)row >= (uint)LowResOutputHeight)
+                {
+                    return false;
+                }
+
+                var line = _lines[GetRasterlineRingSlot(row)];
+                return line.Row == row &&
+                    line.Generation == _generation &&
+                    line.Valid;
             }
 
             public void RecordBitplaneDataSpan(BitplaneDataSpan span)
@@ -3269,7 +3305,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 _bitplaneDataSpans.Add(span);
-                _planarChunkCache.Clear();
             }
 
             public void CopyBitplaneDataSpansTo(List<BitplaneDataSpan> destination)
@@ -3282,30 +3317,48 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public bool TryGetBitplaneFetchLine(int row, out DisplayLineTimeline line)
             {
-                if ((uint)row >= (uint)_lines.Length)
+                if ((uint)row >= (uint)LowResOutputHeight)
                 {
                     line = _lines[0];
                     return false;
                 }
 
-                line = _lines[row];
-                return line.Generation == _generation && line.Valid;
+                line = _lines[GetRasterlineRingSlot(row)];
+                return line.Row == row && line.Generation == _generation && line.Valid;
             }
 
             public void StartLine(int row, int stateIndex)
             {
-                if ((uint)row >= (uint)_lines.Length)
+                if ((uint)row >= (uint)LowResOutputHeight)
                 {
                     return;
                 }
 
-                var line = _lines[row];
+                var line = _lines[GetRasterlineRingSlot(row)];
                 if (line.Generation == _generation)
                 {
+                    var expiredRow = line.Row;
                     SegmentCount -= line.SegmentCount;
+                    for (var i = _bitplaneDataSpans.Count - 1; i >= 0; i--)
+                    {
+                        if (_bitplaneDataSpans[i].Row == expiredRow)
+                        {
+                            _bitplaneDataSpans.RemoveAt(i);
+                        }
+                    }
+
+                    for (var i = _spriteFrameCommands.Count - 1; i >= 0; i--)
+                    {
+                        var command = _spriteFrameCommands[i];
+                        if (command.Row <= expiredRow && command.Descriptor.YStop <= expiredRow + 1)
+                        {
+                            _spriteFrameCommands.RemoveAt(i);
+                        }
+                    }
                 }
 
                 line.Clear();
+                line.Row = row;
                 line.Generation = _generation;
                 line.Valid = true;
                 line.Segments.Add(new DisplayLineSegment(0, _lowResWidth, stateIndex));
@@ -3320,13 +3373,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 ushort offset,
                 bool isCopper)
             {
-                if ((uint)row >= (uint)_lines.Length)
+                if ((uint)row >= (uint)LowResOutputHeight)
                 {
                     return;
                 }
 
-                var line = _lines[row];
-                if (line.Generation != _generation || !line.Valid || line.SegmentCount <= 0)
+                var line = _lines[GetRasterlineRingSlot(row)];
+                if (line.Row != row || line.Generation != _generation || !line.Valid || line.SegmentCount <= 0)
                 {
                     return;
                 }
@@ -3350,7 +3403,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     line.Segments.Clear();
                     line.Segments.Add(new DisplayLineSegment(0, _lowResWidth, stateIndex));
                     SegmentCount++;
-                    _planarChunkCache.Clear();
                     return;
                 }
 
@@ -3380,20 +3432,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 line.Segments.Add(new DisplayLineSegment(x, _lowResWidth, stateIndex));
                 SegmentCount++;
-                _planarChunkCache.Clear();
             }
 
             public void RecordBitplaneFetch(int row, int plane, int word, ushort value, bool granted)
             {
-                if ((uint)row >= (uint)_lines.Length ||
+                if ((uint)row >= (uint)LowResOutputHeight ||
                     (uint)plane >= LiveBitplanePlaneCount ||
                     (uint)word >= MaxBitplaneFetchWords)
                 {
                     return;
                 }
 
-                var line = _lines[row];
-                if (line.Generation != _generation || !line.Valid)
+                var line = _lines[GetRasterlineRingSlot(row)];
+                if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return;
                 }
@@ -3414,15 +3465,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public TimelineFetchStatus GetBitplaneFetchStatus(int row, int plane, int word)
             {
-                if ((uint)row >= (uint)_lines.Length ||
+                if ((uint)row >= (uint)LowResOutputHeight ||
                     (uint)plane >= LiveBitplanePlaneCount ||
                     (uint)word >= MaxBitplaneFetchWords)
                 {
                     return TimelineFetchStatus.NotAttempted;
                 }
 
-                var line = _lines[row];
-                if (line.Generation != _generation || !line.Valid)
+                var line = _lines[GetRasterlineRingSlot(row)];
+                if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return TimelineFetchStatus.NotAttempted;
                 }
@@ -3440,20 +3491,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public ushort GetBitplaneWord(int row, int plane, int word)
             {
-                if ((uint)row >= (uint)_lines.Length ||
+                if ((uint)row >= (uint)LowResOutputHeight ||
                     (uint)plane >= LiveBitplanePlaneCount ||
                     (uint)word >= MaxBitplaneFetchWords)
                 {
                     return 0;
                 }
 
-                var line = _lines[row];
-                if (line.Generation != _generation || !line.Valid)
+                var line = _lines[GetRasterlineRingSlot(row)];
+                if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return 0;
                 }
 
-                return _lines[row].BitplaneWords[(plane * MaxBitplaneFetchWords) + word];
+                return line.BitplaneWords[(plane * MaxBitplaneFetchWords) + word];
             }
 
             public void AddSpriteFrameCommand(SpriteFrameCommand command)
@@ -3513,15 +3564,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public void RecordSpriteDataFetch(int row, int spriteIndex, int word, ushort value, bool granted)
             {
-                if ((uint)row >= (uint)_lines.Length ||
+                if ((uint)row >= (uint)LowResOutputHeight ||
                     (uint)spriteIndex >= LiveSpriteChannelCount ||
                     (uint)word >= LiveSpriteWordsPerChannel)
                 {
                     return;
                 }
 
-                var line = _lines[row];
-                if (line.Generation != _generation || !line.Valid)
+                var line = _lines[GetRasterlineRingSlot(row)];
+                if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return;
                 }
@@ -3552,15 +3603,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public TimelineFetchStatus GetSpriteFetchStatus(int row, int spriteIndex, int word)
             {
-                if ((uint)row >= (uint)_lines.Length ||
+                if ((uint)row >= (uint)LowResOutputHeight ||
                     (uint)spriteIndex >= LiveSpriteChannelCount ||
                     (uint)word >= LiveSpriteWordsPerChannel)
                 {
                     return TimelineFetchStatus.NotAttempted;
                 }
 
-                var line = _lines[row];
-                if (line.Generation != _generation || !line.Valid)
+                var line = _lines[GetRasterlineRingSlot(row)];
+                if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return TimelineFetchStatus.NotAttempted;
                 }
@@ -3578,15 +3629,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public ushort GetSpriteWord(int row, int spriteIndex, int word)
             {
-                if ((uint)row >= (uint)_lines.Length ||
+                if ((uint)row >= (uint)LowResOutputHeight ||
                     (uint)spriteIndex >= LiveSpriteChannelCount ||
                     (uint)word >= LiveSpriteWordsPerChannel)
                 {
                     return 0;
                 }
 
-                var line = _lines[row];
-                if (line.Generation != _generation || !line.Valid)
+                var line = _lines[GetRasterlineRingSlot(row)];
+                if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return 0;
                 }
@@ -3594,35 +3645,23 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return line.SpriteWords[(spriteIndex * LiveSpriteWordsPerChannel) + word];
             }
 
-            public bool TryGetPlanarChunk(PlanarChunkKey key, out PlanarChunkDecoded chunk)
+            public void RecordPlanarChunkDecode()
             {
-                if (_planarChunkCache.TryGetValue(key, out var cached))
-                {
-                    chunk = cached;
-                    PlanarChunkCacheHits++;
-                    return true;
-                }
-
-                chunk = default;
                 PlanarChunkCacheMisses++;
-                return false;
-            }
-
-            public void StorePlanarChunk(PlanarChunkKey key, PlanarChunkDecoded chunk)
-            {
-                _planarChunkCache[key] = chunk;
             }
         }
 
         private sealed class DisplayLineTimeline
         {
-            public readonly List<DisplayLineSegment> Segments = new List<DisplayLineSegment>(4);
+            public readonly List<DisplayLineSegment> Segments =
+                new List<DisplayLineSegment>(MaxRasterlinePresentationEvents);
             public readonly ushort[] BitplaneWords = new ushort[LiveBitplaneWordsPerRow];
             public readonly UInt128[] BitplaneFetchMasks = new UInt128[LiveBitplanePlaneCount];
             public readonly UInt128[] BitplaneDeniedMasks = new UInt128[LiveBitplanePlaneCount];
             public readonly ushort[] SpriteWords = new ushort[LiveSpriteWordsPerRow];
             public readonly byte[] SpriteFetchMasks = new byte[LiveSpriteChannelCount];
             public readonly byte[] SpriteDeniedMasks = new byte[LiveSpriteChannelCount];
+            public int Row = -1;
             public int Generation;
             public bool Valid;
             public bool UnsafeForTimelineRender;
@@ -3634,6 +3673,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public void Clear()
             {
                 Segments.Clear();
+                Row = -1;
                 Valid = false;
                 UnsafeForTimelineRender = false;
                 UnsafeOffset = 0;
@@ -3699,10 +3739,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public int FetchSlotStride;
             public int PaletteSnapshotIndex;
             public byte PlaneHasRowMask;
-            public readonly uint[] BitplanePointers = new uint[6];
-            public readonly int[] BitplaneBaseRows = new int[6];
-            public readonly uint[] BitplaneRowAddresses = new uint[6];
-            public readonly ushort[] BitplaneDataRegisters = new ushort[6];
+            public readonly uint[] BitplanePointers = new uint[MaxBitplaneCapacity];
+            public readonly int[] BitplaneBaseRows = new int[MaxBitplaneCapacity];
+            public readonly uint[] BitplaneRowAddresses = new uint[MaxBitplaneCapacity];
+            public readonly int[] BitplaneWordIndexOffsets = new int[MaxBitplaneCapacity];
+            public readonly ushort[] BitplaneDataRegisters = new ushort[MaxBitplaneCapacity];
         }
 
         private enum TimelineFetchStatus : byte
@@ -3710,93 +3751,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             NotAttempted = 0,
             Granted = 1,
             Denied = 2
-        }
-
-        private enum TimelineRejectReason : byte
-        {
-            None = 0,
-            FrameIncomplete,
-            TimelineInvalid,
-            UnsafeWrite,
-            SegmentCapacity,
-            MissingLine,
-            UnsafeLine,
-            MissingBitplaneFetch,
-            MissingSpriteFetch
-        }
-
-        private readonly struct PlanarChunkKey : IEquatable<PlanarChunkKey>
-        {
-            private readonly ushort _bplcon0;
-            private readonly ushort _bplcon2;
-            private readonly byte _planeCount;
-            private readonly bool _dualPlayfield;
-            private readonly byte _planeHasRowMask;
-            private readonly ushort _word0;
-            private readonly ushort _word1;
-            private readonly ushort _word2;
-            private readonly ushort _word3;
-            private readonly ushort _word4;
-            private readonly ushort _word5;
-
-            public PlanarChunkKey(
-                ushort bplcon0,
-                ushort bplcon2,
-                int planeCount,
-                bool dualPlayfield,
-                byte planeHasRowMask,
-                ushort word0,
-                ushort word1,
-                ushort word2,
-                ushort word3,
-                ushort word4,
-                ushort word5)
-            {
-                _bplcon0 = bplcon0;
-                _bplcon2 = bplcon2;
-                _planeCount = (byte)planeCount;
-                _dualPlayfield = dualPlayfield;
-                _planeHasRowMask = planeHasRowMask;
-                _word0 = word0;
-                _word1 = word1;
-                _word2 = word2;
-                _word3 = word3;
-                _word4 = word4;
-                _word5 = word5;
-            }
-
-            public bool Equals(PlanarChunkKey other)
-            {
-                return _bplcon0 == other._bplcon0 &&
-                    _bplcon2 == other._bplcon2 &&
-                    _planeCount == other._planeCount &&
-                    _dualPlayfield == other._dualPlayfield &&
-                    _planeHasRowMask == other._planeHasRowMask &&
-                    _word0 == other._word0 &&
-                    _word1 == other._word1 &&
-                    _word2 == other._word2 &&
-                    _word3 == other._word3 &&
-                    _word4 == other._word4 &&
-                    _word5 == other._word5;
-            }
-
-            public override bool Equals(object? obj)
-            {
-                return obj is PlanarChunkKey other && Equals(other);
-            }
-
-            public override int GetHashCode()
-            {
-                return HashCode.Combine(
-                    _bplcon0,
-                    _bplcon2,
-                    _planeCount,
-                    _dualPlayfield,
-                    _planeHasRowMask,
-                    _word0,
-                    _word1,
-                    HashCode.Combine(_word2, _word3, _word4, _word5));
-            }
         }
 
         private readonly struct PlanarChunkDecoded
@@ -3882,10 +3836,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public short Bpl2Mod;
             public readonly ushort[] Colors = new ushort[32];
             public readonly uint[] ConvertedColors = new uint[64];
-            public readonly uint[] BitplanePointers = new uint[6];
-            public readonly int[] BitplaneBaseRows = new int[6];
-            public readonly ushort[] BitplaneDataRegisters = new ushort[6];
-            public readonly bool[] BitplaneDataRegisterWritten = new bool[6];
+            public readonly uint[] BitplanePointers = new uint[MaxBitplaneCapacity];
+            public readonly int[] BitplaneBaseRows = new int[MaxBitplaneCapacity];
+            public readonly ushort[] BitplaneDataRegisters = new ushort[MaxBitplaneCapacity];
+            public readonly bool[] BitplaneDataRegisterWritten = new bool[MaxBitplaneCapacity];
         }
 
         private sealed class SpriteState
@@ -3911,61 +3865,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 DataB = 0;
                 ManualArmed = false;
             }
-        }
-
-        private readonly struct RowDmaPlan
-        {
-            public RowDmaPlan(
-                int generation,
-                int row,
-                int signature,
-                int bitplaneStart,
-                int bitplaneCount,
-                int spriteStart,
-                int spriteCount,
-                bool valid)
-            {
-                Generation = generation;
-                Row = row;
-                Signature = signature;
-                BitplaneStart = bitplaneStart;
-                BitplaneCount = bitplaneCount;
-                SpriteStart = spriteStart;
-                SpriteCount = spriteCount;
-                Valid = valid;
-            }
-
-            public int Generation { get; }
-
-            public int Row { get; }
-
-            public int Signature { get; }
-
-            public int BitplaneStart { get; }
-
-            public int BitplaneCount { get; }
-
-            public int SpriteStart { get; }
-
-            public int SpriteCount { get; }
-
-            public bool Valid { get; }
-        }
-
-        private readonly struct RowDmaSpriteEntry
-        {
-            public RowDmaSpriteEntry(long cycle, int spriteIndex, int word)
-            {
-                Cycle = cycle;
-                SpriteIndex = spriteIndex;
-                Word = word;
-            }
-
-            public long Cycle { get; }
-
-            public int SpriteIndex { get; }
-
-            public int Word { get; }
         }
 
         private enum LiveRasterlinePlanEventKind : byte
@@ -4047,165 +3946,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public int CursorC => _cursorC;
         }
 
-        private readonly struct LiveRasterlineDmaDescriptor
-        {
-            public LiveRasterlineDmaDescriptor(
-                int generation,
-                int row,
-                long lineStartCycle,
-                long lineStopCycle,
-                bool displayWindowVerticallyOpen,
-                DeniseResolution resolution,
-                DeniseResolution fetchResolution,
-                ushort bplcon0,
-                ushort bplcon1,
-                ushort bplcon2,
-                ushort bplcon3,
-                ushort diwHigh,
-                bool diwHighValid,
-                ushort agnusDiwHigh,
-                bool agnusDiwHighValid,
-                DisplayWindow agnusDisplayWindow,
-                DisplayWindow deniseDisplayWindow,
-                DataFetchWindow dataFetchWindow,
-                ushort dmacon,
-                short bpl1Mod,
-                short bpl2Mod,
-                int planeCount,
-                int fetchWords,
-                int dataFetchStart,
-                int fetchSlotStride,
-                byte planeHasRowMask,
-                uint bitplaneRowAddress0,
-                uint bitplaneRowAddress1,
-                uint bitplaneRowAddress2,
-                uint bitplaneRowAddress3,
-                uint bitplaneRowAddress4,
-                uint bitplaneRowAddress5,
-                bool hasBitplaneFetches,
-                bool hasSpriteSlots)
-            {
-                Generation = generation;
-                Row = row;
-                LineStartCycle = lineStartCycle;
-                LineStopCycle = lineStopCycle;
-                DisplayWindowVerticallyOpen = displayWindowVerticallyOpen;
-                Resolution = resolution;
-                FetchResolution = fetchResolution;
-                Bplcon0 = bplcon0;
-                Bplcon1 = bplcon1;
-                Bplcon2 = bplcon2;
-                Bplcon3 = bplcon3;
-                DiwHigh = diwHigh;
-                DiwHighValid = diwHighValid;
-                AgnusDiwHigh = agnusDiwHigh;
-                AgnusDiwHighValid = agnusDiwHighValid;
-                AgnusDisplayWindow = agnusDisplayWindow;
-                DeniseDisplayWindow = deniseDisplayWindow;
-                DataFetchWindow = dataFetchWindow;
-                Dmacon = dmacon;
-                Bpl1Mod = bpl1Mod;
-                Bpl2Mod = bpl2Mod;
-                PlaneCount = planeCount;
-                FetchWords = fetchWords;
-                DataFetchStart = dataFetchStart;
-                FetchSlotStride = fetchSlotStride;
-                PlaneHasRowMask = planeHasRowMask;
-                BitplaneRowAddress0 = bitplaneRowAddress0;
-                BitplaneRowAddress1 = bitplaneRowAddress1;
-                BitplaneRowAddress2 = bitplaneRowAddress2;
-                BitplaneRowAddress3 = bitplaneRowAddress3;
-                BitplaneRowAddress4 = bitplaneRowAddress4;
-                BitplaneRowAddress5 = bitplaneRowAddress5;
-                HasBitplaneFetches = hasBitplaneFetches;
-                HasSpriteSlots = hasSpriteSlots;
-            }
-
-            public int Generation { get; }
-
-            public int Row { get; }
-
-            public long LineStartCycle { get; }
-
-            public long LineStopCycle { get; }
-
-            public bool DisplayWindowVerticallyOpen { get; }
-
-            public DeniseResolution Resolution { get; }
-
-            public DeniseResolution FetchResolution { get; }
-
-            public ushort Bplcon0 { get; }
-
-            public ushort Bplcon1 { get; }
-
-            public ushort Bplcon2 { get; }
-
-            public ushort Bplcon3 { get; }
-
-            public ushort DiwHigh { get; }
-
-            public bool DiwHighValid { get; }
-
-            public ushort AgnusDiwHigh { get; }
-
-            public bool AgnusDiwHighValid { get; }
-
-            public DisplayWindow AgnusDisplayWindow { get; }
-
-            public DisplayWindow DeniseDisplayWindow { get; }
-
-            public DataFetchWindow DataFetchWindow { get; }
-
-            public ushort Dmacon { get; }
-
-            public short Bpl1Mod { get; }
-
-            public short Bpl2Mod { get; }
-
-            public int PlaneCount { get; }
-
-            public int FetchWords { get; }
-
-            public int DataFetchStart { get; }
-
-            public int FetchSlotStride { get; }
-
-            public byte PlaneHasRowMask { get; }
-
-            public uint BitplaneRowAddress0 { get; }
-
-            public uint BitplaneRowAddress1 { get; }
-
-            public uint BitplaneRowAddress2 { get; }
-
-            public uint BitplaneRowAddress3 { get; }
-
-            public uint BitplaneRowAddress4 { get; }
-
-            public uint BitplaneRowAddress5 { get; }
-
-            public bool HasBitplaneFetches { get; }
-
-            public bool HasSpriteSlots { get; }
-
-            public bool IsValid(int generation, int row)
-                => Generation == generation && Row == row;
-
-            public uint GetBitplaneRowAddress(int plane)
-            {
-                return plane switch
-                {
-                    0 => BitplaneRowAddress0,
-                    1 => BitplaneRowAddress1,
-                    2 => BitplaneRowAddress2,
-                    3 => BitplaneRowAddress3,
-                    4 => BitplaneRowAddress4,
-                    5 => BitplaneRowAddress5,
-                    _ => 0
-                };
-            }
-        }
     }
 
     internal readonly struct OcsLiveDmaScratchCpuWrite
@@ -4400,7 +4140,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int lastTimelineMissingBitplaneFallbackCount,
             int lastTimelineSpriteCommandCount,
             int lastActiveTimelineFrameCount,
-            int lastArchivedTimelineFrameCount,
             int lastPlanarChunkCacheHits,
             int lastPlanarChunkCacheMisses,
             int lastTimelineCoalescedSegmentCount,
@@ -4429,13 +4168,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int lastPredictedRasterlinePlanUnsupportedSpriteLines,
             int lastPredictedRasterlinePlanUnsupportedInvalidStateLines,
             int lastPredictedRasterlinePlanUnsupportedOverflowLines,
-            int lastRasterlineDescriptorBuilds,
-            int lastRasterlineDescriptorReplayAttempts,
-            int lastRasterlineDescriptorReplayedRows,
-            int lastRasterlineDescriptorFallbackRows,
-            int lastRasterlineDescriptorBitplaneRows,
-            int lastRasterlineDescriptorSpriteRows,
-            int lastRasterlineDescriptorMismatches,
             int lastRowDmaPlansBuilt,
             int lastRowDmaPlannedRowsExecuted,
             int lastRowDmaBitplaneEntriesExecuted,
@@ -4448,30 +4180,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             long copperQuiescentMaxCycles,
             long copperQuiescentActiveStartCycle,
             long copperQuiescentActiveEndCycle,
-            int lastArchiveRejectFrameIncomplete,
-            int lastArchiveRejectTimelineInvalid,
-            int lastArchiveRejectUnsafeWrite,
-            int lastArchiveRejectSegmentCapacity,
-            int lastArchiveRejectMissingLine,
-            int lastArchiveRejectUnsafeLine,
-            int lastArchiveRejectMissingBitplaneFetch,
-            int lastArchiveRejectMissingSpriteFetch,
-            ushort lastArchiveRejectUnsafeOffset,
-            bool lastArchiveRejectUnsafeIsCopper,
-            int lastArchiveRejectMissingSpriteIndex,
-            int lastArchiveRejectMissingSpriteRow,
-            int lastArchiveRejectMissingSpriteWord,
-            int lastArchiveRejectMissingSpriteStatusA,
-            int lastArchiveRejectMissingSpriteStatusB,
-            int lastArchiveRejectMissingSpriteCommandRow,
-            int lastArchiveRejectMissingSpriteYStart,
-            int lastArchiveRejectMissingSpriteYStop,
-            int lastArchiveRejectMissingSpriteUsableChannels,
-            int lastArchiveRejectMissingSpriteDdfStart,
-            ushort lastArchiveRejectMissingSpriteDmacon,
-            ushort lastArchiveRejectMissingSpriteBplcon0,
-            int lastArchiveRejectMissingSpritePreviousStatusA,
-            int lastArchiveRejectMissingSpritePreviousStatusB,
             ushort agnusDiwHigh,
             bool agnusDiwHighValid,
             DisplayWindow agnusDisplayWindow,
@@ -4531,7 +4239,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             LastTimelineMissingBitplaneFallbackCount = lastTimelineMissingBitplaneFallbackCount;
             LastTimelineSpriteCommandCount = lastTimelineSpriteCommandCount;
             LastActiveTimelineFrameCount = lastActiveTimelineFrameCount;
-            LastArchivedTimelineFrameCount = lastArchivedTimelineFrameCount;
             LastPlanarChunkCacheHits = lastPlanarChunkCacheHits;
             LastPlanarChunkCacheMisses = lastPlanarChunkCacheMisses;
             LastTimelineCoalescedSegmentCount = lastTimelineCoalescedSegmentCount;
@@ -4560,13 +4267,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             LastPredictedRasterlinePlanUnsupportedSpriteLines = lastPredictedRasterlinePlanUnsupportedSpriteLines;
             LastPredictedRasterlinePlanUnsupportedInvalidStateLines = lastPredictedRasterlinePlanUnsupportedInvalidStateLines;
             LastPredictedRasterlinePlanUnsupportedOverflowLines = lastPredictedRasterlinePlanUnsupportedOverflowLines;
-            LastRasterlineDescriptorBuilds = lastRasterlineDescriptorBuilds;
-            LastRasterlineDescriptorReplayAttempts = lastRasterlineDescriptorReplayAttempts;
-            LastRasterlineDescriptorReplayedRows = lastRasterlineDescriptorReplayedRows;
-            LastRasterlineDescriptorFallbackRows = lastRasterlineDescriptorFallbackRows;
-            LastRasterlineDescriptorBitplaneRows = lastRasterlineDescriptorBitplaneRows;
-            LastRasterlineDescriptorSpriteRows = lastRasterlineDescriptorSpriteRows;
-            LastRasterlineDescriptorMismatches = lastRasterlineDescriptorMismatches;
             LastRowDmaPlansBuilt = lastRowDmaPlansBuilt;
             LastRowDmaPlannedRowsExecuted = lastRowDmaPlannedRowsExecuted;
             LastRowDmaBitplaneEntriesExecuted = lastRowDmaBitplaneEntriesExecuted;
@@ -4579,30 +4279,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             CopperQuiescentMaxCycles = copperQuiescentMaxCycles;
             CopperQuiescentActiveStartCycle = copperQuiescentActiveStartCycle;
             CopperQuiescentActiveEndCycle = copperQuiescentActiveEndCycle;
-            LastArchiveRejectFrameIncomplete = lastArchiveRejectFrameIncomplete;
-            LastArchiveRejectTimelineInvalid = lastArchiveRejectTimelineInvalid;
-            LastArchiveRejectUnsafeWrite = lastArchiveRejectUnsafeWrite;
-            LastArchiveRejectSegmentCapacity = lastArchiveRejectSegmentCapacity;
-            LastArchiveRejectMissingLine = lastArchiveRejectMissingLine;
-            LastArchiveRejectUnsafeLine = lastArchiveRejectUnsafeLine;
-            LastArchiveRejectMissingBitplaneFetch = lastArchiveRejectMissingBitplaneFetch;
-            LastArchiveRejectMissingSpriteFetch = lastArchiveRejectMissingSpriteFetch;
-            LastArchiveRejectUnsafeOffset = lastArchiveRejectUnsafeOffset;
-            LastArchiveRejectUnsafeIsCopper = lastArchiveRejectUnsafeIsCopper;
-            LastArchiveRejectMissingSpriteIndex = lastArchiveRejectMissingSpriteIndex;
-            LastArchiveRejectMissingSpriteRow = lastArchiveRejectMissingSpriteRow;
-            LastArchiveRejectMissingSpriteWord = lastArchiveRejectMissingSpriteWord;
-            LastArchiveRejectMissingSpriteStatusA = lastArchiveRejectMissingSpriteStatusA;
-            LastArchiveRejectMissingSpriteStatusB = lastArchiveRejectMissingSpriteStatusB;
-            LastArchiveRejectMissingSpriteCommandRow = lastArchiveRejectMissingSpriteCommandRow;
-            LastArchiveRejectMissingSpriteYStart = lastArchiveRejectMissingSpriteYStart;
-            LastArchiveRejectMissingSpriteYStop = lastArchiveRejectMissingSpriteYStop;
-            LastArchiveRejectMissingSpriteUsableChannels = lastArchiveRejectMissingSpriteUsableChannels;
-            LastArchiveRejectMissingSpriteDdfStart = lastArchiveRejectMissingSpriteDdfStart;
-            LastArchiveRejectMissingSpriteDmacon = lastArchiveRejectMissingSpriteDmacon;
-            LastArchiveRejectMissingSpriteBplcon0 = lastArchiveRejectMissingSpriteBplcon0;
-            LastArchiveRejectMissingSpritePreviousStatusA = lastArchiveRejectMissingSpritePreviousStatusA;
-            LastArchiveRejectMissingSpritePreviousStatusB = lastArchiveRejectMissingSpritePreviousStatusB;
             AgnusDiwHigh = agnusDiwHigh;
             AgnusDiwHighValid = agnusDiwHighValid;
             AgnusDisplayWindow = agnusDisplayWindow;
@@ -4783,20 +4459,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         public int LastPredictedRasterlinePlanUnsupportedInvalidStateLines { get; }
 
         public int LastPredictedRasterlinePlanUnsupportedOverflowLines { get; }
-
-        public int LastRasterlineDescriptorBuilds { get; }
-
-        public int LastRasterlineDescriptorReplayAttempts { get; }
-
-        public int LastRasterlineDescriptorReplayedRows { get; }
-
-        public int LastRasterlineDescriptorFallbackRows { get; }
-
-        public int LastRasterlineDescriptorBitplaneRows { get; }
-
-        public int LastRasterlineDescriptorSpriteRows { get; }
-
-        public int LastRasterlineDescriptorMismatches { get; }
 
         public int LastRowDmaPlansBuilt { get; }
 

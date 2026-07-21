@@ -362,15 +362,15 @@ namespace CopperMod.Cust
 
         private void InstallHostEnvironment()
         {
-            Bus.RegisterHostTrapStub(_hostGetListDataAddress, HostGetListData);
-            Bus.RegisterHostTrapStub(_hostOkAddress, HostOk);
-            Bus.RegisterHostTrapStub(_hostSongEndAddress, HostSongEnd);
-            Bus.RegisterHostTrapStub(_hostResetPathAddress, HostResetPath);
-            Bus.RegisterHostTrapStub(_hostAppendPathOrOkAddress, HostAppendPathOrOk);
-            Bus.RegisterHostTrapStub(_hostAudioAllocAddress, HostAudioAlloc);
-            Bus.RegisterHostTrapStub(_hostAudioFreeAddress, HostAudioFree);
-            Bus.RegisterHostTrapStub(_hostWaitAudioDmaAddress, HostWaitAudioDma);
-            Bus.RegisterHostTrapStub(_hostNoOpAddress, HostNoOp);
+            Bus.RegisterHostGateway(_hostGetListDataAddress, HostGetListData);
+            Bus.RegisterHostGateway(_hostOkAddress, HostOk);
+            Bus.RegisterHostGateway(_hostSongEndAddress, HostSongEnd);
+            Bus.RegisterHostGateway(_hostResetPathAddress, HostResetPath);
+            Bus.RegisterHostGateway(_hostAppendPathOrOkAddress, HostAppendPathOrOk);
+            Bus.RegisterHostGateway(_hostAudioAllocAddress, HostAudioAlloc);
+            Bus.RegisterHostGateway(_hostAudioFreeAddress, HostAudioFree);
+            Bus.RegisterHostGateway(_hostWaitAudioDmaAddress, HostWaitAudioDma);
+            Bus.RegisterHostGateway(_hostNoOpAddress, HostNoOp);
             Machine.Kickstart.Install(
                 Bus,
                 new KickstartTrapTable(

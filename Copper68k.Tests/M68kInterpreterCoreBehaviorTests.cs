@@ -1040,6 +1040,31 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(targetExtension.RequestedCycle, recognition.LastInterruptSampleCycle);
 		Assert.True(recognition.LastInterruptSampleCycle < targetExtension.CompletedCycle);
 	}
+
+	[Fact]
+	public void InterruptEntryDoesNotStartBeforeCommittedInterruptSampleCompletes()
+	{
+		var bus = new CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x1002,
+			DelayedInstructionFetchOccurrence = 2,
+			DelayedInstructionFetchCycles = 16
+		};
+		Write(bus.Memory, 0x1000, Words(0x60FE)); // BRA.S self
+		Write(bus.Memory, 0x006C, Words(0x0000, 0x2000));
+		Write(bus.Memory, 0x2000, Words(0x4E71, 0x4E71));
+		var cpu = CreateCycleParityCpu(bus, enableOpcodePlan: true, M68kOpcodePlanDispatch.PackedPlan);
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		cpu.ExecuteInstruction();
+		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
+		var sampleCycle = recognition.LastInterruptSampleCycle;
+
+		cpu.RequestInterrupt(3, (24u + 3u) * 4u);
+
+		var firstExceptionTransfer = bus.CpuBusPhases.First(phase =>
+			phase.AccessKind == M68kBusAccessKind.CpuDataWrite);
+		Assert.True(firstExceptionTransfer.RequestedCycle >= sampleCycle + 2);
+	}
 	[Theory]
 	[InlineData((int)M68kOpcodePlanDispatch.KindTable)]
 	[InlineData((int)M68kOpcodePlanDispatch.PackedPlan)]

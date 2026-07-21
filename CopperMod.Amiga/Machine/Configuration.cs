@@ -609,12 +609,15 @@ namespace CopperMod.Amiga.Runtime
                 return false;
             }
 
-			var acceptanceCycle = Cpu.State.Cycles;
+			var interruptRecognition = Cpu as IM68000InterruptRecognition;
+			var acceptanceCycle = interruptRecognition?.LastInterruptSampleCycle is long sampleCycle &&
+				sampleCycle != long.MinValue
+				? Math.Max(Cpu.State.Cycles, sampleCycle + 2)
+				: Cpu.State.Cycles;
             var interruptedProgramCounter = Cpu.State.ProgramCounter;
             var savedStatusRegister = Cpu.State.StatusRegister;
 			var activeInterruptBits = Bus.Paula.ActiveInterruptBits;
 			var cpuVisibleCycle = Bus.Paula.GetCpuInterruptReleaseCycleForLevel(level, acceptanceCycle) ?? acceptanceCycle;
-			var interruptRecognition = Cpu as IM68000InterruptRecognition;
 			if (interruptRecognition != null &&
 				!interruptRecognition.HasRecognizedInterrupt(cpuVisibleCycle))
 			{

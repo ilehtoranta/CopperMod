@@ -1,5 +1,6 @@
 using CopperMod.Amiga;
 using CopperScreen;
+using System.Diagnostics;
 
 namespace CopperScreen.Tests;
 
@@ -68,29 +69,27 @@ public sealed class CopperScreenPresentationFrameTests
 	}
 
 	[Fact]
-	public void CrtFlickerDimsInactiveFieldRowsAndLeavesActiveFieldRowsBright()
+	public void CrtPhosphorAllocatesOnlyWhenAnInterlacedFieldIsSubmittedAndDecaysBetweenTicks()
 	{
+		var phosphor = new CrtPhosphorComposer();
+		Assert.False(phosphor.HasBuffers);
 		var active = unchecked((int)0xFF204080);
-		var inactive = unchecked((int)0xFFE0A040);
 		var fieldHistory = new int[]
 		{
-			inactive, inactive, inactive, inactive,
 			active, active, active, active,
-			inactive, inactive, inactive, inactive,
+			active, active, active, active,
+			active, active, active, active,
 			active, active, active, active
 		};
-		var output = new int[fieldHistory.Length];
 
-		CopperScreenEmulator.ComposeCrtFlickerInterlaceFrame(fieldHistory, output, width: 4, height: 4, interlaceField: 1);
-
-		var dimInactive = unchecked((int)0xFF705020);
-		Assert.Equal(new[]
-		{
-			dimInactive, dimInactive, dimInactive, dimInactive,
-			active, active, active, active,
-			dimInactive, dimInactive, dimInactive, dimInactive,
-			active, active, active, active
-		}, output);
+		var timestamp = Stopwatch.GetTimestamp();
+		phosphor.SubmitField(fieldHistory, width: 4, height: 4, interlaceField: 1, fieldDurationSeconds: 1.0 / 50.0, timestamp);
+		Assert.True(phosphor.HasBuffers);
+		var beforeDecay = phosphor.Output[4];
+		phosphor.Advance(timestamp + Stopwatch.Frequency / 20);
+		Assert.True((uint)phosphor.Output[4] < (uint)beforeDecay);
+		phosphor.Reset();
+		Assert.False(phosphor.HasBuffers);
 	}
 
 	private static T GetPrivateField<T>(object instance, string fieldName)

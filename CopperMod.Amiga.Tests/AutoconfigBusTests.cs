@@ -160,18 +160,18 @@ public sealed class AutoconfigBusTests
 		state.A[2] = copyBase;
 		state.A[6] = execBase;
 		var diagPoint = copyBase + (uint)CyberGraphicsRtgFirmware.DiagPointOffset;
-		Assert.True(bus.TryInvokeHostTrap(diagPoint, bus.ReadWord(diagPoint + 2), state));
+		Assert.True(bus.TryInvokeHostGateway(diagPoint, bus.ReadLong(diagPoint + 2), state));
 		Assert.Equal(1u, state.D[0]);
 
 		var resident = copyBase + (uint)CyberGraphicsRtgFirmware.ResidentOffset;
 		var residentInit = bus.ReadLong(resident + 0x16);
-		Assert.True(bus.TryInvokeHostTrap(residentInit, bus.ReadWord(residentInit + 2), state));
+		Assert.True(bus.TryInvokeHostGateway(residentInit, bus.ReadLong(residentInit + 2), state));
 
 		var libraryBase = copyBase + (uint)CyberGraphicsRtgFirmware.LibraryBaseOffset;
 		Assert.True(firmware.ResidentInstalled);
 		Assert.Equal(libraryBase, firmware.LibraryBase);
 		Assert.Equal(libraryBase, state.D[0]);
-		Assert.True(bus.HasHostTrapStub(unchecked(libraryBase - 54u)));
+		Assert.True(bus.HasHostGateway(unchecked(libraryBase - 54u)));
 		Assert.Equal(libraryBase, bus.ReadLong(execBase + 0x17A));
 	}
 

@@ -257,7 +257,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                 vectorAddress,
                 originalTarget);
             _patches.Add(key, saved);
-            _bus.RegisterHostTrapStub(vectorAddress, state => Dispatch(module, saved, state));
+            _bus.RegisterHostGateway(vectorAddress, state => Dispatch(module, saved, state));
             return true;
         }
 

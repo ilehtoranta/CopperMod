@@ -89,11 +89,11 @@ public sealed class AmigaCopperConformanceMatrixTests
             case "Copper MOVE can request INTREQ":
                 CopperMoveCanRequestIntreq();
                 break;
-            case "presentation Copper replay does not request INTREQ":
-                PresentationCopperReplayDoesNotRequestIntreq();
+            case "live Copper presentation requests INTREQ":
+                LiveCopperPresentationRequestsIntreq();
                 break;
-            case "live Copper INTREQ does not invalidate presentation timeline":
-                LiveCopperIntreqDoesNotInvalidatePresentationTimeline();
+            case "live Copper INTREQ renders causally":
+                LiveCopperIntreqRendersCausally();
                 break;
             case "COPxLC high word masks unused DMA bits":
                 CopperLocationHighWordMasksUnusedDmaBits();
@@ -142,8 +142,8 @@ public sealed class AmigaCopperConformanceMatrixTests
         Executable("undocumented-ocs", "SKIP-suppressed dangerous MOVE stops Copper"),
         Executable("blitter-wait", "BFD set ignores blitter busy"),
         Executable("interrupts", "Copper MOVE can request INTREQ"),
-        Executable("interrupts", "presentation Copper replay does not request INTREQ"),
-        Executable("interrupts", "live Copper INTREQ does not invalidate presentation timeline"),
+        Executable("interrupts", "live Copper presentation requests INTREQ"),
+        Executable("interrupts", "live Copper INTREQ renders causally"),
         Executable("register-masking", "COPxLC high word masks unused DMA bits"),
         Executable("restricted-registers", "Copper danger register protection via COPCON"),
         Executable("restricted-registers", "MOVE to always-protected register stops Copper"),
@@ -158,9 +158,9 @@ public sealed class AmigaCopperConformanceMatrixTests
         WriteCopperList(bus, CopperList, (0x0180, 0x00F0), (0xFFFF, 0xFFFE));
 
         new AmigaCopper().ExecuteList(bus, CopperList);
-        var frame = RenderLowResFrame(bus);
+        bus.AdvanceDmaTo(64);
 
-        Assert.Equal(0xFF00FF00u, frame[0]);
+        Assert.Equal(0x00F0, bus.Display.CaptureSnapshot().Colors[0]);
     }
 
     private static void EndStopsListExecution()
@@ -169,9 +169,9 @@ public sealed class AmigaCopperConformanceMatrixTests
         WriteCopperList(bus, CopperList, (0x0180, 0x0F00), (0xFFFF, 0xFFFE), (0x0180, 0x00F0));
 
         new AmigaCopper().ExecuteList(bus, CopperList);
-        var frame = RenderLowResFrame(bus);
+        bus.AdvanceDmaTo(64);
 
-        Assert.Equal(0xFFFF0000u, frame[0]);
+        Assert.Equal(0x0F00, bus.Display.CaptureSnapshot().Colors[0]);
     }
 
     private static void Cop1LcStartsDisplayCopperList()
@@ -211,7 +211,8 @@ public sealed class AmigaCopperConformanceMatrixTests
         WriteCopperList(bus, CopperList, (0x0180, 0x0F00), (0xFFFF, 0xFFFE));
         SetCopperPointer(bus, 1, CopperList);
 
-        var frame = RenderLowResFrame(bus, 0, frameCycles);
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        bus.Display.RenderFrame(frame, 0, frameCycles, enableDefaultDma: false);
         Assert.Equal(0xFF000000u, frame[0]);
 
         bus.WriteWord(0x00DFF096, 0x8280, frameCycles);
@@ -390,7 +391,7 @@ public sealed class AmigaCopperConformanceMatrixTests
         Assert.Equal(3, bus.Paula.GetHighestPendingInterruptLevel());
     }
 
-    private static void PresentationCopperReplayDoesNotRequestIntreq()
+    private static void LiveCopperPresentationRequestsIntreq()
     {
         var bus = CreateCopperComponentBus();
         WriteCopperList(
@@ -401,17 +402,18 @@ public sealed class AmigaCopperConformanceMatrixTests
             (0xFFFF, 0xFFFE));
         bus.WriteWord(0x00DFF09A, (ushort)(0xC000 | AmigaConstants.IntreqCopper));
         SetCopperPointer(bus, 1, CopperList);
-        var writesBeforeRender = bus.CustomRegisterWrites.Count;
-
         var frame = RenderLowResFrame(bus);
-        bus.Paula.AdvanceTo(10);
+        bus.Paula.AdvanceTo(FrameCycles());
 
-        Assert.Equal(writesBeforeRender, bus.CustomRegisterWrites.Count);
-        Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqCopper);
+        Assert.Single(
+            bus.CustomRegisterWrites,
+            write => write.Address == 0x09C &&
+                (write.Value & AmigaConstants.IntreqCopper) != 0);
+        Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqCopper);
         Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 0));
     }
 
-    private static void LiveCopperIntreqDoesNotInvalidatePresentationTimeline()
+    private static void LiveCopperIntreqRendersCausally()
     {
         var bus = CreateSlotCopperBus();
         WriteCopperList(
@@ -425,10 +427,19 @@ public sealed class AmigaCopperConformanceMatrixTests
         bus.WriteWord(0x00DFF09A, (ushort)(0xC000 | AmigaConstants.IntreqCopper));
         SetCopperPointer(bus, 1, CopperList);
         bus.WriteWord(0x00DFF096, 0x8280);
-        bus.AdvanceDmaTo(FrameCycles());
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        bus.Display.BeginPresentationFrame(new PresentationFrameTarget(frame), 0, FrameCycles());
+        try
+        {
+            bus.AdvanceDmaTo(FrameCycles() - 1);
+            bus.Display.CompletePresentationFrame(FrameCycles());
+        }
+        catch
+        {
+            bus.Display.AbortPresentationFrame();
+            throw;
+        }
 
-        var frame = RenderLowResFrame(bus, 0, FrameCycles());
-        var snapshot = bus.Display.CaptureSnapshot();
         var triggerY = 0x2F - (0x2C - AmigaConstants.PalLowResOverscanBorderY);
         var triggerX = (0x40 - 0x38) * 2;
 
@@ -437,10 +448,6 @@ public sealed class AmigaCopperConformanceMatrixTests
             write => write.Address == 0x09C &&
                 (write.Value & AmigaConstants.IntreqCopper) != 0);
         Assert.Equal(0xFFFF0000u, Pixel(frame, triggerX + 64, triggerY));
-        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeLine);
-        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-        Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
     }
 
     private static void CopperLocationHighWordMasksUnusedDmaBits()
@@ -475,14 +482,16 @@ public sealed class AmigaCopperConformanceMatrixTests
         Assert.DoesNotContain((ushort)0x0010, moves);
         Assert.Empty(moves);
 
+        var enabledBus = CreateCopperComponentBus();
+        moves.Clear();
         WriteCopperList(
-            bus,
+            enabledBus,
             CopperList,
             (0x002E, 0x0002),
             (0x0010, 0x3333),
             (0xFFFF, 0xFFFE));
 
-        new AmigaCopper().ExecuteList(bus, CopperList, onMove: (offset, _) => moves.Add(offset));
+        new AmigaCopper().ExecuteList(enabledBus, CopperList, onMove: (offset, _) => moves.Add(offset));
 
         Assert.Contains((ushort)0x002E, moves);
         Assert.Contains((ushort)0x0010, moves);
@@ -589,14 +598,14 @@ public sealed class AmigaCopperConformanceMatrixTests
 
     private static void StartLongBlit(AmigaBus bus)
     {
-        bus.WriteWord(0x00DFF040, 0x09F0, 0);
-        bus.WriteWord(0x00DFF042, 0x0000, 0);
-        bus.WriteWord(0x00DFF050, 0x0000, 0);
-        bus.WriteWord(0x00DFF052, 0x3000, 0);
-        bus.WriteWord(0x00DFF054, 0x0000, 0);
-        bus.WriteWord(0x00DFF056, 0x4000, 0);
-        bus.WriteWord(0x00DFF096, 0x8240, 0);
-        bus.WriteWord(0x00DFF058, (ushort)((8 << 6) | 8), 0);
+        bus.WriteWord(0x00DFF040, 0x09F0);
+        bus.WriteWord(0x00DFF042, 0x0000);
+        bus.WriteWord(0x00DFF050, 0x0000);
+        bus.WriteWord(0x00DFF052, 0x3000);
+        bus.WriteWord(0x00DFF054, 0x0000);
+        bus.WriteWord(0x00DFF056, 0x4000);
+        bus.WriteWord(0x00DFF096, 0x8240);
+        bus.WriteWord(0x00DFF058, (ushort)((8 << 6) | 8));
     }
 
     private static void WriteCopperList(AmigaBus bus, uint address, params (ushort First, ushort Second)[] instructions)
@@ -642,7 +651,7 @@ public sealed class AmigaCopperConformanceMatrixTests
     private static AmigaBus CreateCopperComponentBus()
     {
         return new AmigaBus(
-            enableLiveAgnusDma: false);
+            enableLiveAgnusDma: true);
     }
 
     private static AmigaBus CreateSlotCopperBus()

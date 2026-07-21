@@ -115,6 +115,15 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	public int Height { get; }
 
+	internal bool IsInterlaced => _machine.Bus.Display.InterlaceEnabled;
+
+	internal int CompletedInterlaceField { get; private set; }
+
+	internal CopperScreenPresentationGeometry PresentationGeometry
+		=> CopperScreenPresentationGeometry.FromRasterTiming(
+			_machine.Bus.RasterTiming,
+			_machine.Bus.Display.Width == _machine.Bus.RasterTiming.PresentationSuperHighResWidth);
+
 	public int[] Framebuffer { get; }
 
 	internal CopperScreenEmulatorFrameTiming LastFrameTiming { get; private set; }
@@ -1253,9 +1262,22 @@ internal sealed class CopperScreenEmulator : IDisposable
 		var frameTargetCycle = GetPresentationFrameStopCycle(frameStartCycle);
 		_targetCycle = frameTargetCycle;
 		var executionTargetCycle = GetBootExecutionTargetCycle(frameTargetCycle);
-		_executionBoundarySchedule.BeginExecution(frameStartCycle, frameTargetCycle);
-		AmigaBootResult result;
-		var cpuStart = Stopwatch.GetTimestamp();
+		var presentationBound = false;
+		var presentationInterlace = false;
+		if (renderPresentation)
+		{
+			presentationInterlace = BeginPresentationFrame(
+				frameStartCycle,
+				frameTargetCycle,
+				presentationFramebuffer);
+			presentationBound = true;
+		}
+
+		try
+		{
+			_executionBoundarySchedule.BeginExecution(frameStartCycle, frameTargetCycle);
+			AmigaBootResult result;
+			var cpuStart = Stopwatch.GetTimestamp();
 		if (_copperStartRuntimeHandoff)
 		{
 			result = _boot.ContinueCopperStartRuntimeUntilCycle(
@@ -1281,6 +1303,8 @@ internal sealed class CopperScreenEmulator : IDisposable
 		{
 			if (renderPresentation)
 			{
+				_machine.Bus.Display.AbortPresentationFrame();
+				presentationBound = false;
 				var displayStart = Stopwatch.GetTimestamp();
 				RenderStatusFrame(StatusText, presentationFramebuffer);
 				LastFrameTiming = LastFrameTiming with
@@ -1312,7 +1336,12 @@ internal sealed class CopperScreenEmulator : IDisposable
 		if (renderPresentation)
 		{
 			var displayStart = Stopwatch.GetTimestamp();
-			RenderPresentationFrame(frameStartCycle, presentationFrameStopCycle, presentationFramebuffer);
+			CompletePresentationFrame(
+				frameStartCycle,
+				presentationFrameStopCycle,
+				presentationFramebuffer,
+				presentationInterlace);
+			presentationBound = false;
 			if (_boot.TryGetRtgComposition(out var composition))
 			{
 				_ = TryRenderRtgPresentation(presentationFramebuffer, composition);
@@ -1324,6 +1353,14 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		_executionBoundarySchedule.CompleteFrame();
+		}
+		finally
+		{
+			if (presentationBound)
+			{
+				_machine.Bus.Display.AbortPresentationFrame();
+			}
+		}
 	}
 
 	private bool TryRenderRtgPresentation(
@@ -1715,27 +1752,33 @@ internal sealed class CopperScreenEmulator : IDisposable
 			: "inserted " + _diskName;
 	}
 
-	private void RenderPresentationFrame(long frameStartCycle, long frameEndCycle)
-		=> RenderPresentationFrame(frameStartCycle, frameEndCycle, Framebuffer);
-
-	private void RenderPresentationFrame(long frameStartCycle, long frameEndCycle, int[] framebuffer)
+	private bool BeginPresentationFrame(long frameStartCycle, long frameEndCycle, int[] framebuffer)
 	{
 		ValidatePresentationFramebuffer(framebuffer);
-		if (!_machine.Bus.Display.InterlaceEnabled)
+		var interlace = _machine.Bus.Display.InterlaceEnabled;
+		var target = interlace ? _interlacePresentationFrame : framebuffer;
+		if (!interlace)
 		{
 			InvalidateInterlacePresentationHistory();
-			_machine.Bus.Display.RenderFrame(
-				MemoryMarshal.Cast<int, uint>(framebuffer.AsSpan()),
-				frameStartCycle,
-				frameEndCycle);
+		}
+
+		_machine.Bus.Display.BeginPresentationFrame(
+			new PresentationFrameTarget(target),
+			frameStartCycle,
+			frameEndCycle);
+		return interlace;
+	}
+
+	private void CompletePresentationFrame(long frameStartCycle, long frameEndCycle, int[] framebuffer, bool interlace)
+	{
+		_machine.Bus.Display.CompletePresentationFrame(frameEndCycle);
+		if (!interlace)
+		{
 			return;
 		}
 
-		_machine.Bus.Display.RenderFrame(
-			MemoryMarshal.Cast<int, uint>(_interlacePresentationFrame.AsSpan()),
-			frameStartCycle,
-			frameEndCycle);
 		var interlaceField = GetPresentationFrameNumber(frameStartCycle) & 1;
+		CompletedInterlaceField = interlaceField;
 		if (!_interlacePresentationFrameValid)
 		{
 			SeedMissingInterlaceFieldRows(
@@ -1755,20 +1798,9 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private void ComposeInterlacePresentationFrame(int interlaceField, int[] framebuffer)
 	{
 		ValidatePresentationFramebuffer(framebuffer);
-		switch (_presentationOptions.LacedMode)
-		{
-			case CopperScreenLacedPresentationMode.CrtFlicker:
-				ComposeCrtFlickerInterlaceFrame(
-					_interlacePresentationFrame,
-					framebuffer,
-					_machine.Bus.Display.Width,
-					_machine.Bus.Display.Height,
-					interlaceField);
-				break;
-			default:
-				_interlacePresentationFrame.AsSpan().CopyTo(framebuffer);
-				break;
-		}
+		// The host-side phosphor presenter needs the undimmed latest rows from both
+		// fields. Stable weave uses this image directly; CRT phosphor composes it later.
+		_interlacePresentationFrame.AsSpan().CopyTo(framebuffer);
 	}
 
 	private void StabilizeInterlaceFrame()
@@ -1781,6 +1813,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 		Framebuffer.AsSpan().CopyTo(_interlacePresentationFrame);
 		var interlaceField = GetCompletedPresentationFrameNumber(_targetCycle) & 1;
+		CompletedInterlaceField = interlaceField;
 		if (!_interlacePresentationFrameValid)
 		{
 			SeedMissingInterlaceFieldRows(
@@ -1815,46 +1848,6 @@ internal sealed class CopperScreenEmulator : IDisposable
 			var targetOffset = missingRow * width;
 			interlaceFrame.Slice(sourceOffset, width).CopyTo(interlaceFrame.Slice(targetOffset, width));
 		}
-	}
-
-	internal static void ComposeCrtFlickerInterlaceFrame(
-		ReadOnlySpan<int> fieldHistory,
-		Span<int> framebuffer,
-		int width,
-		int height,
-		int interlaceField)
-	{
-		System.Diagnostics.Debug.Assert((width & 1) == 0);
-		System.Diagnostics.Debug.Assert((height & 1) == 0);
-		System.Diagnostics.Debug.Assert((interlaceField & ~1) == 0);
-		System.Diagnostics.Debug.Assert(fieldHistory.Length >= width * height);
-		System.Diagnostics.Debug.Assert(framebuffer.Length >= width * height);
-
-		for (var y = 0; y < height; y++)
-		{
-			var offset = y * width;
-			var source = fieldHistory.Slice(offset, width);
-			var destination = framebuffer.Slice(offset, width);
-			if ((y & 1) == interlaceField)
-			{
-				source.CopyTo(destination);
-				continue;
-			}
-
-			for (var x = 0; x < width; x++)
-			{
-				destination[x] = DimOpaquePixel50(source[x]);
-			}
-		}
-	}
-
-	private static int DimOpaquePixel50(int pixel)
-	{
-		var value = unchecked((uint)pixel);
-		var r = ((value >> 16) & 0xFF) >> 1;
-		var g = ((value >> 8) & 0xFF) >> 1;
-		var blue = (value & 0xFF) >> 1;
-		return unchecked((int)(0xFF00_0000u | (r << 16) | (g << 8) | blue));
 	}
 
 	private void AdvanceInputPulse()

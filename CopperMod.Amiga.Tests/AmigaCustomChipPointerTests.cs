@@ -52,7 +52,7 @@ public sealed class AmigaCustomChipPointerTests
     {
         var bus = CreateBus(ecsAgnus, chipRamSize);
 
-        for (var plane = 0; plane < 6; plane++)
+        for (var plane = 0; plane < 8; plane++)
         {
             WritePointer(bus, 0x0E0 + (plane * 4));
             Assert.Equal(expectedPointer, bus.AgnusRegisters.GetBitplanePointer(plane));
@@ -161,24 +161,24 @@ public sealed class AmigaCustomChipPointerTests
         BigEndian.WriteUInt16(bus.ChipRam, 0, 0x1234);
 
         Assert.Equal(0x0008_0000u, bus.MaskChipDmaAddress(0x0008_0000u));
-        Assert.Equal(0x1234, bus.ReadChipWordForPresentation(0x0008_0000u));
+        Assert.Equal(0x1234, bus.ReadCurrentChipDmaWord(0x0008_0000u));
         Assert.Equal(
             bus.GetChipRamPhysicalOffset(0),
             bus.GetChipRamPhysicalOffset(0x0018_0000u));
     }
 
     [Fact]
-    public void PresentationHistoryUsesPhysicalOffsetsAcrossCpuAndDmaAliases()
+    public void CausalChipRamWritesUsePhysicalOffsetsAcrossCpuAndDmaAliases()
     {
         var bus = new AmigaBus(512 * 1024, captureBusAccesses: false);
         BigEndian.WriteUInt16(bus.ChipRam, 0x2400, 0x1234);
+        Assert.Equal(0x1234, bus.ReadCurrentChipDmaWord(0x0008_2400));
         var cycle = 20L;
 
         bus.WriteWord(0x0018_2400, 0x9ABC, ref cycle, AmigaBusAccessKind.CpuDataWrite);
 
-        var reservation = Assert.NotNull(bus.Agnus.CaptureSnapshot().LastFixedDmaReservation);
-        Assert.Equal(0x1234, bus.ReadChipWordForPresentation(0x0008_2400, reservation.GrantedCycle - 1));
-        Assert.Equal(0x9ABC, bus.ReadChipWordForPresentation(0x0008_2400, reservation.GrantedCycle));
+        Assert.NotNull(bus.Agnus.CaptureSnapshot().LastFixedDmaReservation);
+        Assert.Equal(0x9ABC, bus.ReadCurrentChipDmaWord(0x0008_2400));
     }
 
     [Fact]
@@ -188,26 +188,21 @@ public sealed class AmigaCustomChipPointerTests
         BigEndian.WriteUInt16(bus.ChipRam, 0x000000, 0x1111);
         BigEndian.WriteUInt16(bus.ChipRam, 0x100000, 0x2222);
 
-        Assert.Equal(0x1111, bus.ReadChipWordForPresentation(0x0000_0000u));
-        Assert.Equal(0x2222, bus.ReadChipWordForPresentation(0x0010_0000u));
+        Assert.Equal(0x1111, bus.ReadCurrentChipDmaWord(0x0000_0000u));
+        Assert.Equal(0x2222, bus.ReadCurrentChipDmaWord(0x0010_0000u));
         Assert.Equal(0u, bus.MaskChipDmaAddress(0x0020_0000u));
     }
 
     [Fact]
-    public void BitplanePresentationAndLiveDmaWrapRowsAtTheOcsAperture()
+    public void LiveBitplaneDmaWrapsRowsAtTheOcsAperture()
     {
-        var presentationBus = CreateBoundaryBitplaneBus(enableLiveDma: false);
         var liveBus = CreateBoundaryBitplaneBus(enableLiveDma: true);
-        var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        var actual = new uint[expected.Length];
+        var actual = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 
-        presentationBus.Display.RenderFrame(expected);
         liveBus.Display.RenderFrame(actual);
 
-        Assert.Equal(0xFFFF0000u, Pixel(expected, StandardX, StandardY));
-        Assert.Equal(0xFFFF0000u, Pixel(expected, StandardX + 1, StandardY + 1));
-        Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
-        Assert.Equal(Pixel(expected, StandardX + 1, StandardY + 1), Pixel(actual, StandardX + 1, StandardY + 1));
+        Assert.Equal(0xFFFF0000u, Pixel(actual, StandardX, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(actual, StandardX + 1, StandardY + 1));
     }
 
     private static AmigaBus CreateBus(bool ecsAgnus, int chipRamSize)

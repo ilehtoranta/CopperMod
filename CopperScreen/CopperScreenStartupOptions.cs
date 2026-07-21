@@ -106,7 +106,7 @@ internal sealed class CopperScreenStartupOptions
 		bool deferredCpuBusBatch = false,
 		bool deferredCpuBusBatchVerify = false,
 		bool cpuWaitSlotReference = false,
-		bool hardwareSpecialization = false)
+		bool hardwareSpecialization = true)
 	{
 		var normalizedDriveDiskPaths = NormalizeDrivePaths(driveDiskPaths, baseDirectory);
 		var normalizedWriteProtected = NormalizeDriveWriteProtected(driveWriteProtected);
@@ -175,7 +175,7 @@ internal sealed class CopperScreenStartupOptions
 		var deferredCpuBusBatch = false;
 		var deferredCpuBusBatchVerify = false;
 		var cpuWaitSlotReference = false;
-		var hardwareSpecialization = false;
+		var hardwareSpecialization = true;
 		bool? floppySoundsEnabledOverride = null;
 		FloppyDriveAudioMode? floppySoundModeOverride = null;
 		string? floppySoundPackOverride = null;
@@ -422,6 +422,22 @@ internal sealed class CopperScreenStartupOptions
 			if (arg.StartsWith("-", StringComparison.Ordinal))
 			{
 				error ??= $"Unknown CopperScreen option '{arg}'.";
+				continue;
+			}
+
+			// A profile followed by a disk image is the compact command-line form used
+			// by file associations and launchers.  Resolve profiles before media so a
+			// JSON profile is not silently discarded as an unsupported disk image.
+			if (!profileExplicit &&
+				CopperScreenProfile.TryLoad(arg, baseDirectory, out var positionalProfile, out _))
+			{
+				profile = positionalProfile;
+				profileExplicit = true;
+				if (error == defaultProfileError)
+				{
+					error = null;
+				}
+
 				continue;
 			}
 

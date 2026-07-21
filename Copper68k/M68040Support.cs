@@ -1975,11 +1975,11 @@ namespace Copper68k
         public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
             => _physicalBus.WriteLong(Translate(address, accessKind, write: true, byteCount: 4), value, ref cycle, accessKind);
 
-        public bool HasHostTrapStub(uint address)
+        public bool HasHostGateway(uint address)
         {
             try
             {
-                return _physicalBus.HasHostTrapStub(
+                return _physicalBus.HasHostGateway(
                     Translate(address, M68kBusAccessKind.CpuInstructionFetch, write: false, byteCount: 2));
             }
             catch (M68040MmuFaultException)
@@ -1988,14 +1988,14 @@ namespace Copper68k
             }
         }
 
-        public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+        public bool TryInvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
         {
             var physicalPc = Translate(
                 instructionProgramCounter,
                 M68kBusAccessKind.CpuInstructionFetch,
                 write: false,
                 byteCount: 2);
-            return _physicalBus.TryInvokeHostTrap(physicalPc, trapId, state);
+            return _physicalBus.TryInvokeHostGateway(physicalPc, token, state);
         }
 
         public void ResetExternalDevices(long cycle)

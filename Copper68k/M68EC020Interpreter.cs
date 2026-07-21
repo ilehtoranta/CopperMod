@@ -46,10 +46,10 @@ namespace Copper68k
         public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
             => _bus.WriteLong(Mask(address), value, ref cycle, accessKind);
 
-        public bool HasHostTrapStub(uint address) => _bus.HasHostTrapStub(Mask(address));
+        public bool HasHostGateway(uint address) => _bus.HasHostGateway(Mask(address));
 
-        public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
-            => _bus.TryInvokeHostTrap(Mask(instructionProgramCounter), trapId, state);
+        public bool TryInvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
+            => _bus.TryInvokeHostGateway(Mask(instructionProgramCounter), token, state);
 
         public void ResetExternalDevices(long cycle) => _bus.ResetExternalDevices(cycle);
 

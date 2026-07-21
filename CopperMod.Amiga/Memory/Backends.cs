@@ -49,7 +49,6 @@ namespace CopperMod.Amiga.Memory
         private readonly uint _physicalAddressMask;
         private readonly uint[] _codePageGenerations;
         private readonly int _codeGenerationPageShift;
-        private readonly ChipPresentationWriteHistory _presentationWriteHistory;
 
         public AmigaChipRamBackend(
             int size,
@@ -61,7 +60,6 @@ namespace CopperMod.Amiga.Memory
             DecodeSize = decodeSize;
             _codeGenerationPageShift = codeGenerationPageShift;
             _codePageGenerations = new uint[Math.Max(1, (size + (1 << codeGenerationPageShift) - 1) >> codeGenerationPageShift)];
-            _presentationWriteHistory = new ChipPresentationWriteHistory(size);
         }
 
         public byte[] Data => _data;
@@ -69,8 +67,6 @@ namespace CopperMod.Amiga.Memory
         public int Length => _data.Length;
 
         public uint DecodeSize { get; }
-
-        public ChipPresentationWriteHistory PresentationWriteHistory => _presentationWriteHistory;
 
         public byte this[int index]
         {
@@ -173,30 +169,8 @@ namespace CopperMod.Amiga.Memory
             return (ushort)((_data[offset] << 8) | _data[nextOffset]);
         }
 
-        public ushort ReadWordForPresentation(uint address, long cycle)
-        {
-            if (!_presentationWriteHistory.HasWrites ||
-                !_presentationWriteHistory.MayNeedPresentationRead(cycle))
-            {
-                return ReadDmaWord(address);
-            }
-
-            var offset = GetPhysicalOffset(address);
-            var nextOffset = (offset + 1) & (_data.Length - 1);
-            if (!_presentationWriteHistory.NeedsPresentationRead(offset, cycle) &&
-                !_presentationWriteHistory.NeedsPresentationRead(nextOffset, cycle))
-            {
-                return ReadDmaWord(address);
-            }
-
-            var high = _presentationWriteHistory.ReadByte(_data, offset, cycle);
-            var low = _presentationWriteHistory.ReadByte(_data, nextOffset, cycle);
-            return (ushort)((high << 8) | low);
-        }
-
         public void WriteByteAtOffset(int offset, byte value, long grantedCycle)
         {
-            _presentationWriteHistory.RecordByte(offset, _data[offset], value, grantedCycle);
             _data[offset] = value;
         }
 

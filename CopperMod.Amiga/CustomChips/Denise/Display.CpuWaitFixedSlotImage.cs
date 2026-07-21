@@ -191,6 +191,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var slot = (int)((slotCycle - lineStart) / AgnusChipSlotScheduler.SlotCycles);
             owner = (CpuWaitFixedSlotOwner)_cpuWaitFixedSlotOwners[
                 (beamLine * CpuWaitFixedSlotsPerLine) + slot];
+            _bus.CausalBusExecutor.RecordFixedPlanShadow(
+                slotCycle,
+                owner switch
+                {
+                    CpuWaitFixedSlotOwner.Refresh => AgnusChipSlotOwner.Refresh,
+                    CpuWaitFixedSlotOwner.BitplaneRead => AgnusChipSlotOwner.Bitplane,
+                    CpuWaitFixedSlotOwner.SpriteRead => AgnusChipSlotOwner.Sprite,
+                    _ => AgnusChipSlotOwner.Free
+                });
             if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
             {
                 _cpuWaitFixedSlotImagePredictedSlots++;
@@ -371,13 +380,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var state = _liveLineStates[row];
-            var plan = _rowDmaPlans[row];
+            var state = GetLiveLineState(row);
             if (state.Generation != _liveGeneration ||
-                !plan.Valid ||
-                plan.Generation != _liveGeneration ||
-                plan.Row != row ||
-                plan.Signature != ComputeRowDmaPlanSignature(state))
+                !TryGetValidRowDmaPlan(row, state, out var plan, recordFallback: false))
             {
                 unsupported = CpuWaitFixedSlotImageUnsupported.RasterlinePlan;
                 if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
@@ -473,7 +478,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool WouldCpuWaitFixedImageSpriteFetch(int row, int spriteIndex, int word)
         {
-            var lineState = _liveLineStates[row];
+            var lineState = GetLiveLineState(row);
             if ((uint)spriteIndex >= (uint)_liveSpriteDmaStates.Length ||
                 !IsSpriteDmaSlotAvailable(lineState, spriteIndex, word) ||
                 _liveSpriteDmaExhausted[spriteIndex])

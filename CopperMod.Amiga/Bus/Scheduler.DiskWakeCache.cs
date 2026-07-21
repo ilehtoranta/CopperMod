@@ -21,21 +21,18 @@ namespace CopperMod.Amiga.Bus
                 return currentCycle;
             }
 
-            if ((mask & AmigaHardwareEventMask.DiskPassiveInput) != 0)
-            {
-                return _bus.Disk.GetNextWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
-            }
-
+            // Passive byte-ready rotation is latch state, not a chronological
+            // scheduler deadline.  It is coalesced when the disk is advanced at
+            // the target horizon (and synchronously before DSKBYTR reads).  Only
+            // events with causal side effects may fragment the global agenda.
             return _bus.Disk.GetNextEventWakeCandidateCycle(currentCycle, targetCycle, includeActiveDmaProgress: true) ?? long.MaxValue;
         }
 
         private bool HasDiskWorkThrough(long cycle, AmigaHardwareEventMask mask)
         {
-            return (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0
-                ? _bus.Disk.HasWakeCandidateThrough(cycle)
-                : _bus.Disk.HasEventWakeCandidateThrough(
-                    cycle,
-                    includeActiveDmaProgress: true);
+            return _bus.Disk.HasEventWakeCandidateThrough(
+                cycle,
+                includeActiveDmaProgress: true);
         }
 
         private bool HasDiskWakeSourceThrough(long targetCycle, AmigaHardwareEventMask mask)

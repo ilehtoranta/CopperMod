@@ -95,17 +95,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             continue;
                         }
 
-                        var mod = (plane & 1) == 0 ? _bpl1mod : _bpl2mod;
-                        var rowStride = (fetchWords * 2) + mod;
                         var displaySourceY = y - _bitplaneBaseRows[plane];
-                        var planeSourceY = displaySourceY;
                         var liveCapturedMask = _renderingLiveCapture
                             ? _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(y, plane)]
                             : (UInt128)0;
+                        var liveWordIndexOffset = _renderingLiveCapture
+                            ? _renderBitplaneWordIndexOffsets[plane]
+                            : 0;
                         planeHasRow[plane] = bitplaneDmaEnabled && (displaySourceY >= 0 || liveCapturedMask != 0);
-                        var rowAddress = AddDmaPointerOffset(
-                            _bitplanePointers[plane],
-                            planeSourceY * rowStride);
                         for (var word = 0; word < fetchWords; word++)
                         {
                             if (!planeHasRow[plane])
@@ -114,8 +111,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                                 continue;
                             }
 
-                            if ((liveCapturedMask & ((UInt128)1 << word)) != 0 &&
-                                TryReadLiveCapturedBitplaneWord(y, plane, word, out var captured))
+                            var capturedWord = word + liveWordIndexOffset;
+                            if ((uint)capturedWord < (uint)MaxBitplaneFetchWords &&
+                                (liveCapturedMask & ((UInt128)1 << capturedWord)) != 0 &&
+                                TryReadLiveCapturedBitplaneWord(y, plane, capturedWord, out var captured))
                             {
                                 planeWords[plane, word] = captured;
                                 LoadBitplaneDataRegister(plane, captured);
@@ -123,8 +122,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                                 continue;
                             }
 
-                            var address = AddDmaPointerOffset(rowAddress, word * 2);
-                            planeWords[plane, word] = ReadBitplaneWordForPresentation(address, y, plane, word);
+                            // A word absent from the causal line capture was not
+                            // fetched. Never reconstruct it from current Chip RAM.
+                            planeWords[plane, word] = 0;
                             _lastBitplaneWords++;
                         }
                     }
@@ -514,9 +514,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if (spanIndex >= 0)
             {
                 ref readonly var span = ref GetPaletteFrameSpan(spanIndex);
-                return _paletteFrameSnapshots.GetEncodedColor(
-                    span.PaletteSnapshotIndex,
-                    colorRegister);
+                return GetPaletteFrameSpanEncodedColor(span, colorRegister);
             }
 
             return _colors[colorRegister];
@@ -1010,7 +1008,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             return !deniseModel.SupportsEcsRegisters() && requested == 7
                 ? 4
-                : Math.Min(requested, LiveBitplanePlaneCount);
+                : Math.Min(requested, OcsEcsMaxBitplaneCount);
         }
 
         private int GetDeniseBitplaneDecodePlaneCount()
@@ -1043,7 +1041,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return Math.Min(requested, 4);
             }
 
-            return Math.Clamp(requested, 0, LiveBitplanePlaneCount);
+            return Math.Clamp(requested, 0, OcsEcsMaxBitplaneCount);
         }
 
         private bool IsLatchedOnlyOcsBpu7Plane(ushort bplcon0, int plane)
@@ -1051,7 +1049,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 GetDeniseResolution(bplcon0) == DeniseResolution.LowRes &&
                 GetRequestedBitplaneCount(bplcon0) == 7 &&
                 plane >= 4 &&
-                plane < LiveBitplanePlaneCount;
+                plane < OcsEcsMaxBitplaneCount;
 
         private bool IsDualPlayfieldEnabled()
         {

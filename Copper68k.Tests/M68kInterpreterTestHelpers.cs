@@ -72,16 +72,16 @@ internal sealed class ZeroWaitCodeBus : IM68kBus, IM68kCodeReader
 		cycle += WriteMachineDelay;
 	}
 
-	public bool HasHostTrapStub(uint address)
+	public bool HasHostGateway(uint address)
 	{
 		_ = address;
 		return false;
 	}
 
-	public bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state)
+	public bool TryInvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
 	{
 		_ = instructionProgramCounter;
-		_ = trapId;
+		_ = token;
 		_ = state;
 		return false;
 	}

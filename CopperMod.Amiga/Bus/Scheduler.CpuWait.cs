@@ -82,7 +82,8 @@ namespace CopperMod.Amiga.Bus
                 size == AmigaBusAccessSize.Long ||
                 target is not (AmigaBusAccessTarget.ChipRam or
                     AmigaBusAccessTarget.ExpansionRam or
-                    AmigaBusAccessTarget.RealTimeClock))
+                    AmigaBusAccessTarget.RealTimeClock or
+                    AmigaBusAccessTarget.CustomRegisters))
             {
                 return CpuWaitGrantAdvanceResult.Unsupported;
             }
@@ -95,11 +96,6 @@ namespace CopperMod.Amiga.Bus
                 DrainSlotContendedAccess(requestedCycle - 1);
             }
 
-            if (_bus.HasUnsupportedCpuWaitSlotWorkThrough(requestedCycle + _bus.LineCycles))
-            {
-                return CpuWaitGrantAdvanceResult.ReferenceContinuation;
-            }
-
             var firstCandidateCycle = requestedCycle;
             var blitterStallReleased = _bus.Blitter.CpuStallActive;
             if (blitterStallReleased)
@@ -108,32 +104,25 @@ namespace CopperMod.Amiga.Bus
             }
 
             _busAccessDrainCount++;
-
-            _draining = true;
             _bus.BeginPendingCpuSlotRequest(kind, target, address, size, requestedCycle, isWrite);
             try
             {
                 var candidate = AgnusChipSlotScheduler.AlignToSlot(firstCandidateCycle);
                 while (true)
                 {
-                    if (_bus.Display.HasLiveDisplayWork())
+                    // A candidate CPU slot is only usable after every older
+                    // device event has executed.  Driving Denise to the
+                    // candidate first can sample a later display word before
+                    // an older blitter/Paula access.  Keep the pending CPU
+                    // request visible to arbitration and let the chronological
+                    // scheduler execute the whole interval.
+                    if (_bus.CausalBusExecutor.TryAdvanceCpuOnlySlot(candidate))
                     {
-                        var liveResult = _bus.AdvanceCpuWaitLiveSlot(
-                            candidate,
-                            out _,
-                            out _,
-                            out _);
-                        if (_bus.HasUnsupportedCpuWaitSlotWorkThrough(candidate + _bus.LineCycles) ||
-                            liveResult == OcsCpuWaitLiveSlotResult.CopperBarrier)
-                        {
-                            return CpuWaitGrantAdvanceResult.ReferenceContinuation;
-                        }
-
-                        ExecutePendingCpuSlot(candidate, processBlitter: !blitterStallReleased);
+                        MarkClean(candidate, SlotContendedMemoryAccessMask);
                     }
                     else
                     {
-                        ExecutePendingCpuSlot(candidate, processBlitter: !blitterStallReleased);
+                        DrainSlotContendedAccess(candidate);
                     }
 
                     _bus.SynchronizeHrmBlitterPriority();
@@ -148,7 +137,6 @@ namespace CopperMod.Amiga.Bus
                         out completedCycle))
                     {
                         grantedCycle = candidate;
-                        MarkClean(candidate, SlotContendedMemoryAccessMask);
                         return CpuWaitGrantAdvanceResult.Granted;
                     }
 
@@ -158,9 +146,9 @@ namespace CopperMod.Amiga.Bus
             finally
             {
                 _bus.ClearPendingCpuSlotRequest();
-                _draining = false;
             }
         }
+
 
         internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrantUsingFixedSlotImage(
             AmigaBusAccessKind kind,
@@ -280,7 +268,6 @@ namespace CopperMod.Amiga.Bus
                 }
 
                 completedCycle = committedCompletion;
-                MarkClean(grantedCycle, SlotContendedMemoryAccessMask);
                 _bus.RecordProductionCpuWaitFixedSlotImageUse(requestedCycle, grantedCycle);
                 return CpuWaitGrantAdvanceResult.Granted;
             }
@@ -293,51 +280,22 @@ namespace CopperMod.Amiga.Bus
 
         internal bool TryCatchUpPreparedCpuGrant(long requestedCycle, long grantedCycle)
         {
-            if (_draining || grantedCycle <= requestedCycle)
-            {
-                return grantedCycle <= requestedCycle;
-            }
-
-            if (_bus.Display.HasLiveDmaSlotWorkThrough(grantedCycle) ||
-                HasSlotContendedDiskWorkThrough(grantedCycle))
+            if (_draining)
             {
                 return false;
             }
 
-            _draining = true;
-            try
+            if (IsSlotContendedCleanThrough(grantedCycle))
             {
-                _bus.AdvanceAgnusCoreTo(grantedCycle);
-                _agnusEvents++;
-
-                var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle));
-                if (slotCycle <= requestedCycle)
-                {
-                    slotCycle += AgnusChipSlotScheduler.SlotCycles;
-                }
-
-                for (; slotCycle <= grantedCycle; slotCycle += AgnusChipSlotScheduler.SlotCycles)
-                {
-                    AdvanceSlotContendedPaulaDmaTo(slotCycle);
-                    if (_bus.Blitter.GetNextWakeCandidateCycle(
-                            Math.Max(0, slotCycle - 1),
-                            slotCycle) <= slotCycle)
-                    {
-                        SynchronizeBlitterThrough(slotCycle);
-                        _blitterEvents++;
-                        InvalidateWakeAgenda();
-                    }
-
-                    _bus.InvalidateRasterlineSchedule(slotCycle, SlotContendedMemoryAccessMask);
-                }
-
-                MarkClean(grantedCycle, SlotContendedMemoryAccessMask);
                 return true;
             }
-            finally
-            {
-                _draining = false;
-            }
+
+            // The grant is already present in the HRM slot table, so a normal
+            // drain will preserve it while executing all preceding DMA in
+            // causal order.  Do not fast-forward Agnus and then replay the
+            // other requesters behind it.
+            DrainSlotContendedAccess(grantedCycle);
+            return IsSlotContendedCleanThrough(grantedCycle);
         }
 
         internal bool TryPredictDeferredReadOwnership(
@@ -421,5 +379,6 @@ namespace CopperMod.Amiga.Bus
 
             Debug.Fail("Pending CPU slot execution did not stabilize within the same cycle.");
         }
+
     }
 }

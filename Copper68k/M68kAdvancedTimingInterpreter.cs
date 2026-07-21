@@ -2841,9 +2841,9 @@ namespace Copper68k
                     _ = FetchWord();
                     if (opcode == 0xFF00)
                     {
-                        var trapId = FetchWord();
+                        var token = FetchLong();
                         var returnProgramCounter = State.ProgramCounter;
-                        if (_bus.TryInvokeHostTrap(State.LastInstructionProgramCounter, trapId, State))
+                        if (_bus.TryInvokeHostGateway(State.LastInstructionProgramCounter, token, State))
                         {
                             if (!State.Halted && State.ProgramCounter == returnProgramCounter)
                             {

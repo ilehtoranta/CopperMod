@@ -43,8 +43,8 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
         public void Attach(AmigaBus bus)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
-            WriteTrap(DiagPointOffset, bus.RegisterRelocatableHostTrapStub(HostDiagBootstrap));
-            WriteTrap(ResidentInitOffset, bus.RegisterRelocatableHostTrapStub(HostResidentInit));
+            WriteTrap(DiagPointOffset, bus.RegisterRelocatableHostGateway(HostDiagBootstrap));
+            WriteTrap(ResidentInitOffset, bus.RegisterRelocatableHostGateway(HostResidentInit));
         }
 
         public byte ReadBoardByte(int offset)
@@ -176,11 +176,11 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             return rom;
         }
 
-        private void WriteTrap(int relativeOffset, ushort trapId)
+        private void WriteTrap(int relativeOffset, uint token)
         {
             var offset = DiagAreaOffset + relativeOffset;
             WriteUInt16(_rom, offset, 0xFF00);
-            WriteUInt16(_rom, offset + 2, trapId);
+            WriteUInt32(_rom, offset + 2, token);
         }
 
         private static void WriteReturnStub(byte[] rom, int relativeOffset)
@@ -212,5 +212,6 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             target[offset + 2] = (byte)(value >> 8);
             target[offset + 3] = (byte)value;
         }
+
     }
 }

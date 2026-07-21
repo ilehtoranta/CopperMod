@@ -23,7 +23,6 @@ namespace CopperScreen;
 
 internal sealed class MainWindow : Window
 {
-	private const int PresentationCropBorderY = 16;
 	private const int StatusUpdateIntervalMilliseconds = 250;
 	private const double DebuggerPanelWidth = 1120;
 	private const double DebuggerLeftColumnWidth = 500;
@@ -138,6 +137,7 @@ internal sealed class MainWindow : Window
 	private TextBox _floppySoundPackBox = null!;
 	private TextBox _floppySoundVolumeBox = null!;
 	private ComboBox _lacedPresentationModeBox = null!;
+	private ComboBox _pixelAspectModeBox = null!;
 	private ComboBox _port1ControllerBox = null!;
 	private ComboBox _port2ControllerBox = null!;
 	private ComboBox _controllerProfileChooser = null!;
@@ -167,6 +167,9 @@ internal sealed class MainWindow : Window
 	private double _lastPresenterUpdateMilliseconds;
 	private double _lastPresentationFrameMilliseconds;
 	private bool _isClosed;
+	private CopperScreenPresentationGeometry _presenterGeometry = new(358, 285, 320, 256, 2, 2, true, false);
+	private readonly CrtPhosphorComposer _crtPhosphor = new();
+	private bool _crtPhosphorAnimationQueued;
 
 	public MainWindow(string[] args)
 	{
@@ -206,6 +209,8 @@ internal sealed class MainWindow : Window
 			HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
 			VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch
 		};
+		_presenterGeometry = _runtime?.PresentationGeometry ?? _presenterGeometry;
+		ApplyPresenterGeometry();
 		ApplyPresenterViewport();
 		_diskStatus = CreateToolbarTextBlock(fontSize: 11);
 		_ledFilterStatus = CreateToolbarTextBlock(fontSize: 10, textAlignment: TextAlignment.Center);
@@ -318,6 +323,7 @@ internal sealed class MainWindow : Window
 		Closing += (_, _) =>
 		{
 			_isClosed = true;
+			DisableCrtPhosphorPresentation();
 			_settingsWindow.AllowClose = true;
 			_settingsWindow.Close();
 		};
@@ -387,6 +393,8 @@ internal sealed class MainWindow : Window
 			0,
 			0,
 			0,
+			0,
+			false,
 			0);
 	}
 
@@ -807,8 +815,14 @@ internal sealed class MainWindow : Window
 		RefreshDebuggerUi(state.DebugSnapshot);
 		if (state.FrameNumber != _presentedFrames)
 		{
+			var dimensionsChanged = _presenter.PixelWidth != _runtime.Width || _presenter.PixelHeight != _runtime.Height;
 			_presenter.EnsureDimensions(_runtime.Width, _runtime.Height);
-			_presenter.Update(frameLease.Framebuffer);
+			ApplyPresenterGeometry();
+			if (dimensionsChanged)
+			{
+				ApplyPresenterViewport();
+			}
+			PresentFramebuffer(frameLease.Framebuffer, state);
 			_lastPresenterUpdateMilliseconds = _presenter.LastUpdateMilliseconds;
 			_presentedFrames = state.FrameNumber;
 		}
@@ -832,6 +846,74 @@ internal sealed class MainWindow : Window
 		}
 
 		_lastPresentationFrameMilliseconds = Stopwatch.GetElapsedTime(presentationStartTimestamp).TotalMilliseconds;
+	}
+
+	private void PresentFramebuffer(int[] framebuffer, CopperScreenState state)
+	{
+		if (!ShouldUseCrtPhosphor(state))
+		{
+			if (state.IsPaused && _crtPhosphor.HasBuffers &&
+				_settingsDraft.PresentationOptions.LacedMode == CopperScreenLacedPresentationMode.CrtPhosphor &&
+				state.IsInterlaced)
+			{
+				// A user pause holds the final phosphor image rather than simulating a powered-off tube.
+				_crtPhosphorAnimationQueued = false;
+				return;
+			}
+
+			DisableCrtPhosphorPresentation();
+			_presenter.Update(framebuffer);
+			return;
+		}
+
+		var now = Stopwatch.GetTimestamp();
+		var fieldDurationSeconds = _presenterGeometry.IsPal ? 1.0 / 50.0 : 1.0 / 60.0;
+		_crtPhosphor.SubmitField(
+			framebuffer,
+			_presenter.PixelWidth,
+			_presenter.PixelHeight,
+			state.InterlaceField,
+			fieldDurationSeconds,
+			now);
+		_presenter.Update(_crtPhosphor.Output);
+		QueueCrtPhosphorAnimationFrame();
+	}
+
+	private bool ShouldUseCrtPhosphor(CopperScreenState state)
+		=> !_isClosed &&
+			!state.IsPaused &&
+			state.IsInterlaced &&
+			_settingsDraft.PresentationOptions.LacedMode == CopperScreenLacedPresentationMode.CrtPhosphor;
+
+	private void QueueCrtPhosphorAnimationFrame()
+	{
+		if (_crtPhosphorAnimationQueued || !_crtPhosphor.HasBuffers || _isClosed)
+		{
+			return;
+		}
+
+		_crtPhosphorAnimationQueued = true;
+		RequestAnimationFrame(OnCrtPhosphorAnimationFrame);
+	}
+
+	private void OnCrtPhosphorAnimationFrame(TimeSpan _)
+	{
+		_crtPhosphorAnimationQueued = false;
+		if (_isClosed || _runtime == null || !ShouldUseCrtPhosphor(_latestState))
+		{
+			return;
+		}
+
+		_crtPhosphor.Advance(Stopwatch.GetTimestamp());
+		_presenter.Update(_crtPhosphor.Output);
+		_lastPresenterUpdateMilliseconds = _presenter.LastUpdateMilliseconds;
+		QueueCrtPhosphorAnimationFrame();
+	}
+
+	private void DisableCrtPhosphorPresentation()
+	{
+		_crtPhosphorAnimationQueued = false;
+		_crtPhosphor.Reset();
 	}
 
 	private string BuildCrashLogState(CopperScreenState state)
@@ -1818,7 +1900,9 @@ internal sealed class MainWindow : Window
 		var layout = CreateSettingsPageLayout();
 
 		var display = CreateSettingsGroupForm();
-		_lacedPresentationModeBox = AddComboSetting(display, "Laced display", ["CRT flicker", "Stable weave"], markRestart: false);
+		_pixelAspectModeBox = AddComboSetting(display, "Pixel aspect", ["LCD crisp (1:1 hires / 1:2 superhires)", "CRT-correct aspect"], markRestart: false);
+		_pixelAspectModeBox.SelectionChanged += (_, _) => ApplyPresentationSettingsLive();
+		_lacedPresentationModeBox = AddComboSetting(display, "Laced display", ["CRT phosphor", "Stable weave"], markRestart: false);
 		_lacedPresentationModeBox.SelectionChanged += (_, _) => ApplyPresentationSettingsLive();
 		layout.Children.Add(CreateSettingsGroup("Video Output", display));
 
@@ -2203,6 +2287,7 @@ internal sealed class MainWindow : Window
 			_floppySoundPackBox.Text = _settingsDraft.FloppyDriveAudio.SoundPack;
 			_floppySoundVolumeBox.Text = _settingsDraft.FloppyDriveAudio.Volume.ToString(System.Globalization.CultureInfo.InvariantCulture);
 			_lacedPresentationModeBox.SelectedItem = FormatLacedPresentationMode(_settingsDraft.PresentationOptions.LacedMode);
+			_pixelAspectModeBox.SelectedItem = FormatPixelAspectMode(_settingsDraft.PresentationOptions.PixelAspectMode);
 			RefreshControllerSelectors();
 			SelectSettingsPage(Math.Clamp(_settingsPageIndex, 0, _settingsPages.Length - 1));
 		}
@@ -2417,6 +2502,7 @@ internal sealed class MainWindow : Window
 		}
 
 		ReleaseInteractiveInput();
+		DisableCrtPhosphorPresentation();
 		if (_runtime != null)
 		{
 			_runtime.FramePublished -= QueueFramePresentation;
@@ -2510,7 +2596,8 @@ internal sealed class MainWindow : Window
 	private CopperScreenPresentationOptions ReadPresentationOptionsFromUi()
 	{
 		return new CopperScreenPresentationOptions(
-			ParseLacedPresentationModeSelection(_lacedPresentationModeBox.SelectedItem));
+			ParseLacedPresentationModeSelection(_lacedPresentationModeBox.SelectedItem),
+			ParsePixelAspectModeSelection(_pixelAspectModeBox.SelectedItem));
 	}
 
 	private void RefreshSelectedControllerProfileEditor()
@@ -2632,6 +2719,11 @@ internal sealed class MainWindow : Window
 			ClearSettingsStartupError();
 			_settingsDraft.PresentationOptions = ReadPresentationOptionsFromUi();
 			_runtime?.SetPresentationOptions(_settingsDraft.PresentationOptions);
+			if (_settingsDraft.PresentationOptions.LacedMode != CopperScreenLacedPresentationMode.CrtPhosphor)
+			{
+				DisableCrtPhosphorPresentation();
+			}
+			ApplyPresenterGeometry();
 			UpdateSettingsStatus();
 		}
 		catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException)
@@ -2976,14 +3068,24 @@ internal sealed class MainWindow : Window
 			: FloppyDriveAudioMode.Synthetic;
 
 	private static CopperScreenLacedPresentationMode ParseLacedPresentationModeSelection(object? value)
-		=> string.Equals(value?.ToString(), "CRT flicker", StringComparison.OrdinalIgnoreCase)
-			? CopperScreenLacedPresentationMode.CrtFlicker
+		=> string.Equals(value?.ToString(), "CRT phosphor", StringComparison.OrdinalIgnoreCase)
+			? CopperScreenLacedPresentationMode.CrtPhosphor
 			: CopperScreenLacedPresentationMode.StableWeave;
 
 	private static string FormatLacedPresentationMode(CopperScreenLacedPresentationMode mode)
-		=> mode == CopperScreenLacedPresentationMode.CrtFlicker
-			? "CRT flicker"
+		=> mode == CopperScreenLacedPresentationMode.CrtPhosphor
+			? "CRT phosphor"
 			: "Stable weave";
+
+	private static CopperScreenPixelAspectMode ParsePixelAspectModeSelection(object? value)
+		=> string.Equals(value?.ToString(), "CRT-correct aspect", StringComparison.OrdinalIgnoreCase)
+			? CopperScreenPixelAspectMode.CrtCorrect
+			: CopperScreenPixelAspectMode.Lcd;
+
+	private static string FormatPixelAspectMode(CopperScreenPixelAspectMode mode)
+		=> mode == CopperScreenPixelAspectMode.CrtCorrect
+			? "CRT-correct aspect"
+			: "LCD crisp (1:1 hires / 1:2 superhires)";
 
 	private static int ParseDriveCount(object? value)
 		=> int.TryParse(value?.ToString(), out var count) ? Math.Clamp(count, 1, 4) : 1;
@@ -3473,28 +3575,26 @@ internal sealed class MainWindow : Window
 		}
 		else
 		{
-			var horizontalScale = Math.Max(1, _presenter.PixelWidth / AmigaConstants.PalLowResWidth);
-			var verticalScale = Math.Max(1, _presenter.PixelHeight / AmigaConstants.PalLowResHeight);
-			var viewport = new PixelRect(
-				AmigaConstants.PalLowResOverscanBorderX * horizontalScale,
-				PresentationCropBorderY * verticalScale,
-				AmigaConstants.PalLowResStandardWidth * horizontalScale,
-				AmigaConstants.PalLowResStandardHeight * verticalScale);
+			var viewport = GetCroppedPresentationViewport(_presenterGeometry);
 			_presenter.SetSourceViewport(viewport.X, viewport.Y, viewport.Width, viewport.Height);
 		}
 
 		ReleaseMouseGrab();
 	}
 
-	internal static PixelRect FullOverscanPresentationViewport { get; } =
-		new(0, 0, AmigaConstants.PalHighResWidth, AmigaConstants.PalHighResHeight);
+	internal static PixelRect GetCroppedPresentationViewport(CopperScreenPresentationGeometry geometry)
+		=> geometry.GetCroppedViewport();
 
-	internal static PixelRect CroppedPresentationViewport { get; } =
-		new(
-			AmigaConstants.PalLowResOverscanBorderX * 2,
-			PresentationCropBorderY * 2,
-			AmigaConstants.PalLowResStandardWidth * 2,
-			AmigaConstants.PalLowResStandardHeight * 2);
+	private void ApplyPresenterGeometry()
+	{
+		var geometry = _runtime?.PresentationGeometry ?? _presenterGeometry;
+		_presenter.HorizontalPixelAspect = geometry.GetHorizontalPixelAspect(_settingsDraft.PresentationOptions.PixelAspectMode);
+		if (_presenterGeometry != geometry)
+		{
+			_presenterGeometry = geometry;
+			ApplyPresenterViewport();
+		}
+	}
 
 	private bool BeginMouseGrab(PointerEventArgs args)
 	{

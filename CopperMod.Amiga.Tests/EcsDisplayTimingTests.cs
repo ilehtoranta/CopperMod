@@ -90,21 +90,22 @@ public sealed class EcsDisplayTimingTests
         const long thirdLineStart = 910;
 
         Assert.Equal(thirdLineStart + (0x08 * 2), bus.PredictDiskDmaGrantCycle(thirdLineStart));
-        Assert.True(bus.TryReserveDiskDmaWordExactSlot(
+        Assert.True(bus.TryExecuteDiskDmaWordExactSlot(
             0x2000,
-            isWrite: false,
+            writeMode: false,
+            diskWordValue: 0,
             thirdLineStart + (0x08 * 2),
             out var disk));
         Assert.Equal(thirdLineStart + (0x08 * 2), disk.GrantedCycle);
 
-        Assert.True(bus.TryReservePaulaDmaWordExactSlot(
+        Assert.True(bus.TryExecutePaulaDmaWordReadExactSlot(
             channel: 0,
             address: 0x2200,
             slotCycle: thirdLineStart + (0x10 * 2),
             out var audio));
         Assert.Equal(thirdLineStart + (0x10 * 2), audio.GrantedCycle);
 
-        Assert.True(bus.TryReserveSpriteDmaWordExactSlot(
+        Assert.True(bus.TryExecuteSpriteDmaWordReadExactSlot(
             0x2400,
             thirdLineStart + (0x18 * 2),
             out var sprite));

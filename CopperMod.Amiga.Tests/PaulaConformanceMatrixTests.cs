@@ -228,10 +228,11 @@ public sealed class PaulaConformanceMatrixTests
         Assert.Empty(bus.Paula.DrainInterrupts());
         Assert.True((bus.ReadWord(0x00DFF01E) & 0x0080) != 0);
 
-        bus.WriteWord(0x00DFF09C, 0x0080, 1712);
-        bus.WriteWord(0x00DFF09A, 0xC080, 1712);
-        bus.WriteWord(0x00DFF0AA, 0x0102, 1712);
-        bus.Paula.AdvanceTo(1712);
+        var writeCycle = 1712L;
+        bus.WriteWord(0x00DFF09C, 0x0080, ref writeCycle, AmigaBusAccessKind.CpuDataWrite);
+        bus.WriteWord(0x00DFF09A, 0xC080, ref writeCycle, AmigaBusAccessKind.CpuDataWrite);
+        bus.WriteWord(0x00DFF0AA, 0x0102, ref writeCycle, AmigaBusAccessKind.CpuDataWrite);
+        bus.Paula.AdvanceTo(writeCycle);
 
         Assert.Single(bus.Paula.DrainInterrupts());
         Assert.Equal(4, bus.Paula.GetHighestPendingInterruptLevel());
@@ -255,25 +256,28 @@ public sealed class PaulaConformanceMatrixTests
         var bus = CreateDefaultMinimumPaulaBus();
         BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x7F81);
         ConfigureAudioDma(bus, channel: 0, address: 0x1000, lengthWords: 1, period: 113, volume: 64);
-        bus.WriteWord(0x00DFF096, 0x8201, 0);
+        bus.Paula.ScheduleWrite(0, 0x096, 0x8201);
         bus.Paula.AdvanceTo(0);
         var afterEnable = bus.Paula.GetChannelSnapshot(0);
         var buffer = new float[4];
 
-        bus.Paula.RenderSample(263, buffer, 0, 2);
-        bus.Paula.RenderSample(264, buffer, 1, 2);
+        bus.Paula.RenderSample(261, buffer, 0, 2);
+        bus.Paula.RenderSample(262, buffer, 1, 2);
+		var snapshot = bus.Paula.GetChannelSnapshot(0);
+		var diagnostic = $"samples={string.Join(',', buffer)} state={snapshot.State} word=0x{snapshot.DataWord:X4} " +
+			$"sample={snapshot.CurrentSample} next={snapshot.NextSampleCycle}";
 
         Assert.Equal(34, afterEnable.NextSampleCycle);
-        Assert.True(buffer[0] > 0.20f);
-        Assert.True(buffer[2] < -0.20f);
-        Assert.Equal(490, bus.Paula.GetChannelSnapshot(0).NextSampleCycle);
+        Assert.True(buffer[0] > 0.20f, diagnostic);
+        Assert.True(buffer[2] < -0.20f, diagnostic);
+        Assert.Equal(488, snapshot.NextSampleCycle);
     }
 
     private static void ManualAudioPlaysHighThenLowByte()
     {
         var bus = CreatePaulaComponentBus();
-        bus.WriteWord(0x00DFF09A, 0xC080, 0);
-        bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
+        bus.Paula.ScheduleWrite(0, 0x09A, 0xC080);
+        bus.Paula.ScheduleWrite(0, 0x0AA, 0x7F81);
         var buffer = new float[4];
 
         bus.Paula.RenderSample(0, buffer, 0, 2);
@@ -354,10 +358,16 @@ public sealed class PaulaConformanceMatrixTests
         bus.Paula.RenderSample(38, buffer, 0, 2);
         bus.Paula.RenderSample(42, buffer, 1, 2);
         bus.Paula.RenderSample(46, buffer, 2, 2);
+		var snapshot = bus.Paula.GetChannelSnapshot(0);
+		var dma = string.Join(',', bus.BusAccesses
+			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
+			.Select(access => $"0x{access.Request.Address:X}@{access.RequestedCycle}->{access.GrantedCycle}"));
+		var diagnostic = $"samples={string.Join(',', buffer)} state={snapshot.State} word=0x{snapshot.DataWord:X4} " +
+			$"addr=0x{snapshot.CurrentAddress:X} remain={snapshot.RemainingWords} next={snapshot.NextSampleCycle} dma=[{dma}]";
 
-        Assert.InRange(buffer[0], 0.03f, 0.05f);
-        Assert.InRange(buffer[2], 0.06f, 0.08f);
-        Assert.InRange(buffer[4], 0.09f, 0.12f);
+        Assert.True(buffer[0] is >= 0.03f and <= 0.05f, diagnostic);
+        Assert.True(buffer[2] is >= 0.06f and <= 0.08f, diagnostic);
+        Assert.True(buffer[4] is >= 0.09f and <= 0.12f, diagnostic);
     }
 
     private static void AudioDmaFetchesAllFourChannels()
@@ -482,9 +492,9 @@ public sealed class PaulaConformanceMatrixTests
     private static void PeriodAttachModulatesNextChannel()
     {
         var bus = CreatePaulaComponentBus();
-        bus.WriteWord(0x00DFF09E, 0x8010, 0);
-        bus.WriteWord(0x00DFF0A6, 0x0002, 0);
-        bus.WriteWord(0x00DFF0AA, 0x0005, 0);
+        bus.Paula.ScheduleWrite(0, 0x09E, 0x8010);
+        bus.Paula.ScheduleWrite(0, 0x0A6, 0x0002);
+        bus.Paula.ScheduleWrite(0, 0x0AA, 0x0005);
 
         bus.Paula.AdvanceTo(4);
 
@@ -549,12 +559,12 @@ public sealed class PaulaConformanceMatrixTests
 
     private static void ConfigureAudioDma(AmigaBus bus, int channel, uint address, ushort lengthWords, ushort period, ushort volume)
     {
-        var registerBase = 0x00DFF0A0u + (uint)(channel * 0x10);
-        bus.WriteWord(registerBase, (ushort)(address >> 16), 0);
-        bus.WriteWord(registerBase + 2, (ushort)address, 0);
-        bus.WriteWord(registerBase + 4, lengthWords, 0);
-        bus.WriteWord(registerBase + 6, period, 0);
-        bus.WriteWord(registerBase + 8, volume, 0);
+        var registerBase = (ushort)(0x0A0 + (channel * 0x10));
+        bus.Paula.ScheduleWrite(0, registerBase, (ushort)(address >> 16));
+        bus.Paula.ScheduleWrite(0, (ushort)(registerBase + 2), (ushort)address);
+        bus.Paula.ScheduleWrite(0, (ushort)(registerBase + 4), lengthWords);
+        bus.Paula.ScheduleWrite(0, (ushort)(registerBase + 6), period);
+        bus.Paula.ScheduleWrite(0, (ushort)(registerBase + 8), volume);
         bus.Paula.AdvanceTo(0);
     }
 

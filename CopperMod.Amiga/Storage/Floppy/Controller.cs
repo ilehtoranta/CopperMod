@@ -1338,6 +1338,9 @@ namespace CopperMod.Amiga.Storage.Floppy
             _schedulerWakeVersion++;
         }
 
+        internal void SynchronizeInputThrough(long targetCycle)
+            => AdvanceDiskInputTo(Math.Max(_currentCycle, targetCycle));
+
         public void AdvanceEventsTo(long targetCycle)
         {
             if (targetCycle < _currentCycle)
@@ -1474,7 +1477,8 @@ namespace CopperMod.Amiga.Storage.Floppy
                 return true;
             }
 
-            if (GetNextSelectedSyncCompletionCycleCached(targetCycle) <= targetCycle)
+            if (RequiresChronologicalSyncDeadline() &&
+                GetNextSelectedSyncCompletionCycleCached(targetCycle) <= targetCycle)
             {
                 return true;
             }
@@ -1787,14 +1791,17 @@ namespace CopperMod.Amiga.Storage.Floppy
                         : SchedulerWakeReason.ActiveDmaProgress);
             }
 
-            var syncCycle = GetNextSelectedSyncCompletionCycleCached(targetCycle);
-            if (syncCycle <= targetCycle)
+            if (RequiresChronologicalSyncDeadline())
             {
-                AddWakeCandidate(
-                    ref candidate,
-                    ref reason,
-                    syncCycle,
-                    SchedulerWakeReason.SyncCandidate);
+                var syncCycle = GetNextSelectedSyncCompletionCycleCached(targetCycle);
+                if (syncCycle <= targetCycle)
+                {
+                    AddWakeCandidate(
+                        ref candidate,
+                        ref reason,
+                        syncCycle,
+                        SchedulerWakeReason.SyncCandidate);
+                }
             }
 
             if ((_bus.CiaB.InterruptMask & AmigaCia.FlagInterruptMask) != 0 && AnyConnectedDriveMotorOn())
@@ -1831,6 +1838,30 @@ namespace CopperMod.Amiga.Storage.Floppy
             }
 
             return ClampWakeCandidate(candidate, currentCycle, targetCycle);
+        }
+
+        internal long GetRawSlotDmaEligibilityCycle()
+        {
+            long candidate = long.MaxValue;
+            if ((_pendingReadDmaWords != 0 || _pendingWriteDmaWords != 0) && IsDiskDmaControlEnabled())
+            {
+                var driveIndex = GetSelectedDriveIndex();
+                if (driveIndex >= 0 && IsDriveConnected(driveIndex))
+                {
+                    var drive = _drives[driveIndex];
+                    if (drive.Disk != null && drive.MotorOn)
+                    {
+                        candidate = GetDriveReadyCycle(drive);
+                    }
+                }
+            }
+
+            if (_activeDma && IsDiskDmaControlEnabled())
+            {
+                candidate = Math.Min(candidate, GetNextActiveDmaAdvanceCycle());
+            }
+
+            return candidate;
         }
 
         internal bool HasSlotDmaWakeSourceThrough(long targetCycle)
@@ -3032,26 +3063,34 @@ namespace CopperMod.Amiga.Storage.Floppy
 
             while (_activeDmaRequestServiceCycle <= targetCycle)
             {
-                if (_bus.TryReserveDiskDmaWordExactSlot(
-                    _activeDmaRequestTargetAddress,
-                    _activeDmaWriteMode,
-                    _activeDmaRequestServiceCycle,
-                    out var diskReservation))
+                var diskGranted = _bus.CausalBusExecutor.ProductionEnabled
+                    ? _bus.CausalBusExecutor.TryExecuteDiskWordExact(
+                        _activeDmaRequestTargetAddress,
+                        _activeDmaWriteMode,
+                        _activeDmaRequestReadValue,
+                        _activeDmaRequestServiceCycle,
+                        out var diskExecution)
+                    : _bus.TryExecuteDiskDmaWordExactSlot(
+                        _activeDmaRequestTargetAddress,
+                        _activeDmaWriteMode,
+                        _activeDmaRequestReadValue,
+                        _activeDmaRequestServiceCycle,
+                        out diskExecution);
+                if (diskGranted)
                 {
-                    _activeDmaCompletionCycle = Math.Max(_activeDmaCompletionCycle, diskReservation.CompletedCycle);
-                    _activeDmaNextBusRequestCycle = diskReservation.CompletedCycle;
+                    _activeDmaCompletionCycle = Math.Max(_activeDmaCompletionCycle, diskExecution.CompletedCycle);
+                    _activeDmaNextBusRequestCycle = diskExecution.CompletedCycle;
                     _diskDmaWordLatch = new DiskDmaWordLatch(
                         _activeDmaWriteMode,
                         _activeDmaRequestTargetAddress,
                         _activeDmaRequestSourceBit,
-                        _activeDmaRequestReadValue,
-                        diskReservation);
+                        diskExecution.Value);
                     var value = ConsumeDiskDmaWordLatch(ref _diskDmaWordLatch);
                     if (_traceRecorder != null)
                     {
                         AppendDivergenceTrace(
                             AmigaDiskTraceEventKind.DmaWord,
-                            diskReservation.GrantedCycle,
+                            diskExecution.GrantedCycle,
                             drive: _activeDmaDrive,
                             requestedWords: _activeDmaRequestedWords,
                             transferredWords: _activeDmaTransferredWords + 1,
@@ -3104,6 +3143,7 @@ namespace CopperMod.Amiga.Storage.Floppy
             _activeDmaRequestServiceCycle = 0;
             _activeDmaRequestNextSourceBit = 0;
             _activeDmaRequestNextWordStartCycle = 0;
+            _bus.CancelCausalDiskIntent();
         }
 
         private ushort ConsumeDiskDmaWordLatch(ref DiskDmaWordLatch latch)
@@ -3113,10 +3153,7 @@ namespace CopperMod.Amiga.Storage.Floppy
                 return 0;
             }
 
-            var reservation = latch.Reservation;
-            var value = latch.WriteMode
-                ? _bus.CommitDmaWordRead(in reservation)
-                : latch.Value;
+            var value = latch.Value;
             _diskDataRegister = value;
             _bus.PublishCustomRegisterState(DskDatr, value, _currentCycle);
             if (latch.WriteMode)
@@ -3127,11 +3164,6 @@ namespace CopperMod.Amiga.Storage.Floppy
                     _activeWriteTrackMutated = true;
                 }
             }
-            else
-            {
-                _bus.CommitDmaWordWrite(in reservation, value);
-            }
-
             latch = default;
             return value;
         }
@@ -3492,6 +3524,17 @@ namespace CopperMod.Amiga.Storage.Floppy
             return _activeDma && IsDiskDmaControlEnabled();
         }
 
+        private bool RequiresChronologicalSyncDeadline()
+        {
+            // A rotating sync match is normally just DSKBYTR latch state. Reads
+            // catch it up synchronously. It becomes a chronological event only
+            // while WORDSYNC/MSBSYNC-gated DMA is waiting on that match.
+            return GetDmaSyncMode() != AmigaDiskSyncMode.None &&
+                (_pendingReadDmaWords != 0 ||
+                    _pendingWriteDmaWords != 0 ||
+                    _activeDma);
+        }
+
         private AmigaDiskSyncMode GetDmaSyncMode()
         {
             if ((_bus.Paula.Adkcon & AdkconMsbSync) != 0)
@@ -3659,10 +3702,27 @@ namespace CopperMod.Amiga.Storage.Floppy
                 var track = drive.ReadEncodedTrack(drive.Cylinder, drive.Head);
                 var preparedTrack = GetPreparedTrack(drive, stream, track);
                 var publishThrough = Math.Min(cycle, plan.EndCycle);
-                while (plan.TryPeekNext(stream.SyncCacheOffsets, out var diskEvent) && diskEvent.Cycle <= publishThrough)
+                while (true)
                 {
-                    PublishDiskInputEvent(diskEvent, preparedTrack);
-                    plan.AdvanceNext(diskEvent.Kind);
+                    var hasSync = plan.TryPeekNextSync(stream.SyncCacheOffsets, out var syncEvent) &&
+                        syncEvent.Cycle <= publishThrough;
+                    var byteStop = hasSync ? syncEvent.Cycle : publishThrough;
+                    if (plan.TryConsumeByteEventsThrough(byteStop, out var byteEvent))
+                    {
+                        // No CPU access can be committed inside an already-advanced
+                        // scheduler interval.  Publish only its final byte/word latch;
+                        // materializing every intermediate eight-bit completion made
+                        // passive disk rotation proportional to flux length.
+                        PublishDiskInputEvent(byteEvent, preparedTrack);
+                    }
+
+                    if (!hasSync)
+                    {
+                        break;
+                    }
+
+                    PublishDiskInputEvent(syncEvent, preparedTrack);
+                    plan.AdvanceNext(DiskTrackEventKind.SyncMatch);
                 }
 
                 SetStreamPosition(
@@ -4418,14 +4478,12 @@ namespace CopperMod.Amiga.Storage.Floppy
                 bool writeMode,
                 uint targetAddress,
                 int sourceBit,
-                ushort value,
-                AmigaDmaWordReservation reservation)
+                ushort value)
             {
                 WriteMode = writeMode;
                 TargetAddress = targetAddress;
                 SourceBit = sourceBit;
                 Value = value;
-                Reservation = reservation;
                 HasValue = true;
             }
 
@@ -4436,8 +4494,6 @@ namespace CopperMod.Amiga.Storage.Floppy
             public int SourceBit { get; }
 
             public ushort Value { get; }
-
-            public AmigaDmaWordReservation Reservation { get; }
 
             public bool HasValue { get; }
         }
@@ -4579,6 +4635,33 @@ namespace CopperMod.Amiga.Storage.Floppy
                 diskEvent = !hasSync || (hasByte && byteEvent.Cycle <= syncEvent.Cycle)
                     ? byteEvent
                     : syncEvent;
+                return true;
+            }
+
+            public bool TryPeekNextSync(ReadOnlySpan<int> syncOffsets, out DiskTrackEvent diskEvent)
+                => TryCreateSyncEvent(_syncOffsetIndex, _syncRotationBase, syncOffsets, out diskEvent);
+
+            public bool TryConsumeByteEventsThrough(long cycle, out DiskTrackEvent diskEvent)
+            {
+                if (_nextByteCompletion > _lastByteCompletion || cycle < StartCycle)
+                {
+                    diskEvent = default;
+                    return false;
+                }
+
+                var elapsedCycles = cycle - StartCycle;
+                var completedPosition = StartPosition + (elapsedCycles / CyclesPerBit);
+                var completion = Math.Min(
+                    _lastByteCompletion,
+                    (long)Math.Floor(completedPosition / 8.0));
+                if (completion < _nextByteCompletion)
+                {
+                    diskEvent = default;
+                    return false;
+                }
+
+                _ = TryCreateByteEvent(completion, out diskEvent);
+                _nextByteCompletion = completion + 1;
                 return true;
             }
 

@@ -53,6 +53,7 @@ namespace CopperMod.Amiga.Bus
         private ulong _lastCleanGeneration;
         private bool _hasDrained;
         private bool _draining;
+
         private long _drainCount;
         private long _busAccessDrainCount;
         private long _sameCycleDrainCount;

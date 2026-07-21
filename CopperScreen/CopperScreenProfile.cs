@@ -19,7 +19,8 @@ internal enum CopperScreenKickstartSource
 
 internal sealed class CopperScreenProfile
 {
-	public const string DefaultProfileId = "expanded-copperstart";
+	// ROM-backed by default; CopperStart remains an explicit compatibility profile.
+	public const string DefaultProfileId = "expanded-m68040-kickstart-rom";
 	private const int Kilobyte = 1024;
 	private static readonly JsonSerializerOptions JsonOptions = new()
 	{
@@ -789,7 +790,8 @@ internal sealed class CopperScreenProfile
 	private static CopperScreenPresentationOptions ParsePresentationOptions(PresentationFile? config)
 	{
 		return new CopperScreenPresentationOptions(
-			CopperScreenPresentationOptions.ParseLacedMode(config?.LacedMode));
+			CopperScreenPresentationOptions.ParseLacedMode(config?.LacedMode),
+			CopperScreenPresentationOptions.ParsePixelAspectMode(config?.PixelAspectMode));
 	}
 
 	private static IReadOnlyList<CopperScreenControllerProfile> ParseControllerProfiles(ControllerProfileFile[]? profiles)
@@ -1046,6 +1048,8 @@ internal sealed class CopperScreenProfile
 	private sealed class PresentationFile
 	{
 		public string? LacedMode { get; set; }
+
+		public string? PixelAspectMode { get; set; }
 	}
 
 	private sealed class InputPortsFile

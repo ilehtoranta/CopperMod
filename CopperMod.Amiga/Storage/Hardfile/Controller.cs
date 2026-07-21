@@ -197,9 +197,9 @@ namespace CopperMod.Amiga.Storage.Hardfile
         {
             ArgumentNullException.ThrowIfNull(bus);
             _bootstrapBus = bus;
-            WriteTrap(DiagPointOffset, bus.RegisterRelocatableHostTrapStub(HostDiagBootstrap));
-            WriteTrap(BootPointOffset, bus.RegisterRelocatableHostTrapStub(HostBootBootstrap));
-            WriteTrap(ResidentInitOffset, bus.RegisterRelocatableHostTrapStub(HostResidentInit));
+            WriteTrap(DiagPointOffset, bus.RegisterRelocatableHostGateway(HostDiagBootstrap));
+            WriteTrap(BootPointOffset, bus.RegisterRelocatableHostGateway(HostBootBootstrap));
+            WriteTrap(ResidentInitOffset, bus.RegisterRelocatableHostGateway(HostResidentInit));
             _bootstrapInstalled = true;
         }
 
@@ -686,7 +686,7 @@ namespace CopperMod.Amiga.Storage.Hardfile
         }
 
         private void RegisterDeviceTrap(AmigaBus bus, int displacement, Action<M68kCpuState> callback)
-            => bus.RegisterHostTrapStub(unchecked((uint)((int)_deviceBase + displacement)), callback);
+            => bus.RegisterHostGateway(unchecked((uint)((int)_deviceBase + displacement)), callback);
 
         private static void WriteUnit(AmigaBus bus, uint address)
         {
@@ -1505,11 +1505,11 @@ namespace CopperMod.Amiga.Storage.Hardfile
             return rom;
         }
 
-        private void WriteTrap(int relativeOffset, ushort trapId)
+        private void WriteTrap(int relativeOffset, uint token)
         {
             var offset = DiagAreaOffset + relativeOffset;
             WriteUInt16(_boardRom, offset, 0xFF00);
-            WriteUInt16(_boardRom, offset + 2, trapId);
+            WriteUInt32(_boardRom, offset + 2, token);
         }
 
         private static void WriteDiagArea(byte[] rom)

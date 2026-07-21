@@ -27,6 +27,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         internal bool HasLiveDmaSlotWorkThrough(long targetCycle)
         {
             if (!_liveDmaEnabled ||
+                !_bus.LiveAgnusDmaEnabled ||
                 !_liveFrameValid ||
                 !HasLiveDisplayWork())
             {
@@ -54,7 +55,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var spritesBefore = _liveSpriteDmaFetches;
             completedSafeCopper = false;
 
-            if (!_liveDmaEnabled || !_liveFrameValid || !HasLiveDisplayWork())
+            if (!_liveDmaEnabled ||
+                !_bus.LiveAgnusDmaEnabled ||
+                !_liveFrameValid ||
+                !HasLiveDisplayWork())
             {
                 bitplaneFetches = 0;
                 spriteFetches = 0;
@@ -98,7 +102,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             var bitplanesBefore = _liveBitplaneDmaFetches;
             var spritesBefore = _liveSpriteDmaFetches;
-            if (!_liveDmaEnabled || !_liveFrameValid || !HasLiveDisplayWork())
+            if (!_liveDmaEnabled ||
+                !_bus.LiveAgnusDmaEnabled ||
+                !_liveFrameValid ||
+                !HasLiveDisplayWork())
             {
                 bitplaneFetches = 0;
                 spriteFetches = 0;
@@ -131,7 +138,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         internal long GetNextBlitterFixedSlotBarrierCycle(long targetCycle)
         {
-            if (!_liveDmaEnabled || !_liveFrameValid || !HasLiveDisplayWork())
+            if (!_liveDmaEnabled ||
+                !_bus.LiveAgnusDmaEnabled ||
+                !_liveFrameValid ||
+                !HasLiveDisplayWork())
             {
                 return long.MaxValue;
             }
@@ -286,11 +296,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void CaptureLiveDisplayDmaBeforeHrmGrant(long requestedCycle, bool includeCopper)
         {
+            var requestedSlot = _bus.NextChipSlotCycle(requestedCycle);
             for (var attempt = 0; attempt < 32; attempt++)
             {
                 var before = _bus.FindHrmDmaCandidate(requestedCycle);
                 var frameStopCycle = GetLiveFrameStopCycle();
-                if (before <= _liveCapturedThroughCycle ||
+                if (before > requestedSlot ||
+                    before <= _liveCapturedThroughCycle ||
                     before >= frameStopCycle ||
                     !HasLivePreGrantWorkThrough(before, includeCopper))
                 {
@@ -307,7 +319,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var after = _bus.IsHrmChipSlotReserved(before)
                     ? _bus.FindHrmDmaCandidate(before + AgnusChipSlotScheduler.SlotCycles)
                     : _bus.FindHrmDmaCandidate(requestedCycle);
-                if (after == before)
+                if (after <= before)
                 {
                     return;
                 }
@@ -316,31 +328,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void PrepareLiveDisplaySlotsBeforeHrmGrant(long requestedCycle, bool includeCopper)
         {
-            for (var attempt = 0; attempt < 32; attempt++)
-            {
-                var before = _bus.FindHrmDmaCandidate(requestedCycle);
-                var frameStopCycle = GetLiveFrameStopCycle();
-                if (before <= _liveCapturedThroughCycle ||
-                    before >= frameStopCycle ||
-                    !HasLiveSlotPreparationWorkThrough(before, includeCopper))
-                {
-                    return;
-                }
-
-                if (before < frameStopCycle)
-                {
-                    AdvanceLiveRegisterEventsWithinFrame(before, includeCopper);
-                    PrepareKnownLiveBitplaneSlotsThrough(before);
-                }
-
-                var after = _bus.IsHrmChipSlotReserved(before)
-                    ? _bus.FindHrmDmaCandidate(before + AgnusChipSlotScheduler.SlotCycles)
-                    : _bus.FindHrmDmaCandidate(requestedCycle);
-                if (after == before)
-                {
-                    return;
-                }
-            }
+            // A three-line capture ring cannot reserve arbitrarily far-ahead
+            // display slots without also consuming the intervening DMA: doing so
+            // would overwrite older line state before its fetched words exist.
+            // Execute each reached slot causally and leave only the immediately
+            // prepared line ahead of the capture horizon.
+            CaptureLiveDisplayDmaBeforeHrmGrant(requestedCycle, includeCopper);
         }
 
         private bool HasLivePreGrantWorkThrough(long candidateCycle, bool includeCopper)
@@ -399,14 +392,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             _liveNextWorkCycleValid = false;
             _liveNextWorkCycle = long.MaxValue;
+            _liveCpuVisibleWorkCycleValid = false;
+            _liveCpuVisibleWorkCycle = long.MaxValue;
             _liveDisplayWakeCandidateCacheValid = false;
         }
+
+        private void InvalidateLiveWakeCandidateQueryCache()
+            => _liveDisplayWakeCandidateCacheValid = false;
 
         private void CaptureLiveBitplaneDmaBeforeHrmGrant(long requestedCycle)
         {
             var requestedSlot = _bus.NextChipSlotCycle(requestedCycle);
             var candidate = _bus.FindHrmDmaCandidate(requestedCycle);
-            if (candidate <= _liveCapturedThroughCycle)
+            if (candidate > requestedSlot || candidate <= _liveCapturedThroughCycle)
             {
                 return;
             }
@@ -423,7 +421,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var frameStopCycle = GetLiveFrameStopCycle();
-            while (candidate < frameStopCycle)
+            while (candidate <= requestedSlot && candidate < frameStopCycle)
             {
                 if (candidate < nextFetchCycle)
                 {
@@ -456,10 +454,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var frameStopCycle = GetLiveFrameStopCycle();
+            var requestedSlot = _bus.NextChipSlotCycle(requestedCycle);
             while (true)
             {
                 var candidate = _bus.FindHrmDmaCandidate(requestedCycle);
-                if (candidate >= frameStopCycle ||
+                if (candidate > requestedSlot ||
+                    candidate >= frameStopCycle ||
                     !TryGetLiveSpriteDmaSlot(candidate, out var row, out var spriteIndex, out var word))
                 {
                     return;

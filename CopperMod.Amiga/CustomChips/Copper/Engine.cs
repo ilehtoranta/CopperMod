@@ -8,12 +8,25 @@ namespace CopperMod.Amiga.CustomChips.Copper
         {
             ArgumentNullException.ThrowIfNull(bus);
             var pc = listAddress;
+            var cycle = 0L;
             ushort copcon = 0;
             var suppressNextMove = false;
             for (var i = 0; i < maxInstructions; i++)
             {
-                var first = bus.ReadChipWordForDevice(AmigaBusRequester.Copper, AmigaBusAccessKind.Copper, pc, 0);
-                var second = bus.ReadChipWordForDevice(AmigaBusRequester.Copper, AmigaBusAccessKind.Copper, pc + 2, 0);
+                var firstRead = bus.ReadChipWordForDeviceWithResult(
+                    AmigaBusRequester.Copper,
+                    AmigaBusAccessKind.Copper,
+                    pc,
+                    cycle);
+                cycle = firstRead.BusAccess.CompletedCycle;
+                var secondRead = bus.ReadChipWordForDeviceWithResult(
+                    AmigaBusRequester.Copper,
+                    AmigaBusAccessKind.Copper,
+                    pc + 2,
+                    cycle);
+                cycle = secondRead.BusAccess.CompletedCycle;
+                var first = firstRead.Value;
+                var second = secondRead.Value;
                 pc += 4;
                 if (first == 0xFFFF && second == 0xFFFE)
                 {
@@ -46,7 +59,12 @@ namespace CopperMod.Amiga.CustomChips.Copper
                     }
 
                     onMove?.Invoke(register, second);
-                    bus.WriteDeviceWord(AmigaBusRequester.Copper, AmigaBusAccessKind.Copper, 0x00DFF000u + register, second, 0);
+                    bus.WriteDeviceWord(
+                        AmigaBusRequester.Copper,
+                        AmigaBusAccessKind.Copper,
+                        0x00DFF000u + register,
+                        second,
+                        cycle);
                     continue;
                 }
 

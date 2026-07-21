@@ -366,11 +366,11 @@ public sealed class CopperScreenRuntimeTests
 		var emulator = CopperScreenEmulator.CreateWithoutDisk();
 		using var runtime = CopperScreenRuntime.CreateForTests(emulator);
 
-		runtime.SetPresentationOptions(new CopperScreenPresentationOptions(CopperScreenLacedPresentationMode.CrtFlicker));
+		runtime.SetPresentationOptions(new CopperScreenPresentationOptions(CopperScreenLacedPresentationMode.CrtPhosphor));
 		InvokePrivateMethod(runtime, "ProcessCommands");
 
 		Assert.Equal(
-			CopperScreenLacedPresentationMode.CrtFlicker,
+			CopperScreenLacedPresentationMode.CrtPhosphor,
 			GetPrivateField<CopperScreenPresentationOptions>(emulator, "_presentationOptions").LacedMode);
 	}
 

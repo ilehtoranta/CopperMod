@@ -158,7 +158,7 @@ namespace CopperMod.Amiga
         private uint EnsureRtgOpenScreenContinuation()
         {
             if (_rtgOpenScreenContinuationAddress != 0 &&
-                _machine.Bus.HasHostTrapStub(_rtgOpenScreenContinuationAddress))
+                _machine.Bus.HasHostGateway(_rtgOpenScreenContinuationAddress))
             {
                 return _rtgOpenScreenContinuationAddress;
             }
@@ -170,7 +170,7 @@ namespace CopperMod.Amiga
             }
 
             _rtgOpenScreenContinuationAddress = address;
-            _machine.Bus.RegisterHostTrapStub(address, CompleteRtgOpenScreen);
+            _machine.Bus.RegisterHostGateway(address, CompleteRtgOpenScreen);
             return address;
         }
 

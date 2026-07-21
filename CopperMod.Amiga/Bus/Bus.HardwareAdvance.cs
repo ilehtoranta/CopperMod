@@ -10,6 +10,9 @@ namespace CopperMod.Amiga.Bus
 {
     internal sealed partial class Bus
     {
+        internal void AdvanceCausalBusCoreThrough(long targetCycle)
+            => _hardwareScheduler.DrainSlotContendedAccessCore(targetCycle);
+
         internal void RequestHardwareInterrupt(ushort intreqBit, long cycle)
         {
             Paula.RequestInterrupt(intreqBit, Math.Max(0, cycle));
@@ -240,6 +243,7 @@ namespace CopperMod.Amiga.Bus
         internal bool TryGetCommittedAgnusSlotOwner(long cycle, out AgnusChipSlotOwner owner)
             => _hrmSlotEngine.TryGetCommittedSlotOwner(cycle, out owner);
 
+
         internal AgnusSlotAuditSource PushSlotScheduleAuditSource(AgnusSlotAuditSource source)
         {
             var previous = _hrmSlotEngine.SlotScheduleAuditSource;
@@ -371,15 +375,11 @@ namespace CopperMod.Amiga.Bus
             long grantedCycle,
             bool isWrite)
         {
-            if ((target == AmigaBusAccessTarget.ChipRam ||
-                    target == AmigaBusAccessTarget.ExpansionRam ||
-                    target == AmigaBusAccessTarget.RealTimeClock ||
-                    target == AmigaBusAccessTarget.CustomRegisters) &&
-                grantedCycle <= requestedCycle)
-            {
-                return;
-            }
-
+            // Arbitration establishes ownership, but a no-wait CPU grant does
+            // not prove that every device timeline has executed its earlier
+            // non-conflicting slots. Drain through the grant before the CPU
+            // value is sampled or committed so all Chip RAM observations stay
+            // in nondecreasing granted-cycle order.
             AdvanceDmaBeforeCpuChipAccess(target, address, grantedCycle, isWrite);
         }
 

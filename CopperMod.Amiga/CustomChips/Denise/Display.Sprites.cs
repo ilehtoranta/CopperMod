@@ -10,54 +10,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 {
     internal sealed partial class Display
     {
-        private void RenderSprites(Span<uint> bgra)
-        {
-            for (var spriteGroup = (_sprites.Length / 2) - 1; spriteGroup >= 0; spriteGroup--)
-            {
-                var spriteIndex = spriteGroup * 2;
-                var evenSprites = GetSpriteFrameCommands(spriteIndex);
-                var oddSprites = GetSpriteFrameCommands(spriteIndex + 1);
-                Array.Clear(_evenSpriteAttached, 0, Math.Min(evenSprites.Count, _evenSpriteAttached.Length));
-                Array.Clear(_oddSpriteAttached, 0, Math.Min(oddSprites.Count, _oddSpriteAttached.Length));
-
-                for (var oddIndex = 0; oddIndex < oddSprites.Count; oddIndex++)
-                {
-                    var oddSprite = oddSprites[oddIndex];
-                    var evenIndex = FindAttachedEvenSprite(evenSprites, _evenSpriteAttached, oddSprite);
-                    if (evenIndex < 0)
-                    {
-                        if (oddSprite.Descriptor.Attached)
-                        {
-                            _oddSpriteAttached[oddIndex] = true;
-                        }
-
-                        continue;
-                    }
-
-                    _evenSpriteAttached[evenIndex] = true;
-                    _oddSpriteAttached[oddIndex] = true;
-                    RenderAttachedSpritePair(bgra, spriteIndex, evenSprites[evenIndex], oddSprite);
-                }
-
-                for (var i = 0; i < oddSprites.Count; i++)
-                {
-                    if (!_oddSpriteAttached[i] && !oddSprites[i].Descriptor.Attached)
-                    {
-                        RenderSprite(bgra, spriteIndex + 1, oddSprites[i]);
-                    }
-                }
-
-                for (var i = 0; i < evenSprites.Count; i++)
-                {
-                    if (!_evenSpriteAttached[i])
-                    {
-                        RenderSprite(bgra, spriteIndex, evenSprites[i]);
-                    }
-                }
-            }
-        }
-
-        private void RenderTimelineSprites(Span<uint> bgra, DisplayFrameTimeline timeline)
+        private void RenderTimelineSpritesRow(Span<uint> bgra, DisplayFrameTimeline timeline, int row)
         {
             for (var spriteGroup = (_sprites.Length / 2) - 1; spriteGroup >= 0; spriteGroup--)
             {
@@ -83,14 +36,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                     _evenSpriteAttached[evenIndex] = true;
                     _oddSpriteAttached[oddIndex] = true;
-                    RenderTimelineAttachedSpritePair(bgra, spriteIndex, evenSprites[evenIndex], oddSprite, timeline);
+                    RenderTimelineAttachedSpritePairRow(
+                        bgra,
+                        spriteIndex,
+                        evenSprites[evenIndex],
+                        oddSprite,
+                        timeline,
+                        row);
                 }
 
                 for (var i = 0; i < oddSprites.Count; i++)
                 {
                     if (!_oddSpriteAttached[i] && !oddSprites[i].Descriptor.Attached)
                     {
-                        RenderTimelineSprite(bgra, spriteIndex + 1, oddSprites[i], timeline);
+                        RenderTimelineSpriteRow(bgra, spriteIndex + 1, oddSprites[i], timeline, row);
                     }
                 }
 
@@ -98,7 +57,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     if (!_evenSpriteAttached[i])
                     {
-                        RenderTimelineSprite(bgra, spriteIndex, evenSprites[i], timeline);
+                        RenderTimelineSpriteRow(bgra, spriteIndex, evenSprites[i], timeline, row);
                     }
                 }
             }
@@ -109,71 +68,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var commands = _spriteCommandScratch[spriteIndex];
             timeline.CopySpriteFrameCommands(spriteIndex, commands);
             return commands;
-        }
-
-        private List<SpriteFrameCommand> GetSpriteFrameCommands(int spriteIndex)
-        {
-            var commands = _spriteCommandScratch[spriteIndex];
-            commands.Clear();
-            for (var i = 0; i < _spriteFrameCommands.Count; i++)
-            {
-                var command = _spriteFrameCommands[i];
-                if (command.SpriteIndex == spriteIndex)
-                {
-                    AppendUniqueSpriteFrameCommand(commands, command);
-                }
-            }
-
-            if (commands.Count == 0 &&
-                _previousLiveSpriteFrameStartCycle == _renderFrameStartCycle)
-            {
-                for (var i = 0; i < _previousLiveSpriteFrameCommands.Count; i++)
-                {
-                    var command = _previousLiveSpriteFrameCommands[i];
-                    if (command.SpriteIndex == spriteIndex)
-                    {
-                        AppendUniqueSpriteFrameCommand(commands, command);
-                    }
-                }
-
-                if (commands.Count > 0)
-                {
-                    return commands;
-                }
-            }
-
-            var sprite = _sprites[spriteIndex];
-            var allowStateFallback = !_renderingLiveCapture &&
-                (!_useTimedPresentationReads ||
-                    !_bus.LiveAgnusDmaEnabled ||
-                    HasArchivedLiveSpriteFrameCommands(_renderFrameStartCycle));
-            if (commands.Count == 0 && allowStateFallback && IsSpriteDmaEnabled())
-            {
-                if (IsSpriteDmaChannelAvailable(spriteIndex))
-                {
-                    AppendDmaSpriteFrameCommands(commands, spriteIndex, sprite.Pointer, 0);
-                }
-                else if (_useTimedPresentationReads)
-                {
-                    _lastMissedSpriteDmaSlots++;
-                }
-            }
-            else if (commands.Count == 0 &&
-                allowStateFallback &&
-                TryGetManualSpriteDescriptor(spriteIndex, out var descriptor))
-            {
-                AppendUniqueSpriteFrameCommand(
-                    commands,
-                    new SpriteFrameCommand(spriteIndex, 0, descriptor));
-            }
-
-            return commands;
-        }
-
-        private bool HasArchivedLiveSpriteFrameCommands(long frameStartCycle)
-        {
-            return _previousLiveSpriteFrameStartCycle == frameStartCycle &&
-                _previousLiveSpriteFrameCommands.Count > 0;
         }
 
         private static void AppendUniqueSpriteFrameCommand(List<SpriteFrameCommand> commands, SpriteFrameCommand command)
@@ -326,29 +220,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return true;
         }
 
-        private void CaptureDmaSpriteFrameCommand(int spriteIndex)
-        {
-            if (!_captureSpriteFrameCommands ||
-                _advancingLiveDma ||
-                _useTimedPresentationReads ||
-                !IsSpriteDmaEnabled() ||
-                !IsSpriteDmaChannelAvailable(spriteIndex))
-            {
-                return;
-            }
-
-            var sprite = _sprites[spriteIndex];
-            if (!TryGetCurrentOutputRow(out var row))
-            {
-                row = 0;
-            }
-
-            AppendDmaSpriteFrameCommands(_spriteFrameCommands, spriteIndex, sprite.Pointer, row);
-        }
-
         private void CaptureManualSpriteFrameCommandIfArmed(int spriteIndex, long cycle = long.MinValue)
         {
-            if (!_captureSpriteFrameCommands && !_advancingLiveDma)
+            if (!_advancingLiveDma)
             {
                 return;
             }
@@ -360,11 +234,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var descriptor = CreateManualSpriteDescriptor(sprite);
-            if (_captureSpriteFrameCommands || _advancingLiveDma)
-            {
-                AddSpriteFrameCommand(spriteIndex, descriptor, cycle);
-                return;
-            }
+            AddSpriteFrameCommand(spriteIndex, descriptor, cycle);
         }
 
         private void CaptureInitialManualSpriteFrameCommands()
@@ -414,7 +284,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void StopManualSpriteFrameCommands(int spriteIndex, long cycle = long.MinValue)
         {
-            if (!_captureSpriteFrameCommands && !_advancingLiveDma)
+            if (!_advancingLiveDma)
             {
                 return;
             }
@@ -503,60 +373,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             _displayTimeline.RecordSpriteDataFetch(row, spriteIndex, word, value, granted);
-        }
-
-        private void AppendDmaSpriteFrameCommands(
-            List<SpriteFrameCommand> commands,
-            int spriteIndex,
-            uint pointer,
-            int row)
-        {
-            var controlAddress = pointer;
-            var controlRow = Math.Clamp(row, 0, LowResOutputHeight - 1);
-            var lastVisibleStop = -1;
-            for (var controlBlock = 0; controlBlock < 128; controlBlock++)
-            {
-                if (!TryReadSpriteWordForPresentation(controlAddress, controlRow, spriteIndex, 0, out var pos) ||
-                    !TryReadSpriteWordForPresentation(AddDmaPointerOffset(controlAddress, 2), controlRow, spriteIndex, 1, out var ctl))
-                {
-                    return;
-                }
-
-                if ((pos | ctl) == 0)
-                {
-                    return;
-                }
-
-                var descriptor = CreateSpriteDescriptor(
-                    pos,
-                    ctl,
-                    AddDmaPointerOffset(controlAddress, 4),
-                    isDma: true,
-                    _sprites[spriteIndex].DataA,
-                    _sprites[spriteIndex].DataB);
-                var rawHeight = Math.Max(0, descriptor.YStop - descriptor.YStart);
-                var nextControlAddress = AddDmaPointerOffset(descriptor.DataAddress, rawHeight * 4);
-
-                if (lastVisibleStop >= 0 && descriptor.YStart <= lastVisibleStop)
-                {
-                    descriptor = descriptor.WithYStart(Math.Min(LowResOutputHeight, lastVisibleStop + 1));
-                }
-
-                var height = Math.Max(0, descriptor.YStop - descriptor.YStart);
-                if (height == 0)
-                {
-                    return;
-                }
-
-                if (descriptor.YStart >= row)
-                {
-                    AppendUniqueSpriteFrameCommand(commands, new SpriteFrameCommand(spriteIndex, row, descriptor));
-                }
-
-                lastVisibleStop = Math.Max(lastVisibleStop, descriptor.YStop);
-                controlRow = Math.Clamp(descriptor.YStop + 1, 0, LowResOutputHeight - 1);
-                controlAddress = nextControlAddress;
-            }
         }
 
         private bool IsSpriteDmaEnabled()
@@ -777,208 +593,59 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 manualDataB);
         }
 
-        private void RenderSprite(Span<uint> bgra, int spriteIndex, SpriteFrameCommand command)
-        {
-            var sprite = command.Descriptor;
-            if (!sprite.IsDma)
-            {
-                var yStart = Math.Max(sprite.YStart, command.Row);
-                var yStop = Math.Min(sprite.YStop, LowResOutputHeight);
-                for (var y = yStart; y < yStop; y++)
-                {
-                    RenderSpriteLine(bgra, spriteIndex, sprite, y, sprite.ManualDataA, sprite.ManualDataB);
-                }
-
-                return;
-            }
-
-            var address = sprite.DataAddress;
-            for (var y = sprite.YStart; y < sprite.YStop; y++)
-            {
-                if (TryReadSpriteWordForPresentation(
-                        address,
-                        y,
-                        spriteIndex,
-                        0,
-                        out var dataA,
-                        recordLiveCapture: false) &&
-                    TryReadSpriteWordForPresentation(
-                        AddDmaPointerOffset(address, 2),
-                        y,
-                        spriteIndex,
-                        1,
-                        out var dataB,
-                        recordLiveCapture: false))
-                {
-                    RenderSpriteLine(bgra, spriteIndex, sprite, y, dataA, dataB);
-                }
-
-                address = AddDmaPointerOffset(address, 4);
-            }
-        }
-
-        private void RenderTimelineSprite(
+        private void RenderTimelineSpriteRow(
             Span<uint> bgra,
             int spriteIndex,
             SpriteFrameCommand command,
-            DisplayFrameTimeline timeline)
+            DisplayFrameTimeline timeline,
+            int row)
         {
             var sprite = command.Descriptor;
-            if (!sprite.IsDma)
+            if (row < Math.Max(sprite.YStart, command.Row) || row >= sprite.YStop)
             {
-                var yStart = Math.Max(sprite.YStart, command.Row);
-                var yStop = Math.Min(sprite.YStop, LowResOutputHeight);
-                for (var y = yStart; y < yStop; y++)
-                {
-                    RenderSpriteLine(bgra, spriteIndex, sprite, y, sprite.ManualDataA, sprite.ManualDataB);
-                }
-
                 return;
             }
 
-            for (var y = sprite.YStart; y < sprite.YStop; y++)
+            if (!sprite.IsDma)
             {
-                if (TryReadTimelineSpriteLine(command, y, timeline, out var dataA, out var dataB))
-                {
-                    RenderSpriteLine(bgra, spriteIndex, sprite, y, dataA, dataB);
-                }
+                RenderSpriteLine(bgra, spriteIndex, sprite, row, sprite.ManualDataA, sprite.ManualDataB);
+                return;
+            }
+
+            if (TryReadTimelineSpriteLine(command, row, timeline, out var dataA, out var dataB))
+            {
+                RenderSpriteLine(bgra, spriteIndex, sprite, row, dataA, dataB);
             }
         }
 
-        private void RenderAttachedSpritePair(Span<uint> bgra, int spriteIndex, SpriteFrameCommand evenCommand, SpriteFrameCommand oddCommand)
-        {
-            var evenSprite = evenCommand.Descriptor;
-            var oddSprite = oddCommand.Descriptor;
-            var yStart = Math.Min(evenSprite.YStart, oddSprite.YStart);
-            var yStop = Math.Max(evenSprite.YStop, oddSprite.YStop);
-            for (var y = yStart; y < yStop; y++)
-            {
-                var evenData = ReadSpriteLine(evenCommand, y);
-                var oddData = ReadSpriteLine(oddCommand, y);
-                RenderAttachedSpriteLine(
-                    bgra,
-                    spriteIndex,
-                    evenSprite.X,
-                    oddSprite.X,
-                    y,
-                    evenData.DataA,
-                    evenData.DataB,
-                    oddData.DataA,
-                    oddData.DataB);
-            }
-        }
-
-        private void RenderTimelineAttachedSpritePair(
+        private void RenderTimelineAttachedSpritePairRow(
             Span<uint> bgra,
             int spriteIndex,
             SpriteFrameCommand evenCommand,
             SpriteFrameCommand oddCommand,
-            DisplayFrameTimeline timeline)
+            DisplayFrameTimeline timeline,
+            int row)
         {
             var evenSprite = evenCommand.Descriptor;
             var oddSprite = oddCommand.Descriptor;
-            var yStart = Math.Min(evenSprite.YStart, oddSprite.YStart);
-            var yStop = Math.Max(evenSprite.YStop, oddSprite.YStop);
-            for (var y = yStart; y < yStop; y++)
+            if (row < Math.Min(evenSprite.YStart, oddSprite.YStart) ||
+                row >= Math.Max(evenSprite.YStop, oddSprite.YStop) ||
+                !TryReadTimelineSpriteLine(evenCommand, row, timeline, out var evenDataA, out var evenDataB) ||
+                !TryReadTimelineSpriteLine(oddCommand, row, timeline, out var oddDataA, out var oddDataB))
             {
-                if (!TryReadTimelineSpriteLine(evenCommand, y, timeline, out var evenDataA, out var evenDataB) ||
-                    !TryReadTimelineSpriteLine(oddCommand, y, timeline, out var oddDataA, out var oddDataB))
-                {
-                    continue;
-                }
-
-                RenderAttachedSpriteLine(
-                    bgra,
-                    spriteIndex,
-                    evenSprite.X,
-                    oddSprite.X,
-                    y,
-                    evenDataA,
-                    evenDataB,
-                    oddDataA,
-                    oddDataB);
-            }
-        }
-
-        private void RenderAttachedOddSpriteWithoutEvenPartner(Span<uint> bgra, int spriteIndex, SpriteFrameCommand oddCommand)
-        {
-            var oddSprite = oddCommand.Descriptor;
-            for (var y = oddSprite.YStart; y < oddSprite.YStop; y++)
-            {
-                var oddData = ReadSpriteLine(oddCommand, y);
-                RenderAttachedSpriteLine(
-                    bgra,
-                    spriteIndex,
-                    oddSprite.X,
-                    oddSprite.X,
-                    y,
-                    0,
-                    0,
-                    oddData.DataA,
-                    oddData.DataB);
-            }
-        }
-
-        private void RenderTimelineAttachedOddSpriteWithoutEvenPartner(
-            Span<uint> bgra,
-            int spriteIndex,
-            SpriteFrameCommand oddCommand,
-            DisplayFrameTimeline timeline)
-        {
-            var oddSprite = oddCommand.Descriptor;
-            for (var y = oddSprite.YStart; y < oddSprite.YStop; y++)
-            {
-                if (!TryReadTimelineSpriteLine(oddCommand, y, timeline, out var oddDataA, out var oddDataB))
-                {
-                    continue;
-                }
-
-                RenderAttachedSpriteLine(
-                    bgra,
-                    spriteIndex,
-                    oddSprite.X,
-                    oddSprite.X,
-                    y,
-                    0,
-                    0,
-                    oddDataA,
-                    oddDataB);
-            }
-        }
-
-        private (ushort DataA, ushort DataB) ReadSpriteLine(SpriteFrameCommand command, int y)
-        {
-            var sprite = command.Descriptor;
-            if (y < Math.Max(sprite.YStart, command.Row) || y >= sprite.YStop)
-            {
-                return ((ushort)0, (ushort)0);
+                return;
             }
 
-            if (!sprite.IsDma)
-            {
-                return (sprite.ManualDataA, sprite.ManualDataB);
-            }
-
-            var address = AddDmaPointerOffset(sprite.DataAddress, (y - sprite.YStart) * 4);
-            if (!TryReadSpriteWordForPresentation(
-                    address,
-                    y,
-                    command.SpriteIndex,
-                    0,
-                    out var dataA,
-                    recordLiveCapture: false) ||
-                !TryReadSpriteWordForPresentation(
-                    AddDmaPointerOffset(address, 2),
-                    y,
-                    command.SpriteIndex,
-                    1,
-                    out var dataB,
-                    recordLiveCapture: false))
-            {
-                return ((ushort)0, (ushort)0);
-            }
-
-            return (dataA, dataB);
+            RenderAttachedSpriteLine(
+                bgra,
+                spriteIndex,
+                evenSprite.X,
+                oddSprite.X,
+                row,
+                evenDataA,
+                evenDataB,
+                oddDataA,
+                oddDataB);
         }
 
         private static bool TryReadTimelineSpriteLine(
@@ -1144,8 +811,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             draw = true;
-            var offset = GetCompositionSampleOffset(x, y, sample);
-            return xorPlayfield ? spriteRaw ^ _playfieldSampleColorIndexes[offset] : spriteRaw;
+            return xorPlayfield ? spriteRaw ^ GetPlayfieldSampleColorIndex(x, sample) : spriteRaw;
         }
 
         private bool ShouldSuperHighResolutionSpriteSampleDraw(
@@ -1168,7 +834,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var mask = _playfieldPriorityMasks[GetCompositionSampleOffset(x, y, sample)];
+            var mask = GetPlayfieldPriorityMask(x, sample);
             if (mask == 0)
             {
                 return true;
@@ -1322,11 +988,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var maskOffset = GetCompositionSampleOffset(x, y, 0);
-            var mask = (byte)(_playfieldPriorityMasks[maskOffset] |
-                _playfieldPriorityMasks[maskOffset + 1] |
-                _playfieldPriorityMasks[maskOffset + 2] |
-                _playfieldPriorityMasks[maskOffset + 3]);
+            var mask = (byte)(GetPlayfieldPriorityMask(x, 0) |
+                GetPlayfieldPriorityMask(x, 1) |
+                GetPlayfieldPriorityMask(x, 2) |
+                GetPlayfieldPriorityMask(x, 3));
             if (mask == 0)
             {
                 return true;
@@ -1450,9 +1115,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if ((uint)colorIndex < PaletteColorCount && spanIndex >= 0)
             {
                 ref readonly var span = ref GetPaletteFrameSpan(spanIndex);
-                return _paletteFrameSnapshots.GetConvertedColor(
-                    span.PaletteSnapshotIndex,
-                    colorIndex);
+                return GetPaletteFrameSpanConvertedColor(span, colorIndex);
             }
 
             return ConvertColorIndex(colorIndex);
@@ -1693,6 +1356,46 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _compositionSampleColors[offset + 1] = pixel1;
             _compositionSampleColors[offset + 2] = pixel2;
             _compositionSampleColors[offset + 3] = pixel3;
+        }
+
+        private void FillLowResolutionOutputRun(
+            Span<uint> bgra,
+            int xStart,
+            int xStop,
+            int y,
+            uint pixel)
+        {
+            if (xStop <= xStart || (uint)y >= (uint)ActiveLowResOutputHeight)
+            {
+                return;
+            }
+
+            var scale = GetRenderHorizontalScale();
+            var outputOffset = xStart * scale;
+            var outputLength = (xStop - xStart) * scale;
+            if (!IsRenderingHighResolutionHeight())
+            {
+                bgra.Slice((y * _renderWidth) + outputOffset, outputLength).Fill(pixel);
+            }
+            else
+            {
+                var firstOutputY = (y * 2) + (InterlaceEnabled ? _renderInterlaceField : 0);
+                bgra.Slice((firstOutputY * _renderWidth) + outputOffset, outputLength).Fill(pixel);
+                if (!InterlaceEnabled)
+                {
+                    bgra.Slice(((firstOutputY + 1) * _renderWidth) + outputOffset, outputLength).Fill(pixel);
+                }
+            }
+
+            if (GetDeniseResolution(_bplcon0) != DeniseResolution.SuperHighRes)
+            {
+                return;
+            }
+
+            for (var x = xStart; x < xStop; x++)
+            {
+                StoreCompositionSamples(x, y, pixel, pixel, pixel, pixel);
+            }
         }
 
         private void WriteLowResolutionOutputPixelRow(Span<uint> bgra, int x, int outputY, uint pixel, bool highResolutionWidth)

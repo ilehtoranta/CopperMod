@@ -62,7 +62,9 @@ internal readonly record struct CopperScreenState(
 	double LastCpuFrameMilliseconds,
 	double LastHardwareFrameMilliseconds,
 	double LastDisplayFrameMilliseconds,
-	double LastAudioFrameMilliseconds);
+	double LastAudioFrameMilliseconds,
+	bool IsInterlaced,
+	int InterlaceField);
 
 internal sealed class CopperScreenFrameLease : IDisposable
 {
@@ -178,6 +180,8 @@ internal sealed class CopperScreenRuntime : IDisposable
 	public int Width => _emulator.Width;
 
 	public int Height => _emulator.Height;
+
+	public CopperScreenPresentationGeometry PresentationGeometry => _emulator.PresentationGeometry;
 
 	public event Action? FramePublished;
 
@@ -1004,7 +1008,9 @@ internal sealed class CopperScreenRuntime : IDisposable
 			_emulator.LastFrameTiming.CpuMilliseconds,
 			_emulator.LastFrameTiming.HardwareMilliseconds,
 			_emulator.LastFrameTiming.DisplayMilliseconds,
-			_lastAudioFrameMilliseconds);
+			_lastAudioFrameMilliseconds,
+			_emulator.IsInterlaced,
+			_emulator.CompletedInterlaceField);
 	}
 
 	private CopperScreenDriveState[] CaptureDriveStates()

@@ -209,9 +209,6 @@ namespace CopperMod.Amiga.Bus
             CompleteCleanMark(targetCycle);
         }
 
-        internal void MarkSlotContendedCleanThroughCpuGrant(long targetCycle)
-            => MarkClean(Math.Max(0, targetCycle), SlotContendedMemoryAccessMask);
-
         private void CompleteCleanMark(long targetCycle)
         {
             if (_earliestDirtyCycle <= targetCycle)
@@ -292,6 +289,9 @@ namespace CopperMod.Amiga.Bus
         // prediction. Profiling data for slot-contended drains is still collected at the
         // outer DrainTo level via the profiling partial class.
         internal void DrainSlotContendedAccess(long targetCycle)
+            => _bus.CausalBusExecutor.AdvanceThrough(targetCycle);
+
+        internal void DrainSlotContendedAccessCore(long targetCycle)
         {
             if (CanSkipSlotContendedDrain(targetCycle))
             {
@@ -314,12 +314,6 @@ namespace CopperMod.Amiga.Bus
             try
             {
                 var blitterWasBusyAtDrainStart = _bus.Blitter.Busy;
-                if (HasSlotContendedAgnusWorkThrough(targetCycle))
-                {
-                    _bus.AdvanceAgnusCoreTo(targetCycle);
-                    _agnusEvents++;
-                }
-
                 if (TrySkipDrainWithWakeAgenda(targetCycle, SlotContendedMemoryAccessMask))
                 {
                     MarkClean(targetCycle, SlotContendedMemoryAccessMask);
@@ -334,6 +328,47 @@ namespace CopperMod.Amiga.Bus
 
                 while (true)
                 {
+                    if (_bus.CausalBusExecutor.ProductionEnabled &&
+                        _bus.CausalBusExecutor.TryAdvanceFixedBatch(
+                            cursor,
+                            targetCycle,
+                            out var fixedAdvancedThrough))
+                    {
+                        _agnusEvents++;
+                        cursor = Math.Max(cursor, fixedAdvancedThrough);
+                        if (cursor >= targetCycle)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (_bus.CausalBusExecutor.ProductionEnabled)
+                    {
+                        var dynamicBatch = _bus.CausalBusExecutor.TryAdvanceSingleDynamicBatch(
+                            cursor,
+                            targetCycle,
+                            out var dynamicAdvancedThrough);
+                        if (dynamicBatch != AgnusBusExecutionResult.None)
+                        {
+                            if ((dynamicBatch & AgnusBusExecutionResult.Paula) != 0)
+                            {
+                                _paulaEvents++;
+                            }
+
+                            if ((dynamicBatch & AgnusBusExecutionResult.Disk) != 0)
+                            {
+                                InvalidateDiskWakeFalseCache();
+                                _diskEvents++;
+                            }
+
+                            cursor = Math.Max(cursor, dynamicAdvancedThrough);
+                            if (cursor >= targetCycle)
+                            {
+                                break;
+                            }
+                        }
+                    }
+
                     var nextCycle = GetNextSlotContendedEventCycle(cursor, targetCycle);
                     if (nextCycle == long.MaxValue || nextCycle > targetCycle)
                     {
@@ -507,6 +542,15 @@ namespace CopperMod.Amiga.Bus
 
         private long GetNextSlotContendedEventCycle(long currentCycle, long targetCycle)
         {
+            // The causal executor owns the production slot-contended agenda. Do not
+            // let a legacy wake-cache hit bypass it: besides retaining the old
+            // invalidation cost, that made production behavior depend on whether an
+            // unrelated earlier query happened to populate the scheduler cache.
+            if (_bus.CausalBusExecutor.ProductionEnabled)
+            {
+                return _bus.CausalBusExecutor.GetNextSlotContendedCycle(currentCycle, targetCycle);
+            }
+
             return TryGetWakeAgendaCandidate(
                     currentCycle,
                     targetCycle,
@@ -518,13 +562,44 @@ namespace CopperMod.Amiga.Bus
 
         private long GetNextSlotContendedEventCycleUncached(long currentCycle, long targetCycle)
         {
-            var candidate = long.MaxValue;
-            candidate = Min(candidate, GetNextPaulaDmaEventCycle(currentCycle, targetCycle));
+            var executor = _bus.CausalBusExecutor;
+            if (executor.ProductionEnabled)
+            {
+                // Production execution has a single eligibility agenda. Do not
+                // query the four legacy wake sources first: that scan is the
+                // scheduler cost this boundary is intended to remove.
+                return executor.GetNextSlotContendedCycle(currentCycle, targetCycle);
+            }
 
-            candidate = Min(candidate, GetNextSlotContendedDiskEventCycle(currentCycle, targetCycle));
+            // Sample the shadow before any legacy getter can populate caches or
+            // materialize fixed-slot state. This detects hidden mutation in the
+            // old prediction path instead of accidentally teaching the new
+            // agenda from the reference query.
+            var executorCandidate = executor.ShadowEnabled
+                ? executor.GetNextSlotContendedCycle(currentCycle, targetCycle)
+                : long.MaxValue;
 
-            candidate = Min(candidate, _bus.GetNextAgnusEventCycle(currentCycle, targetCycle));
-            candidate = Min(candidate, _bus.Blitter.GetNextWakeCandidateCycle(currentCycle, targetCycle));
+            var paulaCandidate = GetNextPaulaDmaEventCycle(currentCycle, targetCycle);
+            var diskCandidate = GetNextSlotContendedDiskEventCycle(currentCycle, targetCycle);
+            var agnusCandidate = _bus.GetNextAgnusEventCycle(currentCycle, targetCycle);
+            var blitterCandidate = _bus.Blitter.GetNextWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
+            var candidate = Math.Min(
+                Math.Min(paulaCandidate, diskCandidate),
+                Math.Min(agnusCandidate, blitterCandidate));
+
+            if (executor.ShadowEnabled)
+            {
+                executor.RecordShadowPrediction(
+                    currentCycle,
+                    targetCycle,
+                    candidate,
+                    executorCandidate,
+                    paulaCandidate,
+                    diskCandidate,
+                    agnusCandidate,
+                    blitterCandidate);
+            }
+
             return candidate;
         }
 
@@ -619,6 +694,37 @@ namespace CopperMod.Amiga.Bus
             bool processBlitter)
         {
             Debug.Assert(cycle >= 0, "Hardware scheduler event cycles must be non-negative.");
+
+            if (_bus.CausalBusExecutor.ProductionEnabled)
+            {
+                var executed = _bus.CausalBusExecutor.ExecuteEligibleAt(
+                    cycle,
+                    useCpuWaitBlitterMicroOps,
+                    processBlitter);
+                if ((executed & AgnusBusExecutionResult.Paula) != 0)
+                {
+                    _paulaEvents++;
+                }
+
+                if ((executed & AgnusBusExecutionResult.Disk) != 0)
+                {
+                    InvalidateDiskWakeFalseCache();
+                    _diskEvents++;
+                }
+
+                if ((executed & AgnusBusExecutionResult.Fixed) != 0)
+                {
+                    _agnusEvents++;
+                }
+
+                if ((executed & AgnusBusExecutionResult.Blitter) != 0)
+                {
+                    _blitterEvents++;
+                }
+
+                return;
+            }
+
             InvalidateWakeAgenda();
             if (_bus.Paula.HasDmaWorkThrough(cycle))
             {
@@ -710,6 +816,19 @@ namespace CopperMod.Amiga.Bus
 
         private void ProcessSlotContendedTargetCatchUp(long targetCycle, bool blitterWasBusyAtDrainStart)
         {
+            if (_bus.CausalBusExecutor.ProductionEnabled)
+            {
+                var executed = _bus.CausalBusExecutor.CompleteDynamicThrough(
+                    targetCycle,
+                    blitterWasBusyAtDrainStart);
+                if ((executed & AgnusBusExecutionResult.Disk) != 0)
+                {
+                    InvalidateDiskWakeFalseCache();
+                }
+
+                return;
+            }
+
             if (_bus.Paula.HasDmaWorkThrough(targetCycle))
             {
                 _bus.Paula.AdvanceDmaObservableTo(targetCycle);

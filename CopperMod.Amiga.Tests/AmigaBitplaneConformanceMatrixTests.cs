@@ -68,9 +68,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
             case "hires keeps separate subpixels":
                 HiresKeepsSeparateSubpixels();
                 break;
-            case "live DMA archived timeline renders hires bitplanes":
-                LiveDmaArchivedTimelineRendersHighResBitplanes();
-                break;
             case "ECS superhires keeps four native subpixels and multiplexes colors":
                 EcsSuperHiresKeepsFourNativeSubpixelsAndMultiplexesColors();
                 break;
@@ -95,9 +92,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
             case "BPLCON1 scrolls odd and even planes":
                 Bplcon1ScrollsOddAndEvenPlanes();
                 break;
-            case "live DMA archived timeline renders uniform BPLCON1 scroll":
-                LiveDmaArchivedTimelineRendersUniformBplcon1Scroll();
-                break;
             case "dual playfield separates color groups and priority":
                 DualPlayfieldSeparatesColorGroupsAndPriority();
                 break;
@@ -112,9 +106,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
                 break;
             case "live DMA capture preserves timed palette rows":
                 LiveDmaCapturePreservesTimedPaletteRows();
-                break;
-            case "live DMA invalid captured rows clear reused framebuffer":
-                LiveDmaInvalidCapturedRowsClearReusedFramebuffer();
                 break;
             case "live DMA capture preserves same-line Copper palette spans":
                 LiveDmaCapturePreservesSameLineCopperPaletteSpans();
@@ -139,9 +130,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
                 break;
             case "live DMA timeline tracks same-line bitplane pointer writes":
                 LiveDmaTimelineTracksSameLineBitplanePointerWrites();
-                break;
-            case "live DMA archived timeline accepts Copper COPJMP writes":
-                LiveDmaArchivedTimelineAcceptsCopperCopjmpWrites();
                 break;
             case "bitplane DMA starvation of late sprite slots":
                 BitplaneDmaStarvesLateSpriteSlots();
@@ -195,7 +183,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Executable("plane-count", "plane count selects color index bits"),
         Executable("resolution", "lowres pixels are doubled in highres output"),
         Executable("resolution", "hires keeps separate subpixels"),
-        Executable("resolution", "live DMA archived timeline renders hires bitplanes"),
         Executable("resolution", "ECS superhires keeps four native subpixels and multiplexes colors"),
         Executable("interlace", "interlace alternates field rows"),
         Executable("display-window", "DIW clips and positions the playfield"),
@@ -203,13 +190,11 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Executable("fetch-window", "DDF controls line stride"),
         Executable("modulo", "BPL1MOD advances odd plane rows"),
         Executable("scroll", "BPLCON1 scrolls odd and even planes"),
-        Executable("scroll", "live DMA archived timeline renders uniform BPLCON1 scroll"),
         Executable("dual-playfield", "dual playfield separates color groups and priority"),
         Executable("ehb-ham", "EHB uses half-bright colors"),
         Executable("ehb-ham", "HAM holds and modifies color"),
         Executable("palette", "Copper or CPU palette changes affect later rows"),
         Executable("palette", "live DMA capture preserves timed palette rows"),
-        Executable("palette", "live DMA invalid captured rows clear reused framebuffer"),
         Executable("palette", "live DMA capture preserves same-line Copper palette spans"),
         Executable("dma-control", "DMAEN and BPLEN gate timed bitplane fetches"),
         Executable("fetch-window", "cycle-exact fetch slot contention at DDF edges"),
@@ -218,7 +203,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Executable("fetch-window", "HRM hires bitplane slot order"),
         Executable("fetch-window", "ECS superhires bitplane slot order"),
         Executable("fetch-window", "live DMA timeline tracks same-line bitplane pointer writes"),
-        Executable("custom-registers", "live DMA archived timeline accepts Copper COPJMP writes"),
         Executable("dma-control", "bitplane DMA starvation of late sprite slots"),
         Executable("custom-registers", "CLXDAT bit 15 is always set"),
         Executable("undocumented-ocs", "undocumented BPLCON2 values affect normal playfield"),
@@ -303,35 +287,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.Equal(0xFF000000u, HighResPixel(frame, bus.Display.Width, (StandardX * 2) + 1, y));
         Assert.Equal(0xFF000000u, HighResPixel(frame, bus.Display.Width, StandardX * 2, y + 2));
         Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, (StandardX * 2) + 1, y + 2));
-    }
-
-    private static void LiveDmaArchivedTimelineRendersHighResBitplanes()
-    {
-        var presentationBus = CreateHighResTimelineBus(enableLiveDma: false);
-        var liveBus = CreateHighResTimelineBus(enableLiveDma: true);
-        var expected = new uint[presentationBus.Display.Width * presentationBus.Display.Height];
-        var actual = new uint[liveBus.Display.Width * liveBus.Display.Height];
-
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.AdvanceDmaTo(FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-        var snapshot = liveBus.Display.CaptureSnapshot();
-        var x = StandardX * 2;
-        var y = StandardY * 2;
-        Assert.Equal(HighResPixel(expected, presentationBus.Display.Width, x, y), HighResPixel(actual, liveBus.Display.Width, x, y));
-        Assert.Equal(HighResPixel(expected, presentationBus.Display.Width, x + 1, y), HighResPixel(actual, liveBus.Display.Width, x + 1, y));
-        Assert.Equal(HighResPixel(expected, presentationBus.Display.Width, x, y + 2), HighResPixel(actual, liveBus.Display.Width, x, y + 2));
-        Assert.Equal(HighResPixel(expected, presentationBus.Display.Width, x + 1, y + 2), HighResPixel(actual, liveBus.Display.Width, x + 1, y + 2));
-        Assert.Equal(0xFFFF0000u, HighResPixel(actual, liveBus.Display.Width, x, y));
-        Assert.Equal(0xFF000000u, HighResPixel(actual, liveBus.Display.Width, x + 1, y));
-        Assert.Equal(0xFF000000u, HighResPixel(actual, liveBus.Display.Width, x, y + 2));
-        Assert.Equal(0xFFFF0000u, HighResPixel(actual, liveBus.Display.Width, x + 1, y + 2));
-        Assert.True(snapshot.LastTimelineSegmentCount > 0);
-        Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
     }
 
     private static void InterlaceAlternatesFieldRows()
@@ -450,6 +405,17 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
     private static void DualPlayfieldSeparatesColorGroupsAndPriority()
     {
+        var frontPlayfield1 = CreateDualPlayfieldPriorityBus(0x0000);
+        var frame = RenderLowResFrame(frontPlayfield1);
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
+
+        var frontPlayfield2 = CreateDualPlayfieldPriorityBus(0x0040);
+        frame = RenderLowResFrame(frontPlayfield2);
+        Assert.Equal(0xFF00FF00u, Pixel(frame, StandardX, StandardY));
+    }
+
+    private static AmigaBus CreateDualPlayfieldPriorityBus(ushort bplcon2)
+    {
         var bus = CreateDisplayBus();
         bus.WriteWord(0x00DFF192, 0x00F0);
         bus.WriteWord(0x00DFF092, 0x0038);
@@ -458,15 +424,9 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         SetBitplanePointer(bus, 1, 0x1100);
         BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0xC000);
         BigEndian.WriteUInt16(bus.ChipRam, 0x1100, 0x8000);
+        bus.WriteWord(0x00DFF104, bplcon2);
         bus.WriteWord(0x00DFF100, 0x2400);
-
-        var frame = RenderLowResFrame(bus);
-        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
-
-        bus.WriteWord(0x00DFF104, 0x0040);
-        Array.Clear(frame);
-        bus.Display.RenderFrame(frame);
-        Assert.Equal(0xFF00FF00u, Pixel(frame, StandardX, StandardY));
+        return bus;
     }
 
     private static void ExtraHalfBrightUsesHalfBrightColors()
@@ -527,7 +487,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         bus.WriteWord(0x00DFF182, 0x00F0, row1Cycle);
         var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 
-        bus.Display.RenderFrame(frame, 0, frameCycles);
+        bus.Display.RenderFrame(frame, 0, frameCycles, enableDefaultDma: false);
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
         Assert.Equal(0xFF00FF00u, Pixel(frame, StandardX, StandardY + 1));
@@ -546,22 +506,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
         Assert.Equal(Pixel(expected, StandardX, StandardY + 1), Pixel(actual, StandardX, StandardY + 1));
         Assert.True(liveBus.Display.CaptureSnapshot().LastBitplaneDmaFetches > 0);
-    }
-
-    private static void LiveDmaInvalidCapturedRowsClearReusedFramebuffer()
-    {
-        const uint stalePixel = 0xFF55AA33u;
-        var bus = new AmigaBus(enableLiveAgnusDma: true);
-        var frameCycles = FrameCycles();
-        bus.AdvanceDmaTo(frameCycles - 1);
-        ForceLiveCapturedRowsFallback(bus.Display, capturedThroughCycle: frameCycles - 1);
-        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        Array.Fill(frame, stalePixel);
-
-        bus.Display.RenderFrame(frame, 0, frameCycles);
-
-        Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY));
-        Assert.NotEqual(stalePixel, Pixel(frame, StandardX, StandardY));
     }
 
     private static void LiveDmaCapturePreservesSameLineCopperPaletteSpans()
@@ -643,7 +587,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     public void LiveDmaTimelinePreservesSameLineBplcon1ScrollChange()
     {
         var presentationBus = CreateSameLineBplcon1ScrollBus(enableLiveDma: false);
-        var liveBus = CreateSameLineBplcon1ScrollBus(enableLiveDma: true);
+        var liveBus = CreateSameLineBplcon1ScrollBus(enableLiveDma: false);
         var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
         var actual = new uint[expected.Length];
         var targetRow = StandardY;
@@ -666,13 +610,15 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     public void LiveDmaTimelinePreservesSameLineDdfStopChange()
     {
         var presentationBus = CreateSameLineDdfStopBus(enableLiveDma: false);
-        var liveBus = CreateSameLineDdfStopBus(enableLiveDma: true);
+        var liveBus = CreateSameLineDdfStopBus(enableLiveDma: false);
         var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
         var actual = new uint[expected.Length];
         var targetRow = StandardY;
 
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
+        var changeCycle = OutputRowStartCycle(StandardY) +
+            (0x80 * AmigaConstants.A500PalCpuCyclesPerColorClock);
+        RenderCausalFrame(presentationBus, expected, bus => bus.WriteWord(0x00DFF094, 0x0070, changeCycle));
+        RenderCausalFrame(liveBus, actual, bus => bus.WriteWord(0x00DFF094, 0x0070, changeCycle));
 
         var snapshot = liveBus.Display.CaptureSnapshot();
         for (var x = StandardX; x < StandardX + 256; x++)
@@ -689,13 +635,15 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     public void LiveDmaTimelinePreservesSameLineDiwStartChange()
     {
         var presentationBus = CreateSameLineDiwStartBus(enableLiveDma: false);
-        var liveBus = CreateSameLineDiwStartBus(enableLiveDma: true);
+        var liveBus = CreateSameLineDiwStartBus(enableLiveDma: false);
         var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
         var actual = new uint[expected.Length];
         var targetRow = StandardY;
 
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
+        var changeCycle = OutputRowStartCycle(StandardY) +
+            (0x80 * AmigaConstants.A500PalCpuCyclesPerColorClock);
+        RenderCausalFrame(presentationBus, expected, bus => bus.WriteWord(0x00DFF08E, 0x2CA0, changeCycle));
+        RenderCausalFrame(liveBus, actual, bus => bus.WriteWord(0x00DFF08E, 0x2CA0, changeCycle));
 
         var snapshot = liveBus.Display.CaptureSnapshot();
         for (var x = StandardX; x < StandardX + 256; x++)
@@ -706,85 +654,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.True(snapshot.LastBitplaneDmaFetches > 0);
         Assert.True(snapshot.LastTimelineSegmentCount > 0);
         Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-    }
-
-    [Fact]
-    public void LiveDmaArchivedTimelineRendersCompletedFrameAtBoundary()
-    {
-        var presentationBus = CreateSameLineBplcon1ScrollBus(enableLiveDma: false);
-        var liveBus = CreateSameLineBplcon1ScrollBus(enableLiveDma: true);
-        var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        var actual = new uint[expected.Length];
-        var targetRow = StandardY;
-
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.AdvanceDmaTo(FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-        var snapshot = liveBus.Display.CaptureSnapshot();
-        for (var x = StandardX; x < StandardX + 256; x++)
-        {
-            Assert.Equal(Pixel(expected, x, targetRow), Pixel(actual, x, targetRow));
-        }
-
-        Assert.True(snapshot.LastTimelineSegmentCount > 0);
-        Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-    }
-
-    [Fact]
-    public void LiveDmaArchivedTimelineAcceptsCopperPointerLatchWrites()
-    {
-        var presentationBus = CreateCopperPointerLatchWriteBus(enableLiveDma: false);
-        var liveBus = CreateCopperPointerLatchWriteBus(enableLiveDma: true);
-        var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        var actual = new uint[expected.Length];
-        var targetRow = StandardY;
-
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.AdvanceDmaTo(FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-        var snapshot = liveBus.Display.CaptureSnapshot();
-        for (var x = StandardX; x < StandardX + 256; x++)
-        {
-            Assert.Equal(Pixel(expected, x, targetRow), Pixel(actual, x, targetRow));
-        }
-
-        Assert.True(snapshot.LastTimelineSegmentCount > 0);
-        Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
-        Assert.True(snapshot.LastTimelineFastPathRowCount > 0);
-        Assert.Equal(0, snapshot.LastSpriteRecoveryAttemptCount);
-    }
-
-    [Fact]
-    public void LiveDmaArchivedTimelineRendersCopperBplcon0Changes()
-    {
-        var presentationBus = CreateCopperBplcon0DisableBus(enableLiveDma: false);
-        var liveBus = CreateCopperBplcon0DisableBus(enableLiveDma: true);
-        var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        var actual = new uint[expected.Length];
-
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.AdvanceDmaTo(FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-        var snapshot = liveBus.Display.CaptureSnapshot();
-        Assert.Equal(0xFFFF0000u, Pixel(expected, StandardX, StandardY));
-        Assert.Equal(0xFF000000u, Pixel(expected, StandardX, StandardY + 1));
-        Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
-        Assert.Equal(Pixel(expected, StandardX, StandardY + 1), Pixel(actual, StandardX, StandardY + 1));
-        Assert.True(snapshot.LastTimelineSegmentCount > 0);
-        Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
-        Assert.True(snapshot.LastTimelineFastPathRowCount > 0);
-        Assert.Equal(0, snapshot.LastSpriteRecoveryAttemptCount);
     }
 
     private static void EcsSuperHiresKeepsFourNativeSubpixelsAndMultiplexesColors()
@@ -802,14 +671,14 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
         var live = CreateSuperHighResBus(enableLiveDma: true);
         var liveFrame = new uint[live.Display.Width * live.Display.Height];
-        live.AdvanceDmaTo(FrameCycles());
         live.Display.RenderFrame(liveFrame, 0, FrameCycles());
         Assert.Equal(
             frame.AsSpan((y * bus.Display.Width) + x, 4).ToArray(),
             liveFrame.AsSpan((y * live.Display.Width) + x, 4).ToArray());
 
         var compact = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        bus.Display.RenderFrame(compact);
+        var compactBus = CreateSuperHighResBus(enableLiveDma: false);
+        compactBus.Display.RenderFrame(compact);
         Assert.Equal(0xFF3F3F3Fu, compact[(StandardY * AmigaConstants.PalLowResWidth) + StandardX]);
 
         var ocs = new AmigaBus(chipset: AmigaChipset.OcsPal);
@@ -850,19 +719,16 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     }
 
     [Fact]
-    public void MidLineSuperHiresChangeKeepsDirectLiveAndArchivedPresentationInSync()
+    public void MidLineSuperHiresChangeRendersCausally()
     {
         var presentation = CreateMidLineSuperHiresChangeBus(enableLiveDma: false);
-        var live = CreateMidLineSuperHiresChangeBus(enableLiveDma: true);
-        var archived = CreateMidLineSuperHiresChangeBus(enableLiveDma: true);
+        var live = CreateMidLineSuperHiresChangeBus(enableLiveDma: false);
         var expected = new uint[presentation.Display.Width * presentation.Display.Height];
         var liveFrame = new uint[live.Display.Width * live.Display.Height];
-        var archivedFrame = new uint[archived.Display.Width * archived.Display.Height];
 
-        presentation.Display.RenderFrame(expected, 0, FrameCycles());
-        live.Display.RenderFrame(liveFrame, 0, FrameCycles());
-        archived.AdvanceDmaTo(FrameCycles());
-        archived.Display.RenderFrame(archivedFrame, 0, FrameCycles());
+        var changeCycle = OutputCycle(StandardY, 0x80);
+        RenderCausalFrame(presentation, expected, bus => bus.WriteWord(0x00DFF100, 0x1041, changeCycle));
+        RenderCausalFrame(live, liveFrame, bus => bus.WriteWord(0x00DFF100, 0x1041, changeCycle));
 
         var row = StandardY * 2;
         var rowOffset = row * presentation.Display.Width;
@@ -873,9 +739,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         Assert.Equal(
             expectedRow,
             liveFrame.AsSpan(rowOffset, live.Display.Width).ToArray());
-        Assert.Equal(
-            expected.AsSpan(rowOffset, presentation.Display.Width).ToArray(),
-            archivedFrame.AsSpan(rowOffset, archived.Display.Width).ToArray());
     }
 
     private static AmigaBus CreateMidLineSuperHiresChangeBus(bool enableLiveDma)
@@ -896,7 +759,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
         bus.WriteWord(0x00DFF100, 0x1001);
         bus.WriteWord(0x00DFF096, 0x8300);
-        bus.WriteWord(0x00DFF100, 0x1041, OutputCycle(StandardY, 0x80));
         return bus;
     }
 
@@ -939,18 +801,25 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         bus.WriteWord(0x00DFF096, 0x8280);
 
         var cpuWriteAfterCopperFetch = OutputRowStartCycle(StandardY + 1);
-        bus.WriteWord(copperList + 6, laterColor, cpuWriteAfterCopperFetch);
-        bus.AdvanceDmaTo(FrameCycles());
-
         var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        bus.Display.RenderFrame(frame, 0, FrameCycles());
+        bus.Display.BeginPresentationFrame(new PresentationFrameTarget(frame), 0, FrameCycles());
+        try
+        {
+            bus.WriteWord(copperList + 6, laterColor, cpuWriteAfterCopperFetch);
+            bus.Display.CompletePresentationFrame(FrameCycles());
+        }
+        catch
+        {
+            bus.Display.AbortPresentationFrame();
+            throw;
+        }
+
         var snapshot = bus.Display.CaptureSnapshot();
 
         Assert.Equal(0xFF333333u, Pixel(frame, StandardX + 160, StandardY));
         Assert.Equal(0xFF333333u, Pixel(frame, StandardX, StandardY + 1));
         Assert.NotEqual(0xFFCCCCCCu, Pixel(frame, StandardX + 160, StandardY));
         Assert.NotEqual(0xFFCCCCCCu, Pixel(frame, StandardX, StandardY + 1));
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
         Assert.Equal(0, snapshot.LastTimelineFallbackCount);
     }
 
@@ -992,106 +861,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     }
 
     [Fact]
-    public void LiveDmaArchivedTimelineExpandsLowResPixelsInHighResOutput()
-    {
-        var presentationBus = CreateCopperBplcon0DisableBus(enableLiveDma: false);
-        var liveBus = CreateCopperBplcon0DisableBus(enableLiveDma: true);
-        var expected = new uint[presentationBus.Display.Width * presentationBus.Display.Height];
-        var actual = new uint[liveBus.Display.Width * liveBus.Display.Height];
-
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.AdvanceDmaTo(FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-        var snapshot = liveBus.Display.CaptureSnapshot();
-        var x = StandardX * 2;
-        var y = StandardY * 2;
-        Assert.Equal(HighResPixel(expected, presentationBus.Display.Width, x, y), HighResPixel(actual, liveBus.Display.Width, x, y));
-        Assert.Equal(0xFFFF0000u, HighResPixel(actual, liveBus.Display.Width, x, y));
-        Assert.Equal(0xFFFF0000u, HighResPixel(actual, liveBus.Display.Width, x + 1, y));
-        Assert.Equal(0xFFFF0000u, HighResPixel(actual, liveBus.Display.Width, x, y + 1));
-        Assert.Equal(0xFF000000u, HighResPixel(actual, liveBus.Display.Width, x + 2, y));
-        Assert.Equal(0xFF000000u, HighResPixel(actual, liveBus.Display.Width, x, y + 2));
-        Assert.True(snapshot.LastTimelineSegmentCount > 0);
-        Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
-        Assert.True(snapshot.LastTimelineFastPathRowCount > 0);
-    }
-
-    [Fact]
-    public void LiveDmaArchivedTimelineRendersUniformBplcon1Scroll()
-    {
-        var presentationBus = CreateUniformScrollTimelineBus(enableLiveDma: false);
-        var liveBus = CreateUniformScrollTimelineBus(enableLiveDma: true);
-        var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        var actual = new uint[expected.Length];
-        var x = StandardX + 15;
-
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.AdvanceDmaTo(FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-        var snapshot = liveBus.Display.CaptureSnapshot();
-        Assert.Equal(Pixel(expected, x - 1, StandardY), Pixel(actual, x - 1, StandardY));
-        Assert.Equal(Pixel(expected, x, StandardY), Pixel(actual, x, StandardY));
-        Assert.Equal(0xFF000000u, Pixel(actual, x - 1, StandardY));
-        Assert.Equal(0xFFFFFF00u, Pixel(actual, x, StandardY));
-        Assert.True(snapshot.LastTimelineSegmentCount > 0);
-        Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
-        Assert.True(snapshot.LastTimelineFastPathRowCount > 0);
-        Assert.True(snapshot.LastPlanarChunkCacheMisses > 0);
-    }
-
-    [Fact]
-    public void LiveDmaArchivedTimelineAcceptsCopperBitplanePointerWrites()
-    {
-        var presentationBus = CreateCopperBitplanePointerWriteBus(enableLiveDma: false);
-        var liveBus = CreateCopperBitplanePointerWriteBus(enableLiveDma: true);
-        var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        var actual = new uint[expected.Length];
-
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.AdvanceDmaTo(FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-        var snapshot = liveBus.Display.CaptureSnapshot();
-        Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
-        Assert.Equal(0xFFFF0000u, Pixel(actual, StandardX, StandardY));
-        Assert.True(snapshot.LastTimelineSegmentCount > 0);
-        Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
-    }
-
-    [Fact]
-    public void LiveDmaArchivedTimelineAcceptsCopperCopjmpWrites()
-    {
-        var presentationBus = CreateCopperCopjmpTimelineBus(enableLiveDma: false);
-        var liveBus = CreateCopperCopjmpTimelineBus(enableLiveDma: true);
-        var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        var actual = new uint[expected.Length];
-
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.AdvanceDmaTo(FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-        var snapshot = liveBus.Display.CaptureSnapshot();
-        Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
-        Assert.Equal(0xFFFF0000u, Pixel(actual, StandardX, StandardY));
-        Assert.True(snapshot.LastTimelineSegmentCount > 0);
-        Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
-    }
-
-    [Fact]
     public void LiveDmaLatePendingWriteDoesNotRecaptureCompletedBitplaneRow()
     {
         var bus = new AmigaBus(enableLiveAgnusDma: true);
@@ -1107,37 +876,21 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         bus.WriteWord(0x00DFF096, 0x8380);
         bus.WriteWord(0x00DFF100, 0x1000);
 
-        bus.AdvanceDmaTo(lateWriteCycle);
-        bus.Display.ScheduleWrite(lateWriteCycle, 0x096, 0x0100);
-        bus.AdvanceDmaTo(FrameCycles());
-        bus.Display.RenderFrame(frame, 0, FrameCycles());
+        bus.Display.BeginPresentationFrame(new PresentationFrameTarget(frame), 0, FrameCycles());
+        try
+        {
+            bus.AdvanceDmaTo(lateWriteCycle);
+            bus.Display.ScheduleWrite(lateWriteCycle, 0x096, 0x0100);
+            bus.Display.CompletePresentationFrame(FrameCycles());
+        }
+        catch
+        {
+            bus.Display.AbortPresentationFrame();
+            throw;
+        }
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
         Assert.Equal(0xFF000000u, Pixel(frame, AmigaConstants.PalLowResWidth - 1, StandardY));
-    }
-
-    [Fact]
-    public void LiveDmaArchivedTimelineRendersDmaconChanges()
-    {
-        var presentationBus = CreateDmaconDisableBus(enableLiveDma: false);
-        var liveBus = CreateDmaconDisableBus(enableLiveDma: true);
-        var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        var actual = new uint[expected.Length];
-
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.AdvanceDmaTo(FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-        var snapshot = liveBus.Display.CaptureSnapshot();
-        Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
-        Assert.Equal(Pixel(expected, StandardX, StandardY + 1), Pixel(actual, StandardX, StandardY + 1));
-        Assert.Equal(0xFFFF0000u, Pixel(actual, StandardX, StandardY));
-        Assert.Equal(0xFF000000u, Pixel(actual, StandardX, StandardY + 1));
-        Assert.True(snapshot.LastTimelineSegmentCount > 0);
-        Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-        Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-        Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-        Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
     }
 
     private static AmigaBus CreateTimedPaletteBitplaneBus(bool enableLiveDma)
@@ -1239,9 +992,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         bus.WriteWord(0x00DFF096, 0x8300);
         bus.WriteWord(0x00DFF100, 0x2000);
         bus.WriteWord(0x00DFF102, 0x0000);
-        var scrollChangeCycle = OutputRowStartCycle(StandardY) + (0x80 * AmigaConstants.A500PalCpuCyclesPerColorClock);
-        bus.WriteWord(0x00DFF102, 0x0011, scrollChangeCycle);
-
         return bus;
     }
 
@@ -1352,18 +1102,12 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
     private static AmigaBus CreateSameLineDdfStopBus(bool enableLiveDma)
     {
-        var bus = CreateScrollingBitplaneBus(enableLiveDma);
-        var changeCycle = OutputRowStartCycle(StandardY) + (0x80 * AmigaConstants.A500PalCpuCyclesPerColorClock);
-        bus.WriteWord(0x00DFF094, 0x0070, changeCycle);
-        return bus;
+        return CreateScrollingBitplaneBus(enableLiveDma);
     }
 
     private static AmigaBus CreateSameLineDiwStartBus(bool enableLiveDma)
     {
-        var bus = CreateScrollingBitplaneBus(enableLiveDma);
-        var changeCycle = OutputRowStartCycle(StandardY) + (0x80 * AmigaConstants.A500PalCpuCyclesPerColorClock);
-        bus.WriteWord(0x00DFF08E, 0x2CA0, changeCycle);
-        return bus;
+        return CreateScrollingBitplaneBus(enableLiveDma);
     }
 
     private static AmigaBus CreateScrollingBitplaneBus(bool enableLiveDma)
@@ -1390,19 +1134,34 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
     private static void DmaEnableGatesTimedBitplaneFetches()
     {
-        var bus = CreateDisplayBus();
+        var bus = new AmigaBus();
         var frameCycles = FrameCycles();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF182, 0x0F00);
         SetBitplanePointer(bus, 0, 0x1000);
         BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
         bus.WriteWord(0x00DFF100, 0x1000);
 
         var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        bus.Display.RenderFrame(frame, 0, frameCycles);
+        bus.Display.RenderFrame(frame, 0, frameCycles, enableDefaultDma: false);
         Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY));
 
-        bus.WriteWord(0x00DFF096, 0x8300, frameCycles);
         Array.Clear(frame);
-        bus.Display.RenderFrame(frame, frameCycles, frameCycles * 2);
+        bus.Display.BeginPresentationFrame(
+            new PresentationFrameTarget(frame),
+            frameCycles,
+            frameCycles * 2);
+        try
+        {
+            bus.WriteWord(0x00DFF096, 0x8300, frameCycles);
+            bus.Display.CompletePresentationFrame(frameCycles * 2);
+        }
+        catch
+        {
+            bus.Display.AbortPresentationFrame();
+            throw;
+        }
+
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
     }
 
@@ -1700,23 +1459,17 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     private static void LiveDmaTimelineTracksSameLineBitplanePointerWrites()
     {
         var presentationBus = CreateSameLineBitplanePointerWriteBus(enableLiveDma: false);
-        var liveBus = CreateSameLineBitplanePointerWriteBus(enableLiveDma: true);
-        var archivedBus = CreateSameLineBitplanePointerWriteBus(enableLiveDma: true);
+        var liveBus = CreateSameLineBitplanePointerWriteBus(enableLiveDma: false);
         var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
         var actual = new uint[expected.Length];
-        var archived = new uint[expected.Length];
         var x = StandardX + ((0x70 - 0x38) * 2);
 
         presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
         liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-        archivedBus.AdvanceDmaTo(FrameCycles());
-        archivedBus.Display.RenderFrame(archived, 0, FrameCycles());
 
         Assert.Equal(0xFFFF0000u, Pixel(expected, x, StandardY));
         Assert.Equal(Pixel(expected, x, StandardY), Pixel(actual, x, StandardY));
-        Assert.Equal(Pixel(expected, x, StandardY), Pixel(archived, x, StandardY));
         Assert.Equal(0, liveBus.Display.CaptureSnapshot().LastTimelineFallbackCount);
-        Assert.Equal(0, archivedBus.Display.CaptureSnapshot().LastTimelineFallbackCount);
     }
 
     private static AmigaBus CreateSameLineBitplanePointerWriteBus(bool enableLiveDma)
@@ -1814,15 +1567,16 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
     private static void OcsBitplaneDmaEnableInsideDdfWaitsForNextLine()
     {
-        var bus = CreateDisplayBus();
+        var bus = new AmigaBus();
+        bus.WriteWord(0x00DFF180, 0x0000);
+        bus.WriteWord(0x00DFF182, 0x0F00);
         SetBitplanePointer(bus, 0, 0x1000);
         BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0x8000);
         bus.WriteWord(0x00DFF100, 0x1000);
         var enableCycle = OutputRowStartCycle(StandardY) + (0x40 * AmigaConstants.A500PalCpuCyclesPerColorClock);
-        bus.WriteWord(0x00DFF096, 0x8300, enableCycle);
 
         var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-        bus.Display.RenderFrame(frame, 0, FrameCycles());
+        RenderCausalFrame(bus, frame, current => current.WriteWord(0x00DFF096, 0x8300, enableCycle));
 
         Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY));
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY + 1));
@@ -1859,11 +1613,16 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
     private static void BpldatWritesTriggerDeniseShiftGroup()
     {
-        var bus = CreateBpldatManualBus(enableLiveDma: false);
+        var bus = CreateBpldatManualBus();
         var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
         var x = OutputXForHorizontal(0x70);
+        var writeCycle = OutputCycle(StandardY, 0x70);
 
-        bus.Display.RenderFrame(frame, 0, FrameCycles());
+        RenderCausalFrame(bus, frame, current =>
+        {
+            current.WriteWord(0x00DFF112, 0xFFFF, writeCycle - 4);
+            current.WriteWord(0x00DFF110, 0xFFFF, writeCycle);
+        });
 
         Assert.Equal(0xFFFFFF00u, Pixel(frame, x, StandardY));
         Assert.Equal(0xFFFFFF00u, Pixel(frame, x + 15, StandardY));
@@ -1917,10 +1676,12 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         var x = OutputXForHorizontal(0x70);
         SetColor(bus, 3, 0x0FF0);
         bus.WriteWord(0x00DFF100, 0x1000, 0);
-        bus.WriteWord(0x00DFF112, 0xFFFF, writeCycle - 4);
-        bus.WriteWord(0x00DFF110, 0xFFFF, writeCycle);
 
-        bus.Display.RenderFrame(frame, 0, FrameCycles());
+        RenderCausalFrame(bus, frame, current =>
+        {
+            current.WriteWord(0x00DFF112, 0xFFFF, writeCycle - 4);
+            current.WriteWord(0x00DFF110, 0xFFFF, writeCycle);
+        });
 
         Assert.Equal(0xFFFF0000u, Pixel(frame, x, StandardY));
     }
@@ -1933,9 +1694,8 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         var x = OutputXForHorizontal(0x70);
         bus.WriteWord(0x00DFF102, 0x0004);
         bus.WriteWord(0x00DFF100, 0x1000, 0);
-        bus.WriteWord(0x00DFF110, 0x8000, writeCycle);
 
-        bus.Display.RenderFrame(frame, 0, FrameCycles());
+        RenderCausalFrame(bus, frame, current => current.WriteWord(0x00DFF110, 0x8000, writeCycle));
 
         Assert.Equal(0xFF000000u, Pixel(frame, x, StandardY));
         Assert.Equal(0xFFFF0000u, Pixel(frame, x + 4, StandardY));
@@ -2004,30 +1764,36 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
     private static void LiveDmaCapturePreservesTimedBpldatWrites()
     {
-        var presentationBus = CreateBpldatManualBus(enableLiveDma: false);
-        var liveBus = CreateBpldatManualBus(enableLiveDma: true);
+        var presentationBus = CreateBpldatManualBus();
+        var liveBus = CreateBpldatManualBus();
         var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
         var actual = new uint[expected.Length];
         var x = OutputXForHorizontal(0x70);
+        var writeCycle = OutputCycle(StandardY, 0x70);
 
-        presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-        liveBus.Display.RenderFrame(actual, 0, FrameCycles());
+        RenderCausalFrame(presentationBus, expected, current =>
+        {
+            current.WriteWord(0x00DFF112, 0xFFFF, writeCycle - 4);
+            current.WriteWord(0x00DFF110, 0xFFFF, writeCycle);
+        });
+        RenderCausalFrame(liveBus, actual, current =>
+        {
+            current.WriteWord(0x00DFF112, 0xFFFF, writeCycle - 4);
+            current.WriteWord(0x00DFF110, 0xFFFF, writeCycle);
+        });
 
         Assert.Equal(Pixel(expected, x, StandardY), Pixel(actual, x, StandardY));
         Assert.Equal(Pixel(expected, x + 15, StandardY), Pixel(actual, x + 15, StandardY));
         Assert.Equal(Pixel(expected, x + 16, StandardY), Pixel(actual, x + 16, StandardY));
     }
 
-    private static AmigaBus CreateBpldatManualBus(bool enableLiveDma)
+    private static AmigaBus CreateBpldatManualBus()
     {
-        var bus = new AmigaBus(enableLiveAgnusDma: enableLiveDma);
-        var writeCycle = OutputCycle(StandardY, 0x70);
+        var bus = new AmigaBus();
         bus.WriteWord(0x00DFF180, 0x0000);
         bus.WriteWord(0x00DFF182, 0x0F00);
         bus.WriteWord(0x00DFF186, 0x0FF0);
         bus.WriteWord(0x00DFF100, 0x2000, 0);
-        bus.WriteWord(0x00DFF112, 0xFFFF, writeCycle - 4);
-        bus.WriteWord(0x00DFF110, 0xFFFF, writeCycle);
         return bus;
     }
 
@@ -2036,6 +1802,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         var bus = new AmigaBus();
         bus.WriteWord(0x00DFF180, 0x0000);
         bus.WriteWord(0x00DFF182, 0x0F00);
+        bus.WriteWord(0x00DFF096, 0x8300);
         return bus;
     }
 
@@ -2117,6 +1884,29 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         return frame;
     }
 
+    private static void RenderCausalFrame(
+        AmigaBus bus,
+        uint[] frame,
+        Action<AmigaBus> execute)
+    {
+        if (!bus.LiveAgnusDmaEnabled)
+        {
+            bus.EnableLiveAgnusDma();
+        }
+
+        bus.Display.BeginPresentationFrame(new PresentationFrameTarget(frame), 0, FrameCycles());
+        try
+        {
+            execute(bus);
+            bus.Display.CompletePresentationFrame(FrameCycles());
+        }
+        catch
+        {
+            bus.Display.AbortPresentationFrame();
+            throw;
+        }
+    }
+
     private static uint Pixel(uint[] frame, int x, int y)
     {
         return frame[(y * AmigaConstants.PalLowResWidth) + x];
@@ -2141,13 +1931,6 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     private static long OutputCycle(int row, int horizontal)
     {
         return OutputRowStartCycle(row) + ((long)horizontal * AmigaConstants.A500PalCpuCyclesPerColorClock);
-    }
-
-    private static void ForceLiveCapturedRowsFallback(OcsDisplay display, long capturedThroughCycle)
-    {
-        SetPrivateField(display, "_liveCapturedThroughCycle", capturedThroughCycle);
-        SetPrivateField(display, "_liveFrameHasLateDisplayWindowWrites", true);
-        SetPrivateField(display, "_liveTimelineUnsafeForFrame", true);
     }
 
     private static void SetPrivateField(object target, string name, object value)

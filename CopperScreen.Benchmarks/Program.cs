@@ -14,6 +14,7 @@ const int OpcodeDispatchTransformMemorySize = 1 << 24;
 
 if (Move16AlignmentBenchmark.TryRun(args) ||
     AmigaFastRamBenchmark.TryRun(args) ||
+    AmigaBusSaturationBenchmark.TryRun(args) ||
     AmigaInstructionFetchArbitrationBenchmark.TryRun(args) ||
     EcsTimingBenchmark.TryRun(args) ||
     CustomRegisterDispatchBenchmark.TryRun(args))
@@ -101,6 +102,7 @@ foreach (var workload in workloads)
     {
         var result = RunBenchmark(workload, options);
         WriteBenchmarkResult(result, options);
+        ValidateExpectedChecksums(result, options);
         WriteCopperQuiescenceAuditIfNeeded(result, options);
     }
 }
@@ -490,14 +492,6 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     var measuredDescriptorBitplaneRows = 0;
     var measuredDescriptorSpriteRows = 0;
     var measuredDescriptorMismatches = 0;
-    var descriptorBeforeMeasured = GetDisplay(emulator).CaptureSnapshot();
-    var previousDescriptorBuilds = descriptorBeforeMeasured.LastRasterlineDescriptorBuilds;
-    var previousDescriptorReplayAttempts = descriptorBeforeMeasured.LastRasterlineDescriptorReplayAttempts;
-    var previousDescriptorReplayedRows = descriptorBeforeMeasured.LastRasterlineDescriptorReplayedRows;
-    var previousDescriptorFallbackRows = descriptorBeforeMeasured.LastRasterlineDescriptorFallbackRows;
-    var previousDescriptorBitplaneRows = descriptorBeforeMeasured.LastRasterlineDescriptorBitplaneRows;
-    var previousDescriptorSpriteRows = descriptorBeforeMeasured.LastRasterlineDescriptorSpriteRows;
-    var previousDescriptorMismatches = descriptorBeforeMeasured.LastRasterlineDescriptorMismatches;
     var slowFramesOver20 = 0;
     var slowFramesOver33 = 0;
     var slowFramesOver40 = 0;
@@ -528,21 +522,6 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
                 throw new InvalidOperationException($"Emulator debug snapshot captured at frame {currentAbsoluteFrame}.");
             }
 
-            var displayFrame = GetDisplay(emulator).CaptureSnapshot();
-            measuredDescriptorBuilds += displayFrame.LastRasterlineDescriptorBuilds - previousDescriptorBuilds;
-            measuredDescriptorReplayAttempts += displayFrame.LastRasterlineDescriptorReplayAttempts - previousDescriptorReplayAttempts;
-            measuredDescriptorReplayedRows += displayFrame.LastRasterlineDescriptorReplayedRows - previousDescriptorReplayedRows;
-            measuredDescriptorFallbackRows += displayFrame.LastRasterlineDescriptorFallbackRows - previousDescriptorFallbackRows;
-            measuredDescriptorBitplaneRows += displayFrame.LastRasterlineDescriptorBitplaneRows - previousDescriptorBitplaneRows;
-            measuredDescriptorSpriteRows += displayFrame.LastRasterlineDescriptorSpriteRows - previousDescriptorSpriteRows;
-            measuredDescriptorMismatches += displayFrame.LastRasterlineDescriptorMismatches - previousDescriptorMismatches;
-            previousDescriptorBuilds = displayFrame.LastRasterlineDescriptorBuilds;
-            previousDescriptorReplayAttempts = displayFrame.LastRasterlineDescriptorReplayAttempts;
-            previousDescriptorReplayedRows = displayFrame.LastRasterlineDescriptorReplayedRows;
-            previousDescriptorFallbackRows = displayFrame.LastRasterlineDescriptorFallbackRows;
-            previousDescriptorBitplaneRows = displayFrame.LastRasterlineDescriptorBitplaneRows;
-            previousDescriptorSpriteRows = displayFrame.LastRasterlineDescriptorSpriteRows;
-            previousDescriptorMismatches = displayFrame.LastRasterlineDescriptorMismatches;
             var schedulerAfterFrame = CaptureHardwareSchedulerSnapshot(emulator);
             var frameSchedulerDrains = schedulerAfterFrame.DrainCount - schedulerBeforeFrame.DrainCount;
             maxFrameSchedulerDrains = Math.Max(maxFrameSchedulerDrains, frameSchedulerDrains);
@@ -1304,12 +1283,11 @@ static FrameProfile ProfileFrames(CopperScreenEmulator emulator, int frames)
         var frameStartCycle = (long)targetCycleField.GetValue(emulator)!;
         var targetCycle = frameStartCycle + AmigaConstants.A500PalCpuCyclesPerFrame;
         targetCycleField.SetValue(emulator, targetCycle);
+        machine.Bus.Display.BeginPresentationFrame(
+            new PresentationFrameTarget(emulator.Framebuffer),
+            frameStartCycle,
+            targetCycle);
         executionBoundarySchedule.BeginExecution(frameStartCycle, targetCycle);
-        var liveAgnus = machine.Bus.LiveAgnusDmaEnabled;
-        if (liveAgnus)
-        {
-            machine.Bus.SetLiveAgnusDmaEnabled(false);
-        }
 
         otherTicks += Stopwatch.GetTimestamp() - phaseStart;
 
@@ -1321,16 +1299,12 @@ static FrameProfile ProfileFrames(CopperScreenEmulator emulator, int frames)
         cpuTicks += Stopwatch.GetTimestamp() - phaseStart;
 
         phaseStart = Stopwatch.GetTimestamp();
-        if (liveAgnus)
-        {
-            machine.Bus.SetLiveAgnusDmaEnabled(true);
-        }
-
         executionBoundarySchedule.CompleteExecution(targetCycle);
         var stopped = (bool)handleBootResult.Invoke(emulator, new object[] { result })!;
         otherTicks += Stopwatch.GetTimestamp() - phaseStart;
         if (stopped)
         {
+            machine.Bus.Display.AbortPresentationFrame();
             executionBoundarySchedule.CompleteFrame();
             continue;
         }
@@ -1351,10 +1325,7 @@ static FrameProfile ProfileFrames(CopperScreenEmulator emulator, int frames)
         machine.Bus.SynchronizePaulaThrough(targetCycle);
 
         phaseStart = Stopwatch.GetTimestamp();
-        machine.Bus.Display.RenderFrame(
-            MemoryMarshal.Cast<int, uint>(emulator.Framebuffer.AsSpan()),
-            targetCycle - AmigaConstants.A500PalCpuCyclesPerFrame,
-            targetCycle);
+        machine.Bus.Display.CompletePresentationFrame(targetCycle);
         stabilizeInterlaceFrame.Invoke(emulator, null);
         displayTicks += Stopwatch.GetTimestamp() - phaseStart;
 
@@ -1716,6 +1687,28 @@ static StreamWriter? CreateAudioAuditWriter(BenchmarkOptions options, BenchmarkW
     return writer;
 }
 
+static void ValidateExpectedChecksums(BenchmarkRunResult result, BenchmarkOptions options)
+{
+    if (result.Missing)
+    {
+        return;
+    }
+
+    if (options.ExpectedFramebufferChecksum is uint expectedFramebuffer &&
+        result.Framebuffer.Checksum != expectedFramebuffer)
+    {
+        throw new InvalidOperationException(
+            $"Framebuffer checksum mismatch for {result.Workload.Name}: expected 0x{expectedFramebuffer:X8}, actual 0x{result.Framebuffer.Checksum:X8}.");
+    }
+
+    if (options.ExpectedAudioChecksum is uint expectedAudio &&
+        result.Audio.Checksum != expectedAudio)
+    {
+        throw new InvalidOperationException(
+            $"Audio checksum mismatch for {result.Workload.Name}: expected 0x{expectedAudio:X8}, actual 0x{result.Audio.Checksum:X8}.");
+    }
+}
+
 static string FormatPaulaAudit(Paula paula)
 {
     var parts = new string[4];
@@ -2012,13 +2005,13 @@ static DisplaySummary CaptureDisplaySummary(OcsDisplay display)
         snapshot.LastBitplaneDmaFetches,
         snapshot.LastSpriteDmaFetches,
         snapshot.LastMissedSpriteDmaSlots,
-        snapshot.LastRasterlineDescriptorBuilds,
-        snapshot.LastRasterlineDescriptorReplayAttempts,
-        snapshot.LastRasterlineDescriptorReplayedRows,
-        snapshot.LastRasterlineDescriptorFallbackRows,
-        snapshot.LastRasterlineDescriptorBitplaneRows,
-        snapshot.LastRasterlineDescriptorSpriteRows,
-        snapshot.LastRasterlineDescriptorMismatches,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
         snapshot.LastRowDmaPlansBuilt,
         snapshot.LastRowDmaPlannedRowsExecuted,
         snapshot.LastRowDmaBitplaneEntriesExecuted,
@@ -2042,7 +2035,7 @@ static string FormatStatusWithScheduler(BenchmarkRunResult result)
 {
     var scheduler = result.Scheduler;
     var boundaryMode = result.CopperStartRuntimeHandoffActive ? "runtime" : "boot";
-    return $"{FormatCounterText(result.StatusText)} | boundary={boundaryMode}/{result.CopperStartRuntimeHandoffCount}, scheduler last={scheduler.LastDrainCycle}, drains={scheduler.DrainCount}, max-frame-drains={result.MaxFrameSchedulerDrains}, bus-drains={scheduler.BusAccessDrainCount}, same-cycle={scheduler.SameCycleDrainCount}, line-cache=hit:{scheduler.RasterlineCacheHits},miss:{scheduler.RasterlineCacheMisses},rebuild:{scheduler.RasterlineCacheRebuilds},inv:{scheduler.RasterlineCacheInvalidations}, wake-agenda=hit:{scheduler.WakeAgendaCacheHits},miss:{scheduler.WakeAgendaCacheMisses},skip:{scheduler.WakeAgendaDrainSkips},inv:{scheduler.WakeAgendaInvalidations}, cpuevent=hit:{scheduler.CpuVisibleNoEventCacheHits},miss:{scheduler.CpuVisibleNoEventCacheMisses},inv:{scheduler.CpuVisibleNoEventCacheInvalidations}, copperq=slot:{scheduler.CopperQuiescentSlotContendedAccesses},customw:{scheduler.CopperQuiescentCustomRegisterWrites},cpuw:{scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw:{scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain:{scheduler.CopperQuiescentSchedulerDrains},pred:{scheduler.CopperQuiescentShadowPredictions}/{scheduler.CopperQuiescentShadowMatches}/{scheduler.CopperQuiescentShadowUnsupported}/{scheduler.CopperQuiescentShadowMismatches},fast:{scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}/{scheduler.CopperQuiescentFastPathVerificationMismatches}, cpubatch={FormatDeferredCpuBusBatchSummary(scheduler)}, events=raster:{scheduler.RasterEvents},cia:{scheduler.CiaEvents},paula:{scheduler.PaulaEvents},disk:{scheduler.DiskEvents},agnus:{scheduler.AgnusEvents},blitter:{scheduler.BlitterEvents}";
+    return $"{FormatCounterText(result.StatusText)} | boundary={boundaryMode}/{result.CopperStartRuntimeHandoffCount}, scheduler last={scheduler.LastDrainCycle}, drains={scheduler.DrainCount}, max-frame-drains={result.MaxFrameSchedulerDrains}, bus-drains={scheduler.BusAccessDrainCount}, same-cycle={scheduler.SameCycleDrainCount}, line-cache=hit:{scheduler.RasterlineCacheHits},miss:{scheduler.RasterlineCacheMisses},rebuild:{scheduler.RasterlineCacheRebuilds},inv:{scheduler.RasterlineCacheInvalidations}, wake-agenda=hit:{scheduler.WakeAgendaCacheHits},miss:{scheduler.WakeAgendaCacheMisses},skip:{scheduler.WakeAgendaDrainSkips},inv:{scheduler.WakeAgendaInvalidations}, agnexec=agenda:{scheduler.AgnusExecutorAgendaReads}/{scheduler.AgnusExecutorAgendaUpdates},shadow:{scheduler.AgnusExecutorShadowMatches}/{scheduler.AgnusExecutorShadowMismatches},first:{FormatCounterText(scheduler.AgnusExecutorFirstShadowMismatch)},fixed:{scheduler.AgnusFixedPlanShadowMatches}/{scheduler.AgnusFixedPlanShadowMismatches},fixedFirst:{FormatCounterText(scheduler.AgnusFixedPlanFirstShadowMismatch)}, cpuevent=hit:{scheduler.CpuVisibleNoEventCacheHits},miss:{scheduler.CpuVisibleNoEventCacheMisses},inv:{scheduler.CpuVisibleNoEventCacheInvalidations}, copperq=slot:{scheduler.CopperQuiescentSlotContendedAccesses},customw:{scheduler.CopperQuiescentCustomRegisterWrites},cpuw:{scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw:{scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain:{scheduler.CopperQuiescentSchedulerDrains},pred:{scheduler.CopperQuiescentShadowPredictions}/{scheduler.CopperQuiescentShadowMatches}/{scheduler.CopperQuiescentShadowUnsupported}/{scheduler.CopperQuiescentShadowMismatches},fast:{scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}/{scheduler.CopperQuiescentFastPathVerificationMismatches}, cpubatch={FormatDeferredCpuBusBatchSummary(scheduler)}, events=raster:{scheduler.RasterEvents},cia:{scheduler.CiaEvents},paula:{scheduler.PaulaEvents},disk:{scheduler.DiskEvents},agnus:{scheduler.AgnusEvents},blitter:{scheduler.BlitterEvents}";
 }
 
 static void LaunchWorkbenchPathIfNeeded(CopperScreenEmulator emulator, BenchmarkWorkload workload)
@@ -2732,7 +2725,9 @@ internal readonly record struct BenchmarkOptions(
     bool SyntheticBlitterBenchmark,
     M68kOpcodePlanDispatch? OpcodeDispatch,
     int OpcodeDispatchWarmupInstructions,
-    int OpcodeDispatchInstructions)
+    int OpcodeDispatchInstructions,
+    uint? ExpectedFramebufferChecksum,
+    uint? ExpectedAudioChecksum)
 {
     public static BenchmarkOptions Parse(string[] args)
     {
@@ -2788,6 +2783,8 @@ internal readonly record struct BenchmarkOptions(
         var jitFallbackAttribution = false;
         var realKickstart = false;
         string? kickstartRomPath = null;
+        uint? expectedFramebufferChecksum = null;
+        uint? expectedAudioChecksum = null;
         for (var i = 0; i < args.Length; i++)
         {
             if (string.Equals(args[i], "--warmup", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
@@ -3044,6 +3041,14 @@ internal readonly record struct BenchmarkOptions(
             {
                 dumpChipRamPath = args[++i];
             }
+            else if (string.Equals(args[i], "--expect-framebuffer-checksum", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                expectedFramebufferChecksum = ParseChecksum(args[++i]);
+            }
+            else if (string.Equals(args[i], "--expect-audio-checksum", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                expectedAudioChecksum = ParseChecksum(args[++i]);
+            }
         }
 
         return new BenchmarkOptions(
@@ -3098,7 +3103,9 @@ internal readonly record struct BenchmarkOptions(
             syntheticBlitterBenchmark,
             opcodeDispatch,
             Math.Max(0, opcodeDispatchWarmupInstructions),
-            Math.Max(1, opcodeDispatchInstructions));
+            Math.Max(1, opcodeDispatchInstructions),
+            expectedFramebufferChecksum,
+            expectedAudioChecksum);
     }
 
     private static M68kOpcodePlanDispatch? ParseOpcodeDispatch(string value)
@@ -3119,6 +3126,19 @@ internal readonly record struct BenchmarkOptions(
             _ => throw new ArgumentException(
                 $"Unsupported blitter advance mode '{value}'. Expected reference, bounded, or verify.")
         };
+
+    private static uint ParseChecksum(string value)
+    {
+        var text = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? value[2..]
+            : value;
+        if (!uint.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var checksum))
+        {
+            throw new ArgumentException($"Invalid checksum '{value}'. Expected an eight-digit hexadecimal value.");
+        }
+
+        return checksum;
+    }
 
 }
 

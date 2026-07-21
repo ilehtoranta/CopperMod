@@ -196,25 +196,10 @@ public sealed class EcsDeniseRegisterTests
     [Fact]
     public void Bplcon3BorderEffectsAreGatedByEcsena()
     {
-        var bus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
-        bus.WriteWord(CustomBase + 0x180, 0x0F00);
-        bus.WriteWord(CustomBase + 0x106, 0x0030);
-        var frame = new uint[bus.Display.Width * bus.Display.Height];
-
-        bus.Display.RenderFrame(frame);
-        Assert.Equal(0xFFFF0000u, frame[0]);
-
-        bus.WriteWord(CustomBase + 0x100, 0x0001);
-        bus.Display.RenderFrame(frame);
-        Assert.Equal(0xFF000000u, frame[0]);
-
-        bus.WriteWord(CustomBase + 0x106, 0x0000);
-        bus.Display.RenderFrame(frame);
-        Assert.Equal(0x00FF0000u, frame[0]);
-
-        bus.WriteWord(CustomBase + 0x106, 0x0010);
-        bus.Display.RenderFrame(frame);
-        Assert.Equal(0xFFFF0000u, frame[0]);
+        Assert.Equal(0xFFFF0000u, RenderBorderPixel(bplcon0: 0x0000, bplcon3: 0x0030));
+        Assert.Equal(0xFF000000u, RenderBorderPixel(bplcon0: 0x0001, bplcon3: 0x0030));
+        Assert.Equal(0x00FF0000u, RenderBorderPixel(bplcon0: 0x0001, bplcon3: 0x0000));
+        Assert.Equal(0xFFFF0000u, RenderBorderPixel(bplcon0: 0x0001, bplcon3: 0x0010));
     }
 
     [Fact]
@@ -225,8 +210,9 @@ public sealed class EcsDeniseRegisterTests
         var blockedFrame = new uint[blocked.Display.Width * blocked.Display.Height];
         var enabledFrame = new uint[enabled.Display.Width * enabled.Display.Height];
 
-        blocked.Display.RenderFrame(blockedFrame);
-        enabled.Display.RenderFrame(enabledFrame);
+        var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+        blocked.Display.RenderFrame(blockedFrame, frameCycles, frameCycles * 2);
+        enabled.Display.RenderFrame(enabledFrame, frameCycles, frameCycles * 2);
 
         Assert.Equal(0xFF000000u, blockedFrame[0]);
         Assert.Equal(0xFF00FF00u, enabledFrame[0]);
@@ -464,6 +450,17 @@ public sealed class EcsDeniseRegisterTests
         return bus;
     }
 
+    private static uint RenderBorderPixel(ushort bplcon0, ushort bplcon3)
+    {
+        var bus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
+        bus.WriteWord(CustomBase + 0x180, 0x0F00);
+        bus.WriteWord(CustomBase + 0x100, bplcon0);
+        bus.WriteWord(CustomBase + 0x106, bplcon3);
+        var frame = new uint[bus.Display.Width * bus.Display.Height];
+        bus.Display.RenderFrame(frame);
+        return frame[0];
+    }
+
     private static AmigaBus CreateSuperHiresManualSpriteBus(
         bool positionIncrement,
         ushort dataA,
@@ -497,5 +494,5 @@ public sealed class EcsDeniseRegisterTests
     }
 
     private static void FlushDisplay(AmigaBus bus)
-        => bus.Display.RenderFrame(new uint[bus.Display.Width * bus.Display.Height]);
+        => bus.AdvanceDmaTo(bus.Agnus.CurrentCycle + AgnusChipSlotScheduler.SlotCycles);
 }

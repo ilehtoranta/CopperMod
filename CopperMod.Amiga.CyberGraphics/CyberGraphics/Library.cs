@@ -839,7 +839,7 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             foreach (var vector in AllVectorArray)
             {
                 var capturedOffset = vector.Offset;
-                _bus.RegisterHostTrapStub(AddOffset(libraryBase, capturedOffset), state => Invoke(capturedOffset, state));
+                _bus.RegisterHostGateway(AddOffset(libraryBase, capturedOffset), state => Invoke(capturedOffset, state));
             }
         }
 

@@ -545,17 +545,17 @@ public sealed class CyberGraphicsLibraryTests
 
         foreach (var vector in CyberGraphicsLibrary.AllVectors)
         {
-            Assert.False(bus.HasHostTrapStub(AddOffset(libraryBase, vector.Offset)));
+            Assert.False(bus.HasHostGateway(AddOffset(libraryBase, vector.Offset)));
         }
 
         library.InstallTrapVectors(libraryBase);
 
         foreach (var vector in CyberGraphicsLibrary.AllVectors)
         {
-            Assert.True(bus.HasHostTrapStub(AddOffset(libraryBase, vector.Offset)));
+            Assert.True(bus.HasHostGateway(AddOffset(libraryBase, vector.Offset)));
         }
 
-        Assert.False(bus.HasHostTrapStub(AddOffset(libraryBase, -84)));
+        Assert.False(bus.HasHostGateway(AddOffset(libraryBase, -84)));
         Assert.Equal(libraryBase, library.LibraryBase);
     }
 
@@ -1321,12 +1321,12 @@ public sealed class CyberGraphicsLibraryTests
         var library = new CyberGraphicsLibrary(bus, new GuestServices(0x8000));
 
         Assert.Equal(0, library.InstallSystemPatches(execBase));
-        Assert.False(bus.HasHostTrapStub(graphicsBase - 30));
+        Assert.False(bus.HasHostGateway(graphicsBase - 30));
 
         bus.WriteWord(graphicsBase + 0x14, 40);
         bus.WriteWord(graphicsBase - 30, 0x4E75);
         Assert.Equal(0, library.InstallSystemPatches(execBase));
-        Assert.False(bus.HasHostTrapStub(graphicsBase - 30));
+        Assert.False(bus.HasHostGateway(graphicsBase - 30));
     }
 
     private static AmigaBus CreateBus()
@@ -1457,7 +1457,7 @@ public sealed class CyberGraphicsLibraryTests
     }
 
     private static bool InvokeInstalledTrap(AmigaBus bus, uint address, M68kCpuState state)
-        => bus.TryInvokeHostTrap(address, bus.ReadWord(address + 2), state);
+        => bus.TryInvokeHostGateway(address, bus.ReadLong(address + 2), state);
 
     private static uint AddOffset(uint address, int offset)
         => unchecked((uint)((int)address + offset));

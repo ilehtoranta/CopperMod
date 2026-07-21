@@ -202,5 +202,13 @@ namespace CopperMod.Amiga.Bus
         long HostPaulaTicks,
         long HostDiskTicks,
         long HostAgnusTicks,
-        long HostBlitterTicks);
+        long HostBlitterTicks,
+        long AgnusExecutorAgendaReads,
+        long AgnusExecutorAgendaUpdates,
+        long AgnusExecutorShadowMatches,
+        long AgnusExecutorShadowMismatches,
+        string AgnusExecutorFirstShadowMismatch,
+        long AgnusFixedPlanShadowMatches,
+        long AgnusFixedPlanShadowMismatches,
+        string AgnusFixedPlanFirstShadowMismatch);
 }

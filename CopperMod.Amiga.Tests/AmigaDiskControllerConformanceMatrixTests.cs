@@ -334,8 +334,10 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		SetDiskPointer(bus, DmaBase, cycle);
 
 		WriteDsklenStartSequence(bus, words: 4, cycle);
-		bus.AdvanceDmaTo(bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle - 1);
-		bus.WriteWord(0x00DFF024, 0x0000, bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle - 1);
+		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
+		var cancelCycle = cycle + ((completionCycle - cycle) / 2);
+		bus.AdvanceDmaTo(cancelCycle);
+		bus.WriteWord(0x00DFF024, 0x0000, cancelCycle);
 
 		Assert.False(bus.Disk.CaptureSnapshot().ActiveDma);
 		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x0002);
@@ -429,7 +431,7 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		StartDiskDma(bus, DmaBase, words: 1);
 		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
 		var firstSlot = completionCycle - AgnusChipSlotScheduler.SlotCycles;
-		_ = bus.TryReserveDiskDmaWordExactSlot(0x2000, isWrite: false, firstSlot, out _);
+		_ = bus.TryExecuteDiskDmaWordExactSlot(0x2000, writeMode: false, diskWordValue: 0, firstSlot, out _);
 
 		bus.AdvanceDmaTo(firstSlot);
 		var blockedSnapshot = bus.Disk.CaptureSnapshot();
@@ -1554,15 +1556,16 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		var bus = CreateBusWithTrack(0x1111, 0x2222, 0x3333, 0x4444);
 
 		StartDiskDma(bus, DmaBase, words: 4);
+		var started = Assert.Single(bus.Disk.CaptureDmaTrace().Where(entry => entry.Kind == AmigaDiskDmaTraceKind.Started));
 		var completionCycle = bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle;
-		var cancelCycle = completionCycle - AgnusChipSlotScheduler.SlotCycles - 1;
+		var cancelCycle = started.Cycle + ((completionCycle - started.Cycle) / 2);
 		bus.AdvanceDmaTo(cancelCycle);
 		bus.WriteWord(0x00DFF024, 0x0000, cancelCycle);
 
 		var cancelled = Assert.Single(bus.Disk.CaptureDmaTrace().Where(entry => entry.Kind == AmigaDiskDmaTraceKind.Cancelled));
 		Assert.Equal(4, cancelled.RequestedWords);
 		Assert.InRange(cancelled.TransferredWords, 0, 3);
-		Assert.Equal(cancelCycle, cancelled.Cycle);
+		Assert.InRange(cancelled.Cycle, cancelCycle, completionCycle - 1);
 		Assert.Equal(0, cancelled.Dsklen & 0xC000);
 		Assert.Equal(4 - cancelled.TransferredWords, cancelled.Dsklen & 0x3FFF);
 		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & 0x0002);

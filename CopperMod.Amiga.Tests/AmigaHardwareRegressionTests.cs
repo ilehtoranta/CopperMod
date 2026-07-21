@@ -8,11 +8,12 @@ public sealed class AmigaHardwareRegressionTests
 	public void PaulaManualAudioDataWritePlaysBothWordBytesAndRequestsInterrupt()
 	{
 		var bus = CreateComponentBus();
-		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
+		var writeCycle = 0L;
+		bus.WriteWord(0x00DFF0AA, 0x7F81, ref writeCycle, AmigaBusAccessKind.CpuDataWrite);
 		var buffer = new float[4];
 
-		bus.Paula.RenderSample(0, buffer, 0, 2);
-		bus.Paula.RenderSample(856, buffer, 1, 2);
+		bus.Paula.RenderSample(writeCycle, buffer, 0, 2);
+		bus.Paula.RenderSample(writeCycle + 856, buffer, 1, 2);
 
 		Assert.True(buffer[0] > 0.20f);
 		Assert.True(buffer[2] < -0.20f);

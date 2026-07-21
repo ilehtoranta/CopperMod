@@ -283,8 +283,8 @@ public sealed class CopperHdfControllerTests
 			openState.A[1] = ioAddress;
 			openState.A[6] = bus.CopperHdf.DeviceBase;
 			var openTrap = bus.CopperHdf.DeviceBase - 6u;
-			Assert.True(bus.HasHostTrapStub(openTrap));
-			Assert.True(bus.TryInvokeHostTrap(openTrap, bus.ReadWord(openTrap + 2), openState));
+			Assert.True(bus.HasHostGateway(openTrap));
+			Assert.True(bus.TryInvokeHostGateway(openTrap, bus.ReadLong(openTrap + 2), openState));
 			Assert.Equal(0u, openState.D[0]);
 			Assert.Equal(bus.CopperHdf.DeviceBase, bus.ReadLong(ioAddress + 0x14));
 			Assert.NotEqual(0u, bus.ReadLong(ioAddress + 0x18));
@@ -292,8 +292,8 @@ public sealed class CopperHdfControllerTests
 			bus.WriteWord(ioAddress + 0x1C, 15);
 			var beginIoTrap = bus.CopperHdf.DeviceBase - 30u;
 			openState.A[1] = ioAddress;
-			Assert.True(bus.HasHostTrapStub(beginIoTrap));
-			Assert.True(bus.TryInvokeHostTrap(beginIoTrap, bus.ReadWord(beginIoTrap + 2), openState));
+			Assert.True(bus.HasHostGateway(beginIoTrap));
+			Assert.True(bus.TryInvokeHostGateway(beginIoTrap, bus.ReadLong(beginIoTrap + 2), openState));
 			Assert.Equal(0, bus.ReadByte(ioAddress + 0x1F));
 			Assert.Equal(0u, bus.ReadLong(ioAddress + 0x20));
 		}
@@ -420,19 +420,19 @@ public sealed class CopperHdfControllerTests
 		state.A[6] = execBase;
 
 		var copiedDiagPoint = copyBase + CopperHdfController.DiagPointOffset;
-		Assert.True(bus.HasHostTrapStub(copiedDiagPoint));
-		Assert.True(bus.TryInvokeHostTrap(copiedDiagPoint, bus.ReadWord(copiedDiagPoint + 2), state));
+		Assert.True(bus.HasHostGateway(copiedDiagPoint));
+		Assert.True(bus.TryInvokeHostGateway(copiedDiagPoint, bus.ReadLong(copiedDiagPoint + 2), state));
 		Assert.Equal(1u, state.D[0]);
 
 		var copiedBootPoint = copyBase + CopperHdfController.BootPointOffset;
-		Assert.True(bus.HasHostTrapStub(copiedBootPoint));
-		Assert.True(bus.TryInvokeHostTrap(copiedBootPoint, bus.ReadWord(copiedBootPoint + 2), state));
+		Assert.True(bus.HasHostGateway(copiedBootPoint));
+		Assert.True(bus.TryInvokeHostGateway(copiedBootPoint, bus.ReadLong(copiedBootPoint + 2), state));
 		Assert.Equal(1u, state.D[0]);
 
 		var resident = copyBase + CopperHdfController.ResidentOffset;
 		var residentInit = bus.ReadLong(resident + 0x16);
-		Assert.True(bus.HasHostTrapStub(residentInit));
-		Assert.True(bus.TryInvokeHostTrap(residentInit, bus.ReadWord(residentInit + 2), state));
+		Assert.True(bus.HasHostGateway(residentInit));
+		Assert.True(bus.TryInvokeHostGateway(residentInit, bus.ReadLong(residentInit + 2), state));
 		return (copyBase, execBase, expansionBase, configDev);
 	}
 

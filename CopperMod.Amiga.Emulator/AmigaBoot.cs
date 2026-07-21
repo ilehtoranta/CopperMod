@@ -8,6 +8,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using CopperStartExecServices = CopperMod.Amiga.CopperStart.Exec.ExecServices;
+using CopperStartExecLibraryServices = CopperMod.Amiga.CopperStart.Exec.ExecLibraryServices;
+using CopperStartExecListServices = CopperMod.Amiga.CopperStart.Exec.ExecListServices;
+using CopperStartTaskScheduler = CopperMod.Amiga.CopperStart.Exec.ExecTaskScheduler;
 
 namespace CopperMod.Amiga
 {
@@ -15,6 +19,14 @@ namespace CopperMod.Amiga
     {
         StopAfterBootDiskRead,
         ContinueAfterBootDiskRead
+    }
+
+    internal enum KickstartRomExecTakeoverState
+    {
+        Disabled,
+        Pending,
+        Active,
+        Unavailable
     }
 
     internal sealed partial class AmigaBootController : ICyberGraphicsGuestServices
@@ -48,9 +60,21 @@ namespace CopperMod.Amiga
         private const int ExecThisTaskOffset = 0x114;
         private const int ExecTaskTrapCodeOffset = 0x130;
         private const int ExecTaskTrapAllocOffset = 0x140;
+        private const int ExecResModulesOffset = 0x12C;
+        private const int ExecTaskReadyOffset = 0x196;
+        private const int ExecTaskWaitOffset = 0x1A4;
+        private const int ExecPortListOffset = 0x188;
+        private const int ExecIntrListOffset = 0x16C;
         private const int ExecMemListOffset = 0x142;
+        private const int ExecResourceListOffset = 0x150;
+        private const int ExecDeviceListOffset = 0x15E;
+        private const int ExecLibListOffset = 0x17A;
         private const int TaskNodeTypeOffset = 0x08;
         private const int TaskNodeNameOffset = 0x0A;
+        private const int TaskSigAllocOffset = 0x12;
+        private const int TaskSigWaitOffset = 0x16;
+        private const int TaskSigRecvdOffset = 0x1A;
+        private const int TaskStateOffset = 0x0F;
         private const int TaskTrapAllocOffset = 0x22;
         private const int TaskTrapAbleOffset = 0x24;
         private const int TaskTrapCodeOffset = 0x32;
@@ -78,6 +102,8 @@ namespace CopperMod.Amiga
         private const uint SafeInterruptReturnAddress = 0x00F0_7F00;
         private const uint TaskTrapDispatcherBaseAddress = 0x00F0_8000;
         private const uint DefaultTaskTrapCodeAddress = 0x00F0_8100;
+        private const uint ExecInterruptContinuationAddress = 0x00F0_8200;
+        private const uint ExecLibraryCallContinuationAddress = 0x00F0_8300;
         private const int BusErrorVector = 2;
         private const int AddressErrorVector = 3;
         private const int IllegalInstructionVector = 4;
@@ -120,6 +146,12 @@ namespace CopperMod.Amiga
         private const int MsgPortSigBitOffset = 0x0F;
         private const int MsgPortSigTaskOffset = 0x10;
         private const int MsgPortMsgListOffset = 0x14;
+        private const int NodeSuccessorOffset = 0x00;
+        private const int NodePredecessorOffset = 0x04;
+        private const int NodeNameOffset = 0x0A;
+        private const int LibraryVersionOffset = 0x14;
+        private const int LibraryOpenCountOffset = 0x20;
+        private const int MessageReplyPortOffset = 0x0E;
         private const int GadgetNextOffset = 0x00;
         private const int GadgetLeftEdgeOffset = 0x04;
         private const int GadgetTopEdgeOffset = 0x06;
@@ -190,8 +222,19 @@ namespace CopperMod.Amiga
         private readonly Dictionary<uint, AmigaDosDirectoryEntry> _dosLocks = new Dictionary<uint, AmigaDosDirectoryEntry>();
         private readonly Dictionary<string, string> _dosAssigns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string> _ramDirectorySources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<uint, uint> _taskPendingSignals = new Dictionary<uint, uint>();
+        private readonly Dictionary<uint, uint> _taskAllocatedSignals = new Dictionary<uint, uint>();
+        private readonly Dictionary<uint, int> _taskNextSignalBits = new Dictionary<uint, int>();
+        private readonly Dictionary<uint, uint> _execPortsByAddress = new Dictionary<uint, uint>();
         private readonly Queue<SyntheticIntuiMessage> _syntheticIntuiMessages = new Queue<SyntheticIntuiMessage>();
         private readonly List<SyntheticInterruptServer> _syntheticVBlankInterruptServers = new List<SyntheticInterruptServer>();
+        private readonly Dictionary<int, List<SyntheticInterruptServer>> _execInterruptServers = new Dictionary<int, List<SyntheticInterruptServer>>();
+        private readonly Queue<int> _pendingExecInterruptSources = new Queue<int>();
+        private ushort _observedExecInterruptBits;
+        private ushort _observedTaskSchedulerInterruptBits;
+        private int _activeExecInterruptSource = -1;
+        private int _activeExecInterruptServerIndex;
+        private uint _execInterruptReturnProgramCounter;
         private readonly Dictionary<uint, int> _allocatedRtgBitMaps = new Dictionary<uint, int>();
         private bool _bootDiskReadCompleted;
         private bool _copperStartRuntimeHandoffPrepared;
@@ -272,11 +315,19 @@ namespace CopperMod.Amiga
         private bool _startupSequenceActive;
         private int _startupSequenceFailAt = 10;
         private bool _kickstartRomBootActive;
+        private CopperStartExecServices? _romExecServices;
+        private CopperStartExecLibraryServices? _romExecLibraryServices;
+        private CopperStartExecListServices? _execListServices;
+        private readonly CopperStartTaskScheduler _taskScheduler = new CopperStartTaskScheduler();
+        private readonly ExecTaskServices _execTaskServices;
+        private uint _activeExecBase;
+        private KickstartRomExecTakeoverState _kickstartRomExecTakeoverState;
         private readonly RuntimeInstructionBoundary _runtimeInstructionBoundary;
 
         public AmigaBootController(Machine machine, IAmigaDiskDmaEngine? diskDma = null)
         {
             _machine = machine ?? throw new ArgumentNullException(nameof(machine));
+            _execTaskServices = new ExecTaskServices(this);
             _diskDma = diskDma ?? new ImmediateDiskDmaEngine();
             _instructionBoundary = new BootInstructionBoundary(this);
             _runtimeInstructionBoundary = new RuntimeInstructionBoundary(this);
@@ -303,6 +354,8 @@ namespace CopperMod.Amiga
             => _cyberGraphics ?? throw new InvalidOperationException("CyberGraphX is not enabled for this machine.");
 
         internal bool HasCyberGraphics => _cyberGraphics != null;
+
+        internal KickstartRomExecTakeoverState KickstartRomExecTakeoverState => _kickstartRomExecTakeoverState;
 
         internal bool TryRenderRtgFrame(out CyberGraphicsRtgFrame frame)
         {
@@ -465,6 +518,9 @@ namespace CopperMod.Amiga
 
             ResetBootState(disk, installHostShim: false);
             _kickstartRomBootActive = true;
+            _kickstartRomExecTakeoverState = _machine.Kickstart.Configuration.Version == KickstartVersion.Kickstart31
+                ? KickstartRomExecTakeoverState.Pending
+                : KickstartRomExecTakeoverState.Disabled;
             _dosBootBlockHeaderProbeEnabled = false;
             _machine.Kickstart.InstallRomImage(_machine.Bus);
             var rom = _machine.Kickstart.Configuration.RomImage.Span;
@@ -494,14 +550,32 @@ namespace CopperMod.Amiga
 
         private void ResetBootState(AmigaDiskImage? disk, bool installHostShim)
         {
+            _romExecServices?.Dispose();
+            _romExecServices = null;
+            _romExecLibraryServices = null;
+            _execListServices = null;
+            _activeExecBase = 0;
+            _kickstartRomExecTakeoverState = KickstartRomExecTakeoverState.Disabled;
             _diagnostics.Clear();
             _dosHandles.Clear();
             _dosLocks.Clear();
             _dosAssigns.Clear();
             _ramDirectorySources.Clear();
+            _taskPendingSignals.Clear();
+            _taskAllocatedSignals.Clear();
+            _taskNextSignalBits.Clear();
+            _execPortsByAddress.Clear();
             _dosAssigns["ENVARC"] = "Prefs/Env-Archive";
             _dosAssigns["SYS"] = string.Empty;
             _syntheticVBlankInterruptServers.Clear();
+            _execInterruptServers.Clear();
+            _pendingExecInterruptSources.Clear();
+            _observedExecInterruptBits = 0;
+            _observedTaskSchedulerInterruptBits = 0;
+            _activeExecInterruptSource = -1;
+            _taskScheduler.Reset();
+            _activeExecInterruptServerIndex = 0;
+            _execInterruptReturnProgramCounter = 0;
             _allocatedRtgBitMaps.Clear();
             _rtgOpenScreenContexts.Clear();
             _rtgIntuitionScreens.Clear();
@@ -713,65 +787,47 @@ namespace CopperMod.Amiga
             var bus = _machine.Bus;
             _machine.Kickstart.InstallHostShim(bus, CreateHostTrapTable());
             InstallSafeAutovectors(bus);
-            for (var displacement = -6; displacement >= -1200; displacement -= 6)
-            {
-                var captured = displacement;
-                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, captured), state => HostExecGeneric(state, captured));
-            }
-
+            InstallCopperStartExecGateways();
             InstallTaskTrapDispatchers();
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -456), HostDoIo);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -96), HostFindResident);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -132), HostOk);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -138), HostOk);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -276), HostFindName);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -198), HostAllocMem);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -204), HostAllocAbs);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -210), HostFreeMem);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -216), HostAvailMem);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -408), HostOpenLibrary);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -414), HostOk);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -498), HostOpenLibrary);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExecLibraryBase, -552), HostOpenLibrary);
             for (var displacement = -6; displacement >= -1200; displacement -= 6)
             {
                 var captured = displacement;
-                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, captured), state => HostDosGeneric(state, captured));
+                bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, captured), state => HostDosGeneric(state, captured));
             }
 
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -48), HostDosWrite);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -54), HostDosInput);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -60), HostDosOutput);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -84), HostDosLock);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -90), HostDosUnLock);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -102), HostDosExamine);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -126), HostDosCurrentDir);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.DosLibraryBase, -132), HostDosIoErr);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -48), HostDosWrite);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -54), HostDosInput);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -60), HostDosOutput);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -84), HostDosLock);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -90), HostDosUnLock);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -102), HostDosExamine);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -126), HostDosCurrentDir);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -132), HostDosIoErr);
             for (var displacement = -6; displacement >= -1200; displacement -= 6)
             {
                 var captured = displacement;
-                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, captured), state => HostIconGeneric(state, captured));
+                bus.RegisterHostGateway(Lvo(AmigaKickstartHost.IconLibraryBase, captured), state => HostIconGeneric(state, captured));
             }
 
             for (var displacement = -6; displacement >= -1200; displacement -= 6)
             {
                 var captured = displacement;
-                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.WorkbenchLibraryBase, captured), state => HostWorkbenchGeneric(state, captured));
+                bus.RegisterHostGateway(Lvo(AmigaKickstartHost.WorkbenchLibraryBase, captured), state => HostWorkbenchGeneric(state, captured));
             }
 
             for (var displacement = -6; displacement >= -1200; displacement -= 6)
             {
                 var captured = displacement;
-                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.GraphicsLibraryBase, captured), state => HostGraphicsGeneric(state, captured));
-                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IntuitionLibraryBase, captured), state => HostIntuitionGeneric(state, captured));
-                bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.ExpansionLibraryBase, captured), state => HostExpansionGeneric(state, captured));
+                bus.RegisterHostGateway(Lvo(AmigaKickstartHost.GraphicsLibraryBase, captured), state => HostGraphicsGeneric(state, captured));
+                bus.RegisterHostGateway(Lvo(AmigaKickstartHost.IntuitionLibraryBase, captured), state => HostIntuitionGeneric(state, captured));
+                bus.RegisterHostGateway(Lvo(AmigaKickstartHost.ExpansionLibraryBase, captured), state => HostExpansionGeneric(state, captured));
             }
 
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, -78), HostIconGetDiskObject);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, -90), HostIconFreeDiskObject);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, -96), HostIconFindToolType);
-            bus.RegisterHostTrapStub(Lvo(AmigaKickstartHost.IconLibraryBase, -102), HostIconMatchToolValue);
-            bus.RegisterHostTrapStub(DosResidentInitAddress, HostInitResident);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.IconLibraryBase, -78), HostIconGetDiskObject);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.IconLibraryBase, -90), HostIconFreeDiskObject);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.IconLibraryBase, -96), HostIconFindToolType);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.IconLibraryBase, -102), HostIconMatchToolValue);
+            bus.RegisterHostGateway(DosResidentInitAddress, HostInitResident);
             bus.ConfigureAutoconfigFastRamForHost();
             bus.ConfigureAutoconfigRtgForHost();
             InstallKickstartMemoryList();
@@ -792,6 +848,99 @@ namespace CopperMod.Amiga
             }
             InstallHostSupervisorStack();
         }
+
+        private void InstallCopperStartExecGateways()
+        {
+            _activeExecBase = AmigaKickstartHost.ExecLibraryBase;
+            using var exec = new CopperStartExecServices(
+                _machine.Bus,
+                AmigaKickstartHost.ExecLibraryBase,
+                HostExecGeneric,
+                HostDoIo,
+                HostFindResident,
+                HostOk,
+                HostFindName,
+                HostAllocMem,
+                HostAllocMemAndStore,
+                HostAllocAbs,
+                HostFreeMem,
+                HostAvailMem,
+                HostOpenLibrary, HostCloseLibrary, HostAddLibrary, HostRemLibrary,
+                HostAddDevice, HostAddResource, HostRemResource, HostOpenResource, HostInitResident);
+            exec.InstallCopperStart();
+        }
+
+        private void TryActivateKickstartRomExecServices()
+        {
+            if (_kickstartRomExecTakeoverState != KickstartRomExecTakeoverState.Pending)
+            {
+                return;
+            }
+
+            var execBase = _machine.Bus.ReadLong(AbsExecBaseAddress);
+            if (execBase == 0)
+            {
+                return;
+            }
+
+            if (!IsValidKickstartRomExecBase(execBase))
+            {
+                _kickstartRomExecTakeoverState = KickstartRomExecTakeoverState.Unavailable;
+                return;
+            }
+
+            var services = CreateExecServices(execBase);
+            services.InstallKickstartRomOverlay();
+            _machine.Bus.RegisterHostGateway(ExecInterruptContinuationAddress, HostExecInterruptContinuation);
+            _machine.Bus.RegisterHostGateway(ExecLibraryCallContinuationAddress, HostExecLibraryCallContinuation);
+            _romExecServices = services;
+            _activeExecBase = execBase;
+            _ = GetRomExecLibraryServices();
+            _taskScheduler.CaptureCurrent(_machine.Bus.ReadLong(execBase + ExecThisTaskOffset), _machine.Cpu.State);
+            _memoryListInstalled = true;
+            _kickstartRomExecTakeoverState = KickstartRomExecTakeoverState.Active;
+        }
+
+        private bool IsValidKickstartRomExecBase(uint execBase)
+        {
+            if ((execBase & 3) != 0 ||
+                !_machine.Bus.IsMappedMemoryRange(execBase, ExecMemListOffset + 14) ||
+                _machine.Bus.ReadLong(execBase + ExecChkBaseOffset) != ~execBase)
+            {
+                return false;
+            }
+
+            var task = _machine.Bus.ReadLong(execBase + ExecThisTaskOffset);
+            var list = execBase + ExecMemListOffset;
+            var firstHeader = _machine.Bus.ReadLong(list);
+            if (task == 0 || !_machine.Bus.IsMappedMemoryRange(task, TaskStackUpperOffset + 4) ||
+                (firstHeader != 0 && !_machine.Bus.IsMappedMemoryRange(firstHeader, MemHeaderFreeOffset + 4)))
+            {
+                return false;
+            }
+
+            return _machine.Bus.IsCpuPhysicalAddressMapped(
+                unchecked(execBase - 6u), 6, AmigaBusAccessKind.CpuInstructionFetch);
+        }
+
+        private CopperStartExecServices CreateExecServices(uint execBase)
+            => new CopperStartExecServices(
+                _machine.Bus, execBase, HostExecGeneric, HostDoIo, HostFindResident, HostOk,
+                HostFindName, HostAllocMem, HostAllocMemAndStore, HostAllocAbs, HostFreeMem,
+                HostAvailMem, HostOpenLibrary, HostCloseLibrary, HostAddLibrary, HostRemLibrary,
+                HostAddDevice, HostAddResource, HostRemResource, HostOpenResource, HostInitResident);
+
+        private CopperStartExecLibraryServices GetRomExecLibraryServices()
+            => _romExecLibraryServices ??= new CopperStartExecLibraryServices(
+                _machine.Bus,
+                GetActiveExecBase,
+                FindNameInExecList,
+                StartGuestExecSubroutine,
+                AddExecNodeAtomically,
+                RemoveExecNodeAtomically);
+
+        private CopperStartExecListServices GetExecListServices()
+            => _execListServices ??= new CopperStartExecListServices(_machine.Bus, ReadNullTerminatedString);
 
         private void InstallHostSupervisorStack()
         {
@@ -903,7 +1052,7 @@ namespace CopperMod.Amiga
         private void InstallTaskTrapDispatchers()
         {
             var bus = _machine.Bus;
-            bus.RegisterHostTrapStub(DefaultTaskTrapCodeAddress, HostDefaultTaskTrapCode);
+            bus.RegisterHostGateway(DefaultTaskTrapCodeAddress, HostDefaultTaskTrapCode);
             RegisterTaskTrapDispatcher(bus, BusErrorVector);
             RegisterTaskTrapDispatcher(bus, AddressErrorVector);
             RegisterTaskTrapDispatcher(bus, IllegalInstructionVector);
@@ -921,7 +1070,7 @@ namespace CopperMod.Amiga
         private void RegisterTaskTrapDispatcher(AmigaBus bus, int vector)
         {
             var dispatcherAddress = GetTaskTrapDispatcherAddress(vector);
-            bus.RegisterHostTrapStub(dispatcherAddress, state => HostTaskTrapDispatcher(state, vector));
+            bus.RegisterHostGateway(dispatcherAddress, state => HostTaskTrapDispatcher(state, vector));
         }
 
         private void EnsureTaskTrapVectorsCurrent()
@@ -977,13 +1126,13 @@ namespace CopperMod.Amiga
         {
             return vector switch
             {
-                BusErrorVector => TaskTrapDispatcherBaseAddress + 16u * 4u,
-                AddressErrorVector => TaskTrapDispatcherBaseAddress + 17u * 4u,
-                IllegalInstructionVector => TaskTrapDispatcherBaseAddress + 18u * 4u,
-                PrivilegeViolationVector => TaskTrapDispatcherBaseAddress + 19u * 4u,
-                LineAVector => TaskTrapDispatcherBaseAddress + 20u * 4u,
-                LineFVector => TaskTrapDispatcherBaseAddress + 21u * 4u,
-                >= 32 and < 48 => TaskTrapDispatcherBaseAddress + (uint)((vector - 32) * 4),
+                BusErrorVector => TaskTrapDispatcherBaseAddress + 16u * 6u,
+                AddressErrorVector => TaskTrapDispatcherBaseAddress + 17u * 6u,
+                IllegalInstructionVector => TaskTrapDispatcherBaseAddress + 18u * 6u,
+                PrivilegeViolationVector => TaskTrapDispatcherBaseAddress + 19u * 6u,
+                LineAVector => TaskTrapDispatcherBaseAddress + 20u * 6u,
+                LineFVector => TaskTrapDispatcherBaseAddress + 21u * 6u,
+                >= 32 and < 48 => TaskTrapDispatcherBaseAddress + (uint)((vector - 32) * 6),
                 _ => throw new ArgumentOutOfRangeException(nameof(vector), vector, "Unsupported host task trap vector.")
             };
         }
@@ -1203,6 +1352,19 @@ namespace CopperMod.Amiga
                 if (Completed)
                 {
                     return false;
+                }
+
+                if (_owner._kickstartRomBootActive)
+                {
+                    _owner.TryActivateKickstartRomExecServices();
+                    if (_owner.TryDispatchCopperStartTaskScheduler())
+                    {
+                        return true;
+                    }
+                    if (_owner.TryDispatchPendingExecInterruptServer())
+                    {
+                        return true;
+                    }
                 }
 
                 if (!_owner._kickstartRomBootActive)
@@ -1790,6 +1952,12 @@ namespace CopperMod.Amiga
 
         private void HostOpenLibrary(M68kCpuState state)
         {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                GetRomExecLibraryServices().OpenLibrary(state, ExecLibraryCallContinuationAddress);
+                return;
+            }
+
             var shouldRecordDiagnostic = _openLibraryDiagnosticCount < 24;
             var name = shouldRecordDiagnostic ? ReadNullTerminatedString(state.A[1], 96) : null;
             if (_openLibraryDiagnosticCount < 24)
@@ -2191,6 +2359,20 @@ namespace CopperMod.Amiga
                 -168 => HostExecAddIntServer(state),
                 -174 => HostExecRemIntServer(state),
                 -294 => HostExecFindTask(state),
+                -282 => _execTaskServices.AddTask(state),
+                -288 => _execTaskServices.RemTask(state),
+                -300 => _execTaskServices.SetTaskPri(state),
+                -120 => _execTaskServices.Disable(state),
+                -126 => _execTaskServices.Enable(state),
+                -132 => _execTaskServices.Forbid(state),
+                -138 => _execTaskServices.Permit(state),
+                -234 => HostExecInsert(state),
+                -240 => HostExecAddHead(state),
+                -246 => HostExecAddTail(state),
+                -252 => HostExecRemove(state),
+                -258 => HostExecRemHead(state),
+                -264 => HostExecRemTail(state),
+                -270 => HostExecEnqueue(state),
                 -306 => HostExecSetSignal(state),
                 -312 => 0,
                 -318 => HostExecWait(state),
@@ -2201,13 +2383,13 @@ namespace CopperMod.Amiga
                 -156 => HostExecUserState(state),
                 -342 => HostExecAllocTrap(state),
                 -348 => HostExecFreeTrap(state),
-                -354 => 0,
-                -360 => 0,
-                -366 => 0,
-                -372 => HostExecGetMsg(),
-                -378 => 0,
+                -354 => HostExecAddPort(state),
+                -360 => HostExecRemPort(state),
+                -366 => HostExecPutMsg(state),
+                -372 => HostExecGetMsg(state),
+                -378 => HostExecReplyMsg(state),
                 -384 => HostExecWaitPort(state),
-                -390 => 0,
+                -390 => HostExecFindPort(state),
                 _ => 0
             };
         }
@@ -2216,8 +2398,7 @@ namespace CopperMod.Amiga
         {
             var interruptNumber = unchecked((int)state.D[0]);
             var interrupt = state.A[1];
-            if (interruptNumber != VBlankInterruptNumber ||
-                interrupt == 0 ||
+            if (interruptNumber is < 0 or > 31 || interrupt == 0 ||
                 !_machine.Bus.IsMappedMemoryRange(interrupt, InterruptCodeOffset + 4))
             {
                 return 0;
@@ -2229,13 +2410,28 @@ namespace CopperMod.Amiga
                 return 0;
             }
 
-            for (var i = 0; i < _syntheticVBlankInterruptServers.Count; i++)
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
             {
-                if (_syntheticVBlankInterruptServers[i].InterruptAddress == interrupt)
+                var list = GetActiveExecBase() + ExecIntrListOffset + (uint)(interruptNumber * 14);
+                EnsureExecList(list);
+                if (!ContainsExecNode(list, interrupt)) AddTailExecList(list, interrupt);
+                if (!_execInterruptServers.TryGetValue(interruptNumber, out var servers))
                 {
-                    _syntheticVBlankInterruptServers[i] = new SyntheticInterruptServer(interrupt, data);
-                    return 0;
+                    servers = new List<SyntheticInterruptServer>();
+                    _execInterruptServers.Add(interruptNumber, servers);
                 }
+
+                for (var i = 0; i < servers.Count; i++)
+                {
+                    if (servers[i].InterruptAddress == interrupt)
+                    {
+                        servers[i] = new SyntheticInterruptServer(interrupt, data);
+                        return 0;
+                    }
+                }
+
+                servers.Add(new SyntheticInterruptServer(interrupt, data));
+                return 0;
             }
 
             _syntheticVBlankInterruptServers.Add(new SyntheticInterruptServer(interrupt, data));
@@ -2246,8 +2442,24 @@ namespace CopperMod.Amiga
         {
             var interruptNumber = unchecked((int)state.D[0]);
             var interrupt = state.A[1];
-            if (interruptNumber != VBlankInterruptNumber || interrupt == 0)
+            if (interruptNumber is < 0 or > 31 || interrupt == 0)
             {
+                return 0;
+            }
+
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                var list = GetActiveExecBase() + ExecIntrListOffset + (uint)(interruptNumber * 14);
+                if (ContainsExecNode(list, interrupt)) RemoveExecNode(interrupt);
+                if (_execInterruptServers.TryGetValue(interruptNumber, out var servers))
+                {
+                    servers.RemoveAll(server => server.InterruptAddress == interrupt);
+                    if (servers.Count == 0)
+                    {
+                        _execInterruptServers.Remove(interruptNumber);
+                    }
+                }
+
                 return 0;
             }
 
@@ -2293,6 +2505,152 @@ namespace CopperMod.Amiga
             }
         }
 
+        private bool TryDispatchCopperStartTaskScheduler()
+        {
+            if (_kickstartRomExecTakeoverState != KickstartRomExecTakeoverState.Active)
+            {
+                return false;
+            }
+
+            // Paula exposes VBlank as INTREQ bit 5.  The scheduler only makes
+            // dispatch decisions on that edge; the boundary is merely the safe
+            // point at which the CPU state can be exchanged.
+            var activeInterruptBits = _machine.Bus.Paula.ActiveInterruptBits;
+            var newlyAsserted = (ushort)(activeInterruptBits & ~_observedTaskSchedulerInterruptBits);
+            _observedTaskSchedulerInterruptBits = activeInterruptBits;
+            if ((newlyAsserted & AmigaConstants.IntreqVerticalBlank) != 0)
+            {
+                _taskScheduler.OnVBlank(_machine.Bus.ReadWord(GetActiveExecBase() + 0x120));
+            }
+
+            if (!_taskScheduler.DispatchPending ||
+                _machine.Bus.ReadByte(GetActiveExecBase() + 0x126) != 0 ||
+                _machine.Bus.ReadByte(GetActiveExecBase() + 0x127) != 0)
+            {
+                return false;
+            }
+
+            var readyList = GetActiveExecBase() + ExecTaskReadyOffset;
+            var next = _machine.Bus.ReadLong(readyList);
+            if (next == readyList + 4 || !_machine.Bus.IsMappedMemoryRange(next, TaskStackUpperOffset + 4))
+            {
+                return false;
+            }
+
+            var current = GetCurrentTaskAddress();
+            _taskScheduler.CaptureCurrent(current, _machine.Cpu.State);
+            if (!_taskScheduler.TryRestore(next, _machine.Cpu.State, _machine.Bus.ReadWord(GetActiveExecBase() + 0x120)))
+            {
+                return false;
+            }
+
+            _machine.Bus.WriteLong(GetActiveExecBase() + ExecThisTaskOffset, next);
+            return true;
+        }
+
+        private bool TryDispatchPendingExecInterruptServer()
+        {
+            if (_kickstartRomExecTakeoverState != KickstartRomExecTakeoverState.Active)
+            {
+                return false;
+            }
+
+            var activeBits = _machine.Bus.Paula.ActiveInterruptBits;
+            var newlyAsserted = (ushort)(activeBits & ~_observedExecInterruptBits);
+            _observedExecInterruptBits = activeBits;
+            for (var bit = 0; bit < 14; bit++)
+            {
+                if ((newlyAsserted & (1 << bit)) != 0 && HasGuestInterruptServers(bit))
+                {
+                    _pendingExecInterruptSources.Enqueue(bit);
+                }
+            }
+
+            if (_activeExecInterruptSource >= 0 || _pendingExecInterruptSources.Count == 0)
+            {
+                return false;
+            }
+
+            _activeExecInterruptSource = _pendingExecInterruptSources.Dequeue();
+            _activeExecInterruptServerIndex = 0;
+            _execInterruptReturnProgramCounter = _machine.Cpu.State.ProgramCounter;
+            return StartNextExecInterruptServer(_machine.Cpu.State);
+        }
+
+        private void HostExecInterruptContinuation(M68kCpuState state)
+        {
+            _activeExecInterruptServerIndex++;
+            _ = StartNextExecInterruptServer(state);
+        }
+
+        private bool StartNextExecInterruptServer(M68kCpuState state)
+        {
+            var servers = GetGuestInterruptServers(_activeExecInterruptSource);
+            if (servers.Count == 0)
+            {
+                FinishExecInterruptDispatch(state);
+                return false;
+            }
+
+            while (_activeExecInterruptServerIndex < servers.Count)
+            {
+                var server = servers[_activeExecInterruptServerIndex];
+                var code = _machine.Bus.ReadLong(server.InterruptAddress + InterruptCodeOffset);
+                if (code == 0 || !_machine.Bus.IsCpuPhysicalAddressMapped(code, 2, AmigaBusAccessKind.CpuInstructionFetch))
+                {
+                    _activeExecInterruptServerIndex++;
+                    continue;
+                }
+
+                state.A[1] = server.DataAddress;
+                state.A[7] -= 4;
+                _machine.Bus.WriteLong(state.A[7], ExecInterruptContinuationAddress, state.Cycles);
+                // Match the core's post-fetch PC before directly invoking a host
+                // gateway. If it leaves PC unchanged, perform the normal gateway RTS.
+                state.ProgramCounter = code + 6;
+                if (_machine.Bus.TryInvokeHostGatewayAt(code, state))
+                {
+                    if (state.ProgramCounter == code + 6)
+                    {
+                        state.ProgramCounter = _machine.Bus.ReadLong(state.A[7]);
+                        state.A[7] += 4;
+                    }
+
+                    return true;
+                }
+
+                state.ProgramCounter = code;
+                return true;
+            }
+
+            FinishExecInterruptDispatch(state);
+            return false;
+        }
+
+        private bool HasGuestInterruptServers(int interruptNumber)
+            => GetGuestInterruptServers(interruptNumber).Count != 0;
+
+        private List<SyntheticInterruptServer> GetGuestInterruptServers(int interruptNumber)
+        {
+            var result = new List<SyntheticInterruptServer>();
+            var list = GetActiveExecBase() + ExecIntrListOffset + (uint)(interruptNumber * 14);
+            if (!IsValidExecList(list)) return result;
+            var tail = list + 4;
+            for (var server = _machine.Bus.ReadLong(list); server != tail && IsValidExecNode(server); server = _machine.Bus.ReadLong(server))
+            {
+                result.Add(new SyntheticInterruptServer(server, _machine.Bus.ReadLong(server + InterruptDataOffset)));
+            }
+            return result;
+        }
+
+        private void FinishExecInterruptDispatch(M68kCpuState state)
+        {
+            state.ProgramCounter = _execInterruptReturnProgramCounter;
+            _activeExecInterruptSource = -1;
+            _activeExecInterruptServerIndex = 0;
+            _execInterruptReturnProgramCounter = 0;
+        }
+
         private long GetNextSyntheticVBlankBoundaryCycle(long currentCycle, long targetCycle)
         {
             if (_syntheticVBlankInterruptServers.Count == 0 || targetCycle <= currentCycle)
@@ -2322,7 +2680,7 @@ namespace CopperMod.Amiga
             var trapCode = task != 0 ? _machine.Bus.ReadLong(task + TaskTrapCodeOffset) : 0;
             if (trapCode == 0)
             {
-                trapCode = _machine.Bus.ReadLong(AmigaKickstartHost.ExecLibraryBase + ExecTaskTrapCodeOffset);
+                trapCode = _machine.Bus.ReadLong(GetActiveExecBase() + ExecTaskTrapCodeOffset);
             }
 
             if (trapCode == 0)
@@ -2595,7 +2953,7 @@ namespace CopperMod.Amiga
 
             var returnAddress = _machine.Bus.ReadLong(state.UserStackPointer);
             if (!IsPlausibleTaskTrapReturn(returnAddress) ||
-                (!_machine.Bus.HasHostTrapStub(returnAddress) && IsZeroFilledInstructionTarget(returnAddress)))
+                (!_machine.Bus.HasHostGateway(returnAddress) && IsZeroFilledInstructionTarget(returnAddress)))
             {
                 return false;
             }
@@ -2724,7 +3082,7 @@ namespace CopperMod.Amiga
             }
 
             return IsHostProbeInstructionReadable(programCounter, 2) ||
-                _machine.Bus.HasHostTrapStub(programCounter);
+                _machine.Bus.HasHostGateway(programCounter);
         }
 
         private static bool IsPlausibleTaskTrapStatusRegister(ushort statusRegister)
@@ -2765,8 +3123,8 @@ namespace CopperMod.Amiga
             public ushort ReadHostWord(uint address)
                 => _bus.ReadHostWord(address);
 
-            public bool HasHostTrapStub(uint address)
-                => _bus.HasHostTrapStub(address);
+            public bool HasHostGateway(uint address)
+                => _bus.HasHostGateway(address);
         }
 
         private void HostGraphicsGeneric(M68kCpuState state, int displacement)
@@ -3025,6 +3383,65 @@ namespace CopperMod.Amiga
             {
                 ((ICyberGraphicsGuestServices)this).Free(bitMap, byteCount);
             }
+        }
+
+        private void HostCloseLibrary(M68kCpuState state)
+        {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                GetRomExecLibraryServices().CloseLibrary(state, ExecLibraryCallContinuationAddress);
+            }
+            else
+            {
+                state.D[0] = 0;
+            }
+        }
+
+        private void HostAddLibrary(M68kCpuState state)
+        {
+            if (_kickstartRomExecTakeoverState != KickstartRomExecTakeoverState.Active)
+            {
+                HostAllocMemAndStore(state);
+                return;
+            }
+
+            GetRomExecLibraryServices().AddLibrary(state);
+            state.D[0] = 0;
+        }
+
+        private void HostRemLibrary(M68kCpuState state)
+        {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+                GetRomExecLibraryServices().RemLibrary(state);
+            state.D[0] = 0;
+        }
+
+        private void HostAddDevice(M68kCpuState state)
+        {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+                GetRomExecLibraryServices().AddDevice(state);
+            state.D[0] = 0;
+        }
+
+        private void HostAddResource(M68kCpuState state)
+        {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+                GetRomExecLibraryServices().AddResource(state);
+            state.D[0] = 0;
+        }
+
+        private void HostRemResource(M68kCpuState state)
+        {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+                GetRomExecLibraryServices().RemResource(state);
+            state.D[0] = 0;
+        }
+
+        private void HostOpenResource(M68kCpuState state)
+        {
+            state.D[0] = _kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active
+                ? GetRomExecLibraryServices().OpenResource(state)
+                : 0;
         }
 
         private uint HostGraphicsGetBitMapAttr(uint bitMap, uint attribute)
@@ -3294,14 +3711,14 @@ namespace CopperMod.Amiga
             _currentViewAddress = state.A[1];
             if (_currentViewAddress == 0)
             {
-                CyberGraphics.SelectFrontViewPort(0);
+                _cyberGraphics?.SelectFrontViewPort(0);
                 return;
             }
 
             if (TryReadLong(_currentViewAddress + ViewViewPortOffset, out var viewPort))
             {
-                CyberGraphics.SelectFrontViewPort(viewPort);
-                if (CyberGraphics.RtgDevice?.FrontViewPort == viewPort)
+                _cyberGraphics?.SelectFrontViewPort(viewPort);
+                if (_cyberGraphics?.RtgDevice?.FrontViewPort == viewPort)
                 {
                     return;
                 }
@@ -3939,7 +4356,7 @@ namespace CopperMod.Amiga
                 return true;
             }
 
-            if (CyberGraphics.RtgDevice?.IsAvailable == true)
+            if (_cyberGraphics?.RtgDevice?.IsAvailable == true)
             {
                 var surface = CyberGraphics.AllocateRtgSurface(
                     _syntheticScreenWidth,
@@ -4633,6 +5050,22 @@ namespace CopperMod.Amiga
 
         private uint HostExecWait(M68kCpuState state)
         {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                var task = GetCurrentTaskAddress();
+                var taskRequested = state.D[0];
+                var pending = ReadTaskSignals(task, TaskSigRecvdOffset);
+                var taskDelivered = pending & taskRequested;
+                WriteTaskSignals(task, TaskSigWaitOffset, taskDelivered == 0 ? taskRequested : 0);
+                WriteTaskSignals(task, TaskSigRecvdOffset, pending & ~taskDelivered);
+                if (taskDelivered == 0)
+                {
+                    MoveTaskToList(task, GetActiveExecBase() + ExecTaskWaitOffset, state);
+                    _taskScheduler.RequestDispatch();
+                }
+                return taskDelivered;
+            }
+
             var requested = state.D[0] != 0 ? state.D[0] : 1u;
             var delivered = _syntheticSignalMask & requested;
             if (delivered == 0)
@@ -4646,6 +5079,14 @@ namespace CopperMod.Amiga
 
         private uint HostExecSetSignal(M68kCpuState state)
         {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                var task = GetCurrentTaskAddress();
+                var oldTaskSignals = ReadTaskSignals(task, TaskSigRecvdOffset);
+                WriteTaskSignals(task, TaskSigRecvdOffset, (oldTaskSignals & ~state.D[1]) | (state.D[0] & state.D[1]));
+                return oldTaskSignals;
+            }
+
             var oldSignals = _syntheticSignalMask;
             _syntheticSignalMask = (_syntheticSignalMask & ~state.D[1]) | (state.D[0] & state.D[1]);
             return oldSignals;
@@ -4653,12 +5094,37 @@ namespace CopperMod.Amiga
 
         private uint HostExecSignal(M68kCpuState state)
         {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                SignalExecTask(state.A[1], state.D[0]);
+                if ((ReadTaskSignals(state.A[1], TaskSigRecvdOffset) & ReadTaskSignals(state.A[1], TaskSigWaitOffset)) != 0)
+                {
+                    WriteTaskSignals(state.A[1], TaskSigWaitOffset, 0);
+                    MoveTaskToList(state.A[1], GetActiveExecBase() + ExecTaskReadyOffset, state);
+                    _taskScheduler.RequestDispatch();
+                }
+                return 0;
+            }
+
             _syntheticSignalMask |= state.D[0];
             return 0;
         }
 
+        private void MoveTaskToList(uint task, uint list, M68kCpuState state)
+        {
+            if (IsValidExecNode(task) && _machine.Bus.ReadLong(task + NodePredecessorOffset) != 0) RemoveExecNode(task);
+            EnsureExecList(list);
+            AddTailExecList(list, task);
+            _machine.Bus.WriteByte(task + TaskStateOffset, list == GetActiveExecBase() + ExecTaskWaitOffset ? (byte)4 : (byte)3, state.Cycles);
+        }
+
         private uint HostExecAllocSignal(M68kCpuState state)
         {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                return AllocateExecSignal(GetCurrentTaskAddress(), unchecked((int)state.D[0]));
+            }
+
             var requested = unchecked((int)state.D[0]);
             if (requested >= 0 && requested < 32)
             {
@@ -4692,6 +5158,20 @@ namespace CopperMod.Amiga
 
         private uint HostExecFreeSignal(M68kCpuState state)
         {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                var task = GetCurrentTaskAddress();
+                var taskBit = unchecked((int)state.D[0]);
+                if (taskBit is >= 0 and < 32)
+                {
+                    var mask = ~(1u << taskBit);
+                    WriteTaskSignals(task, TaskSigAllocOffset, ReadTaskSignals(task, TaskSigAllocOffset) & mask);
+                    WriteTaskSignals(task, TaskSigRecvdOffset, ReadTaskSignals(task, TaskSigRecvdOffset) & mask);
+                }
+
+                return 0;
+            }
+
             var bit = unchecked((int)state.D[0]);
             if (bit is >= 0 and < 32)
             {
@@ -4758,8 +5238,15 @@ namespace CopperMod.Amiga
             return 0;
         }
 
-        private uint HostExecGetMsg()
+        private uint HostExecGetMsg(M68kCpuState state)
         {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                var queuedMessage = RemoveFirstPortMessage(state.A[0]);
+                ClearPortSignalIfQueueEmpty(state.A[0]);
+                return queuedMessage;
+            }
+
             if (_syntheticIntuiMessages.Count <= 0)
             {
                 return 0;
@@ -4775,8 +5262,374 @@ namespace CopperMod.Amiga
             return WriteSyntheticMessage(message);
         }
 
+        private uint HostExecAddPort(M68kCpuState state)
+        {
+            var port = state.A[1];
+            if (!IsValidExecPort(port))
+            {
+                return 0;
+            }
+
+            _execPortsByAddress[port] = port;
+            EnsureExecList(port + MsgPortMsgListOffset);
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                var portList = GetActiveExecBase() + ExecPortListOffset;
+                EnsureExecList(portList);
+                if (!ContainsExecNode(portList, port))
+                {
+                    AddTailExecList(portList, port);
+                }
+            }
+            return 0;
+        }
+
+        private uint HostExecRemPort(M68kCpuState state)
+        {
+            var port = state.A[1];
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active &&
+                IsValidExecPort(port) && ContainsExecNode(GetActiveExecBase() + ExecPortListOffset, port))
+            {
+                RemoveExecNode(port);
+            }
+            _execPortsByAddress.Remove(port);
+            return 0;
+        }
+
+        private uint HostExecPutMsg(M68kCpuState state)
+        {
+            var port = state.A[0];
+            var message = state.A[1];
+            if (!IsValidExecPort(port) || !IsValidExecMessage(message) ||
+                (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active && !ContainsExecNode(GetActiveExecBase() + ExecPortListOffset, port)))
+            {
+                return 0;
+            }
+
+            EnsureExecList(port + MsgPortMsgListOffset);
+            AddTailExecList(port + MsgPortMsgListOffset, message);
+            var signalBit = _machine.Bus.ReadByte(port + MsgPortSigBitOffset);
+            if (signalBit < 32)
+            {
+                SignalExecTask(_machine.Bus.ReadLong(port + MsgPortSigTaskOffset), 1u << signalBit);
+            }
+            return 0;
+        }
+
+        private uint HostExecReplyMsg(M68kCpuState state)
+        {
+            var message = state.A[1];
+            if (!IsValidExecMessage(message))
+            {
+                return 0;
+            }
+
+            var replyPort = _machine.Bus.ReadLong(message + MessageReplyPortOffset);
+            if (replyPort != 0)
+            {
+                state.A[0] = replyPort;
+                HostExecPutMsg(state);
+            }
+
+            return 0;
+        }
+
+        private uint HostExecFindPort(M68kCpuState state)
+        {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                return FindNameInExecList(GetActiveExecBase() + ExecPortListOffset, state.A[1]);
+            }
+
+            var name = ReadNullTerminatedString(state.A[1], 96);
+            foreach (var port in _execPortsByAddress.Keys)
+            {
+                if (string.Equals(name, ReadNullTerminatedString(_machine.Bus.ReadLong(port + NodeNameOffset), 96), StringComparison.OrdinalIgnoreCase)) return port;
+            }
+
+            return 0;
+        }
+
+        private bool IsValidExecPort(uint port)
+            => port != 0 && _machine.Bus.IsMappedMemoryRange(port, MsgPortMsgListOffset + 14);
+
+        private bool IsValidExecMessage(uint message)
+            => message != 0 && _machine.Bus.IsMappedMemoryRange(message, MessageReplyPortOffset + 4);
+
+        private void InitializeExecList(uint list)
+            => GetExecListServices().Initialize(list);
+
+        private void EnsureExecList(uint list)
+            => GetExecListServices().Ensure(list);
+
+        private bool ContainsExecNode(uint list, uint node)
+            => GetExecListServices().Contains(list, node);
+
+        private uint HostExecInsert(M68kCpuState state)
+        {
+            var list = state.A[0];
+            var node = state.A[1];
+            var predecessor = state.A[2];
+            if (!IsValidExecList(list) || !IsValidExecNode(node)) return 0;
+            if (predecessor == 0) predecessor = list;
+            if (!IsValidExecNode(predecessor)) return 0;
+            var successor = _machine.Bus.ReadLong(predecessor + NodeSuccessorOffset);
+            if (!IsValidExecNode(successor)) return 0;
+            LinkExecNode(node, predecessor, successor);
+            if (successor == list + 4) _machine.Bus.WriteLong(list + 8, node);
+            return 0;
+        }
+
+        private uint HostExecAddHead(M68kCpuState state)
+        {
+            var list = state.A[0];
+            var node = state.A[1];
+            if (!IsValidExecList(list) || !IsValidExecNode(node)) return 0;
+            var successor = _machine.Bus.ReadLong(list);
+            if (!IsValidExecNode(successor)) return 0;
+            LinkExecNode(node, list, successor);
+            if (successor == list + 4) _machine.Bus.WriteLong(list + 8, node);
+            return 0;
+        }
+
+        private uint HostExecAddTail(M68kCpuState state)
+        {
+            if (IsValidExecList(state.A[0]) && IsValidExecNode(state.A[1]))
+            {
+                AddTailExecList(state.A[0], state.A[1]);
+            }
+            return 0;
+        }
+
+        private uint HostExecRemove(M68kCpuState state) => RemoveExecNode(state.A[1]);
+
+        private uint HostExecRemHead(M68kCpuState state)
+            => RemoveExecListEnd(state.A[0], head: true);
+
+        private uint HostExecRemTail(M68kCpuState state)
+            => RemoveExecListEnd(state.A[0], head: false);
+
+        private uint HostExecEnqueue(M68kCpuState state)
+        {
+            var list = state.A[0];
+            var node = state.A[1];
+            if (!IsValidExecList(list) || !IsValidExecNode(node)) return 0;
+            var priority = unchecked((sbyte)_machine.Bus.ReadByte(node + 9));
+            var current = _machine.Bus.ReadLong(list);
+            while (current != list + 4 && IsValidExecNode(current) &&
+                unchecked((sbyte)_machine.Bus.ReadByte(current + 9)) >= priority)
+            {
+                current = _machine.Bus.ReadLong(current);
+            }
+            var predecessor = _machine.Bus.ReadLong(current + NodePredecessorOffset);
+            if (IsValidExecNode(predecessor))
+            {
+                LinkExecNode(node, predecessor, current);
+                if (current == list + 4) _machine.Bus.WriteLong(list + 8, node);
+            }
+            return 0;
+        }
+
+        private bool IsValidExecList(uint list)
+            => GetExecListServices().IsValidList(list);
+
+        private bool IsValidExecNode(uint node)
+            => GetExecListServices().IsValidNode(node);
+
+        private void LinkExecNode(uint node, uint predecessor, uint successor)
+            => GetExecListServices().Link(node, predecessor, successor);
+
+        private uint RemoveExecNode(uint node)
+            => GetExecListServices().Remove(node);
+
+        private uint RemoveExecListEnd(uint list, bool head)
+            => GetExecListServices().RemoveEnd(list, head);
+
+        private void AddTailExecList(uint list, uint node)
+            => GetExecListServices().AddTail(list, node);
+
+        private void AddExecNodeAtomically(uint list, uint node, bool priorityOrdered, M68kCpuState state)
+        {
+            if (!IsValidExecList(list) || !IsValidExecNode(node) || ContainsExecNode(list, node)) return;
+            _execTaskServices.Forbid(state);
+            try
+            {
+                if (priorityOrdered)
+                {
+                    var priority = unchecked((sbyte)_machine.Bus.ReadByte(node + 9));
+                    var current = _machine.Bus.ReadLong(list);
+                    while (current != list + 4 && IsValidExecNode(current) &&
+                        unchecked((sbyte)_machine.Bus.ReadByte(current + 9)) >= priority)
+                    {
+                        current = _machine.Bus.ReadLong(current + NodeSuccessorOffset);
+                    }
+
+                    var predecessor = _machine.Bus.ReadLong(current + NodePredecessorOffset);
+                    if (IsValidExecNode(predecessor))
+                    {
+                        LinkExecNode(node, predecessor, current);
+                        if (current == list + 4) _machine.Bus.WriteLong(list + 8, node);
+                    }
+                }
+                else
+                {
+                    AddTailExecList(list, node);
+                }
+            }
+            finally
+            {
+                _execTaskServices.Permit(state);
+            }
+        }
+
+        private void RemoveExecNodeAtomically(uint node, M68kCpuState state)
+        {
+            _execTaskServices.Forbid(state);
+            try { RemoveExecNode(node); }
+            finally { _execTaskServices.Permit(state); }
+        }
+
+        private void StartGuestExecSubroutine(M68kCpuState state, uint entry, uint continuation)
+        {
+            if (entry == 0 || !_machine.Bus.IsCpuPhysicalAddressMapped(entry, 2, AmigaBusAccessKind.CpuInstructionFetch) || state.A[7] < 4)
+            {
+                state.D[0] = 0;
+                return;
+            }
+
+            state.A[7] -= 4;
+            _machine.Bus.WriteLong(state.A[7], continuation, state.Cycles);
+            state.ProgramCounter = entry + 6;
+            if (_machine.Bus.TryInvokeHostGatewayAt(entry, state))
+            {
+                if (state.ProgramCounter == entry + 6)
+                {
+                    state.ProgramCounter = _machine.Bus.ReadLong(state.A[7]);
+                    state.A[7] += 4;
+                }
+                return;
+            }
+
+            state.ProgramCounter = entry;
+        }
+
+        private uint RemoveFirstPortMessage(uint port)
+        {
+            if (!IsValidExecPort(port))
+            {
+                return 0;
+            }
+
+            var list = port + MsgPortMsgListOffset;
+            var node = _machine.Bus.ReadLong(list);
+            var tail = list + 4;
+            if (node == 0 || node == tail || !_machine.Bus.IsMappedMemoryRange(node, 8))
+            {
+                return 0;
+            }
+
+            var successor = _machine.Bus.ReadLong(node + NodeSuccessorOffset);
+            if (successor == 0 || !_machine.Bus.IsMappedMemoryRange(successor, 4))
+            {
+                InitializeExecList(list);
+                return 0;
+            }
+
+            _machine.Bus.WriteLong(list, successor);
+            _machine.Bus.WriteLong(successor + NodePredecessorOffset, list);
+            if (successor == tail)
+            {
+                _machine.Bus.WriteLong(list + 8, list);
+            }
+
+            _machine.Bus.WriteLong(node + NodeSuccessorOffset, 0);
+            _machine.Bus.WriteLong(node + NodePredecessorOffset, 0);
+            return node;
+        }
+
+        private void ClearPortSignalIfQueueEmpty(uint port)
+        {
+            if (!IsValidExecPort(port) || _machine.Bus.ReadLong(port + MsgPortMsgListOffset) != port + MsgPortMsgListOffset + 4) return;
+            var bit = _machine.Bus.ReadByte(port + MsgPortSigBitOffset);
+            if (bit >= 32) return;
+            var task = _machine.Bus.ReadLong(port + MsgPortSigTaskOffset);
+            WriteTaskSignals(task, TaskSigRecvdOffset, ReadTaskSignals(task, TaskSigRecvdOffset) & ~(1u << bit));
+        }
+
+        private uint GetTaskPendingSignals(uint task)
+            => ReadTaskSignals(task, TaskSigRecvdOffset);
+
+        private uint GetTaskAllocatedSignals(uint task)
+            => ReadTaskSignals(task, TaskSigAllocOffset);
+
+        private void SignalExecTask(uint task, uint mask)
+        {
+            if (task != 0)
+            {
+                WriteTaskSignals(task, TaskSigRecvdOffset, GetTaskPendingSignals(task) | mask);
+            }
+        }
+
+        private uint AllocateExecSignal(uint task, int requested)
+        {
+            var allocated = GetTaskAllocatedSignals(task);
+            if (requested is >= 0 and < 32)
+            {
+                var requestedMask = 1u << requested;
+                if ((allocated & requestedMask) != 0)
+                {
+                    return 0xFFFF_FFFF;
+                }
+
+                WriteTaskSignals(task, TaskSigAllocOffset, allocated | requestedMask);
+                return (uint)requested;
+            }
+
+            var start = _taskNextSignalBits.TryGetValue(task, out var next) ? next : 0;
+            for (var offset = 0; offset < 32; offset++)
+            {
+                var bit = (start + offset) & 31;
+                if ((allocated & (1u << bit)) == 0)
+                {
+                    WriteTaskSignals(task, TaskSigAllocOffset, allocated | (1u << bit));
+                    return (uint)bit;
+                }
+            }
+
+            return 0xFFFF_FFFF;
+        }
+
+        private uint ReadTaskSignals(uint task, int offset)
+            => task != 0 && _machine.Bus.IsMappedMemoryRange(task + (uint)offset, 4)
+                ? _machine.Bus.ReadLong(task + (uint)offset)
+                : 0;
+
+        private void WriteTaskSignals(uint task, int offset, uint value)
+        {
+            if (task != 0 && _machine.Bus.IsMappedMemoryRange(task + (uint)offset, 4))
+            {
+                _machine.Bus.WriteLong(task + (uint)offset, value);
+            }
+        }
+
         private uint HostExecWaitPort(M68kCpuState state)
         {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                var port = state.A[0];
+                var list = port + MsgPortMsgListOffset;
+                if (IsValidExecPort(port) && _machine.Bus.ReadLong(list) != list + 4)
+                {
+                    return _machine.Bus.ReadLong(list);
+                }
+                if (IsValidExecPort(port))
+                {
+                    var bit = _machine.Bus.ReadByte(port + MsgPortSigBitOffset);
+                    if (bit < 32) WriteTaskSignals(GetCurrentTaskAddress(), TaskSigWaitOffset, 1u << bit);
+                }
+                return 0;
+            }
+
             if (_syntheticIntuiMessages.Count > 0)
             {
                 return WriteSyntheticMessage(_syntheticIntuiMessages.Peek());
@@ -4802,6 +5655,11 @@ namespace CopperMod.Amiga
             }
 
             var taskName = ReadNullTerminatedString(state.A[1], 96);
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                return FindRomTask(taskName);
+            }
+
             var task = (taskName.Equals("CopperScreen", StringComparison.OrdinalIgnoreCase) ||
                 (taskName.Equals("Workbench", StringComparison.OrdinalIgnoreCase) && _syntheticScreenAddress != 0))
                     ? GetCurrentTaskAddress()
@@ -4809,6 +5667,30 @@ namespace CopperMod.Amiga
             AddExecLikeDiagnostic("AMIGA_BOOT_EXEC_FIND_TASK", $"FindTask requested '{taskName}' and returned 0x{task:X8}.");
             return task;
         }
+
+        private uint FindRomTask(string name)
+        {
+            var current = GetCurrentTaskAddress();
+            if (TaskNameEquals(current, name)) return current;
+            var execBase = GetActiveExecBase();
+            return FindTaskInExecList(execBase + ExecTaskReadyOffset, name) is var ready && ready != 0
+                ? ready : FindTaskInExecList(execBase + ExecTaskWaitOffset, name);
+        }
+
+        private uint FindTaskInExecList(uint list, string name)
+        {
+            if (!IsValidExecList(list)) return 0;
+            var tail = list + 4;
+            return FindNamedGuestEntry(
+                name,
+                _machine.Bus.ReadLong(list),
+                task => task != tail && IsValidExecNode(task),
+                task => _machine.Bus.ReadLong(task + NodeSuccessorOffset),
+                task => _machine.Bus.ReadLong(task + TaskNodeNameOffset));
+        }
+
+        private bool TaskNameEquals(uint task, string name)
+            => FindNamedGuestEntry(name, task, IsValidExecNode, _ => 0, entry => _machine.Bus.ReadLong(entry + TaskNodeNameOffset)) == task;
 
         private void AddExecLikeDiagnostic(string code, string message)
         {
@@ -4823,7 +5705,7 @@ namespace CopperMod.Amiga
 
         private uint GetCurrentTaskAddress()
         {
-            var task = _machine.Bus.ReadLong(AmigaKickstartHost.ExecLibraryBase + ExecThisTaskOffset);
+            var task = _machine.Bus.ReadLong(GetActiveExecBase() + ExecThisTaskOffset);
             if (task != 0)
             {
                 return task;
@@ -4831,6 +5713,9 @@ namespace CopperMod.Amiga
 
             return _currentTaskAddress != 0 ? _currentTaskAddress : AmigaKickstartHost.ExecStructAddress;
         }
+
+        private uint GetActiveExecBase()
+            => _activeExecBase != 0 ? _activeExecBase : AmigaKickstartHost.ExecLibraryBase;
 
         private uint EnsureSyntheticMessage()
         {
@@ -4969,6 +5854,12 @@ namespace CopperMod.Amiga
 
         private void HostFindResident(M68kCpuState state)
         {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                state.D[0] = FindRomResident(state.A[1]);
+                return;
+            }
+
             var shouldRecordDiagnostic = _execDiagnosticCount < 16;
             var name = shouldRecordDiagnostic ? ReadNullTerminatedString(state.A[1], 96) : null;
             if (_execDiagnosticCount < 16)
@@ -4985,6 +5876,19 @@ namespace CopperMod.Amiga
             }
 
             state.D[0] = 0;
+        }
+
+        private uint FindRomResident(uint nameAddress)
+        {
+            if (nameAddress == 0) return 0;
+            var target = ReadNullTerminatedString(nameAddress, 96);
+            var modules = _machine.Bus.ReadLong(GetActiveExecBase() + ExecResModulesOffset);
+            return FindNamedGuestEntry(target, modules, entry =>
+            {
+                var resident = _machine.Bus.ReadLong(entry);
+                return resident != 0 && resident != 0xFFFF_FFFF && _machine.Bus.IsMappedMemoryRange(resident, 0x16) &&
+                    _machine.Bus.ReadWord(resident) == 0x4AFC;
+            }, entry => entry + 4, resident => _machine.Bus.ReadLong(resident + 0x0E), indirect: true);
         }
 
         private bool ContainsNullTerminatedString(string? cached, uint address, int maxLength, string value)
@@ -5060,6 +5964,12 @@ namespace CopperMod.Amiga
 
         private void HostFindName(M68kCpuState state)
         {
+            if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
+            {
+                state.D[0] = FindNameInExecList(state.A[0], state.A[1]);
+                return;
+            }
+
             var shouldRecordDiagnostic = _execDiagnosticCount < 16;
             var name = shouldRecordDiagnostic ? ReadNullTerminatedString(state.A[1], 96) : null;
             if (shouldRecordDiagnostic)
@@ -5073,10 +5983,28 @@ namespace CopperMod.Amiga
                 : 0;
         }
 
-        private static void HostInitResident(M68kCpuState state)
+        private uint FindNameInExecList(uint list, uint nameAddress)
+            => GetExecListServices().FindName(list, nameAddress);
+
+        private uint FindNamedGuestEntry(string target, uint first, Func<uint, bool> isEntry, Func<uint, uint> next, Func<uint, uint> namePointer, bool indirect = false)
+        {
+            for (var entry = first; entry != 0 && isEntry(entry); entry = next(entry))
+            {
+                var candidate = indirect ? _machine.Bus.ReadLong(entry) : entry;
+                if (candidate != 0 && string.Equals(target, ReadNullTerminatedString(namePointer(candidate), 96), StringComparison.OrdinalIgnoreCase)) return candidate;
+            }
+            return 0;
+        }
+
+        private void HostInitResident(M68kCpuState state)
         {
             state.D[0] = AmigaKickstartHost.DosLibraryBase;
         }
+
+        private void HostExecLibraryCallContinuation(M68kCpuState state)
+        {
+        }
+
 
         private void EnsureDosResident()
         {
@@ -6195,7 +7123,7 @@ namespace CopperMod.Amiga
         {
             var hasPseudoFast = _machine.Bus.ExpansionRam.Length != 0;
             var hasRealFast = _machine.Bus.RealFastRam.Length != 0;
-            var listAddress = AmigaKickstartHost.ExecLibraryBase + ExecMemListOffset;
+            var listAddress = GetActiveExecBase() + ExecMemListOffset;
             if (hasRealFast)
             {
                 var realMetadataBase = _machine.Bus.RealFastRamBase;
@@ -6657,7 +7585,7 @@ namespace CopperMod.Amiga
 
         private IEnumerable<uint> EnumerateCompatibleMemoryHeaders(uint flags)
         {
-            var listAddress = AmigaKickstartHost.ExecLibraryBase + ExecMemListOffset;
+            var listAddress = GetActiveExecBase() + ExecMemListOffset;
             var headerAddress = _machine.Bus.ReadLong(listAddress);
             for (var guard = 0; headerAddress != 0 && guard < 8; guard++)
             {
@@ -6673,7 +7601,7 @@ namespace CopperMod.Amiga
 
         private uint FindOwningMemoryHeader(uint address, uint byteCount)
         {
-            var listAddress = AmigaKickstartHost.ExecLibraryBase + ExecMemListOffset;
+            var listAddress = GetActiveExecBase() + ExecMemListOffset;
             var headerAddress = _machine.Bus.ReadLong(listAddress);
             for (var guard = 0; headerAddress != 0 && guard < 8; guard++)
             {

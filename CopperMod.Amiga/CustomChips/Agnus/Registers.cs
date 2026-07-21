@@ -14,7 +14,7 @@ internal enum AgnusRegisterWriteEffects : byte
     Stored = 1 << 0,
     BeamState = 1 << 1,
     TimingChanged = 1 << 2,
-    DisplayHistory = 1 << 3,
+    DisplayState = 1 << 3,
     CopperJump1 = 1 << 4,
     CopperJump2 = 1 << 5,
     RasterEventsChanged = 1 << 6
@@ -70,7 +70,7 @@ internal sealed class AgnusRegisterBank
     internal const ushort Bpl1mod = 0x108;
     internal const ushort Bpl2mod = 0x10A;
     internal const ushort BplPointerFirst = 0x0E0;
-    internal const ushort BplPointerLast = 0x0F6;
+    internal const ushort BplPointerLast = 0x0FE;
     internal const ushort SpritePointerFirst = 0x120;
     internal const ushort SpritePointerLast = 0x13E;
 
@@ -110,8 +110,8 @@ internal sealed class AgnusRegisterBank
     private readonly RasterTiming _timing;
     private readonly ChipDmaAddressing _dmaAddressing;
     private readonly ushort[] _beamValues = new ushort[0x12];
-    private readonly uint[] _bitplanePointers = new uint[6];
-    private readonly long[] _bitplanePointerWriteCycles = new long[6];
+    private readonly uint[] _bitplanePointers = new uint[Display.MaxBitplaneCapacity];
+    private readonly long[] _bitplanePointerWriteCycles = new long[Display.MaxBitplaneCapacity];
     private readonly uint[] _spritePointers = new uint[8];
     private ushort _vposw;
     private ushort _copcon;
@@ -257,7 +257,7 @@ internal sealed class AgnusRegisterBank
         {
             _diwHigh = (ushort)(value & DiwhighWritableMask);
             _diwHighValid = true;
-            return Result(AgnusRegisterWriteEffects.Stored | AgnusRegisterWriteEffects.DisplayHistory);
+            return Result(AgnusRegisterWriteEffects.Stored | AgnusRegisterWriteEffects.DisplayState);
         }
 
         var mask = offset switch
@@ -295,7 +295,7 @@ internal sealed class AgnusRegisterBank
         long cycle,
         out AgnusRegisterWriteEffects effects)
     {
-        effects = AgnusRegisterWriteEffects.Stored | AgnusRegisterWriteEffects.DisplayHistory;
+        effects = AgnusRegisterWriteEffects.Stored | AgnusRegisterWriteEffects.DisplayState;
         switch (offset)
         {
             case Copcon:
@@ -314,10 +314,10 @@ internal sealed class AgnusRegisterBank
                 _copperListPointer2 = WritePointerLow(_copperListPointer2, value);
                 return true;
             case Copjmp1:
-                effects = AgnusRegisterWriteEffects.DisplayHistory | AgnusRegisterWriteEffects.CopperJump1;
+                effects = AgnusRegisterWriteEffects.DisplayState | AgnusRegisterWriteEffects.CopperJump1;
                 return true;
             case Copjmp2:
-                effects = AgnusRegisterWriteEffects.DisplayHistory | AgnusRegisterWriteEffects.CopperJump2;
+                effects = AgnusRegisterWriteEffects.DisplayState | AgnusRegisterWriteEffects.CopperJump2;
                 return true;
             case Diwstrt:
                 _diwStart = value;

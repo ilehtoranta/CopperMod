@@ -361,16 +361,16 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             => $"{SlotCount}@{FirstSlotCycle}->{LastSlotCycle}/0x{Hash:X16}/{FirstOwner}->{LastOwner}";
     }
 
-    internal readonly struct AmigaDmaWordReservation
+    internal readonly struct AmigaDmaWordExecutionResult
     {
-        public AmigaDmaWordReservation(uint address, bool granted, AmigaBusAccessResult access)
+        public AmigaDmaWordExecutionResult(ushort value, bool granted, AmigaBusAccessResult access)
         {
-            Address = address;
+            Value = value;
             Granted = granted;
             Access = access;
         }
 
-        public uint Address { get; }
+        public ushort Value { get; }
 
         public bool Granted { get; }
 
@@ -1529,6 +1529,67 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             return result;
         }
 
+        internal long PredictCopperDmaWordSlot(uint address, long requestedCycle)
+        {
+            requestedCycle = Math.Max(0, requestedCycle);
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Copper,
+                AmigaBusAccessKind.Copper,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite: false);
+            var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
+            while (true)
+            {
+                if (!IsCopperAccessSlot(candidate) || IsMandatoryRefreshSlot(candidate))
+                {
+                    candidate += SlotCycles;
+                    continue;
+                }
+
+                if (!TryGetSlot(candidate, out var existing) ||
+                    SlotMatchesRequest(candidate, existing, request) ||
+                    existing.Priority < AgnusChipSlotPriority.Copper)
+                {
+                    return candidate;
+                }
+
+                candidate += SlotCycles;
+            }
+        }
+
+        internal bool TryReserveCopperDmaWordExactSlot(
+            uint address,
+            long requestedCycle,
+            long slotCycle,
+            out AmigaBusAccessResult result)
+        {
+            requestedCycle = Math.Max(0, requestedCycle);
+            slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(requestedCycle, slotCycle));
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Copper,
+                AmigaBusAccessKind.Copper,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite: false);
+            if (!IsCopperAccessSlot(slotCycle))
+            {
+                result = new AmigaBusAccessResult(request, slotCycle, slotCycle);
+                return false;
+            }
+
+            return TryCommitFixedSingleWordSlot(
+                request,
+                AgnusChipSlotOwner.Copper,
+                slotCycle,
+                AgnusChipSlotPriority.Copper,
+                out result);
+        }
+
         public bool TryReserveBlitterDmaWordExactSlot(
             uint address,
             long requestedCycle,
@@ -1617,67 +1678,6 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             result = new AmigaBusAccessResult(request, slotCycle, slotCycle + SlotCycles);
             _lastReservation = result;
             _lastGrantedSlot = new AgnusChipSlotSnapshot(AgnusChipSlotOwner.Blitter, request.Kind, request.Address, request.RequestedCycle, slotCycle, denied: false);
-            AdvanceTo(result.CompletedCycle);
-            return true;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal bool TryReservePredictedBlitterDmaWordExactSlot(
-            uint address,
-            long requestedCycle,
-            long slotCycle,
-            bool isWrite,
-            out AmigaBusAccessResult result)
-        {
-            System.Diagnostics.Debug.Assert(requestedCycle >= 0);
-            System.Diagnostics.Debug.Assert(slotCycle >= requestedCycle);
-            System.Diagnostics.Debug.Assert(
-                slotCycle == AgnusChipSlotScheduler.AlignToSlot(slotCycle));
-            System.Diagnostics.Debug.Assert(!IsMandatoryRefreshSlot(slotCycle));
-            System.Diagnostics.Debug.Assert(
-                !PendingCpuRequestClaimsBlitterCandidate(slotCycle),
-                "Pending CPU arbitration must use the canonical exact-slot path.");
-
-            var request = new AmigaBusAccessRequest(
-                AmigaBusRequester.Blitter,
-                AmigaBusAccessKind.Blitter,
-                AmigaBusAccessTarget.ChipRam,
-                address,
-                AmigaBusAccessSize.Word,
-                requestedCycle,
-                isWrite);
-            if (TryGetSlot(slotCycle, out var existing) &&
-                !SlotMatchesRequest(slotCycle, existing, request) &&
-                existing.Priority >= AgnusChipSlotPriority.Blitter)
-            {
-                result = new AmigaBusAccessResult(request, slotCycle, slotCycle);
-                _lastDeniedFixedSlot = new AgnusChipSlotSnapshot(
-                    AgnusChipSlotOwner.Blitter,
-                    request.Kind,
-                    request.Address,
-                    request.RequestedCycle,
-                    slotCycle,
-                    denied: true);
-                _lastDeniedFixedSlotBlocker = GetSlotSnapshot(slotCycle, existing, denied: false);
-                RecordDeniedFixedSlot(AgnusChipSlotOwner.Blitter, existing.Owner);
-                AdvanceTo(slotCycle);
-                return false;
-            }
-
-            CommitSlot(
-                slotCycle,
-                request,
-                AgnusChipSlotOwner.Blitter,
-                AgnusChipSlotPriority.Blitter);
-            result = new AmigaBusAccessResult(request, slotCycle, slotCycle + SlotCycles);
-            _lastReservation = result;
-            _lastGrantedSlot = new AgnusChipSlotSnapshot(
-                AgnusChipSlotOwner.Blitter,
-                request.Kind,
-                request.Address,
-                request.RequestedCycle,
-                slotCycle,
-                denied: false);
             AdvanceTo(result.CompletedCycle);
             return true;
         }
@@ -2230,6 +2230,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             owner = AgnusChipSlotOwner.Free;
             return false;
         }
+
 
         public bool IsFixedDmaReserved(long cycle)
         {

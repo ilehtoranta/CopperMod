@@ -27,6 +27,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 ApplySetClear(ref _dmacon, value);
+                if (_advancingLiveDma && cycle != long.MinValue)
+                {
+                    var row = GetOutputRowForCycle(_liveFrameStartCycle, cycle);
+                    if ((uint)row < (uint)LowResOutputHeight)
+                    {
+                        PatchActiveRowSpriteDmaPlan(row);
+                    }
+                }
+
                 if (_advancingLiveDma &&
                     !liveCopperDmaWasEnabled &&
                     IsLiveCopperDmaEnabled() &&
@@ -103,11 +112,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _copcon = value;
                 return;
             case CustomRegister.Cop1lch:
+            {
+                var previousPointer = _copperListPointer;
                 _copperListPointer = WriteDmaPointerHigh(_copperListPointer, value);
+                RebasePendingLiveCopperStartAfterPointerWrite(previousPointer, cycle);
                 return;
+            }
             case CustomRegister.Cop1lcl:
+            {
+                var previousPointer = _copperListPointer;
                 _copperListPointer = WriteDmaPointerLow(_copperListPointer, value);
+                RebasePendingLiveCopperStartAfterPointerWrite(previousPointer, cycle);
                 return;
+            }
             case CustomRegister.Cop2lch:
                 _copperListPointer2 = WriteDmaPointerHigh(_copperListPointer2, value);
                 return;
@@ -177,7 +194,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
-            if (offset >= 0x110 && offset <= 0x11A)
+            if (offset >= 0x110 && offset <= 0x11E)
             {
                 ApplyBitplaneDataWrite(offset, value, cycle);
                 return;
@@ -192,7 +209,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
-            if (offset >= 0x0E0 && offset <= 0x0F6)
+            if (offset >= 0x0E0 && offset <= 0x0FE)
             {
                 var plane = (offset - 0x0E0) / 4;
                 if (plane < _bitplanePointers.Length)
@@ -216,6 +233,26 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 ApplySpriteWrite(offset, value, cycle);
             }
+        }
+
+        private void RebasePendingLiveCopperStartAfterPointerWrite(uint previousPointer, long cycle)
+        {
+            if (previousPointer != 0 ||
+                _copperListPointer == 0 ||
+                cycle == long.MinValue ||
+                (!_liveCopper.PendingStart && _liveCopper.Pc != 0))
+            {
+                return;
+            }
+
+            // With no list pointer there was no Copper bus work to execute.
+            // Once this write makes the pointer usable, the dormant start is
+            // causal to the write and cannot replay work behind an already
+            // advanced live-DMA horizon. Merely changing COP1LC while an active
+            // Copper has a nonzero PC still does not jump the running list.
+            _liveCopper.PendingStart = true;
+            _liveCopper.Cycle = Math.Max(_liveCopper.Cycle, Math.Max(cycle, _liveCycle));
+            InvalidateLiveDisplayEventCycle();
         }
 
         private void ApplyBitplaneDataWrite(ushort offset, ushort value, long cycle)
@@ -263,7 +300,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _bitplaneDataRegisters[2],
                 _bitplaneDataRegisters[3],
                 _bitplaneDataRegisters[4],
-                _bitplaneDataRegisters[5]);
+                _bitplaneDataRegisters[5],
+                _bitplaneDataRegisters[6],
+                _bitplaneDataRegisters[7]);
             _bitplaneDataSpans.Add(span);
             if (_advancingLiveDma &&
                 _liveFrameValid &&
@@ -342,16 +381,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int GetCurrentBitplaneBaseRow()
         {
             var windowY = GetDisplayWindowOutputYStart(_agnusDisplayWindow);
-            if (_renderingCopperFrame)
-            {
-                if (_currentCopperRow == 0 && windowY < 0)
-                {
-                    return windowY;
-                }
-
-                return Math.Max(_currentCopperRow, windowY);
-            }
-
             if (_advancingLiveDma)
             {
                 if (_currentCopperRow == 0 && windowY < 0)
@@ -380,9 +409,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var frameStartCycle = _renderingCopperFrame
-                ? _renderFrameStartCycle
-                : _liveFrameValid ? _liveFrameStartCycle : 0;
+            var frameStartCycle = _liveFrameValid ? _liveFrameStartCycle : 0;
             var horizontal = GetCopperHorizontalForCycle(frameStartCycle, cycle);
             var fetchStart = GetDataFetchStartValue();
             var fetchStop = GetDataFetchStopValue();
@@ -483,12 +510,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return true;
             }
 
-            if (_renderingCopperFrame)
-            {
-                row = _currentCopperRow;
-                return true;
-            }
-
             if (_advancingLiveDma)
             {
                 row = _currentCopperRow;
@@ -519,9 +540,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return row;
             }
 
-            var frameStartCycle = _renderingCopperFrame
-                ? _renderFrameStartCycle
-                : _liveFrameValid ? _liveFrameStartCycle : long.MinValue;
+            var frameStartCycle = _liveFrameValid ? _liveFrameStartCycle : long.MinValue;
             if (frameStartCycle == long.MinValue)
             {
                 return row;
@@ -568,7 +587,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     {
                         _sprites[sprite].Pointer = WriteDmaPointerLow(_sprites[sprite].Pointer, value);
                         UpdateLiveSpriteDmaPointerFromRegisterWrite(sprite, GetCurrentSpriteDmaControlRow());
-                        CaptureDmaSpriteFrameCommand(sprite);
                     }
                 }
 
@@ -651,7 +669,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _lastTimelineMissingBitplaneFallbackCount = 0;
             _lastTimelineSpriteCommandCount = 0;
             _lastActiveTimelineFrameCount = 0;
-            _lastArchivedTimelineFrameCount = 0;
             _lastPlanarChunkCacheHits = 0;
             _lastPlanarChunkCacheMisses = 0;
             _lastTimelineCoalescedSegmentCount = 0;
@@ -663,18 +680,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void ResetPlayfieldPriorityMasks()
         {
-            var length = MaxLowResWidth * LowResOutputHeight * MaxDeniseSamplesPerLowResSpan;
-            if (_playfieldPriorityMasks.Length != length)
+            _playfieldSampleGeneration++;
+            if (_playfieldSampleGeneration != int.MaxValue)
             {
-                _playfieldPriorityMasks = new byte[length];
-                _playfieldSampleColorIndexes = new byte[length];
-                _compositionSampleColors = new uint[length];
                 return;
             }
 
-            Array.Clear(_playfieldPriorityMasks);
-            Array.Clear(_playfieldSampleColorIndexes);
-            Array.Clear(_compositionSampleColors);
+            Array.Clear(_playfieldSampleGenerations);
+            _playfieldSampleGeneration = 1;
         }
 
         private void SetPlayfieldPriorityMask(int x, int y, byte mask)
@@ -684,6 +697,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
+            EnsurePlayfieldSampleState(x);
             var offset = GetCompositionSampleOffset(x, y, 0);
             _playfieldPriorityMasks.AsSpan(offset, MaxDeniseSamplesPerLowResSpan).Fill(mask);
         }
@@ -697,13 +711,41 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
+            EnsurePlayfieldSampleState(x);
             var offset = GetCompositionSampleOffset(x, y, sample);
             _playfieldPriorityMasks[offset] = mask;
             _playfieldSampleColorIndexes[offset] = (byte)colorIndex;
         }
 
+        private void EnsurePlayfieldSampleState(int x)
+        {
+            if (_playfieldSampleGenerations[x] == _playfieldSampleGeneration)
+            {
+                return;
+            }
+
+            var offset = x * MaxDeniseSamplesPerLowResSpan;
+            _playfieldPriorityMasks.AsSpan(offset, MaxDeniseSamplesPerLowResSpan).Clear();
+            _playfieldSampleColorIndexes.AsSpan(offset, MaxDeniseSamplesPerLowResSpan).Clear();
+            _playfieldSampleGenerations[x] = _playfieldSampleGeneration;
+        }
+
+        private byte GetPlayfieldPriorityMask(int x, int sample)
+        {
+            return _playfieldSampleGenerations[x] == _playfieldSampleGeneration
+                ? _playfieldPriorityMasks[(x * MaxDeniseSamplesPerLowResSpan) + sample]
+                : (byte)0;
+        }
+
+        private byte GetPlayfieldSampleColorIndex(int x, int sample)
+        {
+            return _playfieldSampleGenerations[x] == _playfieldSampleGeneration
+                ? _playfieldSampleColorIndexes[(x * MaxDeniseSamplesPerLowResSpan) + sample]
+                : (byte)0;
+        }
+
         private static int GetCompositionSampleOffset(int x, int y, int sample)
-            => (((y * MaxLowResWidth) + x) * MaxDeniseSamplesPerLowResSpan) + sample;
+            => (x * MaxDeniseSamplesPerLowResSpan) + sample;
 
 
     }

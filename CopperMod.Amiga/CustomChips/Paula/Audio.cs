@@ -24,6 +24,10 @@ namespace CopperMod.Amiga.CustomChips.Paula
         private readonly PaulaTimelineState _registerTimeline;
         private readonly List<PendingWrite> _pendingWrites = new List<PendingWrite>();
         private readonly PaulaDmaReadLatchQueue[] _dmaReadLatchQueues = CreateDmaReadLatchQueues();
+        private readonly PaulaDmaReadLatch[] _lastRegisterDmaReadLatches =
+            new PaulaDmaReadLatch[AmigaConstants.PaulaChannelCount];
+        private readonly bool[] _lastRegisterDmaReadLatchValid =
+            new bool[AmigaConstants.PaulaChannelCount];
         private readonly List<PaulaInterruptEvent> _pendingInterrupts = new List<PaulaInterruptEvent>();
         private readonly PaulaInterruptEvent[] _drainedInterruptBuffer = new PaulaInterruptEvent[MaxPendingInterruptEvents];
         private readonly ReusableReadOnlyList<PaulaInterruptEvent> _drainedInterrupts = new ReusableReadOnlyList<PaulaInterruptEvent>();
@@ -51,7 +55,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
         private long _startDmaWordOutputCount;
         private long _interruptSourceDmaSkippedCount;
         private long _interruptSourceDmaForcedCatchUpCount;
-        private long _paulaDmaWordReservationCount;
+        private long _paulaDmaWordExecutionCount;
         private long _registerDmaFastForwardIterationCount;
         private bool _hotCounterDiagnosticsEnabled;
         private bool _registerDmaFastForwardEnabled;
@@ -77,7 +81,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
         internal long InterruptSourceDmaForcedCatchUpCount => _interruptSourceDmaForcedCatchUpCount;
 
-        internal long PaulaDmaWordReservationCount => _paulaDmaWordReservationCount;
+        internal long PaulaDmaWordExecutionCount => _paulaDmaWordExecutionCount;
 
         internal long RegisterDmaFastForwardIterationCount => _registerDmaFastForwardIterationCount;
 
@@ -135,7 +139,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
             _startDmaWordOutputCount = 0;
             _interruptSourceDmaSkippedCount = 0;
             _interruptSourceDmaForcedCatchUpCount = 0;
-            _paulaDmaWordReservationCount = 0;
+            _paulaDmaWordExecutionCount = 0;
             _registerDmaFastForwardIterationCount = 0;
             PublishResetReadState();
         }
@@ -413,6 +417,9 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 ? null
                 : ClampWakeCandidate(candidate, currentCycle, targetCycle);
         }
+
+        internal long GetRawDmaEligibilityCycle()
+            => GetDmaWakeCandidateCycle();
 
         internal long? GetNextInterruptSourceWakeCandidateCycle(long currentCycle, long targetCycle)
         {
@@ -755,6 +762,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
                         else
                         {
                             _registerTimeline.Intreq &= (ushort)~mask;
+                            NotifyAudioInterruptsCleared(_registerTimeline, mask);
                         }
 
                         WriteRegisterWord(0x01E, _registerTimeline.Intreq, write.Cycle);
@@ -913,6 +921,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 else
                 {
                     timeline.Intreq &= (ushort)~mask;
+                    NotifyAudioInterruptsCleared(timeline, mask);
                 }
 
                 if (kind == PaulaTimelineKind.Register)
@@ -999,6 +1008,17 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 }
 
                 RequestInterrupt(bit, cycle);
+            }
+        }
+
+        private static void NotifyAudioInterruptsCleared(PaulaTimelineState timeline, ushort mask)
+        {
+            for (var channel = 0; channel < timeline.Channels.Length; channel++)
+            {
+                if ((mask & GetAudioInterruptBit(channel)) != 0)
+                {
+                    timeline.Channels[channel].NotifyInterruptCleared();
+                }
             }
         }
 
@@ -1443,13 +1463,23 @@ namespace CopperMod.Amiga.CustomChips.Paula
             var queue = _dmaReadLatchQueues[channel];
             if (queue.TryConsume(address, requestedCycle, kind, out var cachedLatch))
             {
+                RememberRegisterDmaReadLatch(channel, kind, cachedLatch);
                 return cachedLatch;
             }
 
-            var reservation = _bus.ReservePaulaDmaWord(channel, address, requestedCycle);
-            _paulaDmaWordReservationCount++;
-            var latch = new PaulaDmaReadLatch(channel, address, requestedCycle, reservation);
+            if (kind == PaulaTimelineKind.Audio &&
+                TryCreateAudioReplayLatch(channel, address, requestedCycle, requestedCycle, out var replayLatch))
+            {
+                return replayLatch;
+            }
+
+            var read = _bus.CausalBusExecutor.ProductionEnabled
+                ? _bus.CausalBusExecutor.ExecutePaulaWord(channel, address, requestedCycle)
+                : _bus.ExecutePaulaDmaWordRead(channel, address, requestedCycle);
+            _paulaDmaWordExecutionCount++;
+            var latch = new PaulaDmaReadLatch(channel, address, requestedCycle, read.Value, read.Access);
             queue.AddConsumed(latch, kind);
+            RememberRegisterDmaReadLatch(channel, kind, latch);
             return latch;
         }
 
@@ -1465,18 +1495,80 @@ namespace CopperMod.Amiga.CustomChips.Paula
             var queue = _dmaReadLatchQueues[channel];
             if (queue.TryConsume(address, requestCycle, kind, out latch))
             {
+                RememberRegisterDmaReadLatch(channel, kind, latch);
                 return true;
             }
 
-            if (!_bus.TryReservePaulaDmaWordExactSlot(channel, address, slotCycle, out var reservation))
+            if (kind == PaulaTimelineKind.Audio &&
+                TryCreateAudioReplayLatch(channel, address, requestCycle, slotCycle, out latch))
+            {
+                return true;
+            }
+
+            var granted = _bus.CausalBusExecutor.ProductionEnabled
+                ? _bus.CausalBusExecutor.TryExecutePaulaWordExact(channel, address, slotCycle, out var read)
+                : _bus.TryExecutePaulaDmaWordReadExactSlot(channel, address, slotCycle, out read);
+            if (!granted)
             {
                 latch = default;
                 return false;
             }
 
-            _paulaDmaWordReservationCount++;
-            latch = new PaulaDmaReadLatch(channel, address, requestCycle, reservation);
+            _paulaDmaWordExecutionCount++;
+            latch = new PaulaDmaReadLatch(channel, address, requestCycle, read.Value, read.Access);
             queue.AddConsumed(latch, kind);
+            RememberRegisterDmaReadLatch(channel, kind, latch);
+            return true;
+        }
+
+        private void RememberRegisterDmaReadLatch(
+            int channel,
+            PaulaTimelineKind kind,
+            PaulaDmaReadLatch latch)
+        {
+            if (kind != PaulaTimelineKind.Register)
+            {
+                return;
+            }
+
+            _lastRegisterDmaReadLatches[channel] = latch;
+            _lastRegisterDmaReadLatchValid[channel] = true;
+        }
+
+        private bool TryCreateAudioReplayLatch(
+            int channel,
+            uint address,
+            long requestedCycle,
+            long slotCycle,
+            out PaulaDmaReadLatch latch)
+        {
+            if (!_lastRegisterDmaReadLatchValid[channel])
+            {
+                latch = default;
+                return false;
+            }
+
+            var source = _lastRegisterDmaReadLatches[channel];
+            if (source.Address != address)
+            {
+                latch = default;
+                return false;
+            }
+
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Paula,
+                AmigaBusAccessKind.PaulaDma,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite: false,
+                channel);
+            var access = new AmigaBusAccessResult(
+                request,
+                slotCycle,
+                slotCycle + AgnusChipSlotScheduler.SlotCycles);
+            latch = new PaulaDmaReadLatch(channel, address, requestedCycle, source.Value, access);
             return true;
         }
 
@@ -1523,6 +1615,9 @@ namespace CopperMod.Amiga.CustomChips.Paula
             {
                 _dmaReadLatchQueues[i].Reset();
             }
+
+            Array.Clear(_lastRegisterDmaReadLatches);
+            Array.Clear(_lastRegisterDmaReadLatchValid);
         }
 
         private static bool IsActive(ReadOnlySpan<float> samples)
@@ -1619,19 +1714,12 @@ namespace CopperMod.Amiga.CustomChips.Paula
                         continue;
                     }
 
-                    if (record.RequestedCycle < requestedCycle)
-                    {
-                        record.MarkConsumed(kind);
-                        continue;
-                    }
-
-                    if (!record.Matches(address, requestedCycle))
-                    {
-                        latch = default;
-                        CompactConsumedPrefix();
-                        return false;
-                    }
-
+                    // The register and audio timelines consume the same Paula
+                    // DMA stream at different host batching granularities.
+                    // Once one timeline has sampled a channel word, the other
+                    // must consume that stored value in FIFO order; it must
+                    // never perform a later retrospective Chip RAM read merely
+                    // because its locally derived request cycle differs.
                     record.MarkConsumed(kind);
                     latch = record.Latch;
                     CompactConsumedPrefix();
@@ -1745,13 +1833,15 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 int channel,
                 uint address,
                 long requestedCycle,
-                AmigaDmaWordReservation reservation)
+                ushort value,
+                AmigaBusAccessResult busAccess)
             {
                 Channel = channel;
                 Address = address;
                 RequestedCycle = requestedCycle;
-                Reservation = reservation;
-                LoadCycle = reservation.CompletedCycle;
+                Value = value;
+                BusAccess = busAccess;
+                LoadCycle = busAccess.CompletedCycle;
             }
 
             public int Channel { get; }
@@ -1760,7 +1850,11 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
             public long RequestedCycle { get; }
 
-            public AmigaDmaWordReservation Reservation { get; }
+            public ushort Value { get; }
+
+            public AmigaBusAccessResult BusAccess { get; }
+
+            public long GrantedCycle => BusAccess.GrantedCycle;
 
             public long LoadCycle { get; }
         }
@@ -1793,6 +1887,8 @@ namespace CopperMod.Amiga.CustomChips.Paula
             private PaulaAudioState _state;
             private bool _intreq2;
             private long _intreq2ArmCycle;
+            private long _intreq2ConsumeCycle;
+            private bool _interruptClearedSinceDelayedArm;
             private bool _dataRequest;
             private bool _dmaSpecialRequest;
             private bool _periodBufferLoad;
@@ -1859,6 +1955,8 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 _state = PaulaAudioState.Idle;
                 _intreq2 = false;
                 _intreq2ArmCycle = long.MaxValue;
+                _intreq2ConsumeCycle = long.MinValue;
+                _interruptClearedSinceDelayedArm = false;
                 _dataRequest = false;
                 _dmaSpecialRequest = false;
                 _periodBufferLoad = false;
@@ -2134,20 +2232,31 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 PaulaTimelineKind kind,
                 long cycle)
             {
-                if (!_intreq2 ||
-                    (timeline.Intreq & GetAudioInterruptBit(Index)) != 0)
+                var interruptPending = (timeline.Intreq & GetAudioInterruptBit(Index)) != 0;
+                if (!_intreq2 || (interruptPending && !_interruptClearedSinceDelayedArm))
                 {
                     return false;
                 }
 
                 _intreq2 = false;
+                _intreq2ConsumeCycle = cycle;
+                _interruptClearedSinceDelayedArm = false;
                 paula.RequestAudioInterrupt(kind, Index, cycle);
                 return true;
             }
 
+            public void NotifyInterruptCleared()
+                => _interruptClearedSinceDelayedArm |= _intreq2;
+
             private bool TryArmDelayedInterruptBeforeNextAction(long targetCycle)
             {
                 if (_intreq2ArmCycle > targetCycle)
+                {
+                    return false;
+                }
+
+                if (_intreq2ArmCycle == _intreq2ConsumeCycle &&
+                    targetCycle == _intreq2ConsumeCycle)
                 {
                     return false;
                 }
@@ -2559,7 +2668,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 {
                     _intreq2ArmCycle = Math.Min(
                         _intreq2ArmCycle,
-                        dmaLatch.Reservation.GrantedCycle);
+                        dmaLatch.GrantedCycle);
                 }
 
                 if (!_hasDataWord)
@@ -2610,9 +2719,8 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 in DmaContext context,
                 long targetCycle)
             {
-                var reservation = latch.Reservation;
                 StartDmaWordOutput(
-                    context.Bus.CommitPaulaDmaWord(in reservation).Value,
+                    latch.Value,
                     cycle,
                     in context,
                     targetCycle);
@@ -2633,6 +2741,16 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 _irqCheck = 0;
                 CurrentSample = unchecked((sbyte)(word >> 8));
                 context.Paula.ApplyVolumeModulationFrom(context.Timeline, Index, word);
+                if (DmaEnabled &&
+                    context.Paula.UsesNormalOrVolumeDmaTransition(context.Timeline, Index))
+                {
+                    TryConsumeDelayedInterrupt(
+                        context.Paula,
+                        context.Timeline,
+                        context.Kind,
+                        cycle);
+                }
+
                 var periodCycles = GetPeriodCycles(Period);
                 if (context.Kind != PaulaTimelineKind.Audio &&
                     TrySkipRegisterLowByteDmaOutput(cycle, in context, periodCycles))

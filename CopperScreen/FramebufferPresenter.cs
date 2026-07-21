@@ -17,6 +17,7 @@ internal sealed class FramebufferPresenter : Control
 	private PixelRect _sourceRect;
 	private int _frontBitmapIndex;
 	private bool _devicePixelExactLayout;
+	private double _horizontalPixelAspect = 1.0;
 
 	public FramebufferPresenter(int width, int height)
 	{
@@ -99,6 +100,27 @@ internal sealed class FramebufferPresenter : Control
 		}
 	}
 
+	public double HorizontalPixelAspect
+	{
+		get => _horizontalPixelAspect;
+		set
+		{
+			if (value <= 0 || double.IsNaN(value) || double.IsInfinity(value))
+			{
+				throw new ArgumentOutOfRangeException(nameof(value));
+			}
+
+			if (_horizontalPixelAspect == value)
+			{
+				return;
+			}
+
+			_horizontalPixelAspect = value;
+			InvalidateMeasure();
+			InvalidateVisual();
+		}
+	}
+
 	public override void Render(DrawingContext context)
 	{
 		var renderStartTimestamp = Stopwatch.GetTimestamp();
@@ -106,7 +128,7 @@ internal sealed class FramebufferPresenter : Control
 		context.FillRectangle(Brushes.Black, Bounds);
 		if (!TryCalculateUniformDestination(
 				Bounds.Size,
-				new Size(_sourceRect.Width, _sourceRect.Height),
+				GetEffectiveSourceSize(),
 				GetRenderScaling(),
 				out var destination))
 		{
@@ -134,17 +156,17 @@ internal sealed class FramebufferPresenter : Control
 
 	public bool TryMapPointToFramebuffer(Point position, out Point framebufferPoint)
 	{
-		return TryMapUniformStretchPoint(Bounds.Size, _sourceRect, position, GetRenderScaling(), out framebufferPoint);
+		return TryMapUniformStretchPoint(Bounds.Size, _sourceRect, position, _horizontalPixelAspect, GetRenderScaling(), out framebufferPoint);
 	}
 
 	public bool TryMapPointToFramebufferUnclamped(Point position, out Point framebufferPoint)
 	{
-		return TryMapUniformStretchPointUnclamped(Bounds.Size, _sourceRect, position, GetRenderScaling(), out framebufferPoint);
+		return TryMapUniformStretchPointUnclamped(Bounds.Size, _sourceRect, position, _horizontalPixelAspect, GetRenderScaling(), out framebufferPoint);
 	}
 
 	public bool TryGetRenderedImageCenter(out Point center)
 	{
-		if (!TryCalculateUniformDestination(Bounds.Size, new Size(_sourceRect.Width, _sourceRect.Height), out var destination))
+		if (!TryCalculateUniformDestination(Bounds.Size, GetEffectiveSourceSize(), GetRenderScaling(), out var destination))
 		{
 			center = default;
 			return false;
@@ -158,14 +180,17 @@ internal sealed class FramebufferPresenter : Control
 		=> TryMapUniformStretchPoint(bounds, sourceRect, position, renderScaling: 1.0, out framebufferPoint);
 
 	internal static bool TryMapUniformStretchPoint(Size bounds, PixelRect sourceRect, Point position, double renderScaling, out Point framebufferPoint)
+		=> TryMapUniformStretchPoint(bounds, sourceRect, position, horizontalPixelAspect: 1.0, renderScaling, out framebufferPoint);
+
+	internal static bool TryMapUniformStretchPoint(Size bounds, PixelRect sourceRect, Point position, double horizontalPixelAspect, double renderScaling, out Point framebufferPoint)
 	{
-		if (!TryMapUniformStretchPoint(bounds, new Size(sourceRect.Width, sourceRect.Height), position, renderScaling, out var sourcePoint))
+		if (!TryMapUniformStretchPoint(bounds, new Size(sourceRect.Width * horizontalPixelAspect, sourceRect.Height), position, renderScaling, out var sourcePoint))
 		{
 			framebufferPoint = default;
 			return false;
 		}
 
-		framebufferPoint = new Point(sourceRect.X + sourcePoint.X, sourceRect.Y + sourcePoint.Y);
+		framebufferPoint = new Point(sourceRect.X + (sourcePoint.X / horizontalPixelAspect), sourceRect.Y + sourcePoint.Y);
 		return true;
 	}
 
@@ -173,20 +198,23 @@ internal sealed class FramebufferPresenter : Control
 		=> TryMapUniformStretchPointUnclamped(bounds, sourceRect, position, renderScaling: 1.0, out framebufferPoint);
 
 	internal static bool TryMapUniformStretchPointUnclamped(Size bounds, PixelRect sourceRect, Point position, double renderScaling, out Point framebufferPoint)
+		=> TryMapUniformStretchPointUnclamped(bounds, sourceRect, position, horizontalPixelAspect: 1.0, renderScaling, out framebufferPoint);
+
+	internal static bool TryMapUniformStretchPointUnclamped(Size bounds, PixelRect sourceRect, Point position, double horizontalPixelAspect, double renderScaling, out Point framebufferPoint)
 	{
-		if (!TryMapUniformStretchPointUnclamped(bounds, new Size(sourceRect.Width, sourceRect.Height), position, renderScaling, out var sourcePoint))
+		if (!TryMapUniformStretchPointUnclamped(bounds, new Size(sourceRect.Width * horizontalPixelAspect, sourceRect.Height), position, renderScaling, out var sourcePoint))
 		{
 			framebufferPoint = default;
 			return false;
 		}
 
-		framebufferPoint = new Point(sourceRect.X + sourcePoint.X, sourceRect.Y + sourcePoint.Y);
+		framebufferPoint = new Point(sourceRect.X + (sourcePoint.X / horizontalPixelAspect), sourceRect.Y + sourcePoint.Y);
 		return true;
 	}
 
 	protected override Size MeasureOverride(Size availableSize)
 	{
-		var source = new Size(_sourceRect.Width, _sourceRect.Height);
+		var source = GetEffectiveSourceSize();
 		return _devicePixelExactLayout
 			? CalculateDevicePixelExactLogicalSize(source, GetRenderScaling())
 			: source;
@@ -288,6 +316,9 @@ internal sealed class FramebufferPresenter : Control
 
 	private double GetRenderScaling()
 		=> TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+
+	private Size GetEffectiveSourceSize()
+		=> new(_sourceRect.Width * _horizontalPixelAspect, _sourceRect.Height);
 
 	private static WriteableBitmap CreateBitmap(int width, int height)
 		=> new(

@@ -102,7 +102,7 @@ public sealed class M68kDecoderTests
 	public void KeepsHostTrapRootsOutOfTraces()
 	{
 		var bus = new Copper68kTestBus();
-		bus.RegisterHostTrapStub(0x1000, _ => { });
+		bus.RegisterHostGateway(0x1000, _ => { });
 
 		Assert.False(M68kDecoder.TryDecode(bus, 0x1000, out _, out var reason));
 		Assert.Equal(M68kJitBailoutReason.HostTrap, reason);

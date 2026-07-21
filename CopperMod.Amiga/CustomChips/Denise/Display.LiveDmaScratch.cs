@@ -410,7 +410,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 var detailRow = Math.Clamp(_display.GetOutputRowForCycle(_display._liveFrameStartCycle, requestedCycle), 0, LowResOutputHeight - 1);
                 var detailState = GetScratchLineState(detailRow);
-                var detailPlan = _display._rowDmaPlans[detailRow];
+                var detailPlan = _display._rowDmaPlans[GetRasterlineRingSlot(detailRow)];
                 var nextPending = _pendingWriteIndex < _display._pendingWrites.Count
                     ? _display._pendingWrites[_pendingWriteIndex]
                     : default;
@@ -986,12 +986,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return true;
             }
 
-            private ushort ReadScratchChipWordForPresentation(uint address, long cycle)
+            private ushort ReadScratchChipWordAtCycle(uint address, long cycle)
             {
                 address = _display._bus.MaskChipDmaAddress(address);
                 var physicalOffset = _display._bus.GetChipRamPhysicalOffset(address);
                 var lowPhysicalOffset = _display._bus.AddChipRamPhysicalOffset(physicalOffset, 1);
-                var value = _display._bus.ReadChipWordForPresentation(address, cycle);
+                var value = _display._bus.ReadCurrentChipDmaWord(address);
                 for (var i = _chipWriteOverlayCount - 1; i >= 0; i--)
                 {
                     var write = _chipWriteOverlay[i];
@@ -1220,7 +1220,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return long.MaxValue;
                 }
 
-                var state = _display._liveLineStates[_preparedFetchRow];
+                var state = _display.GetLiveLineState(_preparedFetchRow);
                 state = GetScratchLineState(_preparedFetchRow);
                 if (TryGetScratchRowDmaPlan(_preparedFetchRow, state, out var plan) &&
                     TryFindExactScratchRowDmaBitplaneEntry(plan, _preparedFetchWord, _preparedFetchSlot, out var entry))
@@ -1494,7 +1494,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return false;
                 }
 
-                plan = _display._rowDmaPlans[row];
+                plan = _display._rowDmaPlans[GetRasterlineRingSlot(row)];
                 if (plan.Valid &&
                     plan.Generation == _display._liveGeneration &&
                     plan.Row == row &&
@@ -1725,7 +1725,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return;
                 }
 
-                var value = ReadScratchChipWordForPresentation(address, grantedCycle);
+                var value = ReadScratchChipWordAtCycle(address, grantedCycle);
                 if (word == 0)
                 {
                     state.PendingPos = value;
@@ -1780,7 +1780,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 state.Descriptor = descriptor;
                 state.Active = true;
                 state.LastVisibleStop = Math.Max(state.LastVisibleStop, descriptor.YStop);
-                state.ControlRow = Math.Clamp(descriptor.YStop + 1, 0, LowResOutputHeight);
+                state.ControlRow = Math.Clamp(descriptor.YStop, 0, LowResOutputHeight);
             }
 
             private void AdvanceSpriteCursor()
@@ -1826,14 +1826,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 if (_copper.PendingStart)
                 {
-                    return _display._copperListPointer == 0
+                    return _copperListPointer == 0
                         ? long.MaxValue
                         : Math.Max(_copper.Cycle, _display._liveFrameStartCycle);
                 }
 
-                if (_copper.Pc == 0 && _display._copperListPointer == 0)
+                if (_copper.Pc == 0 && _copperListPointer == 0)
                 {
                     return long.MaxValue;
+                }
+
+                if (_copper.RestartArmed || _copper.ReadyToRequest)
+                {
+                    return _copper.Cycle;
                 }
 
                 if (_copper.Waiting)
@@ -1869,7 +1874,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     var secondAddress = _display.AddDmaPointerOffset(_copperFirstWordAddress, 2);
                     RecordCopperBitplaneRgaCollision(secondRequestCycle);
                     var secondAccess = _slots.ReserveCopperDmaSlot(secondAddress, secondRequestCycle);
-                    var second = ReadScratchChipWordForPresentation(secondAddress, secondAccess.GrantedCycle);
+                    var second = ReadScratchChipWordAtCycle(secondAddress, secondAccess.GrantedCycle);
                     RecordDma(secondAccess.GrantedCycle);
                     var instruction = new CopperInstructionLatch(
                         _copperFirstWord,
@@ -1930,12 +1935,36 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 if (_copper.PendingStart)
                 {
-                    if (_display._copperListPointer == 0)
+                    if (_copperListPointer == 0)
                     {
                         return true;
                     }
 
-                    _copper.StartFrom(_display._copperListPointer);
+                    _copper.StartFrom(_copperListPointer);
+                }
+
+                if (_copper.RestartArmed)
+                {
+                    if (_copper.Cycle > targetCycle)
+                    {
+                        return true;
+                    }
+
+                    if (_copper.WaitRestartIncomingRgaBlocked)
+                    {
+                        _copper.WaitRestartIncomingRgaBlocked = false;
+                        _copper.Cycle += 2L * AgnusChipSlotScheduler.SlotCycles;
+                        return true;
+                    }
+
+                    _copper.AdvanceWaitRestartStage(
+                        _copper.Cycle + (2L * AgnusChipSlotScheduler.SlotCycles));
+                    return true;
+                }
+
+                if (_copper.ReadyToRequest)
+                {
+                    _copper.AdvanceWaitRestartStage(_copper.Cycle);
                 }
 
                 if (_copper.Waiting)
@@ -1949,15 +1978,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             return true;
                         }
 
-                        // A completion prediction is not proof that the final DMA
-                        // transfer was granted. Let the ordered reference executor
-                        // observe BUSY and the physical blitter tail.
                         if (_display._bus.Blitter.Busy)
                         {
                             _unsupported = "copper-blitter-wait";
                             return false;
                         }
-
                     }
 
                     long waitCycle;
@@ -1989,18 +2014,50 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         return true;
                     }
 
-                    var resumeCycle = waitCycle + CopperHpToCpuCycles(GetCopperWaitWakeHpUnits(
+                    var comparisonStartCycle = _copper.Cycle;
+                    var resumeCycle = GetCopperWaitRestartArmCycle(
+                        waitCycle,
                         _copper.WaitSecond,
-                        _copper.WaitObservedBlitterBusy));
+                        _copper.WaitObservedBlitterBusy);
+                    var restartIncomingRgaBlocked = false;
+                    if (waitCycle > comparisonStartCycle)
+                    {
+                        var incomingRgaBlocked = _display.IsBitplaneRgaIncomingPhase(waitCycle);
+                        var overlapsAdjacentRgaStage =
+                            _display.IsBitplaneRgaDecisionPhase(waitCycle) ||
+                            _display.IsBitplaneRgaOutputPhase(waitCycle);
+                        _copper.WaitStartCarrySkipCount = (byte)(overlapsAdjacentRgaStage ? 2 : 0);
+                        _copper.WaitStartCarryPending = incomingRgaBlocked;
+                        restartIncomingRgaBlocked =
+                            _display._bus.CausalBusExecutor.GetNextEligibleCopperControlPhase(
+                                resumeCycle,
+                                incomingRgaBlocked,
+                                overlapsAdjacentRgaStage) > resumeCycle;
+                    }
+                    else if (_copper.WaitStartCarryPending)
+                    {
+                        if (_copper.WaitStartCarrySkipCount > 0)
+                        {
+                            _copper.WaitStartCarrySkipCount--;
+                        }
+                        else
+                        {
+                            restartIncomingRgaBlocked = true;
+                            _copper.WaitStartCarryPending = false;
+                        }
+                    }
+                    else
+                    {
+                        _copper.WaitStartCarryPending = false;
+                        _copper.WaitStartCarrySkipCount = 0;
+                    }
                     if (resumeCycle > targetCycle)
                     {
-                        _copper.Cycle = resumeCycle;
-                        _copper.Waiting = false;
+                        _copper.ArmWaitRestart(resumeCycle, restartIncomingRgaBlocked);
                         return true;
                     }
 
-                    _copper.Cycle = resumeCycle;
-                    _copper.Waiting = false;
+                    _copper.ArmWaitRestart(resumeCycle, restartIncomingRgaBlocked);
                     return true;
                 }
 
@@ -2073,7 +2130,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _copperFirstWordAddress = pc;
                 RecordCopperBitplaneRgaCollision(fetchCycle);
                 _copperFirstWordAccess = _slots.ReserveCopperDmaSlot(pc, fetchCycle);
-                _copperFirstWord = ReadScratchChipWordForPresentation(pc, _copperFirstWordAccess.GrantedCycle);
+                _copperFirstWord = ReadScratchChipWordAtCycle(pc, _copperFirstWordAccess.GrantedCycle);
                 RecordDma(_copperFirstWordAccess.GrantedCycle);
                 _copperFirstWordPending = true;
                 _copper.Cycle = _display.GetCopperSecondWordRequestCycle(_copperFirstWordAccess);
@@ -2093,32 +2150,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return;
                 }
 
-                for (var word = 0; word < state.FetchWords; word++)
+                if (_display.TryMapCopperRequestToLateBitplaneCollision(
+                        state,
+                        copperRequestCycle,
+                        out var plane,
+                        out var capturedWord))
                 {
-                    for (var slot = 0; slot < state.FetchSlotStride; slot++)
-                    {
-                        if (!TryGetBitplanePlaneForFetchSlot(slot, state.PlaneCount, state.FetchResolution, out var plane) ||
-                            (state.PlaneHasRowMask & (1 << plane)) == 0)
-                        {
-                            continue;
-                        }
-
-                        var horizontal = state.DataFetchStart + (word * state.FetchSlotStride) + slot;
-                        if (horizontal <= OcsDdfHardStopHorizontal)
-                        {
-                            continue;
-                        }
-
-                        var fetchCycle = AgnusChipSlotScheduler.AlignToSlot(
-                            state.LineStartCycle + ((long)horizontal * _display.CopperHpCycles));
-                        if (fetchCycle != copperRequestCycle)
-                        {
-                            continue;
-                        }
-
-                        var maskIndex = GetLiveBitplaneMaskIndex(row, plane);
-                        _display._liveBitplaneCopperCollisionMasks[maskIndex] |= (UInt128)1 << word;
-                    }
+                    var maskIndex = GetLiveBitplaneMaskIndex(row, plane);
+                    _display._liveBitplaneCopperCollisionMasks[maskIndex] |=
+                        (UInt128)1 << capturedWord;
                 }
             }
 
@@ -2154,7 +2194,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     PreserveStartedBitplaneRow(cycle);
                     var bitplaneDmaWasEnabled = IsBitplaneDmaEnabled(_dmacon);
+                    var copperDmaWasEnabled = IsLiveCopperDmaEnabled();
                     _dmacon = ApplySetClearPreview(_dmacon, value);
+                    if (!copperDmaWasEnabled && IsLiveCopperDmaEnabled() && _copper.Cycle < cycle)
+                    {
+                        _copper.Cycle = cycle;
+                    }
+
                     if (bitplaneDmaWasEnabled != IsBitplaneDmaEnabled(_dmacon))
                     {
                         MarkDynamicBitplaneScheduleChange(cycle);
@@ -2236,13 +2282,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 if (register == 0x080)
                 {
+                    var previousPointer = _copperListPointer;
                     _copperListPointer = _display.WriteDmaPointerHigh(_copperListPointer, value);
+                    RebasePendingCopperStartAfterPointerWrite(previousPointer, cycle);
                     return true;
                 }
 
                 if (register == 0x082)
                 {
+                    var previousPointer = _copperListPointer;
                     _copperListPointer = _display.WriteDmaPointerLow(_copperListPointer, value);
+                    RebasePendingCopperStartAfterPointerWrite(previousPointer, cycle);
                     return true;
                 }
 
@@ -2352,7 +2402,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return true;
                 }
 
-                if (register >= 0x110 && register <= 0x11A)
+                if (register >= 0x110 && register <= 0x11E)
                 {
                     var plane = (register - 0x110) / 2;
                     if ((uint)plane < (uint)_bitplaneDataRegisters.Length)
@@ -2368,7 +2418,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return true;
                 }
 
-                if (register >= 0x0E0 && register <= 0x0F6)
+                if (register >= 0x0E0 && register <= 0x0FE)
                 {
                     var plane = (register - 0x0E0) / 4;
                     if ((uint)plane < (uint)_bitplanePointers.Length)
@@ -2405,6 +2455,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 return true;
+            }
+
+            private void RebasePendingCopperStartAfterPointerWrite(uint previousPointer, long cycle)
+            {
+                if (_copper.PendingStart &&
+                    previousPointer == 0 &&
+                    _copperListPointer != 0 &&
+                    _copper.Cycle < cycle)
+                {
+                    _copper.Cycle = cycle;
+                }
             }
 
             private void SetScratchBitplaneBaseRows(int startPlane, int stopPlane, int row)
@@ -2537,7 +2598,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 if (!_lineStateDirtyFromScratchWrite[row] && _display.IsLiveLineValid(row))
                 {
-                    CopyScratchLineState(_display._liveLineStates[row], state);
+                    CopyScratchLineState(_display.GetLiveLineState(row), state);
                     return;
                 }
 
@@ -2599,6 +2660,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 Array.Copy(_bitplanePointers, state.BitplanePointers, _bitplanePointers.Length);
                 Array.Copy(_bitplaneBaseRows, state.BitplaneBaseRows, _bitplaneBaseRows.Length);
                 Array.Copy(_bitplaneDataRegisters, state.BitplaneDataRegisters, _bitplaneDataRegisters.Length);
+                Array.Clear(state.BitplaneWordIndexOffsets);
                 for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
                 {
                     if (_display.IsLatchedOnlyOcsBpu7Plane(state.Bplcon0, plane))
@@ -2627,6 +2689,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             private static void CopyScratchLineState(LiveLineState source, LiveLineState destination)
             {
                 destination.Generation = source.Generation;
+                destination.DmaPlanVersion = source.DmaPlanVersion;
                 destination.LineStartCycle = source.LineStartCycle;
                 destination.DisplayWindowVerticallyOpen = source.DisplayWindowVerticallyOpen;
                 destination.DeniseDisplayWindowVerticallyOpen = source.DeniseDisplayWindowVerticallyOpen;
@@ -2660,6 +2723,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 Array.Copy(source.BitplanePointers, destination.BitplanePointers, source.BitplanePointers.Length);
                 Array.Copy(source.BitplaneBaseRows, destination.BitplaneBaseRows, source.BitplaneBaseRows.Length);
                 Array.Copy(source.BitplaneRowAddresses, destination.BitplaneRowAddresses, source.BitplaneRowAddresses.Length);
+                Array.Copy(
+                    source.BitplaneWordIndexOffsets,
+                    destination.BitplaneWordIndexOffsets,
+                    source.BitplaneWordIndexOffsets.Length);
                 Array.Copy(source.BitplaneDataRegisters, destination.BitplaneDataRegisters, source.BitplaneDataRegisters.Length);
             }
 

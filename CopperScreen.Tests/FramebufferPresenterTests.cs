@@ -1,5 +1,6 @@
 using Avalonia;
 using CopperScreen;
+using CopperMod.Amiga.Core;
 using System.Runtime.InteropServices;
 
 namespace CopperScreen.Tests;
@@ -165,10 +166,15 @@ public sealed class FramebufferPresenterTests
 	}
 
 	[Fact]
-	public void PresentationViewportUsesHighResolutionFullAndCroppedCoordinates()
+	public void PresentationViewportUsesTimingDerivedCroppedCoordinates()
 	{
-		Assert.Equal(new PixelRect(0, 0, 716, 570), MainWindow.FullOverscanPresentationViewport);
-		Assert.Equal(new PixelRect(64, 32, 640, 512), MainWindow.CroppedPresentationViewport);
+		var palHighRes = CopperScreenPresentationGeometry.FromRasterTiming(RasterTiming.Pal, superHighRes: false);
+		var palSuperHighRes = CopperScreenPresentationGeometry.FromRasterTiming(RasterTiming.Pal, superHighRes: true);
+		var ntscSuperHighRes = CopperScreenPresentationGeometry.FromRasterTiming(RasterTiming.Ntsc, superHighRes: true);
+
+		Assert.Equal(new PixelRect(64, 32, 640, 512), MainWindow.GetCroppedPresentationViewport(palHighRes));
+		Assert.Equal(new PixelRect(128, 32, 1280, 512), MainWindow.GetCroppedPresentationViewport(palSuperHighRes));
+		Assert.Equal(new PixelRect(128, 32, 1280, 400), MainWindow.GetCroppedPresentationViewport(ntscSuperHighRes));
 	}
 
 	[Fact]
@@ -176,12 +182,44 @@ public sealed class FramebufferPresenterTests
 	{
 		Assert.True(FramebufferPresenter.TryMapUniformStretchPoint(
 			new Size(960, 768),
-			MainWindow.CroppedPresentationViewport,
+			new PixelRect(64, 32, 640, 512),
 			new Point(480, 384),
 			out var center));
 
 		Assert.Equal(384, center.X, precision: 6);
 		Assert.Equal(288, center.Y, precision: 6);
+	}
+
+	[Theory]
+	[InlineData(true, false, 0.5)]
+	[InlineData(false, false, 1.0)]
+	[InlineData(true, true, 8.0 / 15.0)]
+	[InlineData(false, true, 16.0 / 15.0)]
+	public void PalPresentationGeometryUsesExpectedHorizontalPixelAspect(bool superHighRes, bool crtCorrect, double expected)
+	{
+		var geometry = CopperScreenPresentationGeometry.FromRasterTiming(RasterTiming.Pal, superHighRes);
+		var mode = crtCorrect ? CopperScreenPixelAspectMode.CrtCorrect : CopperScreenPixelAspectMode.Lcd;
+		Assert.Equal(expected, geometry.GetHorizontalPixelAspect(mode), precision: 6);
+	}
+
+	[Theory]
+	[InlineData(false, 5.0 / 6.0)]
+	[InlineData(true, 5.0 / 12.0)]
+	public void NtscCrtPresentationGeometryUsesExpectedHorizontalPixelAspect(bool superHighRes, double expected)
+	{
+		var geometry = CopperScreenPresentationGeometry.FromRasterTiming(RasterTiming.Ntsc, superHighRes);
+		Assert.Equal(expected, geometry.GetHorizontalPixelAspect(CopperScreenPixelAspectMode.CrtCorrect), precision: 6);
+	}
+
+	[Fact]
+	public void SuperHighResAspectMapsRenderedCenterBackToRawFramebufferCenter()
+	{
+		var source = new PixelRect(128, 32, 1280, 512);
+		Assert.True(FramebufferPresenter.TryMapUniformStretchPoint(
+			new Size(1280, 512), source, new Point(640, 256), horizontalPixelAspect: 0.5, renderScaling: 1.0, out var point));
+
+		Assert.Equal(768, point.X, precision: 6);
+		Assert.Equal(288, point.Y, precision: 6);
 	}
 
 	[Fact]

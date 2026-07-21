@@ -87,18 +87,26 @@ internal static class EcsTimingBenchmark
                 var beam = _bus.GetBeamPosition(_cursor);
                 var frameStart = beam.FrameStartCycle;
                 var frameStop = frameStart + beam.FrameCycles;
+                if (_workload.IncludeDisplay)
+                {
+                    _bus.Display.BeginPresentationFrame(
+                        new PresentationFrameTarget(_frameBuffer),
+                        frameStart,
+                        frameStop);
+                }
+
                 for (var cycle = frameStart; cycle < frameStop; cycle += _sampleStride)
                 {
                     var position = _bus.GetBeamPosition(cycle);
                     _checksum = unchecked((_checksum * 16777619u) ^ (uint)position.BeamLine);
                     _checksum = unchecked((_checksum * 16777619u) ^ (uint)position.BeamHorizontal);
                     _checksum = unchecked((_checksum * 16777619u) ^ (uint)_bus.PredictDiskDmaGrantCycle(cycle));
-                    _ = _bus.ReadChipWordForPresentation((uint)(cycle & 0x1FFFFE), cycle);
+                    _ = _bus.ReadCurrentChipDmaWord((uint)(cycle & 0x1FFFFE));
                 }
 
                 if (_workload.IncludeDisplay)
                 {
-                    _bus.Display.RenderFrame(_frameBuffer, frameStart, frameStop);
+                    _bus.Display.CompletePresentationFrame(frameStop);
                     _checksum = unchecked((_checksum * 16777619u) ^ (uint)_frameBuffer[frame & (_frameBuffer.Length - 1)]);
                 }
 

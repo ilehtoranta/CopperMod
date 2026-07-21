@@ -320,7 +320,8 @@ public sealed class CopperScreenArchitectureTests
 			Assert.Equal(FloppyDriveAudioMode.Synthetic, profile.FloppyDriveAudio.Mode);
 			Assert.Equal(FloppyDriveAudioOptions.DefaultSoundPack, profile.FloppyDriveAudio.SoundPack);
 			Assert.Equal(FloppyDriveAudioOptions.DefaultVolume, profile.FloppyDriveAudio.Volume);
-			Assert.Equal(CopperScreenLacedPresentationMode.CrtFlicker, profile.PresentationOptions.LacedMode);
+			Assert.Equal(CopperScreenLacedPresentationMode.CrtPhosphor, profile.PresentationOptions.LacedMode);
+			Assert.Equal(CopperScreenPixelAspectMode.Lcd, profile.PresentationOptions.PixelAspectMode);
 		}
 		finally
 		{
@@ -329,7 +330,7 @@ public sealed class CopperScreenArchitectureTests
 	}
 
 	[Fact]
-	public void StartupProfileCanSelectCrtFlickerLacedPresentation()
+	public void StartupProfileLegacyCrtFlickerSelectsCrtPhosphorPresentation()
 	{
 		var profilePath = Path.Combine(Path.GetTempPath(), "copperscreen-crt-flicker-profile.json");
 		File.WriteAllText(
@@ -356,7 +357,7 @@ public sealed class CopperScreenArchitectureTests
 		{
 			Assert.True(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out var profile, out var error), error);
 
-			Assert.Equal(CopperScreenLacedPresentationMode.CrtFlicker, profile.PresentationOptions.LacedMode);
+			Assert.Equal(CopperScreenLacedPresentationMode.CrtPhosphor, profile.PresentationOptions.LacedMode);
 		}
 		finally
 		{
@@ -568,7 +569,9 @@ public sealed class CopperScreenArchitectureTests
 			draft.RtcEnabled = false;
 			draft.RtgVramMb = 256;
 			draft.FloppyDriveCount = 3;
-			draft.PresentationOptions = new CopperScreenPresentationOptions(CopperScreenLacedPresentationMode.StableWeave);
+			draft.PresentationOptions = new CopperScreenPresentationOptions(
+				CopperScreenLacedPresentationMode.StableWeave,
+				CopperScreenPixelAspectMode.CrtCorrect);
 			draft.DriveDiskPaths[1] = diskPath;
 			draft.DriveWriteProtected[1] = false;
 			draft.Input = CopperScreenInputOptions.Create(
@@ -589,6 +592,7 @@ public sealed class CopperScreenArchitectureTests
 			Assert.Equal(256L * 1024 * 1024, loaded.RtgVramSize);
 			Assert.Equal(3, loaded.FloppyDriveCount);
 			Assert.Equal(CopperScreenLacedPresentationMode.StableWeave, loaded.PresentationOptions.LacedMode);
+			Assert.Equal(CopperScreenPixelAspectMode.CrtCorrect, loaded.PresentationOptions.PixelAspectMode);
 			Assert.Equal(2, loaded.Input.MousePort);
 			Assert.Equal("numpad-joystick", loaded.Input.Port1ProfileId);
 			Assert.Equal("mouse", loaded.Input.Port2ProfileId);
@@ -1095,7 +1099,7 @@ public sealed class CopperScreenArchitectureTests
 		Assert.Equal(FloppyDriveAudioMode.Synthetic, profile.FloppyDriveAudio.Mode);
 		Assert.Equal(FloppyDriveAudioOptions.DefaultSoundPack, profile.FloppyDriveAudio.SoundPack);
 		Assert.Equal(FloppyDriveAudioOptions.DefaultVolume, profile.FloppyDriveAudio.Volume);
-		Assert.Equal(CopperScreenLacedPresentationMode.CrtFlicker, profile.PresentationOptions.LacedMode);
+		Assert.Equal(CopperScreenLacedPresentationMode.CrtPhosphor, profile.PresentationOptions.LacedMode);
 		Assert.Equal(expectedFloppyDriveCount, profile.CreateMachineOptions().FloppyDriveCount);
 		Assert.Equal(expectedCpuBackend, profile.CreateMachineOptions().CpuBackend);
 		Assert.Equal(expectedRealFastRamSize, profile.CreateMachineOptions().RealFastRamSize);

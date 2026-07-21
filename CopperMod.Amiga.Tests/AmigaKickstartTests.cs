@@ -226,7 +226,7 @@ public sealed class AmigaKickstartTests
 			return false;
 		}
 
-		return bus.TryInvokeHostTrap(address, bus.ReadWord(address + 2), state);
+		return bus.TryInvokeHostGateway(address, bus.ReadLong(address + 2), state);
 	}
 
 	private static void WriteString(AmigaBus bus, uint address, string value)

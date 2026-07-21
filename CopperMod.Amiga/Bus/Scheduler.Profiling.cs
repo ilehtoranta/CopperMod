@@ -246,7 +246,15 @@ namespace CopperMod.Amiga.Bus
                 _hostPaulaTicks,
                 _hostDiskTicks,
                 _hostAgnusTicks,
-                _hostBlitterTicks);
+                _hostBlitterTicks,
+                _bus.CausalBusExecutor.AgendaReads,
+                _bus.CausalBusExecutor.AgendaUpdates,
+                _bus.CausalBusExecutor.ShadowMatches,
+                _bus.CausalBusExecutor.ShadowMismatches,
+                _bus.CausalBusExecutor.FirstShadowMismatch,
+                _bus.CausalBusExecutor.FixedPlanShadowMatches,
+                _bus.CausalBusExecutor.FixedPlanShadowMismatches,
+                _bus.CausalBusExecutor.FirstFixedPlanShadowMismatch);
         }
 
         private bool TrySkipDrainWithRasterlineScheduleProfiled(long targetCycle, AmigaHardwareEventMask mask)

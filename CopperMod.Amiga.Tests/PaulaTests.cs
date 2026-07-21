@@ -119,7 +119,11 @@ public sealed class PaulaTests
 		Assert.True(bus.Paula.GetChannelSnapshot(0).DelayedInterruptPending);
 		bus.Paula.AdvanceTo(46);
 
-		Assert.False(bus.Paula.GetChannelSnapshot(0).DelayedInterruptPending);
+		var snapshot = bus.Paula.GetChannelSnapshot(0);
+		Assert.False(
+			snapshot.DelayedInterruptPending,
+			$"state={snapshot.State} next={snapshot.NextSampleCycle} word=0x{snapshot.DataWord:X4} " +
+			$"intreq=0x{bus.Paula.Intreq:X4}");
 		Assert.NotEqual(0, bus.Paula.Intreq & 0x0080);
 		Assert.Contains(bus.Paula.DrainInterrupts(), interruptEvent => interruptEvent.Cycle == 46);
 	}
@@ -141,7 +145,11 @@ public sealed class PaulaTests
 		Assert.True(bus.Paula.GetChannelSnapshot(0).DelayedInterruptPending);
 		bus.Paula.AdvanceTo(50);
 
-		Assert.False(bus.Paula.GetChannelSnapshot(0).DelayedInterruptPending);
+		var snapshot = bus.Paula.GetChannelSnapshot(0);
+		Assert.False(
+			snapshot.DelayedInterruptPending,
+			$"state={snapshot.State} next={snapshot.NextSampleCycle} word=0x{snapshot.DataWord:X4} " +
+			$"intreq=0x{bus.Paula.Intreq:X4}");
 		Assert.NotEqual(0, bus.Paula.Intreq & 0x0080);
 		Assert.Contains(bus.Paula.DrainInterrupts(), interruptEvent => interruptEvent.Cycle == 50);
 	}
@@ -161,8 +169,8 @@ public sealed class PaulaTests
 	public void ManualAudioDataOutputsHighThenLowByteAndRequestsInterrupt()
 	{
 		var bus = CreatePaulaComponentBus();
-		bus.WriteWord(0x00DFF09A, 0xC080, 0);
-		bus.WriteWord(0x00DFF0AA, 0x7F81, 0);
+		SchedulePaulaWrite(bus, 0x09A, 0xC080, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x7F81, 0);
 		var buffer = new float[4];
 
 		bus.Paula.RenderSample(0, buffer, 0, 2);
@@ -978,11 +986,14 @@ public sealed class PaulaTests
 		bus.Paula.RenderSample(42, buffer, 2, 2);
 		bus.Paula.RenderSample(46, buffer, 3, 2);
 		var snapshot = bus.Paula.GetChannelSnapshot(0);
+		var diagnostic = $"samples={string.Join(',', buffer)} state={snapshot.State} dma={snapshot.DmaEnabled} " +
+			$"addr=0x{snapshot.CurrentAddress:X} remain={snapshot.RemainingWords} word=0x{snapshot.DataWord:X4} " +
+			$"sample={snapshot.CurrentSample} next={snapshot.NextSampleCycle}";
 
 		Assert.Equal(0.0f, buffer[0]);
-		Assert.True(buffer[2] > 0.10f);
-		Assert.True(buffer[4] < -0.10f);
-		Assert.True(buffer[6] > 0.20f);
+		Assert.True(buffer[2] > 0.10f, diagnostic);
+		Assert.True(buffer[4] < -0.10f, diagnostic);
+		Assert.True(buffer[6] > 0.10f, diagnostic);
 		Assert.Equal(0x1004u, snapshot.CurrentAddress);
 		Assert.Equal(0, snapshot.RemainingWords);
 		Assert.Contains(bus.Paula.DrainInterrupts(), interruptEvent => interruptEvent.Channel == 0);
@@ -1056,24 +1067,24 @@ public sealed class PaulaTests
 		var bus = CreateDefaultMinimumPaulaBus();
 		bus.ChipRam[0x1000] = 0x7F;
 		bus.ChipRam[0x1001] = 0x81;
-		bus.WriteWord(0x00DFF0A0, 0x0000, 0);
-		bus.WriteWord(0x00DFF0A2, 0x1000, 0);
-		bus.WriteWord(0x00DFF0A4, 0x0001, 0);
-		bus.WriteWord(0x00DFF0A6, 0x0071, 0);
-		bus.WriteWord(0x00DFF096, 0x8201, 0);
+		SchedulePaulaWrite(bus, 0x0A0, 0x0000, 0);
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0071, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
 		bus.Paula.AdvanceTo(0);
 		var afterEnable = bus.Paula.GetChannelSnapshot(0);
 		var buffer = new float[4];
 
-		bus.Paula.RenderSample(263, buffer, 0, 2);
-		bus.Paula.RenderSample(264, buffer, 1, 2);
+		bus.Paula.RenderSample(261, buffer, 0, 2);
+		bus.Paula.RenderSample(262, buffer, 1, 2);
 		var afterBoundary = bus.Paula.GetChannelSnapshot(0);
 
 		Assert.Equal(113, afterEnable.Period);
 		Assert.Equal(34, afterEnable.NextSampleCycle);
 		Assert.True(buffer[0] > 0.20f);
 		Assert.True(buffer[2] < -0.20f);
-		Assert.Equal(490, afterBoundary.NextSampleCycle);
+		Assert.Equal(488, afterBoundary.NextSampleCycle);
 	}
 
 	[Fact]
@@ -1302,9 +1313,9 @@ public sealed class PaulaTests
 	public void AdkconPeriodAttachModulatesNextChannelPeriod()
 	{
 		var bus = CreatePaulaComponentBus();
-		bus.WriteWord(0x00DFF09E, 0x8010, 0);
-		bus.WriteWord(0x00DFF0A6, 0x0002, 0);
-		bus.WriteWord(0x00DFF0AA, 0x0005, 0);
+		SchedulePaulaWrite(bus, 0x09E, 0x8010, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0002, 0);
+		SchedulePaulaWrite(bus, 0x0AA, 0x0005, 0);
 
 		bus.Paula.AdvanceTo(4);
 

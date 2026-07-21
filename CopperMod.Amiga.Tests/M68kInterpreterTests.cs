@@ -753,21 +753,21 @@ public sealed class M68kInterpreterTests
 		var phases = bus.CpuBusPhases.Skip(interruptPhaseStart).ToArray();
 
 		Assert.Equal(24, interruptStartCycle);
-		Assert.Equal(68, handlerStartCycle);
+		Assert.Equal(72, handlerStartCycle);
 		Assert.Equal(0x2002u, cpu.State.ProgramCounter);
-		Assert.Equal(interruptStartCycle + 26, phases[5].CompletedCycle);
-		Assert.Equal(interruptStartCycle + 26, phases[6].RequestedCycle);
-		Assert.Equal(interruptStartCycle + 44, phases[7].RequestedCycle);
+		Assert.Equal(interruptStartCycle + 30, phases[5].CompletedCycle);
+		Assert.Equal(interruptStartCycle + 30, phases[6].RequestedCycle);
+		Assert.Equal(interruptStartCycle + 48, phases[7].RequestedCycle);
 		AssertCpuPhaseSequence(
 			phases,
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 30L, 32L),
-			(M68kBusAccessKind.CpuInterruptAcknowledge, 0xFFFFF3u, M68kOperandSize.Word, false, 32L, 36L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFAu, M68kOperandSize.Word, true, 40L, 42L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 42L, 44L),
-			(M68kBusAccessKind.CpuDataRead, 0x0064u, M68kOperandSize.Long, false, 44L, 48L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x2000u, M68kOperandSize.Word, false, 48L, 50L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x2002u, M68kOperandSize.Word, false, 50L, 52L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x2004u, M68kOperandSize.Word, false, 68L, 70L));
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 34L, 36L),
+			(M68kBusAccessKind.CpuInterruptAcknowledge, 0xFFFFF3u, M68kOperandSize.Word, false, 36L, 40L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFAu, M68kOperandSize.Word, true, 44L, 46L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 46L, 48L),
+			(M68kBusAccessKind.CpuDataRead, 0x0064u, M68kOperandSize.Long, false, 48L, 52L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x2000u, M68kOperandSize.Word, false, 52L, 54L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x2002u, M68kOperandSize.Word, false, 54L, 56L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x2004u, M68kOperandSize.Word, false, 72L, 74L));
 	}
 
 	[Fact]
@@ -955,7 +955,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
 		AssertCpuPhaseSequence(
 			branchPhases,
-			(M68kBusAccessKind.CpuInstructionFetch, 0x1008u, M68kOperandSize.Word, false, 28L, 30L));
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1008u, M68kOperandSize.Word, false, 32L, 34L));
 	}
 	[Fact]
 	public void TakenShortBranchBusSequenceFlushesFallthroughAndPrimesTargetQueue()
@@ -2251,7 +2251,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(iterations, sync2Reads.Length);
 		AssertCpuPhaseSequence(
 			branchPhases,
-			(M68kBusAccessKind.CpuInstructionFetch, 0x1008u, M68kOperandSize.Word, false, 80L, 82L));
+			(M68kBusAccessKind.CpuInstructionFetch, 0x1008u, M68kOperandSize.Word, false, 84L, 86L));
 		AssertCpuPhaseSequence(
 			movePhases,
 			(M68kBusAccessKind.CpuInstructionFetch, 0x100Au, M68kOperandSize.Word, false, 88L, 90L),
@@ -2713,7 +2713,7 @@ public sealed class M68kInterpreterTests
 		var bus = new AmigaBus();
 		var trapAddress = 0x00F0_0000u;
 		var callbackCalled = false;
-		bus.RegisterHostTrapStub(trapAddress, state =>
+		bus.RegisterHostGateway(trapAddress, state =>
 		{
 			callbackCalled = true;
 			state.D[0] = 0x1234_5678;
@@ -2729,14 +2729,14 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
 		Assert.Equal(0x3000u, cpu.State.A[7]);
 		Assert.Equal(0xFF00, bus.ReadWord(trapAddress));
-		Assert.NotEqual(0, bus.ReadWord(trapAddress + 2));
+		Assert.NotEqual(0u, bus.ReadLong(trapAddress + 2));
 	}
 	[Fact]
 	public void RegisteredLineFHostTrapDoesNotReturnWhenCallbackChangesProgramCounter()
 	{
 		var bus = new AmigaBus();
 		var trapAddress = 0x00F0_0000u;
-		bus.RegisterHostTrapStub(trapAddress, state => state.ProgramCounter = 0x2000);
+		bus.RegisterHostGateway(trapAddress, state => state.ProgramCounter = 0x2000);
 		bus.WriteWord(0x1000, 0x4EB9); // JSR absolute long
 		bus.WriteLong(0x1002, trapAddress);
 		var cpu = new M68kInterpreter(bus);
@@ -3080,7 +3080,7 @@ public sealed class M68kInterpreterTests
 	{
 		var bus = CreateExactCpuDataAmigaBus();
 		Write(bus.ChipRam, 0x2000, 0x12, 0x34);
-		bus.RegisterHostTrapStub(0x2000, _ => { });
+		bus.RegisterHostGateway(0x2000, _ => { });
 		var cycle = 20L;
 		Assert.False(bus.TryReadExactCpuDataWord(0x2000, ref cycle, out _));
 		Assert.Equal(20L, cycle);
@@ -3104,7 +3104,7 @@ public sealed class M68kInterpreterTests
 	public void AmigaBusExactCpuDataHelpersFallBackForSpecialExpansionRamBank()
 	{
 		var bus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
-		bus.RegisterHostTrapStub(bus.ExpansionRamBase, _ => { });
+		bus.RegisterHostGateway(bus.ExpansionRamBase, _ => { });
 		var cycle = 20L;
 		Assert.False(bus.TryReadExactCpuDataWord(bus.ExpansionRamBase + 0x20, ref cycle, out _));
 		Assert.Equal(20L, cycle);

@@ -1,0 +1,28 @@
+{
+  "id": "a500-kickstart31-host-exec",
+  "displayName": "A500 + Kickstart 3.1 + Host Exec",
+  "description": "A500 PAL with 512 KB chip RAM, 512 KB trapdoor RAM at $C00000, 2 MB real fast RAM at $200000, an interpreted 68000, and a real Kickstart 3.1 ROM. The ROM Exec takeover activates after the ROM publishes AbsExecBase.",
+  "machine": {
+    "model": "A500PAL",
+    "chipRamKb": 512,
+    "pseudoFastRamKb": 512,
+    "pseudoFastBase": "$C00000",
+    "realFastRamKb": 2048,
+    "realFastBase": "$200000",
+    "floppyDriveCount": 2
+  },
+  "cpu": {
+    "backend": "interpreter"
+  },
+  "kickstart": {
+    "source": "KickstartRom",
+    "version": "3.1",
+    "path": "ROM/kickstart-3.1-a500.rom"
+  },
+  "audio": {
+    "floppyDriveSounds": {
+      "enabled": true,
+      "mode": "synthetic"
+    }
+  }
+}

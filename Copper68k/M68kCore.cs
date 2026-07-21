@@ -130,20 +130,20 @@ namespace Copper68k
         void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind);
 
         /// <summary>
-        /// Determines whether an instruction address contains a host trap stub.
+        /// Determines whether an instruction address contains a host gateway.
         /// </summary>
         /// <param name="address">The instruction address to probe.</param>
         /// <returns><see langword="true"/> if the host wants to intercept the instruction.</returns>
-        bool HasHostTrapStub(uint address);
+        bool HasHostGateway(uint address) => false;
 
         /// <summary>
-        /// Invokes a host trap previously identified by <see cref="HasHostTrapStub"/>.
+        /// Invokes a host gateway previously identified by <see cref="HasHostGateway"/>.
         /// </summary>
-        /// <param name="instructionProgramCounter">The address of the host trap instruction.</param>
-        /// <param name="trapId">The trap identifier word following the trap opcode.</param>
+        /// <param name="instructionProgramCounter">The address of the host gateway instruction.</param>
+        /// <param name="token">The opaque 32-bit token following the gateway opcode.</param>
         /// <param name="state">The mutable CPU state at the trap point.</param>
-        /// <returns><see langword="true"/> if the host handled the trap.</returns>
-        bool TryInvokeHostTrap(uint instructionProgramCounter, ushort trapId, M68kCpuState state);
+        /// <returns><see langword="true"/> if the host handled the gateway.</returns>
+        bool TryInvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state) => false;
 
         /// <summary>
         /// Notifies external devices that the 68k RESET instruction was executed.
@@ -885,6 +885,36 @@ namespace Copper68k
         /// </summary>
         public M68kCpuState()
         {
+        }
+
+        /// <summary>
+        /// Replaces this architectural CPU state with another task's saved state.
+        /// This is deliberately an in-place transfer so CPU cores and JITs retain
+        /// their stable State instance while an operating-system scheduler swaps
+        /// guest tasks.
+        /// </summary>
+        public void CopyFrom(M68kCpuState source)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            Array.Copy(source.D, D, D.Length);
+            Array.Copy(source.A, A, A.Length);
+            UserStackPointer = source.UserStackPointer;
+            SupervisorStackPointer = source.SupervisorStackPointer;
+            MasterStackPointer = source.MasterStackPointer;
+            M68020StackModeEnabled = source.M68020StackModeEnabled;
+            _statusRegister = source._statusRegister;
+            ProgramCounter = source.ProgramCounter;
+            VectorBaseRegister = source.VectorBaseRegister;
+            SourceFunctionCode = source.SourceFunctionCode;
+            DestinationFunctionCode = source.DestinationFunctionCode;
+            CacheControlRegister = source.CacheControlRegister;
+            CacheAddressRegister = source.CacheAddressRegister;
+            Cycles = source.Cycles;
+            NativeCycles = source.NativeCycles;
+            Halted = source.Halted;
+            Stopped = source.Stopped;
+            LastOpcode = source.LastOpcode;
+            LastInstructionProgramCounter = source.LastInstructionProgramCounter;
         }
 
         /// <summary>
@@ -4943,9 +4973,9 @@ namespace Copper68k
             {
                 if (opcode == 0xFF00)
                 {
-                    var trapId = FetchWord();
+                    var token = FetchLong();
                     var returnProgramCounter = State.ProgramCounter;
-                    if (_bus.TryInvokeHostTrap(GetCpuBusAddress(instructionPc), trapId, State))
+                    if (_bus.TryInvokeHostGateway(GetCpuBusAddress(instructionPc), token, State))
                     {
                         AddInstructionCycles(16);
                         if (!State.Halted && State.ProgramCounter == returnProgramCounter)
@@ -7242,7 +7272,11 @@ namespace Copper68k
 
             State.Stopped = false;
             var interruptStartCycle = Math.Max(
-                Math.Max(State.Cycles, _cpuRetireBusCycle),
+                Math.Max(
+                    Math.Max(State.Cycles, _cpuRetireBusCycle),
+                    _lastInterruptSampleCycle == long.MinValue
+                        ? 0
+                        : _lastInterruptSampleCycle + M68000InterruptSetupCycles),
                 _exceptionEntryNotBeforeCycle);
             _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref interruptStartCycle);
             State.Cycles = interruptStartCycle;

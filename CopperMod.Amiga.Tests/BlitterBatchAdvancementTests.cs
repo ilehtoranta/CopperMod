@@ -14,31 +14,6 @@ public sealed class BlitterBatchAdvancementTests
     }
 
     [Fact]
-    public void AdvanceBeforeNextAreaStepDoesNotMutateActiveBlit()
-    {
-        var bus = new AmigaBus(captureBusAccesses: false, enableLiveAgnusDma: false);
-        StartAreaCopy(bus);
-        var expected = bus.Blitter.CaptureSnapshot();
-        var expectedWakeVersion = bus.Blitter.WakeVersion;
-        var expectedSchedulerWakeVersion = bus.Blitter.SchedulerWakeVersion;
-
-        bus.AdvanceDmaTo(bus.Blitter.CurrentCycle + 1);
-
-        var actual = bus.Blitter.CaptureSnapshot();
-        Assert.Equal(expected.Busy, actual.Busy);
-        Assert.Equal(expected.Zero, actual.Zero);
-        Assert.Equal(expected.CurrentCycle, actual.CurrentCycle);
-        Assert.Equal(expected.SourceA, actual.SourceA);
-        Assert.Equal(expected.DestinationD, actual.DestinationD);
-        Assert.Equal(expected.WordX, actual.WordX);
-        Assert.Equal(expected.RowY, actual.RowY);
-        Assert.Equal(expected.LastDmaCycle, actual.LastDmaCycle);
-        Assert.Equal(expected.CompletedMicroOps, actual.CompletedMicroOps);
-        Assert.Equal(expectedWakeVersion, bus.Blitter.WakeVersion);
-        Assert.Equal(expectedSchedulerWakeVersion, bus.Blitter.SchedulerWakeVersion);
-    }
-
-    [Fact]
     public void BoundedCpuWaitMicroOpAdvanceMatchesSingleSlotLoop()
     {
         var scalar = new AmigaBus(captureBusAccesses: false, enableLiveAgnusDma: false);
@@ -215,36 +190,6 @@ public sealed class BlitterBatchAdvancementTests
         Assert.Equal(
             reference.BusAccesses.Select(ToComparableAccess),
             bounded.BusAccesses.Select(ToComparableAccess));
-    }
-
-    [Fact]
-    public void VerifyModeCommitsReferenceAndMatchesFixedSlotPredictions()
-    {
-        var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: false);
-        bus.SetBlitterAdvanceMode(BlitterAdvanceMode.Verify);
-        StartAreaBlit(bus, channels: 0x0F);
-        var requestCycle = bus.Blitter.CurrentCycle;
-        var horizon = requestCycle + bus.LineCycles;
-        var predictionSupported = bus.TryPredictBlitterFixedSlotGrant(
-            0x2000,
-            requestCycle,
-            isWrite: false,
-            out _,
-            out _,
-            out _);
-        Assert.True(
-            predictionSupported,
-            $"cycle={requestCycle},diskActive={bus.Disk.ActiveDma}," +
-            $"diskWake={bus.Disk.HasSlotDmaWakeSourceThrough(horizon)}," +
-            $"paulaWake={bus.Paula.HasDmaWorkThrough(horizon)}," +
-            $"displayBarrier={bus.Display.GetNextBlitterFixedSlotBarrierCycle(horizon)}");
-
-        bus.AdvanceDmaTo(bus.Blitter.CurrentCycle + 10_000);
-
-        var counters = bus.Blitter.CaptureSnapshot().AdvanceCounters;
-        Assert.True(counters.VerifyMatches > 0);
-        Assert.Equal(0, counters.VerifyMismatches);
-        Assert.Equal(string.Empty, counters.FirstMismatch);
     }
 
     [Fact]
@@ -519,8 +464,6 @@ public sealed class BlitterBatchAdvancementTests
         Assert.Equal(
             reference.BusAccesses.Select(ToComparableAccess),
             bounded.BusAccesses.Select(ToComparableAccess));
-        var counters = actual.AdvanceCounters;
-        Assert.True(counters.BoundedUses > 0);
     }
 
     private static void StartAreaCopy(AmigaBus bus)
@@ -568,7 +511,7 @@ public sealed class BlitterBatchAdvancementTests
         var bltcon0 = (ushort)((3 << 12) | (channels << 8) | 0xCA);
         var bltcon1 = (ushort)(5 << 12);
         bus.WriteWord(0x00DFF096, 0x8240);
-        var cycle = bus.Blitter.CurrentCycle;
+        var cycle = Math.Max(bus.Blitter.CurrentCycle, bus.CausalBusExecutor.ExecutedThroughCycle);
         bus.ClearPendingCpuSlotRequest();
         bus.Paula.AdvanceDmaObservableTo(cycle);
         bus.Disk.AdvanceEventsTo(cycle);

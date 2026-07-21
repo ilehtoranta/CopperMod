@@ -156,10 +156,6 @@ public sealed class AmigaSpriteConformanceMatrixTests
 			yield return SpriteConformanceRow.Executable("dma-pointers", "SPRxPTL bit 0 ignored");
 			yield return SpriteConformanceRow.Executable("dma-timing", "extra-wide playfield fetches can consume late sprite DMA slots");
 			yield return SpriteConformanceRow.Executable("dma-timing", "sprite DMA latch is consumed after granted data fetch");
-			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA sprite archive carries stationary command across missed capture frame");
-			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA sprite archive does not carry across captured terminator");
-			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA sprite archive does not carry stale command after control block rewrite");
-			yield return SpriteConformanceRow.Executable("dma-timing", "live DMA pending sprite pointer rewrite replaces previous pending X");
 			yield return SpriteConformanceRow.Executable("attached-colors", "odd attached sprite with transparent or missing even partner");
 			yield return SpriteConformanceRow.Executable("dma-list", "hardware one-line gap requirement between reused sprite images");
 			yield return SpriteConformanceRow.Executable("undocumented-ocs", "BPLxDAT latch enables sprites outside normal bitplane area");
@@ -410,7 +406,6 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		bus.Display.ScheduleWrite(disarmCycle, 0x14A, oddCtl);
 		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 
-		bus.AdvanceDmaTo(FrameCycles());
 		bus.Display.RenderFrame(frame, 0, FrameCycles());
 
 		Assert.Equal(ToBgra(color), Pixel(frame, StandardX, StandardY));
@@ -457,7 +452,8 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		EnableSpriteDma(bus, row.Dmacon);
 		WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x0000);
 		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		var frame = RenderLowResFrame(bus);
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+		bus.Display.RenderFrame(frame, 0, FrameCycles(), enableDefaultDma: false);
 
 		Assert.Equal(row.ExpectedVisible ? ToBgra(0x0F00) : ToBgra(0), Pixel(frame, StandardX, StandardY));
 	}
@@ -622,7 +618,6 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 		var actual = new uint[expected.Length];
 		presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-		liveBus.AdvanceDmaTo(FrameCycles());
 		liveBus.Display.RenderFrame(actual, 0, FrameCycles());
 
 		Assert.Equal(expected, actual);
@@ -724,12 +719,15 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	[Fact]
 	public void LiveSpriteDmaTerminatorSuppressesStaleManualSpriteState()
 	{
+		var manualBus = new AmigaBus();
+		SetColor(manualBus, SingleSpriteColorIndex(0, 1), 0x0F00);
+		WriteManualSprite(manualBus, sprite: 0, StandardX, StandardY, 1, 0x8000, 0x0000);
+		var manualFrame = RenderLowResFrame(manualBus);
+		Assert.Equal(ToBgra(0x0F00), Pixel(manualFrame, StandardX, StandardY));
+
 		var bus = new AmigaBus();
 		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
 		WriteManualSprite(bus, sprite: 0, StandardX, StandardY, 1, 0x8000, 0x0000);
-		var manualFrame = RenderLowResFrame(bus);
-		Assert.Equal(ToBgra(0x0F00), Pixel(manualFrame, StandardX, StandardY));
-
 		WriteChipWord(bus, SpriteListBase, 0);
 		WriteChipWord(bus, SpriteListBase + 2, 0);
 		SetSpritePointer(bus, sprite: 0, SpriteListBase);
@@ -754,7 +752,6 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		EnableSpriteDma(bus, 0x8220);
 		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 
-		bus.AdvanceDmaTo(FrameCycles());
 		bus.Display.RenderFrame(frame, 0, FrameCycles());
 
 		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
@@ -772,14 +769,46 @@ public sealed class AmigaSpriteConformanceMatrixTests
 
 		WriteChipWord(bus, SpriteListBase, 0);
 		WriteChipWord(bus, SpriteListBase + 2, 0);
-		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		EnableSpriteDma(bus, 0x8220);
 		var terminatedFrame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-		bus.Display.RenderFrame(terminatedFrame, 0, FrameCycles());
+		var secondFrameStart = FrameCycles();
+		var secondFrameStop = secondFrameStart * 2;
+		bus.Display.BeginPresentationFrame(
+			new PresentationFrameTarget(terminatedFrame),
+			secondFrameStart,
+			secondFrameStop);
+		try
+		{
+			var setupCycle = secondFrameStart;
+			bus.WriteWord(0x00DFF120, (ushort)(SpriteListBase >> 16), ref setupCycle, AmigaBusAccessKind.CpuDataWrite);
+			bus.WriteWord(0x00DFF122, (ushort)SpriteListBase, ref setupCycle, AmigaBusAccessKind.CpuDataWrite);
+			bus.WriteWord(0x00DFF096, 0x8220, ref setupCycle, AmigaBusAccessKind.CpuDataWrite);
+			bus.Display.CompletePresentationFrame(secondFrameStop);
+		}
+		catch
+		{
+			bus.Display.AbortPresentationFrame();
+			throw;
+		}
 		Assert.Equal(ToBgra(0), Pixel(terminatedFrame, StandardX, StandardY));
 
-		EnableSpriteDma(bus, 0x8200);
-		var afterDmaDisabledFrame = RenderLowResFrame(bus);
+		var afterDmaDisabledFrame = new uint[terminatedFrame.Length];
+		var thirdFrameStart = secondFrameStop;
+		var thirdFrameStop = thirdFrameStart + FrameCycles();
+		bus.Display.BeginPresentationFrame(
+			new PresentationFrameTarget(afterDmaDisabledFrame),
+			thirdFrameStart,
+			thirdFrameStop);
+		try
+		{
+			var disableCycle = thirdFrameStart;
+			bus.WriteWord(0x00DFF096, 0x0020, ref disableCycle, AmigaBusAccessKind.CpuDataWrite);
+			bus.Display.CompletePresentationFrame(thirdFrameStop);
+		}
+		catch
+		{
+			bus.Display.AbortPresentationFrame();
+			throw;
+		}
 
 		Assert.Equal(ToBgra(0), Pixel(afterDmaDisabledFrame, StandardX, StandardY));
 		Assert.Equal(0, bus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
@@ -902,7 +931,6 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		bus.WriteWord(0x00DFF092, 0x0018, RowCycle(StandardY + 1) - AmigaConstants.A500PalCpuCyclesPerColorClock);
 		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
 
-		bus.AdvanceDmaTo(FrameCycles());
 		bus.Display.RenderFrame(frame, 0, FrameCycles());
 
 		Assert.Equal(ToBgra(0x00F0), Pixel(frame, StandardX, StandardY));
@@ -1017,6 +1045,35 @@ public sealed class AmigaSpriteConformanceMatrixTests
 	}
 
 	[Fact]
+	public void LateSpriteDmaEnableDoesNotReplayRowsExpiredFromRasterlineRing()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		var enableRow = StandardY + 80;
+		WriteSpriteDmaBlock(
+			bus,
+			SpriteListBase,
+			StandardX,
+			enableRow + 1,
+			height: 1,
+			dataA: 0x8000,
+			dataB: 0x0000);
+		SetSpritePointer(bus, sprite: 0, SpriteListBase);
+
+		var enableCycle = RowCycle(enableRow) + (80 * AmigaConstants.A500PalCpuCyclesPerColorClock);
+		bus.AdvanceDmaTo(enableCycle);
+		var horizonBeforeEnable = bus.ExecutedChipBusHorizon;
+		var cpuCycle = enableCycle + AgnusChipSlotScheduler.SlotCycles;
+		bus.WriteWord(0x00DFF096, 0x8220, ref cpuCycle, AmigaBusAccessKind.CpuDataWrite);
+		bus.AdvanceDmaTo(RowCycle(enableRow + 4));
+
+		var spriteFetches = bus.BusAccesses
+			.Where(access => access.Request.Requester == AmigaBusRequester.Sprite)
+			.ToArray();
+		Assert.NotEmpty(spriteFetches);
+		Assert.All(spriteFetches, access => Assert.True(access.GrantedCycle > horizonBeforeEnable));
+	}
+
+	[Fact]
 	public void SpriteDmaLatchIsConsumedAfterGrantedDataFetch()
 	{
 		var bus = CreateDisplayComponentBus();
@@ -1033,22 +1090,6 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		var snapshot = bus.Display.CaptureSnapshot();
 		Assert.False(hasValue);
 		Assert.True(snapshot.LastSpriteDmaFetches > 0);
-		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
-	}
-
-	[Fact]
-	public void TimedRenderKeepsLiveSpriteDmaCommandsAfterFrameBoundaryOvershoot()
-	{
-		var bus = new AmigaBus();
-		EnableSpriteDma(bus, 0x8220);
-		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
-		WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x0000);
-		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-
-		bus.AdvanceDmaTo(FrameCycles() + 112);
-		bus.Display.RenderFrame(frame, 0, FrameCycles());
-
 		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
 	}
 
@@ -1073,7 +1114,7 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		var snapshot = liveBus.Display.CaptureSnapshot();
 		Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
 		Assert.Equal(ToBgra(0x0F00), Pixel(actual, StandardX, StandardY));
-		Assert.True(snapshot.LastTimelineSpriteCommandCount > 0);
+		Assert.True(snapshot.LastSpriteNonZeroPixels > 0);
 		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
 	}
 
@@ -1100,391 +1141,6 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
 	}
 
-	[Fact]
-	public void LiveDmaArchivedTimelineRendersSpriteDmaCommands()
-	{
-		var presentationBus = new AmigaBus(enableLiveAgnusDma: false);
-		var liveBus = new AmigaBus(enableLiveAgnusDma: true);
-		foreach (var bus in new[] { presentationBus, liveBus })
-		{
-			EnableSpriteDma(bus, 0x8220);
-			SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
-			WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x0000);
-			SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		}
-
-		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-		var actual = new uint[expected.Length];
-		presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-		liveBus.AdvanceDmaTo(FrameCycles());
-		liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-		var snapshot = liveBus.Display.CaptureSnapshot();
-		Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
-		Assert.Equal(ToBgra(0x0F00), Pixel(actual, StandardX, StandardY));
-		Assert.True(snapshot.LastTimelineSpriteCommandCount > 0);
-		Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-		Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-	}
-
-	[Fact]
-	public void ArchivedSpriteFallbackUsesTimelineCompletedSpriteWords()
-	{
-		var bus = new AmigaBus(enableLiveAgnusDma: true);
-		EnableSpriteDma(bus, 0x8220);
-		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
-		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 4, 0x8000, 0x0000);
-		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		bus.AdvanceDmaTo(FrameCycles() - 1);
-		ClearPrivateArray(bus.Display, "_liveSpriteWordMasks");
-		bus.AdvanceDmaTo(FrameCycles());
-		SetPrivateField(bus.Display, "_archivedTimelineValid", false);
-		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-
-		bus.Display.RenderFrame(frame, 0, FrameCycles());
-
-		for (var row = 0; row < 4; row++)
-		{
-			Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY + row));
-		}
-	}
-
-	[Fact]
-	public void ArchivedSpriteFallbackCarriesStationaryCommandAcrossMissedCaptureFrame()
-	{
-		var bus = new AmigaBus(enableLiveAgnusDma: true);
-		EnableSpriteDma(bus, 0x8220);
-		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
-		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 4, 0x8000, 0x0000);
-		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		bus.AdvanceDmaTo(FrameCycles());
-		SetPrivateField(bus.Display, "_liveCapturedThroughCycle", (FrameCycles() * 2) - 1);
-		InvokePrivateMethod(bus.Display, "ArchiveLiveSpriteFrameBeforeStarting", FrameCycles() * 2);
-		Assert.Equal(1, GetPrivateCollectionCount(bus.Display, "_previousLiveSpriteFrameCommands"));
-		SetPrivateField(bus.Display, "_archivedTimelineValid", false);
-		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-
-		bus.Display.RenderFrame(frame, FrameCycles(), FrameCycles() * 2);
-
-		var snapshot = bus.Display.CaptureSnapshot();
-		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
-		Assert.Equal(0, snapshot.LastSpriteDmaFetches);
-		Assert.Equal(0, snapshot.LastMissedSpriteDmaSlots);
-	}
-
-	[Fact]
-	public void ArchivedSpriteFallbackDoesNotCarryStationaryCommandAcrossCapturedTerminator()
-	{
-		var bus = new AmigaBus(enableLiveAgnusDma: true);
-		EnableSpriteDma(bus, 0x8220);
-		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
-		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 4, 0x8000, 0x0000);
-		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		bus.AdvanceDmaTo(FrameCycles());
-		WriteChipWord(bus, SpriteListBase, 0);
-		WriteChipWord(bus, SpriteListBase + 2, 0);
-		bus.AdvanceDmaTo(FrameCycles() * 2);
-		Assert.Equal(0, GetPrivateCollectionCount(bus.Display, "_previousLiveSpriteFrameCommands"));
-		SetPrivateField(bus.Display, "_archivedTimelineValid", false);
-		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-
-		bus.Display.RenderFrame(frame, FrameCycles(), FrameCycles() * 2);
-
-		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
-		Assert.Equal(0, bus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
-	}
-
-	[Fact]
-	public void ArchivedSpriteFallbackDoesNotCarryStaleCommandAfterControlBlockRewrite()
-	{
-		var bus = new AmigaBus(enableLiveAgnusDma: true);
-		EnableSpriteDma(bus, 0x8220);
-		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
-		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 4, 0x8000, 0x0000);
-		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		bus.AdvanceDmaTo(FrameCycles());
-		var (movedPos, movedCtl) = EncodeSpritePosition(StandardX + 12, StandardY, 4);
-		WriteChipWord(bus, SpriteListBase, movedPos);
-		WriteChipWord(bus, SpriteListBase + 2, movedCtl);
-		SetPrivateField(bus.Display, "_liveCapturedThroughCycle", (FrameCycles() * 2) - 1);
-		InvokePrivateMethod(bus.Display, "ArchiveLiveSpriteFrameBeforeStarting", FrameCycles() * 2);
-		SetPrivateField(bus.Display, "_archivedTimelineValid", false);
-		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-
-		bus.Display.RenderFrame(frame, FrameCycles(), FrameCycles() * 2);
-
-		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
-		Assert.Equal(ToBgra(0), Pixel(frame, StandardX + 12, StandardY));
-		Assert.Equal(0, bus.Display.CaptureSnapshot().LastSpriteNonZeroPixels);
-	}
-
-	[Fact]
-	public void LiveDmaArchivedTimelineRendersAttachedManualSpriteRepeats()
-	{
-		var presentationBus = new AmigaBus(enableLiveAgnusDma: false);
-		var liveBus = new AmigaBus(enableLiveAgnusDma: true);
-		foreach (var bus in new[] { presentationBus, liveBus })
-		{
-			const ushort color = 0x0F00;
-			SetColor(bus, 21, color);
-			var (evenPos, evenCtl) = EncodeSpritePosition(StandardX, StandardY, 1);
-			var (oddPos, oddCtl) = EncodeSpritePosition(StandardX, StandardY, 1, attached: true);
-			var armCycle = RowCycle(StandardY);
-			var disarmCycle = RowCycle(StandardY + 2);
-			bus.Display.ScheduleWrite(armCycle, 0x140, evenPos);
-			bus.Display.ScheduleWrite(armCycle, 0x142, evenCtl);
-			bus.Display.ScheduleWrite(armCycle, 0x146, 0x0000);
-			bus.Display.ScheduleWrite(armCycle, 0x144, 0x8000);
-			bus.Display.ScheduleWrite(armCycle, 0x148, oddPos);
-			bus.Display.ScheduleWrite(armCycle, 0x14A, oddCtl);
-			bus.Display.ScheduleWrite(armCycle, 0x14E, 0x0000);
-			bus.Display.ScheduleWrite(armCycle, 0x14C, 0x8000);
-			bus.Display.ScheduleWrite(disarmCycle, 0x142, evenCtl);
-			bus.Display.ScheduleWrite(disarmCycle, 0x14A, oddCtl);
-		}
-
-		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-		var actual = new uint[expected.Length];
-		presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-		liveBus.AdvanceDmaTo(FrameCycles());
-		liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-		var snapshot = liveBus.Display.CaptureSnapshot();
-		Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
-		Assert.Equal(Pixel(expected, StandardX, StandardY + 1), Pixel(actual, StandardX, StandardY + 1));
-		Assert.Equal(ToBgra(0x0F00), Pixel(actual, StandardX, StandardY));
-		Assert.Equal(ToBgra(0x0F00), Pixel(actual, StandardX, StandardY + 1));
-		Assert.Equal(ToBgra(0), Pixel(actual, StandardX, StandardY + 2));
-		Assert.True(snapshot.LastTimelineSpriteCommandCount > 0);
-		Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-		Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-	}
-
-	[Fact]
-	public void LiveDmaArchivedTimelineMatchesMultiLineAttachedManualSpritePair()
-	{
-		var presentationBus = new AmigaBus(enableLiveAgnusDma: false);
-		var liveBus = new AmigaBus(enableLiveAgnusDma: true);
-		foreach (var bus in new[] { presentationBus, liveBus })
-		{
-			SetColor(bus, 21, 0x0F00);
-			SetColor(bus, 26, 0x00F0);
-			var (evenPos, evenCtl) = EncodeSpritePosition(StandardX, StandardY, 1);
-			var (oddPos, oddCtl) = EncodeSpritePosition(StandardX, StandardY, 1, attached: true);
-			var row0Cycle = RowCycle(StandardY);
-			var row1Cycle = RowCycle(StandardY + 1);
-			var disarmCycle = RowCycle(StandardY + 2);
-			var (row0EvenA, row0EvenB) = DataWordsForPixel(1, bitOffset: 0);
-			var (row0OddA, row0OddB) = DataWordsForPixel(1, bitOffset: 0);
-			var (row1EvenA, row1EvenB) = DataWordsForPixel(2, bitOffset: 0);
-			var (row1OddA, row1OddB) = DataWordsForPixel(2, bitOffset: 0);
-			bus.Display.ScheduleWrite(row0Cycle, 0x140, evenPos);
-			bus.Display.ScheduleWrite(row0Cycle, 0x142, evenCtl);
-			bus.Display.ScheduleWrite(row0Cycle, 0x148, oddPos);
-			bus.Display.ScheduleWrite(row0Cycle, 0x14A, oddCtl);
-			bus.Display.ScheduleWrite(row0Cycle, 0x146, row0EvenB);
-			bus.Display.ScheduleWrite(row0Cycle, 0x144, row0EvenA);
-			bus.Display.ScheduleWrite(row0Cycle, 0x14E, row0OddB);
-			bus.Display.ScheduleWrite(row0Cycle, 0x14C, row0OddA);
-			bus.Display.ScheduleWrite(row1Cycle, 0x146, row1EvenB);
-			bus.Display.ScheduleWrite(row1Cycle, 0x144, row1EvenA);
-			bus.Display.ScheduleWrite(row1Cycle, 0x14E, row1OddB);
-			bus.Display.ScheduleWrite(row1Cycle, 0x14C, row1OddA);
-			bus.Display.ScheduleWrite(disarmCycle, 0x142, evenCtl);
-			bus.Display.ScheduleWrite(disarmCycle, 0x14A, oddCtl);
-		}
-
-		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-		var actual = new uint[expected.Length];
-		presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-		liveBus.AdvanceDmaTo(FrameCycles());
-		liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-		var snapshot = liveBus.Display.CaptureSnapshot();
-		Assert.Equal(expected, actual);
-		Assert.Equal(ToBgra(0x0F00), Pixel(actual, StandardX, StandardY));
-		Assert.Equal(ToBgra(0x00F0), Pixel(actual, StandardX, StandardY + 1));
-		Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-	}
-
-	[Fact]
-	public void ArchivedTimelineUsesArchivedLiveSpriteDataWithoutPresentationDmaReads()
-	{
-		var bus = new AmigaBus(enableLiveAgnusDma: true);
-		EnableSpriteDma(bus, 0x8220);
-		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
-		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 16, 0x8000, 0x0000);
-		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		bus.WriteWord(0x00DFF02E, 0x0000, RowCycle(StandardY + 1));
-		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-
-		bus.AdvanceDmaTo(FrameCycles());
-		bus.Display.RenderFrame(frame, 0, FrameCycles());
-
-		var snapshot = bus.Display.CaptureSnapshot();
-		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY));
-		Assert.Equal(ToBgra(0x0F00), Pixel(frame, StandardX, StandardY + 15));
-		Assert.Equal(0, snapshot.LastSpriteDmaFetches);
-		Assert.Equal(0, snapshot.LastMissedSpriteDmaSlots);
-		Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-		Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-		Assert.True(snapshot.LastTimelineSpriteCommandCount > 0);
-		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-	}
-
-	[Fact]
-	public void ArchivedLiveSpriteCommandsCoalesceSameDescriptorWithLaterRows()
-	{
-		var expectedBus = CreateArchivedSpriteFallbackBus(rewritePointer: false);
-		var actualBus = CreateArchivedSpriteFallbackBus(rewritePointer: true);
-		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-		var actual = new uint[expected.Length];
-
-		expectedBus.AdvanceDmaTo(FrameCycles());
-		expectedBus.Display.RenderFrame(expected, 0, FrameCycles());
-		actualBus.AdvanceDmaTo(FrameCycles());
-		actualBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-		var snapshot = actualBus.Display.CaptureSnapshot();
-		Assert.Equal(expected, actual);
-		Assert.Equal(0, snapshot.LastSpriteDmaFetches);
-		Assert.Equal(0, snapshot.LastMissedSpriteDmaSlots);
-	}
-
-	[Fact]
-	public void ArchivedLiveSpritePendingPointerRewriteReplacesPreviousPendingHorizontalPosition()
-	{
-		var bus = new AmigaBus(enableLiveAgnusDma: true);
-		const int movedX = StandardX + 12;
-		EnableSpriteDma(bus, 0x8220);
-		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
-		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 16, 0x8000, 0x0000);
-		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		var (movedPos, movedCtl) = EncodeSpritePosition(movedX, StandardY, 16);
-		bus.WriteWord(SpriteListBase, movedPos, RowCycle(StandardY - 10));
-		bus.WriteWord(SpriteListBase + 2, movedCtl, RowCycle(StandardY - 10));
-		bus.WriteWord(0x00DFF122, (ushort)SpriteListBase, RowCycle(StandardY - 10));
-		bus.WriteWord(0x00DFF100, 0x0000, RowCycle(StandardY + 1));
-		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-
-		bus.AdvanceDmaTo(FrameCycles());
-		bus.Display.RenderFrame(frame, 0, FrameCycles());
-
-		var snapshot = bus.Display.CaptureSnapshot();
-		Assert.Equal(ToBgra(0), Pixel(frame, StandardX, StandardY));
-		Assert.Equal(ToBgra(0x0F00), Pixel(frame, movedX, StandardY));
-		Assert.InRange(snapshot.LastSpriteNonZeroPixels, 1, 16);
-		Assert.Equal(0, snapshot.LastSpriteDmaFetches);
-		Assert.Equal(0, snapshot.LastMissedSpriteDmaSlots);
-	}
-
-	[Fact]
-	public void LiveDmaArchivedTimelineAcceptsCopperSpritePointerWrites()
-	{
-		var presentationBus = new AmigaBus(enableLiveAgnusDma: false);
-		var liveBus = new AmigaBus(enableLiveAgnusDma: true);
-		foreach (var bus in new[] { presentationBus, liveBus })
-		{
-			EnableSpriteDma(bus, 0x82A0);
-			SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
-			WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x0000);
-			WriteCopperList(
-				bus,
-				CopperListBase,
-				(0x0120, (ushort)(SpriteListBase >> 16)),
-				(0x0122, (ushort)SpriteListBase),
-				(0xFFFF, 0xFFFE));
-			bus.WriteWord(0x00DFF080, (ushort)(CopperListBase >> 16));
-			bus.WriteWord(0x00DFF082, (ushort)CopperListBase);
-		}
-
-		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-		var actual = new uint[expected.Length];
-		presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-		liveBus.AdvanceDmaTo(FrameCycles());
-		liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-		var snapshot = liveBus.Display.CaptureSnapshot();
-		Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
-		Assert.Equal(ToBgra(0x0F00), Pixel(actual, StandardX, StandardY));
-		Assert.True(snapshot.LastTimelineSpriteCommandCount > 0);
-		Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-		Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-		Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
-	}
-
-	[Fact]
-	public void LiveDmaArchivedTimelineUsesLatestCopperSpritePointerBeforeControlFetch()
-	{
-		var presentationBus = new AmigaBus(enableLiveAgnusDma: false);
-		var liveBus = new AmigaBus(enableLiveAgnusDma: true);
-		const int movedX = StandardX + 24;
-		var movedSpriteList = SpriteListBase + 0x100;
-		foreach (var bus in new[] { presentationBus, liveBus })
-		{
-			EnableSpriteDma(bus, 0x82A0);
-			SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
-			WriteSpriteDmaBlock(bus, SpriteListBase, StandardX, StandardY, 1, 0x8000, 0x0000);
-			WriteSpriteDmaBlock(bus, movedSpriteList, movedX, StandardY, 1, 0x8000, 0x0000);
-			WriteCopperList(
-				bus,
-				CopperListBase,
-				(0x0120, (ushort)(SpriteListBase >> 16)),
-				(0x0122, (ushort)SpriteListBase),
-				(0x0120, (ushort)(movedSpriteList >> 16)),
-				(0x0122, (ushort)movedSpriteList),
-				(0xFFFF, 0xFFFE));
-			bus.WriteWord(0x00DFF080, (ushort)(CopperListBase >> 16));
-			bus.WriteWord(0x00DFF082, (ushort)CopperListBase);
-		}
-
-		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-		var actual = new uint[expected.Length];
-		presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-		liveBus.AdvanceDmaTo(FrameCycles());
-		liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-		var snapshot = liveBus.Display.CaptureSnapshot();
-		Assert.Equal(ToBgra(0), Pixel(actual, StandardX, StandardY));
-		Assert.Equal(Pixel(expected, movedX, StandardY), Pixel(actual, movedX, StandardY));
-		Assert.Equal(ToBgra(0x0F00), Pixel(actual, movedX, StandardY));
-		Assert.True(snapshot.LastTimelineSpriteCommandCount > 0);
-		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-		Assert.Equal(0, snapshot.LastArchiveRejectUnsafeWrite);
-	}
-
-	[Fact]
-	public void LiveDmaArchivedTimelineRecordsDeniedSpriteDataSlots()
-	{
-		var presentationBus = CreateDeniedSpriteSlotBus(enableLiveDma: false);
-		var liveBus = CreateDeniedSpriteSlotBus(enableLiveDma: true);
-		var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
-		var actual = new uint[expected.Length];
-
-		presentationBus.Display.RenderFrame(expected, 0, FrameCycles());
-		liveBus.AdvanceDmaTo(FrameCycles());
-		liveBus.Display.RenderFrame(actual, 0, FrameCycles());
-
-		var snapshot = liveBus.Display.CaptureSnapshot();
-		Assert.Equal(Pixel(expected, StandardX, StandardY), Pixel(actual, StandardX, StandardY));
-		Assert.Equal(0xFF000000u, Pixel(actual, StandardX, StandardY));
-		Assert.Equal(0, snapshot.LastActiveTimelineFrameCount);
-		Assert.Equal(1, snapshot.LastArchivedTimelineFrameCount);
-		Assert.Equal(0, snapshot.LastTimelineFallbackCount);
-		Assert.Equal(0, snapshot.LastArchiveRejectMissingSpriteFetch);
-		Assert.True(snapshot.LastSpriteDeniedFetchCount > 0);
-		Assert.Equal(0, snapshot.LastSpriteRecoveryAttemptCount);
-		var spriteAccesses = liveBus.BusAccesses
-			.Where(access => access.Request.Kind == AmigaBusAccessKind.Sprite)
-			.ToArray();
-		Assert.NotEmpty(spriteAccesses);
-		Assert.All(spriteAccesses, access => Assert.Equal(access.RequestedCycle, access.GrantedCycle));
-	}
-
 	private static void WriteManualSprite(
 		AmigaBus bus,
 		int sprite,
@@ -1503,35 +1159,6 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		bus.WriteWord(register + 4, dataA);
 	}
 
-	private static void ClearPrivateArray(object instance, string fieldName)
-	{
-		var field = instance.GetType().GetField(
-			fieldName,
-			System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-		Assert.NotNull(field);
-		var value = Assert.IsAssignableFrom<Array>(field.GetValue(instance));
-		Array.Clear(value);
-	}
-
-	private static void SetPrivateField(object instance, string fieldName, object value)
-	{
-		var field = instance.GetType().GetField(
-			fieldName,
-			System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-		Assert.NotNull(field);
-		field.SetValue(instance, value);
-	}
-
-	private static int GetPrivateCollectionCount(object instance, string fieldName)
-	{
-		var field = instance.GetType().GetField(
-			fieldName,
-			System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-		Assert.NotNull(field);
-		var value = Assert.IsAssignableFrom<System.Collections.ICollection>(field.GetValue(instance));
-		return value.Count;
-	}
-
 	private static T GetPrivateField<T>(object instance, string fieldName)
 	{
 		var field = instance.GetType().GetField(
@@ -1539,15 +1166,6 @@ public sealed class AmigaSpriteConformanceMatrixTests
 			System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 		Assert.NotNull(field);
 		return Assert.IsAssignableFrom<T>(field.GetValue(instance));
-	}
-
-	private static void InvokePrivateMethod(object instance, string methodName, params object[] arguments)
-	{
-		var method = instance.GetType().GetMethod(
-			methodName,
-			System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-		Assert.NotNull(method);
-		method.Invoke(instance, arguments);
 	}
 
 	private static void WriteSpriteDmaBlock(
@@ -1631,24 +1249,6 @@ public sealed class AmigaSpriteConformanceMatrixTests
 		bus.WriteWord(0x00DFF100, 0x1000);
 		EnableSpriteDma(bus, 0x8320);
 		bus.WriteWord(0x00DFF092, 0x0018, RowCycle(StandardY - 1));
-		return bus;
-	}
-
-	private static AmigaBus CreateArchivedSpriteFallbackBus(bool rewritePointer)
-	{
-		var bus = new AmigaBus(enableLiveAgnusDma: true);
-		EnableSpriteDma(bus, 0x8220);
-		SetColor(bus, SingleSpriteColorIndex(0, 1), 0x0F00);
-		WriteSpriteDmaRows(bus, SpriteListBase, StandardX, StandardY, 16, 0x8000, 0x0000);
-		SetSpritePointer(bus, sprite: 0, SpriteListBase);
-		if (rewritePointer)
-		{
-			bus.WriteWord(0x00DFF122, (ushort)SpriteListBase, RowCycle(StandardY - 1));
-			bus.WriteWord(0x00DFF122, (ushort)SpriteListBase, RowCycle(StandardY + 5));
-			bus.WriteWord(0x00DFF122, (ushort)SpriteListBase, RowCycle(StandardY + 12));
-		}
-
-		bus.WriteWord(0x00DFF100, 0x0000, RowCycle(StandardY + 1));
 		return bus;
 	}
 
