@@ -218,6 +218,8 @@ namespace CopperMod.Amiga.Runtime
 
         public bool DeferredCpuBusBatchVerifyEnabled { get; private set; }
 
+        public bool DeferredCpuChipReadSegmentsEnabled { get; private set; }
+
         public bool CpuWaitSlotReferencePathEnabled { get; private set; }
 
         public int AudioDmaMinimumPeriod { get; private set; } = AmigaConstants.A500PalMinimumAudioDmaPeriod;
@@ -337,6 +339,12 @@ namespace CopperMod.Amiga.Runtime
         {
             DeferredCpuBusBatchEnabled = enabled;
             DeferredCpuBusBatchVerifyEnabled = verify;
+            return this;
+        }
+
+        public MachineOptions WithDeferredCpuChipReadSegments(bool enabled)
+        {
+            DeferredCpuChipReadSegmentsEnabled = enabled;
             return this;
         }
 
@@ -502,7 +510,8 @@ namespace CopperMod.Amiga.Runtime
                 options.CopperQuiescentDiagnosticsEnabled,
                 options.CpuWaitSlotReferencePathEnabled,
                 options.RtgVramSize,
-                options.Chipset);
+                options.Chipset,
+                enableDeferredCpuChipReadSegments: options.DeferredCpuChipReadSegmentsEnabled);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             if (Bus.DiskDivergenceTraceEnabled)
             {

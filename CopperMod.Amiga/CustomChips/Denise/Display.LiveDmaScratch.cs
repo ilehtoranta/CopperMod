@@ -2056,6 +2056,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         _copper.WaitStartCarryPending = false;
                         _copper.WaitStartCarrySkipCount = 0;
                     }
+                    _copper.WaitRunControlBlocked |= restartIncomingRgaBlocked;
+                    if (_copper.SatisfiedWaitRunCount > 0 && !_copper.WaitRunControlBlocked)
+                    {
+                        _copper.PendingWaitStartTail = true;
+                    }
                     if (resumeCycle > targetCycle)
                     {
                         _copper.ArmWaitRestart(resumeCycle, restartIncomingRgaBlocked);

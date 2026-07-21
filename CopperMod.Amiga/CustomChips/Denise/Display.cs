@@ -2711,6 +2711,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 WaitRunSecond = 0;
                 SatisfiedWaitRunCount = 0;
                 HasWaitRun = false;
+                WaitRunControlBlocked = false;
             }
 
             public uint Pc;
@@ -2786,6 +2787,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public bool HasWaitRun;
 
+            public bool WaitRunControlBlocked;
+
             public void CompleteMove(long stopCycle)
             {
                 Cycle = stopCycle;
@@ -2814,12 +2817,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 if (HasWaitRun && WaitRunFirst == first && WaitRunSecond == second)
                 {
                     SatisfiedWaitRunCount++;
-                    if ((first & 0x0004) == 0 &&
-                        SatisfiedWaitRunCount > 0 &&
-                        (SatisfiedWaitRunCount & 1) == 0)
-                    {
-                        PendingWaitStartTail = true;
-                    }
                 }
                 else
                 {
@@ -2827,6 +2824,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     WaitRunSecond = second;
                     SatisfiedWaitRunCount = 0;
                     HasWaitRun = true;
+                    WaitRunControlBlocked = false;
                 }
 
                 WaitRestartStage = CopperWaitRestartStage.WaitingForComparison;
@@ -2868,6 +2866,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 WaitRunSecond = 0;
                 SatisfiedWaitRunCount = 0;
                 HasWaitRun = false;
+                WaitRunControlBlocked = false;
                 PendingStart = false;
                 SuppressNextMove = false;
                 PendingInstructionSecondWord = false;

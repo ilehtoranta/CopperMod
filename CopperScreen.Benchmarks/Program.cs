@@ -97,7 +97,7 @@ if (options.DiskDivergenceTrace)
     return;
 }
 
-Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, BlitterAdvance={options.BlitterAdvanceMode.ToString().ToLowerInvariant()}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuBusBatchVerify={options.DeferredCpuBusBatchVerify}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
+Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, BlitterAdvance={options.BlitterAdvanceMode.ToString().ToLowerInvariant()}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuBusBatchVerify={options.DeferredCpuBusBatchVerify}, DeferredCpuChipReadSegments={options.DeferredCpuChipReadSegments}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
 WriteBenchmarkHeader();
 
 foreach (var workload in workloads)
@@ -1145,6 +1145,7 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
         (copperQuiescenceDiagnostics ? 1 : 0) +
         (options.DeferredCpuBusBatch ? 1 : 0) +
         (options.DeferredCpuBusBatchVerify ? 1 : 0) +
+        (options.DeferredCpuChipReadSegments ? 1 : 0) +
         (options.CpuWaitSlotReference ? 1 : 0) +
         (options.HardwareSpecialization ? 1 : 0);
     if (count == 0)
@@ -1205,6 +1206,11 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
     if (options.DeferredCpuBusBatchVerify)
     {
         args[index++] = "--cpu-deferred-bus-batch-verify";
+    }
+
+    if (options.DeferredCpuChipReadSegments)
+    {
+        args[index++] = "--cpu-deferred-chip-read-segments";
     }
 
     if (options.CpuWaitSlotReference)
@@ -1742,7 +1748,7 @@ static string FormatPaulaAudit(Paula paula)
 static void RunSyntheticBlitterBenchmarks(BenchmarkOptions options)
 {
     Console.WriteLine(
-        $"Synthetic ROM/expansion blitter bench, warmup={options.OpcodeDispatchWarmupInstructions}, measured={options.OpcodeDispatchInstructions}, repeats={options.RepeatCount}, deferred={options.DeferredCpuBusBatch}, verify={options.DeferredCpuBusBatchVerify}, Release={IsRelease()}");
+        $"Synthetic ROM/expansion blitter bench, warmup={options.OpcodeDispatchWarmupInstructions}, measured={options.OpcodeDispatchInstructions}, repeats={options.RepeatCount}, deferred={options.DeferredCpuBusBatch}, verify={options.DeferredCpuBusBatchVerify}, chipReadSegments={options.DeferredCpuChipReadSegments}, Release={IsRelease()}");
     Console.WriteLine("synthetic-blitter\tsource\trepeat\tinstructions\tms\tinstr/sec\tcycles\tpc\td0\tallocated bytes\tbatch used\twaitfast used\tblitter overlap\tshadow mismatch\tchecksum");
     foreach (var executeFromExpansion in new[] { false, true })
     {
@@ -1792,7 +1798,8 @@ static SyntheticBlitterBenchmarkRun CreateSyntheticBlitterCpu(
         expansionRamSize: AmigaConstants.A500BootPseudoFastRamSize,
         captureBusAccesses: false,
         enableDeferredCpuBusBatch: options.DeferredCpuBusBatch,
-        verifyDeferredCpuBusBatch: options.DeferredCpuBusBatchVerify);
+        verifyDeferredCpuBusBatch: options.DeferredCpuBusBatchVerify,
+        enableDeferredCpuChipReadSegments: options.DeferredCpuChipReadSegments);
     var programAddress = executeFromExpansion
         ? bus.ExpansionRamBase + expansionOffset
         : romBase;
@@ -2728,6 +2735,7 @@ internal readonly record struct BenchmarkOptions(
     bool CopperQuiescenceFastPathVerify,
     bool DeferredCpuBusBatch,
     bool DeferredCpuBusBatchVerify,
+    bool DeferredCpuChipReadSegments,
     bool CpuWaitSlotReference,
     bool HardwareSpecialization,
     BlitterAdvanceMode BlitterAdvanceMode,
@@ -2779,6 +2787,7 @@ internal readonly record struct BenchmarkOptions(
         var copperQuiescenceFastPathVerify = false;
         var deferredCpuBusBatch = false;
         var deferredCpuBusBatchVerify = false;
+        var deferredCpuChipReadSegments = false;
         var cpuWaitSlotReference = false;
         var hardwareSpecialization = false;
         var blitterAdvanceMode = BlitterAdvanceMode.Reference;
@@ -3021,6 +3030,10 @@ internal readonly record struct BenchmarkOptions(
                 deferredCpuBusBatch = true;
                 deferredCpuBusBatchVerify = true;
             }
+            else if (string.Equals(args[i], "--cpu-deferred-chip-read-segments", StringComparison.OrdinalIgnoreCase))
+            {
+                deferredCpuChipReadSegments = true;
+            }
             else if (string.Equals(args[i], "--cpu-wait-slot-reference", StringComparison.OrdinalIgnoreCase))
             {
                 cpuWaitSlotReference = true;
@@ -3106,6 +3119,7 @@ internal readonly record struct BenchmarkOptions(
             copperQuiescenceFastPathVerify,
             deferredCpuBusBatch,
             deferredCpuBusBatchVerify,
+            deferredCpuChipReadSegments,
             cpuWaitSlotReference,
             hardwareSpecialization,
             blitterAdvanceMode,

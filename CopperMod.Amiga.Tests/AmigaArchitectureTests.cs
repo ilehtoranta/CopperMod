@@ -5,6 +5,16 @@ namespace CopperMod.Amiga.Tests;
 public sealed class AmigaArchitectureTests
 {
 	[Fact]
+	public void DeferredCpuChipReadSegmentsAreConfiguredIndependently()
+	{
+		var options = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuChipReadSegments(true);
+
+		Assert.True(options.DeferredCpuChipReadSegmentsEnabled);
+		Assert.False(options.DeferredCpuBusBatchEnabled);
+	}
+
+	[Fact]
 	public void AmigaCoreDoesNotReferencePlayerOrCustAssemblies()
 	{
 		var references = typeof(Machine).Assembly.GetReferencedAssemblies().Select(reference => reference.Name).ToHashSet();

@@ -345,6 +345,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 				startupOptions.DeferredCpuBusBatchVerify);
 		}
 
+		if (startupOptions.DeferredCpuChipReadSegments)
+		{
+			machineOptions.WithDeferredCpuChipReadSegments(true);
+		}
+
 		if (startupOptions.CpuWaitSlotReference)
 		{
 			machineOptions.WithCpuWaitSlotReferencePath(true);

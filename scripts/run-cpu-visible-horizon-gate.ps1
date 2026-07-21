@@ -7,6 +7,12 @@ param(
     [switch] $NoBuild,
     [switch] $SkipRegressionTests,
     [switch] $Quick,
+    [switch] $DeferredCpuBusBatch,
+    [switch] $DeferredCpuChipReadSegments,
+    [ValidatePattern('^[0-9A-Fa-f]{8}$')]
+    [string] $LemmingsFramebufferChecksum = '03E3F1D1',
+    [ValidatePattern('^[0-9A-Fa-f]{8}$')]
+    [string] $LemmingsAudioChecksum = 'FA40F11D',
     [string] $OutputDirectory
 )
 
@@ -53,8 +59,8 @@ $lemmingsChecksums = if ($Quick) {
     @()
 } else {
     @(
-        '--expect-framebuffer-checksum', '03E3F1D1',
-        '--expect-audio-checksum', 'FA40F11D'
+        '--expect-framebuffer-checksum', $LemmingsFramebufferChecksum,
+        '--expect-audio-checksum', $LemmingsAudioChecksum
     )
 }
 $common = @(
@@ -66,6 +72,12 @@ $common = @(
     '--hardware-profile',
     '--skip-phase-profile'
 )
+if ($DeferredCpuBusBatch) {
+    $common += '--cpu-deferred-bus-batch'
+}
+if ($DeferredCpuChipReadSegments) {
+    $common += '--cpu-deferred-chip-read-segments'
+}
 
 $definitions = @{
     Lemmings = @{
@@ -110,6 +122,10 @@ $metadata = @(
     "Warmup frames: $warmup"
     "Measured frames: $frames"
     "Repeats: $effectiveRepeat"
+    "Deferred CPU bus batch: $DeferredCpuBusBatch"
+    "Deferred CPU Chip-read segments: $DeferredCpuChipReadSegments"
+    "Lemmings framebuffer checksum gate: 0x$LemmingsFramebufferChecksum"
+    "Lemmings audio checksum gate: 0x$LemmingsAudioChecksum"
     "Output: $OutputDirectory"
 )
 $metadata | Set-Content -LiteralPath (Join-Path $OutputDirectory 'environment.txt')

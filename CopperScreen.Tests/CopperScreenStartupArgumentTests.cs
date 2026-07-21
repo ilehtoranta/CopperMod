@@ -5,6 +5,18 @@ namespace CopperScreen.Tests;
 public sealed class CopperScreenStartupArgumentTests
 {
 	[Fact]
+	public void DeferredChipReadSegmentsRemainAnIndependentKillSwitch()
+	{
+		var options = CopperScreenStartupOptions.Parse(
+			["--cpu-deferred-chip-read-segments"],
+			AppContext.BaseDirectory);
+
+		Assert.False(options.DeferredCpuBusBatch);
+		Assert.True(options.DeferredCpuChipReadSegments);
+		Assert.Null(options.Error);
+	}
+
+	[Fact]
 	public void PositionalProfileThenDiskStartsWithTheSelectedProfileAndDisk()
 	{
 		var diskPath = Path.GetTempFileName();

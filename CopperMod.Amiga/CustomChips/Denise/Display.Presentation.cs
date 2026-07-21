@@ -282,10 +282,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
             DuplicatePreparedPresentationRow(target, row, duplicateXStart, duplicateXStop);
             RenderTimelineSpritesRow(target, _displayTimeline, row);
             CaptureRenderedCopperPixelTrace(target, row, stage: 1);
+            CaptureRenderedCopperPixelTrace(target, row, stage: 2, secondOutputRow: true);
             return true;
         }
 
-        private void CaptureRenderedCopperPixelTrace(Span<uint> target, int row, byte stage)
+        private void CaptureRenderedCopperPixelTrace(
+            Span<uint> target,
+            int row,
+            byte stage,
+            bool secondOutputRow = false)
         {
             if (!_bus.BusAccessCaptureEnabled || row is < 68 or > 76)
             {
@@ -294,6 +299,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             var scale = GetRenderHorizontalScale();
             var outputY = IsRenderingHighResolutionHeight() ? row * 2 : row;
+            if (secondOutputRow && IsRenderingHighResolutionHeight())
+            {
+                outputY++;
+            }
             var start = (outputY * _renderWidth) + (217 * scale);
             var traces = _renderedCopperPixelTraces ??= new List<RenderedCopperPixelTrace>(32);
             traces.Add(new RenderedCopperPixelTrace(
