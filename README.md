@@ -18,7 +18,7 @@ The project focuses on accurate replay behavior rather than format conversion.
 Backends render audio in small time slices, making them useful both for the
 CopperMod player and for other applications that need tracker playback.
 
-## Built with Codex and GPT-5.6
+## Built with GPT-5.6 and Codex for OpenAI Build Week
 
 Codex, powered by GPT-5.6, was used as an active engineering collaborator during
 OpenAI Build Week. It worked directly in the repository: reading the existing
@@ -47,16 +47,45 @@ its reusable components. Notable Build Week changes include:
   arbitration, live display DMA, Copper execution, and a bounded blitter executor
   onto one ordered slot timeline. In simple terms, every device now performs its
   read or write at the exact point when it owns the bus, so later devices observe
-  the correct data without sacrificing cycle accuracy.
+  the correct data without sacrificing cycle accuracy. Copper WAIT restart phases
+  are modeled as internal, non-reserving control phases on that same physical
+  timeline, including DMA, refresh, and phase-polarity interactions.
+- **68EC020 CPU support with executable timing evidence.** `Copper68k` now exposes
+  the 68EC020 as a distinct CPU model: it retains the MC68020 instruction set,
+  32-bit registers, exception behavior, and timing profile while applying the
+  processor's 24-bit external address bus to instruction and data accesses. Codex
+  helped implement the reusable bus boundary and add direct MC68020/68EC020 state,
+  machine-cycle, native-cycle, and high-address alias regression tests.
+- **Independent 68k conformance gates.** Codex integrated optional, reproducible
+  runners for the Musashi MC68000/MC68040 program corpora and the WinUAE CPU
+  Tester MC68000 data, alongside the project's focused instruction tests. These
+  external suites are used as discovery and regression evidence, with documented
+  exclusions where their expectations concern undefined processor behavior or
+  currently unsupported features; they do not replace the project's chosen CPU
+  semantics or hardware evidence.
+- **Deterministic extended-precision arithmetic in CopperFloat.** The new
+  `CopperFloat` package provides allocation-free managed extF80 arithmetic with
+  explicit precision, rounding, tininess, and IEEE exception flags. It preserves
+  complete 80-bit encodings, including NaN payloads and noncanonical values, and
+  validates results against committed Berkeley TestFloat 3e-derived fixtures.
+  Codex helped build the arithmetic, differential tests, exactness-gated host
+  acceleration, and package boundary used by MC68040 floating-point emulation.
 - **AI-automated regression testing with real software.** Codex runs a corpus of
   games and demos, drives repeatable workloads, records framebuffer and audio
   checksums, CPU and scheduler cycles, boot status, and bus ownership, and compares
   the results after each timing change. When a checksum diverges, the AI narrows the
   first mismatching event and helps turn it into a focused synthetic test. Lemmings
-  and Full Contact also serve as recurring performance workloads.
+  and Full Contact also serve as recurring performance workloads. Selected
+  vAmigaTS timing cases are additionally checked as deterministic raw-frame
+  comparisons with offset scanning disabled.
 - **ECS and CyberGraphX support.** The project added Enhanced Chip Set timing and
   display behavior as well as CyberGraphX RTG integration, extending CopperScreen
   beyond its original OCS-only A500 target.
+- **ROM-first Kickstart gateway groundwork.** CopperScreen can boot a user-supplied
+  Kickstart ROM and use an opt-in CopperStart development overlay. Codex helped
+  migrate host calls to a six-byte `FF00 + uint32` gateway, preserving native ROM
+  execution for every unimplemented vector while establishing the testable path for
+  incremental Exec replacement against the ROM-created ExecBase.
 
 Codex also built differential tests for CPU timing and custom-chip behavior,
 created benchmark and audit tooling, profiled Release builds down to individual
@@ -343,6 +372,8 @@ to inspect the push operations without publishing.
 - `CopperMod.ProTracker` - ProTracker MOD backend.
 - `CopperMod.Sid` - PSID / RSID backend.
 - `Copper68k` - reusable Motorola 68000-family CPU emulation core.
+- `CopperFloat` - deterministic, allocation-free extended 80-bit floating-point
+  arithmetic.
 - `Copper6510` - reusable MOS 6510 CPU emulation core.
 - `CopperDisk` - managed Amiga ADF / IPF disk image library.
 - `CopperMod.Amiga` - shared Amiga 500 emulation core.
