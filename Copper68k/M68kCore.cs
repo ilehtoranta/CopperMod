@@ -185,6 +185,36 @@ namespace Copper68k
         bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind);
     }
 
+    internal readonly record struct M68kDeferredCpuBusCheckpointRequest(
+        ulong RequiredThroughToken,
+        long RequiredVirtualReadyCycle,
+        ulong QueueToken0,
+        ulong QueueToken1,
+        bool HasPendingSuccessor = false,
+        long PendingSuccessorVirtualCycle = 0,
+        ulong PendingSuccessorPredecessorToken = 0,
+        bool PendingSuccessorRequiresIrcGap = false);
+
+    internal readonly record struct M68kDeferredCpuBusCheckpoint(
+        long ArchitecturalRetireCycle,
+        long PhysicalNextTransferCycle,
+        long LastReadyCycle,
+        long QueueReadyCycle0,
+        long QueueReadyCycle1,
+        byte ResolvedQueueMask,
+        bool HasTrimmedPendingTransition = false,
+        long TrimmedPendingOriginalCycle = 0,
+        long ResolvedPendingRequestCycle = 0,
+        ulong TrimmedPendingPredecessorToken = 0,
+        bool TrimmedPendingRequiresIrcGap = false);
+
+    internal readonly record struct M68kDeferredCpuTrimmedInstructionFetch(
+        ulong FirstToken,
+        M68kInstructionFetchPublicationPhase PublicationPhase,
+        long RetirementFloor,
+        M68kInstructionFetchPublicationContext PublicationContext,
+        long VirtualRequestedCycle);
+
     internal interface IM68kDeferredCpuInstructionTiming
     {
         void BeginDeferredCpuInstructionTiming(long cycle);
@@ -196,6 +226,8 @@ namespace Copper68k
         bool IsInternalNoBusWindowEnabled { get; }
 
         bool IsDeferredCpuBusBatchEligibleInstructionFetchWindow(in M68kInstructionFetchWindow window);
+
+        ulong CaptureDeferredCpuInstructionFetchTimingToken();
 
         bool TryBeginDeferredCpuBusBatch(
             M68kCpuState state,
@@ -209,6 +241,20 @@ namespace Copper68k
         void CompleteDeferredCpuBusBatchExecution(
             int instructionCount,
             int skippedInstructionFlushCount);
+
+        bool CanContinueDeferredCpuBusBatch(
+            long virtualRetireCycle,
+            long batchTargetCycle,
+            ulong timingDependencyToken,
+            out long projectedRetireCycle);
+
+        bool TryTrimDeferredCpuInstructionFetchSuffix(
+            ulong requiredThroughToken,
+            out M68kDeferredCpuTrimmedInstructionFetch trimmedFetch);
+
+        M68kDeferredCpuBusCheckpoint SynchronizeDeferredCpuBusBatchTiming(
+            ref long cycle,
+            in M68kDeferredCpuBusCheckpointRequest request);
 
         void EndDeferredCpuBusBatch(ref long cycle, M68kDeferredCpuBusBatchExitReason reason);
 
@@ -447,11 +493,36 @@ namespace Copper68k
         }
     }
 
+    internal enum M68kInstructionFetchPublicationPhase : byte
+    {
+        Required = 0,
+        RetirementQueue = 1,
+        CancellableSuccessor = 2
+    }
+
+    internal readonly record struct M68kInstructionFetchPublicationContext(
+        long Group,
+        long EntryBusCycle,
+        int EntryPrefetchCount,
+        long EntryReadyCycle0,
+        long EntryReadyCycle1,
+        ulong EntryTimingToken0,
+        ulong EntryTimingToken1,
+        long InstructionEntryCycle = 0,
+        ulong PredecessorToken = 0,
+        bool RequiresIrcGap = false);
+
     internal interface IM68kInstructionFetchWindowBus
     {
         bool TryGetInstructionFetchWindow(uint address, out M68kInstructionFetchWindow window);
 
-        void CommitInstructionFetchWindowWord(in M68kInstructionFetchWindow window, uint address, ref long cycle);
+        void CommitInstructionFetchWindowWord(
+            in M68kInstructionFetchWindow window,
+            uint address,
+            ref long cycle,
+            M68kInstructionFetchPublicationPhase publicationPhase = M68kInstructionFetchPublicationPhase.Required,
+            long retirementFloor = long.MinValue,
+            in M68kInstructionFetchPublicationContext publicationContext = default);
     }
 
     internal readonly struct M68kFixedPlanRunWindow
@@ -612,7 +683,12 @@ namespace Copper68k
         bool SkipRetirePrefetchTopUp,
         bool HasPendingPrefetch = false,
         uint PendingPrefetchAddress = 0,
-        long PendingPrefetchEarliestCycle = 0);
+        long PendingPrefetchEarliestCycle = 0,
+        M68kInstructionFetchPublicationPhase PendingPublicationPhase =
+            M68kInstructionFetchPublicationPhase.Required,
+        long PendingVirtualRequestedCycle = 0,
+        long PendingPublicationGroup = 0,
+        long PendingPublicationEntryBusCycle = 0);
 
     internal interface IM68kBatchCore : IM68kCore
     {
@@ -1601,12 +1677,18 @@ namespace Copper68k
             public ushort Word1;
             public long ReadyCycle0;
             public long ReadyCycle1;
+            public ulong TimingToken0;
+            public ulong TimingToken1;
             public bool DeferredBatchEligible0;
             public bool DeferredBatchEligible1;
             public int Count;
             public bool HasPending;
             public uint PendingAddress;
             public long PendingEarliestCycle;
+            public M68kInstructionFetchPublicationPhase PendingPublicationPhase;
+            public long PendingRetirementFloor = long.MinValue;
+            public M68kInstructionFetchPublicationContext PendingPublicationContext;
+            public long PendingVirtualRequestedCycle;
             public bool ConsumeWithoutPrefetch;
             public bool SkipRetireTopUp;
         }
@@ -1756,11 +1838,16 @@ namespace Copper68k
         private int _instructionEntryPrefetchCount;
         private long _instructionEntryReadyCycle0;
         private long _instructionEntryReadyCycle1;
+        private ulong _instructionEntryTimingToken0;
+        private ulong _instructionEntryTimingToken1;
         private long _instructionInterruptSampleCycle;
         private long _lastInterruptSampleCycle;
         private int _nextCpuDataAccessDelayCycles;
         private bool _deferredCpuBusBatchExecutionActive;
         private bool _deferredCpuInstructionTimingStarted;
+        private ulong _instructionDeferredCpuTimingDependencyToken;
+        private long _instructionDeferredCpuTimingDependencyVirtualReadyCycle = -1;
+        private long _instructionFetchPublicationGroup;
         private bool _plannedInterpreterCountersEnabled;
         private long _plannedFastInstructions;
         private long _plannedScalarFallbackInstructions;
@@ -1781,12 +1868,34 @@ namespace Copper68k
         private ushort _prefetchWord1 { get => _prefetchQueue.Word1; set => _prefetchQueue.Word1 = value; }
         private long _prefetchCompletedCycle0 { get => _prefetchQueue.ReadyCycle0; set => _prefetchQueue.ReadyCycle0 = value; }
         private long _prefetchCompletedCycle1 { get => _prefetchQueue.ReadyCycle1; set => _prefetchQueue.ReadyCycle1 = value; }
+        private ulong _prefetchTimingToken0 { get => _prefetchQueue.TimingToken0; set => _prefetchQueue.TimingToken0 = value; }
+        private ulong _prefetchTimingToken1 { get => _prefetchQueue.TimingToken1; set => _prefetchQueue.TimingToken1 = value; }
         private bool _prefetchDeferredCpuBusBatchEligible0 { get => _prefetchQueue.DeferredBatchEligible0; set => _prefetchQueue.DeferredBatchEligible0 = value; }
         private bool _prefetchDeferredCpuBusBatchEligible1 { get => _prefetchQueue.DeferredBatchEligible1; set => _prefetchQueue.DeferredBatchEligible1 = value; }
         private int _prefetchCount { get => _prefetchQueue.Count; set => _prefetchQueue.Count = value; }
         private bool _hasPendingPrefetch { get => _prefetchQueue.HasPending; set => _prefetchQueue.HasPending = value; }
         private uint _pendingPrefetchAddress { get => _prefetchQueue.PendingAddress; set => _prefetchQueue.PendingAddress = value; }
         private long _pendingPrefetchEarliestCycle { get => _prefetchQueue.PendingEarliestCycle; set => _prefetchQueue.PendingEarliestCycle = value; }
+        private M68kInstructionFetchPublicationPhase _pendingPrefetchPublicationPhase
+        {
+            get => _prefetchQueue.PendingPublicationPhase;
+            set => _prefetchQueue.PendingPublicationPhase = value;
+        }
+        private long _pendingPrefetchRetirementFloor
+        {
+            get => _prefetchQueue.PendingRetirementFloor;
+            set => _prefetchQueue.PendingRetirementFloor = value;
+        }
+        private M68kInstructionFetchPublicationContext _pendingPrefetchPublicationContext
+        {
+            get => _prefetchQueue.PendingPublicationContext;
+            set => _prefetchQueue.PendingPublicationContext = value;
+        }
+        private long _pendingPrefetchVirtualRequestedCycle
+        {
+            get => _prefetchQueue.PendingVirtualRequestedCycle;
+            set => _prefetchQueue.PendingVirtualRequestedCycle = value;
+        }
         private bool _consumeWithoutPrefetch { get => _prefetchQueue.ConsumeWithoutPrefetch; set => _prefetchQueue.ConsumeWithoutPrefetch = value; }
         private bool _skipRetirePrefetchTopUp { get => _prefetchQueue.SkipRetireTopUp; set => _prefetchQueue.SkipRetireTopUp = value; }
 
@@ -2056,7 +2165,11 @@ namespace Copper68k
                 _skipRetirePrefetchTopUp,
                 _hasPendingPrefetch,
                 _pendingPrefetchAddress,
-                _pendingPrefetchEarliestCycle);
+                _pendingPrefetchEarliestCycle,
+                _pendingPrefetchPublicationPhase,
+                _pendingPrefetchVirtualRequestedCycle,
+                _pendingPrefetchPublicationContext.Group,
+                _pendingPrefetchPublicationContext.EntryBusCycle);
 
         int IM68kBatchCore.ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
             => ExecuteInstructions(maxInstructions, targetCycle, boundary);
@@ -2076,6 +2189,13 @@ namespace Copper68k
             BeginInstructionCycleFloor(startCycles);
             try
             {
+                if (_deferredCpuBusBatchExecutionActive &&
+                    !EnsureDeferredCpuBusBatchPrefetchReady())
+                {
+                    throw new InvalidOperationException(
+                        "Deferred CPU batch prefetch eligibility changed after instruction entry.");
+                }
+
                 if ((State.ProgramCounter & 1) != 0)
                 {
                     ThrowOddInstructionFetchAddress(State.ProgramCounter);
@@ -2172,7 +2292,7 @@ namespace Copper68k
                     !State.Stopped &&
                     State.Cycles < batchTargetCycle)
                 {
-                    if (!EnsureDeferredCpuBusBatchPrefetchReady())
+                    if (!CanEnterDeferredCpuBusBatchInstruction())
                     {
                         reason = M68kDeferredCpuBusBatchExitReason.PcLeftFastWindow;
                         break;
@@ -2187,6 +2307,47 @@ namespace Copper68k
                     ExecuteSingleInstruction();
 
                     executedInstructions++;
+                    if (targetCycle.HasValue &&
+                        deferredCpuInstructionTiming.IsDeferredCpuBusBatchActive &&
+                        !deferredCpuInstructionTiming.CanContinueDeferredCpuBusBatch(
+                            State.Cycles,
+                            batchTargetCycle,
+                            _instructionDeferredCpuTimingDependencyToken,
+                            out _))
+                    {
+                        if (deferredCpuInstructionTiming.TryTrimDeferredCpuInstructionFetchSuffix(
+                                _instructionDeferredCpuTimingDependencyToken,
+                                out var trimmedFetch))
+                        {
+                            TrimDeferredPrefetchQueueSuffix(in trimmedFetch);
+                        }
+
+                        var synchronizedCycle = State.Cycles;
+                        var checkpointRequest = new M68kDeferredCpuBusCheckpointRequest(
+                            _instructionDeferredCpuTimingDependencyToken,
+                            _instructionDeferredCpuTimingDependencyVirtualReadyCycle,
+                            _prefetchTimingToken0,
+                            _prefetchTimingToken1,
+                            _hasPendingPrefetch,
+                            _pendingPrefetchVirtualRequestedCycle,
+                            _pendingPrefetchPublicationContext.PredecessorToken,
+                            _pendingPrefetchPublicationContext.RequiresIrcGap);
+                        var checkpoint = deferredCpuInstructionTiming.SynchronizeDeferredCpuBusBatchTiming(
+                            ref synchronizedCycle,
+                            in checkpointRequest);
+                        State.Cycles = Math.Max(State.Cycles, synchronizedCycle);
+                        if (_hasPendingPrefetch &&
+                            checkpoint.HasTrimmedPendingTransition &&
+                            checkpoint.TrimmedPendingOriginalCycle ==
+                                _pendingPrefetchVirtualRequestedCycle)
+                        {
+                            _pendingPrefetchEarliestCycle = Math.Max(
+                                _pendingPrefetchEarliestCycle,
+                                checkpoint.ResolvedPendingRequestCycle);
+                        }
+                        RebasePendingPrefetchAfterDeferredSynchronization();
+                    }
+
                     if (deferredCpuInstructionTiming.IsDeferredCpuBusBatchActive)
                     {
                         skippedInstructionFlushes++;
@@ -2242,6 +2403,18 @@ namespace Copper68k
 
                 if (deferredCpuInstructionTiming.IsDeferredCpuBusBatchActive)
                 {
+                    var trimmedCancellableFetchSuffix = false;
+                    if ((reason is M68kDeferredCpuBusBatchExitReason.MaxInstructions or
+                            M68kDeferredCpuBusBatchExitReason.TargetCycle or
+                            M68kDeferredCpuBusBatchExitReason.Completed) &&
+                        deferredCpuInstructionTiming.TryTrimDeferredCpuInstructionFetchSuffix(
+                            _instructionDeferredCpuTimingDependencyToken,
+                            out var trimmedFetch))
+                    {
+                        TrimDeferredPrefetchQueueSuffix(in trimmedFetch);
+                        trimmedCancellableFetchSuffix = true;
+                    }
+
                     // A data-bus transfer may consume the last completed prefetch
                     // and leave only its cancellable ROM/Fast successor. Scalar
                     // retirement materializes that first word before returning;
@@ -2252,10 +2425,11 @@ namespace Copper68k
                         _hasPendingPrefetch &&
                         _pendingPrefetchAddress == State.ProgramCounter;
                     var mustMaterializeEmptyPrefetch =
+                        !trimmedCancellableFetchSuffix &&
                         hasEmptyPendingPrefetch &&
-                        reason is M68kDeferredCpuBusBatchExitReason.Completed or
-                            M68kDeferredCpuBusBatchExitReason.MaxInstructions;
-                    if ((reason == M68kDeferredCpuBusBatchExitReason.Completed ||
+                        reason == M68kDeferredCpuBusBatchExitReason.Completed;
+                    if (!trimmedCancellableFetchSuffix &&
+                        (reason == M68kDeferredCpuBusBatchExitReason.Completed ||
                             mustMaterializeEmptyPrefetch) &&
                         completedWithoutException &&
                         !State.Halted &&
@@ -2304,6 +2478,79 @@ namespace Copper68k
                 _deferredCpuBusBatchExecutionActive = false;
             }
         }
+
+        private void TrimDeferredPrefetchQueueSuffix(
+            in M68kDeferredCpuTrimmedInstructionFetch trimmedFetch)
+        {
+            var firstTrimmedToken = trimmedFetch.FirstToken;
+            while (_prefetchCount > 0)
+            {
+                var tailToken = _prefetchCount == 2
+                    ? _prefetchTimingToken1
+                    : _prefetchTimingToken0;
+                if (tailToken < firstTrimmedToken)
+                {
+                    break;
+                }
+
+                if (_prefetchCount == 2)
+                {
+                    _prefetchTimingToken1 = 0;
+                    _prefetchDeferredCpuBusBatchEligible1 = false;
+                    _prefetchCount = 1;
+                }
+                else
+                {
+                    _prefetchTimingToken0 = 0;
+                    _prefetchDeferredCpuBusBatchEligible0 = false;
+                    _prefetchCount = 0;
+                }
+            }
+
+            var startDelay = _m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0;
+            var pendingAddress = unchecked(
+                _prefetchAddress + (uint)(_prefetchCount * 2));
+            var earliestCycle = State.Cycles + startDelay;
+            _hasPendingPrefetch = true;
+            _pendingPrefetchAddress = pendingAddress;
+            _pendingPrefetchEarliestCycle = earliestCycle;
+            _pendingPrefetchPublicationPhase = trimmedFetch.PublicationPhase;
+            _pendingPrefetchRetirementFloor = trimmedFetch.RetirementFloor;
+            _pendingPrefetchPublicationContext = trimmedFetch.PublicationContext;
+            _pendingPrefetchVirtualRequestedCycle = trimmedFetch.VirtualRequestedCycle;
+            _pendingPrefetchEarliestCycle = Math.Max(
+                _pendingPrefetchEarliestCycle,
+                trimmedFetch.VirtualRequestedCycle);
+            _cpuBusCycle = earliestCycle;
+        }
+
+        private void RebasePendingPrefetchAfterDeferredSynchronization()
+        {
+            if (!_hasPendingPrefetch)
+            {
+                return;
+            }
+
+            var startDelay = _m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0;
+            var earliestCycle = State.Cycles + startDelay;
+            _pendingPrefetchEarliestCycle = Math.Max(
+                _pendingPrefetchEarliestCycle,
+                earliestCycle);
+            _pendingPrefetchVirtualRequestedCycle = Math.Max(
+                _pendingPrefetchVirtualRequestedCycle,
+                earliestCycle);
+            _cpuBusCycle = Math.Max(_cpuBusCycle, _pendingPrefetchEarliestCycle);
+            if (_prefetchCount == 0)
+            {
+                // Keep the empty queue's frozen diagnostic/transition state in
+                // the same shape as scalar retirement.
+                _prefetchCompletedCycle0 = State.Cycles;
+                _prefetchCompletedCycle1 = State.Cycles;
+            }
+        }
+
+
+
 
 
         private bool TryExecuteCachedFixedPlanGraph(
@@ -4925,6 +5172,27 @@ namespace Copper68k
                 _prefetchDeferredCpuBusBatchEligible0;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool CanEnterDeferredCpuBusBatchInstruction()
+        {
+            if (_prefetchCount < 2 &&
+                _hasPendingPrefetch &&
+                _pendingPrefetchAddress == unchecked(
+                    State.ProgramCounter + (uint)(_prefetchCount * 2)))
+            {
+                return _instructionFetchWindowBus != null &&
+                    (_instructionFetchWindow.ContainsWord(_pendingPrefetchAddress) ||
+                        TryGetInstructionFetchWindow(
+                            _instructionFetchWindowBus,
+                            _pendingPrefetchAddress,
+                            out _instructionFetchWindow)) &&
+                    _deferredCpuInstructionTiming?.IsDeferredCpuBusBatchEligibleInstructionFetchWindow(
+                        in _instructionFetchWindow) == true;
+            }
+
+            return IsCurrentPrefetchDeferredCpuBusBatchEligible();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool EnsureDeferredCpuBusBatchPrefetchReady()
         {
             if (_prefetchCount < 2 &&
@@ -4947,6 +5215,8 @@ namespace Copper68k
                 if (_prefetchCount == 0)
                 {
                     _prefetchAddress = State.ProgramCounter;
+                    FullPrefetch(State.ProgramCounter);
+                    return IsCurrentPrefetchDeferredCpuBusBatchEligible();
                 }
 
                 TopUpPrefetchOne();
@@ -4954,6 +5224,7 @@ namespace Copper68k
 
             return IsCurrentPrefetchDeferredCpuBusBatchEligible();
         }
+
 
         private sealed class NoOpInstructionBoundary : IM68kInstructionBoundary
         {
@@ -5651,6 +5922,7 @@ namespace Copper68k
             M68kOperandSize size)
         {
             var value = ReadDisplacementMemory(sourceRegister, size);
+            PrefetchFallthroughAfterMoveSourceRead();
             WriteDataRegisterSized(destinationRegister, value, size);
             SetLogicFlags(value, size);
             AddInstructionCycles(EstimateMoveCycles(GetEaOperandCycles(5, sourceRegister, size), 0, destinationRegister, size));
@@ -6037,6 +6309,7 @@ namespace Copper68k
                 PrefetchFallthroughBeforeMemoryWriteback();
             }
 
+
             switch (opcode & 0xFF00)
             {
                 case 0x0000:
@@ -6066,6 +6339,7 @@ namespace Copper68k
                     _ = Subtract(destination, immediate, size, setExtend: false, storeResult: false);
                     break;
             }
+
 
             AddInstructionCycles(isCompare
                 ? GetCmpiCycles(size, mode, register)
@@ -7400,6 +7674,8 @@ namespace Copper68k
             _prefetchWord1 = state.Word1;
             _prefetchCompletedCycle0 = state.ReadyCycle0;
             _prefetchCompletedCycle1 = state.ReadyCycle1;
+            _prefetchTimingToken0 = 0;
+            _prefetchTimingToken1 = 0;
             _prefetchDeferredCpuBusBatchEligible0 = state.DeferredBatchEligible0;
             _prefetchDeferredCpuBusBatchEligible1 = state.DeferredBatchEligible1;
             _prefetchCount = state.PrefetchCount;
@@ -7442,6 +7718,8 @@ namespace Copper68k
             _prefetchCount = 0;
             _prefetchDeferredCpuBusBatchEligible0 = false;
             _prefetchDeferredCpuBusBatchEligible1 = false;
+            _prefetchTimingToken0 = 0;
+            _prefetchTimingToken1 = 0;
             var firstReadyCycle = TopUpPrefetchOne();
             State.Cycles = Math.Max(State.Cycles, firstReadyCycle);
             var secondReadyCycle = TopUpPrefetchOne();
@@ -10587,6 +10865,11 @@ namespace Copper68k
 
             var value = _prefetchWord0;
             var completedCycle = _prefetchCompletedCycle0;
+            if (_prefetchTimingToken0 >= _instructionDeferredCpuTimingDependencyToken)
+            {
+                _instructionDeferredCpuTimingDependencyToken = _prefetchTimingToken0;
+                _instructionDeferredCpuTimingDependencyVirtualReadyCycle = completedCycle;
+            }
             var address = _prefetchAddress;
             State.ProgramCounter = unchecked(address + 2);
             if (_pendingInternalCycles != 0)
@@ -10610,6 +10893,7 @@ namespace Copper68k
                 _prefetchAddress = unchecked(address + 2);
                 _prefetchWord0 = _prefetchWord1;
                 _prefetchCompletedCycle0 = _prefetchCompletedCycle1;
+                _prefetchTimingToken0 = _prefetchTimingToken1;
                 _prefetchDeferredCpuBusBatchEligible0 = _prefetchDeferredCpuBusBatchEligible1;
                 _prefetchCount = 1;
             }
@@ -10618,9 +10902,11 @@ namespace Copper68k
                 _prefetchAddress = unchecked(address + 2);
                 _prefetchCount = 0;
                 _prefetchDeferredCpuBusBatchEligible0 = false;
+                _prefetchTimingToken0 = 0;
             }
 
             _prefetchDeferredCpuBusBatchEligible1 = false;
+            _prefetchTimingToken1 = 0;
             return value;
         }
 
@@ -10632,6 +10918,11 @@ namespace Copper68k
 
             var value = _prefetchWord0;
             var completedCycle = _prefetchCompletedCycle0;
+            if (_prefetchTimingToken0 >= _instructionDeferredCpuTimingDependencyToken)
+            {
+                _instructionDeferredCpuTimingDependencyToken = _prefetchTimingToken0;
+                _instructionDeferredCpuTimingDependencyVirtualReadyCycle = completedCycle;
+            }
             var address = _prefetchAddress;
             State.ProgramCounter = unchecked(address + 2);
             if (_pendingInternalCycles != 0)
@@ -10653,8 +10944,10 @@ namespace Copper68k
             _prefetchAddress = unchecked(address + 2);
             _prefetchWord0 = _prefetchWord1;
             _prefetchCompletedCycle0 = _prefetchCompletedCycle1;
+            _prefetchTimingToken0 = _prefetchTimingToken1;
             _prefetchDeferredCpuBusBatchEligible0 = _prefetchDeferredCpuBusBatchEligible1;
             _prefetchDeferredCpuBusBatchEligible1 = false;
+            _prefetchTimingToken1 = 0;
             _prefetchCount = 1;
             return value;
         }
@@ -10662,6 +10955,10 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long FullPrefetch(uint address)
         {
+            var publicationContext = _hasPendingPrefetch &&
+                _pendingPrefetchAddress == address
+                    ? _pendingPrefetchPublicationContext
+                    : CaptureInstructionFetchPublicationContext();
             if (_hasPendingPrefetch && _pendingPrefetchAddress != address)
             {
                 _hasPendingPrefetch = false;
@@ -10674,7 +10971,15 @@ namespace Copper68k
             _prefetchDeferredCpuBusBatchEligible0 = false;
             _prefetchDeferredCpuBusBatchEligible1 = false;
             TopUpPrefetchOne();
-            return TopUpPrefetchOne();
+            return TopUpPrefetchOne(
+                out _,
+                M68kInstructionFetchPublicationPhase.Required,
+                long.MinValue,
+                publicationContext with
+                {
+                    PredecessorToken = _prefetchTimingToken0,
+                    RequiresIrcGap = _prefetchTimingToken0 != 0
+                });
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -10683,6 +10988,18 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long TopUpPrefetchOne(out long requestedCycle)
+            => TopUpPrefetchOne(
+                out requestedCycle,
+                M68kInstructionFetchPublicationPhase.Required,
+                long.MinValue,
+                CaptureInstructionFetchPublicationContext());
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long TopUpPrefetchOne(
+            out long requestedCycle,
+            M68kInstructionFetchPublicationPhase publicationPhase,
+            long retirementFloor,
+            M68kInstructionFetchPublicationContext publicationContext)
         {
             if (_prefetchCount >= 2)
             {
@@ -10696,32 +11013,58 @@ namespace Copper68k
             {
                 System.Diagnostics.Debug.Assert(_pendingPrefetchAddress == address);
                 _cpuBusCycle = Math.Max(_cpuBusCycle, _pendingPrefetchEarliestCycle);
+                publicationPhase = _pendingPrefetchPublicationPhase;
+                retirementFloor = _pendingPrefetchRetirementFloor;
+                publicationContext = _pendingPrefetchPublicationContext;
                 _hasPendingPrefetch = false;
                 _pendingPrefetchAddress = 0;
                 _pendingPrefetchEarliestCycle = 0;
+                _pendingPrefetchPublicationPhase = M68kInstructionFetchPublicationPhase.Required;
+                _pendingPrefetchRetirementFloor = long.MinValue;
+                _pendingPrefetchPublicationContext = default;
+                _pendingPrefetchVirtualRequestedCycle = 0;
             }
 
             var value = ReadPrefetchWord(
                 address,
                 out var completedCycle,
                 out var deferredEligible,
-                out requestedCycle);
+                out requestedCycle,
+                publicationPhase,
+                retirementFloor,
+                in publicationContext);
+            var timingToken = _deferredCpuInstructionTiming?
+                .CaptureDeferredCpuInstructionFetchTimingToken() ?? 0;
             if (slot == 0)
             {
                 _prefetchWord0 = value;
                 _prefetchCompletedCycle0 = completedCycle;
+                _prefetchTimingToken0 = timingToken;
                 _prefetchDeferredCpuBusBatchEligible0 = deferredEligible;
             }
             else
             {
                 _prefetchWord1 = value;
                 _prefetchCompletedCycle1 = completedCycle;
+                _prefetchTimingToken1 = timingToken;
                 _prefetchDeferredCpuBusBatchEligible1 = deferredEligible;
             }
 
             _prefetchCount = slot + 1;
             return completedCycle;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private M68kInstructionFetchPublicationContext CaptureInstructionFetchPublicationContext()
+            => new(
+                _instructionFetchPublicationGroup,
+                _instructionEntryBusCycle,
+                _instructionEntryPrefetchCount,
+                _instructionEntryReadyCycle0,
+                _instructionEntryReadyCycle1,
+                _instructionEntryTimingToken0,
+                _instructionEntryTimingToken1,
+                _instructionCycleStart);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void TopUpPrefetchAtRetirement()
@@ -10741,6 +11084,7 @@ namespace Copper68k
                 return;
             }
 
+            var retirementPublicationContext = CaptureInstructionFetchPublicationContext();
             while (_prefetchCount < 2)
             {
                 var earliestCycle = _hasPendingPrefetch
@@ -10758,12 +11102,21 @@ namespace Copper68k
                         _hasPendingPrefetch = true;
                         _pendingPrefetchAddress = unchecked(_prefetchAddress + (uint)(_prefetchCount * 2));
                         _pendingPrefetchEarliestCycle = earliestCycle;
+                        _pendingPrefetchPublicationPhase =
+                            M68kInstructionFetchPublicationPhase.CancellableSuccessor;
+                        _pendingPrefetchRetirementFloor = _instructionCycleFloor;
+                        _pendingPrefetchPublicationContext =
+                            retirementPublicationContext;
+                        _pendingPrefetchVirtualRequestedCycle = earliestCycle;
                     }
-
                     return;
                 }
 
-                var readyCycle = TopUpPrefetchOne();
+                var readyCycle = TopUpPrefetchOne(
+                    out _,
+                    M68kInstructionFetchPublicationPhase.RetirementQueue,
+                    _instructionCycleFloor,
+                    retirementPublicationContext);
 
                 // Once the retirement fetch has entered the physical bus it is
                 // no longer speculative. A wait state may move its completion
@@ -10913,12 +11266,21 @@ namespace Copper68k
             uint address,
             out long completedCycle,
             out bool deferredEligible,
-            out long requestedCycle)
+            out long requestedCycle,
+            M68kInstructionFetchPublicationPhase publicationPhase = M68kInstructionFetchPublicationPhase.Required,
+            long retirementFloor = long.MinValue,
+            in M68kInstructionFetchPublicationContext publicationContext = default)
         {
             var busAddress = GetCpuBusAddress(address);
             var cycle = BeginPrefetchBusAccessCycle();
             requestedCycle = cycle;
-            var value = ReadInstructionFetchWord(busAddress, ref cycle, out deferredEligible);
+            var value = ReadInstructionFetchWord(
+                busAddress,
+                ref cycle,
+                out deferredEligible,
+                publicationPhase,
+                retirementFloor,
+                in publicationContext);
             var timing = GetM68000BusAccessTiming(
                 busAddress,
                 M68kOperandSize.Word,
@@ -10942,7 +11304,13 @@ namespace Copper68k
             return value;
         }
 
-        private ushort ReadInstructionFetchWord(uint address, ref long cycle, out bool deferredEligible)
+        private ushort ReadInstructionFetchWord(
+            uint address,
+            ref long cycle,
+            out bool deferredEligible,
+            M68kInstructionFetchPublicationPhase publicationPhase = M68kInstructionFetchPublicationPhase.Required,
+            long retirementFloor = long.MinValue,
+            in M68kInstructionFetchPublicationContext publicationContext = default)
         {
             if (_instructionFetchWindowBus != null)
             {
@@ -10958,7 +11326,13 @@ namespace Copper68k
                 deferredEligible =
                     _deferredCpuInstructionTiming?.IsDeferredCpuBusBatchEligibleInstructionFetchWindow(
                         in _instructionFetchWindow) == true;
-                bus.CommitInstructionFetchWindowWord(in _instructionFetchWindow, address, ref cycle);
+                bus.CommitInstructionFetchWindowWord(
+                    in _instructionFetchWindow,
+                    address,
+                    ref cycle,
+                    publicationPhase,
+                    retirementFloor,
+                    in publicationContext);
                 return _instructionFetchWindow.ReadWord(address);
             }
 
@@ -11505,6 +11879,8 @@ namespace Copper68k
             _instructionEntryPrefetchCount = _prefetchCount;
             _instructionEntryReadyCycle0 = _prefetchCompletedCycle0;
             _instructionEntryReadyCycle1 = _prefetchCompletedCycle1;
+            _instructionEntryTimingToken0 = _prefetchTimingToken0;
+            _instructionEntryTimingToken1 = _prefetchTimingToken1;
             _instructionInterruptSampleCycle = long.MinValue;
             _instructionCycleFloor = startCycle;
             _cpuBusCycle = Math.Max(_cpuBusCycle, startCycle);
@@ -11512,6 +11888,9 @@ namespace Copper68k
             _pendingInternalCycles = 0;
             _consumeWithoutPrefetch = false;
             _nextCpuDataAccessDelayCycles = 0;
+            _instructionDeferredCpuTimingDependencyToken = 0;
+            _instructionDeferredCpuTimingDependencyVirtualReadyCycle = -1;
+            _instructionFetchPublicationGroup++;
             _deferredCpuInstructionTimingStarted = _deferredCpuBusBatchExecutionActive;
             if (_deferredCpuInstructionTimingStarted)
             {

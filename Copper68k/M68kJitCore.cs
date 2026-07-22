@@ -13278,11 +13278,6 @@ namespace Copper68k
                 return;
             }
 
-            if (TryWriteM68040MaxSpeedColorRegister(address, value, size, cycles))
-            {
-                return;
-            }
-
             if (_minimalCycleTiming &&
                 _amigaBus != null &&
                 _amigaBus.TryWriteJitZeroWaitMemory(address, value, size))

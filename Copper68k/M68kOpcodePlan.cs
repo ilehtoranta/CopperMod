@@ -176,10 +176,8 @@ namespace Copper68k
             M68000CompiledMicrosequenceKind.MoveWordDisplacementToPredecrement or
             M68000CompiledMicrosequenceKind.MoveByteDisplacementToPredecrement;
 
-        public bool UsesPendingAwareMoveRetirement => Kind is
-            M68000CompiledMicrosequenceKind.MoveWordDisplacementToData or
-            M68000CompiledMicrosequenceKind.MoveByteDisplacementToData or
-            M68000CompiledMicrosequenceKind.MoveWordPostincrementToData or
+		public bool UsesPendingAwareMoveRetirement => Kind is
+			M68000CompiledMicrosequenceKind.MoveWordPostincrementToData or
             M68000CompiledMicrosequenceKind.MoveBytePostincrementToData;
 
         public int MoveFinalPrefetchCount => Kind is

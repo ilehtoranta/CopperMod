@@ -4567,6 +4567,26 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			_ = window;
 			return true;
 		}
+		public ulong CaptureDeferredCpuInstructionFetchTimingToken() => 0;
+		public bool CanContinueDeferredCpuBusBatch(
+			long virtualRetireCycle,
+			long batchTargetCycle,
+			ulong timingDependencyToken,
+			out long projectedRetireCycle)
+		{
+			_ = batchTargetCycle;
+			_ = timingDependencyToken;
+			projectedRetireCycle = virtualRetireCycle;
+			return false;
+		}
+		public bool TryTrimDeferredCpuInstructionFetchSuffix(
+			ulong requiredThroughToken,
+			out ulong firstTrimmedToken)
+		{
+			_ = requiredThroughToken;
+			firstTrimmedToken = 0;
+			return false;
+		}
 		public bool TryBeginDeferredCpuBusBatch(
 			M68kCpuState state,
 			long currentCycle,
@@ -4591,6 +4611,19 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		{
 			_ = skippedInstructionFlushCount;
 			CompletedBatchInstructions += instructionCount;
+		}
+		public M68kDeferredCpuBusCheckpoint SynchronizeDeferredCpuBusBatchTiming(
+			ref long cycle,
+			in M68kDeferredCpuBusCheckpointRequest request)
+		{
+			_ = request;
+			return new M68kDeferredCpuBusCheckpoint(
+				cycle,
+				cycle,
+				cycle,
+				-1,
+				-1,
+				0);
 		}
 		public void EndDeferredCpuBusBatch(
 			ref long cycle,
