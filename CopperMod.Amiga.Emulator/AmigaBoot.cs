@@ -31,6 +31,8 @@ using CopperStartExecMakeLibraryServices = CopperMod.Amiga.CopperStart.Exec.Exec
 using CopperStartExecIoServices = CopperMod.Amiga.CopperStart.Exec.ExecIoServices;
 using CopperStartExecLvos = CopperMod.Amiga.CopperStart.Exec.ExecLvos;
 using CopperStartTrackdiskDeviceServices = CopperMod.Amiga.CopperStart.Devices.Trackdisk.TrackdiskDeviceServices;
+using CopperStartTrackdiskRawTrack = CopperMod.Amiga.CopperStart.Devices.Trackdisk.TrackdiskRawTrack;
+using CopperStartEncodedTrack = CopperMod.Amiga.Storage.Floppy.AmigaEncodedTrack;
 using CopperStartRuntime = CopperMod.Amiga.CopperStart.CopperStartRuntime;
 using CopperStartWorkbenchContext = CopperMod.Amiga.CopperStart.Workbench.CopperStartWorkbenchContext;
 using CopperStartWorkbenchServices = CopperMod.Amiga.CopperStart.Workbench.WorkbenchServices;
@@ -465,6 +467,12 @@ namespace CopperMod.Amiga
             _trackdiskDeviceServices = new CopperStartTrackdiskDeviceServices(
                 _machine.Bus,
                 GetTrackdiskData,
+                TryWriteTrackdiskData,
+                GetTrackdiskRawTrack,
+                TryWriteTrackdiskRawTrack,
+                GetTrackdiskChangeVersion,
+                EjectTrackdiskDrive,
+                IsTrackdiskWriteProtected,
                 IsTrackdiskMotorOn,
                 SetTrackdiskMotor,
                 ReplyTrackdiskMessage,
@@ -516,7 +524,7 @@ namespace CopperMod.Amiga
                 new CopperStartRuntimeInstructionBoundaryContext(
                     _machine.Bus, _machine.Cpu.State, () => _ = _machine.DispatchPendingHardwareInterrupt(),
                     GetNextSyntheticVBlankBoundaryCycle, AdvanceSyntheticVBlankInterruptServers,
-                    () => _trackdiskDeviceServices.ProcessPending(_machine.Cpu.State.Cycles)));
+                    () => _trackdiskDeviceServices.ProcessPending(_machine.Cpu.State)));
             if (_machine.Bus.RtgVram.IsPresent)
             {
                 _cyberGraphics = new CyberGraphicsLibrary(_machine.Bus);
@@ -1017,7 +1025,7 @@ namespace CopperMod.Amiga
                 if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
                 {
                     _trackdiskDeviceServices.TryInstall(_activeExecBase);
-                    _trackdiskDeviceServices.ProcessPending(_machine.Cpu.State.Cycles);
+                    _trackdiskDeviceServices.ProcessPending(_machine.Cpu.State);
                 }
 
                 return;
@@ -1549,6 +1557,76 @@ namespace CopperMod.Amiga
                 _ => null
             };
 
+        private bool TryWriteTrackdiskData(int unit, int byteOffset, ReadOnlySpan<byte> source)
+        {
+            var disk = unit switch
+            {
+                0 => Drive0.Disk,
+                1 => Drive1.Disk,
+                2 => Drive2.Disk,
+                3 => Drive3.Disk,
+                _ => null
+            };
+            return disk?.TryWriteBytes(byteOffset, source) == true;
+        }
+
+        private CopperStartTrackdiskRawTrack? GetTrackdiskRawTrack(int unit)
+        {
+            var drive = unit switch
+            {
+                0 => Drive0,
+                1 => Drive1,
+                2 => Drive2,
+                3 => Drive3,
+                _ => null
+            };
+            if (drive?.Disk is null)
+            {
+                return null;
+            }
+
+            var track = drive.ReadEncodedTrack(drive.Cylinder, drive.Head);
+            return new CopperStartTrackdiskRawTrack(track.EncodedData, track.BitLength);
+        }
+
+        private bool TryWriteTrackdiskRawTrack(int unit, CopperStartTrackdiskRawTrack track)
+        {
+            var drive = unit switch
+            {
+                0 => Drive0,
+                1 => Drive1,
+                2 => Drive2,
+                3 => Drive3,
+                _ => null
+            };
+            return drive is { Disk: not null, WriteProtected: false } &&
+                drive.TryWriteEncodedTrack(
+                    drive.Cylinder,
+                    drive.Head,
+                    new CopperStartEncodedTrack(track.Data, track.BitLength));
+        }
+
+        private ulong GetTrackdiskChangeVersion(int unit)
+            => unit switch
+            {
+                0 => Drive0.ChangeVersion,
+                1 => Drive1.ChangeVersion,
+                2 => Drive2.ChangeVersion,
+                3 => Drive3.ChangeVersion,
+                _ => 0
+            };
+
+        private void EjectTrackdiskDrive(int unit)
+        {
+            switch (unit)
+            {
+                case 0: Drive0.Eject(); break;
+                case 1: Drive1.Eject(); break;
+                case 2: Drive2.Eject(); break;
+                case 3: Drive3.Eject(); break;
+            }
+        }
+
         private bool IsTrackdiskMotorOn(int unit)
             => unit switch
             {
@@ -1556,6 +1634,16 @@ namespace CopperMod.Amiga
                 1 => Drive1.MotorOn,
                 2 => Drive2.MotorOn,
                 3 => Drive3.MotorOn,
+                _ => false
+            };
+
+        private bool IsTrackdiskWriteProtected(int unit)
+            => unit switch
+            {
+                0 => Drive0.WriteProtected,
+                1 => Drive1.WriteProtected,
+                2 => Drive2.WriteProtected,
+                3 => Drive3.WriteProtected,
                 _ => false
             };
 

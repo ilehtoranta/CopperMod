@@ -2067,7 +2067,12 @@ public sealed class AmigaBootMemoryTests
 		var bus = machine.Bus;
 		const uint execBase = 0x3000, device = 0x3500, name = 0x3600, request = 0x3700, destination = 0x3800;
 		var disk = Enumerable.Range(0, 1024).Select(value => (byte)value).ToArray();
+		var rawTrack = Enumerable.Range(0, 32).Select(value => (byte)(0xA0 + value)).ToArray();
+		TrackdiskRawTrack? writtenRawTrack = null;
+		ulong changeVersion = 1;
+		var diskPresent = true;
 		var motorOn = false;
+		var writeProtected = false;
 		var replies = new List<uint>();
 		InitializeExecList(bus, execBase + ExecDeviceListOffset);
 		WriteCString(bus, name, "trackdisk.device");
@@ -2079,8 +2084,31 @@ public sealed class AmigaBootMemoryTests
 
 		using var trackdisk = new TrackdiskDeviceServices(
 			bus,
-			unit => unit == 0 ? disk : null,
-			unit => unit == 0,
+			unit => unit == 0 && diskPresent ? disk : null,
+			(unit, offset, source) =>
+			{
+				if (unit != 0 || offset < 0 || offset > disk.Length || source.Length > disk.Length - offset)
+				{
+					return false;
+				}
+
+				source.CopyTo(disk.AsSpan(offset, source.Length));
+				return true;
+			},
+			unit => unit == 0 && diskPresent ? new TrackdiskRawTrack(rawTrack, rawTrack.Length * 8) : null,
+			(unit, track) =>
+			{
+				if (unit != 0)
+				{
+					return false;
+				}
+
+				writtenRawTrack = track;
+				return true;
+			},
+			unit => unit == 0 ? changeVersion : 0,
+			unit => { if (unit == 0) { diskPresent = false; changeVersion++; } },
+			unit => unit == 0 && writeProtected,
 			unit => unit == 0 && motorOn,
 			(unit, enabled, _) => { if (unit == 0) motorOn = enabled; },
 			reply => replies.Add(reply),
@@ -2108,13 +2136,84 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(0x08090A0Bu, bus.ReadLong(destination));
 		Assert.NotEqual(0, bus.ReadByte(request + 0x1E) & 1);
 
+		// TD64 offsets use io_Actual as the high longword and io_Offset as the
+		// low longword. Standard DD media accepts the in-range low-32-bit form.
+		bus.WriteWord(request + 0x1C, 24); // TD_READ64
+		bus.WriteLong(request + 0x20, 0);
+		bus.WriteLong(request + 0x28, destination + 12);
+		bus.WriteLong(request + 0x2C, 8);
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0, bus.ReadByte(request + 0x1F));
+		Assert.Equal(4u, bus.ReadLong(request + 0x20));
+		Assert.Equal(0x08090A0Bu, bus.ReadLong(destination + 12));
+		bus.WriteLong(request + 0x20, 1); // offset 0x00000001_00000008 is outside DD media.
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0xFD, bus.ReadByte(request + 0x1F));
+
 		bus.WriteByte(request + 0x1E, 0, 0); // SendIO path: completion is deferred to a boundary.
+		bus.WriteWord(request + 0x1C, 2); // CMD_READ
 		bus.WriteLong(request + 0x28, destination + 4);
 		Assert.True(InvokeHostTrap(bus, device - 30, begin));
 		Assert.Equal(0u, bus.ReadLong(destination + 4));
 		trackdisk.ProcessPending(0);
 		Assert.Equal(0x08090A0Bu, bus.ReadLong(destination + 4));
 		Assert.Equal([request], replies);
+
+		// TD_RAWREAD reads encoded MFM bytes from the live drive track instead
+		// of exposing the logical ADF sector image.
+		bus.WriteByte(request + 0x1E, 1, 0);
+		bus.WriteWord(request + 0x1C, 16); // TD_RAWREAD
+		bus.WriteLong(request + 0x24, 4);
+		bus.WriteLong(request + 0x28, destination + 8);
+		bus.WriteLong(request + 0x2C, 3);
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0, bus.ReadByte(request + 0x1F));
+		Assert.Equal(4u, bus.ReadLong(request + 0x20));
+		Assert.Equal(0xA3A4A5A6u, bus.ReadLong(destination + 8));
+
+		// TD_RAWWRITE routes a new encoded stream through the drive callback;
+		// it never writes the logical sector image directly.
+		const uint rawSource = 0x3A00;
+		bus.WriteLong(rawSource, 0x11223344u);
+		bus.WriteWord(request + 0x1C, 17); // TD_RAWWRITE
+		bus.WriteLong(request + 0x24, 4);
+		bus.WriteLong(request + 0x28, rawSource);
+		bus.WriteLong(request + 0x2C, 0);
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0, bus.ReadByte(request + 0x1F));
+		Assert.Equal(4u, bus.ReadLong(request + 0x20));
+		Assert.True(writtenRawTrack.HasValue);
+		Assert.Equal(32, writtenRawTrack.Value.BitLength);
+		Assert.Equal(new byte[] { 0x11, 0x22, 0x33, 0x44 }, writtenRawTrack.Value.Data.ToArray());
+
+		// Change-interrupt registrations are keyed by the caller's Interrupt
+		// structure. Removal prevents a later media-generation notification;
+		// a new registration launches guest code at the next outer boundary.
+		const uint changeInterrupt = 0x3B00, changeData = 0x3B40, changeCode = 0x3B80;
+		bus.WriteLong(changeInterrupt + 0x0E, changeData);
+		bus.WriteLong(changeInterrupt + 0x12, changeCode);
+		bus.WriteWord(request + 0x1C, 20); // TD_ADDCHANGEINT
+		bus.WriteLong(request + 0x28, changeInterrupt);
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0, bus.ReadByte(request + 0x1F));
+		bus.WriteWord(request + 0x1C, 21); // TD_REMCHANGEINT
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		changeVersion++;
+		var changeState = new M68kCpuState { ProgramCounter = 0x3C00 };
+		changeState.A[7] = 0x3E00;
+		trackdisk.ProcessPending(changeState);
+		Assert.Equal(0x3C00u, changeState.ProgramCounter);
+
+		bus.WriteWord(request + 0x1C, 20); // TD_ADDCHANGEINT
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		changeVersion++;
+		trackdisk.ProcessPending(changeState);
+		Assert.Equal(changeCode, changeState.ProgramCounter);
+		Assert.Equal(changeData, changeState.A[1]);
+		Assert.True(bus.HasHostGateway(TrackdiskDeviceServices.ChangeInterruptContinuationAddress));
+		Assert.True(InvokeHostTrap(bus, TrackdiskDeviceServices.ChangeInterruptContinuationAddress, changeState));
+		bus.WriteWord(request + 0x1C, 21); // TD_REMCHANGEINT
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
 
 		bus.WriteWord(request + 0x1C, 9);
 		bus.WriteByte(request + 0x1E, 1, 0);
@@ -2123,12 +2222,22 @@ public sealed class AmigaBootMemoryTests
 		Assert.True(motorOn);
 		Assert.Equal(0u, bus.ReadLong(request + 0x20));
 
-		// Read-only removable-media status and standard DD geometry are exposed
+		// Removable-media status and standard DD geometry are exposed
 		// through the same BeginIO path as a ROM caller would use.
-		bus.WriteWord(request + 0x1C, 12); // TD_PROTSTATUS
+		bus.WriteWord(request + 0x1C, 15); // TD_PROTSTATUS
 		Assert.True(InvokeHostTrap(bus, device - 30, begin));
 		Assert.Equal(0, bus.ReadByte(request + 0x1F));
-		Assert.Equal(uint.MaxValue, bus.ReadLong(request + 0x20));
+		Assert.Equal(0u, bus.ReadLong(request + 0x20));
+
+		bus.WriteWord(request + 0x1C, 18); // TD_GETDRIVETYPE
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0, bus.ReadByte(request + 0x1F));
+		Assert.Equal(0u, bus.ReadLong(request + 0x20)); // DRV_35_DD
+
+		bus.WriteWord(request + 0x1C, 19); // TD_GETNUMTRACKS
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0, bus.ReadByte(request + 0x1F));
+		Assert.Equal(160u, bus.ReadLong(request + 0x20));
 
 		bus.WriteWord(request + 0x1C, 14); // TD_CHANGESTATE
 		Assert.True(InvokeHostTrap(bus, device - 30, begin));
@@ -2148,6 +2257,92 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(512u, bus.ReadLong(geometry));
 		Assert.Equal(2u, bus.ReadLong(geometry + 4));
 		Assert.Equal(2u, bus.ReadLong(geometry + 44));
+
+		// CMD_WRITE updates the logical image atomically. A protected drive
+		// rejects the same request with the standard write-protect error.
+		const uint source = 0x3A00;
+		bus.WriteLong(source, 0xDEADBEEFu);
+		bus.WriteWord(request + 0x1C, 3); // CMD_WRITE
+		bus.WriteLong(request + 0x24, 4);
+		bus.WriteLong(request + 0x28, source);
+		bus.WriteLong(request + 0x2C, 16);
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0, bus.ReadByte(request + 0x1F));
+		Assert.Equal(4u, bus.ReadLong(request + 0x20));
+		Assert.Equal(new byte[] { 0xDE, 0xAD, 0xBE, 0xEF }, disk[16..20]);
+
+		// TD_FORMAT uses the same logical-media path. It is intentionally not a
+		// raw-MFM operation; that requires the encoded-track layer.
+		bus.WriteLong(source, 0x01020304u);
+		bus.WriteWord(request + 0x1C, 11); // TD_FORMAT
+		bus.WriteLong(request + 0x2C, 24);
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0, bus.ReadByte(request + 0x1F));
+		Assert.Equal(4u, bus.ReadLong(request + 0x20));
+		Assert.Equal(new byte[] { 0x01, 0x02, 0x03, 0x04 }, disk[24..28]);
+
+		bus.WriteLong(source, 0x55667788u);
+		bus.WriteWord(request + 0x1C, 25); // TD_WRITE64
+		bus.WriteLong(request + 0x20, 0);
+		bus.WriteLong(request + 0x2C, 32);
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0, bus.ReadByte(request + 0x1F));
+		Assert.Equal(4u, bus.ReadLong(request + 0x20));
+		Assert.Equal(new byte[] { 0x55, 0x66, 0x77, 0x88 }, disk[32..36]);
+
+		bus.WriteLong(source, 0x99AABBCCu);
+		bus.WriteWord(request + 0x1C, 27); // TD_FORMAT64
+		bus.WriteLong(request + 0x20, 0);
+		bus.WriteLong(request + 0x2C, 40);
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0, bus.ReadByte(request + 0x1F));
+		Assert.Equal(4u, bus.ReadLong(request + 0x20));
+		Assert.Equal(new byte[] { 0x99, 0xAA, 0xBB, 0xCC }, disk[40..44]);
+
+		bus.WriteWord(request + 0x1C, 26); // TD_SEEK64
+		bus.WriteLong(request + 0x20, 0);
+		bus.WriteLong(request + 0x2C, 512);
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(512u, bus.ReadLong(request + 0x20));
+
+		// New-style-device commands are deliberately not aliases for TD64.
+		bus.WriteWord(request + 0x1C, 0xC000); // NSCMD_TD_READ64
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0xFB, bus.ReadByte(request + 0x1F));
+
+		writeProtected = true;
+		bus.WriteWord(request + 0x1C, 15); // TD_PROTSTATUS
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(uint.MaxValue, bus.ReadLong(request + 0x20));
+		bus.WriteWord(request + 0x1C, 11); // TD_FORMAT
+		bus.WriteLong(request + 0x2C, 20);
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0xFC, bus.ReadByte(request + 0x1F));
+		Assert.Equal(0u, bus.ReadLong(request + 0x20));
+		Assert.Equal(20, disk[20]);
+
+		// TD_REMOVE retains the legacy single change-interrupt pointer. TD_EJECT
+		// changes media state and generation, then dispatches that guest handler
+		// at the following host-device boundary.
+		bus.WriteWord(request + 0x1C, 12); // TD_REMOVE
+		bus.WriteLong(request + 0x28, changeInterrupt);
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(0u, bus.ReadLong(request + 0x20));
+		bus.WriteWord(request + 0x1C, 13); // TD_CHANGENUM
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal((uint)changeVersion, bus.ReadLong(request + 0x20));
+		bus.WriteWord(request + 0x1C, 23); // TD_EJECT
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.False(diskPresent);
+		bus.WriteWord(request + 0x1C, 14); // TD_CHANGESTATE
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal(uint.MaxValue, bus.ReadLong(request + 0x20));
+		bus.WriteWord(request + 0x1C, 13); // TD_CHANGENUM
+		Assert.True(InvokeHostTrap(bus, device - 30, begin));
+		Assert.Equal((uint)changeVersion, bus.ReadLong(request + 0x20));
+		changeState.ProgramCounter = 0x3C00;
+		trackdisk.ProcessPending(changeState);
+		Assert.Equal(changeCode, changeState.ProgramCounter);
 
 		trackdisk.Dispose();
 		Assert.False(bus.HasHostGateway(device - 6));
