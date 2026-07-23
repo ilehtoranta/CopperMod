@@ -252,6 +252,11 @@ namespace CopperMod.Amiga.Bus
             return previous;
         }
 
+        internal bool TryGetCommittedAgnusSlotSnapshot(
+            long cycle,
+            out AgnusChipSlotSnapshot snapshot)
+            => _agnusBusExecutor.TryGetCommittedSlotSnapshot(cycle, out snapshot);
+
         internal void RestoreSlotScheduleAuditSource(AgnusSlotAuditSource source)
             => _hrmSlotEngine.SlotScheduleAuditSource = source;
 
@@ -447,7 +452,43 @@ namespace CopperMod.Amiga.Bus
             out AmigaDiskController.SchedulerWakeReason diskWakeReason)
         {
             var shadowEnabled = _agnusBusExecutor.CpuVisibilityShadowEnabled;
-            var legacyStart = shadowEnabled ? Stopwatch.GetTimestamp() : 0;
+            if (_agnusBusExecutor.ProductionEnabled)
+            {
+                var executorStart = Stopwatch.GetTimestamp();
+                var horizon = _agnusBusExecutor.GetNextCpuVisibilityHorizon(
+                    currentCycle,
+                    targetCycle,
+                    cpuInterruptMask);
+                var executorTicks = Stopwatch.GetTimestamp() - executorStart;
+                wakeSource = AgnusBusExecutor.MapLegacyReason(horizon.Reason);
+                diskWakeReason = horizon.DiskReason;
+
+                if (shadowEnabled)
+                {
+                    var legacyStart = Stopwatch.GetTimestamp();
+                    var legacyCycle = _hardwareScheduler.GetNextCpuVisibleEventCycle(
+                        currentCycle,
+                        targetCycle,
+                        cpuInterruptMask,
+                        out var legacyWakeSource,
+                        out var legacyDiskWakeReason);
+                    var legacyTicks = Stopwatch.GetTimestamp() - legacyStart;
+                    _agnusBusExecutor.RecordCpuVisibilityShadow(
+                        currentCycle,
+                        targetCycle,
+                        legacyCycle,
+                        legacyWakeSource,
+                        legacyDiskWakeReason,
+                        in horizon);
+                    _agnusBusExecutor.RecordCpuVisibilityQueryTicks(
+                        legacyTicks,
+                        executorTicks);
+                }
+
+                return horizon.Cycle;
+            }
+
+            var legacyStartFallback = shadowEnabled ? Stopwatch.GetTimestamp() : 0;
             var cycle = _hardwareScheduler.GetNextCpuVisibleEventCycle(
                 currentCycle,
                 targetCycle,
@@ -456,7 +497,7 @@ namespace CopperMod.Amiga.Bus
                 out diskWakeReason);
             if (shadowEnabled)
             {
-                var legacyTicks = Stopwatch.GetTimestamp() - legacyStart;
+                var legacyTicks = Stopwatch.GetTimestamp() - legacyStartFallback;
                 var executorStart = Stopwatch.GetTimestamp();
                 var horizon = _agnusBusExecutor.GetNextCpuVisibilityHorizon(
                     currentCycle,
@@ -470,9 +511,7 @@ namespace CopperMod.Amiga.Bus
                     wakeSource,
                     diskWakeReason,
                     in horizon);
-                _agnusBusExecutor.RecordCpuVisibilityQueryTicks(
-                    legacyTicks,
-                    executorTicks);
+                _agnusBusExecutor.RecordCpuVisibilityQueryTicks(legacyTicks, executorTicks);
             }
 
             return cycle;

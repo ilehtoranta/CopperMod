@@ -924,7 +924,7 @@ public sealed class CopperScreenArchitectureTests
 			AppContext.BaseDirectory);
 
 		Assert.NotNull(options.Error);
-		Assert.Contains("temporarily unavailable", options.Error, StringComparison.OrdinalIgnoreCase);
+		Assert.Contains("not yet benchmark-stable", options.Error, StringComparison.OrdinalIgnoreCase);
 		Assert.Equal(M68kBackendKind.AccurateM68000, options.Profile.CpuBackend);
 		Assert.Null(options.CpuBackendOverride);
 
@@ -1009,11 +1009,11 @@ public sealed class CopperScreenArchitectureTests
 	}
 
 	[Fact]
-	public void EmulatorDefaultsToExpandedCopperStartProfile()
+	public void EmulatorDefaultsToExpandedM68040KickstartProfile()
 	{
 		var emulator = CopperScreenEmulator.CreateWithoutDisk();
 
-		Assert.Equal("Expanded A500 + CopperStart", emulator.ProfileName);
+		Assert.Equal("Expanded A500 + MC68040 + Kickstart ROM", emulator.ProfileName);
 	}
 
 	[Fact]

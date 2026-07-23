@@ -449,14 +449,9 @@ namespace CopperMod.Amiga.Bus
             out long predictedGrant)
         {
             predictedGrant = 0;
-            // This fast path predicts the nominal start of a new CPU transfer.
-            // Slot-by-slot retries for a request that has already lost arbitration
-            // are handled by the live pending-request loop.
+            // The unified executor materializes the CPU intent at this physical
+            // slot. It may win any unowned slot; after denial it remains pending.
             var candidate = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle));
-            if (!_bus.IsCpuAccessibleSlot(candidate))
-            {
-                candidate += AgnusChipSlotScheduler.SlotCycles;
-            }
 
             var limit = Math.Max(limitCycle, candidate);
             while (candidate <= limit)
@@ -468,7 +463,9 @@ namespace CopperMod.Amiga.Bus
                     return true;
                 }
 
-                candidate += 2 * AgnusChipSlotScheduler.SlotCycles;
+                // Once the CPU request loses its nominal slot it remains pending
+                // and may consume the immediately following physical slot.
+                candidate += AgnusChipSlotScheduler.SlotCycles;
             }
 
             return false;

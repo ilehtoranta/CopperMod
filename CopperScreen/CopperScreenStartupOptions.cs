@@ -22,7 +22,15 @@ internal sealed class CopperScreenStartupOptions
 		bool copperQuiescentDiagnostics,
 		bool deferredCpuBusBatch,
 		bool deferredCpuBusBatchVerify,
+		bool deferredCpuBusBatchConfigured,
+		bool deferredCpuChipWriteJournal,
+		bool deferredCpuChipWriteJournalConfigured,
 		bool deferredCpuChipReadSegments,
+		bool deferredCpuChipReadSegmentsConfigured,
+		bool deferredCpuCustomPointerWrites,
+		bool deferredCpuCustomPointerWritesConfigured,
+		bool deferredCpuCustomCompositionWrites,
+		bool deferredCpuCustomCompositionWritesConfigured,
 		bool cpuWaitSlotReference,
 		bool hardwareSpecialization,
 		FloppyDriveAudioOptions floppyDriveAudio,
@@ -43,7 +51,15 @@ internal sealed class CopperScreenStartupOptions
 		CopperQuiescentDiagnostics = copperQuiescentDiagnostics;
 		DeferredCpuBusBatch = deferredCpuBusBatch;
 		DeferredCpuBusBatchVerify = deferredCpuBusBatchVerify;
+		DeferredCpuBusBatchConfigured = deferredCpuBusBatchConfigured;
+		DeferredCpuChipWriteJournal = deferredCpuChipWriteJournal;
+		DeferredCpuChipWriteJournalConfigured = deferredCpuChipWriteJournalConfigured;
 		DeferredCpuChipReadSegments = deferredCpuChipReadSegments;
+		DeferredCpuChipReadSegmentsConfigured = deferredCpuChipReadSegmentsConfigured;
+		DeferredCpuCustomPointerWrites = deferredCpuCustomPointerWrites;
+		DeferredCpuCustomPointerWritesConfigured = deferredCpuCustomPointerWritesConfigured;
+		DeferredCpuCustomCompositionWrites = deferredCpuCustomCompositionWrites;
+		DeferredCpuCustomCompositionWritesConfigured = deferredCpuCustomCompositionWritesConfigured;
 		CpuWaitSlotReference = cpuWaitSlotReference;
 		HardwareSpecialization = hardwareSpecialization;
 		FloppyDriveAudio = floppyDriveAudio;
@@ -77,7 +93,23 @@ internal sealed class CopperScreenStartupOptions
 
 	public bool DeferredCpuBusBatchVerify { get; }
 
+	public bool DeferredCpuBusBatchConfigured { get; }
+
+	public bool DeferredCpuChipWriteJournal { get; }
+
+	public bool DeferredCpuChipWriteJournalConfigured { get; }
+
 	public bool DeferredCpuChipReadSegments { get; }
+
+	public bool DeferredCpuChipReadSegmentsConfigured { get; }
+
+	public bool DeferredCpuCustomPointerWrites { get; }
+
+	public bool DeferredCpuCustomPointerWritesConfigured { get; }
+
+	public bool DeferredCpuCustomCompositionWrites { get; }
+
+	public bool DeferredCpuCustomCompositionWritesConfigured { get; }
 
 	public bool CpuWaitSlotReference { get; }
 
@@ -109,7 +141,10 @@ internal sealed class CopperScreenStartupOptions
 		bool copperQuiescentDiagnostics = false,
 		bool deferredCpuBusBatch = false,
 		bool deferredCpuBusBatchVerify = false,
+		bool deferredCpuChipWriteJournal = false,
 		bool deferredCpuChipReadSegments = false,
+		bool deferredCpuCustomPointerWrites = false,
+		bool deferredCpuCustomCompositionWrites = false,
 		bool cpuWaitSlotReference = false,
 		bool hardwareSpecialization = true)
 	{
@@ -129,7 +164,15 @@ internal sealed class CopperScreenStartupOptions
 			copperQuiescentDiagnostics,
 			deferredCpuBusBatch,
 			deferredCpuBusBatchVerify,
+			deferredCpuBusBatch || deferredCpuBusBatchVerify,
+			deferredCpuChipWriteJournal,
+			deferredCpuChipWriteJournal,
 			deferredCpuChipReadSegments,
+			deferredCpuChipReadSegments,
+			deferredCpuCustomPointerWrites,
+			deferredCpuCustomPointerWrites,
+			deferredCpuCustomCompositionWrites,
+			deferredCpuCustomCompositionWrites,
 			cpuWaitSlotReference,
 			hardwareSpecialization,
 			floppyDriveAudio,
@@ -160,6 +203,14 @@ internal sealed class CopperScreenStartupOptions
 			false,
 			false,
 			false,
+			false,
+			false,
+			false,
+			false,
+			false,
+			false,
+			false,
+			false,
 			profile.FloppyDriveAudio,
 			profile.Input,
 			baseDirectory,
@@ -181,7 +232,15 @@ internal sealed class CopperScreenStartupOptions
 		var copperQuiescentDiagnostics = false;
 		var deferredCpuBusBatch = false;
 		var deferredCpuBusBatchVerify = false;
+		var deferredCpuBusBatchConfigured = false;
+		var deferredCpuChipWriteJournal = false;
+		var deferredCpuChipWriteJournalConfigured = false;
 		var deferredCpuChipReadSegments = false;
+		var deferredCpuChipReadSegmentsConfigured = false;
+		var deferredCpuCustomPointerWrites = false;
+		var deferredCpuCustomPointerWritesConfigured = false;
+		var deferredCpuCustomCompositionWrites = false;
+		var deferredCpuCustomCompositionWritesConfigured = false;
 		var cpuWaitSlotReference = false;
 		var hardwareSpecialization = true;
 		bool? floppySoundsEnabledOverride = null;
@@ -236,7 +295,7 @@ internal sealed class CopperScreenStartupOptions
 
 			if (IsOption(arg, "--jit"))
 			{
-				error ??= "The --jit option is temporarily unavailable. Use --cpu accurateM68000.";
+				error ??= "The --jit option is not yet benchmark-stable. Use --cpu accurateM68000.";
 				continue;
 			}
 
@@ -262,6 +321,15 @@ internal sealed class CopperScreenStartupOptions
 			if (IsOption(arg, "--cpu-deferred-bus-batch"))
 			{
 				deferredCpuBusBatch = true;
+				deferredCpuBusBatchConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--no-cpu-deferred-bus-batch"))
+			{
+				deferredCpuBusBatch = false;
+				deferredCpuBusBatchVerify = false;
+				deferredCpuBusBatchConfigured = true;
 				continue;
 			}
 
@@ -269,12 +337,63 @@ internal sealed class CopperScreenStartupOptions
 			{
 				deferredCpuBusBatch = true;
 				deferredCpuBusBatchVerify = true;
+				deferredCpuBusBatchConfigured = true;
 				continue;
 			}
 
 			if (IsOption(arg, "--cpu-deferred-chip-read-segments"))
 			{
 				deferredCpuChipReadSegments = true;
+				deferredCpuChipReadSegmentsConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--no-cpu-deferred-chip-read-segments"))
+			{
+				deferredCpuChipReadSegments = false;
+				deferredCpuChipReadSegmentsConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--cpu-deferred-chip-write-journal"))
+			{
+				deferredCpuChipWriteJournal = true;
+				deferredCpuChipWriteJournalConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--no-cpu-deferred-chip-write-journal"))
+			{
+				deferredCpuChipWriteJournal = false;
+				deferredCpuChipWriteJournalConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--cpu-deferred-custom-pointer-writes"))
+			{
+				deferredCpuCustomPointerWrites = true;
+				deferredCpuCustomPointerWritesConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--no-cpu-deferred-custom-pointer-writes"))
+			{
+				deferredCpuCustomPointerWrites = false;
+				deferredCpuCustomPointerWritesConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--cpu-deferred-custom-composition-writes"))
+			{
+				deferredCpuCustomCompositionWrites = true;
+				deferredCpuCustomCompositionWritesConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--no-cpu-deferred-custom-composition-writes"))
+			{
+				deferredCpuCustomCompositionWrites = false;
+				deferredCpuCustomCompositionWritesConfigured = true;
 				continue;
 			}
 
@@ -506,7 +625,15 @@ internal sealed class CopperScreenStartupOptions
 			copperQuiescentDiagnostics,
 			deferredCpuBusBatch,
 			deferredCpuBusBatchVerify,
+			deferredCpuBusBatchConfigured,
+			deferredCpuChipWriteJournal,
+			deferredCpuChipWriteJournalConfigured,
 			deferredCpuChipReadSegments,
+			deferredCpuChipReadSegmentsConfigured,
+			deferredCpuCustomPointerWrites,
+			deferredCpuCustomPointerWritesConfigured,
+			deferredCpuCustomCompositionWrites,
+			deferredCpuCustomCompositionWritesConfigured,
 			cpuWaitSlotReference,
 			hardwareSpecialization,
 			floppyDriveAudio,

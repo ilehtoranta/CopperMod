@@ -82,6 +82,9 @@ internal sealed class M68000JitBusAdapter :
     public bool TryInvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
         => _bus.TryInvokeHostGateway(instructionProgramCounter, token, state);
 
+    public M68kHostGatewayInvocation InvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
+        => _bus.InvokeHostGateway(instructionProgramCounter, token, state);
+
     public void ResetExternalDevices(long cycle) => _bus.ResetExternalDevices(cycle);
 
     public bool IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind)

@@ -30,7 +30,7 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void NoDiskRendersNonBlankInsertDiskFramebuffer()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateIdleEmulator();
 
 		emulator.RenderNextFrame();
 
@@ -980,7 +980,7 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void PrimaryFirePulseReachesCiaAPortDuringRender()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateIdleEmulator();
 
 		emulator.PulsePrimaryFire(frames: 1);
 		emulator.RenderNextFrame();
@@ -992,7 +992,7 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void PrimaryFirePulseDrivesBothJoystickFireLines()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateIdleEmulator();
 
 		emulator.PulsePrimaryFire(frames: 2);
 		emulator.RenderNextFrame();
@@ -1006,7 +1006,7 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void MousePortInputReachesAmigaPortOneRegisters()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateIdleEmulator();
 
 		emulator.MoveMousePort(5, -1);
 		emulator.SetMouseButtons(primaryFirePressed: true, secondFirePressed: true);
@@ -1023,7 +1023,9 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void MouseControllerAssignedToPortTwoReachesAmigaPortTwoRegisters()
 	{
-		var profile = CopperScreenProfile.LoadDefault(AppContext.BaseDirectory, out _);
+		Assert.True(
+			CopperScreenProfile.TryLoad("expanded-copperstart", AppContext.BaseDirectory, out var profile, out var profileError),
+			profileError);
 		var options = CopperScreenStartupOptions.FromSettings(
 			profile,
 			new string?[4],
@@ -1053,7 +1055,7 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void QuickMouseButtonClickSurvivesUntilNextRenderedFrame()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateIdleEmulator();
 
 		emulator.SetMouseButtons(primaryFirePressed: true, secondFirePressed: true);
 		emulator.SetMouseButtons(primaryFirePressed: false, secondFirePressed: false);
@@ -1081,7 +1083,7 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void NumpadJoystickInputReachesAmigaPortTwoRegisters()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateIdleEmulator();
 
 		emulator.SetJoystickPort(
 			up: true,
@@ -1103,7 +1105,7 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void KeyboardJoystickAssignedToPortOneReachesAmigaPortOneRegisters()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateIdleEmulator();
 
 		emulator.SetJoystickPort(
 			0,
@@ -1126,7 +1128,7 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void JoystickDownReachesAmigaPortTwoRegisters()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateIdleEmulator();
 
 		emulator.SetJoystickPort(
 			up: false,
@@ -1393,7 +1395,7 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void AudioFramesPerAppFrameUsesExactPalCapacity()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateIdleEmulator();
 		var expectedCapacity = (int)((((long)44_100 * AmigaConstants.A500PalCpuCyclesPerFrame) - 1) /
 			AmigaConstants.A500PalCpuCyclesPerSecond) + 1;
 
@@ -1405,7 +1407,7 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void AudioSilenceUsesExactVariablePalFrameCounts()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateIdleEmulator();
 		var audio = new float[emulator.AudioFramesPerAppFrame(44_100) * 2];
 		var counts = new HashSet<int>();
 		var totalFrames = 0L;
@@ -1429,7 +1431,7 @@ public sealed class CopperScreenBootTests
 	[Fact]
 	public void AudioSilenceCanReturnZeroFramesAtVeryLowSampleRates()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateIdleEmulator();
 		var audio = new float[emulator.AudioFramesPerAppFrame(1) * 2];
 		var totalFrames = 0;
 		var sawZeroFrame = false;
@@ -2553,7 +2555,9 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		using var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		using var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", "expanded-copperstart", diskPath },
+			AppContext.BaseDirectory);
 		var machine = GetMachine(emulator);
 		var loadedMain = false;
 		for (var frame = 0; frame < 360; frame++)
@@ -3541,6 +3545,11 @@ public sealed class CopperScreenBootTests
 		BigEndian.WriteUInt32(data, 4, CalculateBootChecksum(data.AsSpan(0, 1024)));
 		return data;
 	}
+
+	private static CopperScreenEmulator CreateIdleEmulator()
+		=> CopperScreenEmulator.Create(
+			new[] { "--profile", "expanded-copperstart" },
+			AppContext.BaseDirectory);
 
 	private static void WriteAmigaDosDirectoryHeader(byte[] data, int block, int parentBlock, string name, int secondaryType)
 	{

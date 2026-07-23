@@ -12,7 +12,7 @@ namespace CopperMod.Amiga.Bus
 {
     internal readonly struct HostGatewayStub
     {
-        public HostGatewayStub(uint address, uint token, Action<M68kCpuState> callback)
+        public HostGatewayStub(uint address, uint token, Func<M68kCpuState, M68kHostGatewayResult> callback)
         {
             Address = address;
             Token = token;
@@ -23,7 +23,7 @@ namespace CopperMod.Amiga.Bus
 
         public uint Token { get; }
 
-        public Action<M68kCpuState> Callback { get; }
+        public Func<M68kCpuState, M68kHostGatewayResult> Callback { get; }
     }
 
     /// <summary>Owns a reversible six-byte ROM gateway overlay.</summary>
@@ -89,7 +89,6 @@ namespace CopperMod.Amiga.Bus
         private const int MaxDeferredCpuDataAccesses = 64;
         private const long DeferredCpuBusBatchDefaultCycleWindow = 4096;
         private const int CodeGenerationPageShift = 8;
-        private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
         private const int HostTrapStubPageCount = 1 << (24 - CodeGenerationPageShift);
         private const string ExactCpuChipSlotFastPathSwitch = "CopperMod.Amiga.ExactCpuChipSlotFastPath";
         private const string ExactCpuChipSlotFastPathEnvironmentVariable = "COPPER_AMIGA_EXACT_CPU_CHIP_SLOT_FAST";
@@ -244,7 +243,7 @@ namespace CopperMod.Amiga.Bus
         private readonly AutoconfigRtgBoard? _autoconfigRtg;
         private readonly AutoconfigChain _autoconfig;
         private readonly Dictionary<uint, HostGatewayStub> _hostTrapStubs = new Dictionary<uint, HostGatewayStub>();
-        private readonly Dictionary<uint, Action<M68kCpuState>> _relocatableHostTrapStubs = new Dictionary<uint, Action<M68kCpuState>>();
+        private readonly Dictionary<uint, Func<M68kCpuState, M68kHostGatewayResult>> _relocatableHostTrapStubs = new Dictionary<uint, Func<M68kCpuState, M68kHostGatewayResult>>();
         private readonly List<uint> _hostTrapStubAddresses = new List<uint>();
         private readonly bool[] _hostTrapStubPages = new bool[HostTrapStubPageCount];
         private readonly AmigaMappedMemoryBackend _mappedMemory = new AmigaMappedMemoryBackend();
@@ -310,13 +309,94 @@ namespace CopperMod.Amiga.Bus
         private long _lastRasterAdvanceCycle;
         private bool _deferredCpuInstructionTimingActive;
         private int _deferredCpuDataAccessCount;
+        private readonly long[] _deferredCpuDataRequestedCycles = new long[MaxDeferredCpuDataAccesses];
+        private readonly long[] _deferredCpuDataRequestedRetireDelays = new long[MaxDeferredCpuDataAccesses];
+        private readonly ulong[] _deferredCpuDataTimingTokens = new ulong[MaxDeferredCpuDataAccesses];
+        private readonly M68kInstructionFetchPublicationPhase[] _deferredCpuDataInstructionFetchPublicationPhases =
+            new M68kInstructionFetchPublicationPhase[MaxDeferredCpuDataAccesses];
+        private readonly long[] _deferredCpuDataInstructionFetchRetirementFloors =
+            new long[MaxDeferredCpuDataAccesses];
+        private readonly M68kInstructionFetchPublicationContext[]
+            _deferredCpuDataInstructionFetchPublicationContexts =
+                new M68kInstructionFetchPublicationContext[MaxDeferredCpuDataAccesses];
+        private ulong _deferredCpuDataTimingTokenClock;
+        private ulong _lastDeferredCpuInstructionFetchTimingToken;
+        private long _deferredCpuProjectedRetireDelay;
+        private long _deferredCpuProjectedMaxRetireDelay;
+        private long _deferredCpuProjectedMaxRetireVirtualCycle;
+        private long _deferredCpuProjectedMaxRetireDependencyCompletedCycle;
+        private ulong _deferredCpuProjectedMaxRetireDependencyToken;
+        private int _deferredCpuProjectedMaxRetireJournalCount;
+        private long _deferredCpuProjectedLastVirtualCycle;
+        private long _deferredCpuProjectedLastDependencyCompletedCycle;
+        private ulong _deferredCpuProjectedLastDependencyToken;
+        private int _deferredCpuProjectedLastJournalCount;
+        private int _deferredCpuProjectedLastEntryCount;
+        private int _deferredCpuProjectedLastRejectReason;
+        private int _deferredCpuProjectedLastCpuEventCount;
+        private int _deferredCpuProjectedLastFailedIndex;
+        private long _deferredCpuProjectedLastFailedRequestedCycle;
+        private int _deferredCpuProjectedLastUnsupported;
+        private int _deferredCpuProjectedEntryCount;
+        private long _deferredCpuProjectedCompletedCycle = -1;
+        private long _deferredCpuInstructionPublicationPhaseSlip;
+        private readonly long[] _deferredCpuProjectedEntryCompletedCycles =
+            new long[MaxDeferredCpuDataAccesses];
+        private readonly long[] _deferredCpuProjectedEntryGrantCycles =
+            new long[MaxDeferredCpuDataAccesses];
+        private M68kDeferredCpuBusCheckpoint _lastDeferredCpuBusCheckpoint;
+        private M68kDeferredCpuBusCheckpoint _previousDeferredCpuBusCheckpoint;
+        private bool _deferredCpuTrimmedPendingTransitionActive;
+        private long _deferredCpuTrimmedPendingOriginalCycle;
+        private long _deferredCpuRetirementPublicationShadowEntries;
+        private long _deferredCpuRetirementPublicationShadowLastNominalCycle = -1;
+        private long _deferredCpuRetirementPublicationShadowLastFloor = -1;
+        private long _deferredCpuRetirementPublicationShadowLastInheritedDelay;
+        private long _deferredCpuRetirementPublicationShadowLastLegacyReadyCycle = -1;
+        private long _deferredCpuRetirementPublicationShadowLastTranslatedCycle = -1;
+        private M68kInstructionFetchPublicationPhase
+            _deferredCpuRetirementPublicationShadowLastPhase;
+        private long _deferredCpuRetirementPublicationShadowLastGroup;
+        private long _deferredCpuInstructionPublicationPhaseSlipGroup;
+        private ulong _deferredCpuInstructionPublicationPhaseSlipToken;
+        private long _deferredCpuInstructionPublicationPhaseSlipVirtualReadyCycle;
+        private long _deferredCpuInstructionPublicationPhaseSlipActualReadyCycle;
+        private M68kInstructionFetchPublicationContext
+            _deferredCpuInstructionPublicationPhaseSlipContext;
+        private M68kInstructionFetchPublicationContext
+            _deferredCpuRetirementPublicationShadowLastContext;
+        private bool _deferredCpuRetirementPublicationShadowFirstCaptured;
+        private long _deferredCpuRetirementPublicationShadowFirstNominalCycle = -1;
+        private long _deferredCpuRetirementPublicationShadowFirstFloor = -1;
+        private long _deferredCpuRetirementPublicationShadowFirstInheritedDelay;
+        private long _deferredCpuRetirementPublicationShadowFirstTranslatedCycle = -1;
+        private long _deferredCpuRetirementPublicationShadowFirstSlipGroup;
+        private M68kInstructionFetchPublicationContext
+            _deferredCpuRetirementPublicationShadowFirstContext;
+        private M68kInstructionFetchPublicationContext
+            _deferredCpuInstructionFetchLastCapturedPublicationContext;
+        private ulong _deferredCpuIrcPairShadowLastToken;
+        private long _deferredCpuIrcPairShadowLastReadyCycle = -1;
+        private long _deferredCpuIrcPairShadowEntries;
+        private long _deferredCpuIrcPairShadowFirstPredecessorReadyCycle = -1;
+        private long _deferredCpuIrcPairShadowFirstPredictedReadyCycle = -1;
+        private long _deferredCpuIrcPairShadowPredecessorReadyCycle = -1;
+        private long _deferredCpuIrcPairShadowPredictedReadyCycle = -1;
+        private long _deferredCpuRetirementPublicationShadowTrimEntries;
+        private long _deferredCpuRetirementPublicationShadowReplayEntries;
+        private bool _deferredCpuRetirementPublicationShadowLastWasReplay;
         private ulong _deferredCpuDataLongShapeBits;
         private ulong _deferredCpuDataCiaShapeBits;
+        private ulong _deferredCpuDataInstructionFetchShapeBits;
+        private ulong _deferredCpuDataRomShapeBits;
         private long _deferredCpuDataReplayCycle;
         private bool _deferredCpuBusBatchActive;
         private bool _deferredCpuBusBatchHasTargetCycle;
         private long _deferredCpuBusBatchTargetCycle;
+        private readonly bool _deferredCpuChipWriteJournalEnabled;
         private readonly bool _deferredCpuChipReadSegmentsEnabled;
+        private readonly bool _deferredCpuCustomPointerWritesEnabled;
+        private readonly bool _deferredCpuCustomCompositionWritesEnabled;
         private bool _endingDeferredCpuBusBatch;
         private bool _deferredCpuBusBatchExecutionStarted;
         private M68kTraceBatchWakeSource _deferredCpuBusBatchPendingWakeSource;
@@ -326,6 +406,11 @@ namespace CopperMod.Amiga.Bus
         private long _deferredCpuBusBatchInstructions;
         private long _deferredCpuBusBatchSkippedInstructionFlushes;
         private long _deferredCpuBusBatchFlushes;
+        private long _deferredCpuTimingProjectionAttempts;
+        private long _deferredCpuTimingProjectionSupported;
+        private long _deferredCpuTimingProjectionMatches;
+        private long _deferredCpuTimingProjectionMismatches;
+        private string _deferredCpuTimingProjectionFirstMismatch = string.Empty;
         private long _deferredCpuBusBatchExitTargetCycle;
         private long _deferredCpuBusBatchExitMaxInstructions;
         private long _deferredCpuBusBatchExitChipVisibleAccess;
@@ -389,7 +474,6 @@ namespace CopperMod.Amiga.Bus
         private AmigaBusAccessKind _chipDataBusLatchKind = AmigaBusAccessKind.HostTrap;
 
         internal long ExecutedChipBusHorizon => _chipDataBusLatchCycle;
-        private uint _codeGenerationClock = 1;
         private uint _cpuPhysicalAddressMapGeneration = 1;
         private int _hostAcceleratorAccessDepth;
         private uint _hostAcceleratorRealFastWriteStart = uint.MaxValue;
@@ -407,12 +491,10 @@ namespace CopperMod.Amiga.Bus
         private uint _nextHostTrapId = 1;
         private readonly AmigaChipset _chipset;
 
-        internal event Action<uint, int>? JitEligibleMemoryWritten;
-
         event Action<uint, int>? IM68kJitBus.JitCodeRangeWritten
         {
-            add => JitEligibleMemoryWritten += value;
-            remove => JitEligibleMemoryWritten -= value;
+            add { }
+            remove { }
         }
 
         public Bus(
@@ -442,7 +524,10 @@ namespace CopperMod.Amiga.Bus
             bool verifyDeferredDmaReads = false,
             bool enableDeferredCpuInternalNoBusWindow = false,
             int cpuEventJournalCapacity = CpuEventJournal.DefaultCapacity,
-            bool enableDeferredCpuChipReadSegments = false)
+            bool enableDeferredCpuChipWriteJournal = false,
+            bool enableDeferredCpuChipReadSegments = false,
+            bool enableDeferredCpuCustomPointerWrites = false,
+            bool enableDeferredCpuCustomCompositionWrites = false)
         {
             var selectedChipset = chipset ?? AmigaChipset.OcsPal;
             if (selectedChipset.HasAgaComponent)
@@ -527,10 +612,7 @@ namespace CopperMod.Amiga.Bus
             // the causal hardware executor takes ownership. Keep specialized
             // production on the authoritative scheduler path; bus-access capture
             // must remain observational there.
-            _useFastZeroWaitAccesses =
-                !enableHardwareSpecialization &&
-                !captureBusAccesses &&
-                _useChipSlotScheduler;
+            _useFastZeroWaitAccesses = false;
             _useExactCpuChipSlotFastPath = ResolveExactCpuChipSlotFastPath();
             _exactCpuChipSlotFastPathEnabled = _useExactCpuChipSlotFastPath &&
                 _useFastZeroWaitAccesses &&
@@ -544,7 +626,10 @@ namespace CopperMod.Amiga.Bus
             CopperQuiescentShadowPredictionEnabled = enableCopperQuiescentDiagnostics ||
                 verifyCopperQuiescentFastPath;
             _deferredCpuBusBatchEnabled = enableDeferredCpuBusBatch;
+            _deferredCpuChipWriteJournalEnabled = enableDeferredCpuChipWriteJournal;
             _deferredCpuChipReadSegmentsEnabled = enableDeferredCpuChipReadSegments;
+            _deferredCpuCustomPointerWritesEnabled = enableDeferredCpuCustomPointerWrites;
+            _deferredCpuCustomCompositionWritesEnabled = enableDeferredCpuCustomCompositionWrites;
             _deferredCpuInternalNoBusWindowEnabled = enableDeferredCpuInternalNoBusWindow;
             _deferredCpuBusBatchVerifyEnabled = verifyDeferredCpuBusBatch;
             _deferredDmaReadsVerifyEnabled = verifyDeferredDmaReads && enableHardwareSpecialization;
@@ -884,6 +969,129 @@ namespace CopperMod.Amiga.Bus
         internal long DeferredCpuBusBatchSkippedInstructionFlushes => _deferredCpuBusBatchSkippedInstructionFlushes;
 
         internal long DeferredCpuBusBatchFlushes => _deferredCpuBusBatchFlushes;
+        internal long DeferredCpuTimingProjectionAttempts => _deferredCpuTimingProjectionAttempts;
+        internal M68kDeferredCpuBusCheckpoint LastDeferredCpuBusCheckpoint =>
+            _lastDeferredCpuBusCheckpoint;
+        internal M68kDeferredCpuBusCheckpoint PreviousDeferredCpuBusCheckpoint =>
+            _previousDeferredCpuBusCheckpoint;
+        internal long DeferredCpuRetirementPublicationShadowEntries =>
+            _deferredCpuRetirementPublicationShadowEntries;
+        internal long DeferredCpuRetirementPublicationShadowLastNominalCycle =>
+            _deferredCpuRetirementPublicationShadowLastNominalCycle;
+        internal long DeferredCpuRetirementPublicationShadowLastFloor =>
+            _deferredCpuRetirementPublicationShadowLastFloor;
+        internal long DeferredCpuRetirementPublicationShadowLastInheritedDelay =>
+            _deferredCpuRetirementPublicationShadowLastInheritedDelay;
+        internal long DeferredCpuInstructionPublicationPhaseSlip =>
+            _deferredCpuInstructionPublicationPhaseSlip;
+
+        internal long DeferredCpuProjectedMaxRetireDelay =>
+            _deferredCpuProjectedMaxRetireDelay;
+
+        internal long DeferredCpuProjectedMaxRetireVirtualCycle =>
+            _deferredCpuProjectedMaxRetireVirtualCycle;
+
+        internal long DeferredCpuProjectedMaxRetireDependencyCompletedCycle =>
+            _deferredCpuProjectedMaxRetireDependencyCompletedCycle;
+
+        internal ulong DeferredCpuProjectedMaxRetireDependencyToken =>
+            _deferredCpuProjectedMaxRetireDependencyToken;
+
+        internal int DeferredCpuProjectedMaxRetireJournalCount =>
+            _deferredCpuProjectedMaxRetireJournalCount;
+
+        internal long DeferredCpuProjectedLastVirtualCycle =>
+            _deferredCpuProjectedLastVirtualCycle;
+
+        internal long DeferredCpuProjectedLastDependencyCompletedCycle =>
+            _deferredCpuProjectedLastDependencyCompletedCycle;
+
+        internal ulong DeferredCpuProjectedLastDependencyToken =>
+            _deferredCpuProjectedLastDependencyToken;
+
+        internal int DeferredCpuProjectedLastJournalCount =>
+            _deferredCpuProjectedLastJournalCount;
+
+        internal int DeferredCpuProjectedLastEntryCount =>
+            _deferredCpuProjectedLastEntryCount;
+
+        internal int DeferredCpuProjectedLastRejectReason =>
+            _deferredCpuProjectedLastRejectReason;
+
+        internal int DeferredCpuProjectedLastCpuEventCount =>
+            _deferredCpuProjectedLastCpuEventCount;
+
+        internal int DeferredCpuProjectedLastFailedIndex =>
+            _deferredCpuProjectedLastFailedIndex;
+
+        internal long DeferredCpuProjectedLastFailedRequestedCycle =>
+            _deferredCpuProjectedLastFailedRequestedCycle;
+
+        internal int DeferredCpuProjectedLastUnsupported =>
+            _deferredCpuProjectedLastUnsupported;
+        internal long DeferredCpuRetirementPublicationShadowLastLegacyReadyCycle =>
+            _deferredCpuRetirementPublicationShadowLastLegacyReadyCycle;
+        internal long DeferredCpuRetirementPublicationShadowLastTranslatedCycle =>
+            _deferredCpuRetirementPublicationShadowLastTranslatedCycle;
+        internal M68kInstructionFetchPublicationPhase
+            DeferredCpuRetirementPublicationShadowLastPhase =>
+                _deferredCpuRetirementPublicationShadowLastPhase;
+        internal long DeferredCpuRetirementPublicationShadowLastGroup =>
+            _deferredCpuRetirementPublicationShadowLastGroup;
+        internal long DeferredCpuInstructionPublicationPhaseSlipGroup =>
+            _deferredCpuInstructionPublicationPhaseSlipGroup;
+
+        internal ulong DeferredCpuInstructionPublicationPhaseSlipToken =>
+            _deferredCpuInstructionPublicationPhaseSlipToken;
+
+        internal long DeferredCpuInstructionPublicationPhaseSlipVirtualReadyCycle =>
+            _deferredCpuInstructionPublicationPhaseSlipVirtualReadyCycle;
+
+        internal long DeferredCpuInstructionPublicationPhaseSlipActualReadyCycle =>
+            _deferredCpuInstructionPublicationPhaseSlipActualReadyCycle;
+
+        internal M68kInstructionFetchPublicationContext
+            DeferredCpuInstructionPublicationPhaseSlipContext =>
+                _deferredCpuInstructionPublicationPhaseSlipContext;
+        internal M68kInstructionFetchPublicationContext
+            DeferredCpuRetirementPublicationShadowLastContext =>
+                _deferredCpuRetirementPublicationShadowLastContext;
+        internal long DeferredCpuIrcPairShadowEntries =>
+            _deferredCpuIrcPairShadowEntries;
+        internal long DeferredCpuIrcPairShadowFirstPredecessorReadyCycle =>
+            _deferredCpuIrcPairShadowFirstPredecessorReadyCycle;
+        internal long DeferredCpuIrcPairShadowFirstPredictedReadyCycle =>
+            _deferredCpuIrcPairShadowFirstPredictedReadyCycle;
+        internal long DeferredCpuIrcPairShadowPredecessorReadyCycle =>
+            _deferredCpuIrcPairShadowPredecessorReadyCycle;
+        internal long DeferredCpuIrcPairShadowPredictedReadyCycle =>
+            _deferredCpuIrcPairShadowPredictedReadyCycle;
+        internal long DeferredCpuRetirementPublicationShadowFirstNominalCycle =>
+            _deferredCpuRetirementPublicationShadowFirstNominalCycle;
+        internal long DeferredCpuRetirementPublicationShadowFirstFloor =>
+            _deferredCpuRetirementPublicationShadowFirstFloor;
+        internal long DeferredCpuRetirementPublicationShadowFirstInheritedDelay =>
+            _deferredCpuRetirementPublicationShadowFirstInheritedDelay;
+        internal long DeferredCpuRetirementPublicationShadowFirstTranslatedCycle =>
+            _deferredCpuRetirementPublicationShadowFirstTranslatedCycle;
+        internal long DeferredCpuRetirementPublicationShadowFirstSlipGroup =>
+            _deferredCpuRetirementPublicationShadowFirstSlipGroup;
+        internal M68kInstructionFetchPublicationContext
+            DeferredCpuRetirementPublicationShadowFirstContext =>
+                _deferredCpuRetirementPublicationShadowFirstContext;
+        internal M68kInstructionFetchPublicationContext
+            DeferredCpuInstructionFetchLastCapturedPublicationContext =>
+                _deferredCpuInstructionFetchLastCapturedPublicationContext;
+        internal long DeferredCpuRetirementPublicationShadowTrimEntries =>
+            _deferredCpuRetirementPublicationShadowTrimEntries;
+        internal long DeferredCpuRetirementPublicationShadowReplayEntries =>
+            _deferredCpuRetirementPublicationShadowReplayEntries;
+        internal bool DeferredCpuRetirementPublicationShadowLastWasReplay =>
+            _deferredCpuRetirementPublicationShadowLastWasReplay;
+        internal long DeferredCpuTimingProjectionSupported => _deferredCpuTimingProjectionSupported;
+        internal long DeferredCpuTimingProjectionMatches => _deferredCpuTimingProjectionMatches;
+        internal long DeferredCpuTimingProjectionMismatches => _deferredCpuTimingProjectionMismatches;
+        internal string DeferredCpuTimingProjectionFirstMismatch => _deferredCpuTimingProjectionFirstMismatch;
 
         internal long DeferredCpuBusBatchExitTargetCycle => _deferredCpuBusBatchExitTargetCycle;
 
@@ -1162,15 +1370,16 @@ namespace CopperMod.Amiga.Bus
         }
 
         public uint RegisterHostGateway(uint address, Action<M68kCpuState> callback)
+            => RegisterHostGateway(address, state => { callback(state); return M68kHostGatewayResult.Completed; });
+
+        public uint RegisterHostGateway(uint address, Func<M68kCpuState, M68kHostGatewayResult> callback)
         {
             var token = AllocateHostGatewayToken();
             _hostTrapStubs[address] = new HostGatewayStub(address, token, callback ?? throw new ArgumentNullException(nameof(callback)));
             AddHostTrapStubAddress(address);
             MarkHostTrapStubPages(address);
             InvalidateInstructionFetchWindows();
-            RebuildCpuBusBankTable();
-            TouchCodePages(address, HostGatewayInstructionLength);
-            NotifyJitEligibleMemoryWritten(address, HostGatewayInstructionLength);
+            RebuildCpuBusBanksForHostGateway(address);
             return token;
         }
 
@@ -1179,6 +1388,9 @@ namespace CopperMod.Amiga.Bus
         /// original bytes for diagnostics and later restoration.
         /// </summary>
         public HostGatewayOverlay InstallHostGatewayOverlay(uint address, Action<M68kCpuState> callback)
+            => InstallHostGatewayOverlay(address, state => { callback(state); return M68kHostGatewayResult.Completed; });
+
+        public HostGatewayOverlay InstallHostGatewayOverlay(uint address, Func<M68kCpuState, M68kHostGatewayResult> callback)
         {
             var originalBytes = new byte[HostGatewayInstructionLength];
             for (var offset = 0; offset < originalBytes.Length; offset++)
@@ -1190,6 +1402,9 @@ namespace CopperMod.Amiga.Bus
         }
 
         public uint RegisterRelocatableHostGateway(Action<M68kCpuState> callback)
+            => RegisterRelocatableHostGateway(state => { callback(state); return M68kHostGatewayResult.Completed; });
+
+        public uint RegisterRelocatableHostGateway(Func<M68kCpuState, M68kHostGatewayResult> callback)
         {
             var token = AllocateHostGatewayToken();
             _relocatableHostTrapStubs[token] = callback ?? throw new ArgumentNullException(nameof(callback));
@@ -1197,23 +1412,24 @@ namespace CopperMod.Amiga.Bus
         }
 
         public bool TryInvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
+            => InvokeHostGateway(instructionProgramCounter, token, state).Handled;
+
+        public M68kHostGatewayInvocation InvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
         {
             if (_hostTrapStubs.TryGetValue(instructionProgramCounter, out var stub) &&
                 stub.Token == token)
             {
-                stub.Callback(state);
-                return true;
+                return new M68kHostGatewayInvocation(true, stub.Callback(state));
             }
 
             if (_relocatableHostTrapStubs.TryGetValue(token, out var callback) &&
                 TryReadRelocatableHostGatewayToken(instructionProgramCounter, out var actualToken) &&
                 actualToken == token)
             {
-                callback(state);
-                return true;
+                return new M68kHostGatewayInvocation(true, callback(state));
             }
 
-            return false;
+            return default;
         }
 
         public bool HasHostGateway(uint address)
@@ -1222,7 +1438,7 @@ namespace CopperMod.Amiga.Bus
                 TryReadRelocatableHostGatewayToken(address, out _);
         }
 
-        internal void RemoveHostGateway(uint address, uint token)
+        public void RemoveHostGateway(uint address, uint token)
         {
             if (!_hostTrapStubs.TryGetValue(address, out var stub) || stub.Token != token)
             {
@@ -1238,9 +1454,7 @@ namespace CopperMod.Amiga.Bus
             }
 
             InvalidateInstructionFetchWindows();
-            RebuildCpuBusBankTable();
-            TouchCodePages(address, HostGatewayInstructionLength);
-            NotifyJitEligibleMemoryWritten(address, HostGatewayInstructionLength);
+            RebuildCpuBusBanksForHostGateway(address);
         }
 
         private uint AllocateHostGatewayToken()
@@ -1839,8 +2053,7 @@ namespace CopperMod.Amiga.Bus
         {
             var normalizedAddress = address;
             region = default;
-            if (!_useFastZeroWaitAccesses ||
-                byteCount <= 0 ||
+            if (byteCount <= 0 ||
                 normalizedAddress > CpuAddressMask ||
                 (ulong)normalizedAddress + (ulong)byteCount > 0x0100_0000UL)
             {
@@ -1920,17 +2133,25 @@ namespace CopperMod.Amiga.Bus
         void IM68kInstructionFetchWindowBus.CommitInstructionFetchWindowWord(
             in M68kInstructionFetchWindow window,
             uint address,
-            ref long cycle)
-            => CommitInstructionFetchWindowWord(in window, address, ref cycle);
+            ref long cycle,
+            M68kInstructionFetchPublicationPhase publicationPhase,
+            long retirementFloor,
+            in M68kInstructionFetchPublicationContext publicationContext)
+            => CommitInstructionFetchWindowWord(
+                in window,
+                address,
+                ref cycle,
+                publicationPhase,
+                retirementFloor,
+                in publicationContext);
 
         bool IM68kFixedPlanRunBus.TryGetFixedPlanRunWindow(
             uint address,
             out M68kFixedPlanRunWindow window)
         {
             window = default;
-            if (!_useFastZeroWaitAccesses ||
-                _captureBusAccesses ||
-                !TryGetInstructionFetchWindow(address, out var fetchWindow))
+			if (_captureBusAccesses ||
+				!TryGetInstructionFetchWindow(address, out var fetchWindow))
             {
                 return false;
             }
@@ -1948,6 +2169,28 @@ namespace CopperMod.Amiga.Bus
                 readyCycleOffset: 0,
                 nextBusCycleOffset: 4,
                 deferredBatchEligible: true);
+            return true;
+        }
+
+        internal bool TryWriteJournaledCpuCustomWord(
+            uint address,
+            ushort value,
+            ref long cycle,
+            AmigaBusAccessKind accessKind)
+        {
+            if (ClassifyTarget(address) != AmigaBusAccessTarget.CustomRegisters)
+            {
+                return false;
+            }
+
+            var requestedCycle = cycle;
+            WriteCpuWordArbitrated(
+                AmigaBusAccessTarget.CustomRegisters,
+                address,
+                value,
+                ref cycle,
+                accessKind,
+                requestedCycle);
             return true;
         }
 
@@ -2004,9 +2247,26 @@ namespace CopperMod.Amiga.Bus
         internal void CommitInstructionFetchWindowWord(
             in M68kInstructionFetchWindow window,
             uint address,
-            ref long cycle)
+            ref long cycle,
+            M68kInstructionFetchPublicationPhase publicationPhase = M68kInstructionFetchPublicationPhase.Required,
+            long retirementFloor = long.MinValue,
+            in M68kInstructionFetchPublicationContext publicationContext = default)
         {
+            _lastDeferredCpuInstructionFetchTimingToken = 0;
             var target = (AmigaBusAccessTarget)window.BusTag;
+            if (target is AmigaBusAccessTarget.ExpansionRam or AmigaBusAccessTarget.Rom &&
+                TryDeferExactCpuExpansionDataTiming(
+                    AmigaBusAccessSize.Word,
+                    ref cycle,
+                    AmigaBusAccessKind.CpuInstructionFetch,
+                    target,
+                    publicationPhase,
+                    retirementFloor,
+                    in publicationContext))
+            {
+                return;
+            }
+
             CommitExactCpuDataTiming(
                 target,
                 address,
@@ -2583,6 +2843,15 @@ namespace CopperMod.Amiga.Bus
                 }
             }
 
+            if (_deferredCpuBusBatchActive &&
+                !_agnusBusExecutor.IsFlushingCpuEventJournal &&
+                target == AmigaBusAccessTarget.CustomRegisters &&
+                accessKind == AmigaBusAccessKind.CpuDataWrite &&
+                TryJournalDeferredCpuCustomWordWrite(address, value, ref cycle))
+            {
+                return;
+            }
+
             var requestedCycle = cycle;
             FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: true, ref cycle);
             if (_useFastZeroWaitAccesses)
@@ -2848,7 +3117,6 @@ namespace CopperMod.Amiga.Bus
             }
 
             data.CopyTo(_chipRam.Data.AsSpan((int)address, data.Length));
-            TouchCodePages(address, data.Length);
         }
 
         internal byte ReadHostByte(uint address)
@@ -2951,8 +3219,6 @@ namespace CopperMod.Amiga.Bus
             if (TryGetRealFastRamOffset(address, out var realFastOffset))
             {
                 _realFastRam[realFastOffset] = value;
-                TouchCodePage(address);
-                NotifyJitEligibleMemoryWritten(address, 1);
                 return;
             }
 
@@ -3041,7 +3307,7 @@ namespace CopperMod.Amiga.Bus
             }
 
             memory = null;
-            return false;
+            return default;
         }
 
         /// <summary>
@@ -3147,8 +3413,6 @@ namespace CopperMod.Amiga.Bus
                 return;
             }
 
-            TouchCodePages(address, byteCount);
-            NotifyJitEligibleMemoryWritten(address, byteCount);
         }
 
         private sealed class HostAcceleratorAccessScope : IDisposable
@@ -3198,8 +3462,6 @@ namespace CopperMod.Amiga.Bus
             if (TryGetContiguousWritableSpan(address, data.Length, out var destination))
             {
                 data.CopyTo(destination);
-                TouchCodePages(address, data.Length);
-                NotifyJitEligibleMemoryWritten(address, data.Length);
                 return;
             }
 
@@ -3238,8 +3500,6 @@ namespace CopperMod.Amiga.Bus
             if (TryGetContiguousWritableSpan(address, byteCount, out var destination))
             {
                 destination.Clear();
-                TouchCodePages(address, byteCount);
-                NotifyJitEligibleMemoryWritten(address, byteCount);
                 return;
             }
 
@@ -3321,8 +3581,6 @@ namespace CopperMod.Amiga.Bus
             }
 
             source.CopyTo(destination);
-            TouchCodePages(destinationAddress, byteCount);
-            NotifyJitEligibleMemoryWritten(destinationAddress, byteCount);
             return true;
         }
 
@@ -3709,7 +3967,10 @@ namespace CopperMod.Amiga.Bus
             return execution.Value;
         }
 
-        internal long PredictLiveCopperDmaWordCycle(uint address, long requestedCycle)
+        internal long PredictLiveCopperDmaWordCycle(
+            uint address,
+            long requestedCycle,
+            bool preservePhysicalPhaseAcrossLine = false)
         {
             address = MaskChipDmaAddress(address);
             // A dormant or newly re-armed Copper may carry an old internal
@@ -3717,7 +3978,10 @@ namespace CopperMod.Amiga.Bus
             // horizon, but it may never reserve and sample a historical slot.
             requestedCycle = Math.Max(Math.Max(0, requestedCycle), _chipDataBusLatchCycle);
             return _useChipSlotScheduler
-                ? _hrmSlotEngine.PredictCopperDmaWordSlot(address, requestedCycle)
+                ? _hrmSlotEngine.PredictCopperDmaWordSlot(
+                    address,
+                    requestedCycle,
+                    preservePhysicalPhaseAcrossLine)
                 : requestedCycle;
         }
 
@@ -3725,6 +3989,7 @@ namespace CopperMod.Amiga.Bus
             uint address,
             long requestedCycle,
             long slotCycle,
+            bool preservePhysicalPhaseAcrossLine,
             out ushort value,
             out AmigaBusAccessResult access)
         {
@@ -3751,6 +4016,7 @@ namespace CopperMod.Amiga.Bus
                     address,
                     requestedCycle,
                     slotCycle,
+                    preservePhysicalPhaseAcrossLine,
                     out access);
             }
 
@@ -4522,6 +4788,64 @@ namespace CopperMod.Amiga.Bus
             _cpuPhysicalAddressMapGeneration++;
         }
 
+        private void RebuildCpuBusBanksForHostGateway(uint address)
+        {
+            RebuildCpuBusBank(address & CpuAddressMask);
+            var endAddress = address + (uint)HostGatewayInstructionLength - 1u;
+            if ((address >> CpuBusBankShift) != (endAddress >> CpuBusBankShift))
+            {
+                RebuildCpuBusBank(endAddress & CpuAddressMask);
+            }
+
+            RebuildJitDirectRamBank(address);
+            if ((address >> CpuBusBankShift) != (endAddress >> CpuBusBankShift))
+            {
+                RebuildJitDirectRamBank(endAddress);
+            }
+
+            _cpuPhysicalAddressMapGeneration++;
+        }
+
+        private void RebuildCpuBusBank(uint normalizedAddress)
+        {
+            var bank = (int)(normalizedAddress >> CpuBusBankShift);
+            var bankAddress = (uint)(bank << CpuBusBankShift);
+            var kind = ClassifyCpuBusBank(bankAddress, out var offset);
+            _cpuBusBankKinds[bank] = kind;
+            _cpuBusBankOffsets[bank] = offset;
+        }
+
+        private void RebuildJitDirectRamBank(uint address)
+        {
+            var bank = (int)(address >> CpuBusBankShift);
+            var bankAddress = (uint)bank << CpuBusBankShift;
+            _jitDirectRamBankKinds[bank] = 0;
+            _jitDirectRamBankOffsets[bank] = 0;
+            if (HasHostTrapInCpuBusBank(bankAddress))
+            {
+                return;
+            }
+
+            if (_expansionRam.TryGetContiguousMemory(
+                    bankAddress,
+                    CpuBusBankSize,
+                    out _,
+                    out var expansionOffset))
+            {
+                _jitDirectRamBankKinds[bank] = (byte)M68kJitDirectRamBankKind.PseudoFast;
+                _jitDirectRamBankOffsets[bank] = expansionOffset;
+            }
+            else if (_realFastRam.TryGetContiguousMemory(
+                    bankAddress,
+                    CpuBusBankSize,
+                    out _,
+                    out var realFastOffset))
+            {
+                _jitDirectRamBankKinds[bank] = (byte)M68kJitDirectRamBankKind.RealFast;
+                _jitDirectRamBankOffsets[bank] = realFastOffset;
+            }
+        }
+
         private void PopulateJitDirectRamBanks(
             AmigaLinearRamBackend memory,
             M68kJitDirectRamBankKind kind)
@@ -4729,7 +5053,10 @@ namespace CopperMod.Amiga.Bus
             }
 
             var bankEndExclusive = bankAddress + CpuBusBankSize;
-            var firstPossibleTrapStart = bankAddress >= 3u ? bankAddress - 3u : 0u;
+            var overlapPrefix = (uint)HostGatewayInstructionLength - 1u;
+            var firstPossibleTrapStart = bankAddress >= overlapPrefix
+                ? bankAddress - overlapPrefix
+                : 0u;
             var index = _hostTrapStubAddresses.BinarySearch(firstPossibleTrapStart);
             if (index < 0)
             {
@@ -5652,8 +5979,6 @@ namespace CopperMod.Amiga.Bus
                 return;
             }
 
-            TouchCodePages(address, byteCount);
-            NotifyJitEligibleMemoryWritten(address, byteCount);
         }
 
         void IM68kJitFastMemoryBus.CompleteJitZeroWaitWrite(uint physicalAddress, int byteCount)
@@ -6488,7 +6813,6 @@ namespace CopperMod.Amiga.Bus
             RememberChipDataBusByte(value, grantedCycle, wasDma: false);
             _chipRam.WriteByteAtOffset(chipOffset, value, grantedCycle);
             RememberCpuChipRamWrite(address, value, M68kOperandSize.Byte, grantedCycle);
-            TouchCodePage(address);
         }
 
         private void WriteCpuChipRamWord(uint address, ushort value, long grantedCycle)
@@ -6502,8 +6826,6 @@ namespace CopperMod.Amiga.Bus
             RememberChipDataBusWord(value, grantedCycle, wasDma: false);
             _chipRam.WriteWordAtOffset(chipOffset, value, grantedCycle);
             RememberCpuChipRamWrite(address, value, M68kOperandSize.Word, grantedCycle);
-            TouchCodePage(address);
-            TouchCodePage(address + 1);
         }
 
         private void WriteCpuChipRamLong(uint address, uint value, long firstWordCycle, long secondWordCycle)
@@ -6540,8 +6862,6 @@ namespace CopperMod.Amiga.Bus
             }
 
             _expansionRam[expansionOffset] = value;
-            TouchCodePage(address);
-            NotifyJitEligibleMemoryWritten(address, 1);
         }
 
         private void WriteCpuExpansionRamWord(uint address, ushort value, long grantedCycle)
@@ -6555,9 +6875,6 @@ namespace CopperMod.Amiga.Bus
 
             _expansionRam[expansionOffset] = (byte)(value >> 8);
             _expansionRam[expansionOffset + 1] = (byte)value;
-            TouchCodePage(address);
-            TouchCodePage(address + 1);
-            NotifyJitEligibleMemoryWritten(address, 2);
         }
 
         private void WriteCpuExpansionRamLong(uint address, uint value, long firstWordCycle, long secondWordCycle)
@@ -6575,8 +6892,6 @@ namespace CopperMod.Amiga.Bus
             }
 
             _realFastRam[realFastOffset] = value;
-            TouchCodePage(address);
-            NotifyJitEligibleMemoryWritten(address, 1);
         }
 
         private void WriteCpuRealFastRamWord(uint address, ushort value, long grantedCycle)
@@ -6590,9 +6905,6 @@ namespace CopperMod.Amiga.Bus
 
             _realFastRam[realFastOffset] = (byte)(value >> 8);
             _realFastRam[realFastOffset + 1] = (byte)value;
-            TouchCodePage(address);
-            TouchCodePage(address + 1);
-            NotifyJitEligibleMemoryWritten(address, 2);
         }
 
         private void WriteCpuRealFastRamLong(uint address, uint value, long firstWordCycle, long secondWordCycle)
@@ -6607,7 +6919,9 @@ namespace CopperMod.Amiga.Bus
             if (!_rtgVram.TryWriteByte(address, value))
             {
                 WriteRawByte(address, value, grantedCycle, default(CpuWritePolicy));
+				return;
             }
+
         }
 
         private void WriteCpuRtgVramWord(uint address, ushort value, long grantedCycle)
@@ -6664,7 +6978,6 @@ namespace CopperMod.Amiga.Bus
                     RememberCpuChipRamWrite(address, value, M68kOperandSize.Byte, grantedCycle);
                 }
 
-                TouchCodePage(address);
                 return;
             }
 
@@ -6676,16 +6989,12 @@ namespace CopperMod.Amiga.Bus
             if (TryGetExpansionRamOffset(address, out var expansionOffset))
             {
                 _expansionRam[expansionOffset] = value;
-                TouchCodePage(address);
-                NotifyJitEligibleMemoryWritten(address, 1);
                 return;
             }
 
             if (TryGetRealFastRamOffset(address, out var realFastOffset))
             {
                 _realFastRam[realFastOffset] = value;
-                TouchCodePage(address);
-                NotifyJitEligibleMemoryWritten(address, 1);
                 return;
             }
 
@@ -6785,8 +7094,6 @@ namespace CopperMod.Amiga.Bus
                     RememberCpuChipRamWrite(address, value, M68kOperandSize.Word, grantedCycle);
                 }
 
-                TouchCodePage(address);
-                TouchCodePage(address + 1);
                 return;
             }
 
@@ -6803,9 +7110,6 @@ namespace CopperMod.Amiga.Bus
             {
                 _expansionRam[expansionOffset] = (byte)(value >> 8);
                 _expansionRam[expansionOffset + 1] = (byte)value;
-                TouchCodePage(address);
-                TouchCodePage(address + 1);
-                NotifyJitEligibleMemoryWritten(address, 2);
                 return;
             }
 
@@ -6814,9 +7118,6 @@ namespace CopperMod.Amiga.Bus
             {
                 _realFastRam[realFastOffset] = (byte)(value >> 8);
                 _realFastRam[realFastOffset + 1] = (byte)value;
-                TouchCodePage(address);
-                TouchCodePage(address + 1);
-                NotifyJitEligibleMemoryWritten(address, 2);
                 return;
             }
 
@@ -6883,22 +7184,6 @@ namespace CopperMod.Amiga.Bus
         {
             WriteRawWord(address, (ushort)(value >> 16), firstWordCycle, policy);
             WriteRawWord(address + 2, (ushort)value, secondWordCycle, policy);
-        }
-
-        private void NotifyJitEligibleMemoryWritten(uint address, int byteCount)
-        {
-            var handler = JitEligibleMemoryWritten;
-            if (handler == null || byteCount <= 0)
-            {
-                return;
-            }
-
-            if (IsExpansionRamRange(address, byteCount) ||
-                IsRealFastRamRange(address, byteCount) ||
-                _rtgVram.IsAllocatedRange(address, byteCount))
-            {
-                handler(address, byteCount);
-            }
         }
 
         private static long GetSecondWordCycle(AmigaBusAccessResult access)
@@ -6977,6 +7262,11 @@ namespace CopperMod.Amiga.Bus
                 return _realFastRam.GetCodePageGeneration(realFastOffset);
             }
 
+			if (_rtgVram.IsAllocatedRange(address, 1))
+			{
+				return _rtgVram.GetCodePageGeneration(address, CodeGenerationPageShift);
+			}
+
             return 0;
         }
 
@@ -6992,61 +7282,6 @@ namespace CopperMod.Amiga.Bus
                 GetCodePageGeneration(endAddress) == endGeneration;
         }
 
-        private void TouchCodePages(uint address, int byteCount)
-        {
-            // Code-page generations exist only to guard active host JIT snapshots.
-            // Keep ordinary interpreter writes on the direct memory path.
-            if (JitEligibleMemoryWritten == null || byteCount <= 0)
-            {
-                return;
-            }
-
-            var remaining = byteCount;
-            var current = address;
-            while (remaining > 0)
-            {
-                TouchCodePage(current);
-                var bytesToNextPage = CodeGenerationPageSize - ((int)current & (CodeGenerationPageSize - 1));
-                var step = Math.Min(remaining, bytesToNextPage);
-                remaining -= step;
-                current += (uint)step;
-            }
-        }
-
-        private void TouchCodePage(uint address)
-        {
-            if (JitEligibleMemoryWritten == null)
-            {
-                return;
-            }
-
-            if (TryGetExpansionRamOffset(address, out var expansionOffset))
-            {
-                _expansionRam.SetCodePageGeneration(expansionOffset, NextCodeGeneration());
-                return;
-            }
-
-            if (TryGetRealFastRamOffset(address, out var realFastOffset))
-            {
-                _realFastRam.SetCodePageGeneration(realFastOffset, NextCodeGeneration());
-                return;
-            }
-
-        }
-
-        private uint NextCodeGeneration()
-        {
-            _codeGenerationClock++;
-            if (_codeGenerationClock != 0)
-            {
-                return _codeGenerationClock;
-            }
-
-            _expansionRam.ClearCodePageGenerations();
-            _realFastRam.ClearCodePageGenerations();
-            _codeGenerationClock = 1;
-            return _codeGenerationClock;
-        }
 
         private void ResetCiaAForHardwareReset()
         {

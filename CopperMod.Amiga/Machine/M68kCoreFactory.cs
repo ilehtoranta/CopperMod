@@ -5,6 +5,7 @@
 
 using System;
 using System.Runtime.CompilerServices;
+using CopperMod.Amiga.Jit.M68000;
 
 namespace CopperMod.Amiga.Runtime
 {
@@ -22,10 +23,8 @@ namespace CopperMod.Amiga.Runtime
                 ? backend switch
                 {
                     M68kBackendKind.AccurateM68000 => M68kCoreFactory.CreateM68000Core(amigaBus, default(AmigaCpuDataAccess)),
-                    // The MC68000 JIT shares write-tracking plumbing with the normal
-                    // Amiga path. Keep it unavailable until that contract is isolated.
-                    M68kBackendKind.JitM68000 => throw new NotSupportedException(
-                        "The Amiga MC68000 JIT is temporarily unavailable. Use AccurateM68000."),
+                    M68kBackendKind.JitM68000 => M68kJitCore.CreateM68000(
+                        new M68000JitBusAdapter(amigaBus)),
                     _ => M68kCoreFactory.Default.Create(backend, bus)
                 }
                 : M68kCoreFactory.Default.Create(backend, bus);

@@ -22,7 +22,8 @@ namespace CopperMod.Amiga.Bus
         OverlapBarrier = 1 << 1,
         CodePageBarrier = 1 << 2,
         LongWordFirstHalf = 1 << 3,
-        LongWordSecondHalf = 1 << 4
+        LongWordSecondHalf = 1 << 4,
+        ControlWrite = 1 << 5
     }
 
     internal struct CpuJournalEvent

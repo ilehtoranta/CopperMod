@@ -31,6 +31,20 @@ namespace CopperMod.Amiga.Bus
 
     internal sealed partial class Scheduler
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool AdvanceCpuTimingSequence(
+            in CpuTimingSequenceRequest request,
+            out CpuTimingSequenceResult result)
+        {
+            if (!_bus.CausalBusExecutor.TryExecuteCpuTimingSequence(request, out result))
+            {
+                return false;
+            }
+
+            MarkClean(result.CleanThroughCycle, SlotContendedMemoryAccessMask);
+            return true;
+        }
+
         internal void RecordDeferredCpuWaitBlitterOverlap(bool supported, bool nasty)
         {
             _deferredCpuWaitBlitterOverlapAttempts++;
@@ -78,12 +92,12 @@ namespace CopperMod.Amiga.Bus
         {
             grantedCycle = 0;
             completedCycle = 0;
-            if (_draining ||
-                size == AmigaBusAccessSize.Long ||
-                target is not (AmigaBusAccessTarget.ChipRam or
+			if (_draining ||
+				size == AmigaBusAccessSize.Long ||
+				target is not (AmigaBusAccessTarget.ChipRam or
                     AmigaBusAccessTarget.ExpansionRam or
                     AmigaBusAccessTarget.RealTimeClock or
-                    AmigaBusAccessTarget.CustomRegisters))
+					AmigaBusAccessTarget.CustomRegisters))
             {
                 return CpuWaitGrantAdvanceResult.Unsupported;
             }
@@ -110,6 +124,16 @@ namespace CopperMod.Amiga.Bus
                 var candidate = AgnusChipSlotScheduler.AlignToSlot(firstCandidateCycle);
                 while (true)
                 {
+                    if (target == AmigaBusAccessTarget.CustomRegisters && !isWrite)
+                    {
+                        // Custom-register reads use the exact causal grant path,
+                        // but still need the unexecuted fixed-display suffix
+                        // materialized before HRM considers the adjacent CPU slot.
+                        // This reserves ownership only; memory is sampled later
+                        // by chronological execution.
+                        _bus.PrepareCpuWaitLiveDisplaySlots(candidate);
+                    }
+
                     // A candidate CPU slot is only usable after every older
                     // device event has executed.  Driving Denise to the
                     // candidate first can sample a later display word before
@@ -123,6 +147,20 @@ namespace CopperMod.Amiga.Bus
                     else
                     {
                         DrainSlotContendedAccess(candidate);
+                    }
+
+                    // A competing requester may have committed the candidate
+                    // while the CPU intent remained pending.  Its completion
+                    // advances the data-bus horizon beyond that candidate, so
+                    // retry from the first causally usable CPU cycle instead of
+                    // attempting to grant the already-executed slot again.
+                    var causalCandidate = _bus.AdvancePendingCpuGrantToCausalBusHorizon(
+                        target,
+                        candidate);
+                    if (causalCandidate != candidate)
+                    {
+                        candidate = AgnusChipSlotScheduler.AlignToSlot(causalCandidate);
+                        continue;
                     }
 
                     _bus.SynchronizeHrmBlitterPriority();

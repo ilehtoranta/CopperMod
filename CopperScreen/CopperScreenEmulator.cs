@@ -22,7 +22,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private const int DefaultAudioChannels = 2;
 	private const int DiskSwapEjectFrames = 25;
 	private const int MouseButtonEdgePulseFrames = 2;
-	private const int DefaultBootMaxInstructionsPerFrame = 100_000;
+	private const int DefaultBootMaxInstructionsPerFrame = 250_000;
 	private const int JitM68040BootMaxInstructionsPerFrame = 2_000_000;
 	private const long JitM68040BootRunAheadCyclesPerFrame = 250_000_000;
 	private const string RunningStatusText = "boot program running:";
@@ -338,16 +338,35 @@ internal sealed class CopperScreenEmulator : IDisposable
 			machineOptions.WithCopperQuiescentDiagnostics(true);
 		}
 
-		if (startupOptions.DeferredCpuBusBatch || startupOptions.DeferredCpuBusBatchVerify)
+		if (startupOptions.DeferredCpuBusBatchConfigured)
 		{
 			machineOptions.WithDeferredCpuBusBatch(
 				startupOptions.DeferredCpuBusBatch,
 				startupOptions.DeferredCpuBusBatchVerify);
 		}
 
-		if (startupOptions.DeferredCpuChipReadSegments)
+		if (startupOptions.DeferredCpuChipWriteJournalConfigured)
 		{
-			machineOptions.WithDeferredCpuChipReadSegments(true);
+			machineOptions.WithDeferredCpuChipWriteJournal(
+				startupOptions.DeferredCpuChipWriteJournal);
+		}
+
+		if (startupOptions.DeferredCpuChipReadSegmentsConfigured)
+		{
+			machineOptions.WithDeferredCpuChipReadSegments(
+				startupOptions.DeferredCpuChipReadSegments);
+		}
+
+		if (startupOptions.DeferredCpuCustomPointerWritesConfigured)
+		{
+			machineOptions.WithDeferredCpuCustomPointerWrites(
+				startupOptions.DeferredCpuCustomPointerWrites);
+		}
+
+		if (startupOptions.DeferredCpuCustomCompositionWritesConfigured)
+		{
+			machineOptions.WithDeferredCpuCustomCompositionWrites(
+				startupOptions.DeferredCpuCustomCompositionWrites);
 		}
 
 		if (startupOptions.CpuWaitSlotReference)
@@ -1329,6 +1348,11 @@ internal sealed class CopperScreenEmulator : IDisposable
 			_copperStartRuntimeHandoff = true;
 		}
 
+		if (_machine.Cpu.State.Cycles < frameTargetCycle)
+		{
+			ThrowCpuBehindPresentationHorizon(frameTargetCycle, in result);
+		}
+
 		var hardwareStart = Stopwatch.GetTimestamp();
 		_machine.Bus.AdvanceHardwareTo(frameTargetCycle);
 		LastFrameTiming = LastFrameTiming with
@@ -1367,6 +1391,18 @@ internal sealed class CopperScreenEmulator : IDisposable
 			}
 		}
 	}
+
+	[System.Diagnostics.CodeAnalysis.DoesNotReturn]
+	[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+	private void ThrowCpuBehindPresentationHorizon(long frameTargetCycle, in AmigaBootResult result)
+		=> throw new InvalidOperationException(
+			$"CPU did not reach presentation frame horizon: cpu={_machine.Cpu.State.Cycles}, " +
+			$"frame={frameTargetCycle}, instructions={result.InstructionsExecuted}, completed={result.CompletedBootBlock}, " +
+			$"stopped={_machine.Cpu.State.Stopped}, halted={_machine.Cpu.State.Halted}, " +
+			$"pc=0x{_machine.Cpu.State.ProgramCounter:X8}, d0=0x{_machine.Cpu.State.D[0]:X8}, " +
+			$"sp=0x{_machine.Cpu.State.A[7]:X8}, " +
+			$"cpuVisibilityMismatch='{_machine.Bus.CausalBusExecutor.CpuVisibilityFirstShadowMismatch}', " +
+			$"diagnostics='{string.Join(" | ", FormatDiagnostics(result.Diagnostics))}'.");
 
 	private bool TryRenderRtgPresentation(
 		Span<int> destination,
@@ -1959,17 +1995,20 @@ internal sealed class CopperScreenEmulator : IDisposable
 	{
 		if (HasWorkbenchHandoffDiagnostic(result.Diagnostics))
 		{
-			_workbenchHandoffPending = true;
-			_copperBenchRequestPending = true;
-			IsPaused = true;
-			StatusText = "Workbench handoff: choose a CopperBench item";
-			return false;
+			EnterWorkbenchHandoff();
+			return true;
 		}
 
 		var fatalStatus = BuildFatalStatus(result.Diagnostics);
 		StatusText = fatalStatus ?? RunningStatusText;
 		if (fatalStatus == null)
 		{
+			if (result.CompletedBootBlock && !_profile.UsesKickstartRom)
+			{
+				EnterWorkbenchHandoff();
+				return true;
+			}
+
 			return false;
 		}
 
@@ -1980,6 +2019,14 @@ internal sealed class CopperScreenEmulator : IDisposable
 			FormatDiagnostics(result.Diagnostics));
 		RenderStatusFrame(StatusText);
 		return true;
+	}
+
+	private void EnterWorkbenchHandoff()
+	{
+		_workbenchHandoffPending = true;
+		_copperBenchRequestPending = true;
+		IsPaused = true;
+		StatusText = "Workbench handoff: choose a CopperBench item";
 	}
 
 	private static bool HasWorkbenchHandoffDiagnostic(IReadOnlyList<AmigaBootDiagnostic> diagnostics)

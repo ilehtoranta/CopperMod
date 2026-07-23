@@ -214,11 +214,17 @@ namespace CopperMod.Amiga.Runtime
 
         public bool CopperQuiescentDiagnosticsEnabled { get; private set; }
 
-        public bool DeferredCpuBusBatchEnabled { get; private set; }
+        public bool DeferredCpuBusBatchEnabled { get; private set; } = true;
 
         public bool DeferredCpuBusBatchVerifyEnabled { get; private set; }
 
-        public bool DeferredCpuChipReadSegmentsEnabled { get; private set; }
+        public bool DeferredCpuChipWriteJournalEnabled { get; private set; } = true;
+
+        public bool DeferredCpuChipReadSegmentsEnabled { get; private set; } = true;
+
+        public bool DeferredCpuCustomPointerWritesEnabled { get; private set; } = true;
+
+        public bool DeferredCpuCustomCompositionWritesEnabled { get; private set; } = true;
 
         public bool CpuWaitSlotReferencePathEnabled { get; private set; }
 
@@ -342,9 +348,27 @@ namespace CopperMod.Amiga.Runtime
             return this;
         }
 
+        public MachineOptions WithDeferredCpuChipWriteJournal(bool enabled)
+        {
+            DeferredCpuChipWriteJournalEnabled = enabled;
+            return this;
+        }
+
         public MachineOptions WithDeferredCpuChipReadSegments(bool enabled)
         {
             DeferredCpuChipReadSegmentsEnabled = enabled;
+            return this;
+        }
+
+        public MachineOptions WithDeferredCpuCustomPointerWrites(bool enabled)
+        {
+            DeferredCpuCustomPointerWritesEnabled = enabled;
+            return this;
+        }
+
+        public MachineOptions WithDeferredCpuCustomCompositionWrites(bool enabled)
+        {
+            DeferredCpuCustomCompositionWritesEnabled = enabled;
             return this;
         }
 
@@ -511,7 +535,10 @@ namespace CopperMod.Amiga.Runtime
                 options.CpuWaitSlotReferencePathEnabled,
                 options.RtgVramSize,
                 options.Chipset,
-                enableDeferredCpuChipReadSegments: options.DeferredCpuChipReadSegmentsEnabled);
+                enableDeferredCpuChipWriteJournal: options.DeferredCpuChipWriteJournalEnabled,
+                enableDeferredCpuChipReadSegments: options.DeferredCpuChipReadSegmentsEnabled,
+                enableDeferredCpuCustomPointerWrites: options.DeferredCpuCustomPointerWritesEnabled,
+                enableDeferredCpuCustomCompositionWrites: options.DeferredCpuCustomCompositionWritesEnabled);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             if (Bus.DiskDivergenceTraceEnabled)
             {

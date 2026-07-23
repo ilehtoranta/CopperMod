@@ -43,6 +43,7 @@ namespace CopperMod.Amiga.Bus
         private readonly CpuVisibilityDeadlineAgenda _cpuVisibilityAgenda = new();
         private bool _cpuVisibilityAgendaInitialized;
         private CpuVisibilityDirtySource _cpuVisibilityDirtySources = CpuVisibilityDirtySource.All;
+        private long _cpuVisibilityValidFromCycle = -1;
         private long _cpuVisibilityValidThroughCycle = -1;
         private ulong _cpuVisibilityCiaAVersion;
         private ulong _cpuVisibilityCiaBVersion;
@@ -92,6 +93,7 @@ namespace CopperMod.Amiga.Bus
             _cpuVisibilityAgenda.Reset();
             _cpuVisibilityAgendaInitialized = false;
             _cpuVisibilityDirtySources = CpuVisibilityDirtySource.All;
+            _cpuVisibilityValidFromCycle = -1;
             _cpuVisibilityValidThroughCycle = -1;
             _cpuVisibilityCiaAVersion = ulong.MaxValue;
             _cpuVisibilityCiaBVersion = ulong.MaxValue;
@@ -230,6 +232,12 @@ namespace CopperMod.Amiga.Bus
 
         private void RefreshCpuVisibilityAgenda(long currentCycle, long targetCycle)
         {
+            if (_cpuVisibilityAgendaInitialized && currentCycle < _cpuVisibilityValidFromCycle)
+            {
+                _cpuVisibilityDirtySources = CpuVisibilityDirtySource.All;
+                _cpuVisibilityValidThroughCycle = -1;
+            }
+
             if (_cpuVisibilityAgendaInitialized &&
                 _cpuVisibilityDirtySources == CpuVisibilityDirtySource.None &&
                 targetCycle <= _cpuVisibilityValidThroughCycle)
@@ -374,6 +382,10 @@ namespace CopperMod.Amiga.Bus
             }
 
             _cpuVisibilityAgendaInitialized = true;
+            if (refreshAll)
+            {
+                _cpuVisibilityValidFromCycle = currentCycle;
+            }
             _cpuVisibilityDirtySources = CpuVisibilityDirtySource.None;
             _cpuVisibilityValidThroughCycle = Math.Max(
                 _cpuVisibilityValidThroughCycle,

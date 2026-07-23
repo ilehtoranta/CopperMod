@@ -492,6 +492,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 var state = timeline.GetState(segment.StateIndex);
+                CaptureLivePaletteFrameSpan(row, segment.XStart, segment.XStop, state);
                 FillTimelineLowResolutionSegment(
                     target,
                     row,
@@ -1928,6 +1929,29 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private int GetCopperOutputX(int horizontal, int pixelDelay)
         {
+            if (pixelDelay > 0 &&
+                horizontal < 0xC0 &&
+                GetAgnusBitplaneFetchPlaneCount() == 4 &&
+                _liveCopper.WaitTailPalettePixelOffset != 0)
+            {
+                return Math.Clamp(
+                    GetCopperOutputXForPresentation(horizontal, pixelDelay, LowResWidth) +
+                    _liveCopper.WaitTailPalettePixelOffset,
+                    0,
+                    LowResWidth);
+            }
+
+            if (pixelDelay > 0 &&
+                horizontal < DefaultDdfStart &&
+                GetAgnusBitplaneFetchPlaneCount() == 4 &&
+                _liveCopper.PreDdfPaletteWritesFollowPhysicalPhase)
+            {
+                return Math.Clamp(
+                    ((horizontal - DefaultDdfStart) * 2) + pixelDelay,
+                    0,
+                    LowResWidth);
+            }
+
             return GetCopperOutputXForPresentation(horizontal, pixelDelay, LowResWidth);
         }
 

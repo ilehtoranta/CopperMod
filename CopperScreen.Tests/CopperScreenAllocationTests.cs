@@ -2,6 +2,7 @@ namespace CopperScreen.Tests;
 
 public sealed class CopperScreenAllocationTests
 {
+	private const string CausalBatchingProfile = "expanded-copperstart";
 	private const int SampleRate = 44_100;
 	private const int Channels = 2;
 	private const int WarmupFrames = 220;
@@ -36,29 +37,41 @@ public sealed class CopperScreenAllocationTests
 		GC.Collect();
 		GC.WaitForPendingFinalizers();
 		GC.Collect();
-
 		var before = GC.GetAllocatedBytesForCurrentThread();
+		long renderAllocated = 0;
+		long audioAllocated = 0;
 		for (var frame = 0; frame < MeasuredFrames; frame++)
 		{
+			var beforeRender = GC.GetAllocatedBytesForCurrentThread();
 			emulator.RenderNextFrame();
+			renderAllocated += GC.GetAllocatedBytesForCurrentThread() - beforeRender;
+			var beforeAudio = GC.GetAllocatedBytesForCurrentThread();
 			_ = emulator.RenderAudio(audio, SampleRate, Channels);
+			audioAllocated += GC.GetAllocatedBytesForCurrentThread() - beforeAudio;
 		}
 
 		var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-		Assert.True(allocated == 0, $"{name} allocated {allocated} bytes during measured frame/audio rendering.");
+		Assert.True(
+			allocated == 0,
+			$"{name} allocated {allocated} bytes during measured frame/audio rendering " +
+			$"(frames={renderAllocated}, audio={audioAllocated}, status='{emulator.StatusText}').");
 	}
 
 	private static CopperScreenEmulator? CreateEmulator(string? fileName)
 	{
 		if (fileName == null)
 		{
-			return CopperScreenEmulator.CreateWithoutDisk();
+			return CopperScreenEmulator.Create(
+				["--profile", CausalBatchingProfile],
+				AppContext.BaseDirectory);
 		}
 
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", fileName);
 		return diskPath == null
 			? null
-			: CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+			: CopperScreenEmulator.Create(
+				["--profile", CausalBatchingProfile, diskPath],
+				AppContext.BaseDirectory);
 	}
 
 	private static string? TryFindWorkspaceFile(params string[] parts)

@@ -1875,7 +1875,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                     var secondAddress = _display.AddDmaPointerOffset(_copperFirstWordAddress, 2);
                     RecordCopperBitplaneRgaCollision(secondRequestCycle);
-                    var secondAccess = _slots.ReserveCopperDmaSlot(secondAddress, secondRequestCycle);
+                    var preserveSecondWordPhysicalPhase =
+                        _display._bus.GetBeamPosition(_copperFirstWordAccess.GrantedCycle).BeamLine !=
+                        _display._bus.GetBeamPosition(secondRequestCycle).BeamLine;
+                    var secondAccess = _slots.ReserveCopperDmaSlot(
+                        secondAddress,
+                        secondRequestCycle,
+                        preserveSecondWordPhysicalPhase);
                     var second = ReadScratchChipWordAtCycle(secondAddress, secondAccess.GrantedCycle);
                     RecordDma(secondAccess.GrantedCycle);
                     var instruction = new CopperInstructionLatch(
@@ -1960,7 +1966,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
 
                     _copper.AdvanceWaitRestartStage(
-                        _copper.Cycle + (2L * AgnusChipSlotScheduler.SlotCycles));
+                        _copper.Cycle +
+                        (_display.GetAgnusBitplaneFetchPlaneCount() == 4 &&
+                         (_copper.WaitFirst & 0x00FE) < 0x00C0 &&
+                         _copper.WaitStartCarryPending
+                            ? AgnusChipSlotScheduler.SlotCycles
+                            : 2L * AgnusChipSlotScheduler.SlotCycles));
                     return true;
                 }
 
@@ -2021,7 +2032,40 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         waitCycle,
                         _copper.WaitSecond,
                         _copper.WaitObservedBlitterBusy);
+                    var fourPlanePreTailWait =
+                        _display.GetAgnusBitplaneFetchPlaneCount() == 4 &&
+                        (_copper.WaitFirst & 0x00FE) < 0x00C0;
+                    if (fourPlanePreTailWait && waitCycle > comparisonStartCycle)
+                    {
+                        _copper.PendingWaitPreTailPixelOffset =
+                            (_copper.WaitFirst & 0x0002) * 2;
+                    }
+                    var fourPlaneWaitRunContinuation =
+                        fourPlanePreTailWait &&
+                        waitCycle <= comparisonStartCycle &&
+                        (_copper.SatisfiedWaitRunCount > 0 ||
+                         _copper.WaitRunContinuesFromDifferentInstruction);
+                    var fourPlaneWaitRunReusesControlPhase =
+                        fourPlaneWaitRunContinuation &&
+                        (!_copper.WaitRunContinuesFromDifferentInstruction ||
+                         ((_copper.WaitFirst & 0x00FE) -
+                          (_copper.PreviousWaitRunFirst & 0x00FE)) <= 12);
+                    var fourPlaneRunControlBlocked =
+                        _copper.WaitRunControlBlocked ||
+                        (_copper.WaitRunContinuesFromDifferentInstruction &&
+                         _copper.PreviousWaitRunControlBlocked);
+                    if (fourPlaneWaitRunContinuation &&
+                        (fourPlaneRunControlBlocked ||
+                         (_copper.WaitRunContinuesFromDifferentInstruction &&
+                          (_copper.PreviousWaitRunFirst & 0xFF00) ==
+                          (_copper.WaitFirst & 0xFF00) &&
+                          ((_copper.PreviousWaitRunFirst & 0x0002) == 0 ||
+                           (_copper.WaitFirst & 0x00F0) == 0x00B0))))
+                    {
+                        resumeCycle -= AgnusChipSlotScheduler.SlotCycles;
+                    }
                     var restartIncomingRgaBlocked = false;
+                    var inheritedAdjacentControlPhaseCreated = false;
                     if (waitCycle > comparisonStartCycle)
                     {
                         var incomingRgaBlocked = _display.IsBitplaneRgaIncomingPhase(waitCycle);
@@ -2030,8 +2074,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             _display.IsBitplaneRgaOutputPhase(waitCycle);
                         _copper.WaitStartCarrySkipCount = (byte)(overlapsAdjacentRgaStage ? 2 : 0);
                         _copper.WaitStartCarryPending = incomingRgaBlocked;
+                        _copper.WaitStartCarryAdjacent =
+                            incomingRgaBlocked && overlapsAdjacentRgaStage;
                         _copper.ArmWaitStartTailAfterMove =
-                            incomingRgaBlocked && (_copper.WaitFirst & 0x0004) == 0;
+                            incomingRgaBlocked &&
+                            _display.ShouldCarryWaitStartTailThroughMove(
+                                _copper.WaitFirst,
+                                resumeCycle) &&
+                            !(_display.GetAgnusBitplaneFetchPlaneCount() == 4 &&
+                              (_copper.WaitFirst & 0x00FE) < 0x00C0);
                         restartIncomingRgaBlocked =
                             _display._bus.CausalBusExecutor.GetNextEligibleCopperControlPhase(
                                 resumeCycle,
@@ -2043,11 +2094,23 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         if (_copper.WaitStartCarrySkipCount > 0)
                         {
                             _copper.WaitStartCarrySkipCount--;
+                            if (!_display.IsCopperWaitRestartAtPhysicalLineTail(resumeCycle))
+                            {
+                                _copper.PendingWaitStartTail = true;
+                            }
                         }
                         else
                         {
                             restartIncomingRgaBlocked = true;
                             _copper.WaitStartCarryPending = false;
+                            if (_copper.WaitStartCarryAdjacent)
+                            {
+                                _copper.WaitInheritedAdjacentControlPhase = true;
+                                _copper.WaitInheritedAdjacentFirst = _copper.WaitFirst;
+                                _copper.WaitInheritedAdjacentSecond = _copper.WaitSecond;
+                                inheritedAdjacentControlPhaseCreated = true;
+                            }
+                            _copper.WaitStartCarryAdjacent = false;
                         }
 
                     }
@@ -2056,18 +2119,94 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         _copper.WaitStartCarryPending = false;
                         _copper.WaitStartCarrySkipCount = 0;
                     }
+                    if (fourPlaneWaitRunContinuation)
+                    {
+                        restartIncomingRgaBlocked = false;
+                        _copper.WaitStartCarryPending = false;
+                        _copper.WaitStartCarryAdjacent = false;
+                        _copper.WaitRunControlBlocked = fourPlaneRunControlBlocked;
+                    }
                     _copper.WaitRunControlBlocked |= restartIncomingRgaBlocked;
-                    if (_copper.SatisfiedWaitRunCount > 0 && !_copper.WaitRunControlBlocked)
+                    if (_copper.SatisfiedWaitRunCount > 0 &&
+                        !_copper.WaitRunControlBlocked &&
+                        !fourPlanePreTailWait)
                     {
                         _copper.PendingWaitStartTail = true;
                     }
+                    var reuseInheritedAdjacentControlPhase =
+                        !inheritedAdjacentControlPhaseCreated &&
+                        _copper.WaitInheritedAdjacentControlPhase &&
+                        _copper.WaitInheritedAdjacentFirst == _copper.WaitFirst &&
+                        _copper.WaitInheritedAdjacentSecond == _copper.WaitSecond;
+                    var restartAfterDataFetchStop =
+                        IsCopperWaitRestartAfterDataFetchStop(resumeCycle);
+                    var reuseExhaustedAdjacentCarryPhase =
+                        _copper.WaitStartCarryPending &&
+                        _copper.WaitStartCarryAdjacent &&
+                        _copper.WaitStartCarrySkipCount == 0 &&
+                        (restartAfterDataFetchStop ||
+                         (_copper.SatisfiedWaitRunCount >= 2 &&
+                          !_display.IsCopperWaitRestartAtPhysicalLineTail(resumeCycle) &&
+                          !_display.DidCopperWaitRestartCrossPhysicalLine(comparisonStartCycle, resumeCycle)));
+                    if (!inheritedAdjacentControlPhaseCreated)
+                    {
+                        _copper.WaitInheritedAdjacentControlPhase = false;
+                    }
+                    var reuseRunControlPhase =
+                        (!restartIncomingRgaBlocked &&
+                         (reuseInheritedAdjacentControlPhase ||
+                          reuseExhaustedAdjacentCarryPhase ||
+                          fourPlaneWaitRunReusesControlPhase ||
+                          (_copper.WaitRunControlBlocked &&
+                           _copper.SatisfiedWaitRunCount >= 2 &&
+                           (_display.IsCopperWaitRestartAtPhysicalLineTail(resumeCycle) ||
+                            _display.DidCopperWaitRestartCrossPhysicalLine(comparisonStartCycle, resumeCycle)))));
+                    var presentNextMoveFromReusedWaitTail =
+                        reuseRunControlPhase &&
+                        (_display.IsCopperWaitRestartAtPhysicalLineTail(resumeCycle) ||
+                         _display.DidCopperWaitRestartCrossPhysicalLine(comparisonStartCycle, resumeCycle));
+                    var projectCrossedLineTailRun =
+                        presentNextMoveFromReusedWaitTail &&
+                        _copper.WaitRunCrossedIntoLineTail &&
+                        (_copper.WaitFirst & 0x00FE) == 0x00C4;
+                    var waitTailPresentationX =
+                        projectCrossedLineTailRun
+                            ? Math.Max(
+                                0,
+                                _display.GetCopperWaitTailPresentationX(_copper.WaitFirst) -
+                                (_copper.SatisfiedWaitRunCount * 8))
+                            : presentNextMoveFromReusedWaitTail ||
+                              _display.GetAgnusBitplaneFetchPlaneCount(_bplcon0) != 4
+                            ? -1
+                            : _display.GetCopperWaitTailPresentationX(_copper.WaitFirst);
+                    presentNextMoveFromReusedWaitTail &= !projectCrossedLineTailRun;
+                    var restoreControlPhaseAfterMove =
+                        reuseExhaustedAdjacentCarryPhase &&
+                        !restartAfterDataFetchStop &&
+                        !presentNextMoveFromReusedWaitTail;
                     if (resumeCycle > targetCycle)
                     {
-                        _copper.ArmWaitRestart(resumeCycle, restartIncomingRgaBlocked);
+                        _copper.ArmWaitRestart(
+                            resumeCycle,
+                            restartIncomingRgaBlocked,
+                            reuseRunControlPhase,
+                            restoreControlPhaseAfterMove,
+                            presentNextMoveFromReusedWaitTail);
+                        _copper.PendingWaitTailPresentationX = waitTailPresentationX;
+                        _copper.PendingWaitPaletteTailX =
+                            _display.GetCopperWaitPaletteTailX(_copper.WaitFirst);
                         return true;
                     }
 
-                    _copper.ArmWaitRestart(resumeCycle, restartIncomingRgaBlocked);
+                    _copper.ArmWaitRestart(
+                        resumeCycle,
+                        restartIncomingRgaBlocked,
+                        reuseRunControlPhase,
+                        restoreControlPhaseAfterMove,
+                        presentNextMoveFromReusedWaitTail);
+                    _copper.PendingWaitTailPresentationX = waitTailPresentationX;
+                    _copper.PendingWaitPaletteTailX =
+                        _display.GetCopperWaitPaletteTailX(_copper.WaitFirst);
                     return true;
                 }
 
@@ -2196,6 +2335,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
                 }
 
+                _copper.PresentNextMoveFromReusedWaitTail = false;
                 _copper.CompleteMove(instructionStopCycle);
                 return true;
             }
@@ -2427,6 +2567,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 if (register >= 0x180 && register < 0x1C0)
                 {
+                    _copper.PendingWaitTailPresentationX = -1;
                     return true;
                 }
 
@@ -2904,6 +3045,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 return _dataFetchWindow.Stop;
             }
+
+            private bool IsCopperWaitRestartAfterDataFetchStop(long cycle)
+                => _display._bus.GetBeamPosition(cycle).BeamHorizontal > GetDataFetchStopValue();
 
             private void RefreshScratchDisplayGeometry()
             {

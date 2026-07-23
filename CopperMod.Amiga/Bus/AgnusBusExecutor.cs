@@ -78,6 +78,67 @@ namespace CopperMod.Amiga.Bus
         public AgnusBusAgendaSource Source { get; }
     }
 
+    internal readonly struct CpuTimingSequenceRequest
+    {
+        public CpuTimingSequenceRequest(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            long firstRequestedCycle,
+            int wordCount,
+            bool isWrite,
+            ulong instructionFetchShapeBits = 0)
+        {
+            Kind = kind;
+            Target = target;
+            Address = address;
+            FirstRequestedCycle = firstRequestedCycle;
+            WordCount = wordCount;
+            IsWrite = isWrite;
+            InstructionFetchShapeBits = instructionFetchShapeBits;
+        }
+
+        public AmigaBusAccessKind Kind { get; }
+        public AmigaBusAccessTarget Target { get; }
+        public uint Address { get; }
+        public long FirstRequestedCycle { get; }
+        public int WordCount { get; }
+        public bool IsWrite { get; }
+        public ulong InstructionFetchShapeBits { get; }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public AmigaBusAccessKind GetWordKind(int index)
+            => ((InstructionFetchShapeBits >> index) & 1UL) != 0
+                ? AmigaBusAccessKind.CpuInstructionFetch
+                : Kind;
+    }
+
+    internal readonly struct CpuTimingSequenceResult
+    {
+        public CpuTimingSequenceResult(
+            int completedWords,
+            long firstGrantedCycle,
+            long lastGrantedCycle,
+            long completedCycle,
+            long cleanThroughCycle,
+            long totalWaitCycles)
+        {
+            CompletedWords = completedWords;
+            FirstGrantedCycle = firstGrantedCycle;
+            LastGrantedCycle = lastGrantedCycle;
+            CompletedCycle = completedCycle;
+            CleanThroughCycle = cleanThroughCycle;
+            TotalWaitCycles = totalWaitCycles;
+        }
+
+        public int CompletedWords { get; }
+        public long FirstGrantedCycle { get; }
+        public long LastGrantedCycle { get; }
+        public long CompletedCycle { get; }
+        public long CleanThroughCycle { get; }
+        public long TotalWaitCycles { get; }
+    }
+
     internal sealed class AgnusDisplayControlState
     {
         public const ulong DmaconWritten = 1UL << 0;
@@ -286,6 +347,7 @@ namespace CopperMod.Amiga.Bus
         private readonly AgnusBusDeadlineAgenda _agenda = new AgnusBusDeadlineAgenda();
         private readonly CpuEventJournal _cpuEventJournal;
         private bool _flushingCpuEventJournal;
+        private bool _legacyCpuSlotRequestPending;
         private ulong _chipWriteHazardDiskVersion = ulong.MaxValue;
         private ulong _chipWriteHazardBlitterVersion = ulong.MaxValue;
         private ulong _chipWriteHazardDiskDmaconVersion = ulong.MaxValue;
@@ -299,6 +361,8 @@ namespace CopperMod.Amiga.Bus
         private ulong _diskVersion = ulong.MaxValue;
         private ulong _displayVersion = ulong.MaxValue;
         private long _executedThroughCycle = -1;
+        private long _unresolvedCpuTimingFenceCycle = long.MaxValue;
+        private long _unresolvedCpuEventFenceCycle = long.MaxValue;
         private long _agendaUpdates;
         private long _agendaReads;
         private long _shadowMatches;
@@ -343,6 +407,13 @@ namespace CopperMod.Amiga.Bus
         private long _cpuGrantedWords;
         private long _cpuDeniedWords;
         private long _cpuLongWordPhases;
+        private long _cpuInstructionFetchGrantedWords;
+        private long _cpuDataGrantedWords;
+        private long _cpuTimingSequenceRuns;
+        private long _cpuTimingSequenceWords;
+        private long _cpuTimingSequenceAttempts;
+        private long _cpuTimingSequenceBarrierRejects;
+        private long _cpuTimingSequenceSlotRejects;
         private uint _lastCpuAddress;
         private long _lastCpuGrantedCycle = -1;
         private string _firstShadowMismatch = string.Empty;
@@ -454,6 +525,20 @@ namespace CopperMod.Amiga.Bus
 
         public long CpuLongWordPhases => _cpuLongWordPhases;
 
+        public long CpuInstructionFetchGrantedWords => _cpuInstructionFetchGrantedWords;
+
+        public long CpuDataGrantedWords => _cpuDataGrantedWords;
+
+        public long CpuTimingSequenceRuns => _cpuTimingSequenceRuns;
+
+        public long CpuTimingSequenceWords => _cpuTimingSequenceWords;
+
+        public long CpuTimingSequenceAttempts => _cpuTimingSequenceAttempts;
+
+        public long CpuTimingSequenceBarrierRejects => _cpuTimingSequenceBarrierRejects;
+
+        public long CpuTimingSequenceSlotRejects => _cpuTimingSequenceSlotRejects;
+
         public uint LastCpuAddress => _lastCpuAddress;
 
         public long LastCpuGrantedCycle => _lastCpuGrantedCycle;
@@ -552,6 +637,8 @@ namespace CopperMod.Amiga.Bus
             _diskVersion = ulong.MaxValue;
             _displayVersion = ulong.MaxValue;
             _executedThroughCycle = -1;
+            _unresolvedCpuTimingFenceCycle = long.MaxValue;
+            _unresolvedCpuEventFenceCycle = long.MaxValue;
             _agendaUpdates = 0;
             _agendaReads = 0;
             _shadowMatches = 0;
@@ -596,6 +683,13 @@ namespace CopperMod.Amiga.Bus
             _cpuGrantedWords = 0;
             _cpuDeniedWords = 0;
             _cpuLongWordPhases = 0;
+            _cpuInstructionFetchGrantedWords = 0;
+            _cpuDataGrantedWords = 0;
+            _cpuTimingSequenceRuns = 0;
+            _cpuTimingSequenceWords = 0;
+            _cpuTimingSequenceAttempts = 0;
+            _cpuTimingSequenceBarrierRejects = 0;
+            _cpuTimingSequenceSlotRejects = 0;
             _lastCpuAddress = 0;
             _lastCpuGrantedCycle = -1;
             _firstShadowMismatch = string.Empty;
@@ -603,13 +697,25 @@ namespace CopperMod.Amiga.Bus
             _advancing = false;
         }
 
-        public void AdvanceThrough(long targetCycle)
+        public long AdvanceThrough(long targetCycle)
         {
             targetCycle = Math.Max(0, targetCycle);
+            var unresolvedCpuFenceCycle = GetUnresolvedCpuFenceCycle();
+            if (unresolvedCpuFenceCycle != long.MaxValue)
+            {
+                targetCycle = Math.Min(
+                    targetCycle,
+                    unresolvedCpuFenceCycle - 1);
+                if (targetCycle < 0)
+                {
+                    return _executedThroughCycle;
+                }
+            }
+
             if (_advancing)
             {
                 _bus.AdvanceCausalBusCoreThrough(targetCycle);
-                return;
+                return _executedThroughCycle;
             }
 
             _advancing = true;
@@ -622,6 +728,59 @@ namespace CopperMod.Amiga.Bus
             {
                 _advancing = false;
             }
+
+            return _executedThroughCycle;
+        }
+
+        internal long UnresolvedCpuTimingFenceCycle => _unresolvedCpuTimingFenceCycle;
+
+        internal long UnresolvedCpuEventFenceCycle => _unresolvedCpuEventFenceCycle;
+
+        internal void PublishUnresolvedCpuTiming(long requestedCycle)
+        {
+            var fenceCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle));
+            if (fenceCycle < _executedThroughCycle)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot publish unresolved CPU timing at cycle {fenceCycle} behind executed horizon {_executedThroughCycle}.");
+            }
+
+            _unresolvedCpuTimingFenceCycle = Math.Min(
+                _unresolvedCpuTimingFenceCycle,
+                fenceCycle);
+        }
+
+        internal void ClearUnresolvedCpuTiming()
+            => _unresolvedCpuTimingFenceCycle = long.MaxValue;
+
+        private void PublishUnresolvedCpuEvent(long requestedCycle)
+        {
+            var fenceCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle));
+            if (fenceCycle < _executedThroughCycle)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot publish unresolved CPU event at cycle {fenceCycle} behind executed horizon {_executedThroughCycle}.");
+            }
+
+            _unresolvedCpuEventFenceCycle = Math.Min(
+                _unresolvedCpuEventFenceCycle,
+                fenceCycle);
+        }
+
+        private void ClearUnresolvedCpuEvent()
+            => _unresolvedCpuEventFenceCycle = long.MaxValue;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long GetUnresolvedCpuFenceCycle()
+            => Math.Min(_unresolvedCpuTimingFenceCycle, _unresolvedCpuEventFenceCycle);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long ClampPhysicalCommitTarget(long targetCycle)
+        {
+            var fenceCycle = GetUnresolvedCpuFenceCycle();
+            return fenceCycle == long.MaxValue
+                ? targetCycle
+                : Math.Min(targetCycle, fenceCycle - 1);
         }
 
         public CpuWordResult ExecuteCpuWord(in CpuWordRequest request)
@@ -629,7 +788,12 @@ namespace CopperMod.Amiga.Bus
             var cycle = request.RequestedCycle;
             if (request.IsWrite)
             {
-                if (!_bus.TryWriteExactCpuDataWord(request.Address, request.Value, ref cycle))
+                if (!_bus.TryWriteExactCpuDataWord(request.Address, request.Value, ref cycle) &&
+                    !_bus.TryWriteJournaledCpuCustomWord(
+                        request.Address,
+                        request.Value,
+                        ref cycle,
+                        request.Kind))
                 {
                     _bus.WriteWord(request.Address, request.Value, ref cycle, request.Kind);
                 }
@@ -671,6 +835,35 @@ namespace CopperMod.Amiga.Bus
             if (accepted && wasEmpty)
             {
                 SetDeadline(AgnusBusAgendaSource.Cpu, requestedCycle);
+                PublishUnresolvedCpuEvent(requestedCycle);
+            }
+
+            return accepted;
+        }
+
+        public bool TryEnqueueCpuCustomWordWrite(
+            uint address,
+            ushort value,
+            long requestedCycle,
+            CpuJournalInstructionPhase phase,
+            out ulong sequence)
+        {
+            var wasEmpty = _cpuEventJournal.Count == 0;
+            var accepted = _cpuEventJournal.TryEnqueue(
+                requestedCycle,
+                phase,
+                AmigaBusAccessTarget.CustomRegisters,
+                address,
+                AmigaBusAccessKind.CpuDataWrite,
+                AmigaBusAccessSize.Word,
+                isWrite: true,
+                value,
+                CpuJournalDependencyFlags.ControlWrite,
+                out sequence);
+            if (accepted && wasEmpty)
+            {
+                SetDeadline(AgnusBusAgendaSource.Cpu, requestedCycle);
+                PublishUnresolvedCpuEvent(requestedCycle);
             }
 
             return accepted;
@@ -724,18 +917,21 @@ namespace CopperMod.Amiga.Bus
         {
             var completedCycle = -1L;
             var accumulatedDelay = 0L;
+            ClearUnresolvedCpuEvent();
             _flushingCpuEventJournal = true;
             try
             {
                 while (_cpuEventJournal.Count != 0)
                 {
                     ref var entry = ref _cpuEventJournal.Peek();
-                    if (entry.Target != AmigaBusAccessTarget.ChipRam ||
+                    if (entry.Target is not (
+                            AmigaBusAccessTarget.ChipRam or
+                            AmigaBusAccessTarget.CustomRegisters) ||
                         entry.Size != AmigaBusAccessSize.Word ||
                         !entry.IsWrite)
                     {
                         throw new InvalidOperationException(
-                            "Only CPU Chip RAM word writes are supported by the current journal stage.");
+                            "Only CPU Chip RAM and classified custom-register word writes are supported by the journal.");
                     }
 
                     var virtualCompletedCycle = entry.RequestedCycle + AgnusChipSlotScheduler.SlotCycles;
@@ -783,15 +979,16 @@ namespace CopperMod.Amiga.Bus
             {
                 if (request.Size == AmigaBusAccessSize.Long)
                 {
-                    RecordGrantedCpuWord(request.Address, result.GrantedCycle, isLongWordPhase: true);
+                    RecordGrantedCpuWord(request.Kind, request.Address, result.GrantedCycle, isLongWordPhase: true);
                     RecordGrantedCpuWord(
+                        request.Kind,
                         request.Address + 2,
                         result.GrantedCycle + AgnusChipSlotScheduler.SlotCycles,
                         isLongWordPhase: true);
                 }
                 else
                 {
-                    RecordGrantedCpuWord(request.Address, result.GrantedCycle, isLongWordPhase: false);
+                    RecordGrantedCpuWord(request.Kind, request.Address, result.GrantedCycle, isLongWordPhase: false);
                 }
             }
 
@@ -1008,17 +1205,44 @@ namespace CopperMod.Amiga.Bus
             uint address,
             long requestedCycle,
             long slotCycle,
+            bool preservePhysicalPhaseAcrossLine,
             out AmigaBusAccessResult result)
-            => _slots.TryReserveCopperDmaWordExactSlot(address, requestedCycle, slotCycle, out result);
+            => _slots.TryReserveCopperDmaWordExactSlot(
+                address,
+                requestedCycle,
+                slotCycle,
+                preservePhysicalPhaseAcrossLine,
+                out result);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public long PredictCopperWordCycle(uint address, long requestedCycle)
-            => _bus.PredictLiveCopperDmaWordCycle(address, requestedCycle);
+        public long PredictCopperWordCycle(
+            uint address,
+            long requestedCycle,
+            bool preservePhysicalPhaseAcrossLine = false)
+            => _bus.PredictLiveCopperDmaWordCycle(
+                address,
+                requestedCycle,
+                preservePhysicalPhaseAcrossLine);
 
         public bool TryExecuteCopperWordExact(
             uint address,
             long requestedCycle,
             long slotCycle,
+            out ushort value,
+            out AmigaBusAccessResult access)
+            => TryExecuteCopperWordExact(
+                address,
+                requestedCycle,
+                slotCycle,
+                preservePhysicalPhaseAcrossLine: false,
+                out value,
+                out access);
+
+        public bool TryExecuteCopperWordExact(
+            uint address,
+            long requestedCycle,
+            long slotCycle,
+            bool preservePhysicalPhaseAcrossLine,
             out ushort value,
             out AmigaBusAccessResult access)
         {
@@ -1036,13 +1260,15 @@ namespace CopperMod.Amiga.Bus
                 address,
                 requestedCycle,
                 slotCycle,
+                preservePhysicalPhaseAcrossLine,
                 out value,
                 out access))
             {
                 _copperDeniedWords++;
                 var retryCycle = _bus.PredictLiveCopperDmaWordCycle(
                     address,
-                    slotCycle + AgnusChipSlotScheduler.SlotCycles);
+                    slotCycle + AgnusChipSlotScheduler.SlotCycles,
+                    preservePhysicalPhaseAcrossLine);
                 SetCopperIntent(address, retryCycle, retryCycle);
                 return false;
             }
@@ -1314,9 +1540,267 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            RecordGrantedCpuWord(address, slotCycle, isLongWordPhase: false);
+            RecordGrantedCpuWord(kind, address, slotCycle, isLongWordPhase: false);
             ClearCpuIntent();
             return true;
+        }
+
+        internal bool TryCommitCpuDataKnownQuietSlot(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            long requestedCycle,
+            long slotCycle,
+            bool isWrite,
+            out long completedCycle)
+        {
+            if (slotCycle < _executedThroughCycle)
+            {
+                completedCycle = 0;
+                return false;
+            }
+
+            SetCpuIntent(
+                kind,
+                target,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite);
+            if (!_slots.TryCommitCpuDataKnownQuietSlot(
+                kind,
+                target,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                slotCycle,
+                isWrite,
+                out completedCycle))
+            {
+                return false;
+            }
+
+            RecordGrantedCpuWord(kind, address, slotCycle, isLongWordPhase: false);
+            _executedThroughCycle = Math.Max(_executedThroughCycle, slotCycle);
+            _queryCacheValid = false;
+            return true;
+        }
+
+        internal bool TryExecuteCpuTimingSequence(
+            in CpuTimingSequenceRequest request,
+            out CpuTimingSequenceResult result)
+        {
+            result = default;
+            if (request.Kind is not (AmigaBusAccessKind.CpuDataRead or
+                    AmigaBusAccessKind.CpuInstructionFetch) ||
+                request.Target is not (AmigaBusAccessTarget.ExpansionRam or AmigaBusAccessTarget.Rom) ||
+                request.IsWrite ||
+                request.WordCount <= 0 ||
+                request.FirstRequestedCycle < 0)
+            {
+                return false;
+            }
+
+            if (request.FirstRequestedCycle < _executedThroughCycle)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot execute CPU timing sequence at cycle {request.FirstRequestedCycle} behind executed horizon {_executedThroughCycle}.");
+            }
+
+            _cpuTimingSequenceAttempts++;
+
+            var firstRequestedCycle = Math.Max(0, request.FirstRequestedCycle);
+            if (firstRequestedCycle > 0)
+            {
+                AdvanceThrough(firstRequestedCycle - 1);
+                _slots.AdvanceTo(firstRequestedCycle - 1);
+            }
+            var requestedCycle = firstRequestedCycle;
+            var completedCycle = firstRequestedCycle;
+            var firstGrantedCycle = -1L;
+            var lastGrantedCycle = -1L;
+            var totalWaitCycles = 0L;
+            var word = 0;
+            SetCpuIntent(
+                request.GetWordKind(0),
+                request.Target,
+                request.Address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite: false);
+            try
+            {
+                while (word < request.WordCount)
+                {
+                    var candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
+                    RefreshDeviceDeadlines();
+                    var barrier = GetCpuTimingSequenceBarrier(candidate);
+                    if (_slots.TryCommitCpuDataKnownQuietRun(
+                        request.Kind,
+                        request.Target,
+                        request.Address,
+                        request.InstructionFetchShapeBits,
+                        word,
+                        request.WordCount - word,
+                        requestedCycle,
+                        candidate,
+                        barrier,
+                        out var quietWords,
+                        out completedCycle))
+                    {
+                        var quietLastGrantedCycle = completedCycle -
+                            AgnusChipSlotScheduler.SlotCycles;
+                        ref var quietIntent = ref _intents[(int)AgnusBusAgendaSource.Cpu];
+                        quietIntent.Kind = request.GetWordKind(word + quietWords - 1);
+                        quietIntent.EarliestCycle = completedCycle;
+                        RecordGrantedCpuRun(
+                            request.Address,
+                            quietWords,
+                            CountInstructionFetchWords(in request, word, quietWords),
+                            candidate,
+                            quietLastGrantedCycle);
+                        _executedThroughCycle = Math.Max(
+                            _executedThroughCycle,
+                            quietLastGrantedCycle);
+                        firstGrantedCycle = firstGrantedCycle < 0 ? candidate : firstGrantedCycle;
+                        lastGrantedCycle = quietLastGrantedCycle;
+                        totalWaitCycles += candidate - requestedCycle;
+                        requestedCycle = completedCycle;
+                        candidate = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
+                        word += quietWords;
+                    }
+
+                    if (word >= request.WordCount)
+                    {
+                        break;
+                    }
+
+                    var exactKind = request.GetWordKind(word);
+                    ref var exactIntent = ref _intents[(int)AgnusBusAgendaSource.Cpu];
+                    exactIntent.Kind = exactKind;
+                    exactIntent.EarliestCycle = requestedCycle;
+                    var exposeLegacyRequest =
+                        !ProductionEnabled ||
+                        !_bus.Blitter.Busy ||
+                        !_slots.BlitterPriorityEnabled;
+                    if (exposeLegacyRequest)
+                    {
+                        _slots.BeginPendingCpuSlotRequest(
+                            exactKind,
+                            request.Target,
+                            request.Address,
+                            AmigaBusAccessSize.Word,
+                            requestedCycle,
+                            isWrite: false);
+                    }
+
+                    try
+                    {
+                        while (true)
+                        {
+                            _cpuTimingSequenceBarrierRejects++;
+                        AdvanceThrough(candidate);
+                        var causalCandidate = _bus.AdvancePendingCpuGrantToCausalBusHorizon(
+                            request.Target,
+                            candidate);
+                        if (causalCandidate != candidate)
+                        {
+                            candidate = AgnusChipSlotScheduler.AlignToSlot(causalCandidate);
+                            continue;
+                        }
+
+                        _bus.SynchronizeHrmBlitterPriority();
+                        if (_slots.TryGrantCpuDataSingleExactSlot(
+                                exactKind,
+                            request.Target,
+                            request.Address,
+                            AmigaBusAccessSize.Word,
+                            requestedCycle,
+                            candidate,
+                            isWrite: false,
+                            allowNiceBlitterSteal: true,
+                            out completedCycle))
+                        {
+                            RecordGrantedCpuWord(
+                                exactKind,
+                                request.Address,
+                                candidate,
+                                isLongWordPhase: false);
+                            _executedThroughCycle = Math.Max(_executedThroughCycle, candidate);
+                            firstGrantedCycle = firstGrantedCycle < 0 ? candidate : firstGrantedCycle;
+                            lastGrantedCycle = candidate;
+                            totalWaitCycles += candidate - requestedCycle;
+                            break;
+                        }
+
+                        _cpuDeniedWords++;
+                        _cpuTimingSequenceSlotRejects++;
+                        ref var pending = ref _intents[(int)AgnusBusAgendaSource.Cpu];
+                        pending.EarliestCycle = AgnusChipSlotScheduler.AlignToSlot(
+                            candidate + AgnusChipSlotScheduler.SlotCycles);
+                        candidate += _bus.TryGetCommittedAgnusSlotOwner(candidate, out var deniedOwner) &&
+                            deniedOwner == AgnusChipSlotOwner.Copper
+                                ? 2 * AgnusChipSlotScheduler.SlotCycles
+                                : AgnusChipSlotScheduler.SlotCycles;
+                        }
+                    }
+                    finally
+                    {
+                        if (exposeLegacyRequest)
+                        {
+                            _slots.ClearPendingCpuSlotRequest();
+                        }
+                    }
+
+                    requestedCycle = completedCycle;
+                    word++;
+                }
+            }
+            finally
+            {
+                ClearCpuIntent();
+            }
+
+            _executedThroughCycle = Math.Max(_executedThroughCycle, lastGrantedCycle);
+            _cpuTimingSequenceRuns++;
+            _cpuTimingSequenceWords += request.WordCount;
+            _queryCacheValid = false;
+            result = new CpuTimingSequenceResult(
+                request.WordCount,
+                firstGrantedCycle,
+                lastGrantedCycle,
+                completedCycle,
+                lastGrantedCycle,
+                totalWaitCycles);
+            return true;
+        }
+
+        internal bool TryGetCommittedSlotSnapshot(
+            long cycle,
+            out AgnusChipSlotSnapshot snapshot)
+            => _slots.TryGetCommittedSlotSnapshot(cycle, out snapshot);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long GetCpuTimingSequenceBarrier(long candidate)
+        {
+            var barrier = _slots.NextMandatoryRefreshCycle;
+            barrier = Math.Min(barrier, _agenda.Get(AgnusBusAgendaSource.Display));
+            barrier = Math.Min(barrier, _agenda.Get(AgnusBusAgendaSource.Paula));
+            barrier = Math.Min(barrier, _agenda.Get(AgnusBusAgendaSource.Disk));
+            barrier = Math.Min(barrier, _agenda.Get(AgnusBusAgendaSource.Copper));
+            barrier = Math.Min(barrier, _agenda.Get(AgnusBusAgendaSource.Control));
+            barrier = Math.Min(barrier, _agenda.Get(AgnusBusAgendaSource.Raster));
+            barrier = Math.Min(barrier, _agenda.Get(AgnusBusAgendaSource.Blitter));
+            if (_bus.Blitter.Busy)
+            {
+                barrier = Math.Min(
+                    barrier,
+                    _bus.Blitter.NormalizeRawBusEligibilityCycle(
+                        _bus.Blitter.GetRawBusEligibilityCycle(),
+                        Math.Max(0, candidate - AgnusChipSlotScheduler.SlotCycles)));
+            }
+
+            return barrier;
         }
 
         public void ClearSlots() => _slots.Clear();
@@ -1332,7 +1816,20 @@ namespace CopperMod.Amiga.Bus
             long requestedCycle,
             bool isWrite)
         {
-            _slots.BeginPendingCpuSlotRequest(kind, target, address, size, requestedCycle, isWrite);
+            // The legacy allocator remains the reference owner map for quiet
+            // CPU slots during migration.  Do not expose the pending CPU to it
+            // while production is chronologically executing an active blitter:
+            // its retrospective CPU claim would suppress BLTPRI arbitration
+            // before the unified executor can choose the real owner.
+            _legacyCpuSlotRequestPending =
+                !ProductionEnabled ||
+                !_bus.Blitter.Busy ||
+                !_slots.BlitterPriorityEnabled;
+            if (_legacyCpuSlotRequestPending)
+            {
+                _slots.BeginPendingCpuSlotRequest(kind, target, address, size, requestedCycle, isWrite);
+            }
+
             var intent = new AgnusBusIntent
             {
                 Requester = AmigaBusRequester.Cpu,
@@ -1348,7 +1845,12 @@ namespace CopperMod.Amiga.Bus
 
         public void ClearPendingCpuSlotRequest()
         {
-            _slots.ClearPendingCpuSlotRequest();
+            if (_legacyCpuSlotRequestPending)
+            {
+                _slots.ClearPendingCpuSlotRequest();
+                _legacyCpuSlotRequestPending = false;
+            }
+
             ClearCpuIntent();
         }
 
@@ -1372,7 +1874,7 @@ namespace CopperMod.Amiga.Bus
                 isWrite,
                 out grantedCycle,
                 out completedCycle);
-            RecordGrantedCpuWord(address, grantedCycle, isLongWordPhase: false);
+            RecordGrantedCpuWord(kind, address, grantedCycle, isLongWordPhase: false);
             ClearCpuIntent();
         }
 
@@ -1396,8 +1898,8 @@ namespace CopperMod.Amiga.Bus
                 out firstWordCycle,
                 out secondWordCycle,
                 out completedCycle);
-            RecordGrantedCpuWord(address, firstWordCycle, isLongWordPhase: true);
-            RecordGrantedCpuWord(address + 2, secondWordCycle, isLongWordPhase: true);
+            RecordGrantedCpuWord(kind, address, firstWordCycle, isLongWordPhase: true);
+            RecordGrantedCpuWord(kind, address + 2, secondWordCycle, isLongWordPhase: true);
             ClearCpuIntent();
         }
 
@@ -1421,7 +1923,7 @@ namespace CopperMod.Amiga.Bus
                 isWrite,
                 out grantedCycle,
                 out completedCycle);
-            RecordGrantedCpuWord(address, grantedCycle, isLongWordPhase: true);
+            RecordGrantedCpuWord(kind, address, grantedCycle, isLongWordPhase: true);
             ClearCpuIntent();
         }
 
@@ -1451,9 +1953,21 @@ namespace CopperMod.Amiga.Bus
             _intents[(int)AgnusBusAgendaSource.Cpu].Clear();
         }
 
-        private void RecordGrantedCpuWord(uint address, long cycle, bool isLongWordPhase)
+        private void RecordGrantedCpuWord(
+            AmigaBusAccessKind kind,
+            uint address,
+            long cycle,
+            bool isLongWordPhase)
         {
             _cpuGrantedWords++;
+            if (kind == AmigaBusAccessKind.CpuInstructionFetch)
+            {
+                _cpuInstructionFetchGrantedWords++;
+            }
+            else
+            {
+                _cpuDataGrantedWords++;
+            }
             if (isLongWordPhase)
             {
                 _cpuLongWordPhases++;
@@ -1461,6 +1975,38 @@ namespace CopperMod.Amiga.Bus
 
             _lastCpuAddress = address;
             _lastCpuGrantedCycle = cycle;
+        }
+
+        private void RecordGrantedCpuRun(
+            uint address,
+            int wordCount,
+            int instructionFetchWordCount,
+            long firstCycle,
+            long lastCycle)
+        {
+            _cpuGrantedWords += wordCount;
+            _cpuInstructionFetchGrantedWords += instructionFetchWordCount;
+            _cpuDataGrantedWords += wordCount - instructionFetchWordCount;
+            _lastCpuAddress = address;
+            _lastCpuGrantedCycle = lastCycle;
+            _ = firstCycle;
+        }
+
+        private static int CountInstructionFetchWords(
+            in CpuTimingSequenceRequest request,
+            int wordOffset,
+            int wordCount)
+        {
+            var count = 0;
+            for (var i = 0; i < wordCount; i++)
+            {
+                if (request.GetWordKind(wordOffset + i) == AmigaBusAccessKind.CpuInstructionFetch)
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
 
         public void UpdateGeometry(long frameCycles) => _slots.UpdateGeometry(frameCycles);
@@ -1796,7 +2342,8 @@ namespace CopperMod.Amiga.Bus
                 bplcon2,
                 bplcon3,
                 bpl1Mod,
-                bpl2Mod);
+                bpl2Mod,
+                formatDiagnostic: state.FirstLineStateMismatch.Length == 0);
 
             if (mismatch == null)
             {
@@ -1826,24 +2373,27 @@ namespace CopperMod.Amiga.Bus
             ushort bplcon2,
             ushort bplcon3,
             short bpl1Mod,
-            short bpl2Mod)
+            short bpl2Mod,
+            bool formatDiagnostic)
         {
-            if ((state.WrittenMask & AgnusDisplayControlState.DmaconWritten) != 0 && state.Dmacon != dmacon) return Format("DMACON", state.Dmacon, dmacon, cycle);
-            if ((state.WrittenMask & AgnusDisplayControlState.DiwStartWritten) != 0 && state.DiwStart != diwStart) return Format("DIWSTRT", state.DiwStart, diwStart, cycle);
-            if ((state.WrittenMask & AgnusDisplayControlState.DiwStopWritten) != 0 && state.DiwStop != diwStop) return Format("DIWSTOP", state.DiwStop, diwStop, cycle);
-            if ((state.WrittenMask & AgnusDisplayControlState.DiwHighWritten) != 0 && state.DiwHigh != diwHigh) return Format("DIWHIGH", state.DiwHigh, diwHigh, cycle);
-            if ((state.WrittenMask & AgnusDisplayControlState.DdfStartWritten) != 0 && state.DdfStart != ddfStart) return Format("DDFSTRT", state.DdfStart, ddfStart, cycle);
-            if ((state.WrittenMask & AgnusDisplayControlState.DdfStopWritten) != 0 && state.DdfStop != ddfStop) return Format("DDFSTOP", state.DdfStop, ddfStop, cycle);
-            if ((state.WrittenMask & AgnusDisplayControlState.Bplcon0Written) != 0 && state.Bplcon0 != bplcon0) return Format("BPLCON0", state.Bplcon0, bplcon0, cycle);
-            if ((state.WrittenMask & AgnusDisplayControlState.Bplcon1Written) != 0 && state.Bplcon1 != bplcon1) return Format("BPLCON1", state.Bplcon1, bplcon1, cycle);
-            if ((state.WrittenMask & AgnusDisplayControlState.Bplcon2Written) != 0 && state.Bplcon2 != bplcon2) return Format("BPLCON2", state.Bplcon2, bplcon2, cycle);
-            if ((state.WrittenMask & AgnusDisplayControlState.Bplcon3Written) != 0 && state.Bplcon3 != bplcon3) return Format("BPLCON3", state.Bplcon3, bplcon3, cycle);
-            if ((state.WrittenMask & AgnusDisplayControlState.Bpl1ModWritten) != 0 && state.Bpl1Mod != bpl1Mod) return Format("BPL1MOD", (ushort)state.Bpl1Mod, (ushort)bpl1Mod, cycle);
-            if ((state.WrittenMask & AgnusDisplayControlState.Bpl2ModWritten) != 0 && state.Bpl2Mod != bpl2Mod) return Format("BPL2MOD", (ushort)state.Bpl2Mod, (ushort)bpl2Mod, cycle);
+            if ((state.WrittenMask & AgnusDisplayControlState.DmaconWritten) != 0 && state.Dmacon != dmacon) return Result("DMACON", state.Dmacon, dmacon, cycle, formatDiagnostic);
+            if ((state.WrittenMask & AgnusDisplayControlState.DiwStartWritten) != 0 && state.DiwStart != diwStart) return Result("DIWSTRT", state.DiwStart, diwStart, cycle, formatDiagnostic);
+            if ((state.WrittenMask & AgnusDisplayControlState.DiwStopWritten) != 0 && state.DiwStop != diwStop) return Result("DIWSTOP", state.DiwStop, diwStop, cycle, formatDiagnostic);
+            if ((state.WrittenMask & AgnusDisplayControlState.DiwHighWritten) != 0 && state.DiwHigh != diwHigh) return Result("DIWHIGH", state.DiwHigh, diwHigh, cycle, formatDiagnostic);
+            if ((state.WrittenMask & AgnusDisplayControlState.DdfStartWritten) != 0 && state.DdfStart != ddfStart) return Result("DDFSTRT", state.DdfStart, ddfStart, cycle, formatDiagnostic);
+            if ((state.WrittenMask & AgnusDisplayControlState.DdfStopWritten) != 0 && state.DdfStop != ddfStop) return Result("DDFSTOP", state.DdfStop, ddfStop, cycle, formatDiagnostic);
+            if ((state.WrittenMask & AgnusDisplayControlState.Bplcon0Written) != 0 && state.Bplcon0 != bplcon0) return Result("BPLCON0", state.Bplcon0, bplcon0, cycle, formatDiagnostic);
+            if ((state.WrittenMask & AgnusDisplayControlState.Bplcon1Written) != 0 && state.Bplcon1 != bplcon1) return Result("BPLCON1", state.Bplcon1, bplcon1, cycle, formatDiagnostic);
+            if ((state.WrittenMask & AgnusDisplayControlState.Bplcon2Written) != 0 && state.Bplcon2 != bplcon2) return Result("BPLCON2", state.Bplcon2, bplcon2, cycle, formatDiagnostic);
+            if ((state.WrittenMask & AgnusDisplayControlState.Bplcon3Written) != 0 && state.Bplcon3 != bplcon3) return Result("BPLCON3", state.Bplcon3, bplcon3, cycle, formatDiagnostic);
+            if ((state.WrittenMask & AgnusDisplayControlState.Bpl1ModWritten) != 0 && state.Bpl1Mod != bpl1Mod) return Result("BPL1MOD", (ushort)state.Bpl1Mod, (ushort)bpl1Mod, cycle, formatDiagnostic);
+            if ((state.WrittenMask & AgnusDisplayControlState.Bpl2ModWritten) != 0 && state.Bpl2Mod != bpl2Mod) return Result("BPL2MOD", (ushort)state.Bpl2Mod, (ushort)bpl2Mod, cycle, formatDiagnostic);
             return null;
 
-            static string Format(string name, ushort agnus, ushort denise, long at)
-                => $"{name}:agnus=0x{agnus:X4},denise=0x{denise:X4},cycle={at}";
+            static string Result(string name, ushort agnus, ushort denise, long at, bool format)
+                => format
+                    ? $"{name}:agnus=0x{agnus:X4},denise=0x{denise:X4},cycle={at}"
+                    : "mismatch";
         }
 
         private static bool IsDisplayControlRegister(ushort offset)
@@ -1957,6 +2507,7 @@ namespace CopperMod.Amiga.Bus
             long targetCycle,
             out long advancedThroughCycle)
         {
+            targetCycle = ClampPhysicalCommitTarget(targetCycle);
             advancedThroughCycle = currentCycle;
             if (targetCycle < currentCycle)
             {
@@ -1998,6 +2549,7 @@ namespace CopperMod.Amiga.Bus
             long targetCycle,
             out long advancedThroughCycle)
         {
+            targetCycle = ClampPhysicalCommitTarget(targetCycle);
             advancedThroughCycle = currentCycle;
             if (targetCycle < currentCycle)
             {
@@ -2113,6 +2665,12 @@ namespace CopperMod.Amiga.Bus
             bool useCpuWaitBlitterMicroOps,
             bool processBlitter)
         {
+            if (cycle >= GetUnresolvedCpuFenceCycle())
+            {
+                throw new InvalidOperationException(
+                    $"Cannot execute Agnus slot at cycle {cycle} across unresolved CPU fence {GetUnresolvedCpuFenceCycle()}.");
+            }
+
             if (cycle < _executedThroughCycle)
             {
                 throw new InvalidOperationException(
@@ -2178,6 +2736,11 @@ namespace CopperMod.Amiga.Bus
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryAdvanceCpuOnlySlot(long cycle)
         {
+            if (cycle >= GetUnresolvedCpuFenceCycle())
+            {
+                return false;
+            }
+
             if (cycle < _executedThroughCycle)
             {
                 return false;
@@ -2214,15 +2777,17 @@ namespace CopperMod.Amiga.Bus
             }
 
             return !processBlitter ||
+                !_bus.Blitter.Busy ||
                 _bus.Blitter.NormalizeRawBusEligibilityCycle(
                     _bus.Blitter.GetRawBusEligibilityCycle(),
-                    cycle) > cycle;
+                    Math.Max(0, cycle - AgnusChipSlotScheduler.SlotCycles)) > cycle;
         }
 
         public AgnusBusExecutionResult CompleteDynamicThrough(
             long targetCycle,
             bool blitterWasBusyAtDrainStart)
         {
+            targetCycle = ClampPhysicalCommitTarget(targetCycle);
             if (targetCycle < _executedThroughCycle)
             {
                 throw new InvalidOperationException(
@@ -2358,6 +2923,13 @@ namespace CopperMod.Amiga.Bus
 
         public void MarkAdvancedThrough(long cycle)
         {
+            var fenceCycle = GetUnresolvedCpuFenceCycle();
+            if (cycle >= fenceCycle)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot move Agnus executor horizon to {cycle} across unresolved CPU fence {fenceCycle}.");
+            }
+
             if (cycle < _executedThroughCycle)
             {
                 throw new InvalidOperationException(

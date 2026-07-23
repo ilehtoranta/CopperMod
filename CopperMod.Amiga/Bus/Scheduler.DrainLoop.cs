@@ -61,9 +61,17 @@ namespace CopperMod.Amiga.Bus
                 var blitterWasBusyAtDrainStart = _bus.Blitter.Busy;
                 var forceCatchUp = (mask & AmigaHardwareEventMask.ForceCatchUp) != 0;
                 var cpuBoundary = (mask & AmigaHardwareEventMask.CpuBoundary) != 0;
+                // Disk DMA writes Chip RAM.  Its transfers must be interleaved
+                // with live display fetches, otherwise an eager whole-frame
+                // Agnus advance reads the old bitplane words before the disk
+                // write is made visible.
+                var diskDmaMayAffectDisplay =
+                    (mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
+                    _bus.Disk.HasSlotDmaWakeSourceThrough(targetCycle);
                 if ((mask & AmigaHardwareEventMask.Agnus) != 0 &&
                     !cpuBoundary &&
                     !_bus.Blitter.Busy &&
+                    !diskDmaMayAffectDisplay &&
                     (forceCatchUp || _bus.Display.HasLiveDisplayWork()))
                 {
                     if (HostProfilingEnabled)

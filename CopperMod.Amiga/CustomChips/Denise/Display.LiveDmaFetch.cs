@@ -274,7 +274,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             InvalidateRowDmaPlan(row);
 
-            if (_liveNextFetchRow == row)
+            if (_liveNextFetchRow >= row)
             {
                 SetBitplaneCursorAfterCycle(ref _liveBitplaneFetchTimeline.Captured, state, cycle);
             }

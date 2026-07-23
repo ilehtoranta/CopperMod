@@ -353,6 +353,34 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return (uint)row < LowResOutputHeight;
         }
 
+        internal bool CanPredictCpuWaitBlankingSlotAsFree(long slotCycle, long barrierHorizon)
+        {
+            if (!_timing.IsCanonicalPal ||
+                !_liveDmaEnabled ||
+                !_liveFrameValid ||
+                slotCycle < _liveFrameStartCycle ||
+                slotCycle >= GetLiveFrameStopCycle() ||
+                GetNextLiveCopperBarrierCycle() <= barrierHorizon ||
+                GetNextLivePendingWriteCycle() <= barrierHorizon)
+            {
+                return false;
+            }
+
+            var frameCycle = slotCycle - _liveFrameStartCycle;
+            var beamLine = (int)(frameCycle / LineCycles);
+            var row = beamLine - StandardVStart;
+            if ((uint)beamLine >= AmigaConstants.A500PalRasterLines ||
+                (uint)row < LowResOutputHeight)
+            {
+                return false;
+            }
+
+            var masterEnabled = (_dmacon & DmaconMasterEnable) != 0;
+            var displayChannelEnabled =
+                (_dmacon & (DmaconBitplaneEnable | DmaconSpriteEnable)) != 0;
+            return !masterEnabled || !displayChannelEnabled;
+        }
+
         private bool TryEnsureCpuWaitFixedSlotImage(
             int beamLine,
             long lineStart,
