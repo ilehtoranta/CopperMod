@@ -1,4 +1,5 @@
 using Copper68k;
+using System.Collections.Generic;
 
 namespace CopperMod.Amiga.CopperStart.Exec;
 
@@ -9,24 +10,28 @@ internal sealed class ExecPortServices
     private const int SigRecvdOffset = 0x1A;
     private readonly CopperStartExecContext _context;
     private readonly ExecListServices _lists;
+    private readonly ExecSignalServices _signals;
+    private readonly Dictionary<uint, uint> _compatibilityPorts = new();
 
-    public ExecPortServices(CopperStartExecContext context, ExecListServices lists) { _context = context; _lists = lists; }
+    public ExecPortServices(CopperStartExecContext context, ExecListServices lists, ExecSignalServices signals) { _context = context; _lists = lists; _signals = signals; }
 
     public uint AddPort(M68kCpuState state)
     {
         var port = state.A[1]; if (!IsPort(port)) return 0;
+        if (!_context.UsesRomExec()) { _compatibilityPorts[port] = port; _lists.Ensure(port + MsgListOffset); return 0; }
         _lists.Ensure(port + MsgListOffset); var ports = _context.GetExecBase() + PortListOffset; _lists.Ensure(ports);
         if (!_lists.Contains(ports, port)) _lists.AddTail(ports, port); return 0;
     }
     public uint RemPort(M68kCpuState state)
     {
+        if (!_context.UsesRomExec()) { _compatibilityPorts.Remove(state.A[1]); return 0; }
         var port = state.A[1]; var ports = _context.GetExecBase() + PortListOffset;
         if (IsPort(port) && _lists.Contains(ports, port)) _lists.Remove(port); return 0;
     }
     public uint PutMsg(M68kCpuState state)
     {
         var port = state.A[0]; var message = state.A[1];
-        if (!IsPort(port) || !IsMessage(message) || !_lists.Contains(_context.GetExecBase() + PortListOffset, port)) return 0;
+        if (!IsPort(port) || !IsMessage(message) || (_context.UsesRomExec() && !_lists.Contains(_context.GetExecBase() + PortListOffset, port))) return 0;
         _lists.Ensure(port + MsgListOffset); _lists.AddTail(port + MsgListOffset, message);
         var bit = _context.Memory.ReadByte(port + SigBitOffset);
         if (bit < 32) SignalTask(_context.Memory.ReadLong(port + SigTaskOffset), 1u << bit, state);
@@ -38,18 +43,32 @@ internal sealed class ExecPortServices
     }
     public uint ReplyMsg(M68kCpuState state)
     {
-        var message = state.A[1]; if (!IsMessage(message)) return 0; var replyPort = _context.Memory.ReadLong(message + ReplyPortOffset);
-        if (replyPort != 0) { state.A[0] = replyPort; PutMsg(state); } return 0;
+        ReplyMessage(state.A[1], state); return 0;
     }
-    public uint FindPort(M68kCpuState state) => _lists.FindName(_context.GetExecBase() + PortListOffset, state.A[1]);
-    public uint WaitPort(M68kCpuState state)
+    /// <summary>Queues a completed IORequest on its reply port without requiring a public port-list entry.</summary>
+    public void ReplyMessage(uint message, M68kCpuState state)
+    {
+        if (!IsMessage(message)) return;
+        var replyPort = _context.Memory.ReadLong(message + ReplyPortOffset);
+        if (!IsPort(replyPort)) return;
+        _lists.Ensure(replyPort + MsgListOffset); _lists.AddTail(replyPort + MsgListOffset, message);
+        var bit = _context.Memory.ReadByte(replyPort + SigBitOffset);
+        if (bit < 32) SignalTask(_context.Memory.ReadLong(replyPort + SigTaskOffset), 1u << bit, state);
+    }
+    public uint FindPort(M68kCpuState state)
+    {
+        if (_context.UsesRomExec()) return _lists.FindName(_context.GetExecBase() + PortListOffset, state.A[1]);
+        var target = _context.ReadString(state.A[1], 96);
+        foreach (var port in _compatibilityPorts.Keys)
+            if (string.Equals(target, _context.ReadString(_context.Memory.ReadLong(port + 0x0A), 96), System.StringComparison.OrdinalIgnoreCase)) return port;
+        return 0;
+    }
+    public M68kHostGatewayResult WaitPort(M68kCpuState state)
     {
         var port = state.A[0]; var list = port + MsgListOffset;
-        if (!IsPort(port)) return 0;
-        if (_context.Memory.ReadLong(list) != list + 4) return _context.Memory.ReadLong(list);
-        var bit = _context.Memory.ReadByte(port + SigBitOffset);
-        if (bit < 32) _context.Memory.WriteLong(_context.GetCurrentTask() + SigRecvdOffset - 4, 1u << bit);
-        return 0;
+        if (!IsPort(port)) { state.D[0] = 0; return M68kHostGatewayResult.Completed; }
+        if (_context.Memory.ReadLong(list) != list + 4) { state.D[0] = _context.Memory.ReadLong(list); return M68kHostGatewayResult.Completed; }
+        return _signals.WaitForPort(state, port);
     }
     private void SignalTask(uint task, uint mask, M68kCpuState state)
     {

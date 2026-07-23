@@ -9,7 +9,7 @@ namespace CopperMod.Amiga.CopperStart;
 internal sealed class HostLibraryGatewayRegistry : IDisposable
 {
     private readonly AmigaBus _bus;
-    private readonly Dictionary<uint, Action<M68kCpuState>> _handlers = new();
+    private readonly Dictionary<uint, Func<M68kCpuState, M68kHostGatewayResult>> _handlers = new();
     private readonly List<HostGatewayOverlay> _overlays = new();
     public HostLibraryGatewayRegistry(AmigaBus bus) => _bus = bus ?? throw new ArgumentNullException(nameof(bus));
     public bool IsInstalled { get; private set; }
@@ -33,4 +33,8 @@ internal sealed class HostLibraryGatewayRegistry : IDisposable
     public void Dispose() { for (var i = _overlays.Count - 1; i >= 0; i--) _overlays[i].Dispose(); _overlays.Clear(); IsInstalled = false; }
 }
 
-internal readonly record struct HostLibraryGateway(int Lvo, Action<M68kCpuState> Handler);
+internal readonly record struct HostLibraryGateway(int Lvo, Func<M68kCpuState, M68kHostGatewayResult> Handler)
+{
+    public HostLibraryGateway(int lvo, Action<M68kCpuState> handler)
+        : this(lvo, state => { handler(state); return M68kHostGatewayResult.Completed; }) { }
+}

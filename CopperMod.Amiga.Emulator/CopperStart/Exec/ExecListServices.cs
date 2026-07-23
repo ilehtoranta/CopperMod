@@ -124,10 +124,17 @@ internal sealed class ExecListServices
     public uint RemTail(M68kCpuState state) => RemoveEnd(state.A[0], false);
     public uint Enqueue(M68kCpuState state)
     {
-        var list = state.A[0]; var node = state.A[1]; if (!IsValidList(list) || !IsValidNode(node)) return 0;
+        Enqueue(state.A[0], state.A[1]);
+        return 0;
+    }
+
+    /// <summary>Inserts a node in descending Node priority order.</summary>
+    public void Enqueue(uint list, uint node)
+    {
+        if (!IsValidList(list) || !IsValidNode(node)) return;
         var priority = unchecked((sbyte)_memory.ReadByte(node + 9)); var current = _memory.ReadLong(list);
         while (current != list + 4 && IsValidNode(current) && unchecked((sbyte)_memory.ReadByte(current + 9)) >= priority) current = _memory.ReadLong(current);
-        var predecessor = _memory.ReadLong(current + NodePredecessorOffset); if (!IsValidNode(predecessor)) return 0;
-        Link(node, predecessor, current); if (current == list + 4) _memory.WriteLong(list + 8, node); return 0;
+        var predecessor = _memory.ReadLong(current + NodePredecessorOffset); if (!IsValidNode(predecessor)) return;
+        Link(node, predecessor, current); if (current == list + 4) _memory.WriteLong(list + 8, node);
     }
 }
