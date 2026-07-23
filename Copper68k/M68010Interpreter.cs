@@ -58,6 +58,9 @@ namespace Copper68k
         public bool TryInvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
             => _bus.TryInvokeHostGateway(Mask(instructionProgramCounter), token, state);
 
+        public M68kHostGatewayInvocation InvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
+            => _bus.InvokeHostGateway(Mask(instructionProgramCounter), token, state);
+
         public ushort ReadHostWord(uint address)
             => _codeReader is not null
                 ? _codeReader.ReadHostWord(Mask(address))

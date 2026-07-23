@@ -1085,6 +1085,15 @@ namespace Copper68k
             ClearRuntimeState();
         }
 
+        public void SwitchTaskContext(M68kCpuState next)
+        {
+            ArgumentNullException.ThrowIfNull(next);
+            _fallback.SwitchTaskContext(next);
+            CaptureFallbackM68000PipelineState();
+            ResetExecutionStateBookkeeping();
+            ClearRuntimeState();
+        }
+
         public void RequestInterrupt(int level, uint vectorAddress)
         {
             // A compiled slice owns the current 68000 prefetch/bus state. An

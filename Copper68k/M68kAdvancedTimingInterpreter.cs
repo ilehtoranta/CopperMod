@@ -2843,9 +2843,11 @@ namespace Copper68k
                     {
                         var token = FetchLong();
                         var returnProgramCounter = State.ProgramCounter;
-                        if (_bus.TryInvokeHostGateway(State.LastInstructionProgramCounter, token, State))
+                        var gateway = _bus.InvokeHostGateway(State.LastInstructionProgramCounter, token, State);
+                        if (gateway.Handled)
                         {
-                            if (!State.Halted && State.ProgramCounter == returnProgramCounter)
+                            if (gateway.Result != M68kHostGatewayResult.BlockCurrentTask &&
+                                !State.Halted && State.ProgramCounter == returnProgramCounter)
                             {
                                 State.ProgramCounter = PullLong();
                             }

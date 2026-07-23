@@ -1998,6 +1998,16 @@ namespace Copper68k
             return _physicalBus.TryInvokeHostGateway(physicalPc, token, state);
         }
 
+        public M68kHostGatewayInvocation InvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
+        {
+            var physicalPc = Translate(
+                instructionProgramCounter,
+                M68kBusAccessKind.CpuInstructionFetch,
+                write: false,
+                byteCount: 2);
+            return _physicalBus.InvokeHostGateway(physicalPc, token, state);
+        }
+
         public void ResetExternalDevices(long cycle)
             => _physicalBus.ResetExternalDevices(cycle);
 
