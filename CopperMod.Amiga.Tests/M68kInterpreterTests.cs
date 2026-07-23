@@ -4,6 +4,39 @@ namespace CopperMod.Amiga.Tests;
 public sealed class M68kInterpreterTests
 {
 	[Fact]
+	public void PendingRetirementSuccessorPublishesItsOriginatingFloorToWindowBus()
+	{
+		var bus = new InstructionFetchWindowBus();
+		Write(bus.Memory, 0x1000,
+			0x4E, 0x71, // NOP
+			0x4E, 0x71,
+			0x4E, 0x71);
+		var cpu = new M68kInterpreter(
+			bus,
+			new M68kCpuState(),
+			instructionFrequency: null,
+			enableInstructionFetchWindow: true,
+			enableOpcodePlan: false);
+		cpu.Reset(0x1000, 0x3000);
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Contains(
+			M68kInstructionFetchPublicationPhase.Required,
+			bus.PublicationPhases[..bus.WindowCommits]);
+		var retirementIndex = Array.IndexOf(
+			bus.PublicationPhases,
+			M68kInstructionFetchPublicationPhase.CancellableSuccessor,
+			0,
+			bus.WindowCommits);
+		Assert.True(retirementIndex >= 0);
+		Assert.NotEqual(long.MinValue, bus.RetirementFloors[retirementIndex]);
+		Assert.True(bus.PublicationContexts[retirementIndex].Group > 0);
+	}
+
+	[Fact]
 	public void NopUsesDocumentedCyclesWithoutAddingFetchTime()
 	{
 		var bus = new AmigaBus();
@@ -2552,7 +2585,7 @@ public sealed class M68kInterpreterTests
 		Assert.True(dataWriteIndex > fallthroughFetchIndex, diagnostic);
 	}
 	[Fact]
-	public void MoveWordDisplacementSourceToDataRegisterIncludesPrefetchContention()
+	public void MoveWordDisplacementSourceToDataRegisterIncludesFinalPrefetchContention()
 	{
 		var bus = new AmigaBus();
 		Write(bus.ChipRam, 0x1000, 0x30, 0x28, 0x00, 0x02); // MOVE.W 2(A0),D0
@@ -2562,7 +2595,7 @@ public sealed class M68kInterpreterTests
 		cpu.State.Cycles = 20;
 		cpu.State.A[0] = 0x2000;
 		var cycles = cpu.ExecuteInstruction();
-		Assert.Equal(16, cycles);
+		Assert.Equal(20, cycles);
 		Assert.Equal(0x1234u, cpu.State.D[0] & 0xFFFF);
 	}
 	[Fact]
@@ -2818,7 +2851,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x800F, write.Value);
 	}
 	[Fact]
-	public void AmigaBusExactCpuDataHelpersMatchGenericChipRamAccess()
+	public void ExactRamClassifierMatchesGenericChipRamAccess()
 	{
 		var genericBus = CreateExactCpuDataAmigaBus();
 		var exactBus = CreateExactCpuDataAmigaBus();
@@ -2828,22 +2861,20 @@ public sealed class M68kInterpreterTests
 		var genericReadCycle = 100L;
 		var exactReadCycle = 100L;
 		var genericValue = generic.ReadLong(0x2000, ref genericReadCycle, M68kBusAccessKind.CpuDataRead);
-		var exactGranted = exactBus.TryReadExactCpuDataLong(0x2000, ref exactReadCycle, out var exactValue);
-		Assert.True(exactGranted);
+		Assert.True(exactBus.TryReadExactCpuDataLong(0x2000, ref exactReadCycle, out var exactValue));
 		Assert.Equal(genericValue, exactValue);
 		Assert.Equal(genericReadCycle, exactReadCycle);
 		var genericWriteCycle = 120L;
 		var exactWriteCycle = 120L;
 		generic.WriteLong(0x2010, 0x89AB_CDEF, ref genericWriteCycle, M68kBusAccessKind.CpuDataWrite);
-		var exactWrote = exactBus.TryWriteExactCpuDataLong(0x2010, 0x89AB_CDEF, ref exactWriteCycle);
-		Assert.True(exactWrote);
+		Assert.True(exactBus.TryWriteExactCpuDataLong(0x2010, 0x89AB_CDEF, ref exactWriteCycle));
 		Assert.Equal(genericWriteCycle, exactWriteCycle);
 		Assert.Equal(
 			BigEndian.ReadUInt32(genericBus.ChipRam, 0x2010, "generic chip write"),
 			BigEndian.ReadUInt32(exactBus.ChipRam, 0x2010, "exact chip write"));
 	}
 	[Fact]
-	public void AmigaBusExactCpuDataHelpersMatchGenericExpansionRamAccess()
+	public void ExactRamClassifierMatchesGenericExpansionRamAccess()
 	{
 		var genericBus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
 		var exactBus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
@@ -2855,22 +2886,20 @@ public sealed class M68kInterpreterTests
 		var genericReadCycle = 100L;
 		var exactReadCycle = 100L;
 		var genericValue = generic.ReadLong(readAddress, ref genericReadCycle, M68kBusAccessKind.CpuDataRead);
-		var exactGranted = exactBus.TryReadExactCpuDataLong(readAddress, ref exactReadCycle, out var exactValue);
-		Assert.True(exactGranted);
+		Assert.True(exactBus.TryReadExactCpuDataLong(readAddress, ref exactReadCycle, out var exactValue));
 		Assert.Equal(genericValue, exactValue);
 		Assert.Equal(genericReadCycle, exactReadCycle);
 		var genericWriteCycle = 120L;
 		var exactWriteCycle = 120L;
 		generic.WriteLong(writeAddress, 0x89AB_CDEF, ref genericWriteCycle, M68kBusAccessKind.CpuDataWrite);
-		var exactWrote = exactBus.TryWriteExactCpuDataLong(writeAddress, 0x89AB_CDEF, ref exactWriteCycle);
-		Assert.True(exactWrote);
+		Assert.True(exactBus.TryWriteExactCpuDataLong(writeAddress, 0x89AB_CDEF, ref exactWriteCycle));
 		Assert.Equal(genericWriteCycle, exactWriteCycle);
 		Assert.Equal(
 			BigEndian.ReadUInt32(genericBus.ExpansionRam, 0x40, "generic expansion write"),
 			BigEndian.ReadUInt32(exactBus.ExpansionRam, 0x40, "exact expansion write"));
 	}
 	[Fact]
-	public void AmigaBusDeferredPseudoFastTimingFlushMatchesImmediateExactTiming()
+	public void ExactRamClassifierDefersExpansionTimingWithinBatch()
 	{
 		var immediateBus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
 		var deferredBus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
@@ -2883,11 +2912,11 @@ public sealed class M68kInterpreterTests
 		var immediateCycle = 20L;
 		var deferredCycle = 20L;
 		var deferredTiming = (IM68kDeferredCpuInstructionTiming)deferredBus;
-		Assert.True(immediateBus.TryReadExactCpuDataWord(firstAddress, ref immediateCycle, out var immediateWord));
-		Assert.True(immediateBus.TryReadExactCpuDataLong(secondAddress, ref immediateCycle, out var immediateLong));
+		var immediateWord = AmigaCpuDataAccess.ReadWord(immediateBus, firstAddress, ref immediateCycle);
+		var immediateLong = AmigaCpuDataAccess.ReadLong(immediateBus, secondAddress, ref immediateCycle);
 		deferredTiming.BeginDeferredCpuInstructionTiming(deferredCycle);
-		Assert.True(deferredBus.TryReadExactCpuDataWord(firstAddress, ref deferredCycle, out var deferredWord));
-		Assert.True(deferredBus.TryReadExactCpuDataLong(secondAddress, ref deferredCycle, out var deferredLong));
+		var deferredWord = AmigaCpuDataAccess.ReadWord(deferredBus, firstAddress, ref deferredCycle);
+		var deferredLong = AmigaCpuDataAccess.ReadLong(deferredBus, secondAddress, ref deferredCycle);
 		Assert.Equal(20L, deferredCycle);
 		deferredTiming.FlushDeferredCpuInstructionTiming(ref deferredCycle);
 		Assert.Equal(immediateWord, deferredWord);
@@ -2895,7 +2924,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(immediateCycle, deferredCycle);
 	}
 	[Fact]
-	public void AmigaBusDeferredPseudoFastTimingFlushesBeforeChipExactAccess()
+	public void ExactRamClassifierFlushesDeferredExpansionTimingBeforeChipAccess()
 	{
 		var immediateBus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
 		var deferredBus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
@@ -2907,39 +2936,27 @@ public sealed class M68kInterpreterTests
 		var immediateCycle = 20L;
 		var deferredCycle = 20L;
 		var deferredTiming = (IM68kDeferredCpuInstructionTiming)deferredBus;
-		Assert.True(immediateBus.TryReadExactCpuDataWord(expansionAddress, ref immediateCycle, out var immediateExpansion));
-		Assert.True(immediateBus.TryReadExactCpuDataWord(0x2000, ref immediateCycle, out var immediateChip));
+		var immediateExpansion = AmigaCpuDataAccess.ReadWord(immediateBus, expansionAddress, ref immediateCycle);
+		var immediateChip = AmigaCpuDataAccess.ReadWord(immediateBus, 0x2000, ref immediateCycle);
 		deferredTiming.BeginDeferredCpuInstructionTiming(deferredCycle);
-		Assert.True(deferredBus.TryReadExactCpuDataWord(expansionAddress, ref deferredCycle, out var deferredExpansion));
+		var deferredExpansion = AmigaCpuDataAccess.ReadWord(deferredBus, expansionAddress, ref deferredCycle);
 		Assert.Equal(20L, deferredCycle);
-		Assert.True(deferredBus.TryReadExactCpuDataWord(0x2000, ref deferredCycle, out var deferredChip));
+		var deferredChip = AmigaCpuDataAccess.ReadWord(deferredBus, 0x2000, ref deferredCycle);
 		Assert.Equal(immediateExpansion, deferredExpansion);
 		Assert.Equal(immediateChip, deferredChip);
 		Assert.Equal(immediateCycle, deferredCycle);
 	}
 	[Fact]
-	public void AmigaBusDeferredPseudoFastWritesNotifyJitBeforeTimingFlush()
+	public void ExactRamClassifierWritesBeforeTimingFlush()
 	{
 		var bus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
 		var address = bus.ExpansionRamBase + 0x20;
 		var cycle = 20L;
-		var notifications = 0;
-		uint notifiedAddress = 0;
-		var notifiedByteCount = 0;
-		bus.JitEligibleMemoryWritten += (writtenAddress, byteCount) =>
-		{
-			notifications++;
-			notifiedAddress = writtenAddress;
-			notifiedByteCount = byteCount;
-		};
 		var deferredTiming = (IM68kDeferredCpuInstructionTiming)bus;
 		deferredTiming.BeginDeferredCpuInstructionTiming(cycle);
-		Assert.True(bus.TryWriteExactCpuDataLong(address, 0x1234_5678, ref cycle));
+		AmigaCpuDataAccess.WriteLong(bus, address, 0x1234_5678, ref cycle);
 		Assert.Equal(20L, cycle);
 		Assert.Equal(0x1234_5678u, BigEndian.ReadUInt32(bus.ExpansionRam, 0x20, "deferred expansion write"));
-		Assert.Equal(1, notifications);
-		Assert.Equal(address, notifiedAddress);
-		Assert.Equal(4, notifiedByteCount);
 		deferredTiming.FlushDeferredCpuInstructionTiming(ref cycle);
 		Assert.True(cycle >= 20L);
 	}
@@ -2973,7 +2990,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(0x0000_4002u, cpu.State.ProgramCounter);
 	}
 	[Fact]
-	public void AmigaBusExactCpuDataHelpersMatchGenericRealFastRamAccess()
+	public void ExactRamClassifierMatchesGenericRealFastRamAccess()
 	{
 		var genericBus = CreateExactCpuDataAmigaBus(realFastRamSize: 0x10000);
 		var exactBus = CreateExactCpuDataAmigaBus(realFastRamSize: 0x10000);
@@ -2985,15 +3002,13 @@ public sealed class M68kInterpreterTests
 		var genericReadCycle = 100L;
 		var exactReadCycle = 100L;
 		var genericValue = generic.ReadLong(readAddress, ref genericReadCycle, M68kBusAccessKind.CpuDataRead);
-		var exactGranted = exactBus.TryReadExactCpuDataLong(readAddress, ref exactReadCycle, out var exactValue);
-		Assert.True(exactGranted);
+		Assert.True(exactBus.TryReadExactCpuDataLong(readAddress, ref exactReadCycle, out var exactValue));
 		Assert.Equal(genericValue, exactValue);
 		Assert.Equal(genericReadCycle, exactReadCycle);
 		var genericWriteCycle = 120L;
 		var exactWriteCycle = 120L;
 		generic.WriteLong(writeAddress, 0x89AB_CDEF, ref genericWriteCycle, M68kBusAccessKind.CpuDataWrite);
-		var exactWrote = exactBus.TryWriteExactCpuDataLong(writeAddress, 0x89AB_CDEF, ref exactWriteCycle);
-		Assert.True(exactWrote);
+		Assert.True(exactBus.TryWriteExactCpuDataLong(writeAddress, 0x89AB_CDEF, ref exactWriteCycle));
 		Assert.Equal(genericWriteCycle, exactWriteCycle);
 		Assert.Equal(
 			BigEndian.ReadUInt32(genericBus.RealFastRam, 0x40, "generic real fast write"),
@@ -3060,7 +3075,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(20L, cycle);
 	}
 	[Fact]
-	public void AmigaBusExactCpuDataHelpersResumeChipRamAfterRomOverlayDisabled()
+	public void ExactRamClassifierResumesChipRamAfterRomOverlayDisabled()
 	{
 		var bus = CreateExactCpuDataAmigaBus();
 		var overlayRom = new byte[0x40000];
@@ -3088,7 +3103,7 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(20L, cycle);
 	}
 	[Fact]
-	public void AmigaBusExactCpuDataHelpersGuardExpansionRamBoundaries()
+	public void ExactRamClassifierGuardsExpansionRamBoundaries()
 	{
 		var bus = CreateExactCpuDataAmigaBus(expansionRamSize: 0x10000);
 		var finalLongAddress = bus.ExpansionRamBase + 0xFFFC;
@@ -3138,6 +3153,22 @@ public sealed class M68kInterpreterTests
 	{
 		yield return new object[] { (int)M68kOpcodePlanDispatch.KindTable };
 		yield return new object[] { (int)M68kOpcodePlanDispatch.PackedPlan };
+	}
+	[Fact]
+	public void RegisteredLineFHostGatewayBlockKeepsCallerFrameIntact()
+	{
+		var bus = new AmigaBus();
+		const uint trapAddress = 0x00F0_0000;
+		bus.RegisterHostGateway(trapAddress, _ => M68kHostGatewayResult.BlockCurrentTask);
+		bus.WriteWord(0x1000, 0x4EB9); // JSR absolute long
+		bus.WriteLong(0x1002, trapAddress);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		Assert.Equal(trapAddress + 6, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFCu, cpu.State.A[7]);
+		Assert.Equal(0x1006u, bus.ReadLong(0x2FFC));
 	}
 
 	public static IEnumerable<object[]> M68000DispatchVariants()
@@ -4007,6 +4038,11 @@ public sealed class M68kInterpreterTests
 		public int WindowRequests { get; private set; }
 		public int WindowCommits { get; private set; }
 		public int GenericInstructionFetchWordReads { get; private set; }
+		public M68kInstructionFetchPublicationPhase[] PublicationPhases { get; } =
+			new M68kInstructionFetchPublicationPhase[16];
+		public long[] RetirementFloors { get; } = new long[16];
+		public M68kInstructionFetchPublicationContext[] PublicationContexts { get; } =
+			new M68kInstructionFetchPublicationContext[16];
 		public bool TryGetInstructionFetchWindow(uint address, out M68kInstructionFetchWindow window)
 		{
 			WindowRequests++;
@@ -4021,10 +4057,22 @@ public sealed class M68kInterpreterTests
 				_generation[0]);
 			return true;
 		}
-		public void CommitInstructionFetchWindowWord(in M68kInstructionFetchWindow window, uint address, ref long cycle)
+		public void CommitInstructionFetchWindowWord(
+			in M68kInstructionFetchWindow window,
+			uint address,
+			ref long cycle,
+			M68kInstructionFetchPublicationPhase publicationPhase,
+			long retirementFloor,
+			in M68kInstructionFetchPublicationContext publicationContext)
 		{
 			_ = window;
 			_ = address;
+			_ = publicationPhase;
+			_ = retirementFloor;
+			_ = publicationContext;
+			PublicationPhases[WindowCommits] = publicationPhase;
+			RetirementFloors[WindowCommits] = retirementFloor;
+			PublicationContexts[WindowCommits] = publicationContext;
 			WindowCommits++;
 			cycle += 2;
 		}

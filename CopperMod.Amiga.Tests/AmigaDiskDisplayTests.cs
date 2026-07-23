@@ -1300,6 +1300,8 @@ public sealed class AmigaDiskDisplayTests
         {
             bus.WriteWord(0x00DFF100, 0x1000, row0Cycle);
             bus.WriteWord(0x00DFF100, 0x0000, row1Cycle);
+            Assert.True(bus.Display.TryGetCapturedBitplaneWord(StandardY, 0, 0, out var captured));
+            Assert.Equal(0x8000, captured);
             bus.Display.CompletePresentationFrame(frameCycles);
         }
         catch

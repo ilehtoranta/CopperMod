@@ -121,16 +121,20 @@ public sealed class M68040AmigaBusIntegrationTests
 		cpu.ExecuteInstruction();
 
 		Assert.Equal(0x0000_0005u, bus.ReadLong(chipAddress));
-		Assert.Contains(bus.BusAccesses, access =>
+		var reads = bus.BusAccesses.Where(access =>
 			access.Request.Requester == AmigaBusRequester.Cpu &&
 			access.Request.Kind == AmigaBusAccessKind.CpuDataRead &&
-			access.Request.Address == chipAddress &&
-			access.Request.Size == AmigaBusAccessSize.Long);
-		Assert.Contains(bus.BusAccesses, access =>
+			access.Request.Address >= chipAddress &&
+			access.Request.Address < chipAddress + 4).ToArray();
+		var writes = bus.BusAccesses.Where(access =>
 			access.Request.Requester == AmigaBusRequester.Cpu &&
 			access.Request.Kind == AmigaBusAccessKind.CpuDataWrite &&
-			access.Request.Address == chipAddress &&
-			access.Request.Size == AmigaBusAccessSize.Long);
+			access.Request.Address >= chipAddress &&
+			access.Request.Address < chipAddress + 4).ToArray();
+
+		Assert.Equal(new[] { chipAddress, chipAddress + 2 }, reads.Select(access => access.Request.Address));
+		Assert.Equal(new[] { chipAddress, chipAddress + 2 }, writes.Select(access => access.Request.Address));
+		Assert.All(reads.Concat(writes), access => Assert.Equal(AmigaBusAccessSize.Word, access.Request.Size));
 	}
 
 	[Fact]

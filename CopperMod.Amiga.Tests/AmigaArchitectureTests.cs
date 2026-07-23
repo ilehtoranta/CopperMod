@@ -11,7 +11,53 @@ public sealed class AmigaArchitectureTests
 			.WithDeferredCpuChipReadSegments(true);
 
 		Assert.True(options.DeferredCpuChipReadSegmentsEnabled);
-		Assert.False(options.DeferredCpuBusBatchEnabled);
+		Assert.True(options.DeferredCpuBusBatchEnabled);
+	}
+
+	[Fact]
+	public void DeferredCpuCustomPointerWritesAreConfiguredIndependently()
+	{
+		var options = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuCustomPointerWrites(false);
+
+		Assert.False(options.DeferredCpuCustomPointerWritesEnabled);
+		Assert.True(options.DeferredCpuBusBatchEnabled);
+	}
+
+	[Fact]
+	public void DeferredCpuCustomCompositionWritesAreConfiguredIndependently()
+	{
+		var options = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuCustomCompositionWrites(false);
+
+		Assert.False(options.DeferredCpuCustomCompositionWritesEnabled);
+		Assert.True(options.DeferredCpuBusBatchEnabled);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchIsEnabledByDefaultAndCanBeDisabled()
+	{
+		var defaults = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton);
+		var disabled = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuBusBatch(enabled: false, verify: false);
+
+		Assert.True(defaults.DeferredCpuBusBatchEnabled);
+		Assert.True(defaults.DeferredCpuChipWriteJournalEnabled);
+		Assert.True(defaults.DeferredCpuChipReadSegmentsEnabled);
+		Assert.True(defaults.DeferredCpuCustomPointerWritesEnabled);
+		Assert.True(defaults.DeferredCpuCustomCompositionWritesEnabled);
+		Assert.False(disabled.DeferredCpuBusBatchEnabled);
+	}
+
+	[Fact]
+	public void DeferredCpuChipWriteJournalIsConfiguredIndependently()
+	{
+		var options = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuChipWriteJournal(false);
+
+		Assert.True(options.DeferredCpuBusBatchEnabled);
+		Assert.False(options.DeferredCpuChipWriteJournalEnabled);
+		Assert.True(options.DeferredCpuChipReadSegmentsEnabled);
 	}
 
 	[Fact]

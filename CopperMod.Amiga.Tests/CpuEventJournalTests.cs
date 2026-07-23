@@ -5,6 +5,20 @@ namespace CopperMod.Amiga.Tests;
 
 public sealed class CpuEventJournalTests
 {
+	public static IEnumerable<object[]> OcsJournalableCustomWriteOffsets()
+	{
+		for (ushort offset = 0; offset < 0x200; offset += 2)
+		{
+			if (CpuDeferredCustomAccessClassifier.ClassifyCustom(
+					AmigaChipset.OcsPal,
+					offset,
+					isWrite: true) == CpuDeferredPeripheralAccess.JournalableWrite)
+			{
+				yield return [offset];
+			}
+		}
+	}
+
 	[Fact]
 	public void JournalPreservesChronologicalMetadataAndCommitOrder()
 	{
@@ -174,7 +188,10 @@ public sealed class CpuEventJournalTests
 			0x23, 0xFC, 0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x10, 0x04
 		}.CopyTo(rom, 12);
 		new byte[] { 0x30, 0x39, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 22);
-		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuChipWriteJournal: true);
 		bus.MapReadOnlyMemory(romBase, rom);
 		var cpu = M68kCoreFactory.CreateM68000Core(
 			bus,
@@ -192,6 +209,26 @@ public sealed class CpuEventJournalTests
 			bus.CausalBusExecutor.CpuEventJournal.EnqueuedEvents,
 			bus.CausalBusExecutor.CpuEventJournal.CommittedEvents);
 		Assert.Equal(0, bus.CausalBusExecutor.CpuEventJournal.Count);
+	}
+
+	[Fact]
+	public void StageTwoBatchLeavesChipWriteJournalDormantUnlessEnabled()
+	{
+		const uint romBase = 0x00FC0000;
+		var rom = CreateNopRom(128);
+		new byte[] { 0x33, 0xFC, 0xA5, 0x5A, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 4);
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		bus.MapReadOnlyMemory(romBase, rom);
+		var cpu = M68kCoreFactory.CreateM68000Core(
+			bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x4000);
+
+		cpu.ExecuteInstructions(4, null, JournalTestBoundary.Instance);
+
+		Assert.Equal((ushort)0xA55A, bus.ReadWord(0x1000));
+		Assert.Equal(0, bus.CausalBusExecutor.CpuEventJournal.EnqueuedEvents);
+		Assert.Equal(0, bus.CausalBusExecutor.CpuEventJournal.CommittedEvents);
+		Assert.True(bus.CaptureHardwareSchedulerSnapshot().DeferredCpuBusBatchExitChipVisibleAccess > 0);
 	}
 
 	[Fact]
@@ -231,7 +268,10 @@ public sealed class CpuEventJournalTests
 		new byte[] { 0x33, 0xFC, 0xCA, 0xFE, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 4);
 		rom[12] = 0x4A;
 		rom[13] = 0xFC; // ILLEGAL
-		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuChipWriteJournal: true);
 		bus.MapReadOnlyMemory(romBase, rom);
 		bus.WriteLong(4u * 4u, handler); // vector 4
 		var cpu = M68kCoreFactory.CreateM68000Core(
@@ -261,7 +301,10 @@ public sealed class CpuEventJournalTests
 
 		new byte[] { 0x33, 0xFC, 0x11, 0x11, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 4);
 		new byte[] { 0x33, 0xFC, 0x22, 0x22, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 12);
-		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuChipWriteJournal: true);
 		bus.MapReadOnlyMemory(romBase, rom);
 		var cpu = M68kCoreFactory.CreateM68000Core(
 			bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
@@ -287,7 +330,10 @@ public sealed class CpuEventJournalTests
 
 		new byte[] { 0x33, 0xFC, 0xBE, 0xEF, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 4);
 		new byte[] { 0x4E, 0x72, 0x27, 0x00 }.CopyTo(rom, 12);
-		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuChipWriteJournal: true);
 		bus.MapReadOnlyMemory(romBase, rom);
 		var cpu = M68kCoreFactory.CreateM68000Core(
 			bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
@@ -315,7 +361,10 @@ public sealed class CpuEventJournalTests
 		rom[12] = (byte)(readOpcode >> 8);
 		rom[13] = (byte)readOpcode;
 		new byte[] { 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 14);
-		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuChipWriteJournal: true);
 		bus.MapReadOnlyMemory(romBase, rom);
 		bus.WriteWord(0x1002, 0x5AA5);
 		var cpu = M68kCoreFactory.CreateM68000Core(
@@ -338,7 +387,10 @@ public sealed class CpuEventJournalTests
 		var rom = CreateNopRom(256);
 		new byte[] { 0x33, 0xFC, 0xD0, 0x0D, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 4);
 		new byte[] { 0x4E, 0x70 }.CopyTo(rom, 12); // RESET
-		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuChipWriteJournal: true);
 		bus.MapReadOnlyMemory(romBase, rom);
 		var cpu = M68kCoreFactory.CreateM68000Core(
 			bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
@@ -361,7 +413,8 @@ public sealed class CpuEventJournalTests
 		var bus = new AmigaBus(
 			captureBusAccesses: false,
 			enableDeferredCpuBusBatch: true,
-			cpuEventJournalCapacity: 2);
+			cpuEventJournalCapacity: 2,
+			enableDeferredCpuChipWriteJournal: true);
 		bus.MapReadOnlyMemory(romBase, rom);
 		var cpu = M68kCoreFactory.CreateM68000Core(
 			bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
@@ -388,7 +441,10 @@ public sealed class CpuEventJournalTests
 		var rom = CreateNopRom(256);
 		new byte[] { 0x33, 0xFC, 0x4E, 0x71, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 4);
 		new byte[] { 0x4E, 0xF9, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 12); // JMP $1000
-		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuChipWriteJournal: true);
 		bus.MapReadOnlyMemory(romBase, rom);
 		bus.WriteWord(0x1000, 0x4AFC); // ILLEGAL until the journal commits NOP.
 		var cpu = M68kCoreFactory.CreateM68000Core(
@@ -409,7 +465,10 @@ public sealed class CpuEventJournalTests
 		const uint romBase = 0x00FC0000;
 		var rom = CreateNopRom(256);
 		new byte[] { 0x33, 0xFC, 0xC0, 0xDE, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 4);
-		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuChipWriteJournal: true);
 		bus.MapReadOnlyMemory(romBase, rom);
 		ushort observed = 0;
 		var invoked = false;
@@ -427,6 +486,167 @@ public sealed class CpuEventJournalTests
 		Assert.True(invoked);
 		Assert.Equal((ushort)0xC0DE, observed);
 		Assert.Equal(0, bus.CausalBusExecutor.CpuEventJournal.Count);
+	}
+
+	[Fact]
+	public void DeferredBitplanePointerWritesCommitCausallyWithoutLeavingRomBatch()
+	{
+		const uint romBase = 0x00FC0000;
+		var rom = CreateNopRom(256);
+		new byte[] { 0x33, 0xFC, 0x00, 0x00, 0x00, 0xDF, 0xF0, 0xE0 }.CopyTo(rom, 4);
+		new byte[] { 0x33, 0xFC, 0x30, 0x00, 0x00, 0xDF, 0xF0, 0xE2 }.CopyTo(rom, 12);
+		var scalar = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var journaled = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuCustomPointerWrites: true);
+		scalar.MapReadOnlyMemory(romBase, rom);
+		journaled.MapReadOnlyMemory(romBase, rom);
+		var scalarCpu = M68kCoreFactory.CreateM68000Core(
+			scalar, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		var journaledCpu = M68kCoreFactory.CreateM68000Core(
+			journaled, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		scalarCpu.Reset(romBase, 0x4000);
+		journaledCpu.Reset(romBase, 0x4000);
+
+		scalarCpu.ExecuteInstructions(5, null, JournalTestBoundary.Instance);
+		journaledCpu.ExecuteInstructions(5, null, JournalTestBoundary.Instance);
+
+		Assert.Equal(scalarCpu.State.Cycles, journaledCpu.State.Cycles);
+		Assert.Equal(scalarCpu.State.ProgramCounter, journaledCpu.State.ProgramCounter);
+		Assert.Equal(
+			scalar.Display.CaptureSnapshot().BitplanePointers[0],
+			journaled.Display.CaptureSnapshot().BitplanePointers[0]);
+		Assert.Equal(
+			scalar.CaptureCustomRegisterFileSnapshot().Get(0x0E0).LastWriteValue,
+			journaled.CaptureCustomRegisterFileSnapshot().Get(0x0E0).LastWriteValue);
+		Assert.Equal(
+			scalar.CaptureCustomRegisterFileSnapshot().Get(0x0E2).LastWriteValue,
+			journaled.CaptureCustomRegisterFileSnapshot().Get(0x0E2).LastWriteValue);
+		Assert.Equal((ushort)0x3000, journaled.CaptureCustomRegisterFileSnapshot().Get(0x0E2).LastWriteValue);
+		Assert.Equal(2, journaled.CausalBusExecutor.CpuEventJournal.CommittedEvents);
+		Assert.Equal(0, journaled.CausalBusExecutor.CpuEventJournal.Count);
+		Assert.Equal(0, journaled.CaptureHardwareSchedulerSnapshot().DeferredCpuBusBatchExitChipVisibleAccess);
+		Assert.True(scalar.CaptureHardwareSchedulerSnapshot().DeferredCpuBusBatchExitChipVisibleAccess > 0);
+	}
+
+	[Fact]
+	public void DeferredCustomPointerSwitchKeepsDmaconAsImmediateBarrier()
+	{
+		const uint romBase = 0x00FC0000;
+		var rom = CreateNopRom(128);
+		new byte[] { 0x33, 0xFC, 0x82, 0x00, 0x00, 0xDF, 0xF0, 0x96 }.CopyTo(rom, 4);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuCustomPointerWrites: true);
+		bus.MapReadOnlyMemory(romBase, rom);
+		var cpu = M68kCoreFactory.CreateM68000Core(
+			bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x4000);
+
+		cpu.ExecuteInstructions(4, null, JournalTestBoundary.Instance);
+
+		Assert.Equal(0, bus.CausalBusExecutor.CpuEventJournal.CommittedEvents);
+		Assert.True(bus.CaptureHardwareSchedulerSnapshot().DeferredCpuBusBatchExitChipVisibleAccess > 0);
+	}
+
+	[Fact]
+	public void DeferredCustomPointerJournalAllocatesNothingInSteadyState()
+	{
+		const uint romBase = 0x00FC0000;
+		var rom = CreateNopRom(256);
+		new byte[] { 0x33, 0xFC, 0x00, 0x00, 0x00, 0xDF, 0xF0, 0xE0 }.CopyTo(rom, 4);
+		new byte[] { 0x33, 0xFC, 0x30, 0x00, 0x00, 0xDF, 0xF0, 0xE2 }.CopyTo(rom, 12);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuCustomPointerWrites: true);
+		bus.MapReadOnlyMemory(romBase, rom);
+		var cpu = M68kCoreFactory.CreateM68000Core(
+			bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x4000);
+		cpu.ExecuteInstructions(5, null, JournalTestBoundary.Instance);
+		cpu.Reset(romBase, 0x4000);
+
+		var before = GC.GetAllocatedBytesForCurrentThread();
+		cpu.ExecuteInstructions(5, null, JournalTestBoundary.Instance);
+		var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+		Assert.Equal(0, allocated);
+		Assert.Equal(0, bus.CausalBusExecutor.CpuEventJournal.Count);
+	}
+
+	[Fact]
+	public void ScheduleChangingCustomWriteFlushesEarlierCompositionEventFirst()
+	{
+		const uint romBase = 0x00FC0000;
+		var rom = CreateNopRom(128);
+		new byte[] { 0x33, 0xFC, 0x0F, 0x00, 0x00, 0xDF, 0xF1, 0x80 }.CopyTo(rom, 4);
+		new byte[] { 0x33, 0xFC, 0x12, 0x00, 0x00, 0xDF, 0xF1, 0x00 }.CopyTo(rom, 12);
+		var bus = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuCustomCompositionWrites: true);
+		bus.MapReadOnlyMemory(romBase, rom);
+		var cpu = M68kCoreFactory.CreateM68000Core(
+			bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		cpu.Reset(romBase, 0x4000);
+
+		cpu.ExecuteInstructions(4, null, JournalTestBoundary.Instance);
+
+		var writes = bus.CustomRegisterWrites
+			.Where(write => write.Address is 0x180 or 0x100)
+			.ToArray();
+		Assert.Equal(2, writes.Length);
+		Assert.Equal(0x180, writes[0].Address);
+		Assert.Equal(0x100, writes[1].Address);
+		Assert.True(writes[0].Cycle < writes[1].Cycle);
+		Assert.Equal(1, bus.CausalBusExecutor.CpuEventJournal.CommittedEvents);
+		Assert.Equal(0, bus.CausalBusExecutor.CpuEventJournal.Count);
+		Assert.True(bus.CaptureHardwareSchedulerSnapshot().DeferredCpuBusBatchExitChipVisibleAccess > 0);
+	}
+
+	[Theory]
+	[MemberData(nameof(OcsJournalableCustomWriteOffsets))]
+	public void EveryAdmittedOcsCustomWriteMatchesScalarGrantAndValue(ushort offset)
+	{
+		const uint romBase = 0x00FC0000;
+		var rom = CreateNopRom(128);
+		rom[4] = 0x33;
+		rom[5] = 0xFC;
+		rom[6] = 0x12;
+		rom[7] = 0x34;
+		rom[8] = 0x00;
+		rom[9] = 0xDF;
+		var lowAddress = (ushort)(0xF000 + offset);
+		rom[10] = (byte)(lowAddress >> 8);
+		rom[11] = (byte)lowAddress;
+		var scalar = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true);
+		var journaled = new AmigaBus(
+			captureBusAccesses: false,
+			enableDeferredCpuBusBatch: true,
+			enableDeferredCpuCustomPointerWrites: true,
+			enableDeferredCpuCustomCompositionWrites: true);
+		scalar.MapReadOnlyMemory(romBase, rom);
+		journaled.MapReadOnlyMemory(romBase, rom);
+		var scalarCpu = M68kCoreFactory.CreateM68000Core(
+			scalar, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		var journaledCpu = M68kCoreFactory.CreateM68000Core(
+			journaled, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
+		scalarCpu.Reset(romBase, 0x4000);
+		journaledCpu.Reset(romBase, 0x4000);
+
+		scalarCpu.ExecuteInstructions(3, null, JournalTestBoundary.Instance);
+		journaledCpu.ExecuteInstructions(3, null, JournalTestBoundary.Instance);
+
+		var scalarWrite = Assert.Single(scalar.CustomRegisterWrites.Where(write => write.Address == offset));
+		var journaledWrite = Assert.Single(journaled.CustomRegisterWrites.Where(write => write.Address == offset));
+		Assert.Equal(scalarCpu.State.Cycles, journaledCpu.State.Cycles);
+		Assert.Equal(scalarWrite.Cycle, journaledWrite.Cycle);
+		Assert.Equal(scalarWrite.Value, journaledWrite.Value);
+		Assert.Equal(1, journaled.CausalBusExecutor.CpuEventJournal.CommittedEvents);
+		Assert.Equal(0, journaled.CausalBusExecutor.CpuEventJournal.Count);
 	}
 
 	private static byte[] CreateNopRom(int byteCount)

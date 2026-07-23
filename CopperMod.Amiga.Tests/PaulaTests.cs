@@ -1134,6 +1134,38 @@ public sealed class PaulaTests
 	}
 
 	[Fact]
+	public void LiveAudioDmaKeepsChannelSlotsWhileNastyBlitterStallsPendingCpu()
+	{
+		var bus = new AmigaBus(
+			enableLiveAgnusDma: true,
+			enableLiveDisplayDma: false);
+		bus.ChipRam[0x1000] = 0x7F;
+		bus.ChipRam[0x1001] = 0x81;
+		SchedulePaulaWrite(bus, 0x0A2, 0x1000, 0);
+		SchedulePaulaWrite(bus, 0x0A4, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x0A6, 0x0001, 0);
+		SchedulePaulaWrite(bus, 0x096, 0x8201, 0);
+		bus.WriteWord(0x00DFF040, 0x0100); // D-only clear.
+		bus.WriteWord(0x00DFF054, 0x0000);
+		bus.WriteWord(0x00DFF056, 0x4000);
+		bus.WriteWord(0x00DFF096, 0x8640); // DMAEN, BLTEN and BLTPRI.
+		bus.WriteWord(0x00DFF058, 0x0200, 0); // Eight rows of 64 words.
+		var cpuCycle = AudioSlotCycle(0, 0);
+
+		_ = bus.ReadWord(0x00002000, ref cpuCycle, AmigaBusAccessKind.CpuInstructionFetch);
+		bus.Paula.AdvanceDmaObservableTo(1_000);
+
+		var firstRequestedCycles = bus.BusAccesses
+			.Where(access => access.Request.Kind == AmigaBusAccessKind.PaulaDma)
+			.Select(access => access.RequestedCycle)
+			.Take(3)
+			.ToArray();
+		Assert.Equal(
+			new[] { AudioSlotCycle(0, 0), AudioSlotCycle(1, 0), AudioSlotCycle(2, 0) },
+			firstRequestedCycles);
+	}
+
+	[Fact]
 	public void LiveDmaBelowMinimumPeriodRepeatsSampleWithoutStretchingPeriodClock()
 	{
 		var bus = new AmigaBus(

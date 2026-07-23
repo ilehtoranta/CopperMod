@@ -292,6 +292,7 @@ public sealed class AmigaCiaTests
 			.ForProfile(MachineProfile.A500Pal512KBoot)
 			.WithLiveAgnusDma(false));
 		machine.Bus.WriteLong(0x68, 0x0000_2000);
+		machine.Bus.WriteWord(0x1000, 0x4E71);
 		machine.Cpu.Reset(0x1000, 0x3000);
 		machine.Cpu.State.StatusRegister = (ushort)(machine.Cpu.State.StatusRegister & 0xF8FF);
 		machine.Bus.WriteWord(0x00DFF09A, (ushort)(0xC000 | AmigaConstants.IntreqPorts));
@@ -304,6 +305,9 @@ public sealed class AmigaCiaTests
 		var releaseCycle = 100 + AmigaConstants.A500IntreqToIplDelayCpuCycles;
 		machine.Cpu.State.Cycles = releaseCycle;
 		machine.Bus.Paula.AdvanceTo(releaseCycle);
+		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(machine.Cpu);
+		machine.Cpu.ExecuteInstruction();
+		Assert.True(recognition.LastInterruptSampleCycle >= releaseCycle);
 		Assert.True(machine.DispatchPendingHardwareInterrupt());
 		Assert.NotEqual(0, machine.Bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqPorts);
 		Assert.Equal(0x0000_2000u, machine.Cpu.State.ProgramCounter);

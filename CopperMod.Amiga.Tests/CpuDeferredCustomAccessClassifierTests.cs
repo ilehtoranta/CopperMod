@@ -41,12 +41,27 @@ public sealed class CpuDeferredCustomAccessClassifierTests
 	[InlineData(0x08A)] // COPJMP2
 	[InlineData(0x058)] // BLTSIZE
 	[InlineData(0x024)] // DSKLEN
+	[InlineData(0x08E)] // DIWSTRT
+	[InlineData(0x092)] // DDFSTRT
 	[InlineData(0x100)] // BPLCON0
-	[InlineData(0x180)] // COLOR00
+	[InlineData(0x140)] // SPR0POS
 	public void ScheduleAndCpuVisibleWritesRemainImmediateBarriers(int offset)
 	{
 		Assert.Equal(
 			CpuDeferredPeripheralAccess.ImmediateBarrier,
+			CpuDeferredCustomAccessClassifier.ClassifyCustom(
+				AmigaChipset.OcsPal,
+				(ushort)offset,
+				isWrite: true));
+	}
+
+	[Theory]
+	[InlineData(0x180)]
+	[InlineData(0x1BE)]
+	public void OcsPaletteWritesAreExplicitCompositionJournalCandidates(int offset)
+	{
+		Assert.Equal(
+			CpuDeferredPeripheralAccess.JournalableWrite,
 			CpuDeferredCustomAccessClassifier.ClassifyCustom(
 				AmigaChipset.OcsPal,
 				(ushort)offset,
