@@ -771,6 +771,7 @@ namespace CopperMod.Amiga.Storage.Floppy
         private int _cachedTrackCylinder = -1;
         private int _cachedTrackHead = -1;
         private ulong _wakeVersion;
+        private ulong _changeVersion;
 
         public IAmigaDiskImage? Disk { get; private set; }
 
@@ -788,6 +789,9 @@ namespace CopperMod.Amiga.Storage.Floppy
 
         public bool DiskChanged { get; private set; }
 
+        /// <summary>Monotonic insertion/ejection generation for host device services.</summary>
+        public ulong ChangeVersion => _changeVersion;
+
         public bool WriteProtected { get; private set; }
 
         internal ulong WakeVersion => _wakeVersion;
@@ -799,6 +803,7 @@ namespace CopperMod.Amiga.Storage.Floppy
             WriteProtected = writeProtected ?? disk.DefaultWriteProtected;
             ClearTrackCache();
             _wakeVersion++;
+            _changeVersion++;
         }
 
         public void Eject()
@@ -808,6 +813,7 @@ namespace CopperMod.Amiga.Storage.Floppy
             WriteProtected = false;
             ClearTrackCache();
             _wakeVersion++;
+            _changeVersion++;
         }
 
         public void ResetPosition()

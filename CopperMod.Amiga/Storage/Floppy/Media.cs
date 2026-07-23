@@ -44,6 +44,9 @@ namespace CopperMod.Amiga.Storage.Floppy
 
         ReadOnlySpan<byte> ReadBytes(int byteOffset, int byteCount);
 
+        /// <summary>Writes logical sector-image bytes when the mounted media supports it.</summary>
+        bool TryWriteBytes(int byteOffset, ReadOnlySpan<byte> source) => false;
+
         AmigaEncodedTrack ReadEncodedTrack(int cylinder, int head);
 
         bool TryWriteEncodedTrack(int cylinder, int head, AmigaEncodedTrack track);
