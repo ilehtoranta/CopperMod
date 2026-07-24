@@ -102,6 +102,28 @@ public sealed class KeyboardDeviceServicesTests
         Assert.Empty(replies);
     }
 
+    [Fact]
+    public void ConfiguredRepeatUsesHostDeviceDeadlineAndRepeatQualifier()
+    {
+        var bus = CreateBus(); InitializeDevices(bus);
+        using var service = CreateService(bus, out _);
+        Assert.True(service.TryInstall(ExecBase));
+        service.ConfigureKeyRepeat(0, 1, period: false);
+        service.ConfigureKeyRepeat(0, 1, period: true);
+        Assert.True(service.QueueKeyDown(AmigaRawKey.A, cycle: 10));
+        var state = new M68kCpuState { Cycles = 10, ProgramCounter = 0x2200 };
+        state.A[7] = 0x5000;
+        service.ProcessPending(state);
+        Assert.Equal(Input - 30, state.ProgramCounter);
+        Assert.True(Invoke(bus, 0x00F0_8600, state));
+
+        state.Cycles = service.GetNextDeadline(10, long.MaxValue);
+        service.ProcessPending(state);
+        var inputEvent = bus.ReadLong(state.A[1] + 0x28);
+        Assert.Equal((ushort)AmigaRawKey.A, bus.ReadWord(inputEvent + 6));
+        Assert.NotEqual(0, bus.ReadWord(inputEvent + 8) & 0x0200);
+    }
+
     private static KeyboardDeviceServices CreateService(AmigaBus bus, out uint scratch, List<uint>? replies = null, Func<uint>? getCurrentTask = null)
     {
         var allocation = 0x4000u;

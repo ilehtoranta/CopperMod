@@ -18,6 +18,7 @@ internal sealed class ExecLibraryGatewayServices
     private readonly Action<M68kCpuState> _addRomResource;
     private readonly Action<M68kCpuState> _removeRomResource;
     private readonly Func<M68kCpuState, uint> _openRomResource;
+    private readonly Func<M68kCpuState, uint> _openCompatibilityResource;
     private readonly Action<M68kCpuState> _openCompatibilityLibrary;
     private readonly Action<M68kCpuState> _allocateCompatibilityLibrary;
     private readonly uint _compatibilityDosLibrary;
@@ -29,12 +30,14 @@ internal sealed class ExecLibraryGatewayServices
         Action<M68kCpuState> openRomDevice, Action<M68kCpuState> closeRomDevice,
         Action<M68kCpuState> addRomResource,
         Action<M68kCpuState> removeRomResource, Func<M68kCpuState, uint> openRomResource,
+        Func<M68kCpuState, uint> openCompatibilityResource,
         Action<M68kCpuState> openCompatibilityLibrary, Action<M68kCpuState> allocateCompatibilityLibrary,
         uint compatibilityDosLibrary)
     {
         _usesRomExec = usesRomExec; _openRom = openRom; _closeRom = closeRom; _addRomLibrary = addRomLibrary; _removeRomLibrary = removeRomLibrary;
         _addRomDevice = addRomDevice; _removeRomDevice = removeRomDevice; _openRomDevice = openRomDevice; _closeRomDevice = closeRomDevice;
         _addRomResource = addRomResource; _removeRomResource = removeRomResource; _openRomResource = openRomResource;
+        _openCompatibilityResource = openCompatibilityResource;
         _openCompatibilityLibrary = openCompatibilityLibrary; _allocateCompatibilityLibrary = allocateCompatibilityLibrary; _compatibilityDosLibrary = compatibilityDosLibrary;
     }
     public void OpenLibrary(M68kCpuState state) { if (_usesRomExec()) _openRom(state); else _openCompatibilityLibrary(state); }
@@ -47,6 +50,7 @@ internal sealed class ExecLibraryGatewayServices
     public void CloseDevice(M68kCpuState state) { if (_usesRomExec()) _closeRomDevice(state); else state.D[0] = 0; }
     public void AddResource(M68kCpuState state) { if (_usesRomExec()) _addRomResource(state); state.D[0] = 0; }
     public void RemResource(M68kCpuState state) { if (_usesRomExec()) _removeRomResource(state); state.D[0] = 0; }
-    public void OpenResource(M68kCpuState state) => state.D[0] = _usesRomExec() ? _openRomResource(state) : 0;
+    public void OpenResource(M68kCpuState state) =>
+        state.D[0] = _usesRomExec() ? _openRomResource(state) : _openCompatibilityResource(state);
     public void InitResident(M68kCpuState state) => state.D[0] = _compatibilityDosLibrary;
 }

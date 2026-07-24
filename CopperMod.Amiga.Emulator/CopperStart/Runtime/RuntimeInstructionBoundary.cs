@@ -52,6 +52,13 @@ internal sealed class RuntimeInstructionBoundary :
         advancedCycles = 0; var previous = state.Cycles; if (targetCycle <= previous) return false;
         targetCycle = _schedule.GetNextBoundaryCycle(previous, targetCycle);
         var mask = (state.StatusRegister >> 8) & 7; var wake = _context.Bus.GetNextStoppedCpuWakeCandidateCycle(previous, targetCycle, mask);
-        wake = Math.Clamp(wake, previous + 1, targetCycle); advancedCycles = wake - previous; state.Cycles = wake; AfterInstruction(previous, wake); return true;
+        wake = Math.Clamp(wake, previous + 1, targetCycle);
+        wake = _context.Bus.AdvanceStoppedCpuHardwareEventsTo(previous, wake, mask);
+        wake = Math.Clamp(wake, previous + 1, targetCycle);
+        advancedCycles = wake - previous;
+        state.Cycles = wake;
+        _schedule.AdvanceThrough(previous, wake);
+        _context.DispatchInterrupt();
+        return true;
     }
 }

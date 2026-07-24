@@ -159,6 +159,7 @@ namespace CopperMod.Amiga.Firmware
         public const uint GraphicsLibraryBase = 0x00F9_0000;
         public const uint IntuitionLibraryBase = 0x00FA_0000;
         public const uint ExpansionLibraryBase = 0x00FB_0000;
+        public const uint MiscResourceBase = 0x00FC_0000;
         public const uint ExecStructAddress = 0x0000_2000;
         public const uint HostPathBufferAddress = 0x0000_3000;
         public const int HostPathBufferLength = 512;
@@ -203,6 +204,7 @@ namespace CopperMod.Amiga.Firmware
             RegisterExecLibrary(bus, traps);
             RegisterDosLibrary(bus, traps);
             RegisterCiaResource(bus, traps);
+            RegisterMiscResource(bus, traps);
             RegisterReqLibrary(bus, traps);
             RegisterIntuitionLibrary(bus, traps);
             RegisterDummyLibrary(bus, traps);
@@ -268,6 +270,12 @@ namespace CopperMod.Amiga.Firmware
             RegisterLibraryCallback(bus, resourceBase, -12, traps.RemoveInterrupt);
             RegisterLibraryCallback(bus, resourceBase, -18, traps.AbleIcr);
             RegisterLibraryCallback(bus, resourceBase, -24, traps.SetIcr);
+        }
+
+        private static void RegisterMiscResource(AmigaBus bus, KickstartTrapTable traps)
+        {
+            RegisterLibraryCallback(bus, MiscResourceBase, -6, traps.Ok);
+            RegisterLibraryCallback(bus, MiscResourceBase, -12, traps.Ok);
         }
 
         private static void RegisterReqLibrary(AmigaBus bus, KickstartTrapTable traps)

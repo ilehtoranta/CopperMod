@@ -56,7 +56,7 @@ internal sealed class DosServices
     public void Lock(M68kCpuState state)
     {
         var entry = _context.ReadPath(state.D[1]) is var path && !string.IsNullOrWhiteSpace(path) ? _context.FindEntry(path) : null;
-        if (entry is null) { state.D[0] = 0; _lastError = 205; return; }
+        if (entry is null) { state.D[0] = 0; _lastError = 205; Diagnose(ref _genericDiagnostics, "AMIGA_BOOT_DOS_LOCK_MISSING", $"Lock failed for '{path}'.", 24); return; }
         var handle = _nextLock; _nextLock += 4; _locks[handle] = entry.Value; state.D[0] = handle; _lastError = 0;
     }
     public void UnLock(M68kCpuState state) { _locks.Remove(state.D[1]); state.D[0] = 0; _lastError = 0; }

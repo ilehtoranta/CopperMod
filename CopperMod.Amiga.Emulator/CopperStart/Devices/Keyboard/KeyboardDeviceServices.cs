@@ -48,7 +48,7 @@ internal sealed class KeyboardDeviceServices : IDisposable
     private readonly Action<string> _diagnostic;
     private readonly List<(uint Address, uint Token)> _gateways = new();
     private readonly Queue<byte> _readEvents = new();
-    private readonly Queue<byte> _inputEvents = new();
+    private readonly Queue<PendingInputEvent> _inputEvents = new();
     private readonly HashSet<byte> _pressed = new();
     private readonly HashSet<uint> _resetHandlers = new();
     private readonly Func<uint> _getCurrentTask;
@@ -57,6 +57,11 @@ internal sealed class KeyboardDeviceServices : IDisposable
     private uint _scratch;
     private bool _inputDispatchActive;
     private readonly record struct PendingRead(uint Request, uint Task);
+    private readonly record struct PendingInputEvent(byte Raw, bool Repeat);
+    private byte? _repeatKey;
+    private long _nextRepeatCycle = long.MaxValue;
+    private long _repeatThresholdCycles;
+    private long _repeatPeriodCycles;
 
     public KeyboardDeviceServices(AmigaBus bus, ExecMemoryOperations memory, Action<uint> replyMessage, Action<string> diagnostic, Func<uint> getCurrentTask)
     {
@@ -65,6 +70,8 @@ internal sealed class KeyboardDeviceServices : IDisposable
         _replyMessage = replyMessage ?? throw new ArgumentNullException(nameof(replyMessage));
         _diagnostic = diagnostic ?? throw new ArgumentNullException(nameof(diagnostic));
         _getCurrentTask = getCurrentTask ?? throw new ArgumentNullException(nameof(getCurrentTask));
+        _repeatThresholdCycles = _bus.RasterTiming.CpuClockHz / 2;
+        _repeatPeriodCycles = Math.Max(1, _bus.RasterTiming.CpuClockHz / 25);
     }
 
     public uint DeviceBase { get; private set; }
@@ -89,12 +96,13 @@ internal sealed class KeyboardDeviceServices : IDisposable
         return true;
     }
 
-    public bool QueueKeyDown(AmigaRawKey key)
+    public bool QueueKeyDown(AmigaRawKey key, long cycle = 0)
     {
         if (!IsInstalled) return false;
         var raw = (byte)key;
         if (raw >= 0x80 || !_pressed.Add(raw)) return true;
         Enqueue(raw);
+        if (IsRepeatable(raw)) { _repeatKey = raw; _nextRepeatCycle = cycle + _repeatThresholdCycles; }
         return true;
     }
 
@@ -104,13 +112,30 @@ internal sealed class KeyboardDeviceServices : IDisposable
         var raw = (byte)key;
         if (raw >= 0x80 || !_pressed.Remove(raw)) return true;
         Enqueue((byte)(raw | 0x80));
+        if (_repeatKey == raw) { _repeatKey = null; _nextRepeatCycle = long.MaxValue; }
         return true;
     }
+
+    public void ConfigureKeyRepeat(uint seconds, uint microseconds, bool period)
+    {
+        var micros = (Int128)seconds * 1_000_000 + Math.Min(microseconds, 999_999u);
+        var cycles = (long)Int128.Clamp((micros * _bus.RasterTiming.CpuClockHz) / 1_000_000, 1, long.MaxValue);
+        if (period) _repeatPeriodCycles = cycles;
+        else _repeatThresholdCycles = cycles;
+    }
+
+    public long GetNextDeadline(long currentCycle, long targetCycle)
+        => _repeatKey.HasValue && _nextRepeatCycle > currentCycle && _nextRepeatCycle < targetCycle ? _nextRepeatCycle : targetCycle;
 
     public void ProcessPending(M68kCpuState state)
     {
         if (!IsInstalled) return;
         CompletePendingRead(state.Cycles);
+        if (_repeatKey is { } repeat && state.Cycles >= _nextRepeatCycle)
+        {
+            _inputEvents.Enqueue(new PendingInputEvent(repeat, true));
+            _nextRepeatCycle = state.Cycles + _repeatPeriodCycles;
+        }
         if (_inputDispatchActive || _inputEvents.Count == 0) return;
         StartNativeInput(state, _inputEvents.Dequeue());
     }
@@ -124,6 +149,7 @@ internal sealed class KeyboardDeviceServices : IDisposable
         if (_scratch != 0) _memory.Free(_scratch, RequestBytes + EventBytes);
         _scratch = 0; DeviceBase = 0; InputDeviceBase = 0; _nativeInputTask = 0; _inputDispatchActive = false;
         _pendingReads.Clear(); _readEvents.Clear(); _inputEvents.Clear(); _pressed.Clear(); _resetHandlers.Clear();
+        _repeatKey = null; _nextRepeatCycle = long.MaxValue;
     }
 
     private void Open(M68kCpuState state)
@@ -174,7 +200,7 @@ internal sealed class KeyboardDeviceServices : IDisposable
 
     private void Enqueue(byte raw)
     {
-        _readEvents.Enqueue(raw); _inputEvents.Enqueue(raw);
+        _readEvents.Enqueue(raw); _inputEvents.Enqueue(new PendingInputEvent(raw, false));
     }
 
     private void ReadEvent(uint request, long cycle)
@@ -227,14 +253,14 @@ internal sealed class KeyboardDeviceServices : IDisposable
     private void AddResetHandler(uint request, long cycle) { var handler = _bus.ReadLong(request + IoDataOffset); if (handler == 0) Complete(request, IoErrBadAddress, 0, cycle, true); else { _resetHandlers.Add(handler); Complete(request, 0, 0, cycle, true); } }
     private void RemoveResetHandler(uint request, long cycle) { var handler = _bus.ReadLong(request + IoDataOffset); Complete(request, _resetHandlers.Remove(handler) ? (byte)0 : IoErrBadAddress, 0, cycle, true); }
 
-    private void StartNativeInput(M68kCpuState state, byte raw)
+    private void StartNativeInput(M68kCpuState state, PendingInputEvent input)
     {
         var request = _scratch; var inputEvent = _scratch + EventOffset;
         _bus.ClearMemory(_scratch, RequestBytes + EventBytes);
         _bus.WriteLong(request + IoDeviceOffset, InputDeviceBase, state.Cycles); _bus.WriteWord(request + IoCommandOffset, IndWriteEvent, state.Cycles); _bus.WriteLong(request + IoDataOffset, inputEvent, state.Cycles);
         _bus.WriteByte(request + IoFlagsOffset, IoQuick, state.Cycles);
         _bus.WriteByte(inputEvent + 4, 1, state.Cycles); // IECLASS_RAWKEY
-        _bus.WriteWord(inputEvent + 6, raw, state.Cycles); _bus.WriteWord(inputEvent + 8, GetQualifiers(), state.Cycles);
+        _bus.WriteWord(inputEvent + 6, input.Raw, state.Cycles); _bus.WriteWord(inputEvent + 8, (ushort)(GetQualifiers() | (input.Repeat ? 0x0200 : 0)), state.Cycles);
         var micros = ((Int128)Math.Max(0, state.Cycles) * 1_000_000) / _bus.RasterTiming.CpuClockHz;
         _bus.WriteLong(inputEvent + 0x10, unchecked((uint)(micros / 1_000_000)), state.Cycles); _bus.WriteLong(inputEvent + 0x14, unchecked((uint)(micros % 1_000_000)), state.Cycles);
         var resume = state.ProgramCounter; state.A[7] -= 4; _bus.WriteLong(state.A[7], resume, state.Cycles); state.A[7] -= 4; _bus.WriteLong(state.A[7], InputContinuationAddress, state.Cycles);
@@ -256,6 +282,11 @@ internal sealed class KeyboardDeviceServices : IDisposable
         if (_pressed.Contains((byte)AmigaRawKey.RightAmiga)) result |= 0x0080;
         return result;
     }
+
+    private static bool IsRepeatable(byte raw)
+        => raw is not ((byte)AmigaRawKey.LeftShift) and not ((byte)AmigaRawKey.RightShift) and not ((byte)AmigaRawKey.CapsLock) and
+           not ((byte)AmigaRawKey.Control) and not ((byte)AmigaRawKey.LeftAlt) and not ((byte)AmigaRawKey.RightAlt) and
+           not ((byte)AmigaRawKey.LeftAmiga) and not ((byte)AmigaRawKey.RightAmiga);
 
     private void Complete(uint request, byte error, uint actual, long cycle, bool reply)
     {

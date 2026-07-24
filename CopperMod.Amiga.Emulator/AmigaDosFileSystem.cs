@@ -48,6 +48,8 @@ namespace CopperMod.Amiga
 
         public IReadOnlyList<AmigaDosDirectoryEntry> Entries => _entries;
 
+        public string VolumeName { get; private set; } = string.Empty;
+
         public static bool IsSupported(IAmigaDiskImage disk)
         {
             return disk.HasCompleteSectorData &&
@@ -309,6 +311,10 @@ namespace CopperMod.Amiga
                 }
 
                 var headerKey = ReadHeaderKey(offset, block);
+                if (secondaryType == SecondaryTypeRoot)
+                {
+                    VolumeName = name;
+                }
                 var parent = secondaryType == SecondaryTypeRoot ? 0 : checked((int)ReadUInt32(offset + ParentOffset));
                 var size = secondaryType == SecondaryTypeFile ? checked((int)ReadUInt32(offset + FileSizeOffset)) : 0;
                 _entries.Add(new AmigaDosDirectoryEntry(headerKey, parent, name, secondaryType, size));

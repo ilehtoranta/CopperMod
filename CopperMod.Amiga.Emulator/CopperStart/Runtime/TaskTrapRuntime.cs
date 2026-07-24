@@ -50,8 +50,16 @@ internal sealed class TaskTrapRuntime
     public void Install()
     {
         _bus.RegisterHostGateway(_defaultTrapCodeAddress, _defaultTrapCode);
-        foreach (var vector in AllVectors())
+        for (var index = 0; index < Vectors.Length; index++)
         {
+            var vector = Vectors[index];
+            var captured = vector;
+            _bus.RegisterHostGateway(_dispatcherAddress(captured), state => Dispatch(state, captured));
+        }
+
+        for (var trap = 0; trap < 16; trap++)
+        {
+            var vector = 32 + trap;
             var captured = vector;
             _bus.RegisterHostGateway(_dispatcherAddress(captured), state => Dispatch(state, captured));
         }
@@ -71,16 +79,31 @@ internal sealed class TaskTrapRuntime
         // Match the original coordinator policy: these probe vectors are ours
         // to refresh, while a guest may intentionally replace another TRAP #n
         // vector after boot (for example TRAP #4 in a boot block).
-        foreach (var vector in RefreshProbeVectors())
+        for (var index = 0; index < Vectors.Length; index++)
+        {
+            var vector = Vectors[index];
             if (_bus.ReadLong((uint)(vector * 4)) != _dispatcherAddress(vector)) return true;
+        }
+
+        const int trapZeroVector = 32;
+        if (_bus.ReadLong(trapZeroVector * 4) != _dispatcherAddress(trapZeroVector)) return true;
         return false;
     }
 
     private void RefreshVectors()
     {
         _cpuState.VectorBaseRegister = 0;
-        foreach (var vector in AllVectors())
+        for (var index = 0; index < Vectors.Length; index++)
+        {
+            var vector = Vectors[index];
             _bus.WriteLong((uint)(vector * 4), _dispatcherAddress(vector));
+        }
+
+        for (var trap = 0; trap < 16; trap++)
+        {
+            var vector = 32 + trap;
+            _bus.WriteLong((uint)(vector * 4), _dispatcherAddress(vector));
+        }
     }
 
     private void Dispatch(M68kCpuState state, int vector)
@@ -92,17 +115,5 @@ internal sealed class TaskTrapRuntime
         state.SetActiveStackPointer(state.A[7] - 4);
         _bus.WriteLong(state.A[7], (uint)vector);
         state.ProgramCounter = trapCode;
-    }
-
-    private static System.Collections.Generic.IEnumerable<int> AllVectors()
-    {
-        foreach (var vector in Vectors) yield return vector;
-        for (var trap = 0; trap < 16; trap++) yield return 32 + trap;
-    }
-
-    private static System.Collections.Generic.IEnumerable<int> RefreshProbeVectors()
-    {
-        foreach (var vector in Vectors) yield return vector;
-        yield return 32;
     }
 }

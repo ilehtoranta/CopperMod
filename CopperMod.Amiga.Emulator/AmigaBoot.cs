@@ -35,6 +35,7 @@ using CopperStartTrackdiskRawTrack = CopperMod.Amiga.CopperStart.Devices.Trackdi
 using CopperStartTimerDeviceServices = CopperMod.Amiga.CopperStart.Devices.Timer.TimerDeviceServices;
 using CopperStartKeyboardDeviceServices = CopperMod.Amiga.CopperStart.Devices.Keyboard.KeyboardDeviceServices;
 using CopperStartInputDeviceServices = CopperMod.Amiga.CopperStart.Devices.Input.InputDeviceServices;
+using CopperStartGameportDeviceServices = CopperMod.Amiga.CopperStart.Devices.Gameport.GameportDeviceServices;
 using CopperMod.Amiga.Input;
 using CopperStartEncodedTrack = CopperMod.Amiga.Storage.Floppy.AmigaEncodedTrack;
 using CopperStartRuntime = CopperMod.Amiga.CopperStart.CopperStartRuntime;
@@ -394,6 +395,7 @@ namespace CopperMod.Amiga
         private readonly CopperStartTimerDeviceServices _timerDeviceServices;
         private readonly CopperStartKeyboardDeviceServices _keyboardDeviceServices;
         private readonly CopperStartInputDeviceServices _inputDeviceServices;
+        private readonly CopperStartGameportDeviceServices _gameportDeviceServices;
         private uint _activeExecBase;
         private KickstartRomExecTakeoverState _kickstartRomExecTakeoverState;
         private readonly CopperStartRuntimeInstructionBoundary _runtimeInstructionBoundary;
@@ -494,7 +496,8 @@ namespace CopperMod.Amiga
                 ReplyTrackdiskMessage,
                 message => _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_KEYBOARD", message)),
                 _execContext.GetCurrentTask);
-            _inputDeviceServices = new CopperStartInputDeviceServices(_machine.Bus, ReplyTrackdiskMessage);
+            _inputDeviceServices = new CopperStartInputDeviceServices(_machine.Bus, ReplyTrackdiskMessage, StartGuestExecSubroutine, _keyboardDeviceServices.ConfigureKeyRepeat);
+            _gameportDeviceServices = new CopperStartGameportDeviceServices(_machine.Bus, ReplyTrackdiskMessage);
             _execFormatServices = new CopperStartExecFormatServices(_machine.Bus, RawDoFmtContinuationAddress, ReadNullTerminatedString);
             _execGatewayServices = new CopperStartExecGatewayServices(
                 LogExecCall, _execMemoryServices, _execTaskServices, GetExecListServices(), _execSignalServices,
@@ -504,7 +507,7 @@ namespace CopperMod.Amiga
                 () => _kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active,
                 OpenRomLibrary, CloseRomLibrary, AddRomLibrary, RemoveRomLibrary, AddRomDevice,
                 RemoveRomDevice, OpenRomDevice, CloseRomDevice,
-                AddRomResource, RemoveRomResource, OpenRomResource, OpenCompatibilityLibrary,
+                AddRomResource, RemoveRomResource, OpenRomResource, OpenCompatibilityResource, OpenCompatibilityLibrary,
                 _execMemoryServices.AllocMemAndStore, AmigaKickstartHost.DosLibraryBase);
             _copperStartRuntime = new CopperStartRuntime(_machine.Bus, CreateExecServices);
             _workbenchServices = new CopperStartWorkbenchServices(new CopperStartWorkbenchContext(
@@ -609,7 +612,7 @@ namespace CopperMod.Amiga
 
         public bool AutoRunStartupSequence { get; set; }
 
-        public bool QueueHostKeyDown(AmigaRawKey key) => _keyboardDeviceServices.QueueKeyDown(key);
+        public bool QueueHostKeyDown(AmigaRawKey key) => _keyboardDeviceServices.QueueKeyDown(key, _machine.Cpu.State.Cycles);
 
         public bool QueueHostKeyUp(AmigaRawKey key) => _keyboardDeviceServices.QueueKeyUp(key);
 
@@ -770,6 +773,7 @@ namespace CopperMod.Amiga
             _timerDeviceServices.Reset();
             _keyboardDeviceServices.Reset();
             _inputDeviceServices.Reset();
+            _gameportDeviceServices.Reset();
             _copperStartRuntime.Reset();
             _romExecLibraryServices = null;
             _execListServices = null;
@@ -984,9 +988,13 @@ namespace CopperMod.Amiga
                 bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, captured), state => _dosServices.InvokeGeneric(state, captured));
             }
 
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -30), _dosServices.Open);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -36), _dosServices.Close);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -42), _dosServices.Read);
             bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -48), _dosServices.Write);
             bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -54), _dosServices.Input);
             bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -60), _dosServices.Output);
+            bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -66), _dosServices.Seek);
             bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -84), _dosServices.Lock);
             bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -90), _dosServices.UnLock);
             bus.RegisterHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -102), _dosServices.Examine);
@@ -1054,6 +1062,7 @@ namespace CopperMod.Amiga
                     _timerDeviceServices.TryInstall(_activeExecBase);
                     _inputDeviceServices.TryInstall(_activeExecBase);
                     _keyboardDeviceServices.TryInstall(_activeExecBase);
+                    _gameportDeviceServices.TryInstall(_activeExecBase);
                     ProcessHostDevices();
                 }
 
@@ -1090,6 +1099,7 @@ namespace CopperMod.Amiga
             _timerDeviceServices.TryInstall(execBase);
             _inputDeviceServices.TryInstall(execBase);
             _keyboardDeviceServices.TryInstall(execBase);
+            _gameportDeviceServices.TryInstall(execBase);
         }
 
         private void ProcessHostDevices()
@@ -1098,10 +1108,11 @@ namespace CopperMod.Amiga
             _timerDeviceServices.ProcessPending(_machine.Cpu.State);
             _keyboardDeviceServices.ProcessPending(_machine.Cpu.State);
             _inputDeviceServices.ProcessPending();
+            _gameportDeviceServices.ProcessPending(_machine.Cpu.State);
         }
 
         private long GetNextHostDeviceBoundary(long currentCycle, long targetCycle)
-            => _timerDeviceServices.GetNextDeadline(currentCycle, targetCycle);
+            => _keyboardDeviceServices.GetNextDeadline(currentCycle, _timerDeviceServices.GetNextDeadline(currentCycle, targetCycle));
 
         private bool IsValidKickstartRomExecBase(uint execBase)
         {
@@ -1845,6 +1856,12 @@ namespace CopperMod.Amiga
                 return true;
             }
 
+            if (MatchesNullTerminatedString(cachedName, nameAddress, 96, "misc.resource"))
+            {
+                libraryBase = AmigaKickstartHost.MiscResourceBase;
+                return true;
+            }
+
             if (MatchesNullTerminatedString(cachedName, nameAddress, 96, "icon.library"))
             {
                 libraryBase = AmigaKickstartHost.IconLibraryBase;
@@ -2411,6 +2428,9 @@ namespace CopperMod.Amiga
 
         private uint OpenRomResource(M68kCpuState state)
             => GetRomExecLibraryServices().OpenResource(state);
+
+        private uint OpenCompatibilityResource(M68kCpuState state)
+            => TryGetHostLibraryBase(null, state.A[1], out var resourceBase) ? resourceBase : 0;
 
         private uint GetBitMapAttr(uint bitMap, uint attribute)
         {
@@ -3046,6 +3066,7 @@ namespace CopperMod.Amiga
 
         private void LoadCopperList(uint copperList, long cycle)
         {
+            cycle = Math.Max(cycle, _machine.Bus.CausalBusExecutor.ExecutedThroughCycle + 1);
             _machine.Bus.WriteWord(0x00DFF096, 0x8380, cycle);
             _machine.Bus.WriteWord(0x00DFF080, (ushort)(copperList >> 16), cycle);
             _machine.Bus.WriteWord(0x00DFF082, (ushort)copperList, cycle);
@@ -5067,6 +5088,15 @@ namespace CopperMod.Amiga
                     _dosAssigns.TryGetValue(assignName, out var target))
                 {
                     return CombineHostDosPath(ResolveRamDirectorySource(target), suffix);
+                }
+
+                for (var mountedDrive = 0; mountedDrive < _machine.Bus.Disk.ConnectedDriveCount; mountedDrive++)
+                {
+                    if (TryGetDosFileSystem(mountedDrive, out var fileSystem) &&
+                        assignName.Equals(fileSystem.VolumeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return $"DF{mountedDrive}:{NormalizeHostDosPath(suffix)}";
+                    }
                 }
             }
 

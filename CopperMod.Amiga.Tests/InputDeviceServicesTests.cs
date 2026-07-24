@@ -14,10 +14,14 @@ public sealed class InputDeviceServicesTests
         bus.WriteLong(execBase + 0x15E, input); bus.WriteLong(execBase + 0x15E + 4, execBase + 0x15E + 4); bus.WriteLong(execBase + 0x15E + 8, input);
         bus.WriteLong(input, execBase + 0x15E + 4); bus.WriteLong(input + 0x0A, name);
         foreach (var (index, character) in "input.device\0".Select((value, index) => (index, value))) bus.WriteByte(name + (uint)index, (byte)character, 0);
-        using var service = new InputDeviceServices(bus, _ => { });
+        var replies = new List<uint>();
+        using var service = new InputDeviceServices(bus, replies.Add, (cpu, entry, continuationAddress) =>
+        {
+            cpu.A[7] -= 4; bus.WriteLong(cpu.A[7], continuationAddress, cpu.Cycles); cpu.ProgramCounter = entry;
+        }, (_, _, _) => { });
         Assert.True(service.TryInstall(execBase));
         Assert.True(bus.HasHostGateway(input - 30));
-        Assert.Equal(2, service.GatewayRegistrationCount);
+        Assert.Equal(3, service.GatewayRegistrationCount);
 
         var state = new M68kCpuState { Cycles = 10, ProgramCounter = input - 24 };
         state.A[1] = request; state.A[7] = 0x4000; bus.WriteLong(state.A[7], 0x2222, 10);
@@ -30,7 +34,7 @@ public sealed class InputDeviceServicesTests
         state.ProgramCounter = continuation + 6;
         Assert.True(bus.TryInvokeHostGateway(continuation, bus.ReadLong(continuation + 2), state));
         Assert.True(bus.HasHostGateway(input - 30));
-        Assert.Equal(2, service.GatewayRegistrationCount);
+        Assert.Equal(3, service.GatewayRegistrationCount);
         // input.device completes handler registration asynchronously.  Model
         // its ReplyMsg completion and the live Exec List that it owns.
         bus.WriteLong(handlers, handler); bus.WriteLong(handlers + 4, 0); bus.WriteLong(handlers + 8, handler);
@@ -41,11 +45,47 @@ public sealed class InputDeviceServicesTests
         const uint firstEvent = 0x3A00, secondEvent = 0x3A20;
         bus.WriteLong(firstEvent, secondEvent); bus.WriteByte(firstEvent + 4, 1, 10); bus.WriteWord(firstEvent + 6, 0x20, 10); bus.WriteWord(firstEvent + 8, 1, 10);
         bus.WriteLong(secondEvent, 0); bus.WriteByte(secondEvent + 4, 1, 10); bus.WriteWord(secondEvent + 6, 0xA0, 10); bus.WriteWord(secondEvent + 8, 0, 10);
+        const uint handlerCode = 0x4400, handlerData = 0x4455, handlerContinuation = 0x00F0_8710;
+        bus.WriteLong(handler + 0x0E, handlerData); bus.WriteLong(handler + 0x12, handlerCode);
         state.A[1] = request; state.A[7] = 0x4000; bus.WriteLong(state.A[7], 0x2222, 10);
         bus.WriteWord(request + 0x1C, 11); bus.WriteLong(request + 0x28, firstEvent);
         Assert.True(bus.TryInvokeHostGateway(input - 30, bus.ReadLong(input - 28), state));
+        Assert.Equal(handlerCode, state.ProgramCounter);
+        Assert.Equal(firstEvent, state.A[0]); Assert.Equal(handlerData, state.A[1]);
+        state.D[0] = firstEvent; state.ProgramCounter = handlerContinuation + 6;
+        Assert.True(bus.TryInvokeHostGateway(handlerContinuation, bus.ReadLong(handlerContinuation + 2), state));
+        Assert.Equal(new[] { request }, replies);
         Assert.Collection(service.ObservedWriteEvents,
             item => { Assert.Equal(firstEvent, item.Address); Assert.Equal((ushort)0x20, item.Code); Assert.Equal(secondEvent, item.Next); },
             item => { Assert.Equal(secondEvent, item.Address); Assert.Equal((ushort)0xA0, item.Code); Assert.Equal(0u, item.Next); });
+
+        const uint secondHandler = 0x3B80;
+        replies.Clear();
+        bus.WriteByte(secondHandler + 9, 1, 10); bus.WriteLong(secondHandler + 0x12, handlerCode);
+        state.A[1] = request; bus.WriteWord(request + 0x1C, 9); bus.WriteLong(request + 0x28, secondHandler); bus.WriteByte(request + 0x1E, 1, 10);
+        Assert.True(bus.TryInvokeHostGateway(input - 30, bus.ReadLong(input - 28), state));
+        Assert.Equal(secondHandler, bus.ReadLong(handlers));
+        Assert.Contains(secondHandler, service.KnownNativeHandlers);
+        Assert.Equal(new[] { request }, replies);
+
+        replies.Clear();
+        state.A[1] = request; bus.WriteWord(request + 0x1C, 10); bus.WriteLong(request + 0x28, secondHandler);
+        Assert.True(bus.TryInvokeHostGateway(input - 30, bus.ReadLong(input - 28), state));
+        Assert.Equal(handler, bus.ReadLong(handlers));
+        Assert.DoesNotContain(secondHandler, service.KnownNativeHandlers);
+        Assert.Equal(new[] { request }, replies);
+
+        replies.Clear();
+        const uint addedFirstEvent = 0x3C00, addedSecondEvent = 0x3C18;
+        bus.WriteByte(addedFirstEvent + 4, 1, 10); bus.WriteByte(addedSecondEvent + 4, 2, 10);
+        state.A[1] = request; state.A[7] = 0x4000; bus.WriteLong(state.A[7], 0x2222, 10);
+        bus.WriteWord(request + 0x1C, 24); bus.WriteLong(request + 0x28, addedFirstEvent); bus.WriteLong(request + 0x24, 0x30);
+        Assert.True(bus.TryInvokeHostGateway(input - 30, bus.ReadLong(input - 28), state));
+        Assert.Equal(handlerCode, state.ProgramCounter);
+        Assert.Equal(addedSecondEvent, bus.ReadLong(addedFirstEvent));
+        Assert.Equal(0u, bus.ReadLong(addedSecondEvent));
+        state.D[0] = addedFirstEvent; state.ProgramCounter = handlerContinuation + 6;
+        Assert.True(bus.TryInvokeHostGateway(handlerContinuation, bus.ReadLong(handlerContinuation + 2), state));
+        Assert.Equal(new[] { request }, replies);
     }
 }
