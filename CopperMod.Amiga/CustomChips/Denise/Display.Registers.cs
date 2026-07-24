@@ -214,6 +214,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var plane = (offset - 0x0E0) / 4;
                 if (plane < _bitplanePointers.Length)
                 {
+                    var previousPointer = _bitplanePointers[plane];
                     if ((offset & 2) == 0)
                     {
                         _bitplanePointers[plane] = WriteDmaPointerHigh(_bitplanePointers[plane], value);
@@ -223,7 +224,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         _bitplanePointers[plane] = WriteDmaPointerLow(_bitplanePointers[plane], value);
                     }
 
-                    _bitplaneBaseRows[plane] = GetCurrentBitplaneBaseRow();
+                    // Base rows describe which source row the composed DMA
+                    // pointer addresses. Rewriting an unchanged pointer half
+                    // must not restart that mapping.
+                    if (_bitplanePointers[plane] != previousPointer)
+                    {
+                        _bitplaneBaseRows[plane] = GetCurrentBitplaneBaseRow();
+                    }
                 }
 
                 return;

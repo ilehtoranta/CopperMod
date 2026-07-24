@@ -1378,6 +1378,47 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void UnchangedBitplanePointerHalfDoesNotRestartSourceRowMapping()
+    {
+        var bus = new AmigaBus();
+        var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        var writeCycle = CycleForOutputRow(StandardY + 10, lineCycles);
+        bus.WriteWord(0x00DFF092, 0x0038, 0);
+        bus.WriteWord(0x00DFF094, 0x0038, 0);
+        bus.WriteWord(0x00DFF0E0, 0x0000, 0);
+        bus.WriteWord(0x00DFF0E2, 0x1000, 0);
+        bus.WriteWord(0x00DFF0E4, 0x0000, 0);
+        bus.WriteWord(0x00DFF0E6, 0x2000, 0);
+        bus.WriteWord(0x00DFF0E8, 0x0000, 0);
+        bus.WriteWord(0x00DFF0EA, 0x3000, 0);
+        bus.WriteWord(0x00DFF100, 0x3000, 0);
+        bus.WriteWord(0x00DFF096, 0x8300, 0);
+
+        bus.AdvanceDmaTo(writeCycle - 1);
+        var before = bus.Display.CaptureSnapshot();
+
+        bus.WriteWord(0x00DFF0E0, 0x0000, writeCycle);
+        bus.AdvanceDmaTo(writeCycle);
+        var after = bus.Display.CaptureSnapshot();
+
+        Assert.Equal(before.BitplanePointers[0], after.BitplanePointers[0]);
+        Assert.Equal(before.BitplaneBaseRows[0], after.BitplaneBaseRows[0]);
+        Assert.Equal(after.BitplaneBaseRows[1], after.BitplaneBaseRows[0]);
+        Assert.Equal(after.BitplaneBaseRows[2], after.BitplaneBaseRows[0]);
+
+        bus.WriteWord(0x00DFF100, 0xB000, writeCycle + 8);
+        bus.AdvanceDmaTo(writeCycle + 8);
+        var afterHighResSwitch = bus.Display.CaptureSnapshot();
+
+        Assert.Equal(
+            afterHighResSwitch.BitplaneBaseRows[1],
+            afterHighResSwitch.BitplaneBaseRows[0]);
+        Assert.Equal(
+            afterHighResSwitch.BitplaneBaseRows[2],
+            afterHighResSwitch.BitplaneBaseRows[0]);
+    }
+
+    [Fact]
     public void LiveBitplaneDmaAdvancesPointersAcrossDmaconDisableAndEnable()
     {
         var bus = new AmigaBus();

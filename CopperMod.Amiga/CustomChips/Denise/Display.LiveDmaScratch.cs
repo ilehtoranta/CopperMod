@@ -2576,10 +2576,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     var plane = (register - 0x0E0) / 4;
                     if ((uint)plane < (uint)_bitplanePointers.Length)
                     {
+                        var previousPointer = _bitplanePointers[plane];
                         _bitplanePointers[plane] = (register & 2) == 0
                             ? _display.WriteDmaPointerHigh(_bitplanePointers[plane], value)
                             : _display.WriteDmaPointerLow(_bitplanePointers[plane], value);
-                        _bitplaneBaseRows[plane] = GetCurrentBitplaneBaseRow(cycle);
+                        if (_bitplanePointers[plane] != previousPointer)
+                        {
+                            _bitplaneBaseRows[plane] = GetCurrentBitplaneBaseRow(cycle);
+                        }
                     }
 
                     return true;
