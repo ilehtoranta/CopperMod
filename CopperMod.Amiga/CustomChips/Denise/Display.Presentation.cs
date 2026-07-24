@@ -316,6 +316,46 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 target[start + (5 * scale)]));
         }
 
+        internal string CaptureBitplaneSourceProbe(int row, int x, int word)
+        {
+            if (!_displayTimeline.HasLine(row))
+            {
+                return $"row={row}:missing";
+            }
+
+            var line = _displayTimeline.GetLine(row);
+            for (var index = 0; index < line.SegmentCount; index++)
+            {
+                var segment = line.Segments[index];
+                if (segment.XStart > x || segment.XStop <= x)
+                {
+                    continue;
+                }
+
+                var state = _displayTimeline.GetState(segment.StateIndex);
+                var planes = new string[Math.Min(3, state.DecodePlaneCount)];
+                for (var plane = 0; plane < planes.Length; plane++)
+                {
+                    var granted = TryGetTimelineBitplaneWord(
+                        row,
+                        plane,
+                        word,
+                        state,
+                        _displayTimeline,
+                        out var value);
+                    planes[plane] =
+                        $"p{plane}={value:X4}/{granted}@{state.BitplaneRowAddresses[plane]:X6}" +
+                        $"+{state.BitplaneWordIndexOffsets[plane]}";
+                }
+
+                return $"row={row},line={state.LineStartCycle},seg={segment.XStart}-{segment.XStop}," +
+                    $"bpl={state.Bplcon0:X4},dma={state.Dmacon:X4},fetch={state.FetchWords}," +
+                    string.Join(",", planes);
+            }
+
+            return $"row={row}:x={x}:missing";
+        }
+
         private bool TryRenderBoundPresentationPlayfieldRow(
             Span<uint> target,
             int row,

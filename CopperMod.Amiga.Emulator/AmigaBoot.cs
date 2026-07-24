@@ -33,6 +33,9 @@ using CopperStartExecLvos = CopperMod.Amiga.CopperStart.Exec.ExecLvos;
 using CopperStartTrackdiskDeviceServices = CopperMod.Amiga.CopperStart.Devices.Trackdisk.TrackdiskDeviceServices;
 using CopperStartTrackdiskRawTrack = CopperMod.Amiga.CopperStart.Devices.Trackdisk.TrackdiskRawTrack;
 using CopperStartTimerDeviceServices = CopperMod.Amiga.CopperStart.Devices.Timer.TimerDeviceServices;
+using CopperStartKeyboardDeviceServices = CopperMod.Amiga.CopperStart.Devices.Keyboard.KeyboardDeviceServices;
+using CopperStartInputDeviceServices = CopperMod.Amiga.CopperStart.Devices.Input.InputDeviceServices;
+using CopperMod.Amiga.Input;
 using CopperStartEncodedTrack = CopperMod.Amiga.Storage.Floppy.AmigaEncodedTrack;
 using CopperStartRuntime = CopperMod.Amiga.CopperStart.CopperStartRuntime;
 using CopperStartWorkbenchContext = CopperMod.Amiga.CopperStart.Workbench.CopperStartWorkbenchContext;
@@ -389,6 +392,8 @@ namespace CopperMod.Amiga
         private readonly CopperStartExecIoServices _execIoServices;
         private readonly CopperStartTrackdiskDeviceServices _trackdiskDeviceServices;
         private readonly CopperStartTimerDeviceServices _timerDeviceServices;
+        private readonly CopperStartKeyboardDeviceServices _keyboardDeviceServices;
+        private readonly CopperStartInputDeviceServices _inputDeviceServices;
         private uint _activeExecBase;
         private KickstartRomExecTakeoverState _kickstartRomExecTakeoverState;
         private readonly CopperStartRuntimeInstructionBoundary _runtimeInstructionBoundary;
@@ -483,6 +488,13 @@ namespace CopperMod.Amiga
                 _machine.Bus,
                 ReplyTrackdiskMessage,
                 message => _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_TIMER", message)));
+            _keyboardDeviceServices = new CopperStartKeyboardDeviceServices(
+                _machine.Bus,
+                _execContext.MemoryOperations,
+                ReplyTrackdiskMessage,
+                message => _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_KEYBOARD", message)),
+                _execContext.GetCurrentTask);
+            _inputDeviceServices = new CopperStartInputDeviceServices(_machine.Bus, ReplyTrackdiskMessage);
             _execFormatServices = new CopperStartExecFormatServices(_machine.Bus, RawDoFmtContinuationAddress, ReadNullTerminatedString);
             _execGatewayServices = new CopperStartExecGatewayServices(
                 LogExecCall, _execMemoryServices, _execTaskServices, GetExecListServices(), _execSignalServices,
@@ -596,6 +608,10 @@ namespace CopperMod.Amiga
         public bool AutoStartWorkbenchDefaultTool { get; set; } = true;
 
         public bool AutoRunStartupSequence { get; set; }
+
+        public bool QueueHostKeyDown(AmigaRawKey key) => _keyboardDeviceServices.QueueKeyDown(key);
+
+        public bool QueueHostKeyUp(AmigaRawKey key) => _keyboardDeviceServices.QueueKeyUp(key);
 
         public AmigaProgramLaunchRequest? PendingWorkbenchLaunchRequest { get; private set; }
 
@@ -752,6 +768,8 @@ namespace CopperMod.Amiga
         {
             _trackdiskDeviceServices.Reset();
             _timerDeviceServices.Reset();
+            _keyboardDeviceServices.Reset();
+            _inputDeviceServices.Reset();
             _copperStartRuntime.Reset();
             _romExecLibraryServices = null;
             _execListServices = null;
@@ -1034,6 +1052,8 @@ namespace CopperMod.Amiga
                 {
                     _trackdiskDeviceServices.TryInstall(_activeExecBase);
                     _timerDeviceServices.TryInstall(_activeExecBase);
+                    _inputDeviceServices.TryInstall(_activeExecBase);
+                    _keyboardDeviceServices.TryInstall(_activeExecBase);
                     ProcessHostDevices();
                 }
 
@@ -1068,12 +1088,16 @@ namespace CopperMod.Amiga
             _kickstartRomExecTakeoverState = KickstartRomExecTakeoverState.Active;
             _trackdiskDeviceServices.TryInstall(execBase);
             _timerDeviceServices.TryInstall(execBase);
+            _inputDeviceServices.TryInstall(execBase);
+            _keyboardDeviceServices.TryInstall(execBase);
         }
 
         private void ProcessHostDevices()
         {
             _trackdiskDeviceServices.ProcessPending(_machine.Cpu.State);
             _timerDeviceServices.ProcessPending(_machine.Cpu.State);
+            _keyboardDeviceServices.ProcessPending(_machine.Cpu.State);
+            _inputDeviceServices.ProcessPending();
         }
 
         private long GetNextHostDeviceBoundary(long currentCycle, long targetCycle)

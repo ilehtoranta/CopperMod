@@ -210,8 +210,10 @@ namespace Copper68k
     }
 
     internal readonly record struct M68kDeferredCpuBusCheckpointRequest(
-        ulong RequiredThroughToken,
-        long RequiredVirtualReadyCycle,
+        ulong ConsumedThroughToken,
+        long ConsumedVirtualReadyCycle,
+        ulong QueueRetirementThroughToken,
+        ulong CancellableTrimThroughToken,
         ulong QueueToken0,
         ulong QueueToken1,
         bool HasPendingSuccessor = false,
@@ -2392,7 +2394,11 @@ namespace Copper68k
                         !deferredCpuInstructionTiming.CanContinueDeferredCpuBusBatch(
                             State.Cycles,
                             batchTargetCycle,
-                            _instructionDeferredCpuTimingDependencyToken,
+                            Math.Max(
+                                _instructionDeferredCpuTimingDependencyToken,
+                                Math.Max(
+                                    _prefetchTimingToken0,
+                                    _prefetchTimingToken1)),
                             out _))
                     {
                         if (deferredCpuInstructionTiming.TryTrimDeferredCpuInstructionFetchSuffix(
@@ -2406,6 +2412,12 @@ namespace Copper68k
                         var checkpointRequest = new M68kDeferredCpuBusCheckpointRequest(
                             _instructionDeferredCpuTimingDependencyToken,
                             _instructionDeferredCpuTimingDependencyVirtualReadyCycle,
+                            Math.Max(
+                                _instructionDeferredCpuTimingDependencyToken,
+                                Math.Max(
+                                    _prefetchTimingToken0,
+                                    _prefetchTimingToken1)),
+                            _instructionDeferredCpuTimingDependencyToken,
                             _prefetchTimingToken0,
                             _prefetchTimingToken1,
                             _hasPendingPrefetch,
@@ -2528,6 +2540,12 @@ namespace Copper68k
                     var checkpointRequest = new M68kDeferredCpuBusCheckpointRequest(
                         _instructionDeferredCpuTimingDependencyToken,
                         _instructionDeferredCpuTimingDependencyVirtualReadyCycle,
+                        Math.Max(
+                            _instructionDeferredCpuTimingDependencyToken,
+                            Math.Max(
+                                _prefetchTimingToken0,
+                                _prefetchTimingToken1)),
+                        _instructionDeferredCpuTimingDependencyToken,
                         _prefetchTimingToken0,
                         _prefetchTimingToken1,
                         _hasPendingPrefetch,

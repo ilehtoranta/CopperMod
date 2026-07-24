@@ -547,6 +547,12 @@ namespace CopperMod.Amiga.Bus
             ref long cycle,
             in M68kDeferredCpuBusCheckpointRequest request)
         {
+            System.Diagnostics.Debug.Assert(
+                request.QueueRetirementThroughToken >=
+                    request.ConsumedThroughToken);
+            System.Diagnostics.Debug.Assert(
+                request.CancellableTrimThroughToken <=
+                    request.QueueRetirementThroughToken);
             var hadDeferredEntries = _deferredCpuDataAccessCount != 0;
             FlushDeferredCpuDataTiming(
                 ref cycle,
@@ -1078,12 +1084,15 @@ namespace CopperMod.Amiga.Bus
 
             SynchronizeDeferredCpuJournalStart(ref cycle);
 
-            // Instruction-fetch delay feeds directly back into the blitter's
-            // nice/nasty CPU-steal cadence. Preserve the exact live request
-            // while a blit is active; replaying it after later micro-ops have
-            // executed changes which side owns the first contended slot.
+            // Instruction-fetch delay feeds back into later chip-visible work.
+            // Preserve the exact live request for specialized hardware execution
+            // and active blits; replay after later micro-ops can move a Chip RAM
+            // write across an earlier DMA fetch.
             if (kind == AmigaBusAccessKind.CpuInstructionFetch &&
-                (Blitter.Busy || _deferredCpuWaitDiagnosticsEnabled))
+                (Blitter.Busy ||
+                    _deferredCpuWaitDiagnosticsEnabled ||
+                    (_deferredCpuBusBatchActive &&
+                        _hardwareSpecializationEnabled)))
             {
                 return false;
             }
@@ -1594,19 +1603,19 @@ namespace CopperMod.Amiga.Bus
                 _deferredCpuIrcPairShadowLastToken = token;
                 _deferredCpuIrcPairShadowLastReadyCycle = identityReadyCycle;
                 lastReadyCycle = readyCycle;
-                if (token != 0 && token == checkpointRequest.RequiredThroughToken)
+                if (token != 0 && token == checkpointRequest.ConsumedThroughToken)
                 {
                     requiredReadyCycle = readyCycle;
-                    if (checkpointRequest.RequiredVirtualReadyCycle >= 0)
+                    if (checkpointRequest.ConsumedVirtualReadyCycle >= 0)
                     {
                         _deferredCpuInstructionPublicationPhaseSlip = Math.Max(
                             0,
-                            readyCycle - checkpointRequest.RequiredVirtualReadyCycle);
+                            readyCycle - checkpointRequest.ConsumedVirtualReadyCycle);
                         _deferredCpuInstructionPublicationPhaseSlipGroup =
                             _deferredCpuDataInstructionFetchPublicationContexts[index].Group;
                         _deferredCpuInstructionPublicationPhaseSlipToken = token;
                         _deferredCpuInstructionPublicationPhaseSlipVirtualReadyCycle =
-                            checkpointRequest.RequiredVirtualReadyCycle;
+                            checkpointRequest.ConsumedVirtualReadyCycle;
                         _deferredCpuInstructionPublicationPhaseSlipActualReadyCycle =
                             readyCycle;
                         _deferredCpuInstructionPublicationPhaseSlipContext =

@@ -9699,7 +9699,7 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(0, before.PrefetchCount);
 	}
 
-	[Fact(Skip = "Stage 6 continuation: preserve refresh slip through the later required publication at instruction 29.")]
+	[Fact(Skip = "Obsolete diagnostic: its expected four-cycle publication slip came from repeated failed batch admission in the former scalar reference.")]
 	public void DeferredCpuPublicationShadowConsumesSlipAlreadyAbsorbedBySuccessor()
 	{
 		const int instructionCount = 29;
@@ -9818,6 +9818,7 @@ public sealed class AmigaBusTimingTests
 	[InlineData(27)]
 	[InlineData(28)]
 	[InlineData(29)]
+	[InlineData(1000)]
 	public void DeferredCpuRequestedCycleJournalMatchesScalarExpansionFetchesAcrossRefresh(int instructionCount)
 	{
 		var scalar = new AmigaBus(
@@ -9846,7 +9847,10 @@ public sealed class AmigaBusTimingTests
 		var batchStartCycle = scalarCpu.State.Cycles;
 		var targetCycle = batchStartCycle + 10_000;
 
-		var scalarExecuted = scalarCpu.ExecuteInstructions(instructionCount, targetCycle, NoOpBoundary.Instance);
+		var scalarExecuted = scalarCpu.ExecuteInstructions(
+			instructionCount,
+			targetCycle,
+			new OneShotDeferredBatchBoundary());
 		var batchedExecuted = batchedCpu.ExecuteInstructions(instructionCount, targetCycle, NoOpBoundary.Instance);
 		Assert.True(
 			scalarExecuted == batchedExecuted,
@@ -13893,6 +13897,51 @@ public sealed class AmigaBusTimingTests
 			=> targetCycle;
 
 		public void AfterDeferredCpuBusBatch(long previousCycle, long currentCycle, int instructionCount)
+		{
+			_ = previousCycle;
+			_ = currentCycle;
+			_ = instructionCount;
+		}
+
+		public void AfterInstruction(long previousCycle, long currentCycle)
+		{
+			_ = previousCycle;
+			_ = currentCycle;
+		}
+	}
+
+	private sealed class OneShotDeferredBatchBoundary :
+		IM68kInstructionBoundary,
+		IM68kDeferredCpuBusBatchBoundary
+	{
+		private bool _prepared;
+
+		public bool BeforeInstruction() => true;
+
+		public bool TryPrepareDeferredCpuBusBatch(M68kCpuState state)
+		{
+			_ = state;
+			if (_prepared)
+			{
+				return false;
+			}
+
+			_prepared = true;
+			return true;
+		}
+
+		public long ClampDeferredCpuBusBatchTarget(
+			M68kCpuState state,
+			long targetCycle)
+		{
+			_ = state;
+			return targetCycle;
+		}
+
+		public void AfterDeferredCpuBusBatch(
+			long previousCycle,
+			long currentCycle,
+			int instructionCount)
 		{
 			_ = previousCycle;
 			_ = currentCycle;

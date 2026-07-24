@@ -1160,12 +1160,18 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 	public void KeyDown(AmigaRawKey key)
 	{
-		_machine.Bus.Keyboard.KeyDown(key, _machine.Cpu.State.Cycles);
+		if (!_boot.QueueHostKeyDown(key))
+		{
+			_machine.Bus.Keyboard.KeyDown(key, _machine.Cpu.State.Cycles);
+		}
 	}
 
 	public void KeyUp(AmigaRawKey key)
 	{
-		_machine.Bus.Keyboard.KeyUp(key, _machine.Cpu.State.Cycles);
+		if (!_boot.QueueHostKeyUp(key))
+		{
+			_machine.Bus.Keyboard.KeyUp(key, _machine.Cpu.State.Cycles);
+		}
 	}
 
 	[HotPath]
