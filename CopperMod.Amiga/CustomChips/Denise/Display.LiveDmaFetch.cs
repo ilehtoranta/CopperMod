@@ -221,7 +221,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             state.FetchWords = GetDataFetchWordCount();
             state.DataFetchStart = _dataFetchWindow.Start;
             state.FetchSlotStride = DisplayGeometryDecoder.GetDataFetchSlotStride(_dataFetchWindow);
-            state.PaletteSnapshotIndex = CaptureLivePaletteSnapshot(row);
+            // PaletteSnapshotIndex is the immutable presentation baseline
+            // captured at line start. Mid-line changes are timeline events;
+            // rebuilding future DMA must not replace that baseline.
 
             var oldPlaneHasRowMask = state.PlaneHasRowMask;
             state.PlaneHasRowMask = 0;
@@ -274,6 +276,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             InvalidateRowDmaPlan(row);
 
+            // Physical lookahead can move capture beyond this row before a
+            // causal write rebuilds its unexecuted suffix. Rewind from either
+            // the current or a future row so those transfers are sampled at
+            // their physical slots instead of being revisited behind horizon.
             if (_liveNextFetchRow >= row)
             {
                 SetBitplaneCursorAfterCycle(ref _liveBitplaneFetchTimeline.Captured, state, cycle);
