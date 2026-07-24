@@ -39,6 +39,14 @@ live `DeviceList` node and registers gateways only at its Open, Close, Expunge,
 ExtFunc, BeginIO, and AbortIO vectors. Its backing bytes remain untouched, and
 every non-trackdisk device remains native.
 
+`timer.device` follows the same ROM-device rule. Its deadlines are held by the
+outer execution-boundary schedule, so a running, batched, or stopped CPU cannot
+pass a due timer request. The device is deterministic: system time starts at
+zero on reset and advances with emulated machine cycles only. `UNIT_VBLANK`
+uses a fixed, recurring 50 Hz PAL or 60 Hz NTSC timer tick, independent of
+beam state and programmable ECS/AGA VBlank cadence. It never allocates a CIA
+timer, installs a CIA interrupt server, or claims either CIA resource.
+
 The ROM Exec overlay also owns task-list, signal, and trap allocation LVOs.
 Those operations edit only the live ROM-created Task and Exec list fields.
 They never restore a managed CPU snapshot: `Wait`, a current `RemTask`, and a

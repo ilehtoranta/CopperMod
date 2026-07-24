@@ -13,14 +13,16 @@ internal sealed class BootInstructionBoundaryContext
         Func<bool> recoverTrap, Func<bool> startDosContinuation, Action recordNullPc,
         Func<bool> continueStartup, Action skipBootHeader, Action applyLanguage,
         Func<bool> bootReadComplete, Action dispatchHardwareInterrupt,
-        Func<long, long, long> nextSyntheticBoundary, Action<long, long> advanceSynthetic)
-    { Bus = bus; Cpu = cpu; DosReturnAddress = dosReturnAddress; RomBoot = romBoot; ActivateRomExec = activateRomExec; DispatchTasks = dispatchTasks; DispatchInterrupts = dispatchInterrupts; EnsureTrapVectors = ensureTrapVectors; EnsureLowMemory = ensureLowMemory; EnsureAutovectors = ensureAutovectors; RecoverTrap = recoverTrap; StartDosContinuation = startDosContinuation; RecordNullPc = recordNullPc; ContinueStartup = continueStartup; SkipBootHeader = skipBootHeader; ApplyLanguage = applyLanguage; BootReadComplete = bootReadComplete; DispatchHardwareInterrupt = dispatchHardwareInterrupt; NextSyntheticBoundary = nextSyntheticBoundary; AdvanceSynthetic = advanceSynthetic; }
+        Func<long, long, long> nextSyntheticBoundary, Action<long, long> advanceSynthetic,
+        Func<long, long, long> nextHostDeviceBoundary)
+    { Bus = bus; Cpu = cpu; DosReturnAddress = dosReturnAddress; RomBoot = romBoot; ActivateRomExec = activateRomExec; DispatchTasks = dispatchTasks; DispatchInterrupts = dispatchInterrupts; EnsureTrapVectors = ensureTrapVectors; EnsureLowMemory = ensureLowMemory; EnsureAutovectors = ensureAutovectors; RecoverTrap = recoverTrap; StartDosContinuation = startDosContinuation; RecordNullPc = recordNullPc; ContinueStartup = continueStartup; SkipBootHeader = skipBootHeader; ApplyLanguage = applyLanguage; BootReadComplete = bootReadComplete; DispatchHardwareInterrupt = dispatchHardwareInterrupt; NextSyntheticBoundary = nextSyntheticBoundary; AdvanceSynthetic = advanceSynthetic; NextHostDeviceBoundary = nextHostDeviceBoundary; }
     public AmigaBus Bus { get; } public M68kCpuState Cpu { get; } public uint DosReturnAddress { get; }
     public Func<bool> RomBoot { get; } public Action ActivateRomExec { get; } public Func<bool> DispatchTasks { get; } public Func<bool> DispatchInterrupts { get; }
     public Action EnsureTrapVectors { get; } public Action EnsureLowMemory { get; } public Action EnsureAutovectors { get; }
     public Func<bool> RecoverTrap { get; } public Func<bool> StartDosContinuation { get; } public Action RecordNullPc { get; }
     public Func<bool> ContinueStartup { get; } public Action SkipBootHeader { get; } public Action ApplyLanguage { get; } public Func<bool> BootReadComplete { get; }
     public Action DispatchHardwareInterrupt { get; } public Func<long, long, long> NextSyntheticBoundary { get; } public Action<long, long> AdvanceSynthetic { get; }
+    public Func<long, long, long> NextHostDeviceBoundary { get; }
 }
 
 /// <summary>Boot CPU/JIT boundary and CopperStart boot-continuation policy.</summary>
@@ -30,7 +32,7 @@ internal sealed class BootInstructionBoundary :
 {
     private readonly BootInstructionBoundaryContext _context; private readonly ExecutionBoundarySchedule _schedule;
     private AmigaBootRunMode _runMode; private int _instructions;
-    public BootInstructionBoundary(BootInstructionBoundaryContext context) { _context = context ?? throw new ArgumentNullException(nameof(context)); _schedule = new ExecutionBoundarySchedule(context.NextSyntheticBoundary, context.AdvanceSynthetic); }
+    public BootInstructionBoundary(BootInstructionBoundaryContext context) { _context = context ?? throw new ArgumentNullException(nameof(context)); _schedule = new ExecutionBoundarySchedule(context.NextSyntheticBoundary, context.AdvanceSynthetic, context.NextHostDeviceBoundary); }
     public bool Completed { get; private set; } public M68kTraceBatchWakeSource LastTraceBatchWakeSource { get; private set; }
     public void Reset(AmigaBootRunMode runMode, Action<long, long>? beforeDeviceAdvance, IAmigaExecutionBoundarySchedule? schedule) { _runMode = runMode; _schedule.Reset(beforeDeviceAdvance, schedule); _instructions = 0; Completed = false; }
     public bool TryPrepareDeferredCpuBusBatch(M68kCpuState state) => _runMode != AmigaBootRunMode.StopAfterBootDiskRead && !_schedule.HasOpaqueLegacyAdvance && BeforeInstruction();
@@ -54,5 +56,5 @@ internal sealed class BootInstructionBoundary :
     public bool TryBeginBusAccessTraceBatch(M68kCpuState state, long targetCycle, out long batchTargetCycle) { if (_schedule.HasOpaqueLegacyAdvance) { batchTargetCycle = targetCycle; return false; } return TryBeginPureCpuTraceBatch(state, targetCycle, out batchTargetCycle); }
     public void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount) => AfterBatch(previousCycle, currentCycle, instructionCount);
     private void AfterBatch(long previousCycle, long currentCycle, int count) { if (count <= 0) return; _schedule.AdvanceThrough(previousCycle, currentCycle); var mask = (_context.Cpu.StatusRegister >> 8) & 7; _context.Bus.AdvanceHardwareEventsTo(currentCycle, mask); _context.DispatchHardwareInterrupt(); _instructions += count; if (_context.BootReadComplete() && _runMode == AmigaBootRunMode.StopAfterBootDiskRead) Completed = true; }
-    public bool TryFastForwardStoppedInstruction(M68kCpuState state, long targetCycle, out long advancedCycles) { advancedCycles = 0; if (!BeforeInstruction() || targetCycle <= state.Cycles) return false; var previous = state.Cycles; var mask = (state.StatusRegister >> 8) & 7; var wake = _context.Bus.GetNextStoppedCpuWakeCandidateCycle(previous, targetCycle, mask); wake = Math.Clamp(wake, previous + 1, targetCycle); advancedCycles = wake - previous; state.Cycles = wake; AfterInstruction(previous, wake); return true; }
+    public bool TryFastForwardStoppedInstruction(M68kCpuState state, long targetCycle, out long advancedCycles) { advancedCycles = 0; if (!BeforeInstruction() || targetCycle <= state.Cycles) return false; var previous = state.Cycles; targetCycle = _schedule.GetNextBoundaryCycle(previous, targetCycle); var mask = (state.StatusRegister >> 8) & 7; var wake = _context.Bus.GetNextStoppedCpuWakeCandidateCycle(previous, targetCycle, mask); wake = Math.Clamp(wake, previous + 1, targetCycle); advancedCycles = wake - previous; state.Cycles = wake; AfterInstruction(previous, wake); return true; }
 }

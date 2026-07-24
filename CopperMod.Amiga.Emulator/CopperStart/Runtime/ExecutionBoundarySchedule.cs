@@ -10,16 +10,19 @@ namespace CopperMod.Amiga.CopperStart.Runtime;
 internal sealed class ExecutionBoundarySchedule : IAmigaExecutionBoundarySchedule
 {
     private readonly Func<long, long, long> _nextSyntheticBoundary;
+    private readonly Func<long, long, long> _nextHostDeviceBoundary;
     private readonly Action<long, long> _advanceSynthetic;
     private Action<long, long>? _legacyAdvance;
     private IAmigaExecutionBoundarySchedule? _scheduledAdvance;
 
     public ExecutionBoundarySchedule(
         Func<long, long, long> nextSyntheticBoundary,
-        Action<long, long> advanceSynthetic)
+        Action<long, long> advanceSynthetic,
+        Func<long, long, long> nextHostDeviceBoundary)
     {
         _nextSyntheticBoundary = nextSyntheticBoundary ?? throw new ArgumentNullException(nameof(nextSyntheticBoundary));
         _advanceSynthetic = advanceSynthetic ?? throw new ArgumentNullException(nameof(advanceSynthetic));
+        _nextHostDeviceBoundary = nextHostDeviceBoundary ?? throw new ArgumentNullException(nameof(nextHostDeviceBoundary));
     }
 
     public bool HasOpaqueLegacyAdvance => _legacyAdvance != null && _scheduledAdvance == null;
@@ -36,7 +39,8 @@ internal sealed class ExecutionBoundarySchedule : IAmigaExecutionBoundarySchedul
     public long GetNextBoundaryCycle(long currentCycle, long targetCycle)
     {
         var scheduledCycle = _scheduledAdvance?.GetNextBoundaryCycle(currentCycle, targetCycle) ?? targetCycle;
-        return _nextSyntheticBoundary(currentCycle, Math.Min(targetCycle, scheduledCycle));
+        var hostDeviceCycle = _nextHostDeviceBoundary(currentCycle, Math.Min(targetCycle, scheduledCycle));
+        return _nextSyntheticBoundary(currentCycle, Math.Min(targetCycle, hostDeviceCycle));
     }
 
     public void AdvanceThrough(long previousCycle, long currentCycle)

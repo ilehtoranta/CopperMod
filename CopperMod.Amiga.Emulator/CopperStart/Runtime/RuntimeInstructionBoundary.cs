@@ -9,11 +9,12 @@ internal sealed class RuntimeInstructionBoundaryContext
 {
     public RuntimeInstructionBoundaryContext(AmigaBus bus, M68kCpuState cpu, Action dispatchInterrupt,
         Func<long, long, long> nextSyntheticBoundary, Action<long, long> advanceSynthetic,
-        Action processHostDevices)
-    { Bus = bus; Cpu = cpu; DispatchInterrupt = dispatchInterrupt; NextSyntheticBoundary = nextSyntheticBoundary; AdvanceSynthetic = advanceSynthetic; ProcessHostDevices = processHostDevices; }
+        Action processHostDevices, Func<long, long, long> nextHostDeviceBoundary)
+    { Bus = bus; Cpu = cpu; DispatchInterrupt = dispatchInterrupt; NextSyntheticBoundary = nextSyntheticBoundary; AdvanceSynthetic = advanceSynthetic; ProcessHostDevices = processHostDevices; NextHostDeviceBoundary = nextHostDeviceBoundary; }
     public AmigaBus Bus { get; } public M68kCpuState Cpu { get; } public Action DispatchInterrupt { get; }
     public Func<long, long, long> NextSyntheticBoundary { get; } public Action<long, long> AdvanceSynthetic { get; }
     public Action ProcessHostDevices { get; }
+    public Func<long, long, long> NextHostDeviceBoundary { get; }
 }
 
 /// <summary>Runtime CPU/JIT boundary: batching, wakeups, hardware advancement, and interrupts.</summary>
@@ -24,7 +25,7 @@ internal sealed class RuntimeInstructionBoundary :
     private readonly RuntimeInstructionBoundaryContext _context;
     private readonly ExecutionBoundarySchedule _schedule;
     public RuntimeInstructionBoundary(RuntimeInstructionBoundaryContext context)
-    { _context = context ?? throw new ArgumentNullException(nameof(context)); _schedule = new ExecutionBoundarySchedule(context.NextSyntheticBoundary, context.AdvanceSynthetic); }
+    { _context = context ?? throw new ArgumentNullException(nameof(context)); _schedule = new ExecutionBoundarySchedule(context.NextSyntheticBoundary, context.AdvanceSynthetic, context.NextHostDeviceBoundary); }
     public void Reset(Action<long, long>? beforeDeviceAdvance, IAmigaExecutionBoundarySchedule? boundarySchedule) => _schedule.Reset(beforeDeviceAdvance, boundarySchedule);
     public M68kTraceBatchWakeSource LastTraceBatchWakeSource { get; private set; }
     public bool TryPrepareDeferredCpuBusBatch(M68kCpuState state) => !_schedule.HasOpaqueLegacyAdvance;
@@ -49,6 +50,7 @@ internal sealed class RuntimeInstructionBoundary :
     public bool TryFastForwardStoppedInstruction(M68kCpuState state, long targetCycle, out long advancedCycles)
     {
         advancedCycles = 0; var previous = state.Cycles; if (targetCycle <= previous) return false;
+        targetCycle = _schedule.GetNextBoundaryCycle(previous, targetCycle);
         var mask = (state.StatusRegister >> 8) & 7; var wake = _context.Bus.GetNextStoppedCpuWakeCandidateCycle(previous, targetCycle, mask);
         wake = Math.Clamp(wake, previous + 1, targetCycle); advancedCycles = wake - previous; state.Cycles = wake; AfterInstruction(previous, wake); return true;
     }

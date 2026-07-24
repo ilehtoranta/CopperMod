@@ -32,6 +32,7 @@ using CopperStartExecIoServices = CopperMod.Amiga.CopperStart.Exec.ExecIoService
 using CopperStartExecLvos = CopperMod.Amiga.CopperStart.Exec.ExecLvos;
 using CopperStartTrackdiskDeviceServices = CopperMod.Amiga.CopperStart.Devices.Trackdisk.TrackdiskDeviceServices;
 using CopperStartTrackdiskRawTrack = CopperMod.Amiga.CopperStart.Devices.Trackdisk.TrackdiskRawTrack;
+using CopperStartTimerDeviceServices = CopperMod.Amiga.CopperStart.Devices.Timer.TimerDeviceServices;
 using CopperStartEncodedTrack = CopperMod.Amiga.Storage.Floppy.AmigaEncodedTrack;
 using CopperStartRuntime = CopperMod.Amiga.CopperStart.CopperStartRuntime;
 using CopperStartWorkbenchContext = CopperMod.Amiga.CopperStart.Workbench.CopperStartWorkbenchContext;
@@ -387,6 +388,7 @@ namespace CopperMod.Amiga
         private readonly CopperStartExecSemaphoreServices _execSemaphoreServices;
         private readonly CopperStartExecIoServices _execIoServices;
         private readonly CopperStartTrackdiskDeviceServices _trackdiskDeviceServices;
+        private readonly CopperStartTimerDeviceServices _timerDeviceServices;
         private uint _activeExecBase;
         private KickstartRomExecTakeoverState _kickstartRomExecTakeoverState;
         private readonly CopperStartRuntimeInstructionBoundary _runtimeInstructionBoundary;
@@ -477,6 +479,10 @@ namespace CopperMod.Amiga
                 SetTrackdiskMotor,
                 ReplyTrackdiskMessage,
                 message => _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_TRACKDISK", message)));
+            _timerDeviceServices = new CopperStartTimerDeviceServices(
+                _machine.Bus,
+                ReplyTrackdiskMessage,
+                message => _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_TIMER", message)));
             _execFormatServices = new CopperStartExecFormatServices(_machine.Bus, RawDoFmtContinuationAddress, ReadNullTerminatedString);
             _execGatewayServices = new CopperStartExecGatewayServices(
                 LogExecCall, _execMemoryServices, _execTaskServices, GetExecListServices(), _execSignalServices,
@@ -519,12 +525,13 @@ namespace CopperMod.Amiga
                     TryRecoverHostTaskTrapFromZeroVector, TryStartDosBootContinuation, RecordNativeKickstartNullPc,
                     TryContinueStartupSequence, SkipDosBootBlockHeaderIfNeeded, ApplyWorkbenchLanguageSelectionIfNeeded,
                     () => _bootDiskReadCompleted, () => _ = _machine.DispatchPendingHardwareInterrupt(),
-                    GetNextSyntheticVBlankBoundaryCycle, AdvanceSyntheticVBlankInterruptServers));
+                    GetNextSyntheticVBlankBoundaryCycle, AdvanceSyntheticVBlankInterruptServers,
+                    GetNextHostDeviceBoundary));
             _runtimeInstructionBoundary = new CopperStartRuntimeInstructionBoundary(
                 new CopperStartRuntimeInstructionBoundaryContext(
                     _machine.Bus, _machine.Cpu.State, () => _ = _machine.DispatchPendingHardwareInterrupt(),
                     GetNextSyntheticVBlankBoundaryCycle, AdvanceSyntheticVBlankInterruptServers,
-                    () => _trackdiskDeviceServices.ProcessPending(_machine.Cpu.State)));
+                    ProcessHostDevices, GetNextHostDeviceBoundary));
             if (_machine.Bus.RtgVram.IsPresent)
             {
                 _cyberGraphics = new CyberGraphicsLibrary(_machine.Bus);
@@ -744,6 +751,7 @@ namespace CopperMod.Amiga
         private void ResetBootState(AmigaDiskImage? disk, bool installHostShim)
         {
             _trackdiskDeviceServices.Reset();
+            _timerDeviceServices.Reset();
             _copperStartRuntime.Reset();
             _romExecLibraryServices = null;
             _execListServices = null;
@@ -1025,7 +1033,8 @@ namespace CopperMod.Amiga
                 if (_kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active)
                 {
                     _trackdiskDeviceServices.TryInstall(_activeExecBase);
-                    _trackdiskDeviceServices.ProcessPending(_machine.Cpu.State);
+                    _timerDeviceServices.TryInstall(_activeExecBase);
+                    ProcessHostDevices();
                 }
 
                 return;
@@ -1058,7 +1067,17 @@ namespace CopperMod.Amiga
             _memoryListInstalled = true;
             _kickstartRomExecTakeoverState = KickstartRomExecTakeoverState.Active;
             _trackdiskDeviceServices.TryInstall(execBase);
+            _timerDeviceServices.TryInstall(execBase);
         }
+
+        private void ProcessHostDevices()
+        {
+            _trackdiskDeviceServices.ProcessPending(_machine.Cpu.State);
+            _timerDeviceServices.ProcessPending(_machine.Cpu.State);
+        }
+
+        private long GetNextHostDeviceBoundary(long currentCycle, long targetCycle)
+            => _timerDeviceServices.GetNextDeadline(currentCycle, targetCycle);
 
         private bool IsValidKickstartRomExecBase(uint execBase)
         {
