@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using Copper68k;
 using CopperMod.Amiga.Bus;
 using CopperMod.Amiga.CopperStart.Devices.Input;
+using CopperMod.Amiga.CopperStart.Devices.Clipboard;
 using CopperMod.Amiga.CopperStart.Exec;
 
 namespace CopperMod.Amiga.CopperStart.Devices.Console;
@@ -25,6 +26,7 @@ internal sealed class ConsoleDeviceServices : IDisposable
     private const uint MemfPublicClear = 0x0001_0001;
     private const int KeyMapBytes = 32;
     private const int DefaultColumns = 80, DefaultRows = 25;
+    private const int ClipboardRequestBytes = 0x34, ClipboardBufferBytes = 4096;
     private const uint MapRawKeyContinuationAddress = 0x00F0_8910;
     // Public console.device RawKeyConvert() needs the same guest keymap
     // lookup as input delivery, but it enters it from a library gateway.
@@ -63,6 +65,7 @@ internal sealed class ConsoleDeviceServices : IDisposable
         public ConsoleUnit(uint request, int number, uint window, uint rastPort, uint scratch) { Request = request; Number = number; Window = window; RastPort = rastPort; Scratch = scratch; }
         public uint Request { get; } public int Number { get; } public uint Window { get; } public uint RastPort { get; } public uint Scratch { get; }
         public uint KeyMap { get; set; }
+        public uint ClipboardRequest { get; set; } public uint ClipboardBuffer { get; set; }
         public Queue<byte> Input { get; } = new(); public List<byte> History { get; } = new();
         public List<List<byte>> Lines { get; } = new() { new List<byte>() };
         public List<List<RenderStyle>> Styles { get; } = new() { new List<RenderStyle>() };
@@ -112,7 +115,7 @@ internal sealed class ConsoleDeviceServices : IDisposable
     public void CloseCompatibilitySession(uint session)
     {
         CancelReads(session, 0);
-        if (_units.Remove(session, out var unit) && unit.Scratch != 0) _memory.Free(unit.Scratch, 256);
+        if (_units.Remove(session, out var unit)) FreeUnitMemory(unit);
     }
 
     public uint WriteCompatibility(M68kCpuState state, uint session, uint source, uint length)
@@ -173,7 +176,7 @@ internal sealed class ConsoleDeviceServices : IDisposable
     private void ClearResetState()
     {
         for (var index = _gateways.Count - 1; index >= 0; index--) _bus.RemoveHostGateway(_gateways[index].Address, _gateways[index].Token);
-        foreach (var unit in _units.Values) if (unit.Scratch != 0) _memory.Free(unit.Scratch, 256);
+        foreach (var unit in _units.Values) FreeUnitMemory(unit);
         _gateways.Clear(); _units.Clear(); _pendingReads.Clear(); _pendingWrites.Clear(); _rawInput.Clear(); _pendingKeyMapCall = null; _pendingRawKeyConvert = null; _pendingRender = null; _pendingClear = null; DeviceBase = 0; _execBase = 0;
     }
 
@@ -204,7 +207,7 @@ internal sealed class ConsoleDeviceServices : IDisposable
             CancelClear(unit.Request, state.Cycles);
             CancelQueuedWrites(unit.Request, state.Cycles);
             _units.Remove(unit.Request);
-            _memory.Free(unit.Scratch, 256);
+            FreeUnitMemory(unit);
         }
         var count = _bus.ReadWord(DeviceBase + LibraryOpenCountOffset); if (count != 0) _bus.WriteWord(DeviceBase + LibraryOpenCountOffset, unchecked((ushort)(count - 1)), state.Cycles); state.D[0] = 0;
     }
@@ -802,6 +805,8 @@ internal sealed class ConsoleDeviceServices : IDisposable
                 }
                 if (unit.RawEventTypes.Contains(1)) { QueueRawInput(unit, input); continue; }
                 if ((input.Code & 0x80) != 0) continue;
+                if ((input.Qualifier & 0x0080) != 0 && input.Code == 0x33 && CopyHistoryToClipboard(unit, state)) continue;
+                if ((input.Qualifier & 0x0080) != 0 && input.Code == 0x34 && PasteClipboard(unit, state)) continue;
                 var keyMapLibrary = FindLibrary(_execBase, "keymap.library");
                 if (keyMapLibrary == 0 || !_bus.IsCpuPhysicalAddressMapped(keyMapLibrary - 36, 2, AmigaBusAccessKind.CpuInstructionFetch))
                 {
@@ -836,6 +841,68 @@ internal sealed class ConsoleDeviceServices : IDisposable
         var count = Math.Min(state.D[0], 224u);
         for (uint index = 0; index < count && _bus.IsMappedMemoryRange(unit.Scratch + 32 + index, 1); index++) unit.Input.Enqueue(_bus.ReadByte(unit.Scratch + 32 + index));
         if (count == 0) QueueFallbackCharacter(unit, pending.Input);
+    }
+
+    // Console accesses clipboard.device only through a guest IOClipReq. The
+    // service never calls the platform clipboard; clipboard.device owns that bridge.
+    private bool CopyHistoryToClipboard(ConsoleUnit unit, M68kCpuState state)
+    {
+        if (!TryOpenClipboard(unit, state)) return false;
+        var bytes = ClipboardIffText.Encode(System.Text.Encoding.Latin1.GetString(CollectionsMarshal.AsSpan(unit.History)));
+        if (bytes.Length > ClipboardBufferBytes) return false;
+        for (var index = 0; index < bytes.Length; index++) _bus.WriteByte(unit.ClipboardBuffer + (uint)index, bytes[index], state.Cycles);
+        return InvokeClipboardIo(unit, CmdWrite, unit.ClipboardBuffer, (uint)bytes.Length, 0, 0, state, out var id) &&
+            InvokeClipboardIo(unit, CmdUpdate, 0, 0, 0, id, state, out _);
+    }
+
+    private bool PasteClipboard(ConsoleUnit unit, M68kCpuState state)
+    {
+        if (!TryOpenClipboard(unit, state) || !InvokeClipboardIo(unit, CmdRead, unit.ClipboardBuffer, ClipboardBufferBytes, 0, 0, state, out _)) return false;
+        var length = _bus.ReadLong(unit.ClipboardRequest + IoActualOffset);
+        if (length > ClipboardBufferBytes) return false;
+        var bytes = new byte[(int)length];
+        for (var index = 0u; index < length; index++) bytes[index] = _bus.ReadByte(unit.ClipboardBuffer + index);
+        if (!ClipboardIffText.TryDecode(bytes, out var text)) return false;
+        foreach (var character in text) unit.Input.Enqueue(character <= byte.MaxValue ? (byte)character : (byte)'?');
+        return true;
+    }
+
+    private bool TryOpenClipboard(ConsoleUnit unit, M68kCpuState state)
+    {
+        if (unit.ClipboardRequest != 0) return true;
+        var device = FindDevice(_execBase + DeviceListOffset, "clipboard.device");
+        if (device < 36 || !_bus.IsCpuPhysicalAddressMapped(device - 36, 6, AmigaBusAccessKind.CpuInstructionFetch)) return false;
+        var request = _memory.Allocate(ClipboardRequestBytes, MemfPublicClear);
+        var buffer = _memory.Allocate(ClipboardBufferBytes, MemfPublicClear);
+        if (request == 0 || buffer == 0) { if (request != 0) _memory.Free(request, ClipboardRequestBytes); if (buffer != 0) _memory.Free(buffer, ClipboardBufferBytes); return false; }
+        _bus.ClearMemory(request, ClipboardRequestBytes); _bus.ClearMemory(buffer, ClipboardBufferBytes);
+        var call = new M68kCpuState { Cycles = state.Cycles }; call.A[1] = request; call.D[0] = 0;
+        if (!_bus.TryInvokeHostGatewayAt(device - 6, call) || call.D[0] != 0 || _bus.ReadLong(request + IoDeviceOffset) != device)
+        { _memory.Free(request, ClipboardRequestBytes); _memory.Free(buffer, ClipboardBufferBytes); return false; }
+        unit.ClipboardRequest = request; unit.ClipboardBuffer = buffer; return true;
+    }
+
+    private bool InvokeClipboardIo(ConsoleUnit unit, ushort command, uint data, uint length, uint offset, uint clipId, M68kCpuState state, out uint resultingId)
+    {
+        resultingId = 0;
+        var device = _bus.ReadLong(unit.ClipboardRequest + IoDeviceOffset);
+        if (device < 30 || !_bus.IsCpuPhysicalAddressMapped(device - 30, 6, AmigaBusAccessKind.CpuInstructionFetch)) return false;
+        _bus.WriteWord(unit.ClipboardRequest + IoCommandOffset, command, state.Cycles);
+        _bus.WriteByte(unit.ClipboardRequest + IoFlagsOffset, IoQuick, state.Cycles);
+        _bus.WriteLong(unit.ClipboardRequest + IoDataOffset, data, state.Cycles);
+        _bus.WriteLong(unit.ClipboardRequest + IoLengthOffset, length, state.Cycles);
+        _bus.WriteLong(unit.ClipboardRequest + 0x2C, offset, state.Cycles);
+        _bus.WriteLong(unit.ClipboardRequest + 0x30, clipId, state.Cycles);
+        var call = new M68kCpuState { Cycles = state.Cycles }; call.A[1] = unit.ClipboardRequest;
+        if (!_bus.TryInvokeHostGatewayAt(device - 30, call) || _bus.ReadByte(unit.ClipboardRequest + IoErrorOffset) != 0) return false;
+        resultingId = _bus.ReadLong(unit.ClipboardRequest + 0x30); return true;
+    }
+
+    private void FreeUnitMemory(ConsoleUnit unit)
+    {
+        if (unit.Scratch != 0) _memory.Free(unit.Scratch, 256);
+        if (unit.ClipboardRequest != 0) _memory.Free(unit.ClipboardRequest, ClipboardRequestBytes);
+        if (unit.ClipboardBuffer != 0) _memory.Free(unit.ClipboardBuffer, ClipboardBufferBytes);
     }
 
     private static void QueueFallbackCharacter(ConsoleUnit unit, InputDeviceServices.ObservedInputEvent input)

@@ -38,6 +38,7 @@ using CopperStartInputDeviceServices = CopperMod.Amiga.CopperStart.Devices.Input
 using CopperStartGameportDeviceServices = CopperMod.Amiga.CopperStart.Devices.Gameport.GameportDeviceServices;
 using CopperStartConsoleDeviceServices = CopperMod.Amiga.CopperStart.Devices.Console.ConsoleDeviceServices;
 using CopperStartConsoleContext = CopperMod.Amiga.CopperStart.Devices.Console.CopperStartConsoleContext;
+using CopperStartClipboardDeviceServices = CopperMod.Amiga.CopperStart.Devices.Clipboard.ClipboardDeviceServices;
 using CopperMod.Amiga.Input;
 using CopperStartEncodedTrack = CopperMod.Amiga.Storage.Floppy.AmigaEncodedTrack;
 using CopperStartDiskImage = CopperMod.Amiga.Storage.Floppy.IAmigaDiskImage;
@@ -166,6 +167,7 @@ namespace CopperMod.Amiga
         private const uint ExecMakeLibraryContinuationAddress = 0x00F0_8400;
         private const uint RawDoFmtContinuationAddress = 0x00F0_8400;
         private const uint ExecWaitResumeGatewayAddress = 0x00F0_8500;
+        private const uint ClipboardHookContinuationAddress = 0x00F0_8930;
         private const int BusErrorVector = 2;
         private const int AddressErrorVector = 3;
         private const int IllegalInstructionVector = 4;
@@ -400,6 +402,7 @@ namespace CopperMod.Amiga
         private readonly CopperStartInputDeviceServices _inputDeviceServices;
         private readonly CopperStartGameportDeviceServices _gameportDeviceServices;
         private readonly CopperStartConsoleDeviceServices _consoleDeviceServices;
+        private readonly CopperStartClipboardDeviceServices _clipboardDeviceServices;
         private uint _activeExecBase;
         private KickstartRomExecTakeoverState _kickstartRomExecTakeoverState;
         private readonly CopperStartRuntimeInstructionBoundary _runtimeInstructionBoundary;
@@ -506,6 +509,9 @@ namespace CopperMod.Amiga
             _gameportDeviceServices = new CopperStartGameportDeviceServices(_machine.Bus, ReplyTrackdiskMessage);
             _consoleDeviceServices = new CopperStartConsoleDeviceServices(new CopperStartConsoleContext(
                 _machine.Bus, _execContext.MemoryOperations, _inputDeviceServices, ReplyTrackdiskMessage, DrawConsoleText, StartGuestExecSubroutine));
+            _clipboardDeviceServices = new CopperStartClipboardDeviceServices(
+                _machine.Bus, _execContext.MemoryOperations, ReplyTrackdiskMessage, _execPortServices.PutMessage,
+                StartGuestExecSubroutine, ClipboardHookContinuationAddress);
             _dosServices.AttachConsole(_consoleDeviceServices);
             _execFormatServices = new CopperStartExecFormatServices(_machine.Bus, RawDoFmtContinuationAddress, ReadNullTerminatedString);
             _execGatewayServices = new CopperStartExecGatewayServices(
@@ -572,6 +578,12 @@ namespace CopperMod.Amiga
         public AmigaFloppyDrive Drive2 => _machine.Bus.Disk.Drive2;
 
         public AmigaFloppyDrive Drive3 => _machine.Bus.Disk.Drive3;
+
+        /// <summary>Accepts primary clipboard text from the host UI without touching guest state on the UI thread.</summary>
+        public void QueueHostClipboardText(string text) => _clipboardDeviceServices.QueuePrimaryTextFromHost(text);
+
+        /// <summary>Retrieves one guest primary-clipboard update for publication by the host UI.</summary>
+        public bool TryTakeHostClipboardText(out string text) => _clipboardDeviceServices.TryTakePrimaryTextForHost(out text);
 
         public IReadOnlyList<AmigaBootDiagnostic> Diagnostics => _diagnostics;
 
@@ -784,6 +796,7 @@ namespace CopperMod.Amiga
             _inputDeviceServices.Reset();
             _gameportDeviceServices.Reset();
             _consoleDeviceServices.Reset();
+            _clipboardDeviceServices.Reset();
             _copperStartRuntime.Reset();
             _romExecLibraryServices = null;
             _execListServices = null;
@@ -1004,6 +1017,7 @@ namespace CopperMod.Amiga
             InstallCopperStartExecGateways();
             bus.RegisterHostGateway(RawDoFmtContinuationAddress, _execFormatServices.Continue);
             bus.RegisterHostGateway(ExecWaitResumeGatewayAddress, ContinueHostWait);
+            bus.RegisterHostGateway(ClipboardHookContinuationAddress, _clipboardDeviceServices.ContinueHook);
             _taskTrapRuntime.Install();
             for (var displacement = -6; displacement >= -1200; displacement -= 6)
             {
@@ -1087,6 +1101,7 @@ namespace CopperMod.Amiga
                     _keyboardDeviceServices.TryInstall(_activeExecBase);
                     _gameportDeviceServices.TryInstall(_activeExecBase);
                     _consoleDeviceServices.TryInstall(_activeExecBase);
+                    _clipboardDeviceServices.TryInstall(_activeExecBase);
                     ProcessHostDevices();
                 }
 
@@ -1115,6 +1130,7 @@ namespace CopperMod.Amiga
             });
             _machine.Bus.RegisterHostGateway(RawDoFmtContinuationAddress, _execFormatServices.Continue);
             _machine.Bus.RegisterHostGateway(ExecWaitResumeGatewayAddress, ContinueHostWait);
+            _machine.Bus.RegisterHostGateway(ClipboardHookContinuationAddress, _clipboardDeviceServices.ContinueHook);
             _activeExecBase = execBase;
             _ = GetRomExecLibraryServices();
             _memoryListInstalled = true;
@@ -1125,6 +1141,7 @@ namespace CopperMod.Amiga
             _keyboardDeviceServices.TryInstall(execBase);
             _gameportDeviceServices.TryInstall(execBase);
             _consoleDeviceServices.TryInstall(execBase);
+            _clipboardDeviceServices.TryInstall(execBase);
         }
 
         private void ProcessHostDevices()
@@ -1135,6 +1152,7 @@ namespace CopperMod.Amiga
             _inputDeviceServices.ProcessPending();
             _gameportDeviceServices.ProcessPending(_machine.Cpu.State);
             _consoleDeviceServices.ProcessPending(_machine.Cpu.State);
+            _clipboardDeviceServices.ProcessPending(_machine.Cpu.State);
         }
 
         private void DrawConsoleText(M68kCpuState state, uint rastPort, uint text, uint length)

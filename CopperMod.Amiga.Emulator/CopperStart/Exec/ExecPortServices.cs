@@ -37,6 +37,14 @@ internal sealed class ExecPortServices
         if (bit < 32) SignalTask(_context.Memory.ReadLong(port + SigTaskOffset), 1u << bit, state);
         return 0;
     }
+    /// <summary>Queues a host-created guest message on a guest port at an outer boundary.</summary>
+    public void PutMessage(uint port, uint message, M68kCpuState state)
+    {
+        if (!IsPort(port) || !IsMessage(message)) return;
+        _lists.Ensure(port + MsgListOffset); _lists.AddTail(port + MsgListOffset, message);
+        var bit = _context.Memory.ReadByte(port + SigBitOffset);
+        if (bit < 32) SignalTask(_context.Memory.ReadLong(port + SigTaskOffset), 1u << bit, state);
+    }
     public uint GetMsg(M68kCpuState state)
     {
         var message = _lists.RemoveEnd(state.A[0] + MsgListOffset, true); ClearSignalIfEmpty(state.A[0]); return message;
