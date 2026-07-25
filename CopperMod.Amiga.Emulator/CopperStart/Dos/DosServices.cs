@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Copper68k;
 using CopperMod.Amiga;
+using CopperMod.Amiga.CopperStart.Devices.Console;
 
 namespace CopperMod.Amiga.CopperStart.Dos;
 
@@ -9,6 +10,7 @@ namespace CopperMod.Amiga.CopperStart.Dos;
 internal sealed class DosServices
 {
     private readonly CopperStartDosContext _context;
+    private ConsoleDeviceServices? _console;
     private readonly Dictionary<uint, DosHandle> _handles = new();
     private uint _nextHandle = 0x0000_5000;
     private uint _lastError;
@@ -16,33 +18,43 @@ internal sealed class DosServices
     private readonly Dictionary<uint, AmigaDosDirectoryEntry> _locks = new();
     private int _openDiagnostics, _readDiagnostics, _writeDiagnostics, _genericDiagnostics, _readArgsDiagnostics;
     public DosServices(CopperStartDosContext context) => _context = context ?? throw new ArgumentNullException(nameof(context));
+    public void AttachConsole(ConsoleDeviceServices console) => _console = console ?? throw new ArgumentNullException(nameof(console));
 
     public void CurrentDir(M68kCpuState state) => state.D[0] = _context.CurrentDirectoryLock;
 
-    public void Reset() { _handles.Clear(); _locks.Clear(); _nextHandle = 0x0000_5000; _nextLock = 0x0000_7000; _lastError = 0; _openDiagnostics = _readDiagnostics = _writeDiagnostics = _genericDiagnostics = _readArgsDiagnostics = 0; }
+    public void Reset() { foreach (var pair in _handles) if (pair.Value.IsConsole) _console?.CloseCompatibilitySession(pair.Key); _handles.Clear(); _locks.Clear(); _nextHandle = 0x0000_5000; _nextLock = 0x0000_7000; _lastError = 0; _openDiagnostics = _readDiagnostics = _writeDiagnostics = _genericDiagnostics = _readArgsDiagnostics = 0; }
     public void Open(M68kCpuState state)
     {
         var path = _context.ReadPath(state.D[1]);
-        if (path.StartsWith("con:", StringComparison.OrdinalIgnoreCase)) { state.D[0] = CreateHandle(path, Array.Empty<byte>(), true); return; }
+        if (path.StartsWith("con:", StringComparison.OrdinalIgnoreCase))
+        {
+            var consoleHandle = CreateHandle(path, Array.Empty<byte>(), true);
+            if (_console is not null && !_console.OpenCompatibilitySession(consoleHandle)) { _handles.Remove(consoleHandle); state.D[0] = 0; _lastError = 103; return; }
+            state.D[0] = consoleHandle; _lastError = 0; return;
+        }
         var data = string.IsNullOrWhiteSpace(path) ? null : _context.ReadFile(path);
         if (data is null) { state.D[0] = 0; _lastError = 205; Diagnose(ref _openDiagnostics, "AMIGA_BOOT_DOS_OPEN_MISSING", $"Open failed for '{path}'.", 16); return; }
         var handle = CreateHandle(path, data, false); state.D[0] = handle; _lastError = 0; Diagnose(ref _openDiagnostics, "AMIGA_BOOT_DOS_OPEN", $"Opened '{path}' as 0x{handle:X8}.", 16);
     }
-    public void Close(M68kCpuState state) { _handles.Remove(state.D[1]); state.D[0] = 0; }
+    public void Close(M68kCpuState state) { if (_handles.Remove(state.D[1], out var handle) && handle.IsConsole) _console?.CloseCompatibilitySession(state.D[1]); state.D[0] = 0; }
     public void Input(M68kCpuState state) => Output(state);
     public void Output(M68kCpuState state)
     {
         foreach (var pair in _handles) if (pair.Value.IsConsole) { state.D[0] = pair.Key; return; }
-        state.D[0] = CreateHandle("con:", Array.Empty<byte>(), true);
+        var handle = CreateHandle("con:", Array.Empty<byte>(), true);
+        if (_console is not null && !_console.OpenCompatibilitySession(handle)) { _handles.Remove(handle); state.D[0] = 0; _lastError = 103; return; }
+        state.D[0] = handle;
     }
     public void Write(M68kCpuState state)
     {
         if (!_handles.TryGetValue(state.D[1], out var handle) || !handle.IsConsole) { state.D[0] = 0xFFFF_FFFF; return; }
-        Diagnose(ref _writeDiagnostics, "AMIGA_BOOT_DOS_WRITE", _context.ReadText(state.D[2], checked((int)Math.Min(state.D[3], 160))), 16); state.D[0] = state.D[3];
+        var written = _console?.WriteCompatibility(state, state.D[1], state.D[2], state.D[3]) ?? 0;
+        Diagnose(ref _writeDiagnostics, "AMIGA_BOOT_DOS_WRITE", _context.ReadText(state.D[2], checked((int)Math.Min(state.D[3], 160))), 16); state.D[0] = written;
     }
     public void Read(M68kCpuState state)
     {
         if (!_handles.TryGetValue(state.D[1], out var handle)) { state.D[0] = 0xFFFF_FFFF; return; }
+        if (handle.IsConsole) { state.D[0] = _console?.ReadCompatibility(state, state.D[1], state.D[2], state.D[3]) ?? 0; return; }
         var requested = (int)Math.Min(state.D[3], int.MaxValue); var count = Math.Min(requested, Math.Max(0, handle.Data.Length - handle.Position));
         if (count > 0 && _context.Memory.IsMapped(state.D[2], count)) { for (var i = 0; i < count; i++) _context.Memory.WriteByte(state.D[2] + (uint)i, handle.Data[handle.Position + i]); handle.Position += count; }
         Diagnose(ref _readDiagnostics, "AMIGA_BOOT_DOS_READ", $"Read {count}/0x{requested:X} bytes from '{handle.Path}' into 0x{state.D[2]:X8}.", 24); state.D[0] = (uint)count;

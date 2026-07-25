@@ -37,6 +37,7 @@ using CopperStartKeyboardDeviceServices = CopperMod.Amiga.CopperStart.Devices.Ke
 using CopperStartInputDeviceServices = CopperMod.Amiga.CopperStart.Devices.Input.InputDeviceServices;
 using CopperStartGameportDeviceServices = CopperMod.Amiga.CopperStart.Devices.Gameport.GameportDeviceServices;
 using CopperStartConsoleDeviceServices = CopperMod.Amiga.CopperStart.Devices.Console.ConsoleDeviceServices;
+using CopperStartConsoleContext = CopperMod.Amiga.CopperStart.Devices.Console.CopperStartConsoleContext;
 using CopperMod.Amiga.Input;
 using CopperStartEncodedTrack = CopperMod.Amiga.Storage.Floppy.AmigaEncodedTrack;
 using CopperStartRuntime = CopperMod.Amiga.CopperStart.CopperStartRuntime;
@@ -500,7 +501,9 @@ namespace CopperMod.Amiga
                 _execContext.GetCurrentTask);
             _inputDeviceServices = new CopperStartInputDeviceServices(_machine.Bus, ReplyTrackdiskMessage, StartGuestExecSubroutine, _keyboardDeviceServices.ConfigureKeyRepeat);
             _gameportDeviceServices = new CopperStartGameportDeviceServices(_machine.Bus, ReplyTrackdiskMessage);
-            _consoleDeviceServices = new CopperStartConsoleDeviceServices(_machine.Bus, _execContext.MemoryOperations, _inputDeviceServices, ReplyTrackdiskMessage, DrawConsoleText);
+            _consoleDeviceServices = new CopperStartConsoleDeviceServices(new CopperStartConsoleContext(
+                _machine.Bus, _execContext.MemoryOperations, _inputDeviceServices, ReplyTrackdiskMessage, DrawConsoleText, StartGuestExecSubroutine));
+            _dosServices.AttachConsole(_consoleDeviceServices);
             _execFormatServices = new CopperStartExecFormatServices(_machine.Bus, RawDoFmtContinuationAddress, ReadNullTerminatedString);
             _execGatewayServices = new CopperStartExecGatewayServices(
                 LogExecCall, _execMemoryServices, _execTaskServices, GetExecListServices(), _execSignalServices,
@@ -1115,6 +1118,7 @@ namespace CopperMod.Amiga
             _keyboardDeviceServices.ProcessPending(_machine.Cpu.State);
             _inputDeviceServices.ProcessPending();
             _gameportDeviceServices.ProcessPending(_machine.Cpu.State);
+            _consoleDeviceServices.ProcessPending(_machine.Cpu.State);
         }
 
         private void DrawConsoleText(M68kCpuState state, uint rastPort, uint text, uint length)

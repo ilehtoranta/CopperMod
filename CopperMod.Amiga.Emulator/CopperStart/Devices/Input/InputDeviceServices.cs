@@ -62,7 +62,7 @@ internal sealed class InputDeviceServices : IDisposable
         public uint Events { get; set; }
         public uint Handler { get; set; }
     }
-    internal readonly record struct ObservedInputEvent(uint Address, byte Class, byte SubClass, ushort Code, ushort Qualifier, uint Next);
+    internal readonly record struct ObservedInputEvent(uint Address, byte Class, byte SubClass, ushort Code, ushort Qualifier, short X, short Y, uint Seconds, uint Microseconds, uint Next);
 
     public InputDeviceServices(AmigaBus bus, Action<uint> replyMessage, Action<M68kCpuState, uint, uint> startGuestSubroutine, Action<uint, uint, bool> configureKeyRepeat)
     {
@@ -329,11 +329,13 @@ internal sealed class InputDeviceServices : IDisposable
     {
         for (var count = 0; eventAddress != 0 && count < 256; count++)
         {
-            if (!_bus.IsMappedMemoryRange(eventAddress, 16)) break;
+            if (!_bus.IsMappedMemoryRange(eventAddress, 22)) break;
             var next = _bus.ReadLong(eventAddress);
             var observed = new ObservedInputEvent(eventAddress,
                 _bus.ReadByte(eventAddress + 4), _bus.ReadByte(eventAddress + 5),
-                _bus.ReadWord(eventAddress + 6), _bus.ReadWord(eventAddress + 8), next);
+                _bus.ReadWord(eventAddress + 6), _bus.ReadWord(eventAddress + 8),
+                unchecked((short)_bus.ReadWord(eventAddress + 10)), unchecked((short)_bus.ReadWord(eventAddress + 12)),
+                _bus.ReadLong(eventAddress + 14), _bus.ReadLong(eventAddress + 18), next);
             _observedEvents.Add(observed);
             InputEventObserved?.Invoke(observed);
             if (next == eventAddress) break;
