@@ -517,3 +517,5 @@ benchmark-results
 *.nettrace
 *.tsv
 *.etlx
+*.wav
+.claude

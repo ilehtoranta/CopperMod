@@ -36,6 +36,7 @@ using CopperStartTimerDeviceServices = CopperMod.Amiga.CopperStart.Devices.Timer
 using CopperStartKeyboardDeviceServices = CopperMod.Amiga.CopperStart.Devices.Keyboard.KeyboardDeviceServices;
 using CopperStartInputDeviceServices = CopperMod.Amiga.CopperStart.Devices.Input.InputDeviceServices;
 using CopperStartGameportDeviceServices = CopperMod.Amiga.CopperStart.Devices.Gameport.GameportDeviceServices;
+using CopperStartConsoleDeviceServices = CopperMod.Amiga.CopperStart.Devices.Console.ConsoleDeviceServices;
 using CopperMod.Amiga.Input;
 using CopperStartEncodedTrack = CopperMod.Amiga.Storage.Floppy.AmigaEncodedTrack;
 using CopperStartRuntime = CopperMod.Amiga.CopperStart.CopperStartRuntime;
@@ -396,6 +397,7 @@ namespace CopperMod.Amiga
         private readonly CopperStartKeyboardDeviceServices _keyboardDeviceServices;
         private readonly CopperStartInputDeviceServices _inputDeviceServices;
         private readonly CopperStartGameportDeviceServices _gameportDeviceServices;
+        private readonly CopperStartConsoleDeviceServices _consoleDeviceServices;
         private uint _activeExecBase;
         private KickstartRomExecTakeoverState _kickstartRomExecTakeoverState;
         private readonly CopperStartRuntimeInstructionBoundary _runtimeInstructionBoundary;
@@ -498,6 +500,7 @@ namespace CopperMod.Amiga
                 _execContext.GetCurrentTask);
             _inputDeviceServices = new CopperStartInputDeviceServices(_machine.Bus, ReplyTrackdiskMessage, StartGuestExecSubroutine, _keyboardDeviceServices.ConfigureKeyRepeat);
             _gameportDeviceServices = new CopperStartGameportDeviceServices(_machine.Bus, ReplyTrackdiskMessage);
+            _consoleDeviceServices = new CopperStartConsoleDeviceServices(_machine.Bus, _execContext.MemoryOperations, _inputDeviceServices, ReplyTrackdiskMessage, DrawConsoleText);
             _execFormatServices = new CopperStartExecFormatServices(_machine.Bus, RawDoFmtContinuationAddress, ReadNullTerminatedString);
             _execGatewayServices = new CopperStartExecGatewayServices(
                 LogExecCall, _execMemoryServices, _execTaskServices, GetExecListServices(), _execSignalServices,
@@ -774,6 +777,7 @@ namespace CopperMod.Amiga
             _keyboardDeviceServices.Reset();
             _inputDeviceServices.Reset();
             _gameportDeviceServices.Reset();
+            _consoleDeviceServices.Reset();
             _copperStartRuntime.Reset();
             _romExecLibraryServices = null;
             _execListServices = null;
@@ -1063,6 +1067,7 @@ namespace CopperMod.Amiga
                     _inputDeviceServices.TryInstall(_activeExecBase);
                     _keyboardDeviceServices.TryInstall(_activeExecBase);
                     _gameportDeviceServices.TryInstall(_activeExecBase);
+                    _consoleDeviceServices.TryInstall(_activeExecBase);
                     ProcessHostDevices();
                 }
 
@@ -1100,6 +1105,7 @@ namespace CopperMod.Amiga
             _inputDeviceServices.TryInstall(execBase);
             _keyboardDeviceServices.TryInstall(execBase);
             _gameportDeviceServices.TryInstall(execBase);
+            _consoleDeviceServices.TryInstall(execBase);
         }
 
         private void ProcessHostDevices()
@@ -1111,8 +1117,16 @@ namespace CopperMod.Amiga
             _gameportDeviceServices.ProcessPending(_machine.Cpu.State);
         }
 
+        private void DrawConsoleText(M68kCpuState state, uint rastPort, uint text, uint length)
+        {
+            var oldA0 = state.A[0]; var oldA1 = state.A[1]; var oldD0 = state.D[0];
+            state.A[0] = text; state.A[1] = rastPort; state.D[0] = length;
+            _graphicsServices.Text(state);
+            state.A[0] = oldA0; state.A[1] = oldA1; state.D[0] = oldD0;
+        }
+
         private long GetNextHostDeviceBoundary(long currentCycle, long targetCycle)
-            => _keyboardDeviceServices.GetNextDeadline(currentCycle, _timerDeviceServices.GetNextDeadline(currentCycle, targetCycle));
+            => _gameportDeviceServices.GetNextDeadline(currentCycle, _keyboardDeviceServices.GetNextDeadline(currentCycle, _timerDeviceServices.GetNextDeadline(currentCycle, targetCycle)));
 
         private bool IsValidKickstartRomExecBase(uint execBase)
         {

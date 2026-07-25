@@ -76,6 +76,54 @@ public sealed class GameportDeviceServicesTests
         Assert.Equal(new[] { Request }, replies);
     }
 
+    [Fact]
+    public void RomGameportReportsAbsoluteChangesAndRelativeJoystickRepeats()
+    {
+        var bus = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithLiveAgnusDma(false)).Bus;
+        InitializeDevice(bus);
+        var replies = new List<uint>();
+        using var service = new GameportDeviceServices(bus, replies.Add);
+        Assert.True(service.TryInstall(ExecBase));
+
+        var state = new M68kCpuState { Cycles = 10 };
+        state.A[1] = Request; state.D[0] = 0;
+        Assert.True(Invoke(bus, Device - 6, state));
+        SetControllerAndJoystickTrigger(bus, state, 3); // GPCT_ABSJOYSTICK
+        replies.Clear();
+        BeginRead(bus, state);
+        bus.SetGamePortJoystick(0, up: true, down: false, left: false, right: true);
+        state.Cycles = 20; service.ProcessPending(state);
+        Assert.Equal(new[] { Request }, replies);
+        Assert.Equal((ushort)1, bus.ReadWord(Data + 0x0A));
+        Assert.Equal(unchecked((ushort)-1), bus.ReadWord(Data + 0x0C));
+
+        replies.Clear(); BeginRead(bus, state);
+        state.Cycles = 21; service.ProcessPending(state);
+        Assert.Empty(replies); // Absolute joysticks do not autorepeat.
+
+        SetControllerAndJoystickTrigger(bus, state, 2); // GPCT_RELJOYSTICK
+        replies.Clear(); BeginRead(bus, state);
+        state.Cycles = service.GetNextDeadline(state.Cycles, long.MaxValue);
+        service.ProcessPending(state);
+        Assert.Equal(new[] { Request }, replies);
+        Assert.Equal((ushort)1, bus.ReadWord(Data + 0x0A));
+        Assert.Equal(unchecked((ushort)-1), bus.ReadWord(Data + 0x0C));
+    }
+
+    private static void SetControllerAndJoystickTrigger(AmigaBus bus, M68kCpuState state, byte type)
+    {
+        bus.ClearMemory(Data, 8); bus.WriteByte(Data, type, state.Cycles); bus.WriteWord(Request + 0x1C, 11); bus.WriteLong(Request + 0x28, Data); bus.WriteLong(Request + 0x24, 1);
+        Assert.True(Invoke(bus, Device - 30, state));
+        bus.ClearMemory(Data, 8); bus.WriteByte(Data + 5, 1, state.Cycles); bus.WriteByte(Data + 7, 1, state.Cycles); bus.WriteWord(Request + 0x1C, 13); bus.WriteLong(Request + 0x28, Data); bus.WriteLong(Request + 0x24, 8);
+        Assert.True(Invoke(bus, Device - 30, state));
+    }
+
+    private static void BeginRead(AmigaBus bus, M68kCpuState state)
+    {
+        bus.WriteWord(Request + 0x1C, 9); bus.WriteLong(Request + 0x28, Data); bus.WriteLong(Request + 0x24, 0x18); bus.WriteByte(Request + 0x1E, 0, state.Cycles);
+        Assert.True(Invoke(bus, Device - 30, state));
+    }
+
     private static void InitializeDevice(AmigaBus bus)
     {
         bus.WriteLong(ExecBase + 0x15E, Device); bus.WriteLong(ExecBase + 0x162, 0); bus.WriteLong(ExecBase + 0x166, Device);

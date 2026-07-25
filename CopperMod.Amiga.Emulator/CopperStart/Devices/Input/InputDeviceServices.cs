@@ -77,6 +77,8 @@ internal sealed class InputDeviceServices : IDisposable
     public IReadOnlyCollection<uint> KnownNativeHandlers => _nativeHandlers;
     public IReadOnlyList<ObservedInputEvent> ObservedWriteEvents => _observedEvents;
     internal int GatewayRegistrationCount => _gateways.Count;
+    /// <summary>Raised for raw input before the guest handler chain consumes it.</summary>
+    internal event Action<ObservedInputEvent>? InputEventObserved;
 
     /// <summary>Observes completion of ROM-owned asynchronous handler commands.</summary>
     public void ProcessPending()
@@ -329,9 +331,11 @@ internal sealed class InputDeviceServices : IDisposable
         {
             if (!_bus.IsMappedMemoryRange(eventAddress, 16)) break;
             var next = _bus.ReadLong(eventAddress);
-            _observedEvents.Add(new ObservedInputEvent(eventAddress,
+            var observed = new ObservedInputEvent(eventAddress,
                 _bus.ReadByte(eventAddress + 4), _bus.ReadByte(eventAddress + 5),
-                _bus.ReadWord(eventAddress + 6), _bus.ReadWord(eventAddress + 8), next));
+                _bus.ReadWord(eventAddress + 6), _bus.ReadWord(eventAddress + 8), next);
+            _observedEvents.Add(observed);
+            InputEventObserved?.Invoke(observed);
             if (next == eventAddress) break;
             eventAddress = next;
         }
