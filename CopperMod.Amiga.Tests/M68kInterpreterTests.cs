@@ -254,6 +254,38 @@ public sealed class M68kInterpreterTests
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1008u, M68kOperandSize.Word, false, 26L, 28L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x100Au, M68kOperandSize.Word, false, 28L, 30L));
 	}
+
+	[Fact]
+	public void VposPollingLoopKeepsTakenShortBneAtSeventeenColorClocks()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000,
+			0x34, 0x13,             // MOVE.W (A3),D2
+			0xC4, 0x7C, 0xFF, 0x00, // ANDI.W #$FF00,D2
+			0xB4, 0x7C, 0x20, 0x00, // CMPI.W #$2000,D2
+			0x66, 0xF4);            // BNE.S $1000
+		Write(bus.Memory, 0x2000, 0x1F, 0x00);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.Cycles = 20;
+		cpu.State.A[3] = 0x2000;
+
+		var startCycle = cpu.State.Cycles;
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(34, cpu.State.Cycles - startCycle);
+		Assert.Equal(0x1000u, cpu.State.ProgramCounter);
+		Assert.Contains(bus.CpuBusPhases, phase =>
+			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.Address == 0x1000);
+		Assert.Contains(bus.CpuBusPhases, phase =>
+			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.Address == 0x1002);
+	}
+
 	[Fact]
 	public void NotTakenBneMaterializesPendingFallthrough()
 	{

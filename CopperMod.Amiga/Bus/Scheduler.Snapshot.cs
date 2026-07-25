@@ -34,19 +34,12 @@ namespace CopperMod.Amiga.Bus
         long CopperQuiescentCopperScheduleAffectingCustomMoves,
         long CopperQuiescentCopperBenignCustomMoves,
         long CopperQuiescentSchedulerDrains,
-        long CopperQuiescentShadowPredictions,
-        long CopperQuiescentShadowMatches,
-        long CopperQuiescentShadowUnsupported,
-        long CopperQuiescentShadowMismatches,
-        string CopperQuiescentFirstShadowMismatch,
         long CopperQuiescentFastPathAttempts,
         long CopperQuiescentFastPathUsed,
         long CopperQuiescentFastPathRejectedUnsupported,
         long CopperQuiescentFastPathRejectedInvalidated,
         long CopperQuiescentFastPathRejectedDynamicDma,
         long CopperQuiescentFastPathSkippedDrains,
-        long CopperQuiescentFastPathVerificationMismatches,
-        string CopperQuiescentFastPathFirstMismatch,
         long DeferredCpuBusBatchAttempts,
         long DeferredCpuBusBatchUsed,
         long DeferredCpuBusBatchInstructions,
@@ -63,8 +56,6 @@ namespace CopperMod.Amiga.Bus
         long DeferredCpuBusBatchExitPcLeftFastWindow,
         long DeferredCpuBusBatchExitException,
         long DeferredCpuBusBatchExitUnsupported,
-        long DeferredCpuBusBatchVerificationMismatches,
-        string DeferredCpuBusBatchFirstMismatch,
         long DeferredCpuBusBatchWakeTargetCycle,
         long DeferredCpuBusBatchWakePendingInterrupt,
         long DeferredCpuBusBatchWakeVerticalBlank,
@@ -96,8 +87,6 @@ namespace CopperMod.Amiga.Bus
         long DeferredCpuInternalNoBusWindowWakePaula,
         long DeferredCpuInternalNoBusWindowWakeCopper,
         long DeferredCpuInternalNoBusWindowWakeBlitter,
-        long DeferredCpuInternalNoBusWindowVerificationMismatches,
-        string DeferredCpuInternalNoBusWindowFirstMismatch,
         long DeferredCpuWaitWindowAttempts,
         long DeferredCpuWaitWindowEligible,
         long DeferredCpuWaitWindowTotalCycles,
@@ -124,47 +113,6 @@ namespace CopperMod.Amiga.Bus
         long DeferredCpuWaitWindowFastPathRejectedUnstable,
         long DeferredCpuWaitWindowFastPathAdvancedCycles,
         long DeferredCpuWaitWindowFastPathMaxAdvancedCycles,
-        long DeferredCpuWaitSlotShadowAttempts,
-        long DeferredCpuWaitSlotShadowMatches,
-        long DeferredCpuWaitSlotShadowMismatches,
-        long DeferredCpuWaitSlotShadowUnsupported,
-        long DeferredCpuWaitSlotShadowGrantMismatches,
-        long DeferredCpuWaitSlotShadowCompletionMismatches,
-        long DeferredCpuWaitSlotShadowSlotOwnerMismatches,
-        long DeferredCpuWaitSlotShadowBlitterStateMismatches,
-        long DeferredCpuWaitSlotShadowPaulaMismatches,
-        long DeferredCpuWaitSlotShadowDiskMismatches,
-        long DeferredCpuWaitSlotShadowDisplayMismatches,
-        long DeferredCpuWaitSlotShadowCopperMismatches,
-        long DeferredCpuWaitSlotShadowLiveAttempts,
-        long DeferredCpuWaitSlotShadowLiveSupported,
-        long DeferredCpuWaitSlotShadowLiveUnsupported,
-        long DeferredCpuWaitSlotShadowLiveUnsupportedPendingWrite,
-        long DeferredCpuWaitSlotShadowLiveUnsupportedBitplaneWindow,
-        long DeferredCpuWaitSlotShadowLiveUnsupportedCopperWaitWindow,
-        long DeferredCpuWaitSlotShadowLiveUnsupportedRasterlinePlan,
-        long DeferredCpuWaitSlotShadowLiveUnsupportedCpuPredict,
-        long DeferredCpuWaitSlotShadowLiveUnsupportedUnstable,
-        long DeferredCpuWaitSlotShadowLiveUnsupportedScratchWrite,
-        long DeferredCpuWaitSlotShadowLiveUnsupportedLongWrite,
-        long DeferredCpuWaitSlotShadowLiveUnsupportedOther,
-        long DeferredCpuWaitSlotShadowLiveLongAccesses,
-        long DeferredCpuWaitSlotShadowLiveBitplaneFetches,
-        long DeferredCpuWaitSlotShadowLiveSpriteFetches,
-        long DeferredCpuWaitSlotShadowLiveCopperSteps,
-        long DeferredCpuWaitSlotShadowBlitterScratchAttempts,
-        long DeferredCpuWaitSlotShadowBlitterScratchSupported,
-        long DeferredCpuWaitSlotShadowBlitterScratchUnsupported,
-        long DeferredCpuWaitSlotShadowBlitterScratchMatches,
-        long DeferredCpuWaitSlotShadowBlitterScratchMismatches,
-        long DeferredCpuWaitSlotShadowBlitterScratchPartial,
-        long DeferredCpuWaitSlotShadowBlitterScratchMicroOps,
-        string DeferredCpuWaitSlotShadowFirstMismatch,
-        long DeferredCpuWaitFixedImageAttempts,
-        long DeferredCpuWaitFixedImageSupported,
-        long DeferredCpuWaitFixedImageMatches,
-        long DeferredCpuWaitFixedImageMismatches,
-        long DeferredCpuWaitFixedImageUnsupported,
         long DeferredCpuWaitFixedImageBuilds,
         long DeferredCpuWaitFixedImageHits,
         long DeferredCpuWaitFixedImageMisses,
@@ -175,7 +123,6 @@ namespace CopperMod.Amiga.Bus
         long DeferredCpuWaitFixedImageUnsupportedPendingWrite,
         long DeferredCpuWaitFixedImageUnsupportedRasterlinePlan,
         long DeferredCpuWaitFixedImageUnsupportedSpriteState,
-        string DeferredCpuWaitFixedImageFirstMismatch,
         long DeferredCpuWaitFixedImageProductionAttempts,
         long DeferredCpuWaitFixedImageProductionUsed,
         long DeferredCpuWaitFixedImageProductionPreGrantDrainsSkipped,
@@ -189,10 +136,7 @@ namespace CopperMod.Amiga.Bus
         long DeferredCpuWaitFixedImageProductionFallbackRasterlinePlan,
         long DeferredCpuWaitFixedImageProductionFallbackSpriteState,
         long DeferredCpuWaitFixedImageProductionFallbackUnstable,
-        long DeferredCpuWaitFixedImageProductionVerificationMatches,
-        long DeferredCpuWaitFixedImageProductionVerificationMismatches,
         bool DeferredCpuWaitFixedImageProductionDisabled,
-        string DeferredCpuWaitFixedImageProductionFirstMismatch,
         long DeferredCpuWaitBlitterOverlapAttempts,
         long DeferredCpuWaitBlitterOverlapSupported,
         long DeferredCpuWaitBlitterOverlapUnsupported,
@@ -208,14 +152,9 @@ namespace CopperMod.Amiga.Bus
         long HostDiskTicks,
         long HostAgnusTicks,
         long HostBlitterTicks,
+        long HostCausalExecutorTicks,
         long AgnusExecutorAgendaReads,
         long AgnusExecutorAgendaUpdates,
-        long AgnusExecutorShadowMatches,
-        long AgnusExecutorShadowMismatches,
-        string AgnusExecutorFirstShadowMismatch,
-        long AgnusFixedPlanShadowMatches,
-        long AgnusFixedPlanShadowMismatches,
-        string AgnusFixedPlanFirstShadowMismatch,
         long CpuTimingSequenceAttempts,
         long CpuTimingSequenceRuns,
         long CpuTimingSequenceWords,
@@ -224,15 +163,32 @@ namespace CopperMod.Amiga.Bus
         long CpuInstructionFetchGrantedWords,
         long CpuDataGrantedWords,
         long CpuVisibilityQueries,
+        long CpuVisibilityStoppedQueries,
         long CpuVisibilityRootReads,
         long CpuVisibilityLeafUpdates,
         long CpuVisibilitySourceRefreshes,
-        long CpuVisibilityShadowMatches,
-        long CpuVisibilityShadowMismatches,
-        long CpuVisibilityPotentialCycles,
-        long CpuVisibilityPotentialInstructions,
-        long CpuVisibilityShortHorizonRejections,
-        long CpuVisibilityLegacyQueryTicks,
-        long CpuVisibilityExecutorQueryTicks,
-        string CpuVisibilityFirstShadowMismatch);
+        CpuVisibilityExpiredRootSnapshot CpuVisibilityExpiredRoot,
+        CpuVisibilityExpiredCopperStateSnapshot CpuVisibilityExpiredCopperState)
+    {
+        public string CpuVisibilityExpiredRootSummary =>
+            $"irq:{CpuVisibilityExpiredRoot.Interrupt}," +
+            $"vbl:{CpuVisibilityExpiredRoot.VerticalBlank}," +
+            $"hsync:{CpuVisibilityExpiredRoot.HorizontalSyncTod}," +
+            $"cia:{CpuVisibilityExpiredRoot.CiaTimer}," +
+            $"disk:{CpuVisibilityExpiredRoot.Disk}," +
+            $"paula:{CpuVisibilityExpiredRoot.Paula}," +
+            $"copper:{CpuVisibilityExpiredRoot.Copper}," +
+            $"control:{CpuVisibilityExpiredRoot.Control}," +
+            $"blitter:{CpuVisibilityExpiredRoot.Blitter}";
+
+        public string CpuVisibilityExpiredCopperStateSummary =>
+            $"move:{CpuVisibilityExpiredCopperState.Move}," +
+            $"skip:{CpuVisibilityExpiredCopperState.Skip}," +
+            $"start:{CpuVisibilityExpiredCopperState.Start}," +
+            $"restart:{CpuVisibilityExpiredCopperState.Restart}," +
+            $"request:{CpuVisibilityExpiredCopperState.Request}," +
+            $"wait:{CpuVisibilityExpiredCopperState.Wait}," +
+            $"fetch:{CpuVisibilityExpiredCopperState.Fetch}," +
+            $"waitImmediate:{CpuVisibilityExpiredCopperState.WaitImmediateAfterRefresh}";
+    }
 }

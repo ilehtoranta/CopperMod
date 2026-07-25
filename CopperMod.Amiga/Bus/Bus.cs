@@ -285,8 +285,6 @@ namespace CopperMod.Amiga.Bus
         private readonly bool _usePaulaDmaFixedSlotFastPath;
         private readonly bool _deferredCpuBusBatchEnabled;
         private readonly bool _deferredCpuInternalNoBusWindowEnabled;
-        private readonly bool _deferredCpuBusBatchVerifyEnabled;
-        private readonly bool _deferredDmaReadsVerifyEnabled;
         private readonly bool _forceCpuWaitSlotReference;
         private readonly bool _liveAgnusDmaDefault;
         private readonly bool _hardwareSpecializationEnabled;
@@ -307,6 +305,10 @@ namespace CopperMod.Amiga.Bus
         private long _nextHorizontalSyncIndex;
         private long _nextHorizontalSyncCycle;
         private long _lastRasterAdvanceCycle;
+        private bool _externalResyncEnabled;
+        private int _externalResyncLine;
+        private bool _externalResyncLongFrame;
+        private long _externalResyncLineStartCycle;
         private bool _deferredCpuInstructionTimingActive;
         private int _deferredCpuDataAccessCount;
         private readonly long[] _deferredCpuDataRequestedCycles = new long[MaxDeferredCpuDataAccesses];
@@ -348,15 +350,6 @@ namespace CopperMod.Amiga.Bus
         private M68kDeferredCpuBusCheckpoint _previousDeferredCpuBusCheckpoint;
         private bool _deferredCpuTrimmedPendingTransitionActive;
         private long _deferredCpuTrimmedPendingOriginalCycle;
-        private long _deferredCpuRetirementPublicationShadowEntries;
-        private long _deferredCpuRetirementPublicationShadowLastNominalCycle = -1;
-        private long _deferredCpuRetirementPublicationShadowLastFloor = -1;
-        private long _deferredCpuRetirementPublicationShadowLastInheritedDelay;
-        private long _deferredCpuRetirementPublicationShadowLastLegacyReadyCycle = -1;
-        private long _deferredCpuRetirementPublicationShadowLastTranslatedCycle = -1;
-        private M68kInstructionFetchPublicationPhase
-            _deferredCpuRetirementPublicationShadowLastPhase;
-        private long _deferredCpuRetirementPublicationShadowLastGroup;
         private long _deferredCpuInstructionPublicationPhaseSlipGroup;
         private ulong _deferredCpuInstructionPublicationPhaseSlipToken;
         private long _deferredCpuInstructionPublicationPhaseSlipVirtualReadyCycle;
@@ -364,27 +357,9 @@ namespace CopperMod.Amiga.Bus
         private M68kInstructionFetchPublicationContext
             _deferredCpuInstructionPublicationPhaseSlipContext;
         private M68kInstructionFetchPublicationContext
-            _deferredCpuRetirementPublicationShadowLastContext;
-        private bool _deferredCpuRetirementPublicationShadowFirstCaptured;
-        private long _deferredCpuRetirementPublicationShadowFirstNominalCycle = -1;
-        private long _deferredCpuRetirementPublicationShadowFirstFloor = -1;
-        private long _deferredCpuRetirementPublicationShadowFirstInheritedDelay;
-        private long _deferredCpuRetirementPublicationShadowFirstTranslatedCycle = -1;
-        private long _deferredCpuRetirementPublicationShadowFirstSlipGroup;
-        private M68kInstructionFetchPublicationContext
-            _deferredCpuRetirementPublicationShadowFirstContext;
-        private M68kInstructionFetchPublicationContext
             _deferredCpuInstructionFetchLastCapturedPublicationContext;
-        private ulong _deferredCpuIrcPairShadowLastToken;
-        private long _deferredCpuIrcPairShadowLastReadyCycle = -1;
-        private long _deferredCpuIrcPairShadowEntries;
-        private long _deferredCpuIrcPairShadowFirstPredecessorReadyCycle = -1;
-        private long _deferredCpuIrcPairShadowFirstPredictedReadyCycle = -1;
-        private long _deferredCpuIrcPairShadowPredecessorReadyCycle = -1;
-        private long _deferredCpuIrcPairShadowPredictedReadyCycle = -1;
-        private long _deferredCpuRetirementPublicationShadowTrimEntries;
-        private long _deferredCpuRetirementPublicationShadowReplayEntries;
-        private bool _deferredCpuRetirementPublicationShadowLastWasReplay;
+        private ulong _deferredCpuIrcPairLastToken;
+        private long _deferredCpuIrcPairLastReadyCycle = -1;
         private ulong _deferredCpuDataLongShapeBits;
         private ulong _deferredCpuDataCiaShapeBits;
         private ulong _deferredCpuDataInstructionFetchShapeBits;
@@ -417,8 +392,6 @@ namespace CopperMod.Amiga.Bus
         private long _deferredCpuBusBatchExitPcLeftFastWindow;
         private long _deferredCpuBusBatchExitException;
         private long _deferredCpuBusBatchExitUnsupported;
-        private long _deferredCpuBusBatchVerificationMismatches;
-        private string _deferredCpuBusBatchFirstMismatch = string.Empty;
         private long _deferredCpuBusBatchWakeTargetCycle;
         private long _deferredCpuBusBatchWakePendingInterrupt;
         private long _deferredCpuBusBatchWakeVerticalBlank;
@@ -436,7 +409,6 @@ namespace CopperMod.Amiga.Bus
         private long _deferredCpuBusBatchDiskWakePassiveByteReady;
         private long _deferredCpuBusBatchDiskWakeUnknown;
         private long _deferredCpuBatchExitChipAccessCycle = -1;
-        private bool _deferredCpuWaitFixedImageProductionDisabled;
         private long _deferredCpuInternalNoBusWindowAttempts;
         private long _deferredCpuInternalNoBusWindowUsed;
         private long _deferredCpuInternalNoBusWindowTotalCycles;
@@ -452,8 +424,6 @@ namespace CopperMod.Amiga.Bus
         private long _deferredCpuInternalNoBusWindowWakePaula;
         private long _deferredCpuInternalNoBusWindowWakeCopper;
         private long _deferredCpuInternalNoBusWindowWakeBlitter;
-        private long _deferredCpuInternalNoBusWindowVerificationMismatches;
-        private string _deferredCpuInternalNoBusWindowFirstMismatch = string.Empty;
         private enum CpuBusBankKind : byte
         {
             Unmapped,
@@ -514,14 +484,11 @@ namespace CopperMod.Amiga.Bus
             Func<DateTimeOffset>? realTimeClockNowProvider = null,
             IEnumerable<AmigaHardfileConfiguration>? hardfiles = null,
             bool enableCopperQuiescentFastPath = false,
-            bool verifyCopperQuiescentFastPath = false,
             bool enableDeferredCpuBusBatch = false,
-            bool verifyDeferredCpuBusBatch = false,
             bool enableCopperQuiescentDiagnostics = false,
             bool forceCpuWaitSlotReference = false,
             long rtgVramSize = 0,
             AmigaChipset? chipset = null,
-            bool verifyDeferredDmaReads = false,
             bool enableDeferredCpuInternalNoBusWindow = false,
             int cpuEventJournalCapacity = CpuEventJournal.DefaultCapacity,
             bool enableDeferredCpuChipWriteJournal = false,
@@ -619,21 +586,14 @@ namespace CopperMod.Amiga.Bus
                 !captureBusAccesses;
             _usePaulaDmaFixedSlotFastPath = ResolvePaulaDmaFixedSlotFastPath();
             CopperQuiescentFastPathEnabled = enableCopperQuiescentFastPath;
-            CopperQuiescentFastPathVerifyEnabled = verifyCopperQuiescentFastPath;
             CopperQuiescentDiagnosticsEnabled = enableCopperQuiescentDiagnostics ||
-                enableCopperQuiescentFastPath ||
-                verifyCopperQuiescentFastPath;
-            CopperQuiescentShadowPredictionEnabled = enableCopperQuiescentDiagnostics ||
-                verifyCopperQuiescentFastPath;
+                enableCopperQuiescentFastPath;
             _deferredCpuBusBatchEnabled = enableDeferredCpuBusBatch;
             _deferredCpuChipWriteJournalEnabled = enableDeferredCpuChipWriteJournal;
             _deferredCpuChipReadSegmentsEnabled = enableDeferredCpuChipReadSegments;
             _deferredCpuCustomPointerWritesEnabled = enableDeferredCpuCustomPointerWrites;
             _deferredCpuCustomCompositionWritesEnabled = enableDeferredCpuCustomCompositionWrites;
             _deferredCpuInternalNoBusWindowEnabled = enableDeferredCpuInternalNoBusWindow;
-            _deferredCpuBusBatchVerifyEnabled = verifyDeferredCpuBusBatch;
-            _deferredDmaReadsVerifyEnabled = verifyDeferredDmaReads && enableHardwareSpecialization;
-            _deferredCpuWaitDiagnosticsEnabled = verifyDeferredCpuBusBatch;
             _forceCpuWaitSlotReference = forceCpuWaitSlotReference;
             Paula = new Paula(this);
             Disk = new AmigaDiskController(this, floppyDriveCount, enableHardwareSpecialization);
@@ -658,7 +618,6 @@ namespace CopperMod.Amiga.Bus
                 _hrmSlotEngine,
                 cpuEventJournalCapacity);
             Display = new OcsDisplay(this, _agnusRegisters, selectedChipset, enableLiveDisplayDma);
-            Display.SetCpuWaitFixedSlotImageDiagnosticsEnabled(verifyDeferredCpuBusBatch);
             _diagnosticChipSlots = _hrmSlotEngine;
             Agnus = new AgnusBeamDmaScheduler(this, _diagnosticChipSlots);
             Blitter = new AmigaBlitter(this, enableHardwareSpecialization);
@@ -676,6 +635,7 @@ namespace CopperMod.Amiga.Bus
             _beamClock.Reset();
             _nextVerticalBlankCycle = _beamClock.GetNextFrameStartCycle(0);
             _lastRasterAdvanceCycle = 0;
+            ResetExternalResyncState();
             ResetHorizontalSyncCounter();
             ResetCiaAForHardwareReset();
             CiaB.Reset();
@@ -954,11 +914,7 @@ namespace CopperMod.Amiga.Bus
 
         internal bool CopperQuiescentFastPathEnabled { get; }
 
-        internal bool CopperQuiescentFastPathVerifyEnabled { get; }
-
         internal bool CopperQuiescentDiagnosticsEnabled { get; }
-
-        internal bool CopperQuiescentShadowPredictionEnabled { get; }
 
         internal long DeferredCpuBusBatchAttempts => _deferredCpuBusBatchAttempts;
 
@@ -974,14 +930,6 @@ namespace CopperMod.Amiga.Bus
             _lastDeferredCpuBusCheckpoint;
         internal M68kDeferredCpuBusCheckpoint PreviousDeferredCpuBusCheckpoint =>
             _previousDeferredCpuBusCheckpoint;
-        internal long DeferredCpuRetirementPublicationShadowEntries =>
-            _deferredCpuRetirementPublicationShadowEntries;
-        internal long DeferredCpuRetirementPublicationShadowLastNominalCycle =>
-            _deferredCpuRetirementPublicationShadowLastNominalCycle;
-        internal long DeferredCpuRetirementPublicationShadowLastFloor =>
-            _deferredCpuRetirementPublicationShadowLastFloor;
-        internal long DeferredCpuRetirementPublicationShadowLastInheritedDelay =>
-            _deferredCpuRetirementPublicationShadowLastInheritedDelay;
         internal long DeferredCpuInstructionPublicationPhaseSlip =>
             _deferredCpuInstructionPublicationPhaseSlip;
 
@@ -1029,15 +977,6 @@ namespace CopperMod.Amiga.Bus
 
         internal int DeferredCpuProjectedLastUnsupported =>
             _deferredCpuProjectedLastUnsupported;
-        internal long DeferredCpuRetirementPublicationShadowLastLegacyReadyCycle =>
-            _deferredCpuRetirementPublicationShadowLastLegacyReadyCycle;
-        internal long DeferredCpuRetirementPublicationShadowLastTranslatedCycle =>
-            _deferredCpuRetirementPublicationShadowLastTranslatedCycle;
-        internal M68kInstructionFetchPublicationPhase
-            DeferredCpuRetirementPublicationShadowLastPhase =>
-                _deferredCpuRetirementPublicationShadowLastPhase;
-        internal long DeferredCpuRetirementPublicationShadowLastGroup =>
-            _deferredCpuRetirementPublicationShadowLastGroup;
         internal long DeferredCpuInstructionPublicationPhaseSlipGroup =>
             _deferredCpuInstructionPublicationPhaseSlipGroup;
 
@@ -1054,40 +993,8 @@ namespace CopperMod.Amiga.Bus
             DeferredCpuInstructionPublicationPhaseSlipContext =>
                 _deferredCpuInstructionPublicationPhaseSlipContext;
         internal M68kInstructionFetchPublicationContext
-            DeferredCpuRetirementPublicationShadowLastContext =>
-                _deferredCpuRetirementPublicationShadowLastContext;
-        internal long DeferredCpuIrcPairShadowEntries =>
-            _deferredCpuIrcPairShadowEntries;
-        internal long DeferredCpuIrcPairShadowFirstPredecessorReadyCycle =>
-            _deferredCpuIrcPairShadowFirstPredecessorReadyCycle;
-        internal long DeferredCpuIrcPairShadowFirstPredictedReadyCycle =>
-            _deferredCpuIrcPairShadowFirstPredictedReadyCycle;
-        internal long DeferredCpuIrcPairShadowPredecessorReadyCycle =>
-            _deferredCpuIrcPairShadowPredecessorReadyCycle;
-        internal long DeferredCpuIrcPairShadowPredictedReadyCycle =>
-            _deferredCpuIrcPairShadowPredictedReadyCycle;
-        internal long DeferredCpuRetirementPublicationShadowFirstNominalCycle =>
-            _deferredCpuRetirementPublicationShadowFirstNominalCycle;
-        internal long DeferredCpuRetirementPublicationShadowFirstFloor =>
-            _deferredCpuRetirementPublicationShadowFirstFloor;
-        internal long DeferredCpuRetirementPublicationShadowFirstInheritedDelay =>
-            _deferredCpuRetirementPublicationShadowFirstInheritedDelay;
-        internal long DeferredCpuRetirementPublicationShadowFirstTranslatedCycle =>
-            _deferredCpuRetirementPublicationShadowFirstTranslatedCycle;
-        internal long DeferredCpuRetirementPublicationShadowFirstSlipGroup =>
-            _deferredCpuRetirementPublicationShadowFirstSlipGroup;
-        internal M68kInstructionFetchPublicationContext
-            DeferredCpuRetirementPublicationShadowFirstContext =>
-                _deferredCpuRetirementPublicationShadowFirstContext;
-        internal M68kInstructionFetchPublicationContext
             DeferredCpuInstructionFetchLastCapturedPublicationContext =>
                 _deferredCpuInstructionFetchLastCapturedPublicationContext;
-        internal long DeferredCpuRetirementPublicationShadowTrimEntries =>
-            _deferredCpuRetirementPublicationShadowTrimEntries;
-        internal long DeferredCpuRetirementPublicationShadowReplayEntries =>
-            _deferredCpuRetirementPublicationShadowReplayEntries;
-        internal bool DeferredCpuRetirementPublicationShadowLastWasReplay =>
-            _deferredCpuRetirementPublicationShadowLastWasReplay;
         internal long DeferredCpuTimingProjectionSupported => _deferredCpuTimingProjectionSupported;
         internal long DeferredCpuTimingProjectionMatches => _deferredCpuTimingProjectionMatches;
         internal long DeferredCpuTimingProjectionMismatches => _deferredCpuTimingProjectionMismatches;
@@ -1104,10 +1011,6 @@ namespace CopperMod.Amiga.Bus
         internal long DeferredCpuBusBatchExitException => _deferredCpuBusBatchExitException;
 
         internal long DeferredCpuBusBatchExitUnsupported => _deferredCpuBusBatchExitUnsupported;
-
-        internal long DeferredCpuBusBatchVerificationMismatches => _deferredCpuBusBatchVerificationMismatches;
-
-        internal string DeferredCpuBusBatchFirstMismatch => _deferredCpuBusBatchFirstMismatch;
 
         internal long DeferredCpuBusBatchWakeTargetCycle => _deferredCpuBusBatchWakeTargetCycle;
 
@@ -1170,10 +1073,6 @@ namespace CopperMod.Amiga.Bus
         internal long DeferredCpuInternalNoBusWindowWakeCopper => _deferredCpuInternalNoBusWindowWakeCopper;
 
         internal long DeferredCpuInternalNoBusWindowWakeBlitter => _deferredCpuInternalNoBusWindowWakeBlitter;
-
-        internal long DeferredCpuInternalNoBusWindowVerificationMismatches => _deferredCpuInternalNoBusWindowVerificationMismatches;
-
-        internal string DeferredCpuInternalNoBusWindowFirstMismatch => _deferredCpuInternalNoBusWindowFirstMismatch;
 
         internal bool LiveDisplayDmaEnabled => Display.LiveDmaEnabled;
 
@@ -1345,6 +1244,7 @@ namespace CopperMod.Amiga.Bus
             _lineCycles = _beamClock.MaximumLineCycles;
             _nextVerticalBlankCycle = _beamClock.GetNextFrameStartCycle(0);
             _lastRasterAdvanceCycle = 0;
+            ResetExternalResyncState();
             ResetHorizontalSyncCounter();
             _rasterlineScheduleCache.Reset();
             _hardwareScheduler.Reset();
@@ -1498,6 +1398,7 @@ namespace CopperMod.Amiga.Bus
             _lineCycles = _beamClock.MaximumLineCycles;
             _nextVerticalBlankCycle = _beamClock.GetNextFrameStartCycle(0);
             _lastRasterAdvanceCycle = 0;
+            ResetExternalResyncState();
             ResetHorizontalSyncCounter();
             _rasterlineScheduleCache.Reset();
             _hardwareScheduler.Reset();
@@ -3853,13 +3754,34 @@ namespace CopperMod.Amiga.Bus
             out ushort value,
             out long grantedCycle)
         {
-            var granted = TryReadDisplayDmaWord(
-                AmigaBusRequester.Bitplane,
-                AmigaBusAccessKind.Bitplane,
-                address,
-                requestedCycle,
-                out value,
-                out var access);
+            address = MaskChipDmaAddress(address);
+            requestedCycle = Math.Max(0, requestedCycle);
+            AmigaBusAccessResult access;
+            bool granted;
+            if (!_useChipSlotScheduler)
+            {
+                var request = new AmigaBusAccessRequest(
+                    AmigaBusRequester.Bitplane,
+                    AmigaBusAccessKind.Bitplane,
+                    AmigaBusAccessTarget.ChipRam,
+                    address,
+                    AmigaBusAccessSize.Word,
+                    requestedCycle,
+                    isWrite: false);
+                access = new AmigaBusAccessResult(request, requestedCycle, requestedCycle);
+                granted = true;
+            }
+            else
+            {
+                granted = _agnusBusExecutor.TryCommitPlannedBitplaneSlot(
+                    address,
+                    requestedCycle,
+                    out access);
+            }
+
+            CaptureDmaAccess(access);
+            var execution = ExecuteDmaWordRead(address, granted, access);
+            value = execution.Value;
             grantedCycle = access.GrantedCycle;
             return granted;
         }
@@ -3976,7 +3898,9 @@ namespace CopperMod.Amiga.Bus
             // A dormant or newly re-armed Copper may carry an old internal
             // request cycle.  It may retry from the current executed bus
             // horizon, but it may never reserve and sample a historical slot.
-            requestedCycle = Math.Max(Math.Max(0, requestedCycle), _chipDataBusLatchCycle);
+            requestedCycle = Math.Max(
+                Math.Max(Math.Max(0, requestedCycle), _chipDataBusLatchCycle),
+                _agnusBusExecutor.ExecutedThroughCycle + 1);
             return _useChipSlotScheduler
                 ? _hrmSlotEngine.PredictCopperDmaWordSlot(
                     address,
@@ -4669,20 +4593,6 @@ namespace CopperMod.Amiga.Bus
             }
 
             var result = _agnusBusExecutor.Arbitrate(request, baseResult);
-            if (CopperQuiescentShadowPredictionEnabled &&
-                request.Requester == AmigaBusRequester.Cpu)
-            {
-                _hardwareScheduler.RecordCopperQuiescentCpuSlotPrediction(
-                    request.Kind,
-                    request.Target,
-                    request.Address,
-                    request.Size,
-                    request.RequestedCycle,
-                    result.GrantedCycle,
-                    result.CompletedCycle,
-                    request.IsWrite);
-            }
-
             return result;
         }
 

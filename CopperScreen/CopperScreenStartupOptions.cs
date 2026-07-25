@@ -21,7 +21,6 @@ internal sealed class CopperScreenStartupOptions
 		bool copperQuiescentFastPathVerify,
 		bool copperQuiescentDiagnostics,
 		bool deferredCpuBusBatch,
-		bool deferredCpuBusBatchVerify,
 		bool deferredCpuBusBatchConfigured,
 		bool deferredCpuChipWriteJournal,
 		bool deferredCpuChipWriteJournalConfigured,
@@ -50,7 +49,6 @@ internal sealed class CopperScreenStartupOptions
 		CopperQuiescentFastPathVerify = copperQuiescentFastPathVerify;
 		CopperQuiescentDiagnostics = copperQuiescentDiagnostics;
 		DeferredCpuBusBatch = deferredCpuBusBatch;
-		DeferredCpuBusBatchVerify = deferredCpuBusBatchVerify;
 		DeferredCpuBusBatchConfigured = deferredCpuBusBatchConfigured;
 		DeferredCpuChipWriteJournal = deferredCpuChipWriteJournal;
 		DeferredCpuChipWriteJournalConfigured = deferredCpuChipWriteJournalConfigured;
@@ -90,8 +88,6 @@ internal sealed class CopperScreenStartupOptions
 	public bool CopperQuiescentDiagnostics { get; }
 
 	public bool DeferredCpuBusBatch { get; }
-
-	public bool DeferredCpuBusBatchVerify { get; }
 
 	public bool DeferredCpuBusBatchConfigured { get; }
 
@@ -140,7 +136,6 @@ internal sealed class CopperScreenStartupOptions
 		bool copperQuiescentFastPathVerify = false,
 		bool copperQuiescentDiagnostics = false,
 		bool deferredCpuBusBatch = false,
-		bool deferredCpuBusBatchVerify = false,
 		bool deferredCpuChipWriteJournal = false,
 		bool deferredCpuChipReadSegments = false,
 		bool deferredCpuCustomPointerWrites = false,
@@ -163,8 +158,7 @@ internal sealed class CopperScreenStartupOptions
 			copperQuiescentFastPathVerify,
 			copperQuiescentDiagnostics,
 			deferredCpuBusBatch,
-			deferredCpuBusBatchVerify,
-			deferredCpuBusBatch || deferredCpuBusBatchVerify,
+			deferredCpuBusBatch,
 			deferredCpuChipWriteJournal,
 			deferredCpuChipWriteJournal,
 			deferredCpuChipReadSegments,
@@ -210,7 +204,6 @@ internal sealed class CopperScreenStartupOptions
 			false,
 			false,
 			false,
-			false,
 			profile.FloppyDriveAudio,
 			profile.Input,
 			baseDirectory,
@@ -231,7 +224,6 @@ internal sealed class CopperScreenStartupOptions
 		var copperQuiescentFastPathVerify = false;
 		var copperQuiescentDiagnostics = false;
 		var deferredCpuBusBatch = false;
-		var deferredCpuBusBatchVerify = false;
 		var deferredCpuBusBatchConfigured = false;
 		var deferredCpuChipWriteJournal = false;
 		var deferredCpuChipWriteJournalConfigured = false;
@@ -328,15 +320,6 @@ internal sealed class CopperScreenStartupOptions
 			if (IsOption(arg, "--no-cpu-deferred-bus-batch"))
 			{
 				deferredCpuBusBatch = false;
-				deferredCpuBusBatchVerify = false;
-				deferredCpuBusBatchConfigured = true;
-				continue;
-			}
-
-			if (IsOption(arg, "--cpu-deferred-bus-batch-verify"))
-			{
-				deferredCpuBusBatch = true;
-				deferredCpuBusBatchVerify = true;
 				deferredCpuBusBatchConfigured = true;
 				continue;
 			}
@@ -624,7 +607,6 @@ internal sealed class CopperScreenStartupOptions
 			copperQuiescentFastPathVerify,
 			copperQuiescentDiagnostics,
 			deferredCpuBusBatch,
-			deferredCpuBusBatchVerify,
 			deferredCpuBusBatchConfigured,
 			deferredCpuChipWriteJournal,
 			deferredCpuChipWriteJournalConfigured,

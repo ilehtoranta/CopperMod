@@ -70,7 +70,6 @@ public sealed class CopperScreenStartupArgumentTests
 
 		Assert.True(options.DeferredCpuBusBatchConfigured);
 		Assert.Equal(enabled, options.DeferredCpuBusBatch);
-		Assert.False(options.DeferredCpuBusBatchVerify);
 		Assert.Null(options.Error);
 	}
 

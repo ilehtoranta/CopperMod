@@ -326,11 +326,9 @@ internal sealed class CopperScreenEmulator : IDisposable
 			machineOptions.WithCpu(AmigaM68kCoreFactory.Default, startupOptions.CpuBackendOverride.Value);
 		}
 
-		if (startupOptions.CopperQuiescentFastPath || startupOptions.CopperQuiescentFastPathVerify)
+		if (startupOptions.CopperQuiescentFastPath)
 		{
-			machineOptions.WithCopperQuiescentFastPath(
-				startupOptions.CopperQuiescentFastPath,
-				startupOptions.CopperQuiescentFastPathVerify);
+			machineOptions.WithCopperQuiescentFastPath(true);
 		}
 
 		if (startupOptions.CopperQuiescentDiagnostics)
@@ -340,9 +338,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 
 		if (startupOptions.DeferredCpuBusBatchConfigured)
 		{
-			machineOptions.WithDeferredCpuBusBatch(
-				startupOptions.DeferredCpuBusBatch,
-				startupOptions.DeferredCpuBusBatchVerify);
+			machineOptions.WithDeferredCpuBusBatch(startupOptions.DeferredCpuBusBatch);
 		}
 
 		if (startupOptions.DeferredCpuChipWriteJournalConfigured)
@@ -1407,7 +1403,6 @@ internal sealed class CopperScreenEmulator : IDisposable
 			$"stopped={_machine.Cpu.State.Stopped}, halted={_machine.Cpu.State.Halted}, " +
 			$"pc=0x{_machine.Cpu.State.ProgramCounter:X8}, d0=0x{_machine.Cpu.State.D[0]:X8}, " +
 			$"sp=0x{_machine.Cpu.State.A[7]:X8}, " +
-			$"cpuVisibilityMismatch='{_machine.Bus.CausalBusExecutor.CpuVisibilityFirstShadowMismatch}', " +
 			$"diagnostics='{string.Join(" | ", FormatDiagnostics(result.Diagnostics))}'.");
 
 	private bool TryRenderRtgPresentation(
@@ -1563,13 +1558,13 @@ internal sealed class CopperScreenEmulator : IDisposable
 	}
 
 	private int GetBootMaxInstructionsPerFrame()
-		=> _profile.CpuBackend == M68kBackendKind.JitM68040
+		=> _machine.Options.CpuBackend == M68kBackendKind.JitM68040
 			? JitM68040BootMaxInstructionsPerFrame
 			: DefaultBootMaxInstructionsPerFrame;
 
 	private long GetBootExecutionTargetCycle(long frameTargetCycle)
 	{
-		if (_profile.CpuBackend != M68kBackendKind.JitM68040)
+		if (_machine.Options.CpuBackend != M68kBackendKind.JitM68040)
 		{
 			return frameTargetCycle;
 		}

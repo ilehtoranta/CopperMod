@@ -191,15 +191,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var slot = (int)((slotCycle - lineStart) / AgnusChipSlotScheduler.SlotCycles);
             owner = (CpuWaitFixedSlotOwner)_cpuWaitFixedSlotOwners[
                 (beamLine * CpuWaitFixedSlotsPerLine) + slot];
-            _bus.CausalBusExecutor.RecordFixedPlanShadow(
-                slotCycle,
-                owner switch
-                {
-                    CpuWaitFixedSlotOwner.Refresh => AgnusChipSlotOwner.Refresh,
-                    CpuWaitFixedSlotOwner.BitplaneRead => AgnusChipSlotOwner.Bitplane,
-                    CpuWaitFixedSlotOwner.SpriteRead => AgnusChipSlotOwner.Sprite,
-                    _ => AgnusChipSlotOwner.Free
-                });
             if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
             {
                 _cpuWaitFixedSlotImagePredictedSlots++;

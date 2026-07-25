@@ -519,3 +519,9 @@ benchmark-results
 *.etlx
 *.wav
 .claude
+.kiro
+.repowise
+.codex
+.vscode
+.repowise-workspace
+.mcp.json

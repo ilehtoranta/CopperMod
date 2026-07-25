@@ -4160,6 +4160,10 @@ namespace Copper68k
             context.NextBusCycle += advancedCycles;
             context.ReadyBusCycle += advancedCycles;
             context.RetireBusCycle += advancedCycles;
+            if (context.ExceptionEntryNotBeforeCycle != 0)
+            {
+                context.ExceptionEntryNotBeforeCycle += advancedCycles;
+            }
             context.PrefetchReadyCycle0 += advancedCycles;
             context.PrefetchReadyCycle1 += advancedCycles;
             if (context.HasPendingPrefetch)
@@ -5029,10 +5033,18 @@ namespace Copper68k
             context.ProgramCounter = target;
             FlushFixedBatchPrefetch(ref context);
             context.PrefetchAddress = target;
-            TopUpFixedBatchPrefetchOne(ref context);
-            TopUpFixedBatchPrefetchOne(
-                ref context,
-                out context.InstructionInterruptSampleCycle);
+            var targetOpcodeReadyCycle =
+                TopUpFixedBatchPrefetchOne(ref context);
+            context.InstructionInterruptSampleCycle =
+                targetOpcodeReadyCycle;
+            var targetExtensionReadyCycle =
+                TopUpFixedBatchPrefetchOne(ref context);
+            context.RetireBusCycle = Math.Max(
+                context.RetireBusCycle,
+                targetExtensionReadyCycle);
+            context.ExceptionEntryNotBeforeCycle = Math.Max(
+                context.ExceptionEntryNotBeforeCycle,
+                targetExtensionReadyCycle);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -7758,7 +7770,7 @@ namespace Copper68k
         bool IM68000InterruptRecognition.HasRecognizedInterrupt(long pinAssertCycle)
             => State.Stopped ||
                 (_lastInterruptSampleCycle != long.MinValue &&
-                    pinAssertCycle < _lastInterruptSampleCycle - M68000InterruptSetupCycles);
+                    pinAssertCycle <= _lastInterruptSampleCycle - M68000InterruptSetupCycles);
 
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
@@ -10932,8 +10944,15 @@ namespace Copper68k
             ValidateBranchTarget(target, stackedProgramCounter);
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
-            TopUpPrefetchOne();
-            TopUpPrefetchOne(out _instructionInterruptSampleCycle);
+            var targetOpcodeReadyCycle = TopUpPrefetchOne();
+            _instructionInterruptSampleCycle = targetOpcodeReadyCycle;
+            var targetExtensionReadyCycle = TopUpPrefetchOne();
+            _cpuRetireBusCycle = Math.Max(
+                _cpuRetireBusCycle,
+                targetExtensionReadyCycle);
+            _exceptionEntryNotBeforeCycle = Math.Max(
+                _exceptionEntryNotBeforeCycle,
+                targetExtensionReadyCycle);
             _skipRetirePrefetchTopUp = true;
         }
 

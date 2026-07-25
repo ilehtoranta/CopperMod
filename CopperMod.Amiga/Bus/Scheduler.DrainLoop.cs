@@ -25,7 +25,17 @@ namespace CopperMod.Amiga.Bus
 
             if (mask == SlotContendedMemoryAccessMask)
             {
-                DrainSlotContendedAccess(targetCycle);
+                if (HostProfilingEnabled)
+                {
+                    var start = Stopwatch.GetTimestamp();
+                    DrainSlotContendedAccess(targetCycle);
+                    _hostCausalExecutorTicks += Stopwatch.GetTimestamp() - start;
+                }
+                else
+                {
+                    DrainSlotContendedAccess(targetCycle);
+                }
+
                 return;
             }
 
@@ -350,7 +360,8 @@ namespace CopperMod.Amiga.Bus
                         }
                     }
 
-                    if (_bus.CausalBusExecutor.ProductionEnabled)
+                    if (_bus.CausalBusExecutor.ProductionEnabled &&
+                        !_stoppedCpuSlotDrainActive)
                     {
                         var dynamicBatch = _bus.CausalBusExecutor.TryAdvanceSingleDynamicBatch(
                             cursor,
@@ -388,6 +399,14 @@ namespace CopperMod.Amiga.Bus
                     _bus.InvalidateRasterlineSchedule(nextCycle, SlotContendedMemoryAccessMask);
                     cursor = nextCycle == long.MaxValue ? targetCycle : nextCycle;
 
+                    if (_stoppedCpuSlotDrainActive &&
+                        HasUnmaskedPendingPaulaInterrupt(_stoppedCpuSlotDrainInterruptMask))
+                    {
+                        targetCycle = nextCycle;
+                        _stoppedCpuSlotDrainReachedCycle = nextCycle;
+                        break;
+                    }
+
                     // Same-cycle Paula/disk work must remain visible to the CPU access.
                     var sameCycleWorkRemains = HasSlotContendedSameCycleWork(cursor);
                     var madeSameCycleProgress = _generation != generationBeforeEvent;
@@ -408,6 +427,30 @@ namespace CopperMod.Amiga.Bus
             {
                 _draining = false;
             }
+        }
+
+        internal long DrainSlotContendedUntilCpuInterrupt(
+            long targetCycle,
+            int cpuInterruptMask)
+        {
+            _stoppedCpuSlotDrainActive = true;
+            _stoppedCpuSlotDrainInterruptMask = cpuInterruptMask;
+            _stoppedCpuSlotDrainReachedCycle = targetCycle;
+            try
+            {
+                DrainSlotContendedAccessCore(targetCycle);
+                return _stoppedCpuSlotDrainReachedCycle;
+            }
+            finally
+            {
+                _stoppedCpuSlotDrainActive = false;
+            }
+        }
+
+        private bool HasUnmaskedPendingPaulaInterrupt(int cpuInterruptMask)
+        {
+            var level = _bus.Paula.GetHighestPendingInterruptLevel();
+            return level > 0 && level > (cpuInterruptMask & 0x07);
         }
 
         private void AdvanceSlotContendedPaulaDmaTo(long targetCycle)
@@ -579,14 +622,6 @@ namespace CopperMod.Amiga.Bus
                 return executor.GetNextSlotContendedCycle(currentCycle, targetCycle);
             }
 
-            // Sample the shadow before any legacy getter can populate caches or
-            // materialize fixed-slot state. This detects hidden mutation in the
-            // old prediction path instead of accidentally teaching the new
-            // agenda from the reference query.
-            var executorCandidate = executor.ShadowEnabled
-                ? executor.GetNextSlotContendedCycle(currentCycle, targetCycle)
-                : long.MaxValue;
-
             var paulaCandidate = GetNextPaulaDmaEventCycle(currentCycle, targetCycle);
             var diskCandidate = GetNextSlotContendedDiskEventCycle(currentCycle, targetCycle);
             var agnusCandidate = _bus.GetNextAgnusEventCycle(currentCycle, targetCycle);
@@ -594,19 +629,6 @@ namespace CopperMod.Amiga.Bus
             var candidate = Math.Min(
                 Math.Min(paulaCandidate, diskCandidate),
                 Math.Min(agnusCandidate, blitterCandidate));
-
-            if (executor.ShadowEnabled)
-            {
-                executor.RecordShadowPrediction(
-                    currentCycle,
-                    targetCycle,
-                    candidate,
-                    executorCandidate,
-                    paulaCandidate,
-                    diskCandidate,
-                    agnusCandidate,
-                    blitterCandidate);
-            }
 
             return candidate;
         }

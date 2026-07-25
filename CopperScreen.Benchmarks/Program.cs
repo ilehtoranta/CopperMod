@@ -97,7 +97,7 @@ if (options.DiskDivergenceTrace)
     return;
 }
 
-Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, BlitterAdvance={options.BlitterAdvanceMode.ToString().ToLowerInvariant()}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuBusBatchVerify={options.DeferredCpuBusBatchVerify}, DeferredCpuChipWriteJournal={options.DeferredCpuChipWriteJournal}, DeferredCpuChipReadSegments={options.DeferredCpuChipReadSegments}, DeferredCpuCustomPointerWrites={options.DeferredCpuCustomPointerWrites}, DeferredCpuCustomCompositionWrites={options.DeferredCpuCustomCompositionWrites}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
+Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, BlitterAdvance={options.BlitterAdvanceMode.ToString().ToLowerInvariant()}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuChipWriteJournal={options.DeferredCpuChipWriteJournal}, DeferredCpuChipReadSegments={options.DeferredCpuChipReadSegments}, DeferredCpuCustomPointerWrites={options.DeferredCpuCustomPointerWrites}, DeferredCpuCustomCompositionWrites={options.DeferredCpuCustomCompositionWrites}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
 WriteBenchmarkHeader();
 
 foreach (var workload in workloads)
@@ -1149,7 +1149,6 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
         (options.CopperQuiescenceFastPathVerify ? 1 : 0) +
         (copperQuiescenceDiagnostics ? 1 : 0) +
         1 + // Explicit enable/rollback keeps benchmark modes independent of runtime defaults.
-        (options.DeferredCpuBusBatchVerify ? 1 : 0) +
         1 + // Explicit enable/rollback keeps Stage 3 independent of runtime defaults.
         1 + // Explicit enable/rollback keeps Stage 4 independent of runtime defaults.
         1 + // Explicit Stage 5 pointer enable/rollback.
@@ -1213,11 +1212,6 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
     else
     {
         args[index++] = "--no-cpu-deferred-bus-batch";
-    }
-
-    if (options.DeferredCpuBusBatchVerify)
-    {
-        args[index++] = "--cpu-deferred-bus-batch-verify";
     }
 
     if (options.DeferredCpuChipWriteJournal)
@@ -1791,7 +1785,7 @@ static string FormatPaulaAudit(Paula paula)
 static void RunSyntheticBlitterBenchmarks(BenchmarkOptions options)
 {
     Console.WriteLine(
-        $"Synthetic ROM/expansion blitter bench, warmup={options.OpcodeDispatchWarmupInstructions}, measured={options.OpcodeDispatchInstructions}, repeats={options.RepeatCount}, deferred={options.DeferredCpuBusBatch}, verify={options.DeferredCpuBusBatchVerify}, chipReadSegments={options.DeferredCpuChipReadSegments}, customPointerWrites={options.DeferredCpuCustomPointerWrites}, customCompositionWrites={options.DeferredCpuCustomCompositionWrites}, Release={IsRelease()}");
+        $"Synthetic ROM/expansion blitter bench, warmup={options.OpcodeDispatchWarmupInstructions}, measured={options.OpcodeDispatchInstructions}, repeats={options.RepeatCount}, deferred={options.DeferredCpuBusBatch}, chipReadSegments={options.DeferredCpuChipReadSegments}, customPointerWrites={options.DeferredCpuCustomPointerWrites}, customCompositionWrites={options.DeferredCpuCustomCompositionWrites}, Release={IsRelease()}");
     Console.WriteLine("synthetic-blitter\tsource\trepeat\tinstructions\tms\tinstr/sec\tcycles\tpc\td0\tallocated bytes\tbatch used\twaitfast used\tblitter overlap\tshadow mismatch\tchecksum");
     foreach (var executeFromExpansion in new[] { false, true })
     {
@@ -1821,11 +1815,7 @@ static void RunSyntheticBlitterBenchmarks(BenchmarkOptions options)
             var scheduler = run.Bus.CaptureHardwareSchedulerSnapshot();
             var checksum = CreateSyntheticBlitterChecksum(run.Cpu.State, run.Bus);
             Console.WriteLine(
-                $"synthetic-blitter\t{(executeFromExpansion ? "expansion" : "rom")}\t{repeat + 1}\t{executed}\t{elapsed.TotalMilliseconds:F3}\t{executed / Math.Max(elapsed.TotalSeconds, double.Epsilon):F0}\t{run.Cpu.State.Cycles}\t0x{run.Cpu.State.ProgramCounter:X8}\t0x{run.Cpu.State.D[0]:X8}\t{allocated}\t{scheduler.DeferredCpuBusBatchUsed}\t{scheduler.DeferredCpuWaitWindowFastPathUsed}\t{scheduler.DeferredCpuWaitBlitterOverlapAttempts}\t{scheduler.DeferredCpuWaitSlotShadowMismatches}\t0x{checksum:X8}");
-            if (scheduler.DeferredCpuWaitSlotShadowMismatches != 0)
-            {
-                Console.WriteLine($"synthetic-blitter-mismatch\t{(executeFromExpansion ? "expansion" : "rom")}\t{scheduler.DeferredCpuWaitSlotShadowFirstMismatch}");
-            }
+                $"synthetic-blitter\t{(executeFromExpansion ? "expansion" : "rom")}\t{repeat + 1}\t{executed}\t{elapsed.TotalMilliseconds:F3}\t{executed / Math.Max(elapsed.TotalSeconds, double.Epsilon):F0}\t{run.Cpu.State.Cycles}\t0x{run.Cpu.State.ProgramCounter:X8}\t0x{run.Cpu.State.D[0]:X8}\t{allocated}\t{scheduler.DeferredCpuBusBatchUsed}\t{scheduler.DeferredCpuWaitWindowFastPathUsed}\t{scheduler.DeferredCpuWaitBlitterOverlapAttempts}\t0x{checksum:X8}");
         }
     }
 }
@@ -1841,7 +1831,6 @@ static SyntheticBlitterBenchmarkRun CreateSyntheticBlitterCpu(
         expansionRamSize: AmigaConstants.A500BootPseudoFastRamSize,
         captureBusAccesses: false,
         enableDeferredCpuBusBatch: options.DeferredCpuBusBatch,
-        verifyDeferredCpuBusBatch: options.DeferredCpuBusBatchVerify,
         enableDeferredCpuChipWriteJournal: options.DeferredCpuChipWriteJournal,
         enableDeferredCpuChipReadSegments: options.DeferredCpuChipReadSegments,
         enableDeferredCpuCustomPointerWrites: options.DeferredCpuCustomPointerWrites,
@@ -2091,7 +2080,18 @@ static DisplaySummary CaptureDisplaySummary(OcsDisplay display)
         snapshot.CopperQuiescentWindowCount,
         snapshot.CopperQuiescentTotalCycles,
         snapshot.CopperQuiescentMaxCycles,
-        display.BitplaneDataSpanCount);
+        display.BitplaneDataSpanCount,
+        display.PresentationDuplicatedRowCount,
+        display.PresentationDuplicatedByteCount,
+        display.HostLiveStateTicks,
+        display.HostLineCaptureTicks,
+        display.HostPresentationTicks,
+        display.HostBitplaneCaptureTicks,
+        display.HostLiveStateCalls,
+        display.HostLineCaptureCalls,
+        display.HostPresentationCalls,
+        display.HostBitplaneCaptureCalls,
+        display.HostLiveStateFastReturns);
 }
 
 static string FormatFramebufferSummary(FramebufferSummary summary)
@@ -2104,7 +2104,7 @@ static string FormatStatusWithScheduler(BenchmarkRunResult result)
 {
     var scheduler = result.Scheduler;
     var boundaryMode = result.CopperStartRuntimeHandoffActive ? "runtime" : "boot";
-    return $"{FormatCounterText(result.StatusText)} | boundary={boundaryMode}/{result.CopperStartRuntimeHandoffCount}, scheduler last={scheduler.LastDrainCycle}, drains={scheduler.DrainCount}, max-frame-drains={result.MaxFrameSchedulerDrains}, bus-drains={scheduler.BusAccessDrainCount}, same-cycle={scheduler.SameCycleDrainCount}, line-cache=hit:{scheduler.RasterlineCacheHits},miss:{scheduler.RasterlineCacheMisses},rebuild:{scheduler.RasterlineCacheRebuilds},inv:{scheduler.RasterlineCacheInvalidations}, wake-agenda=hit:{scheduler.WakeAgendaCacheHits},miss:{scheduler.WakeAgendaCacheMisses},skip:{scheduler.WakeAgendaDrainSkips},inv:{scheduler.WakeAgendaInvalidations}, agnexec=agenda:{scheduler.AgnusExecutorAgendaReads}/{scheduler.AgnusExecutorAgendaUpdates},shadow:{scheduler.AgnusExecutorShadowMatches}/{scheduler.AgnusExecutorShadowMismatches},first:{FormatCounterText(scheduler.AgnusExecutorFirstShadowMismatch)},fixed:{scheduler.AgnusFixedPlanShadowMatches}/{scheduler.AgnusFixedPlanShadowMismatches},fixedFirst:{FormatCounterText(scheduler.AgnusFixedPlanFirstShadowMismatch)},cpuseq:{scheduler.CpuTimingSequenceAttempts}/{scheduler.CpuTimingSequenceRuns}/{scheduler.CpuTimingSequenceWords}/{scheduler.CpuTimingSequenceBarrierRejects}/{scheduler.CpuTimingSequenceSlotRejects}, visibility=q:{scheduler.CpuVisibilityQueries},root:{scheduler.CpuVisibilityRootReads},leaf:{scheduler.CpuVisibilityLeafUpdates},refresh:{scheduler.CpuVisibilitySourceRefreshes},shadow:{scheduler.CpuVisibilityShadowMatches}/{scheduler.CpuVisibilityShadowMismatches},cycles:{scheduler.CpuVisibilityPotentialCycles},first:{FormatCounterText(scheduler.CpuVisibilityFirstShadowMismatch)}, cpuevent=hit:{scheduler.CpuVisibleNoEventCacheHits},miss:{scheduler.CpuVisibleNoEventCacheMisses},inv:{scheduler.CpuVisibleNoEventCacheInvalidations}, copperq=slot:{scheduler.CopperQuiescentSlotContendedAccesses},customw:{scheduler.CopperQuiescentCustomRegisterWrites},cpuw:{scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw:{scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain:{scheduler.CopperQuiescentSchedulerDrains},pred:{scheduler.CopperQuiescentShadowPredictions}/{scheduler.CopperQuiescentShadowMatches}/{scheduler.CopperQuiescentShadowUnsupported}/{scheduler.CopperQuiescentShadowMismatches},fast:{scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}/{scheduler.CopperQuiescentFastPathVerificationMismatches}, cpubatch={FormatDeferredCpuBusBatchSummary(scheduler)}, events=raster:{scheduler.RasterEvents},cia:{scheduler.CiaEvents},paula:{scheduler.PaulaEvents},disk:{scheduler.DiskEvents},agnus:{scheduler.AgnusEvents},blitter:{scheduler.BlitterEvents}";
+    return $"{FormatCounterText(result.StatusText)} | boundary={boundaryMode}/{result.CopperStartRuntimeHandoffCount}, scheduler last={scheduler.LastDrainCycle}, drains={scheduler.DrainCount}, max-frame-drains={result.MaxFrameSchedulerDrains}, bus-drains={scheduler.BusAccessDrainCount}, same-cycle={scheduler.SameCycleDrainCount}, line-cache=hit:{scheduler.RasterlineCacheHits},miss:{scheduler.RasterlineCacheMisses},rebuild:{scheduler.RasterlineCacheRebuilds},inv:{scheduler.RasterlineCacheInvalidations}, wake-agenda=hit:{scheduler.WakeAgendaCacheHits},miss:{scheduler.WakeAgendaCacheMisses},skip:{scheduler.WakeAgendaDrainSkips},inv:{scheduler.WakeAgendaInvalidations}, agnexec=agenda:{scheduler.AgnusExecutorAgendaReads}/{scheduler.AgnusExecutorAgendaUpdates},cpuseq:{scheduler.CpuTimingSequenceAttempts}/{scheduler.CpuTimingSequenceRuns}/{scheduler.CpuTimingSequenceWords}/{scheduler.CpuTimingSequenceBarrierRejects}/{scheduler.CpuTimingSequenceSlotRejects}, visibility=q:{scheduler.CpuVisibilityQueries},stopped:{scheduler.CpuVisibilityStoppedQueries},root:{scheduler.CpuVisibilityRootReads},leaf:{scheduler.CpuVisibilityLeafUpdates},refresh:{scheduler.CpuVisibilitySourceRefreshes},expired:{scheduler.CpuVisibilityExpiredRootSummary},copperExpired:{scheduler.CpuVisibilityExpiredCopperStateSummary}, cpuevent=hit:{scheduler.CpuVisibleNoEventCacheHits},miss:{scheduler.CpuVisibleNoEventCacheMisses},inv:{scheduler.CpuVisibleNoEventCacheInvalidations}, copperq=slot:{scheduler.CopperQuiescentSlotContendedAccesses},customw:{scheduler.CopperQuiescentCustomRegisterWrites},cpuw:{scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw:{scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain:{scheduler.CopperQuiescentSchedulerDrains},fast:{scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}, cpubatch={FormatDeferredCpuBusBatchSummary(scheduler)}, events=raster:{scheduler.RasterEvents},cia:{scheduler.CiaEvents},paula:{scheduler.PaulaEvents},disk:{scheduler.DiskEvents},agnus:{scheduler.AgnusEvents},blitter:{scheduler.BlitterEvents}";
 }
 
 static void LaunchWorkbenchPathIfNeeded(CopperScreenEmulator emulator, BenchmarkWorkload workload)
@@ -2173,21 +2173,19 @@ static string FormatDeferredCpuBusBatchSummary(AmigaHardwareSchedulerSnapshot sc
     var exits = $"exit={scheduler.DeferredCpuBusBatchExitTargetCycle}/{scheduler.DeferredCpuBusBatchExitMaxInstructions}/{scheduler.DeferredCpuBusBatchExitChipVisibleAccess}/{scheduler.DeferredCpuBusBatchExitPcLeftFastWindow}/{scheduler.DeferredCpuBusBatchExitException}/{scheduler.DeferredCpuBusBatchExitUnsupported}";
     var wakes = $"wake={scheduler.DeferredCpuBusBatchWakeTargetCycle}/{scheduler.DeferredCpuBusBatchWakePendingInterrupt}/{scheduler.DeferredCpuBusBatchWakeVerticalBlank}/{scheduler.DeferredCpuBusBatchWakeHorizontalSyncTod}/{scheduler.DeferredCpuBusBatchWakeCiaTimer}/{scheduler.DeferredCpuBusBatchWakeDisk}/{scheduler.DeferredCpuBusBatchWakePaula}/{scheduler.DeferredCpuBusBatchWakeCopper}/{scheduler.DeferredCpuBusBatchWakeBlitter}";
     var diskWakes = $"diskwake={scheduler.DeferredCpuBusBatchDiskWakePendingDma}/{scheduler.DeferredCpuBusBatchDiskWakeActiveDmaProgress}/{scheduler.DeferredCpuBusBatchDiskWakeActiveDmaCompletion}/{scheduler.DeferredCpuBusBatchDiskWakeSyncCandidate}/{scheduler.DeferredCpuBusBatchDiskWakeIndexPulse}/{scheduler.DeferredCpuBusBatchDiskWakePassiveByteReady}/{scheduler.DeferredCpuBusBatchDiskWakeUnknown}";
-    var internalWindow = $"internal={scheduler.DeferredCpuInternalNoBusWindowAttempts}/{scheduler.DeferredCpuInternalNoBusWindowUsed}/{scheduler.DeferredCpuInternalNoBusWindowTotalCycles}/{scheduler.DeferredCpuInternalNoBusWindowAdvancedCycles},op={scheduler.DeferredCpuInternalNoBusWindowMultiply}/{scheduler.DeferredCpuInternalNoBusWindowDivide},iwake={scheduler.DeferredCpuInternalNoBusWindowWakeTargetCycle}/{scheduler.DeferredCpuInternalNoBusWindowWakePendingInterrupt}/{scheduler.DeferredCpuInternalNoBusWindowWakeVerticalBlank}/{scheduler.DeferredCpuInternalNoBusWindowWakeHorizontalSyncTod}/{scheduler.DeferredCpuInternalNoBusWindowWakeCiaTimer}/{scheduler.DeferredCpuInternalNoBusWindowWakeDisk}/{scheduler.DeferredCpuInternalNoBusWindowWakePaula}/{scheduler.DeferredCpuInternalNoBusWindowWakeCopper}/{scheduler.DeferredCpuInternalNoBusWindowWakeBlitter},iverify={scheduler.DeferredCpuInternalNoBusWindowVerificationMismatches}";
+    var internalWindow = $"internal={scheduler.DeferredCpuInternalNoBusWindowAttempts}/{scheduler.DeferredCpuInternalNoBusWindowUsed}/{scheduler.DeferredCpuInternalNoBusWindowTotalCycles}/{scheduler.DeferredCpuInternalNoBusWindowAdvancedCycles},op={scheduler.DeferredCpuInternalNoBusWindowMultiply}/{scheduler.DeferredCpuInternalNoBusWindowDivide},iwake={scheduler.DeferredCpuInternalNoBusWindowWakeTargetCycle}/{scheduler.DeferredCpuInternalNoBusWindowWakePendingInterrupt}/{scheduler.DeferredCpuInternalNoBusWindowWakeVerticalBlank}/{scheduler.DeferredCpuInternalNoBusWindowWakeHorizontalSyncTod}/{scheduler.DeferredCpuInternalNoBusWindowWakeCiaTimer}/{scheduler.DeferredCpuInternalNoBusWindowWakeDisk}/{scheduler.DeferredCpuInternalNoBusWindowWakePaula}/{scheduler.DeferredCpuInternalNoBusWindowWakeCopper}/{scheduler.DeferredCpuInternalNoBusWindowWakeBlitter}";
     var waitWindow = $"waitwin={scheduler.DeferredCpuWaitWindowAttempts}/{scheduler.DeferredCpuWaitWindowEligible}/{scheduler.DeferredCpuWaitWindowTotalCycles}/{scheduler.DeferredCpuWaitWindowMaxCycles},kind={scheduler.DeferredCpuWaitWindowInstructionFetch}/{scheduler.DeferredCpuWaitWindowDataRead}/{scheduler.DeferredCpuWaitWindowDataWrite}/{scheduler.DeferredCpuWaitWindowCustom},target={scheduler.DeferredCpuWaitWindowChipRam}/{scheduler.DeferredCpuWaitWindowExpansionRam}/{scheduler.DeferredCpuWaitWindowRealTimeClock}/{scheduler.DeferredCpuWaitWindowCustomRegisters},size={scheduler.DeferredCpuWaitWindowByte}/{scheduler.DeferredCpuWaitWindowWord}/{scheduler.DeferredCpuWaitWindowLong},rw={scheduler.DeferredCpuWaitWindowRead}/{scheduler.DeferredCpuWaitWindowWrite},slots={scheduler.DeferredCpuWaitWindowSingleSlot}/{scheduler.DeferredCpuWaitWindowLongSlot}";
     var waitFast = $"waitfast={scheduler.DeferredCpuWaitWindowFastPathAttempts}/{scheduler.DeferredCpuWaitWindowFastPathUsed}/{scheduler.DeferredCpuWaitWindowFastPathRejectedUnsupported}/{scheduler.DeferredCpuWaitWindowFastPathRejectedDynamicDma}/{scheduler.DeferredCpuWaitWindowFastPathRejectedUnstable}/{scheduler.DeferredCpuWaitWindowFastPathAdvancedCycles}/{scheduler.DeferredCpuWaitWindowFastPathMaxAdvancedCycles}";
-    var slotShadow = $"slotshadow={scheduler.DeferredCpuWaitSlotShadowAttempts}/{scheduler.DeferredCpuWaitSlotShadowMatches}/{scheduler.DeferredCpuWaitSlotShadowMismatches}/{scheduler.DeferredCpuWaitSlotShadowUnsupported},slotreason={scheduler.DeferredCpuWaitSlotShadowGrantMismatches}/{scheduler.DeferredCpuWaitSlotShadowCompletionMismatches}/{scheduler.DeferredCpuWaitSlotShadowSlotOwnerMismatches}/{scheduler.DeferredCpuWaitSlotShadowBlitterStateMismatches}/{scheduler.DeferredCpuWaitSlotShadowPaulaMismatches}/{scheduler.DeferredCpuWaitSlotShadowDiskMismatches}/{scheduler.DeferredCpuWaitSlotShadowDisplayMismatches}/{scheduler.DeferredCpuWaitSlotShadowCopperMismatches},slotlive={scheduler.DeferredCpuWaitSlotShadowLiveAttempts}/{scheduler.DeferredCpuWaitSlotShadowLiveSupported}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupported}/{scheduler.DeferredCpuWaitSlotShadowLiveLongAccesses},slotliveunsup={scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedPendingWrite}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedBitplaneWindow}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedCopperWaitWindow}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedRasterlinePlan}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedCpuPredict}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedUnstable}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedScratchWrite}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedLongWrite}/{scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedOther},slotdma={scheduler.DeferredCpuWaitSlotShadowLiveBitplaneFetches}/{scheduler.DeferredCpuWaitSlotShadowLiveSpriteFetches}/{scheduler.DeferredCpuWaitSlotShadowLiveCopperSteps},slotblt={scheduler.DeferredCpuWaitSlotShadowBlitterScratchAttempts}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchSupported}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchUnsupported}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchMatches}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchMismatches}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchPartial}/{scheduler.DeferredCpuWaitSlotShadowBlitterScratchMicroOps},slotfirst={scheduler.DeferredCpuWaitSlotShadowFirstMismatch}";
-    var fixedImage = $"fixedimg={scheduler.DeferredCpuWaitFixedImageAttempts}/{scheduler.DeferredCpuWaitFixedImageSupported}/{scheduler.DeferredCpuWaitFixedImageMatches}/{scheduler.DeferredCpuWaitFixedImageMismatches}/{scheduler.DeferredCpuWaitFixedImageUnsupported},cache={scheduler.DeferredCpuWaitFixedImageBuilds}/{scheduler.DeferredCpuWaitFixedImageHits}/{scheduler.DeferredCpuWaitFixedImageMisses}/{scheduler.DeferredCpuWaitFixedImageInvalidations},slots={scheduler.DeferredCpuWaitFixedImagePredictedSlots},unsup={scheduler.DeferredCpuWaitFixedImageUnsupportedFrame}/{scheduler.DeferredCpuWaitFixedImageUnsupportedCopper}/{scheduler.DeferredCpuWaitFixedImageUnsupportedPendingWrite}/{scheduler.DeferredCpuWaitFixedImageUnsupportedRasterlinePlan}/{scheduler.DeferredCpuWaitFixedImageUnsupportedSpriteState},first={scheduler.DeferredCpuWaitFixedImageFirstMismatch}";
-    var fixedProduction = $"fixedprod={scheduler.DeferredCpuWaitFixedImageProductionAttempts}/{scheduler.DeferredCpuWaitFixedImageProductionUsed}/{scheduler.DeferredCpuWaitFixedImageProductionPreGrantDrainsSkipped}/{scheduler.DeferredCpuWaitFixedImageProductionPostGrantCatchups}/{scheduler.DeferredCpuWaitFixedImageProductionPredictedWaitCycles},fallback={scheduler.DeferredCpuWaitFixedImageProductionFallbackUnsupported}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackDynamicDma}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackFrame}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackCopper}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackPendingWrite}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackRasterlinePlan}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackSpriteState}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackUnstable},verify={scheduler.DeferredCpuWaitFixedImageProductionVerificationMatches}/{scheduler.DeferredCpuWaitFixedImageProductionVerificationMismatches},disabled={(scheduler.DeferredCpuWaitFixedImageProductionDisabled ? 1 : 0)},first={scheduler.DeferredCpuWaitFixedImageProductionFirstMismatch}";
+    var fixedImage = $"fixedimg=cache:{scheduler.DeferredCpuWaitFixedImageBuilds}/{scheduler.DeferredCpuWaitFixedImageHits}/{scheduler.DeferredCpuWaitFixedImageMisses}/{scheduler.DeferredCpuWaitFixedImageInvalidations},slots={scheduler.DeferredCpuWaitFixedImagePredictedSlots},unsup={scheduler.DeferredCpuWaitFixedImageUnsupportedFrame}/{scheduler.DeferredCpuWaitFixedImageUnsupportedCopper}/{scheduler.DeferredCpuWaitFixedImageUnsupportedPendingWrite}/{scheduler.DeferredCpuWaitFixedImageUnsupportedRasterlinePlan}/{scheduler.DeferredCpuWaitFixedImageUnsupportedSpriteState}";
+    var fixedProduction = $"fixedprod={scheduler.DeferredCpuWaitFixedImageProductionAttempts}/{scheduler.DeferredCpuWaitFixedImageProductionUsed}/{scheduler.DeferredCpuWaitFixedImageProductionPreGrantDrainsSkipped}/{scheduler.DeferredCpuWaitFixedImageProductionPostGrantCatchups}/{scheduler.DeferredCpuWaitFixedImageProductionPredictedWaitCycles},fallback={scheduler.DeferredCpuWaitFixedImageProductionFallbackUnsupported}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackDynamicDma}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackFrame}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackCopper}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackPendingWrite}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackRasterlinePlan}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackSpriteState}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackUnstable},disabled={(scheduler.DeferredCpuWaitFixedImageProductionDisabled ? 1 : 0)}";
     var blitterOverlap = $"bltoverlap={scheduler.DeferredCpuWaitBlitterOverlapAttempts}/{scheduler.DeferredCpuWaitBlitterOverlapSupported}/{scheduler.DeferredCpuWaitBlitterOverlapUnsupported}/{scheduler.DeferredCpuWaitBlitterOverlapNasty}";
-    var visibility = $"viscost={scheduler.CpuVisibilityPotentialInstructions}/{scheduler.CpuVisibilityShortHorizonRejections}/{scheduler.CpuVisibilityLegacyQueryTicks}/{scheduler.CpuVisibilityExecutorQueryTicks}";
     var cpuKinds = $"cpukind={scheduler.CpuInstructionFetchGrantedWords}/{scheduler.CpuDataGrantedWords}";
-    return $"{batch},{timingProjection},{exits},{wakes},{diskWakes},verify={scheduler.DeferredCpuBusBatchVerificationMismatches},{internalWindow},{waitWindow},{waitFast},{slotShadow},{fixedImage},{fixedProduction},{blitterOverlap},{visibility},{cpuKinds}";
+    return $"{batch},{timingProjection},{exits},{wakes},{diskWakes},{internalWindow},{waitWindow},{waitFast},{fixedImage},{fixedProduction},{blitterOverlap},{cpuKinds}";
 }
 
 static string FormatHardwareProfile(AmigaHardwareSchedulerSnapshot scheduler)
 {
-    var copperQuiescence = $"copperq:slot={scheduler.CopperQuiescentSlotContendedAccesses},customw={scheduler.CopperQuiescentCustomRegisterWrites},cpuw={scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw={scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain={scheduler.CopperQuiescentSchedulerDrains},pred={scheduler.CopperQuiescentShadowPredictions}/{scheduler.CopperQuiescentShadowMatches}/{scheduler.CopperQuiescentShadowUnsupported}/{scheduler.CopperQuiescentShadowMismatches},fast={scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}/{scheduler.CopperQuiescentFastPathVerificationMismatches}";
+    var copperQuiescence = $"copperq:slot={scheduler.CopperQuiescentSlotContendedAccesses},customw={scheduler.CopperQuiescentCustomRegisterWrites},cpuw={scheduler.CopperQuiescentCpuScheduleAffectingCustomWrites}/{scheduler.CopperQuiescentCpuBenignCustomWrites},copw={scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves}/{scheduler.CopperQuiescentCopperBenignCustomMoves},drain={scheduler.CopperQuiescentSchedulerDrains},fast={scheduler.CopperQuiescentFastPathAttempts}/{scheduler.CopperQuiescentFastPathUsed}/{scheduler.CopperQuiescentFastPathSkippedDrains}/{scheduler.CopperQuiescentFastPathRejectedUnsupported}/{scheduler.CopperQuiescentFastPathRejectedInvalidated}/{scheduler.CopperQuiescentFastPathRejectedDynamicDma}";
     var deferredCpuBatch = $"cpubatch:{FormatDeferredCpuBusBatchSummary(scheduler)}";
     var hasCopperQuiescence =
         scheduler.CopperQuiescentSlotContendedAccesses != 0 ||
@@ -2197,26 +2195,18 @@ static string FormatHardwareProfile(AmigaHardwareSchedulerSnapshot scheduler)
         scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves != 0 ||
         scheduler.CopperQuiescentCopperBenignCustomMoves != 0 ||
         scheduler.CopperQuiescentSchedulerDrains != 0 ||
-        scheduler.CopperQuiescentShadowPredictions != 0 ||
-        scheduler.CopperQuiescentShadowUnsupported != 0 ||
-        scheduler.CopperQuiescentShadowMismatches != 0 ||
         scheduler.CopperQuiescentFastPathAttempts != 0 ||
-        scheduler.CopperQuiescentFastPathUsed != 0 ||
-        scheduler.CopperQuiescentFastPathVerificationMismatches != 0;
+        scheduler.CopperQuiescentFastPathUsed != 0;
     var hasDeferredCpuBatch =
         scheduler.DeferredCpuBusBatchAttempts != 0 ||
         scheduler.DeferredCpuBusBatchUsed != 0 ||
         scheduler.DeferredCpuBusBatchInstructions != 0 ||
-        scheduler.DeferredCpuBusBatchVerificationMismatches != 0 ||
         scheduler.DeferredCpuInternalNoBusWindowAttempts != 0 ||
         scheduler.DeferredCpuInternalNoBusWindowUsed != 0 ||
-        scheduler.DeferredCpuInternalNoBusWindowVerificationMismatches != 0 ||
         scheduler.DeferredCpuWaitWindowAttempts != 0 ||
         scheduler.DeferredCpuWaitWindowEligible != 0 ||
         scheduler.DeferredCpuWaitWindowFastPathAttempts != 0 ||
-        scheduler.DeferredCpuWaitWindowFastPathUsed != 0 ||
-        scheduler.DeferredCpuWaitSlotShadowAttempts != 0 ||
-        scheduler.DeferredCpuWaitSlotShadowMismatches != 0;
+        scheduler.DeferredCpuWaitWindowFastPathUsed != 0;
     if (!scheduler.HostProfilingEnabled && scheduler.HostDrainTicks == 0)
     {
         return string.Join(",", new[] { hasCopperQuiescence ? copperQuiescence : string.Empty, hasDeferredCpuBatch ? deferredCpuBatch : string.Empty }.Where(static value => value.Length != 0));
@@ -2231,7 +2221,8 @@ static string FormatHardwareProfile(AmigaHardwareSchedulerSnapshot scheduler)
         scheduler.HostPaulaTicks +
         scheduler.HostDiskTicks +
         scheduler.HostAgnusTicks +
-        scheduler.HostBlitterTicks;
+        scheduler.HostBlitterTicks +
+        scheduler.HostCausalExecutorTicks;
     var otherTicks = Math.Max(0, scheduler.HostDrainTicks - accountedTicks);
     return string.Join(
         ',',
@@ -2245,6 +2236,7 @@ static string FormatHardwareProfile(AmigaHardwareSchedulerSnapshot scheduler)
         FormatHostTicks("disk", scheduler.HostDiskTicks, scheduler.HostDrainTicks),
         FormatHostTicks("agnus", scheduler.HostAgnusTicks, scheduler.HostDrainTicks),
         FormatHostTicks("blit", scheduler.HostBlitterTicks, scheduler.HostDrainTicks),
+        FormatHostTicks("executor", scheduler.HostCausalExecutorTicks, scheduler.HostDrainTicks),
         FormatHostTicks("other", otherTicks, scheduler.HostDrainTicks),
         $"agenda:{scheduler.WakeAgendaCacheHits}/{scheduler.WakeAgendaCacheMisses}/{scheduler.WakeAgendaDrainSkips}/{scheduler.WakeAgendaInvalidations}",
         $"cpuevent:{scheduler.CpuVisibleNoEventCacheHits}/{scheduler.CpuVisibleNoEventCacheMisses}/{scheduler.CpuVisibleNoEventCacheInvalidations}",
@@ -2269,9 +2261,28 @@ static string FormatDisplaySummary(DisplaySummary summary)
         $"desc={summary.DescriptorBuilds}/{summary.DescriptorReplayAttempts}/{summary.DescriptorReplayedRows}/{summary.DescriptorFallbackRows}," +
         $"descRows={summary.DescriptorBitplaneRows}/{summary.DescriptorSpriteRows},descMis={summary.DescriptorMismatches}," +
         $"rowPlan={summary.RowDmaPlansBuilt}/{summary.RowDmaPlannedRowsExecuted}/{summary.RowDmaBitplaneEntriesExecuted}/{summary.RowDmaSpriteEntriesExecuted}/{summary.RowDmaScalarFallbackRows}/{summary.RowDmaPlanInvalidationRows}/{summary.RowDmaPlanMismatchRows}," +
+        $"rowCopy={summary.PresentationDuplicatedRows}/{summary.PresentationDuplicatedBytes}," +
+        $"host={FormatDisplayHostTicks(summary)}," +
         $"copperq={summary.CopperQuiescentWindowCount}/{summary.CopperQuiescentTotalCycles}/{summary.CopperQuiescentMaxCycles}," +
         $"bplcon={summary.Bplcon0:X4}/{summary.Bplcon1:X4}/{summary.Bplcon2:X4}";
 }
+
+static string FormatDisplayHostTicks(DisplaySummary summary)
+    => $"state:{FormatDisplayHostPhase(summary.HostLiveStateTicks, summary.HostLiveStateCalls)}" +
+        $"-fast:{summary.HostLiveStateFastReturns}/" +
+        string.Join(
+        '/',
+        FormatDisplayHostPhase(summary.HostLineCaptureTicks, summary.HostLineCaptureCalls),
+        FormatDisplayHostPhase(summary.HostPresentationTicks, summary.HostPresentationCalls),
+        FormatDisplayHostPhase(summary.HostBitplaneCaptureTicks, summary.HostBitplaneCaptureCalls));
+
+static string FormatDisplayHostPhase(long ticks, long calls)
+    => $"{FormatHostMilliseconds(ticks)}@{calls}";
+
+static string FormatHostMilliseconds(long ticks)
+    => string.Create(
+        CultureInfo.InvariantCulture,
+        $"{ticks * 1000.0 / Stopwatch.Frequency:F2}");
 
 static void WriteCopperQuiescenceAuditIfNeeded(BenchmarkRunResult result, BenchmarkOptions options)
 {
@@ -2312,19 +2323,19 @@ static void WriteCopperQuiescenceAuditIfNeeded(BenchmarkRunResult result, Benchm
         scheduler.CopperQuiescentCopperScheduleAffectingCustomMoves.ToString(CultureInfo.InvariantCulture),
         scheduler.CopperQuiescentCopperBenignCustomMoves.ToString(CultureInfo.InvariantCulture),
         scheduler.CopperQuiescentSchedulerDrains.ToString(CultureInfo.InvariantCulture),
-        scheduler.CopperQuiescentShadowPredictions.ToString(CultureInfo.InvariantCulture),
-        scheduler.CopperQuiescentShadowMatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.CopperQuiescentShadowUnsupported.ToString(CultureInfo.InvariantCulture),
-        scheduler.CopperQuiescentShadowMismatches.ToString(CultureInfo.InvariantCulture),
+        "0",
+        "0",
+        "0",
+        "0",
         scheduler.CopperQuiescentFastPathAttempts.ToString(CultureInfo.InvariantCulture),
         scheduler.CopperQuiescentFastPathUsed.ToString(CultureInfo.InvariantCulture),
         scheduler.CopperQuiescentFastPathSkippedDrains.ToString(CultureInfo.InvariantCulture),
         scheduler.CopperQuiescentFastPathRejectedUnsupported.ToString(CultureInfo.InvariantCulture),
         scheduler.CopperQuiescentFastPathRejectedInvalidated.ToString(CultureInfo.InvariantCulture),
         scheduler.CopperQuiescentFastPathRejectedDynamicDma.ToString(CultureInfo.InvariantCulture),
-        scheduler.CopperQuiescentFastPathVerificationMismatches.ToString(CultureInfo.InvariantCulture),
-        SanitizeTsv(scheduler.CopperQuiescentFirstShadowMismatch),
-        SanitizeTsv(scheduler.CopperQuiescentFastPathFirstMismatch),
+        "0",
+        string.Empty,
+        string.Empty,
         scheduler.CpuVisibleNoEventCacheHits.ToString(CultureInfo.InvariantCulture),
         scheduler.CpuVisibleNoEventCacheMisses.ToString(CultureInfo.InvariantCulture),
         scheduler.CpuVisibleNoEventCacheInvalidations.ToString(CultureInfo.InvariantCulture),
@@ -2339,8 +2350,8 @@ static void WriteCopperQuiescenceAuditIfNeeded(BenchmarkRunResult result, Benchm
         scheduler.DeferredCpuBusBatchExitPcLeftFastWindow.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuBusBatchExitException.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuBusBatchExitUnsupported.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuBusBatchVerificationMismatches.ToString(CultureInfo.InvariantCulture),
-        SanitizeTsv(scheduler.DeferredCpuBusBatchFirstMismatch),
+        "0",
+        string.Empty,
         scheduler.DeferredCpuBusBatchWakeTargetCycle.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuBusBatchWakePendingInterrupt.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuBusBatchWakeVerticalBlank.ToString(CultureInfo.InvariantCulture),
@@ -2372,8 +2383,8 @@ static void WriteCopperQuiescenceAuditIfNeeded(BenchmarkRunResult result, Benchm
         scheduler.DeferredCpuInternalNoBusWindowWakePaula.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuInternalNoBusWindowWakeCopper.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuInternalNoBusWindowWakeBlitter.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuInternalNoBusWindowVerificationMismatches.ToString(CultureInfo.InvariantCulture),
-        SanitizeTsv(scheduler.DeferredCpuInternalNoBusWindowFirstMismatch),
+        "0",
+        string.Empty,
         scheduler.DeferredCpuWaitWindowAttempts.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuWaitWindowEligible.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuWaitWindowTotalCycles.ToString(CultureInfo.InvariantCulture),
@@ -2393,42 +2404,8 @@ static void WriteCopperQuiescenceAuditIfNeeded(BenchmarkRunResult result, Benchm
         scheduler.DeferredCpuWaitWindowWrite.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuWaitWindowSingleSlot.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuWaitWindowLongSlot.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowAttempts.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowMatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowMismatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowUnsupported.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowGrantMismatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowCompletionMismatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowSlotOwnerMismatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowBlitterStateMismatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowPaulaMismatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowDiskMismatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowDisplayMismatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowCopperMismatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveAttempts.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveSupported.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveUnsupported.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedPendingWrite.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedBitplaneWindow.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedCopperWaitWindow.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedRasterlinePlan.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedCpuPredict.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedUnstable.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedScratchWrite.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedLongWrite.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveUnsupportedOther.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveLongAccesses.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveBitplaneFetches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveSpriteFetches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowLiveCopperSteps.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowBlitterScratchAttempts.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowBlitterScratchSupported.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowBlitterScratchUnsupported.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowBlitterScratchMatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowBlitterScratchMismatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowBlitterScratchPartial.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitSlotShadowBlitterScratchMicroOps.ToString(CultureInfo.InvariantCulture),
-        SanitizeTsv(scheduler.DeferredCpuWaitSlotShadowFirstMismatch),
+        // Retain the legacy TSV column positions for old audit consumers.
+        string.Join('\t', Enumerable.Repeat("0", 35)) + "\t",
         scheduler.DeferredCpuWaitFixedImageProductionAttempts.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuWaitFixedImageProductionUsed.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuWaitFixedImageProductionPreGrantDrainsSkipped.ToString(CultureInfo.InvariantCulture),
@@ -2442,10 +2419,10 @@ static void WriteCopperQuiescenceAuditIfNeeded(BenchmarkRunResult result, Benchm
         scheduler.DeferredCpuWaitFixedImageProductionFallbackRasterlinePlan.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuWaitFixedImageProductionFallbackSpriteState.ToString(CultureInfo.InvariantCulture),
         scheduler.DeferredCpuWaitFixedImageProductionFallbackUnstable.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitFixedImageProductionVerificationMatches.ToString(CultureInfo.InvariantCulture),
-        scheduler.DeferredCpuWaitFixedImageProductionVerificationMismatches.ToString(CultureInfo.InvariantCulture),
+        "0",
+        "0",
         scheduler.DeferredCpuWaitFixedImageProductionDisabled ? "1" : "0",
-        SanitizeTsv(scheduler.DeferredCpuWaitFixedImageProductionFirstMismatch)));
+        string.Empty));
 }
 
 static string FormatDiskSummary(DiskSummary summary)
@@ -2632,7 +2609,18 @@ internal readonly record struct DisplaySummary(
     long CopperQuiescentWindowCount,
     long CopperQuiescentTotalCycles,
     long CopperQuiescentMaxCycles,
-    int BitplaneDataSpans);
+    int BitplaneDataSpans,
+    int PresentationDuplicatedRows,
+    long PresentationDuplicatedBytes,
+    long HostLiveStateTicks,
+    long HostLineCaptureTicks,
+    long HostPresentationTicks,
+    long HostBitplaneCaptureTicks,
+    long HostLiveStateCalls,
+    long HostLineCaptureCalls,
+    long HostPresentationCalls,
+    long HostBitplaneCaptureCalls,
+    long HostLiveStateFastReturns);
 
 internal readonly record struct DiskSummary(
     int TransferCount,
@@ -2782,7 +2770,6 @@ internal readonly record struct BenchmarkOptions(
     bool CopperQuiescenceFastPath,
     bool CopperQuiescenceFastPathVerify,
     bool DeferredCpuBusBatch,
-    bool DeferredCpuBusBatchVerify,
     bool DeferredCpuChipWriteJournal,
     bool DeferredCpuChipReadSegments,
     bool DeferredCpuCustomPointerWrites,
@@ -2837,7 +2824,6 @@ internal readonly record struct BenchmarkOptions(
         var copperQuiescenceFastPath = false;
         var copperQuiescenceFastPathVerify = false;
         var deferredCpuBusBatch = false;
-        var deferredCpuBusBatchVerify = false;
         var deferredCpuChipWriteJournal = false;
         var deferredCpuChipReadSegments = false;
         var deferredCpuCustomPointerWrites = false;
@@ -3079,11 +3065,6 @@ internal readonly record struct BenchmarkOptions(
             {
                 deferredCpuBusBatch = true;
             }
-            else if (string.Equals(args[i], "--cpu-deferred-bus-batch-verify", StringComparison.OrdinalIgnoreCase))
-            {
-                deferredCpuBusBatch = true;
-                deferredCpuBusBatchVerify = true;
-            }
             else if (string.Equals(args[i], "--cpu-deferred-chip-read-segments", StringComparison.OrdinalIgnoreCase))
             {
                 deferredCpuChipReadSegments = true;
@@ -3196,7 +3177,6 @@ internal readonly record struct BenchmarkOptions(
             copperQuiescenceFastPath,
             copperQuiescenceFastPathVerify,
             deferredCpuBusBatch,
-            deferredCpuBusBatchVerify,
             deferredCpuChipWriteJournal,
             deferredCpuChipReadSegments,
             deferredCpuCustomPointerWrites,
@@ -3550,11 +3530,20 @@ internal sealed class OpcodeDispatchBenchmarkBus : IM68kBus, IM68kInstructionFet
         return true;
     }
 
-    public void CommitInstructionFetchWindowWord(in M68kInstructionFetchWindow window, uint address, ref long cycle)
+    public void CommitInstructionFetchWindowWord(
+        in M68kInstructionFetchWindow window,
+        uint address,
+        ref long cycle,
+        M68kInstructionFetchPublicationPhase publicationPhase,
+        long retirementFloor,
+        in M68kInstructionFetchPublicationContext publicationContext)
     {
         _ = window;
         _ = address;
         _ = cycle;
+        _ = publicationPhase;
+        _ = retirementFloor;
+        _ = publicationContext;
     }
 
     public ushort ReadWordValue(uint address)

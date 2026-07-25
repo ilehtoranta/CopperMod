@@ -39,7 +39,7 @@ public sealed class AmigaArchitectureTests
 	{
 		var defaults = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton);
 		var disabled = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
-			.WithDeferredCpuBusBatch(enabled: false, verify: false);
+			.WithDeferredCpuBusBatch(enabled: false);
 
 		Assert.True(defaults.DeferredCpuBusBatchEnabled);
 		Assert.True(defaults.DeferredCpuChipWriteJournalEnabled);

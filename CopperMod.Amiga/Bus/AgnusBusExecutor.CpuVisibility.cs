@@ -38,6 +38,27 @@ namespace CopperMod.Amiga.Bus
         public bool ReachesTarget => Reason == CpuVisibilityHorizonReason.TargetCycle;
     }
 
+    internal readonly record struct CpuVisibilityExpiredRootSnapshot(
+        long Interrupt,
+        long VerticalBlank,
+        long HorizontalSyncTod,
+        long CiaTimer,
+        long Disk,
+        long Paula,
+        long Copper,
+        long Control,
+        long Blitter);
+
+    internal readonly record struct CpuVisibilityExpiredCopperStateSnapshot(
+        long Move,
+        long Skip,
+        long Start,
+        long Restart,
+        long Request,
+        long Wait,
+        long Fetch,
+        long WaitImmediateAfterRefresh);
+
     internal sealed partial class AgnusBusExecutor
     {
         private readonly CpuVisibilityDeadlineAgenda _cpuVisibilityAgenda = new();
@@ -57,33 +78,41 @@ namespace CopperMod.Amiga.Bus
         private long _cpuVisibilityControlCycle = -1;
         private bool _cpuVisibilityHsyncTodActive;
         private long _cpuVisibilityQueries;
+        private long _cpuVisibilityStoppedQueries;
         private long _cpuVisibilityRootReads;
         private long _cpuVisibilityLeafUpdates;
         private long _cpuVisibilitySourceRefreshes;
-        private long _cpuVisibilityShadowMatches;
-        private long _cpuVisibilityShadowMismatches;
-        private long _cpuVisibilityPotentialCycles;
-        private long _cpuVisibilityPotentialInstructions;
-        private long _cpuVisibilityShortHorizonRejections;
-        private long _cpuVisibilityLegacyQueryTicks;
-        private long _cpuVisibilityExecutorQueryTicks;
-        private string _cpuVisibilityFirstShadowMismatch = string.Empty;
+        private readonly long[] _cpuVisibilityExpiredRootCounts =
+            new long[(int)CpuVisibilityDeadlineSource.Count];
+        private readonly long[] _cpuVisibilityExpiredCopperStateCounts = new long[7];
+        private long _cpuVisibilityExpiredCopperWaitImmediateRefreshes;
 
         public long CpuVisibilityQueries => _cpuVisibilityQueries;
+        public long CpuVisibilityStoppedQueries => _cpuVisibilityStoppedQueries;
         public long CpuVisibilityRootReads => _cpuVisibilityRootReads;
         public long CpuVisibilityLeafUpdates => _cpuVisibilityLeafUpdates;
         public long CpuVisibilitySourceRefreshes => _cpuVisibilitySourceRefreshes;
-        public long CpuVisibilityShadowMatches => _cpuVisibilityShadowMatches;
-        public long CpuVisibilityShadowMismatches => _cpuVisibilityShadowMismatches;
-        public long CpuVisibilityPotentialCycles => _cpuVisibilityPotentialCycles;
-        public long CpuVisibilityPotentialInstructions => _cpuVisibilityPotentialInstructions;
-        public long CpuVisibilityShortHorizonRejections => _cpuVisibilityShortHorizonRejections;
-        public long CpuVisibilityLegacyQueryTicks => _cpuVisibilityLegacyQueryTicks;
-        public long CpuVisibilityExecutorQueryTicks => _cpuVisibilityExecutorQueryTicks;
-        public string CpuVisibilityFirstShadowMismatch => _cpuVisibilityFirstShadowMismatch;
-        public bool CpuVisibilityShadowEnabled { get; } =
-            ReadBooleanEnvironmentVariable("COPPERMOD_AMIGA_CPU_VISIBILITY_SHADOW", false);
-
+        public CpuVisibilityExpiredRootSnapshot CpuVisibilityExpiredRoot =>
+            new(
+                _cpuVisibilityExpiredRootCounts[(int)CpuVisibilityDeadlineSource.Interrupt],
+                _cpuVisibilityExpiredRootCounts[(int)CpuVisibilityDeadlineSource.VerticalBlank],
+                _cpuVisibilityExpiredRootCounts[(int)CpuVisibilityDeadlineSource.HorizontalSyncTod],
+                _cpuVisibilityExpiredRootCounts[(int)CpuVisibilityDeadlineSource.CiaTimer],
+                _cpuVisibilityExpiredRootCounts[(int)CpuVisibilityDeadlineSource.Disk],
+                _cpuVisibilityExpiredRootCounts[(int)CpuVisibilityDeadlineSource.Paula],
+                _cpuVisibilityExpiredRootCounts[(int)CpuVisibilityDeadlineSource.Copper],
+                _cpuVisibilityExpiredRootCounts[(int)CpuVisibilityDeadlineSource.Control],
+                _cpuVisibilityExpiredRootCounts[(int)CpuVisibilityDeadlineSource.Blitter]);
+        public CpuVisibilityExpiredCopperStateSnapshot CpuVisibilityExpiredCopperState =>
+            new(
+                _cpuVisibilityExpiredCopperStateCounts[0],
+                _cpuVisibilityExpiredCopperStateCounts[1],
+                _cpuVisibilityExpiredCopperStateCounts[2],
+                _cpuVisibilityExpiredCopperStateCounts[3],
+                _cpuVisibilityExpiredCopperStateCounts[4],
+                _cpuVisibilityExpiredCopperStateCounts[5],
+                _cpuVisibilityExpiredCopperStateCounts[6],
+                _cpuVisibilityExpiredCopperWaitImmediateRefreshes);
         internal (long Cycle, AmigaDiskController.SchedulerWakeReason DiskReason)
             GetCpuVisibilityDeadlineForTest(int interruptMask, CpuVisibilityDeadlineSource source)
             => _cpuVisibilityAgenda.GetLeaf(interruptMask, source);
@@ -107,64 +136,110 @@ namespace CopperMod.Amiga.Bus
             _cpuVisibilityControlCycle = -1;
             _cpuVisibilityHsyncTodActive = false;
             _cpuVisibilityQueries = 0;
+            _cpuVisibilityStoppedQueries = 0;
             _cpuVisibilityRootReads = 0;
             _cpuVisibilityLeafUpdates = 0;
             _cpuVisibilitySourceRefreshes = 0;
-            _cpuVisibilityShadowMatches = 0;
-            _cpuVisibilityShadowMismatches = 0;
-            _cpuVisibilityPotentialCycles = 0;
-            _cpuVisibilityPotentialInstructions = 0;
-            _cpuVisibilityShortHorizonRejections = 0;
-            _cpuVisibilityLegacyQueryTicks = 0;
-            _cpuVisibilityExecutorQueryTicks = 0;
-            _cpuVisibilityFirstShadowMismatch = string.Empty;
-        }
-
-        public void RecordCpuVisibilityShadow(
-            long currentCycle,
-            long targetCycle,
-            long referenceCycle,
-            M68kTraceBatchWakeSource referenceSource,
-            AmigaDiskController.SchedulerWakeReason referenceDiskReason,
-            in CpuVisibilityHorizon horizon)
-        {
-            var potentialCycles = Math.Max(0, horizon.Cycle - currentCycle);
-            _cpuVisibilityPotentialCycles += potentialCycles;
-            _cpuVisibilityPotentialInstructions += potentialCycles / 4;
-            if (potentialCycles < 16)
-            {
-                _cpuVisibilityShortHorizonRejections++;
-            }
-            var mappedSource = MapLegacyReason(horizon.Reason);
-            var diskReason = horizon.Reason == CpuVisibilityHorizonReason.Disk
-                ? horizon.DiskReason
-                : AmigaDiskController.SchedulerWakeReason.None;
-            if (referenceCycle == horizon.Cycle &&
-                referenceSource == mappedSource &&
-                referenceDiskReason == diskReason)
-            {
-                _cpuVisibilityShadowMatches++;
-                return;
-            }
-
-            _cpuVisibilityShadowMismatches++;
-            if (_cpuVisibilityFirstShadowMismatch.Length == 0)
-            {
-                _cpuVisibilityFirstShadowMismatch =
-                    $"current={currentCycle},target={targetCycle}," +
-                    $"reference={referenceCycle}/{referenceSource}/{referenceDiskReason}," +
-                    $"executor={horizon.Cycle}/{horizon.Reason}/{horizon.DiskReason}";
-            }
-        }
-
-        public void RecordCpuVisibilityQueryTicks(long legacyTicks, long executorTicks)
-        {
-            _cpuVisibilityLegacyQueryTicks += Math.Max(0, legacyTicks);
-            _cpuVisibilityExecutorQueryTicks += Math.Max(0, executorTicks);
+            Array.Clear(_cpuVisibilityExpiredRootCounts);
+            Array.Clear(_cpuVisibilityExpiredCopperStateCounts);
+            _cpuVisibilityExpiredCopperWaitImmediateRefreshes = 0;
         }
 
         public void InvalidateCpuVisibilityAgenda(CpuVisibilityDirtySource sources = CpuVisibilityDirtySource.All)
             => _cpuVisibilityDirtySources |= sources;
+
+        public void RecordStoppedCpuVisibilityQuery()
+            => _cpuVisibilityStoppedQueries++;
+
+        public CpuVisibilityHorizon GetNextStoppedCpuInterruptHorizon(
+            long currentCycle,
+            long targetCycle,
+            int cpuInterruptMask)
+        {
+            currentCycle = Math.Max(0, currentCycle);
+            targetCycle = Math.Max(currentCycle, targetCycle);
+            if (targetCycle <= currentCycle)
+            {
+                return new CpuVisibilityHorizon(
+                    currentCycle,
+                    CpuVisibilityHorizonReason.TargetCycle,
+                    AmigaDiskController.SchedulerWakeReason.None);
+            }
+
+            _cpuVisibilityQueries++;
+            _cpuVisibilityStoppedQueries++;
+            if (_bus.HasPendingCiaInterrupts)
+            {
+                return new CpuVisibilityHorizon(
+                    currentCycle + 1,
+                    CpuVisibilityHorizonReason.PendingInterrupt,
+                    AmigaDiskController.SchedulerWakeReason.None);
+            }
+
+            RefreshCpuVisibilityAgenda(currentCycle, targetCycle);
+            _cpuVisibilityRootReads++;
+            var mask = cpuInterruptMask & 7;
+            var bestCycle = targetCycle;
+            var bestSource = CpuVisibilityDeadlineSource.Count;
+            var bestDiskReason = AmigaDiskController.SchedulerWakeReason.None;
+            var horizontalSyncCycle = _bus.NextHorizontalSyncCycle;
+            if (horizontalSyncCycle > currentCycle &&
+                horizontalSyncCycle < bestCycle)
+            {
+                bestCycle = horizontalSyncCycle;
+                bestSource = CpuVisibilityDeadlineSource.HorizontalSyncTod;
+            }
+
+            for (var sourceIndex = 0;
+                 sourceIndex < (int)CpuVisibilityDeadlineSource.Count;
+                 sourceIndex++)
+            {
+                var source = (CpuVisibilityDeadlineSource)sourceIndex;
+                if (source == CpuVisibilityDeadlineSource.Copper ||
+                    source == CpuVisibilityDeadlineSource.Control ||
+                    source == CpuVisibilityDeadlineSource.Blitter)
+                {
+                    continue;
+                }
+
+                var (cycle, diskReason) = _cpuVisibilityAgenda.GetLeaf(mask, source);
+                if (cycle <= currentCycle)
+                {
+                    cycle = currentCycle + 1;
+                }
+
+                if (cycle < bestCycle)
+                {
+                    bestCycle = cycle;
+                    bestSource = source;
+                    bestDiskReason = diskReason;
+                }
+            }
+
+            var blitterCompletion = _bus.Blitter.Busy
+                ? _bus.Blitter.GetPredictedCompletionCycle()
+                : long.MaxValue;
+            if (blitterCompletion <= currentCycle)
+            {
+                blitterCompletion = currentCycle + 1;
+            }
+            if (blitterCompletion < bestCycle)
+            {
+                bestCycle = blitterCompletion;
+                bestSource = CpuVisibilityDeadlineSource.Blitter;
+                bestDiskReason = AmigaDiskController.SchedulerWakeReason.None;
+            }
+
+            return bestSource == CpuVisibilityDeadlineSource.Count
+                ? new CpuVisibilityHorizon(
+                    targetCycle,
+                    CpuVisibilityHorizonReason.TargetCycle,
+                    AmigaDiskController.SchedulerWakeReason.None)
+                : new CpuVisibilityHorizon(
+                    bestCycle,
+                    MapReason(bestSource),
+                    bestDiskReason);
+        }
 
         /// <summary>
         /// Returns the first event that can become visible to the CPU. This is
@@ -208,10 +283,24 @@ namespace CopperMod.Amiga.Bus
             var root = _cpuVisibilityAgenda.Get(mask);
             if (root.Cycle <= currentCycle)
             {
+                _cpuVisibilityExpiredRootCounts[(int)root.Source]++;
+                var expiredCopperState = -1;
+                if (root.Source == CpuVisibilityDeadlineSource.Copper)
+                {
+                    expiredCopperState =
+                        _bus.Display.GetLiveCopperCpuBatchBarrierStateForDiagnostics();
+                    _cpuVisibilityExpiredCopperStateCounts[expiredCopperState]++;
+                }
                 _cpuVisibilityDirtySources = CpuVisibilityDirtySource.All;
                 _cpuVisibilityValidThroughCycle = -1;
                 RefreshCpuVisibilityAgenda(currentCycle, targetCycle);
                 root = _cpuVisibilityAgenda.Get(mask);
+                if (expiredCopperState == 5 &&
+                    root.Source == CpuVisibilityDeadlineSource.Copper &&
+                    root.Cycle <= currentCycle + 1)
+                {
+                    _cpuVisibilityExpiredCopperWaitImmediateRefreshes++;
+                }
             }
             if (root.Cycle == long.MaxValue || root.Cycle >= targetCycle)
             {

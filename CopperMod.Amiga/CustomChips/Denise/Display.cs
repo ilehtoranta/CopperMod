@@ -38,10 +38,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
         private const int MaxPendingWrites = 65536;
-        private const int StandardHStart = 0x81 - AmigaConstants.PalLowResOverscanBorderX;
-        // Left overscan exposes the bitplane shifter's comparator-$80 pixel.
-        // A standard-or-later DIW clips that pre-roll and begins at comparator
-        // $81. DDF retains this physical phase in both lowres and hires.
+        private const int StandardHStart = 0x82 - AmigaConstants.PalLowResOverscanBorderX;
+        // The raw capture includes comparator $81 immediately before the
+        // nominal border. A standard DIW therefore opens on that preceding
+        // sample; DDF retains the same physical phase in lowres and hires.
         private const int StandardBitplanePrerollOrigin = AmigaConstants.PalLowResOverscanBorderX - 1;
         private const int StandardVStart = 0x2C - AmigaConstants.PalLowResOverscanBorderY;
         private const ushort DefaultDiwStart = AgnusRegisterBank.DefaultDiwStart;
@@ -226,6 +226,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private long _boundPresentationFrameStartCycle;
         private long _boundPresentationFrameStopCycle;
         private int _nextBoundPresentationRow;
+        private int _presentationDuplicatedRowCount;
+        private long _presentationDuplicatedByteCount;
+        private bool _hostProfilingEnabled;
+        private long _hostLiveStateTicks;
+        private long _hostLineCaptureTicks;
+        private long _hostPresentationTicks;
+        private long _hostBitplaneCaptureTicks;
+        private long _hostLiveStateCalls;
+        private long _hostLineCaptureCalls;
+        private long _hostPresentationCalls;
+        private long _hostBitplaneCaptureCalls;
+        private long _hostLiveStateFastReturns;
         private bool _boundPresentationActive;
         private bool _boundPresentationCompleted;
         private readonly LiveLineState[] _liveLineStates = new LiveLineState[RasterlineRingSize];
@@ -585,6 +597,44 @@ namespace CopperMod.Amiga.CustomChips.Denise
         internal long LiveCausalDisplayStateThroughCycle => _liveCausalDisplayStateThroughCycle;
 
         internal long LiveFinalizedPresentationThroughCycle => _liveFinalizedPresentationThroughCycle;
+
+        internal int PresentationDuplicatedRowCount => _presentationDuplicatedRowCount;
+
+        internal long PresentationDuplicatedByteCount => _presentationDuplicatedByteCount;
+
+        internal long HostLiveStateTicks => _hostLiveStateTicks;
+
+        internal long HostLineCaptureTicks => _hostLineCaptureTicks;
+
+        internal long HostPresentationTicks => _hostPresentationTicks;
+
+        internal long HostBitplaneCaptureTicks => _hostBitplaneCaptureTicks;
+
+        internal long HostLiveStateCalls => _hostLiveStateCalls;
+
+        internal long HostLineCaptureCalls => _hostLineCaptureCalls;
+
+        internal long HostPresentationCalls => _hostPresentationCalls;
+
+        internal long HostBitplaneCaptureCalls => _hostBitplaneCaptureCalls;
+
+        internal long HostLiveStateFastReturns => _hostLiveStateFastReturns;
+
+        internal void SetHostProfilingEnabled(bool enabled)
+            => _hostProfilingEnabled = enabled;
+
+        internal void ResetHostProfile()
+        {
+            _hostLiveStateTicks = 0;
+            _hostLineCaptureTicks = 0;
+            _hostPresentationTicks = 0;
+            _hostBitplaneCaptureTicks = 0;
+            _hostLiveStateCalls = 0;
+            _hostLineCaptureCalls = 0;
+            _hostPresentationCalls = 0;
+            _hostBitplaneCaptureCalls = 0;
+            _hostLiveStateFastReturns = 0;
+        }
 
         internal long LiveCpuVisibleWorkCycleCacheHits => _liveCpuVisibleWorkCycleCacheHits;
 
@@ -1476,7 +1526,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             var address = AddDmaPointerOffset(state.Descriptor.DataAddress, ((row - state.Descriptor.YStart) * 4) + (word * 2));
             EnsureActiveRowSpriteDmaPlanCurrent(row);
-            _bus.CausalBusExecutor.RecordFixedPlanShadow(slotCycle, AgnusChipSlotOwner.Sprite, _dmacon);
             var captured = TryCaptureLiveSpriteDmaWord(
                 address,
                 row,
@@ -1527,7 +1576,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             long slotCycle)
         {
             EnsureActiveRowSpriteDmaPlanCurrent(row);
-            _bus.CausalBusExecutor.RecordFixedPlanShadow(slotCycle, AgnusChipSlotOwner.Sprite, _dmacon);
             if (word == 0)
             {
                 if (!TryCaptureLiveSpriteDmaWord(state.ControlAddress, row, spriteIndex, 0, out var pos))

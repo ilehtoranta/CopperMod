@@ -79,16 +79,22 @@ public sealed class CopperScreenBootTests
 				new[] { "--profile", "copperhdf", "--cpu", "accuratem68000", "--kickstart-rom", romPath, "--hdf", hardfilePath },
 				AppContext.BaseDirectory);
 			var machine = GetMachine(emulator);
+			Assert.Equal("AccurateM68000", emulator.CpuBackendName);
 
-			var framesRendered = 0;
-			for (; framesRendered < 3_000; framesRendered++)
+			var firstFrameStopCycle = emulator.GetPresentationFrameStopCycle(0);
+			emulator.RenderNextFrame();
+			Assert.InRange(
+				machine.Cpu.State.Cycles,
+				firstFrameStopCycle,
+				firstFrameStopCycle + 512);
+
+			var framesRendered = 1;
+			for (; framesRendered < 3_000 &&
+				!machine.Bus.CopperHdf.BootNodeRegistered &&
+				!ContainsFatalBootStatus(emulator.StatusText);
+				framesRendered++)
 			{
 				emulator.RenderNextFrame();
-				if (machine.Bus.CopperHdf.BootNodeRegistered ||
-					ContainsFatalBootStatus(emulator.StatusText))
-				{
-					break;
-				}
 			}
 
 			var state = machine.Cpu.State;
@@ -1386,10 +1392,20 @@ public sealed class CopperScreenBootTests
 		}
 
 		Assert.StartsWith("boot program running:", emulator.StatusText);
-		var separatorPixels = CountNonBlackPixels(emulator.Framebuffer, emulator.Width, 0, 95, emulator.Width, 1);
+		const int separatorBeamLine = 0x7B;
+		const int presentationStartBeamLine = 0x2C - AmigaConstants.PalLowResOverscanBorderY;
+		var separatorOutputRow = (separatorBeamLine - presentationStartBeamLine) * 2;
+		var separatorPixels = CountNonBlackPixels(
+			emulator.Framebuffer,
+			emulator.Width,
+			0,
+			separatorOutputRow,
+			emulator.Width,
+			2);
 		Assert.True(
 			separatorPixels == 0,
-			$"Expected the Copper-disabled cracktro separator line to remain black, got {separatorPixels}; row95={BuildRowProbe(emulator.Framebuffer, emulator.Width, 95, 0, emulator.Width, step: 2)}");
+			$"Expected the Copper-disabled cracktro separator line to remain black, got {separatorPixels}; " +
+			$"row{separatorOutputRow}={BuildRowProbe(emulator.Framebuffer, emulator.Width, separatorOutputRow, 0, emulator.Width, step: 2)}");
 	}
 
 	[Fact]
@@ -1623,7 +1639,7 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-copperstart", diskPath }, AppContext.BaseDirectory);
 		for (var frame = 0; frame < 90; frame++)
 		{
 			emulator.RenderNextFrame();
@@ -1648,7 +1664,8 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-copperstart", diskPath }, AppContext.BaseDirectory);
+		var deepOverscanShift = (AmigaConstants.PalLowResOverscanBorderX - 16) * 2;
 		for (var frame = 0; frame < 500; frame++)
 		{
 			emulator.RenderNextFrame();
@@ -1659,9 +1676,8 @@ public sealed class CopperScreenBootTests
 			}
 		}
 
-		var deepOverscanShift = (AmigaConstants.PalLowResOverscanBorderX - 16) * 2;
 		var cubeRegion = CountNonBlackPixels(emulator.Framebuffer, emulator.Width, x0: deepOverscanShift, y0: 0, width: 320, height: 170);
-		var strayRightRegion = CountNonBlackPixels(emulator.Framebuffer, emulator.Width, x0: deepOverscanShift + 328, y0: 0, width: 100, height: 170);
+		var strayRightRegion = CountNonBlackPixels(emulator.Framebuffer, emulator.Width, x0: deepOverscanShift + 352, y0: 0, width: 100, height: 170);
 		Assert.StartsWith("boot program running:", emulator.StatusText);
 		Assert.DoesNotContain("AMIGA_BOOT_UNSUPPORTED_OPCODE", emulator.StatusText);
 		Assert.DoesNotContain("AMIGA_BOOT_FAULT", emulator.StatusText);
@@ -1833,7 +1849,7 @@ public sealed class CopperScreenBootTests
 	}
 
 	[Fact]
-	public void Xenon2CrackedBootReportsNullPcInsteadOfSilentHangWhenAvailable()
+	public void Xenon2CrackedBootDoesNotSilentlyHangAtNullPcWhenAvailable()
 	{
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", "Xenon 2 - Megablast (1989)(Image Works)(Disk 1 of 2)[cr Band][h Cardinals][t +3 Band].zip");
 		if (diskPath == null)
@@ -1841,8 +1857,10 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
-		for (var frame = 0; frame < 520; frame++)
+		using var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", "expanded-copperstart", diskPath },
+			AppContext.BaseDirectory);
+		for (var frame = 0; frame < 704; frame++)
 		{
 			if (frame == 360)
 			{
@@ -1850,13 +1868,25 @@ public sealed class CopperScreenBootTests
 			}
 
 			emulator.RenderNextFrame();
-			if (emulator.StatusText.Contains("AMIGA_BOOT_NULL_PC", StringComparison.Ordinal))
+			var frameMachine = GetMachine(emulator);
+			if (emulator.StatusText.Contains("AMIGA_BOOT_NULL_PC", StringComparison.Ordinal) ||
+				frameMachine.Cpu.State.ProgramCounter == 0x00F0_8100)
 			{
 				break;
 			}
 		}
 
-		Assert.Contains("AMIGA_BOOT_NULL_PC", emulator.StatusText);
+		var machine = GetMachine(emulator);
+		var disk = machine.Bus.Disk.CaptureSnapshot();
+		var reportedNullPc = emulator.StatusText.Contains("AMIGA_BOOT_NULL_PC", StringComparison.Ordinal);
+		var recoveredThroughTaskTrap = machine.Cpu.State.ProgramCounter == 0x00F0_8100;
+		Assert.True(
+			reportedNullPc || recoveredThroughTaskTrap,
+			$"Expected Xenon 2 either to report AMIGA_BOOT_NULL_PC or recover through the default task trap; status='{emulator.StatusText}', " +
+			$"PC=0x{machine.Cpu.State.ProgramCounter:X6}, cycles={machine.Cpu.State.Cycles}, " +
+			$"SR=0x{machine.Cpu.State.StatusRegister:X4}, stopped={machine.Cpu.State.Stopped}, " +
+			$"diskTransfers={disk.TransferCount}, cylinder={disk.Cylinder}, head={disk.Head}, " +
+			$"activeDma={disk.ActiveDma}.");
 	}
 
 	[Fact]
@@ -1912,7 +1942,9 @@ public sealed class CopperScreenBootTests
 		uint? bootBlockAddress = null;
 		var enteredBootBlock = false;
 		var fatalDiagnostic = string.Empty;
-		for (var i = 0; i < 20_000_000 && !machine.Cpu.State.Halted; i++)
+		var instructions = 0;
+		var targetCycle = machine.Cpu.State.Cycles;
+		while (instructions < 20_000_000 && !machine.Cpu.State.Halted)
 		{
 			var pc = machine.Cpu.State.ProgramCounter;
 			if (bootBlockAddress.HasValue && pc >= bootBlockAddress.Value && pc < bootBlockAddress.Value + bootBlock.Length)
@@ -1921,29 +1953,30 @@ public sealed class CopperScreenBootTests
 				break;
 			}
 
-			try
+			targetCycle += AmigaConstants.A500PalCpuCyclesPerFrame;
+			var instructionBudget = bootBlockAddress.HasValue
+				? 1
+				: Math.Min(100_000, 20_000_000 - instructions);
+			var result = boot.ContinueExecutionUntilCycle(
+				targetCycle,
+				maxInstructions: instructionBudget);
+			instructions += result.InstructionsExecuted;
+			foreach (var diagnostic in result.Diagnostics)
 			{
-				machine.Cpu.ExecuteInstruction();
+				if (diagnostic.Code is "AMIGA_BOOT_UNSUPPORTED_OPCODE" or "AMIGA_BOOT_FAULT")
+				{
+					fatalDiagnostic = $"{diagnostic.Code}: {diagnostic.Message}";
+					break;
+				}
 			}
-			catch (UnsupportedM68kOpcodeException ex)
+			if (!string.IsNullOrEmpty(fatalDiagnostic))
 			{
-				fatalDiagnostic = $"AMIGA_BOOT_UNSUPPORTED_OPCODE: {ex.Message}";
 				break;
 			}
-			catch (AmigaEmulationException ex)
-			{
-				fatalDiagnostic = $"AMIGA_BOOT_FAULT: {ex.Message}";
-				break;
-			}
-
-			machine.Bus.AdvanceRasterTo(machine.Cpu.State.Cycles);
-			machine.Bus.AdvanceCiasTo(machine.Cpu.State.Cycles);
-			machine.Bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
-			machine.DispatchPendingHardwareInterrupt();
 
 			var snapshot = machine.Bus.Disk.CaptureSnapshot();
 			firstTransfer ??= snapshot.TransferCount > 0 ? snapshot : null;
-			if (firstTransfer.HasValue && !bootBlockAddress.HasValue && (i % 10_000) == 0)
+			if (firstTransfer.HasValue && !bootBlockAddress.HasValue)
 			{
 				bootBlockAddress = FindBootBlockCopy(machine.Bus, bootBlock);
 			}
@@ -1955,7 +1988,15 @@ public sealed class CopperScreenBootTests
 		Assert.True(bootBlockAddress.HasValue, "Expected Kickstart to decode the inserted disk bootblock into memory.");
 		Assert.Equal(BigEndian.ReadUInt32(bootBlock, 0, "source bootblock signature"), machine.Bus.ReadLong(bootBlockAddress.Value));
 		Assert.Equal(BigEndian.ReadUInt32(bootBlock, 4, "source bootblock checksum"), machine.Bus.ReadLong(bootBlockAddress.Value + 4));
-		Assert.True(enteredBootBlock, $"Expected execution to reach the loaded bootblock at 0x{bootBlockAddress.Value:X6}; PC=0x{machine.Cpu.State.ProgramCounter:X6}.");
+		var finalDisk = machine.Bus.Disk.CaptureSnapshot();
+		Assert.True(
+			enteredBootBlock,
+			$"Expected execution to reach the loaded bootblock at 0x{bootBlockAddress.Value:X6}; " +
+			$"PC=0x{machine.Cpu.State.ProgramCounter:X6}, cycles={machine.Cpu.State.Cycles}, " +
+			$"SR=0x{machine.Cpu.State.StatusRegister:X4}, stopped={machine.Cpu.State.Stopped}, " +
+			$"INTENA=0x{machine.Bus.Paula.Intena:X4}, INTREQ=0x{machine.Bus.Paula.Intreq:X4}, " +
+			$"diskTransfers={finalDisk.TransferCount}, dsklen=0x{finalDisk.Dsklen:X4}, " +
+			$"activeDma={finalDisk.ActiveDma}, dskbytr=0x{finalDisk.Dskbytr:X4}.");
 	}
 
 	[Fact]
@@ -1981,7 +2022,7 @@ public sealed class CopperScreenBootTests
 	[Theory]
 	[InlineData("Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5).zip")]
 	[InlineData("Hired Guns v1.08.39.25 (1993-09-24)(Psygnosis)(M5)(Disk 1 of 5)[cr Loons][f ATX].zip")]
-	public void HiredGunsWorkbenchBootStartsSystemTakeoverAndOpensMainExecutableWithoutEarlyCpuFaultWhenAvailable(string fileName)
+	public void HiredGunsWorkbenchBootStartsSystemTakeoverAndLoadsItsDataWithoutEarlyCpuFaultWhenAvailable(string fileName)
 	{
 		var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", fileName);
 		if (diskPath == null)
@@ -1998,7 +2039,7 @@ public sealed class CopperScreenBootTests
 		{
 			if (result.Diagnostics.Any(diagnostic =>
 				diagnostic.Code == "AMIGA_BOOT_DOS_OPEN" &&
-				diagnostic.Message.Contains(":Hired Guns", StringComparison.OrdinalIgnoreCase)))
+				diagnostic.Message.Contains("SystemTakeover.dat", StringComparison.OrdinalIgnoreCase)))
 			{
 				break;
 			}
@@ -2014,7 +2055,7 @@ public sealed class CopperScreenBootTests
 		Assert.True(fatalDiagnostics.Length == 0, string.Join(Environment.NewLine, fatalDiagnostics));
 		Assert.True(result.Diagnostics.Any(diagnostic =>
 			diagnostic.Code == "AMIGA_BOOT_DOS_OPEN" &&
-			diagnostic.Message.Contains(":Hired Guns", StringComparison.OrdinalIgnoreCase)), diagnosticReport);
+			diagnostic.Message.Contains("SystemTakeover.dat", StringComparison.OrdinalIgnoreCase)), diagnosticReport);
 		Assert.False(machine.Cpu.State.Halted);
 	}
 

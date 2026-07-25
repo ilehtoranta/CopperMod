@@ -321,13 +321,34 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         return null;
                     }
 
+                    var restartCycle = GetCopperWaitRestartArmCycle(
+                        cachedWaitCycle,
+                        _liveCopper.WaitSecond,
+                        _liveCopper.WaitObservedBlitterBusy);
+                    if (restartCycle <= currentCycle)
+                    {
+                        if (!TryGetCopperWaitCycle(
+                            _liveCopper.WaitFirst,
+                            _liveCopper.WaitSecond,
+                            _liveFrameStartCycle,
+                            currentCycle + 1,
+                            targetCycle + 1,
+                            blitterFinished: true,
+                            out var nextWaitCycle))
+                        {
+                            return null;
+                        }
+
+                        restartCycle = GetCopperWaitRestartArmCycle(
+                            nextWaitCycle,
+                            _liveCopper.WaitSecond,
+                            _liveCopper.WaitObservedBlitterBusy);
+                    }
+
                     return NormalizeCopperBatchBarrier(
                         currentCycle,
                         targetCycle,
-                        GetCopperWaitRestartArmCycle(
-                            cachedWaitCycle,
-                            _liveCopper.WaitSecond,
-                            _liveCopper.WaitObservedBlitterBusy));
+                        restartCycle);
                 }
 
                 if (!TryGetCopperWaitCycle(
@@ -360,6 +381,41 @@ namespace CopperMod.Amiga.CustomChips.Denise
             // is latched, PendingMove/PendingSkip/Waiting can provide a longer boundary.
             var fetchCycle = Math.Max(_liveCopper.Cycle, _liveFrameStartCycle);
             return NormalizeCopperBatchBarrier(currentCycle, targetCycle, fetchCycle);
+        }
+
+        internal int GetLiveCopperCpuBatchBarrierStateForDiagnostics()
+        {
+            if (_liveCopper.PendingMove)
+            {
+                return 0;
+            }
+
+            if (_liveCopper.PendingSkip)
+            {
+                return 1;
+            }
+
+            if (_liveCopper.PendingStart)
+            {
+                return 2;
+            }
+
+            if (_liveCopper.RestartArmed)
+            {
+                return 3;
+            }
+
+            if (_liveCopper.ReadyToRequest)
+            {
+                return 4;
+            }
+
+            if (_liveCopper.Waiting)
+            {
+                return 5;
+            }
+
+            return 6;
         }
 
         private static long? NormalizeCopperBatchBarrier(long currentCycle, long targetCycle, long barrierCycle)

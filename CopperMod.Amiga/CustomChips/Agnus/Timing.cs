@@ -1223,6 +1223,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             }
         }
 
+        internal bool SlotScheduleAuditEnabled => _slotScheduleAuditSink != null;
+
         internal AgnusSlotAuditSourceState SlotScheduleAuditSourceState
         {
             get => new(_slotScheduleAuditSource, _slotScheduleAuditSourceA, _slotScheduleAuditSourceB, _slotScheduleAuditSourceC);
@@ -1460,6 +1462,29 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             }
 
             return TryCommitFixedSlot(request, owner, granted, out result);
+        }
+
+        [HotPath]
+        public bool TryCommitPlannedBitplaneSlot(
+            uint address,
+            long requestedCycle,
+            out AmigaBusAccessResult result)
+        {
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Bitplane,
+                AmigaBusAccessKind.Bitplane,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite: false);
+            var granted = AgnusChipSlotScheduler.AlignToSlot(requestedCycle);
+            return TryCommitFixedSingleWordSlot(
+                request,
+                AgnusChipSlotOwner.Bitplane,
+                granted,
+                AgnusChipSlotPriority.Bitplane,
+                out result);
         }
 
         [HotPath]
@@ -3883,6 +3908,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         private readonly IAgnusChipSlotTiming _chipSlots;
         private long _currentCycle;
         private long _cpuChipStallCycles;
+        private ulong _displayAdvancedWakeVersion;
 
         public AgnusBeamDmaScheduler(AmigaBus bus, IAgnusChipSlotTiming chipSlots)
         {
@@ -3898,6 +3924,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             _cpuChipStallCycles = 0;
             _chipSlots.AdvanceTo(0);
             _bus.Display.ResetLiveDma();
+            _displayAdvancedWakeVersion = _bus.Display.LiveWakeVersion;
         }
 
         public void AdvanceTo(long targetCycle)
@@ -3911,9 +3938,13 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 return;
             }
 
-            if (advanceLiveDisplay)
+            var displayWakeVersion = _bus.Display.LiveWakeVersion;
+            if (advanceLiveDisplay &&
+                (targetCycle > _currentCycle ||
+                 displayWakeVersion != _displayAdvancedWakeVersion))
             {
                 _bus.Display.AdvanceLiveDmaTo(targetCycle);
+                _displayAdvancedWakeVersion = _bus.Display.LiveWakeVersion;
             }
 
             _chipSlots.AdvanceTo(targetCycle);

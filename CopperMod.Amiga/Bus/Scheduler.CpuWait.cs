@@ -203,15 +203,11 @@ namespace CopperMod.Amiga.Bus
             long requestedCycle,
             bool isWrite,
             out long grantedCycle,
-            out long completedCycle,
-            out CpuWaitFixedSlotTimelineSignature timeline,
-            out bool verifyTimeline)
+            out long completedCycle)
         {
             _bus.RecordProductionCpuWaitFixedSlotImageAttempt();
             grantedCycle = 0;
             completedCycle = 0;
-            timeline = default;
-            verifyTimeline = false;
             if (_draining ||
                 _bus.DeferredCpuWaitFixedImageProductionDisabled ||
                 size == AmigaBusAccessSize.Long ||
@@ -236,30 +232,17 @@ namespace CopperMod.Amiga.Bus
                 return CpuWaitGrantAdvanceResult.ReferenceContinuation;
             }
 
-            verifyTimeline = _bus.ShouldVerifyProductionCpuWaitFixedSlotImage;
             CpuWaitFixedSlotImageUnsupported unsupported;
-            var supported = verifyTimeline
-                ? _bus.TryPredictCpuWaitFixedSlotGrant(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    requestedCycle,
-                    isWrite,
-                    out grantedCycle,
-                    out completedCycle,
-                    out unsupported,
-                    out timeline)
-                : _bus.TryPredictCpuWaitFixedSlotGrant(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    requestedCycle,
-                    isWrite,
-                    out grantedCycle,
-                    out completedCycle,
-                    out unsupported);
+            var supported = _bus.TryPredictCpuWaitFixedSlotGrant(
+                kind,
+                target,
+                address,
+                size,
+                requestedCycle,
+                isWrite,
+                out grantedCycle,
+                out completedCycle,
+                out unsupported);
             if (!supported)
             {
                 _bus.RecordProductionCpuWaitFixedSlotImageFallback(unsupported switch

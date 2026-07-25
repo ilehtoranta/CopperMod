@@ -2035,7 +2035,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     var fourPlanePreTailWait =
                         _display.GetAgnusBitplaneFetchPlaneCount() == 4 &&
                         (_copper.WaitFirst & 0x00FE) < 0x00C0;
-                    if (fourPlanePreTailWait && waitCycle > comparisonStartCycle)
+                    if (fourPlanePreTailWait &&
+                        waitCycle > comparisonStartCycle &&
+                        _display.IsBitplaneRgaIncomingPhase(waitCycle))
                     {
                         _copper.PendingWaitPreTailPixelOffset =
                             (_copper.WaitFirst & 0x0002) * 2;

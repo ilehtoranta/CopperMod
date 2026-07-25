@@ -163,6 +163,23 @@ public sealed class M68kInterpreterCoreBehaviorTests
 
 		Assert.True(recognition.HasRecognizedInterrupt(pinAssertCycle));
 	}
+
+	[Fact]
+	public void IplAssertedAtFourCycleSetupBoundaryIsRecognizedAtPoll()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x60, 0xFE); // BRA.S $1000
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
+
+		cpu.ExecuteInstruction();
+		var pollCycle = recognition.LastInterruptSampleCycle;
+
+		Assert.True(recognition.HasRecognizedInterrupt(pollCycle - 4));
+		Assert.False(recognition.HasRecognizedInterrupt(pollCycle - 3));
+	}
+
 	[Theory]
 	[InlineData(1, 2L, 12)]
 	[InlineData(2, 6L, 10)]
@@ -1002,7 +1019,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan, false)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable, true)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan, true)]
-	public void ShortBranchPollsIplWhenCommittedTargetExtensionStarts(
+	public void ShortBranchPollsIplAfterTargetOpcodeBeforeCommittedExtensionCompletes(
 		bool enableOpcodePlan,
 		int dispatchValue,
 		bool executeBatch)
@@ -1031,18 +1048,65 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			cpu.ExecuteInstruction();
 		}
 
+		var targetOpcode = bus.CpuBusPhases.Last(phase =>
+			phase.InstructionProgramCounter == 0x1000 &&
+			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.Address == 0x1000);
 		var targetExtension = bus.CpuBusPhases.Last(phase =>
 			phase.InstructionProgramCounter == 0x1000 &&
 			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
 			phase.Address == 0x1002);
 		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
 
+		Assert.Equal(targetOpcode.CompletedCycle, recognition.LastInterruptSampleCycle);
 		Assert.Equal(targetExtension.RequestedCycle, recognition.LastInterruptSampleCycle);
 		Assert.True(recognition.LastInterruptSampleCycle < targetExtension.CompletedCycle);
 	}
 
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void CachedShortBranchTransfersOpcodePollAndCommittedExtensionFloor(int dispatchValue)
+	{
+		var bus = new CycleCountingBus
+		{
+			FixedPlanRunEnabled = true,
+			FixedPlanWindowStart = 0x1000,
+			FixedPlanWindowEndExclusive = 0x1100
+		};
+		Write(bus.Memory, 0x1000, Words(
+			0x7001, // MOVEQ #1,D0
+			0x60FC)); // BRA.S MOVEQ
+		var cpu = CreateCycleParityCpu(
+			bus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue,
+			enableCpuBusPhaseTrace: false);
+		var boundary = new BusAccessBatchBoundary();
+
+		Assert.Equal(16, ((IM68kBatchCore)cpu).ExecuteInstructions(
+			16,
+			long.MaxValue,
+			boundary));
+
+		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
+		var pipeline = Assert.IsAssignableFrom<IM68000PipelineStateTransfer>(cpu)
+			.ExportM68000PipelineState();
+		var diagnostic =
+			$"pc=0x{cpu.State.ProgramCounter:X}, opcode=0x{cpu.State.LastOpcode:X4}, " +
+			$"cycles={cpu.State.Cycles}, sample={recognition.LastInterruptSampleCycle}, " +
+			$"ready={pipeline.ReadyCycle0},{pipeline.ReadyCycle1}, " +
+			$"batch={boundary.PureCpuBatchCalls}/{boundary.PureCpuBatchInstructions}";
+
+		Assert.True(boundary.PureCpuBatchCalls > 0);
+		Assert.True(
+			pipeline.ReadyCycle0 == recognition.LastInterruptSampleCycle,
+			diagnostic);
+		Assert.Equal(pipeline.ReadyCycle1, pipeline.ExceptionEntryNotBeforeCycle);
+		Assert.True(pipeline.ReadyCycle0 < pipeline.ReadyCycle1);
+	}
+
 	[Fact]
-	public void InterruptEntryDoesNotStartBeforeCommittedInterruptSampleCompletes()
+	public void TakenShortBranchCommitsTargetExtensionBeforeInterruptEntry()
 	{
 		var bus = new CycleCountingBus
 		{
@@ -1058,12 +1122,17 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		cpu.ExecuteInstruction();
 		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
 		var sampleCycle = recognition.LastInterruptSampleCycle;
+		var targetExtension = bus.CpuBusPhases.Last(phase =>
+			phase.InstructionProgramCounter == 0x1000 &&
+			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.Address == 0x1002);
 
 		cpu.RequestInterrupt(3, (24u + 3u) * 4u);
 
 		var firstExceptionTransfer = bus.CpuBusPhases.First(phase =>
 			phase.AccessKind == M68kBusAccessKind.CpuDataWrite);
-		Assert.True(firstExceptionTransfer.RequestedCycle >= sampleCycle + 2);
+		Assert.True(sampleCycle < targetExtension.CompletedCycle);
+		Assert.True(firstExceptionTransfer.RequestedCycle >= targetExtension.CompletedCycle);
 	}
 	[Theory]
 	[InlineData((int)M68kOpcodePlanDispatch.KindTable)]
@@ -4442,10 +4511,19 @@ public sealed class M68kInterpreterCoreBehaviorTests
 				_generation[0]);
 			return true;
 		}
-		public void CommitInstructionFetchWindowWord(in M68kInstructionFetchWindow window, uint address, ref long cycle)
+		public void CommitInstructionFetchWindowWord(
+			in M68kInstructionFetchWindow window,
+			uint address,
+			ref long cycle,
+			M68kInstructionFetchPublicationPhase publicationPhase = M68kInstructionFetchPublicationPhase.Required,
+			long retirementFloor = long.MinValue,
+			in M68kInstructionFetchPublicationContext publicationContext = default)
 		{
 			_ = window;
 			_ = address;
+			_ = publicationPhase;
+			_ = retirementFloor;
+			_ = publicationContext;
 			WindowCommits++;
 			cycle += 2;
 		}
@@ -4541,10 +4619,16 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		public void CommitInstructionFetchWindowWord(
 			in M68kInstructionFetchWindow window,
 			uint address,
-			ref long cycle)
+			ref long cycle,
+			M68kInstructionFetchPublicationPhase publicationPhase = M68kInstructionFetchPublicationPhase.Required,
+			long retirementFloor = long.MinValue,
+			in M68kInstructionFetchPublicationContext publicationContext = default)
 		{
 			_ = window;
 			_ = address;
+			_ = publicationPhase;
+			_ = retirementFloor;
+			_ = publicationContext;
 			cycle += 2;
 			if (_batchExecutionStarted)
 			{
@@ -4581,10 +4665,10 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		}
 		public bool TryTrimDeferredCpuInstructionFetchSuffix(
 			ulong requiredThroughToken,
-			out ulong firstTrimmedToken)
+			out M68kDeferredCpuTrimmedInstructionFetch trimmedFetch)
 		{
 			_ = requiredThroughToken;
-			firstTrimmedToken = 0;
+			trimmedFetch = default;
 			return false;
 		}
 		public bool TryBeginDeferredCpuBusBatch(

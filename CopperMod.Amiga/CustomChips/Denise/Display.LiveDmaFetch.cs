@@ -4,6 +4,7 @@
  */
 
 using System;
+using System.Diagnostics;
 
 namespace CopperMod.Amiga.CustomChips.Denise
 {
@@ -11,7 +12,30 @@ namespace CopperMod.Amiga.CustomChips.Denise
     {
         private void CaptureLiveLineState(int row, bool recordTimeline = true)
         {
+            if (!_hostProfilingEnabled)
+            {
+                CaptureLiveLineStateCore(row, recordTimeline);
+                return;
+            }
+
+            var start = Stopwatch.GetTimestamp();
+            CaptureLiveLineStateCore(row, recordTimeline);
+            _hostLineCaptureTicks += Stopwatch.GetTimestamp() - start;
+            _hostLineCaptureCalls++;
+        }
+
+        private void CaptureLiveLineStateCore(int row, bool recordTimeline)
+        {
             if ((uint)row >= (uint)LowResOutputHeight)
+            {
+                return;
+            }
+
+            // A valid entry that already owns fetched data cannot be reused by
+            // this call. Avoid running presentation finalization for the very
+            // common repeated lookup of the active line.
+            if (IsLiveLineValid(row) &&
+                (HasCapturedLiveBitplaneWords(row) || HasStartedLiveBitplaneFetches(row, _liveCycle)))
             {
                 return;
             }
@@ -21,12 +45,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 GetOutputRowStartCycle(_liveFrameStartCycle, row),
                 completing: false,
                 minimumRenderStop: Math.Max(0, row - RasterlineRingSize + 1));
-
-            if (IsLiveLineValid(row) &&
-                (HasCapturedLiveBitplaneWords(row) || HasStartedLiveBitplaneFetches(row, _liveCycle)))
-            {
-                return;
-            }
 
             AdvanceLiveDisplayWindowStateToLine(StandardVStart + row);
             var state = GetLiveLineState(row);
@@ -766,6 +784,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void CaptureLiveBitplaneFetchBatch(long stopCycle)
         {
+            if (!_hostProfilingEnabled)
+            {
+                CaptureLiveBitplaneFetchBatchCore(stopCycle);
+                return;
+            }
+
+            var start = Stopwatch.GetTimestamp();
+            CaptureLiveBitplaneFetchBatchCore(stopCycle);
+            _hostBitplaneCaptureTicks += Stopwatch.GetTimestamp() - start;
+            _hostBitplaneCaptureCalls++;
+        }
+
+        private void CaptureLiveBitplaneFetchBatchCore(long stopCycle)
+        {
             while (_liveNextFetchRow < LowResOutputHeight)
             {
                 if (!NormalizeLiveBitplaneFetchCursor())
@@ -916,16 +948,34 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (batchCount > 0)
             {
-                var firstEntry = _rowDmaBitplaneEntries[batchStart];
                 var grantedCount = 0;
                 var firstGrantedCycle = -1L;
                 var lastGrantedCycle = -1L;
-                var previousAuditSource = _bus.PushSlotScheduleAuditSource(
-                    AgnusSlotAuditSource.RowBitplanePresentation,
-                    row,
-                    firstEntry.Word,
-                    firstEntry.Slot);
-                try
+                if (_bus.SlotScheduleAuditEnabled)
+                {
+                    var firstEntry = _rowDmaBitplaneEntries[batchStart];
+                    var previousAuditSource = _bus.PushSlotScheduleAuditSource(
+                        AgnusSlotAuditSource.RowBitplanePresentation,
+                        row,
+                        firstEntry.Word,
+                        firstEntry.Slot);
+                    try
+                    {
+                        _bus.CausalBusExecutor.ExecuteBitplaneRowBatch(
+                            _rowDmaBitplaneEntries.AsSpan(batchStart, batchCount),
+                            state.LineStartCycle,
+                            _rowDmaBitplaneBatchValues.AsSpan(0, batchCount),
+                            _rowDmaBitplaneBatchGranted.AsSpan(0, batchCount),
+                            out grantedCount,
+                            out firstGrantedCycle,
+                            out lastGrantedCycle);
+                    }
+                    finally
+                    {
+                        _bus.RestoreSlotScheduleAuditSource(previousAuditSource);
+                    }
+                }
+                else
                 {
                     _bus.CausalBusExecutor.ExecuteBitplaneRowBatch(
                         _rowDmaBitplaneEntries.AsSpan(batchStart, batchCount),
@@ -935,10 +985,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         out grantedCount,
                         out firstGrantedCycle,
                         out lastGrantedCycle);
-                }
-                finally
-                {
-                    _bus.RestoreSlotScheduleAuditSource(previousAuditSource);
                 }
 
                 ConsumeRowDmaBitplaneBatch(
@@ -1400,11 +1446,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void CaptureLiveBitplaneFetch(int row, int plane, int word, long fetchCycle, LiveLineState state)
         {
             EnsureActiveRowBitplaneDmaPlanCurrent(row);
-            _bus.CausalBusExecutor.RecordFixedPlanShadow(
-                fetchCycle,
-                AgnusChipSlotOwner.Bitplane,
-                _dmacon,
-                _bplcon0);
             var capturedWord = word + state.BitplaneWordIndexOffsets[plane];
             if ((uint)capturedWord >= (uint)MaxBitplaneFetchWords)
             {
@@ -1430,11 +1471,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             var state = GetLiveLineState(row);
             EnsureActiveRowBitplaneDmaPlanCurrent(row);
-            _bus.CausalBusExecutor.RecordFixedPlanShadow(
-                entry.GetCycle(state.LineStartCycle),
-                AgnusChipSlotOwner.Bitplane,
-                _dmacon,
-                _bplcon0);
             var capturedWord = entry.Word + state.BitplaneWordIndexOffsets[entry.Plane];
             if ((uint)capturedWord >= (uint)MaxBitplaneFetchWords)
             {

@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace CopperMod.Amiga.CustomChips.Denise
 {
@@ -16,6 +17,35 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void AdvanceLiveDisplayStateTo(long targetCycle, bool includeCopper)
         {
             targetCycle = Math.Max(_liveFrameStartCycle, targetCycle);
+            if (!_hostProfilingEnabled)
+            {
+                if (GetNextLiveDisplayEventCycle(includeCopper) > targetCycle)
+                {
+                    _liveCycle = Math.Max(_liveCycle, targetCycle);
+                    return;
+                }
+
+                AdvanceLiveDisplayStateToCore(targetCycle, includeCopper);
+                return;
+            }
+
+            var start = Stopwatch.GetTimestamp();
+            if (GetNextLiveDisplayEventCycle(includeCopper) > targetCycle)
+            {
+                _liveCycle = Math.Max(_liveCycle, targetCycle);
+                _hostLiveStateTicks += Stopwatch.GetTimestamp() - start;
+                _hostLiveStateCalls++;
+                _hostLiveStateFastReturns++;
+                return;
+            }
+
+            AdvanceLiveDisplayStateToCore(targetCycle, includeCopper);
+            _hostLiveStateTicks += Stopwatch.GetTimestamp() - start;
+            _hostLiveStateCalls++;
+        }
+
+        private void AdvanceLiveDisplayStateToCore(long targetCycle, bool includeCopper)
+        {
             while (true)
             {
                 var nextCycle = GetNextLiveDisplayEventCycle(includeCopper);
@@ -341,7 +371,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var fourPlanePreTailWait =
                     GetAgnusBitplaneFetchPlaneCount() == 4 &&
                     (_liveCopper.WaitFirst & 0x00FE) < 0x00C0;
-                if (fourPlanePreTailWait && waitCycle > comparisonStartCycle)
+                if (fourPlanePreTailWait &&
+                    waitCycle > comparisonStartCycle &&
+                    IsBitplaneRgaIncomingPhase(waitCycle))
                 {
                     _liveCopper.PendingWaitPreTailPixelOffset =
                         (_liveCopper.WaitFirst & 0x0002) * 2;
@@ -622,7 +654,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 // phase is already behind the executed horizon and must be
                 // committed synchronously below; scheduling a second control
                 // event would both be late and move the write into a later line.
-                if (commitMove && dataCycle > _bus.ExecutedChipBusHorizon)
+                if (commitMove && dataCycle > _bus.CausalBusExecutor.ExecutedThroughCycle)
                 {
                     _bus.CausalBusExecutor.ScheduleCopperMoveControl(
                         register,

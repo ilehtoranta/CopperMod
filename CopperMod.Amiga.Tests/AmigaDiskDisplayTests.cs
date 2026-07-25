@@ -6,7 +6,7 @@ namespace CopperMod.Amiga.Tests;
 
 public sealed class AmigaDiskDisplayTests
 {
-    private const int StandardX = AmigaConstants.PalLowResOverscanBorderX;
+    private const int StandardX = AmigaConstants.PalLowResOverscanBorderX - 1;
     private const int StandardY = AmigaConstants.PalLowResOverscanBorderY;
 
     [Theory]
@@ -426,6 +426,49 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void StartedLineRefreshRewindsCaptureCursorFromFutureRow()
+    {
+        var bus = new AmigaBus(enableLiveAgnusDma: true);
+        var frameCycle = AmigaConstants.A500PalCpuCyclesPerFrame;
+        var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        var row = StandardY;
+        var lineStart = CycleForOutputRow(row, lineCycles);
+        var refreshCycle = CycleForOutputRowHorizontal(row, 0x38, lineCycles) - 2;
+        bus.WriteWord(0x00DFF092, 0x0038);
+        bus.WriteWord(0x00DFF094, 0x00D0);
+        bus.WriteWord(0x00DFF0E0, 0x0000);
+        bus.WriteWord(0x00DFF0E2, 0x1000);
+        bus.WriteWord(0x00DFF100, 0x9000);
+        bus.WriteWord(0x00DFF096, 0x8300);
+        bus.Display.BeginPresentationFrame(
+            new PresentationFrameTarget(new uint[bus.Display.Width * bus.Display.Height]),
+            0,
+            frameCycle);
+
+        try
+        {
+            bus.AdvanceDmaTo(lineStart);
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var cursor = typeof(Display).GetProperty("_liveNextFetchRow", flags) ??
+                throw new InvalidOperationException("Live capture cursor property was not found.");
+            var refresh = typeof(Display).GetMethod("RefreshStartedLiveLineDmaState", flags) ??
+                throw new InvalidOperationException("Started-line refresh method was not found.");
+
+            // Physical lookahead may have moved capture to a later row before
+            // a causal mode write rebuilds the current row's unexecuted suffix.
+            cursor.SetValue(bus.Display, row + 1);
+            refresh.Invoke(bus.Display, [row, refreshCycle]);
+
+            Assert.Equal(row, cursor.GetValue(bus.Display));
+        }
+        finally
+        {
+            bus.Display.AbortPresentationFrame();
+        }
+    }
+
+    [Fact]
     public void DisplayContinuesBitplaneFetchesPastAdjacentPlanePointers()
     {
         var bus = new AmigaBus();
@@ -564,8 +607,8 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 15, StandardY));
-        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 16, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 16, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 17, StandardY));
     }
 
     [Fact]
@@ -586,8 +629,8 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFF000000u, Pixel(frame, StandardX - 16, StandardY));
-        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX - 1, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX - 15, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
     }
 
     [Fact]
@@ -609,7 +652,7 @@ public sealed class AmigaDiskDisplayTests
         bus.Display.RenderFrame(frame);
 
         var firstLine = StandardY * 2;
-        var expectedFirstPixel = ((StandardX - 1) + ((0x38 - 0x3C) * 2)) * 2;
+        var expectedFirstPixel = (StandardX + ((0x38 - 0x3C) * 2)) * 2;
         Assert.Equal(0xFF000000u, HighResPixel(frame, bus.Display.Width, expectedFirstPixel - 1, firstLine));
         Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, expectedFirstPixel, firstLine));
     }
@@ -981,7 +1024,7 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 15, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 16, StandardY));
     }
 
     [Fact]
@@ -1706,8 +1749,8 @@ public sealed class AmigaDiskDisplayTests
             throw;
         }
 
-        Assert.Equal(0xFFFF0000u, Pixel(liveFrame, StandardX + 1, StandardY));
-        Assert.Equal(0xFF00FF00u, Pixel(liveFrame, StandardX + 2, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(liveFrame, StandardX + 2, StandardY));
+        Assert.Equal(0xFF00FF00u, Pixel(liveFrame, StandardX + 3, StandardY));
         Assert.Equal(0xFF00FF00u, Pixel(liveFrame, StandardX + 15, StandardY));
         var snapshot = liveBus.Display.CaptureSnapshot();
         Assert.Equal(0x00F0, snapshot.Colors[1]);
@@ -2455,7 +2498,7 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFF0000FFu, Pixel(frame, StandardX + 63, StandardY + 65));
+        Assert.Equal(0xFF0000FFu, Pixel(frame, StandardX + 64, StandardY + 65));
     }
 
     [Fact]
@@ -2471,8 +2514,8 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFF000000u, Pixel(frame, StandardX - 1, StandardY));
-        Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFF0000FFu, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 1, StandardY));
     }
 
     [Fact]

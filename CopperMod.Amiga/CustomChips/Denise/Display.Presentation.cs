@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -45,6 +46,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _boundPresentationFrameStartCycle = frameStartCycle;
             _boundPresentationFrameStopCycle = Math.Min(frameStopCycle, GetFrameStopCycle(frameStartCycle));
             _nextBoundPresentationRow = 0;
+            _presentationDuplicatedRowCount = 0;
+            _presentationDuplicatedByteCount = 0;
             _boundPresentationActive = true;
             _boundPresentationCompleted = false;
             _renderFrameStartCycle = frameStartCycle;
@@ -156,10 +159,58 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int GetInterlaceField(long frameStartCycle)
             => _bus.GetBeamPosition(frameStartCycle).FrameNumber & 1;
 
+        private void RenderBoundPresentationLinesIfReady(long capturedThroughCycle)
+        {
+            if (!_boundPresentationActive ||
+                _boundPresentationCompleted ||
+                !_boundPresentationTarget.IsBound ||
+                capturedThroughCycle < _boundPresentationFrameStartCycle)
+            {
+                return;
+            }
+
+            // Non-completing presentation deliberately retains two live rows:
+            // row N is safe only after the capture reaches the start of N+2.
+            // Admit the renderer only at that causal boundary instead of
+            // polling it after every outer live-DMA advance.
+            var readyCycle = GetOutputRowStartCycle(
+                _boundPresentationFrameStartCycle,
+                _nextBoundPresentationRow + 2);
+            if (capturedThroughCycle < readyCycle)
+            {
+                return;
+            }
+
+            RenderBoundPresentationLinesThrough(capturedThroughCycle, completing: false);
+        }
+
         private void RenderBoundPresentationLinesThrough(
             long capturedThroughCycle,
             bool completing,
             int minimumRenderStop = 0)
+        {
+            if (!_hostProfilingEnabled)
+            {
+                RenderBoundPresentationLinesThroughCore(
+                    capturedThroughCycle,
+                    completing,
+                    minimumRenderStop);
+                return;
+            }
+
+            var start = Stopwatch.GetTimestamp();
+            RenderBoundPresentationLinesThroughCore(
+                capturedThroughCycle,
+                completing,
+                minimumRenderStop);
+            _hostPresentationTicks += Stopwatch.GetTimestamp() - start;
+            _hostPresentationCalls++;
+        }
+
+        private void RenderBoundPresentationLinesThroughCore(
+            long capturedThroughCycle,
+            bool completing,
+            int minimumRenderStop)
         {
             if (!_boundPresentationActive ||
                 _boundPresentationCompleted ||
@@ -314,46 +365,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 target[start + (3 * scale)],
                 target[start + (4 * scale)],
                 target[start + (5 * scale)]));
-        }
-
-        internal string CaptureBitplaneSourceProbe(int row, int x, int word)
-        {
-            if (!_displayTimeline.HasLine(row))
-            {
-                return $"row={row}:missing";
-            }
-
-            var line = _displayTimeline.GetLine(row);
-            for (var index = 0; index < line.SegmentCount; index++)
-            {
-                var segment = line.Segments[index];
-                if (segment.XStart > x || segment.XStop <= x)
-                {
-                    continue;
-                }
-
-                var state = _displayTimeline.GetState(segment.StateIndex);
-                var planes = new string[Math.Min(3, state.DecodePlaneCount)];
-                for (var plane = 0; plane < planes.Length; plane++)
-                {
-                    var granted = TryGetTimelineBitplaneWord(
-                        row,
-                        plane,
-                        word,
-                        state,
-                        _displayTimeline,
-                        out var value);
-                    planes[plane] =
-                        $"p{plane}={value:X4}/{granted}@{state.BitplaneRowAddresses[plane]:X6}" +
-                        $"+{state.BitplaneWordIndexOffsets[plane]}";
-                }
-
-                return $"row={row},line={state.LineStartCycle},seg={segment.XStart}-{segment.XStop}," +
-                    $"bpl={state.Bplcon0:X4},dma={state.Dmacon:X4},fetch={state.FetchWords}," +
-                    string.Join(",", planes);
-            }
-
-            return $"row={row}:x={x}:missing";
         }
 
         private bool TryRenderBoundPresentationPlayfieldRow(
@@ -1042,6 +1053,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var outputY = row * 2;
             bgra.Slice((outputY * _renderWidth) + pixelStart, pixelCount)
                 .CopyTo(bgra.Slice(((outputY + 1) * _renderWidth) + pixelStart, pixelCount));
+            _presentationDuplicatedRowCount++;
+            _presentationDuplicatedByteCount += pixelCount * sizeof(uint);
         }
 
         private void FillTimelineLowResolutionSegment(

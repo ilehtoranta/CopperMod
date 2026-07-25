@@ -210,13 +210,9 @@ namespace CopperMod.Amiga.Runtime
 
         public bool CopperQuiescentFastPathEnabled { get; private set; }
 
-        public bool CopperQuiescentFastPathVerifyEnabled { get; private set; }
-
         public bool CopperQuiescentDiagnosticsEnabled { get; private set; }
 
         public bool DeferredCpuBusBatchEnabled { get; private set; } = true;
-
-        public bool DeferredCpuBusBatchVerifyEnabled { get; private set; }
 
         public bool DeferredCpuChipWriteJournalEnabled { get; private set; } = true;
 
@@ -328,10 +324,9 @@ namespace CopperMod.Amiga.Runtime
             return this;
         }
 
-        public MachineOptions WithCopperQuiescentFastPath(bool enabled, bool verify)
+        public MachineOptions WithCopperQuiescentFastPath(bool enabled)
         {
             CopperQuiescentFastPathEnabled = enabled;
-            CopperQuiescentFastPathVerifyEnabled = verify;
             return this;
         }
 
@@ -341,10 +336,9 @@ namespace CopperMod.Amiga.Runtime
             return this;
         }
 
-        public MachineOptions WithDeferredCpuBusBatch(bool enabled, bool verify)
+        public MachineOptions WithDeferredCpuBusBatch(bool enabled)
         {
             DeferredCpuBusBatchEnabled = enabled;
-            DeferredCpuBusBatchVerifyEnabled = verify;
             return this;
         }
 
@@ -528,9 +522,7 @@ namespace CopperMod.Amiga.Runtime
                 null,
                 options.Hardfiles,
                 options.CopperQuiescentFastPathEnabled,
-                options.CopperQuiescentFastPathVerifyEnabled,
                 options.DeferredCpuBusBatchEnabled,
-                options.DeferredCpuBusBatchVerifyEnabled,
                 options.CopperQuiescentDiagnosticsEnabled,
                 options.CpuWaitSlotReferencePathEnabled,
                 options.RtgVramSize,

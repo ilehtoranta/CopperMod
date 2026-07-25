@@ -30,7 +30,6 @@ internal static class AmigaInstructionFetchArbitrationBenchmark
             $"profile=OCS-PAL/A500, warmup={options.WarmupInstructions}, measured={options.Instructions}, " +
             $"repeats={options.Repeats}, scheduler-profile={options.ProfileScheduler}, " +
             $"deferred-cpu={options.DeferredCpuBusBatch}, hardware-specialization={options.HardwareSpecialization}, " +
-            $"deferred-read-shadow={options.DeferredDmaReadsVerify}, " +
             $"Release={IsRelease()}");
         Console.WriteLine(
             "scenario\trepeat\tinstructions\tms\tinstr/sec\tns/instr\tcycles/instr\tallocated bytes\tchecksum\t" +
@@ -71,7 +70,6 @@ internal static class AmigaInstructionFetchArbitrationBenchmark
             realFastRamSize: RealFastRamSize,
             enableHardwareSpecialization: options.HardwareSpecialization,
             enableDeferredCpuBusBatch: options.DeferredCpuBusBatch,
-            verifyDeferredDmaReads: options.DeferredDmaReadsVerify,
             chipset: AmigaChipset.OcsPal);
         bus.ConfigureAutoconfigFastRamForHost();
         var programAddress = InstallProgram(bus, scenario.Memory);
@@ -206,7 +204,6 @@ internal static class AmigaInstructionFetchArbitrationBenchmark
         var profileScheduler = false;
         var deferredCpuBusBatch = false;
         var hardwareSpecialization = false;
-        var deferredDmaReadsVerify = false;
         for (var index = 0; index < args.Length; index++)
         {
             switch (args[index])
@@ -231,16 +228,12 @@ internal static class AmigaInstructionFetchArbitrationBenchmark
                 case "--hardware-specialization":
                     hardwareSpecialization = true;
                     break;
-                case "--deferred-dma-reads-verify":
-                    deferredDmaReadsVerify = true;
-                    break;
                 case "--help":
                 case "-h":
                     Console.WriteLine(
                         "Usage: dotnet run -c Release --project CopperScreen.Benchmarks -- " +
                         "--amiga-fetch-arbitration [--warmup N] [--instructions N] [--repeats N] " +
-                        "[--profile-scheduler] [--deferred-cpu] [--hardware-specialization] " +
-                        "[--deferred-dma-reads-verify]");
+                        "[--profile-scheduler] [--deferred-cpu] [--hardware-specialization]");
                     Environment.Exit(0);
                     break;
                 default:
@@ -259,8 +252,7 @@ internal static class AmigaInstructionFetchArbitrationBenchmark
             repeats,
             profileScheduler,
             deferredCpuBusBatch,
-            hardwareSpecialization,
-            deferredDmaReadsVerify);
+            hardwareSpecialization);
     }
 
     private static int ParseInt(string[] args, ref int index)
@@ -302,8 +294,7 @@ internal static class AmigaInstructionFetchArbitrationBenchmark
         int Repeats,
         bool ProfileScheduler,
         bool DeferredCpuBusBatch,
-        bool HardwareSpecialization,
-        bool DeferredDmaReadsVerify);
+        bool HardwareSpecialization);
 
     private readonly record struct AmigaInstructionFetchArbitrationResult(
         int Instructions,

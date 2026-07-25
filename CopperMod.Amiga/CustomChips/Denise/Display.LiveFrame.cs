@@ -57,7 +57,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if (!_liveDmaEnabled || !HasLiveDisplayWork())
             {
                 AdvanceIdleLiveDmaTo(targetCycle);
-                RenderBoundPresentationLinesThrough(_liveCapturedThroughCycle, completing: false);
+                RenderBoundPresentationLinesIfReady(_liveCapturedThroughCycle);
                 return;
             }
 
@@ -100,7 +100,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _advancingLiveDma = savedAdvancingLiveDma;
             if (!savedAdvancingLiveDma)
             {
-                RenderBoundPresentationLinesThrough(_liveCapturedThroughCycle, completing: false);
+                RenderBoundPresentationLinesIfReady(_liveCapturedThroughCycle);
             }
         }
 

@@ -20,8 +20,8 @@ namespace CopperMod.Amiga.Bus
         private long _cpuGrantDynamicDmaRejectSegmentEnd = -1;
 
         private const int DeferredCpuBusBatchMinimumHorizonCycles = 16;
-        // The CPU wait-slot executor remains shadow-only until its display and
-        // scheduler state transitions are proven equivalent to the reference drain.
+        // Production CPU wait-slot searches reuse the causal fixed-owner image.
+        // Unsupported dynamic cases conservatively fall back to scheduler draining.
         private const bool DeferredCpuWaitFastPathEnabled = true;
 
         internal void ArmDeferredCpuBatchExitForTest(long cycle)
@@ -102,21 +102,6 @@ namespace CopperMod.Amiga.Bus
 
             if (!_deferredCpuBusBatchEnabled)
             {
-                if (_agnusBusExecutor.CpuVisibilityShadowEnabled)
-                {
-                    currentCycle = Math.Max(0, currentCycle);
-                    var diagnosticTarget = targetCycle.HasValue
-                        ? Math.Max(currentCycle + 1, targetCycle.Value)
-                        : currentCycle + DeferredCpuBusBatchDefaultCycleWindow;
-                    var diagnosticInterruptMask = (state.StatusRegister >> 8) & 0x07;
-                    _ = GetNextCpuBatchWakeCandidateCycle(
-                        currentCycle,
-                        diagnosticTarget,
-                        diagnosticInterruptMask,
-                        out _,
-                        out _);
-                }
-
                 return false;
             }
 
@@ -172,15 +157,9 @@ namespace CopperMod.Amiga.Bus
             _deferredCpuInstructionPublicationPhaseSlipVirtualReadyCycle = -1;
             _deferredCpuInstructionPublicationPhaseSlipActualReadyCycle = -1;
             _deferredCpuInstructionPublicationPhaseSlipContext = default;
-            _deferredCpuRetirementPublicationShadowFirstCaptured = false;
             _deferredCpuTrimmedPendingTransitionActive = false;
-            _deferredCpuIrcPairShadowLastToken = 0;
-            _deferredCpuIrcPairShadowLastReadyCycle = -1;
-            _deferredCpuIrcPairShadowEntries = 0;
-            _deferredCpuIrcPairShadowFirstPredecessorReadyCycle = -1;
-            _deferredCpuIrcPairShadowFirstPredictedReadyCycle = -1;
-            _deferredCpuIrcPairShadowPredecessorReadyCycle = -1;
-            _deferredCpuIrcPairShadowPredictedReadyCycle = -1;
+            _deferredCpuIrcPairLastToken = 0;
+            _deferredCpuIrcPairLastReadyCycle = -1;
             _agnusBusExecutor.ClearUnresolvedCpuTiming();
             _deferredCpuBusBatchExecutionStarted = false;
             _deferredCpuBusBatchPendingWakeSource = wakeSource;
@@ -304,48 +283,6 @@ namespace CopperMod.Amiga.Bus
                     if (isIdentityBoundIrc)
                     {
                         break;
-                    }
-                }
-
-                if (candidatePhase is
-                    M68kInstructionFetchPublicationPhase.RetirementQueue or
-                    M68kInstructionFetchPublicationPhase.CancellableSuccessor)
-                {
-                    var nominalCycle = _deferredCpuDataRequestedCycles[candidateIndex] +
-                        _deferredCpuDataRequestedRetireDelays[candidateIndex];
-                    var translatedCycle = nominalCycle +
-                        CalculateDeferredCpuPublicationResidualSlip(
-                            candidateIndex,
-                            nominalCycle,
-                            _deferredCpuInstructionPublicationPhaseSlip);
-                    _deferredCpuRetirementPublicationShadowEntries++;
-                    _deferredCpuRetirementPublicationShadowLastNominalCycle = nominalCycle;
-                    _deferredCpuRetirementPublicationShadowLastFloor =
-                        _deferredCpuDataInstructionFetchRetirementFloors[candidateIndex];
-                    _deferredCpuRetirementPublicationShadowLastInheritedDelay =
-                        _deferredCpuInstructionPublicationPhaseSlip;
-                    _deferredCpuRetirementPublicationShadowLastTranslatedCycle = translatedCycle;
-                    _deferredCpuRetirementPublicationShadowLastPhase = candidatePhase;
-                    _deferredCpuRetirementPublicationShadowLastGroup =
-                        _deferredCpuDataInstructionFetchPublicationContexts[candidateIndex].Group;
-                    RecordDeferredCpuPublicationShadowContext(
-                        candidateIndex,
-                        nominalCycle,
-                        _deferredCpuDataInstructionFetchRetirementFloors[candidateIndex],
-                        _deferredCpuInstructionPublicationPhaseSlip,
-                        wasReplay: false);
-                    if (TryPredictCpuWaitFixedSlotGrant(
-                            AmigaBusAccessKind.CpuInstructionFetch,
-                            AmigaBusAccessTarget.ExpansionRam,
-                            ExpansionRamBase,
-                            AmigaBusAccessSize.Word,
-                            nominalCycle,
-                            isWrite: false,
-                            out var legacyGrant,
-                            out _,
-                            out _))
-                    {
-                        _deferredCpuRetirementPublicationShadowLastLegacyReadyCycle = legacyGrant;
                     }
                 }
 
@@ -1026,8 +963,6 @@ namespace CopperMod.Amiga.Bus
             _deferredCpuBusBatchExitPcLeftFastWindow = 0;
             _deferredCpuBusBatchExitException = 0;
             _deferredCpuBusBatchExitUnsupported = 0;
-            _deferredCpuBusBatchVerificationMismatches = 0;
-            _deferredCpuBusBatchFirstMismatch = string.Empty;
             _deferredCpuBusBatchWakeTargetCycle = 0;
             _deferredCpuBusBatchWakePendingInterrupt = 0;
             _deferredCpuBusBatchWakeVerticalBlank = 0;
@@ -1059,8 +994,6 @@ namespace CopperMod.Amiga.Bus
             _deferredCpuInternalNoBusWindowWakePaula = 0;
             _deferredCpuInternalNoBusWindowWakeCopper = 0;
             _deferredCpuInternalNoBusWindowWakeBlitter = 0;
-            _deferredCpuInternalNoBusWindowVerificationMismatches = 0;
-            _deferredCpuInternalNoBusWindowFirstMismatch = string.Empty;
             ResetDeferredCpuWaitDiagnostics();
         }
 
@@ -1397,23 +1330,11 @@ namespace CopperMod.Amiga.Bus
             if (checkpointRequest.PendingSuccessorRequiresIrcGap &&
                 checkpointRequest.PendingSuccessorPredecessorToken != 0 &&
                 checkpointRequest.PendingSuccessorPredecessorToken ==
-                    _deferredCpuIrcPairShadowLastToken)
+                    _deferredCpuIrcPairLastToken)
             {
                 resolvedPendingRequestCycle = Math.Max(
                     resolvedPendingOriginalCycle,
-                    _deferredCpuIrcPairShadowLastReadyCycle + 4);
-                if (_deferredCpuIrcPairShadowEntries == 0)
-                {
-                    _deferredCpuIrcPairShadowFirstPredecessorReadyCycle =
-                        _deferredCpuIrcPairShadowLastReadyCycle;
-                    _deferredCpuIrcPairShadowFirstPredictedReadyCycle =
-                        resolvedPendingRequestCycle;
-                }
-                _deferredCpuIrcPairShadowEntries++;
-                _deferredCpuIrcPairShadowPredecessorReadyCycle =
-                    _deferredCpuIrcPairShadowLastReadyCycle;
-                _deferredCpuIrcPairShadowPredictedReadyCycle =
-                    resolvedPendingRequestCycle;
+                    _deferredCpuIrcPairLastReadyCycle + 4);
             }
             checkpoint = new M68kDeferredCpuBusCheckpoint(
                 architecturalRetireCycle,
@@ -1500,47 +1421,16 @@ namespace CopperMod.Amiga.Bus
                     _deferredCpuDataRequestedRetireDelays[index];
                 var publicationContext =
                     _deferredCpuDataInstructionFetchPublicationContexts[index];
-                if (publicationContext.RequiresIrcGap &&
-                    publicationContext.PredecessorToken != 0 &&
-                    publicationContext.PredecessorToken == _deferredCpuIrcPairShadowLastToken)
-                {
-                    var predictedRequestCycle = Math.Max(
-                        entryNominalCycle,
-                        _deferredCpuIrcPairShadowLastReadyCycle + 4);
-                    if (TryPredictCpuWaitFixedSlotGrant(
-                            AmigaBusAccessKind.CpuInstructionFetch,
-                            AmigaBusAccessTarget.ExpansionRam,
-                            ExpansionRamBase,
-                            AmigaBusAccessSize.Word,
-                            predictedRequestCycle,
-                            isWrite: false,
-                            out var predictedGrantCycle,
-                            out _,
-                            out _))
-                    {
-                        if (_deferredCpuIrcPairShadowEntries == 0)
-                        {
-                            _deferredCpuIrcPairShadowFirstPredecessorReadyCycle =
-                                _deferredCpuIrcPairShadowLastReadyCycle;
-                            _deferredCpuIrcPairShadowFirstPredictedReadyCycle =
-                                predictedGrantCycle;
-                        }
-                        _deferredCpuIrcPairShadowEntries++;
-                        _deferredCpuIrcPairShadowPredecessorReadyCycle =
-                            _deferredCpuIrcPairShadowLastReadyCycle;
-                        _deferredCpuIrcPairShadowPredictedReadyCycle = predictedGrantCycle;
-                    }
-                }
                 var requestedCycle = Math.Max(
                     actualCompletedCycle,
                     entryNominalCycle);
                 if (publicationContext.RequiresIrcGap &&
                     publicationContext.PredecessorToken != 0 &&
-                    publicationContext.PredecessorToken == _deferredCpuIrcPairShadowLastToken)
+                    publicationContext.PredecessorToken == _deferredCpuIrcPairLastToken)
                 {
                     requestedCycle = Math.Max(
                         requestedCycle,
-                        _deferredCpuIrcPairShadowLastReadyCycle + 4);
+                        _deferredCpuIrcPairLastReadyCycle + 4);
                 }
                 var runCycle = requestedCycle;
                 if (!TryReplayDeferredCpuExpansionWordTimingSequence(
@@ -1569,39 +1459,21 @@ namespace CopperMod.Amiga.Bus
                     var nominalCycle = _deferredCpuDataRequestedCycles[index] +
                         _deferredCpuDataRequestedRetireDelays[index];
                     var inheritedDelay = _deferredCpuInstructionPublicationPhaseSlip;
-                    _deferredCpuRetirementPublicationShadowEntries++;
-                    _deferredCpuRetirementPublicationShadowLastNominalCycle = nominalCycle;
-                    _deferredCpuRetirementPublicationShadowLastFloor =
-                        _deferredCpuDataInstructionFetchRetirementFloors[index];
-                    _deferredCpuRetirementPublicationShadowLastInheritedDelay = inheritedDelay;
-                    _deferredCpuRetirementPublicationShadowLastLegacyReadyCycle = readyCycle;
                     var translatedReadyCycle = Math.Max(
                         actualCompletedCycle,
                         nominalCycle + CalculateDeferredCpuPublicationResidualSlip(
                             index,
                             nominalCycle,
                             inheritedDelay));
-                    _deferredCpuRetirementPublicationShadowLastTranslatedCycle =
-                        translatedReadyCycle;
                     readyCycle = translatedReadyCycle;
-                    _deferredCpuRetirementPublicationShadowLastPhase =
-                        _deferredCpuDataInstructionFetchPublicationPhases[index];
-                    _deferredCpuRetirementPublicationShadowLastGroup =
-                        _deferredCpuDataInstructionFetchPublicationContexts[index].Group;
-                    RecordDeferredCpuPublicationShadowContext(
-                        index,
-                        nominalCycle,
-                        _deferredCpuDataInstructionFetchRetirementFloors[index],
-                        inheritedDelay,
-                        wasReplay: true);
                     if (inheritedDelay > 0)
                     {
                         _deferredCpuInstructionPublicationPhaseSlip = 0;
                         _deferredCpuInstructionPublicationPhaseSlipGroup = 0;
                     }
                 }
-                _deferredCpuIrcPairShadowLastToken = token;
-                _deferredCpuIrcPairShadowLastReadyCycle = identityReadyCycle;
+                _deferredCpuIrcPairLastToken = token;
+                _deferredCpuIrcPairLastReadyCycle = identityReadyCycle;
                 lastReadyCycle = readyCycle;
                 if (token != 0 && token == checkpointRequest.ConsumedThroughToken)
                 {
@@ -1638,40 +1510,6 @@ namespace CopperMod.Amiga.Bus
 
             replayCycle = actualCompletedCycle;
             return true;
-        }
-
-        private void RecordDeferredCpuPublicationShadowContext(
-            int index,
-            long nominalCycle,
-            long retirementFloor,
-            long inheritedDelay,
-            bool wasReplay)
-        {
-            if (wasReplay)
-            {
-                _deferredCpuRetirementPublicationShadowReplayEntries++;
-            }
-            else
-            {
-                _deferredCpuRetirementPublicationShadowTrimEntries++;
-            }
-            _deferredCpuRetirementPublicationShadowLastWasReplay = wasReplay;
-            var context = _deferredCpuDataInstructionFetchPublicationContexts[index];
-            _deferredCpuRetirementPublicationShadowLastContext = context;
-            if (_deferredCpuRetirementPublicationShadowFirstCaptured || inheritedDelay <= 0)
-            {
-                return;
-            }
-
-            _deferredCpuRetirementPublicationShadowFirstCaptured = true;
-            _deferredCpuRetirementPublicationShadowFirstNominalCycle = nominalCycle;
-            _deferredCpuRetirementPublicationShadowFirstFloor = retirementFloor;
-            _deferredCpuRetirementPublicationShadowFirstInheritedDelay = inheritedDelay;
-            _deferredCpuRetirementPublicationShadowFirstTranslatedCycle = nominalCycle +
-                CalculateDeferredCpuPublicationResidualSlip(index, nominalCycle, inheritedDelay);
-            _deferredCpuRetirementPublicationShadowFirstSlipGroup =
-                _deferredCpuInstructionPublicationPhaseSlipGroup;
-            _deferredCpuRetirementPublicationShadowFirstContext = context;
         }
 
         private long CalculateDeferredCpuPublicationResidualSlip(
@@ -2079,13 +1917,8 @@ namespace CopperMod.Amiga.Bus
 
             var grantRequestCycle = requestedCycle;
             var slotContendedClean = _hardwareScheduler.IsSlotContendedCleanThrough(grantRequestCycle);
-            var scratchAudit = default(DeferredCpuWaitScratchAudit);
             var cpuGrantCommitted = false;
             var deferredPreparationUsed = false;
-            var verifyDeferredDmaReadOwnership = false;
-            var predictedDeferredDmaReadGrant = 0L;
-            var predictedDeferredDmaReadCompletion = 0L;
-            var predictedDeferredDmaReadTimeline = default(CpuWaitFixedSlotTimelineSignature);
             if (!slotContendedClean &&
                 ShouldAttemptDeferredCpuWaitWindowFastPath(grantRequestCycle))
             {
@@ -2113,33 +1946,12 @@ namespace CopperMod.Amiga.Bus
                         RecordProductionCpuWaitFixedSlotImageAttempt();
                         RecordProductionCpuWaitFixedSlotImageFallback(CpuWaitFixedImageProductionFallback.DynamicDma);
                     }
-                    RecordDeferredCpuWaitDynamicRejectShadow(
-                        kind,
-                        target,
-                        address,
-                        size,
-                        isWrite,
-                        requestedCycle);
                 }
                 else if (Blitter.Busy)
                 {
                     _hardwareScheduler.RecordDeferredCpuWaitBlitterOverlap(
                         Blitter.CanUseCpuWaitAreaMicroOps,
                         Blitter.CpuStallActive);
-                    if (ShouldRunDeferredCpuWaitSlotShadowAudit)
-                    {
-                        BeginDeferredCpuWaitScratchAudit(
-                            kind,
-                            target,
-                            address,
-                            size,
-                            requestedCycle,
-                            grantRequestCycle,
-                            isWrite,
-                            scratchWrite,
-                            ref scratchAudit);
-                    }
-
                     var advanceResult = _hardwareScheduler.AdvanceUntilCpuGrant(
                         kind,
                         target,
@@ -2218,38 +2030,8 @@ namespace CopperMod.Amiga.Bus
                 }
             }
 
-            if (!slotContendedClean &&
-                !cpuGrantCommitted &&
-                _deferredDmaReadsVerifyEnabled &&
-                !isWrite)
-            {
-                verifyDeferredDmaReadOwnership = _hardwareScheduler.TryPredictDeferredReadOwnership(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    grantRequestCycle,
-                    out predictedDeferredDmaReadGrant,
-                    out predictedDeferredDmaReadCompletion,
-                    out predictedDeferredDmaReadTimeline);
-            }
-
             if (!slotContendedClean && !cpuGrantCommitted)
             {
-                if (ShouldRunDeferredCpuWaitSlotShadowAudit && !scratchAudit.BlitterAttempted)
-                {
-                    BeginDeferredCpuWaitScratchAudit(
-                        kind,
-                        target,
-                        address,
-                        size,
-                        requestedCycle,
-                        grantRequestCycle,
-                        isWrite,
-                        scratchWrite,
-                        ref scratchAudit);
-                }
-
                 _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite, size);
                 AdvanceCpuAccessToCausalBusHorizon(target, ref grantRequestCycle);
             }
@@ -2316,36 +2098,6 @@ namespace CopperMod.Amiga.Bus
                 requestedCycle,
                 grantedCycle);
 
-            if (CopperQuiescentShadowPredictionEnabled)
-            {
-                _hardwareScheduler.RecordCopperQuiescentCpuSlotPrediction(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    grantRequestCycle,
-                    grantedCycle,
-                    completedCycle,
-                    isWrite);
-            }
-
-            if (scratchAudit.HasSupportedScratch)
-            {
-                CompleteDeferredCpuWaitScratchAudit(
-                    in scratchAudit,
-                    kind,
-                    target,
-                    address,
-                    size,
-                    requestedCycle,
-                    grantRequestCycle,
-                    isWrite,
-                    grantedCycle,
-                    secondWordCycle,
-                    completedCycle,
-                    _hrmSlotEngine.CaptureTimelineSignature(grantRequestCycle, completedCycle));
-            }
-
             if (grantedCycle > requestedCycle)
             {
                 Agnus.RecordCpuChipWaitCycles(grantedCycle - requestedCycle);
@@ -2375,21 +2127,6 @@ namespace CopperMod.Amiga.Bus
                     grantedCycle,
                     secondWordCycle,
                     completedCycle);
-            }
-
-            if (verifyDeferredDmaReadOwnership)
-            {
-                VerifyDeferredDmaReadOwnership(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    grantRequestCycle,
-                    grantedCycle,
-                    completedCycle,
-                    predictedDeferredDmaReadGrant,
-                    predictedDeferredDmaReadCompletion,
-                    predictedDeferredDmaReadTimeline);
             }
 
             chronologicalGrantCommitted = cpuGrantCommitted;
@@ -3599,19 +3336,6 @@ namespace CopperMod.Amiga.Bus
                     out grantedCycle,
                     out completedCycle);
                 secondWordCycle = grantedCycle;
-            }
-
-            if (CopperQuiescentShadowPredictionEnabled)
-            {
-                _hardwareScheduler.RecordCopperQuiescentCpuSlotPrediction(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    originalRequestedCycle,
-                    grantedCycle,
-                    completedCycle,
-                    isWrite);
             }
 
             Agnus.RecordCpuChipWaitCycles(grantedCycle - originalRequestedCycle);

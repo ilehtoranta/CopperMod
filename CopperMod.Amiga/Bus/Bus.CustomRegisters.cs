@@ -296,11 +296,73 @@ namespace CopperMod.Amiga.Bus
 
         private void CalculateBeamPosition(long targetCycle, out ushort vposr, out ushort vhposr)
         {
+            if (TryCalculateExternalResyncBeamPosition(targetCycle, out vposr, out vhposr))
+            {
+                return;
+            }
+
             var beam = _beamClock.GetPosition(targetCycle);
             var horizontal = EncodeVhposrHorizontal(beam.BeamHorizontal, targetCycle);
             var registerLine = beam.BeamLine;
             vposr = (ushort)(((beam.IsLongFrame ? 1 : 0) << 15) | ((registerLine >> 8) & 0x0001));
             vhposr = (ushort)(((registerLine & 0x00FF) << 8) | horizontal);
+        }
+
+        private void ApplyExternalResyncControl(ushort bplcon0, long cycle)
+        {
+            const ushort externalResync = 0x0002;
+            var enabled = (bplcon0 & externalResync) != 0;
+            if (enabled == _externalResyncEnabled)
+            {
+                return;
+            }
+
+            if (!enabled)
+            {
+                ResetExternalResyncState();
+                return;
+            }
+
+            var writeCycle = Math.Max(0, cycle);
+            var beam = _beamClock.GetPosition(writeCycle);
+            _externalResyncEnabled = true;
+            _externalResyncLine = beam.BeamLine;
+            _externalResyncLongFrame = beam.IsLongFrame;
+            _externalResyncLineStartCycle = _beamClock.GetLineStartCycle(writeCycle);
+        }
+
+        private bool TryCalculateExternalResyncBeamPosition(
+            long targetCycle,
+            out ushort vposr,
+            out ushort vhposr)
+        {
+            if (!_externalResyncEnabled)
+            {
+                vposr = 0;
+                vhposr = 0;
+                return false;
+            }
+
+            var lineCycles = _beamClock.GetLineCyclesAt(_externalResyncLineStartCycle);
+            var elapsed = Math.Max(0, targetCycle - _externalResyncLineStartCycle);
+            // With ERSY asserted and no external sync input, the current
+            // Agnus line counter finishes in its native phase, then waits at
+            // h=0 without advancing the vertical counter.
+            var horizontal = elapsed < lineCycles
+                ? Math.Max(0, (int)(elapsed / _rasterTiming.CpuCyclesPerColorClock) - 1)
+                : 0;
+            vposr = (ushort)(((_externalResyncLongFrame ? 1 : 0) << 15) |
+                ((_externalResyncLine >> 8) & 0x0001));
+            vhposr = (ushort)(((_externalResyncLine & 0x00FF) << 8) | horizontal);
+            return true;
+        }
+
+        private void ResetExternalResyncState()
+        {
+            _externalResyncEnabled = false;
+            _externalResyncLine = 0;
+            _externalResyncLongFrame = false;
+            _externalResyncLineStartCycle = 0;
         }
 
         private int EncodeVhposrHorizontal(int beamHorizontal, long cycle)
@@ -329,45 +391,6 @@ namespace CopperMod.Amiga.Bus
         {
             const AmigaBusAccessTarget target = AmigaBusAccessTarget.CustomRegisters;
             var grantRequestCycle = requestedCycle + AgnusChipSlotScheduler.SlotCycles;
-            var liveScratchAttempted = false;
-            var liveScratchSupported = false;
-            var liveScratch = default(OcsLiveDmaScratchResult);
-            if (ShouldRunDeferredCpuWaitSlotShadowAudit &&
-                _deferredCpuWaitSlotShadowLiveAttempts < DeferredCpuWaitSlotShadowLiveMaxSamples &&
-                LiveAgnusDmaEnabled &&
-                Display.HasLiveDisplayWork() &&
-                Display.GetNextLiveDisplayWakeCandidateCycle(grantRequestCycle, grantRequestCycle + LineCycles).HasValue &&
-                IsDeferredCpuWaitSlotShadowGrantSupported(target, AmigaBusAccessSize.Long, grantRequestCycle + LineCycles))
-            {
-                liveScratchAttempted = true;
-                var scratchSlots = _hrmSlotEngine.CreateShadowCopy();
-                _deferredCpuWaitSlotShadowLiveAttempts++;
-                liveScratchSupported = Display.TryRunCpuWaitLiveDmaScratch(
-                    scratchSlots,
-                    accessKind,
-                    target,
-                    address,
-                    AmigaBusAccessSize.Long,
-                    grantRequestCycle,
-                    isWrite: true,
-                    OcsLiveDmaScratchCpuWrite.Long(target, address, value),
-                    out liveScratch);
-                RecordDeferredCpuWaitSlotShadowLiveCoverage(AmigaBusAccessSize.Long, liveScratch);
-                if (!liveScratchSupported)
-                {
-                    RecordDeferredCpuWaitSlotShadowUnsupported(
-                        accessKind,
-                        target,
-                        address,
-                        AmigaBusAccessSize.Long,
-                        isWrite: true,
-                        requestedCycle,
-                        grantRequestCycle,
-                        CpuWaitSlotShadowReason.Display,
-                        liveScratch.ToDetailString());
-                }
-            }
-
             _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite: true, AmigaBusAccessSize.Long);
             if (Blitter.Busy)
             {
@@ -414,28 +437,6 @@ namespace CopperMod.Amiga.Bus
                 out var completedCycle);
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, firstCompletedCycle, secondWordCycle, isWrite: true);
             WriteRawWord(address + 2, (ushort)value, secondWordCycle, default(CpuWritePolicy));
-
-            if (liveScratchAttempted && liveScratchSupported)
-            {
-                var referenceTimeline = _hrmSlotEngine.CaptureTimelineSignature(grantRequestCycle, completedCycle);
-                RecordDeferredCpuWaitSlotShadowAudit(
-                    accessKind,
-                    target,
-                    address,
-                    AmigaBusAccessSize.Long,
-                    isWrite: true,
-                    requestedCycle,
-                    grantRequestCycle,
-                    liveScratch.GrantedCycle,
-                    liveScratch.SecondWordCycle,
-                    liveScratch.CompletedCycle,
-                    firstWordCycle,
-                    secondWordCycle,
-                    completedCycle,
-                    liveScratch.Timeline,
-                    referenceTimeline,
-                    liveScratch.ToDetailString());
-            }
 
             RecordDeferredCpuWaitWindow(
                 accessKind,
@@ -539,6 +540,10 @@ namespace CopperMod.Amiga.Bus
             }
 
             var write = new CustomRegisterWriteContext(requester, offset, value, cycle);
+            if (offset == 0x100)
+            {
+                ApplyExternalResyncControl(value, cycle);
+            }
             _agnusBusExecutor.ObserveDisplayControlWrite(requester, offset, value, cycle);
             BeginCustomRegisterWrite(in write);
             try

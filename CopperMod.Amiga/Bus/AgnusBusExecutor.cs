@@ -60,6 +60,17 @@ namespace CopperMod.Amiga.Bus
         public void Clear() => this = default;
     }
 
+    internal readonly record struct AgnusCommittedSlotDiagnostic(
+        long Cycle,
+        AmigaBusRequester Requester,
+        AmigaBusAccessKind Kind,
+        AmigaBusAccessTarget Target,
+        uint Address,
+        ushort Value,
+        bool ValueValid,
+        bool IsWrite,
+        byte Channel);
+
     internal readonly struct AgnusControlEvent
     {
         public AgnusControlEvent(long cycle, AgnusBusAgendaSource source)
@@ -340,7 +351,7 @@ namespace CopperMod.Amiga.Bus
     /// </summary>
     internal sealed partial class AgnusBusExecutor
     {
-        private const string ShadowEnvironmentVariable = "COPPERMOD_AMIGA_CAUSAL_AGNUS_SHADOW";
+        internal const int RecentCommittedSlotCapacity = 64;
         private const string ProductionEnvironmentVariable = "COPPERMOD_AMIGA_CAUSAL_AGNUS_EXECUTOR";
         private readonly Bus _bus;
         private readonly AgnusHrmSlotEngine _slots;
@@ -357,6 +368,12 @@ namespace CopperMod.Amiga.Bus
         private long _chipWriteHazardRefreshes;
         private readonly AgnusBusIntent[] _intents = new AgnusBusIntent[(int)AgnusBusAgendaSource.Count];
         private readonly AgnusBusIntent[] _paulaIntents = new AgnusBusIntent[AmigaConstants.PaulaChannelCount];
+        private readonly AgnusCommittedSlotDiagnostic[] _recentCommittedSlots =
+            new AgnusCommittedSlotDiagnostic[RecentCommittedSlotCapacity];
+        private bool _recentCommittedSlotsEnabled;
+        private int _recentCommittedSlotNext;
+        private int _recentCommittedSlotCount;
+        private long _recentCommittedSlotTotal;
         private ulong _paulaVersion = ulong.MaxValue;
         private ulong _diskVersion = ulong.MaxValue;
         private ulong _displayVersion = ulong.MaxValue;
@@ -365,11 +382,6 @@ namespace CopperMod.Amiga.Bus
         private long _unresolvedCpuEventFenceCycle = long.MaxValue;
         private long _agendaUpdates;
         private long _agendaReads;
-        private long _shadowMatches;
-        private long _shadowMismatches;
-        private long _fixedPlanShadowMatches;
-        private long _fixedPlanShadowMismatches;
-        private string _firstFixedPlanShadowMismatch = string.Empty;
         private long _copperGrantedWords;
         private long _copperDeniedWords;
         private uint _lastCopperAddress;
@@ -416,7 +428,6 @@ namespace CopperMod.Amiga.Bus
         private long _cpuTimingSequenceSlotRejects;
         private uint _lastCpuAddress;
         private long _lastCpuGrantedCycle = -1;
-        private string _firstShadowMismatch = string.Empty;
         private long _cachedQueryCurrentCycle;
         private long _cachedQueryTargetCycle;
         private long _cachedQueryResult;
@@ -443,15 +454,11 @@ namespace CopperMod.Amiga.Bus
 
         public long AgendaReads => _agendaReads;
 
-        public long ShadowMatches => _shadowMatches;
+        public bool RecentCommittedSlotsEnabled => _recentCommittedSlotsEnabled;
 
-        public long ShadowMismatches => _shadowMismatches;
+        public int RecentCommittedSlotCount => _recentCommittedSlotCount;
 
-        public long FixedPlanShadowMatches => _fixedPlanShadowMatches;
-
-        public long FixedPlanShadowMismatches => _fixedPlanShadowMismatches;
-
-        public string FirstFixedPlanShadowMismatch => _firstFixedPlanShadowMismatch;
+        public long RecentCommittedSlotTotal => _recentCommittedSlotTotal;
 
         public long CopperGrantedWords => _copperGrantedWords;
 
@@ -605,10 +612,6 @@ namespace CopperMod.Amiga.Bus
             }
         }
 
-        public string FirstShadowMismatch => _firstShadowMismatch;
-
-        public bool ShadowEnabled { get; } = ReadBooleanEnvironmentVariable(ShadowEnvironmentVariable, false);
-
         public bool ProductionEnabled { get; } = ReadBooleanEnvironmentVariable(ProductionEnvironmentVariable, true);
 
         public AgnusHrmSlotEngine Slots => _slots;
@@ -616,6 +619,34 @@ namespace CopperMod.Amiga.Bus
         public AgnusRasterlineDmaPlanRing RasterlinePlans { get; }
 
         public AgnusDisplayControlState DisplayControlState { get; }
+
+        public void SetRecentCommittedSlotsEnabled(bool enabled)
+        {
+            _recentCommittedSlotsEnabled = enabled;
+            _recentCommittedSlotNext = 0;
+            _recentCommittedSlotCount = 0;
+            _recentCommittedSlotTotal = 0;
+        }
+
+        public bool TryGetRecentCommittedSlot(
+            int newestOffset,
+            out AgnusCommittedSlotDiagnostic diagnostic)
+        {
+            if ((uint)newestOffset >= (uint)_recentCommittedSlotCount)
+            {
+                diagnostic = default;
+                return false;
+            }
+
+            var index = _recentCommittedSlotNext - newestOffset - 1;
+            if (index < 0)
+            {
+                index += RecentCommittedSlotCapacity;
+            }
+
+            diagnostic = _recentCommittedSlots[index];
+            return true;
+        }
 
         public void Reset()
         {
@@ -636,16 +667,14 @@ namespace CopperMod.Amiga.Bus
             _paulaVersion = ulong.MaxValue;
             _diskVersion = ulong.MaxValue;
             _displayVersion = ulong.MaxValue;
+            _recentCommittedSlotNext = 0;
+            _recentCommittedSlotCount = 0;
+            _recentCommittedSlotTotal = 0;
             _executedThroughCycle = -1;
             _unresolvedCpuTimingFenceCycle = long.MaxValue;
             _unresolvedCpuEventFenceCycle = long.MaxValue;
             _agendaUpdates = 0;
             _agendaReads = 0;
-            _shadowMatches = 0;
-            _shadowMismatches = 0;
-            _fixedPlanShadowMatches = 0;
-            _fixedPlanShadowMismatches = 0;
-            _firstFixedPlanShadowMismatch = string.Empty;
             _copperGrantedWords = 0;
             _copperDeniedWords = 0;
             _lastCopperAddress = 0;
@@ -692,7 +721,6 @@ namespace CopperMod.Amiga.Bus
             _cpuTimingSequenceSlotRejects = 0;
             _lastCpuAddress = 0;
             _lastCpuGrantedCycle = -1;
-            _firstShadowMismatch = string.Empty;
             _queryCacheValid = false;
             _advancing = false;
         }
@@ -1004,6 +1032,13 @@ namespace CopperMod.Amiga.Bus
             => _slots.TryReserveExactFixedDmaSlot(request, out result);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryCommitPlannedBitplaneSlot(
+            uint address,
+            long requestedCycle,
+            out AmigaBusAccessResult result)
+            => _slots.TryCommitPlannedBitplaneSlot(address, requestedCycle, out result);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public AmigaBusAccessResult ReserveBitplaneDmaSlot(uint address, long requestedCycle)
             => _slots.ReserveBitplaneDmaSlot(address, requestedCycle);
 
@@ -1100,6 +1135,15 @@ namespace CopperMod.Amiga.Bus
             _lastPaulaAddresses[channel] = _bus.MaskChipDmaAddress(address);
             _lastPaulaValues[channel] = value;
             _lastPaulaGrantedCycles[channel] = cycle;
+            RecordRecentCommittedSlot(
+                cycle,
+                AmigaBusRequester.Paula,
+                AmigaBusAccessKind.PaulaDma,
+                address,
+                value,
+                valueValid: true,
+                isWrite: false,
+                (byte)channel);
         }
 
         private static void ValidatePaulaChannel(int channel)
@@ -1194,6 +1238,15 @@ namespace CopperMod.Amiga.Bus
             _lastDiskAddress = _bus.MaskChipDmaAddress(address);
             _lastDiskValue = value;
             _lastDiskGrantedCycle = cycle;
+            RecordRecentCommittedSlot(
+                cycle,
+                AmigaBusRequester.Disk,
+                AmigaBusAccessKind.DiskDma,
+                address,
+                value,
+                valueValid: true,
+                isWrite: !writeMode,
+                channel: 0);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1246,7 +1299,7 @@ namespace CopperMod.Amiga.Bus
             out ushort value,
             out AmigaBusAccessResult access)
         {
-            if (slotCycle <= _bus.ExecutedChipBusHorizon)
+            if (slotCycle <= _executedThroughCycle)
             {
                 value = 0;
                 access = default;
@@ -1404,6 +1457,15 @@ namespace CopperMod.Amiga.Bus
             _lastCopperValue = value;
             _lastCopperGrantedCycle = grantedCycle;
             _executedThroughCycle = Math.Max(_executedThroughCycle, grantedCycle);
+            RecordRecentCommittedSlot(
+                grantedCycle,
+                AmigaBusRequester.Copper,
+                AmigaBusAccessKind.Copper,
+                address,
+                value,
+                valueValid: true,
+                isWrite: false,
+                channel: 0);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1503,6 +1565,15 @@ namespace CopperMod.Amiga.Bus
             _lastBlitterValue = value;
             _lastBlitterGrantedCycle = cycle;
             _executedThroughCycle = Math.Max(_executedThroughCycle, cycle);
+            RecordRecentCommittedSlot(
+                cycle,
+                AmigaBusRequester.Blitter,
+                AmigaBusAccessKind.Blitter,
+                address,
+                value,
+                valueValid: true,
+                isWrite,
+                channel: 0);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1975,6 +2046,54 @@ namespace CopperMod.Amiga.Bus
 
             _lastCpuAddress = address;
             _lastCpuGrantedCycle = cycle;
+            RecordRecentCommittedSlot(
+                cycle,
+                AmigaBusRequester.Cpu,
+                kind,
+                address,
+                value: 0,
+                valueValid: false,
+                isWrite: kind == AmigaBusAccessKind.CpuDataWrite,
+                channel: 0);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void RecordRecentCommittedSlot(
+            long cycle,
+            AmigaBusRequester requester,
+            AmigaBusAccessKind kind,
+            uint address,
+            ushort value,
+            bool valueValid,
+            bool isWrite,
+            byte channel)
+        {
+            if (!_recentCommittedSlotsEnabled)
+            {
+                return;
+            }
+
+            _recentCommittedSlots[_recentCommittedSlotNext] = new AgnusCommittedSlotDiagnostic(
+                cycle,
+                requester,
+                kind,
+                AmigaBusAccessTarget.ChipRam,
+                _bus.MaskChipDmaAddress(address),
+                value,
+                valueValid,
+                isWrite,
+                channel);
+            _recentCommittedSlotNext++;
+            if (_recentCommittedSlotNext == RecentCommittedSlotCapacity)
+            {
+                _recentCommittedSlotNext = 0;
+            }
+
+            if (_recentCommittedSlotCount < RecentCommittedSlotCapacity)
+            {
+                _recentCommittedSlotCount++;
+            }
+            _recentCommittedSlotTotal++;
         }
 
         private void RecordGrantedCpuRun(
@@ -2042,7 +2161,11 @@ namespace CopperMod.Amiga.Bus
                 {
                     throw new InvalidOperationException(
                         $"Cannot apply display control write 0x{offset:X3} at cycle {cycle} " +
-                        $"behind executed horizon {_executedThroughCycle}.");
+                        $"behind executed horizon {_executedThroughCycle}; " +
+                        $"live={_bus.Display.LiveExecutionCycle}, " +
+                        $"captured={_bus.Display.LiveCapturedThroughCycle}, " +
+                        $"causal={_bus.Display.LiveCausalDisplayStateThroughCycle}, " +
+                        $"copperState={_bus.Display.GetLiveCopperCpuBatchBarrierStateForDiagnostics()}.");
                 }
 
                 DisplayControlState.IgnoredHistoricalWriteCount++;
@@ -2097,7 +2220,7 @@ namespace CopperMod.Amiga.Bus
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void RecordGrantedBitplaneFetch(int plane, uint address, long grantedCycle)
+        private void RecordGrantedBitplaneFetch(int plane, uint address, ushort value, long grantedCycle)
         {
             if ((uint)plane >= 8)
             {
@@ -2108,6 +2231,15 @@ namespace CopperMod.Amiga.Bus
             state.BitplaneLastFetchAddresses[plane] = address;
             state.BitplaneLastFetchCycles[plane] = grantedCycle;
             state.BitplaneGrantCounts[plane]++;
+            RecordRecentCommittedSlot(
+                grantedCycle,
+                AmigaBusRequester.Bitplane,
+                AmigaBusAccessKind.Bitplane,
+                address,
+                value,
+                valueValid: true,
+                isWrite: false,
+                (byte)plane);
         }
 
         public bool TryExecuteBitplaneWord(
@@ -2134,7 +2266,7 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            RecordGrantedBitplaneFetch(plane, address, grantedCycle);
+            RecordGrantedBitplaneFetch(plane, address, value, grantedCycle);
             _executedThroughCycle = Math.Max(_executedThroughCycle, grantedCycle);
             return true;
         }
@@ -2187,15 +2319,15 @@ namespace CopperMod.Amiga.Bus
                 values[index] = value;
                 granted[index] = true;
                 grantedCount++;
-                if (firstGrantedCycle < 0 || grantedCycle < firstGrantedCycle)
+                if (firstGrantedCycle < 0)
                 {
                     firstGrantedCycle = grantedCycle;
                 }
 
-                if (lastGrantedCycle < 0 || grantedCycle > lastGrantedCycle)
-                {
-                    lastGrantedCycle = grantedCycle;
-                }
+                // Row-plan entries are stored in physical slot order and the
+                // executor commits monotonically. A denied entry does not
+                // disturb the order of the grants that remain.
+                lastGrantedCycle = grantedCycle;
             }
         }
 
@@ -2212,7 +2344,7 @@ namespace CopperMod.Amiga.Bus
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void RecordGrantedSpriteFetch(int channel, uint address, long grantedCycle)
+        private void RecordGrantedSpriteFetch(int channel, uint address, ushort value, long grantedCycle)
         {
             if ((uint)channel >= 8)
             {
@@ -2243,6 +2375,15 @@ namespace CopperMod.Amiga.Bus
             state.SpriteLastFetchCycles[channel] = grantedCycle;
             state.SpriteGrantCounts[channel]++;
             state.SpriteNextFetchAddresses[channel] = _bus.AddChipDmaPointerOffset(address, 2);
+            RecordRecentCommittedSlot(
+                grantedCycle,
+                AmigaBusRequester.Sprite,
+                AmigaBusAccessKind.Sprite,
+                address,
+                value,
+                valueValid: true,
+                isWrite: false,
+                (byte)channel);
         }
 
         public bool TryExecuteSpriteWord(
@@ -2269,7 +2410,7 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            RecordGrantedSpriteFetch(channel, address, grantedCycle);
+            RecordGrantedSpriteFetch(channel, address, value, grantedCycle);
             _executedThroughCycle = Math.Max(_executedThroughCycle, grantedCycle);
             return true;
         }
@@ -2819,37 +2960,6 @@ namespace CopperMod.Amiga.Bus
             return result;
         }
 
-        public void RecordShadowPrediction(
-            long currentCycle,
-            long targetCycle,
-            long referenceCycle,
-            long predictedCycle,
-            long referencePaula,
-            long referenceDisk,
-            long referenceAgnus,
-            long referenceBlitter)
-        {
-            if (referenceCycle == predictedCycle)
-            {
-                _shadowMatches++;
-                return;
-            }
-
-            _shadowMismatches++;
-            if (_firstShadowMismatch.Length == 0)
-            {
-                _firstShadowMismatch =
-                    $"current={currentCycle},target={targetCycle},reference={referenceCycle},predicted={predictedCycle}," +
-                    $"refSources={referencePaula}/{referenceDisk}/{referenceAgnus}/{referenceBlitter}," +
-                    $"displayState={_bus.Display.LiveExecutionCycle}/{_bus.Display.LiveCapturedThroughCycle}," +
-                    $"display={_agenda.Get(AgnusBusAgendaSource.Display)}," +
-                    $"paula={_agenda.Get(AgnusBusAgendaSource.Paula)}," +
-                    $"disk={_agenda.Get(AgnusBusAgendaSource.Disk)}," +
-                    $"copper={_agenda.Get(AgnusBusAgendaSource.Copper)}," +
-                    $"blitter={_agenda.Get(AgnusBusAgendaSource.Blitter)}";
-            }
-        }
-
         internal AgnusChipSlotOwner GetPlannedFixedOwnerAt(long cycle, out int entryIndex)
         {
             var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, cycle));
@@ -2889,37 +2999,6 @@ namespace CopperMod.Amiga.Bus
                 ? phaseCycle + (2L * AgnusChipSlotScheduler.SlotCycles)
                 : phaseCycle;
         }
-
-        internal void RecordFixedPlanShadow(
-            long cycle,
-            AgnusChipSlotOwner referenceOwner,
-            ushort liveDmacon = 0,
-            ushort liveBplcon0 = 0)
-        {
-            var plannedOwner = GetPlannedFixedOwnerAt(cycle, out var entryIndex);
-            if (plannedOwner == referenceOwner)
-            {
-                _fixedPlanShadowMatches++;
-                return;
-            }
-
-            _fixedPlanShadowMismatches++;
-            if (_firstFixedPlanShadowMismatch.Length == 0)
-            {
-                var plan0 = RasterlinePlans.Plans[0];
-                var plan1 = RasterlinePlans.Plans[1];
-                var plan2 = RasterlinePlans.Plans[2];
-                _firstFixedPlanShadowMismatch =
-                    $"cycle={cycle},reference={referenceOwner},planned={plannedOwner},entry={entryIndex}," +
-                    $"liveDmacon={liveDmacon:X4},liveBplcon0={liveBplcon0:X4}," +
-                    $"plans={DescribePlan(in plan0)}/{DescribePlan(in plan1)}/{DescribePlan(in plan2)}";
-            }
-        }
-
-        private static string DescribePlan(in RowDmaPlan plan)
-            => plan.Valid
-                ? $"r{plan.Row}@{plan.LineStartCycle}:d{plan.Dmacon:X4}:c{plan.Bplcon0:X4}:b{plan.BitplaneCount}:s{plan.SpriteCount}:v{plan.DmaPlanVersion}"
-                : "invalid";
 
         public void MarkAdvancedThrough(long cycle)
         {
