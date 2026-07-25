@@ -37,8 +37,42 @@ public sealed class GameportDeviceServicesTests
         bus.MoveGamePortMouse(0, 3, -2);
         state.Cycles = 20; service.ProcessPending(state);
         Assert.Equal((byte)2, bus.ReadByte(Data + 4));
+        Assert.Equal((ushort)0x00FF, bus.ReadWord(Data + 6));
         Assert.Equal((ushort)3, bus.ReadWord(Data + 0x0A));
         Assert.Equal(unchecked((ushort)-2), bus.ReadWord(Data + 0x0C));
+        Assert.Equal(0x18u, bus.ReadLong(Request + 0x20));
+        Assert.Equal(new[] { Request }, replies);
+
+        replies.Clear(); bus.WriteWord(Request + 0x1C, 9); bus.WriteLong(Request + 0x28, Data); bus.WriteLong(Request + 0x24, 0x18); bus.WriteByte(Request + 0x1E, 0, 20);
+        Assert.True(Invoke(bus, Device - 30, state));
+        bus.GamePort0FirePressed = true;
+        state.Cycles = 30; service.ProcessPending(state);
+        Assert.Equal((ushort)0x0068, bus.ReadWord(Data + 6));
+        Assert.NotEqual(0, bus.ReadWord(Data + 8) & 0x4000);
+        Assert.Equal(new[] { Request }, replies);
+
+        // CMD_CLEAR discards sampled input and reports no transferred bytes.
+        bus.MoveGamePortMouse(0, 4, 0);
+        state.Cycles = 31; service.ProcessPending(state);
+        bus.WriteWord(Request + 0x1C, 5); bus.WriteByte(Request + 0x1E, 0, 31);
+        Assert.True(Invoke(bus, Device - 30, state));
+        Assert.Equal(0u, bus.ReadLong(Request + 0x20));
+
+        // Aborting an active read completes and replies exactly once.
+        replies.Clear(); bus.WriteWord(Request + 0x1C, 9); bus.WriteLong(Request + 0x28, Data); bus.WriteLong(Request + 0x24, 0x18); bus.WriteByte(Request + 0x1E, 0, 31);
+        Assert.True(Invoke(bus, Device - 30, state));
+        Assert.True(Invoke(bus, Device - 36, state));
+        Assert.Equal((byte)0xFE, bus.ReadByte(Request + 0x1F));
+        Assert.Equal(new[] { Request }, replies);
+
+        replies.Clear();
+        bus.ClearMemory(Data, 8); bus.WriteByte(Data + 3, 1, 30); bus.WriteWord(Request + 0x1C, 13); bus.WriteLong(Request + 0x28, Data); bus.WriteLong(Request + 0x24, 8);
+        Assert.True(Invoke(bus, Device - 30, state));
+        replies.Clear();
+        bus.WriteWord(Request + 0x1C, 9); bus.WriteLong(Request + 0x28, Data); bus.WriteLong(Request + 0x24, 0x18);
+        Assert.True(Invoke(bus, Device - 30, state));
+        state.Cycles = service.GetNextDeadline(30, long.MaxValue); service.ProcessPending(state);
+        Assert.Equal((ushort)0x00FF, bus.ReadWord(Data + 6));
         Assert.Equal(new[] { Request }, replies);
     }
 
