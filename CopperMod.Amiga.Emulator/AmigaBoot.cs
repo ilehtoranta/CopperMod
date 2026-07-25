@@ -40,6 +40,7 @@ using CopperStartConsoleDeviceServices = CopperMod.Amiga.CopperStart.Devices.Con
 using CopperStartConsoleContext = CopperMod.Amiga.CopperStart.Devices.Console.CopperStartConsoleContext;
 using CopperMod.Amiga.Input;
 using CopperStartEncodedTrack = CopperMod.Amiga.Storage.Floppy.AmigaEncodedTrack;
+using CopperStartDiskImage = CopperMod.Amiga.Storage.Floppy.IAmigaDiskImage;
 using CopperStartRuntime = CopperMod.Amiga.CopperStart.CopperStartRuntime;
 using CopperStartWorkbenchContext = CopperMod.Amiga.CopperStart.Workbench.CopperStartWorkbenchContext;
 using CopperStartWorkbenchServices = CopperMod.Amiga.CopperStart.Workbench.WorkbenchServices;
@@ -498,7 +499,9 @@ namespace CopperMod.Amiga
                 _execContext.MemoryOperations,
                 ReplyTrackdiskMessage,
                 message => _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_KEYBOARD", message)),
-                _execContext.GetCurrentTask);
+                _execContext.GetCurrentTask,
+                StartGuestExecSubroutine,
+                RequestKeyboardReset);
             _inputDeviceServices = new CopperStartInputDeviceServices(_machine.Bus, ReplyTrackdiskMessage, StartGuestExecSubroutine, _keyboardDeviceServices.ConfigureKeyRepeat);
             _gameportDeviceServices = new CopperStartGameportDeviceServices(_machine.Bus, ReplyTrackdiskMessage);
             _consoleDeviceServices = new CopperStartConsoleDeviceServices(new CopperStartConsoleContext(
@@ -620,7 +623,7 @@ namespace CopperMod.Amiga
 
         public bool QueueHostKeyDown(AmigaRawKey key) => _keyboardDeviceServices.QueueKeyDown(key, _machine.Cpu.State.Cycles);
 
-        public bool QueueHostKeyUp(AmigaRawKey key) => _keyboardDeviceServices.QueueKeyUp(key);
+        public bool QueueHostKeyUp(AmigaRawKey key) => _keyboardDeviceServices.QueueKeyUp(key, _machine.Cpu.State.Cycles);
 
         public AmigaProgramLaunchRequest? PendingWorkbenchLaunchRequest { get; private set; }
 
@@ -773,7 +776,7 @@ namespace CopperMod.Amiga
             ResetBootState(disk, installHostShim: true);
         }
 
-        private void ResetBootState(AmigaDiskImage? disk, bool installHostShim)
+        private void ResetBootState(CopperStartDiskImage? disk, bool installHostShim)
         {
             _trackdiskDeviceServices.Reset();
             _timerDeviceServices.Reset();
@@ -905,6 +908,19 @@ namespace CopperMod.Amiga
                 reportOverrun: false,
                 beforeDeviceAdvance,
                 boundarySchedule: null);
+        }
+
+        /// <summary>
+        /// A keyboard-originated reset must reset the CopperStart lifecycle as
+        /// well as the machine.  Calling Machine.ResetHardware directly would
+        /// clear bus gateway registrations while leaving their services marked
+        /// installed, so the next ROM boot could lose its host device layer.
+        /// </summary>
+        private void RequestKeyboardReset()
+        {
+            // keyboard.device is active only after the corresponding boot
+            // mode is known. Preserve DF0 media across the hardware reset.
+            ResetBootState(Drive0.Disk, installHostShim: !_kickstartRomBootActive);
         }
 
         internal AmigaBootResult ContinueExecutionUntilCycle(
