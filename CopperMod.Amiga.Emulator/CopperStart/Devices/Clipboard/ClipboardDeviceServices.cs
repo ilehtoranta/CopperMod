@@ -33,10 +33,14 @@ internal sealed class ClipboardDeviceServices : IDisposable
     private const byte IoErrNoCommand = 0xFD;
     private const byte IoErrBadAddress = 0xFC;
     private const byte CbErrObsoleteId = 1;
+    private const ushort CmdReset = 1;
     private const ushort CmdRead = 2;
     private const ushort CmdWrite = 3;
     private const ushort CmdUpdate = 4;
     private const ushort CmdClear = 5;
+    private const ushort CmdStop = 6;
+    private const ushort CmdStart = 7;
+    private const ushort CmdFlush = 8;
     private const ushort CbdPost = 9;
     private const ushort CbdCurrentReadId = 10;
     private const ushort CbdCurrentWriteId = 11;
@@ -55,10 +59,11 @@ internal sealed class ClipboardDeviceServices : IDisposable
     private readonly List<(uint Address, uint Token)> _gateways = new();
     private readonly Dictionary<uint, ClipboardUnit> _units = new();
     private readonly Dictionary<uint, ClipboardUnit> _unitsByAddress = new();
-    private readonly ConcurrentQueue<string> _pendingHostText = new();
+    private readonly ConcurrentQueue<HostClipboardPayload> _pendingHostPayloads = new();
     private uint _allocation;
     private uint _execBase;
     private string? _primaryTextForHost;
+    private ClipboardImage? _primaryImageForHost;
     private readonly Queue<HookNotification> _pendingHooks = new();
     private uint _activeHookMessage;
 
@@ -70,14 +75,17 @@ internal sealed class ClipboardDeviceServices : IDisposable
         public uint SatisfyMessage;
         public bool SatisfySent;
         public readonly List<uint> PendingReads = new();
+        public readonly List<uint> DeferredRequests = new();
         public readonly HashSet<uint> ChangeHooks = new();
         public uint ReadId = 1;
         public uint WriteId = 1;
         public byte[] Committed = Array.Empty<byte>();
         public byte[] Pending = Array.Empty<byte>();
         public bool HasPendingWrite;
+        public bool Stopped;
     }
     private readonly record struct HookNotification(uint Hook, uint ChangeCommand, uint ClipId);
+    private readonly record struct HostClipboardPayload(string? Text, ClipboardImage? Image);
 
     public ClipboardDeviceServices(AmigaBus bus, ExecMemoryOperations memory, Action<uint> replyMessage, Action<uint, uint, M68kCpuState> putMessage,
         Action<M68kCpuState, uint, uint> startGuestSubroutine, uint hookContinuation)
@@ -94,7 +102,14 @@ internal sealed class ClipboardDeviceServices : IDisposable
     public bool IsInstalled => DeviceBase != 0;
 
     /// <summary>Queues text supplied by the host UI; guest state changes only at a boundary.</summary>
-    public void QueuePrimaryTextFromHost(string text) => _pendingHostText.Enqueue(text ?? string.Empty);
+    public void QueuePrimaryTextFromHost(string text) => _pendingHostPayloads.Enqueue(new HostClipboardPayload(text ?? string.Empty, null));
+
+    /// <summary>Queues a primary-unit image supplied by the host UI.</summary>
+    public void QueuePrimaryImageFromHost(ClipboardImage image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        _pendingHostPayloads.Enqueue(new HostClipboardPayload(null, image));
+    }
 
     /// <summary>Returns one primary-unit update to be published by the host UI.</summary>
     public bool TryTakePrimaryTextForHost(out string text)
@@ -105,18 +120,27 @@ internal sealed class ClipboardDeviceServices : IDisposable
         return available;
     }
 
+    /// <summary>Returns one primary-unit ILBM update decoded for the host UI.</summary>
+    public bool TryTakePrimaryImageForHost(out ClipboardImage? image)
+    {
+        image = _primaryImageForHost;
+        _primaryImageForHost = null;
+        return image is not null;
+    }
+
     /// <summary>Applies host input at an outer emulator boundary.</summary>
     public void ProcessPending(M68kCpuState state)
     {
-        while (_pendingHostText.TryDequeue(out var text))
+        while (_pendingHostPayloads.TryDequeue(out var payload))
         {
             var unit = GetUnit(0);
-            unit.Committed = ClipboardIffText.Encode(text);
+            unit.Committed = payload.Image is { } image ? ClipboardIffImage.Encode(image) : ClipboardIffText.Encode(payload.Text ?? string.Empty);
             unit.Pending = Array.Empty<byte>(); unit.HasPendingWrite = false;
-            unit.WriteId++; if (unit.WriteId == 0) unit.WriteId = 1;
-            unit.ReadId = unit.WriteId;
+            AdvanceClipIds(unit);
             QueueChangeHooks(unit, CmdUpdate);
         }
+        foreach (var unit in _units.Values)
+            if (!unit.Stopped) ProcessDeferredRequests(unit, state);
         StartNextHook(state);
     }
 
@@ -175,8 +199,9 @@ internal sealed class ClipboardDeviceServices : IDisposable
         }
         _units.Clear();
         _unitsByAddress.Clear();
-        while (_pendingHostText.TryDequeue(out _)) { }
+        while (_pendingHostPayloads.TryDequeue(out _)) { }
         _primaryTextForHost = null;
+        _primaryImageForHost = null;
         while (_pendingHooks.Count != 0) _pendingHooks.Dequeue();
         _activeHookMessage = 0;
     }
@@ -222,6 +247,12 @@ internal sealed class ClipboardDeviceServices : IDisposable
                 state.D[0] = 0;
                 return;
             }
+            if (unit.DeferredRequests.Remove(request))
+            {
+                Complete(request, IoErrAborted, state.Cycles, true);
+                state.D[0] = 0;
+                return;
+            }
         }
         state.D[0] = 0;
     }
@@ -235,17 +266,42 @@ internal sealed class ClipboardDeviceServices : IDisposable
             Complete(request, IoErrBadAddress, state.Cycles, (_bus.ReadByte(request + IoFlagsOffset) & IoQuick) == 0);
             return;
         }
+        ProcessRequest(request, unit, state);
+    }
+
+    private void ProcessRequest(uint request, ClipboardUnit unit, M68kCpuState state)
+    {
         var command = _bus.ReadWord(request + IoCommandOffset);
+        if (unit.Stopped && command is not CmdStart and not CmdReset and not CmdFlush)
+        {
+            if (!unit.DeferredRequests.Contains(request)) unit.DeferredRequests.Add(request);
+            return;
+        }
         byte error;
         switch (command)
         {
+            case CmdReset:
+                FlushPendingRequests(unit, state, request);
+                unit.Stopped = false; unit.Pending = Array.Empty<byte>(); unit.HasPendingWrite = false;
+                unit.PostPort = 0; unit.PostId = 0; unit.SatisfySent = false;
+                error = 0;
+                break;
             case CmdRead:
                 error = Read(request, unit, state);
                 if (unit.PendingReads.Contains(request)) return;
                 break;
             case CmdWrite: error = Write(request, unit, state.Cycles); break;
             case CmdUpdate: error = Update(request, unit, state.Cycles); break;
-            case CmdClear: unit.Committed = Array.Empty<byte>(); unit.Pending = Array.Empty<byte>(); unit.HasPendingWrite = false; unit.ReadId++; unit.WriteId++; QueuePrimaryTextForHost(unit); QueueChangeHooks(unit, CmdUpdate); error = 0; break;
+            case CmdClear: error = Clear(unit, state); break;
+            case CmdStop: unit.Stopped = true; error = 0; break;
+            case CmdStart:
+                unit.Stopped = false;
+                error = 0;
+                break;
+            case CmdFlush:
+                FlushPendingRequests(unit, state, request);
+                error = 0;
+                break;
             case CbdCurrentReadId: _bus.WriteLong(request + IoClipIdOffset, unit.ReadId, state.Cycles); error = 0; break;
             case CbdCurrentWriteId: _bus.WriteLong(request + IoClipIdOffset, unit.WriteId, state.Cycles); error = 0; break;
             case CbdPost: error = Post(request, unit, state.Cycles); break;
@@ -253,6 +309,46 @@ internal sealed class ClipboardDeviceServices : IDisposable
             default: error = IoErrNoCommand; break;
         }
         Complete(request, error, state.Cycles, (_bus.ReadByte(request + IoFlagsOffset) & IoQuick) == 0);
+        if (command == CmdStart) ProcessDeferredRequests(unit, state);
+    }
+
+    private byte Clear(ClipboardUnit unit, M68kCpuState state)
+    {
+        unit.Committed = Array.Empty<byte>(); unit.Pending = Array.Empty<byte>(); unit.HasPendingWrite = false;
+        unit.PostPort = 0; unit.PostId = 0; unit.SatisfySent = false;
+        AdvanceClipIds(unit);
+        QueuePrimaryTextForHost(unit); QueueChangeHooks(unit, CmdUpdate);
+        CompletePendingReads(unit, state.Cycles);
+        return 0;
+    }
+
+    private void FlushPendingRequests(ClipboardUnit unit, M68kCpuState state, uint exclude)
+    {
+        for (var index = unit.PendingReads.Count - 1; index >= 0; index--)
+        {
+            var request = unit.PendingReads[index];
+            if (request == exclude) continue;
+            unit.PendingReads.RemoveAt(index);
+            Complete(request, IoErrAborted, state.Cycles, true);
+        }
+        for (var index = unit.DeferredRequests.Count - 1; index >= 0; index--)
+        {
+            var request = unit.DeferredRequests[index];
+            if (request == exclude) continue;
+            unit.DeferredRequests.RemoveAt(index);
+            Complete(request, IoErrAborted, state.Cycles, true);
+        }
+    }
+
+    private void ProcessDeferredRequests(ClipboardUnit unit, M68kCpuState state)
+    {
+        while (!unit.Stopped && unit.DeferredRequests.Count != 0)
+        {
+            var request = unit.DeferredRequests[0];
+            unit.DeferredRequests.RemoveAt(0);
+            if (!_bus.IsMappedMemoryRange(request, IoClipIdOffset + 4)) continue;
+            ProcessRequest(request, unit, state);
+        }
     }
 
     private byte Read(uint request, ClipboardUnit unit, M68kCpuState state)
@@ -274,8 +370,7 @@ internal sealed class ClipboardDeviceServices : IDisposable
         var id = _bus.ReadLong(request + IoClipIdOffset);
         if (id == 0)
         {
-            unit.WriteId++;
-            if (unit.WriteId == 0) unit.WriteId = 1;
+            AdvanceWriteId(unit);
             unit.Pending = Array.Empty<byte>(); unit.HasPendingWrite = true;
             id = unit.WriteId;
             _bus.WriteLong(request + IoClipIdOffset, id, cycle);
@@ -308,7 +403,7 @@ internal sealed class ClipboardDeviceServices : IDisposable
         var port = _bus.ReadLong(request + IoDataOffset);
         if (port == 0 || !_bus.IsMappedMemoryRange(port, 0x20)) return IoErrBadAddress;
         if (requestedId != 0 && requestedId != unit.WriteId) return CbErrObsoleteId;
-        unit.WriteId++; if (unit.WriteId == 0) unit.WriteId = 1;
+        AdvanceWriteId(unit);
         unit.ReadId = unit.WriteId; unit.Pending = Array.Empty<byte>(); unit.HasPendingWrite = true;
         unit.PostPort = port; unit.PostId = unit.WriteId; unit.SatisfySent = false;
         _bus.WriteLong(request + IoClipIdOffset, unit.PostId, cycle);
@@ -319,7 +414,7 @@ internal sealed class ClipboardDeviceServices : IDisposable
     private byte ChangeHook(uint request, ClipboardUnit unit)
     {
         var hook = _bus.ReadLong(request + IoDataOffset);
-        if (hook == 0 || !_bus.IsMappedMemoryRange(hook, 8)) return IoErrBadAddress;
+        if (hook == 0 || !_bus.IsMappedMemoryRange(hook, 12)) return IoErrBadAddress;
         if (_bus.ReadLong(request + IoLengthOffset) != 0) unit.ChangeHooks.Add(hook);
         else unit.ChangeHooks.Remove(hook);
         return 0;
@@ -361,8 +456,10 @@ internal sealed class ClipboardDeviceServices : IDisposable
     {
         if (_activeHookMessage != 0 || _pendingHooks.Count == 0) return;
         var notification = _pendingHooks.Dequeue();
-        if (!_bus.IsMappedMemoryRange(notification.Hook, 8)) return;
-        var entry = _bus.ReadLong(notification.Hook);
+        if (!_bus.IsMappedMemoryRange(notification.Hook, 12)) return;
+        // CBD_CHANGEHOOK receives a utility.library struct Hook. Its
+        // h_Entry follows the two-pointer MinNode at offset +8.
+        var entry = _bus.ReadLong(notification.Hook + 8);
         if (entry == 0 || !_bus.IsCpuPhysicalAddressMapped(entry, 2, AmigaBusAccessKind.CpuInstructionFetch)) return;
         var message = _memory.Allocate(12, 0);
         if (message == 0 || !_bus.IsMappedMemoryRange(message, 12)) return;
@@ -395,9 +492,14 @@ internal sealed class ClipboardDeviceServices : IDisposable
         return unit;
     }
     private ClipboardUnit GetUnit(uint number) => GetOrCreateUnit(number) ?? throw new InvalidOperationException("Unable to allocate clipboard unit.");
+    private static void AdvanceWriteId(ClipboardUnit unit) { unit.WriteId++; if (unit.WriteId == 0) unit.WriteId = 1; }
+    private static void AdvanceClipIds(ClipboardUnit unit) { AdvanceWriteId(unit); unit.ReadId = unit.WriteId; }
     private void QueuePrimaryTextForHost(ClipboardUnit unit)
     {
-        if (_units.TryGetValue(0, out var primary) && ReferenceEquals(primary, unit) && ClipboardIffText.TryDecode(unit.Committed, out var text)) _primaryTextForHost = text;
+        if (!_units.TryGetValue(0, out var primary) || !ReferenceEquals(primary, unit)) return;
+        _primaryTextForHost = null; _primaryImageForHost = null;
+        if (ClipboardIffImage.TryDecode(unit.Committed, out var image)) _primaryImageForHost = image;
+        else if (ClipboardIffText.TryDecode(unit.Committed, out var text)) _primaryTextForHost = text;
     }
     private void Complete(uint request, byte error, long cycle, bool reply)
     {

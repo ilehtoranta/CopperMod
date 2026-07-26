@@ -41,6 +41,7 @@ using CopperStartGameportDeviceServices = CopperMod.Amiga.CopperStart.Devices.Ga
 using CopperStartConsoleDeviceServices = CopperMod.Amiga.CopperStart.Devices.Console.ConsoleDeviceServices;
 using CopperStartConsoleContext = CopperMod.Amiga.CopperStart.Devices.Console.CopperStartConsoleContext;
 using CopperStartClipboardDeviceServices = CopperMod.Amiga.CopperStart.Devices.Clipboard.ClipboardDeviceServices;
+using CopperStartClipboardImage = CopperMod.Amiga.CopperStart.Devices.Clipboard.ClipboardImage;
 using CopperStartUtilityContext = CopperMod.Amiga.CopperStart.Utility.CopperStartUtilityContext;
 using CopperStartUtilityLibraryServices = CopperMod.Amiga.CopperStart.Utility.UtilityLibraryServices;
 using CopperMod.Amiga.Input;
@@ -603,8 +604,14 @@ namespace CopperMod.Amiga
         /// <summary>Accepts primary clipboard text from the host UI without touching guest state on the UI thread.</summary>
         public void QueueHostClipboardText(string text) => _clipboardDeviceServices.QueuePrimaryTextFromHost(text);
 
+        /// <summary>Accepts a primary clipboard image from the host UI at the next safe boundary.</summary>
+        public void QueueHostClipboardImage(CopperStartClipboardImage image) => _clipboardDeviceServices.QueuePrimaryImageFromHost(image);
+
         /// <summary>Retrieves one guest primary-clipboard update for publication by the host UI.</summary>
         public bool TryTakeHostClipboardText(out string text) => _clipboardDeviceServices.TryTakePrimaryTextForHost(out text);
+
+        /// <summary>Retrieves one primary clipboard image decoded from guest ILBM data.</summary>
+        public bool TryTakeHostClipboardImage(out CopperStartClipboardImage? image) => _clipboardDeviceServices.TryTakePrimaryImageForHost(out image);
 
         public IReadOnlyList<AmigaBootDiagnostic> Diagnostics => _diagnostics;
 

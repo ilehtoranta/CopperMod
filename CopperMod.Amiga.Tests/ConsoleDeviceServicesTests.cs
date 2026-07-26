@@ -1,6 +1,7 @@
 using Copper68k;
 using CopperMod.Amiga;
 using CopperMod.Amiga.Bus;
+using CopperMod.Amiga.CopperStart.Devices.Clipboard;
 using CopperMod.Amiga.CopperStart.Devices.Console;
 using CopperMod.Amiga.CopperStart.Devices.Input;
 using CopperMod.Amiga.CopperStart.Exec;
@@ -496,6 +497,37 @@ public sealed class ConsoleDeviceServicesTests
         bus.WriteWord(Request + 0x1C, 2); bus.WriteLong(Request + 0x28, Data); bus.WriteLong(Request + 0x24, 8); Assert.True(Invoke(bus, Device - 30, state));
 
         Assert.Equal("\u009B0 v", System.Text.Encoding.Latin1.GetString(Enumerable.Range(0, 4).Select(index => bus.ReadByte(Data + (uint)index)).ToArray()));
+    }
+
+    [Fact]
+    public void ConsoleCopyUsesGuestClipboardDeviceIo()
+    {
+        const uint clipboardRequest = 0x7000, clipboardBuffer = 0x7100;
+        var bus = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithLiveAgnusDma(false)).Bus;
+        InitializeDevice(bus); bus.WriteLong(Window + 0x32, RastPort);
+        uint next = 0x5000;
+        var memory = new ExecMemoryOperations((bytes, _) => { var result = next; next += (uint)((bytes + 7) & ~7); return result; }, (_, _) => { }, (address, bytes) => bus.ClearMemory(address, bytes));
+        using var input = new InputDeviceServices(bus, _ => { }, (_, _, _) => { }, (_, _, _) => { });
+        using var clipboard = new ClipboardDeviceServices(bus, memory, _ => { }, (_, _, _) => { }, (_, _, _) => { }, 0xF08930);
+        using var console = new ConsoleDeviceServices(bus, memory, input, _ => { }, (_, _, _, _) => { });
+        Assert.True(clipboard.TryInstall(ExecBase)); Assert.True(console.TryInstall(ExecBase));
+
+        var state = new M68kCpuState { Cycles = 10 }; state.A[1] = Request; state.D[0] = 0; bus.WriteLong(Request + 0x28, Window);
+        Assert.True(Invoke(bus, Device - 6, state));
+        bus.WriteByte(Data, (byte)'c', 10); bus.WriteByte(Data + 1, (byte)'o', 10); bus.WriteByte(Data + 2, (byte)'p', 10); bus.WriteByte(Data + 3, (byte)'y', 10);
+        bus.WriteWord(Request + 0x1C, 3); bus.WriteLong(Request + 0x28, Data); bus.WriteLong(Request + 0x24, 4);
+        Assert.True(Invoke(bus, Device - 30, state));
+
+        bus.WriteByte(Event + 4, 1, 10); bus.WriteWord(Event + 6, 0x33); bus.WriteWord(Event + 8, 0x80); state.A[0] = Event;
+        Assert.True(Invoke(bus, Device - 42, state)); console.ProcessPending(state);
+
+        state.A[1] = clipboardRequest; state.D[0] = 0;
+        Assert.True(Invoke(bus, clipboard.DeviceBase - 6, state));
+        bus.WriteWord(clipboardRequest + 0x1C, 2); bus.WriteByte(clipboardRequest + 0x1E, 1, 10); bus.WriteLong(clipboardRequest + 0x28, clipboardBuffer); bus.WriteLong(clipboardRequest + 0x24, 128); bus.WriteLong(clipboardRequest + 0x2C, 0); bus.WriteLong(clipboardRequest + 0x30, 0);
+        Assert.True(Invoke(bus, clipboard.DeviceBase - 30, state));
+        var count = bus.ReadLong(clipboardRequest + 0x20);
+        Assert.True(ClipboardIffText.TryDecode(Enumerable.Range(0, (int)count).Select(index => bus.ReadByte(clipboardBuffer + (uint)index)).ToArray(), out var text));
+        Assert.Equal("copy", text);
     }
 
     [Fact]
