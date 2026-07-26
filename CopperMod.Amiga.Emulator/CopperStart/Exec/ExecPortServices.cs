@@ -30,9 +30,18 @@ internal sealed class ExecPortServices
     }
     public uint PutMsg(M68kCpuState state)
     {
+        return PutMessage(state, addToHead: false);
+    }
+    public uint PutMsgHead(M68kCpuState state)
+    {
+        return PutMessage(state, addToHead: true);
+    }
+    private uint PutMessage(M68kCpuState state, bool addToHead)
+    {
         var port = state.A[0]; var message = state.A[1];
         if (!IsPort(port) || !IsMessage(message) || (_context.UsesRomExec() && !_lists.Contains(_context.GetExecBase() + PortListOffset, port))) return 0;
-        _lists.Ensure(port + MsgListOffset); _lists.AddTail(port + MsgListOffset, message);
+        _lists.Ensure(port + MsgListOffset);
+        if (addToHead) _lists.AddHead(port + MsgListOffset, message); else _lists.AddTail(port + MsgListOffset, message);
         var bit = _context.Memory.ReadByte(port + SigBitOffset);
         if (bit < 32) SignalTask(_context.Memory.ReadLong(port + SigTaskOffset), 1u << bit, state);
         return 0;

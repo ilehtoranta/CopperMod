@@ -76,6 +76,15 @@ internal sealed class ExecListServices
         _memory.WriteLong(list + 8, node);
     }
 
+    public void AddHead(uint list, uint node)
+    {
+        if (!IsValidList(list) || !IsValidNode(node)) return;
+        var successor = _memory.ReadLong(list);
+        if (!IsValidNode(successor)) return;
+        Link(node, list, successor);
+        if (successor == list + 4) _memory.WriteLong(list + 8, node);
+    }
+
     public void Link(uint node, uint predecessor, uint successor)
     {
         _memory.WriteLong(node + NodePredecessorOffset, predecessor);
@@ -114,9 +123,7 @@ internal sealed class ExecListServices
     }
     public uint AddHead(M68kCpuState state)
     {
-        var list = state.A[0]; var node = state.A[1]; if (!IsValidList(list) || !IsValidNode(node)) return 0;
-        var successor = _memory.ReadLong(list); if (!IsValidNode(successor)) return 0;
-        Link(node, list, successor); if (successor == list + 4) _memory.WriteLong(list + 8, node); return 0;
+        AddHead(state.A[0], state.A[1]); return 0;
     }
     public uint AddTail(M68kCpuState state) { if (IsValidList(state.A[0]) && IsValidNode(state.A[1])) AddTail(state.A[0], state.A[1]); return 0; }
     public uint Remove(M68kCpuState state) => Remove(state.A[1]);

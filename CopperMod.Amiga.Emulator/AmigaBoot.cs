@@ -21,6 +21,7 @@ using CopperStartExecNameServices = CopperMod.Amiga.CopperStart.Exec.ExecNameSer
 using CopperStartExecMemoryOperations = CopperMod.Amiga.CopperStart.Exec.ExecMemoryOperations;
 using CopperStartExecPoolServices = CopperMod.Amiga.CopperStart.Exec.ExecPoolServices;
 using CopperStartExecResidentServices = CopperMod.Amiga.CopperStart.Exec.ExecResidentServices;
+using CopperStartCopperOsResidentServices = CopperMod.Amiga.CopperStart.Exec.CopperOsResidentServices;
 using CopperStartExecMemoryServices = CopperMod.Amiga.CopperStart.Exec.ExecMemoryServices;
 using CopperStartExecMemoryContext = CopperMod.Amiga.CopperStart.Exec.ExecMemoryContext;
 using CopperStartExecGatewayServices = CopperMod.Amiga.CopperStart.Exec.ExecGatewayServices;
@@ -33,12 +34,15 @@ using CopperStartExecLvos = CopperMod.Amiga.CopperStart.Exec.ExecLvos;
 using CopperStartTrackdiskDeviceServices = CopperMod.Amiga.CopperStart.Devices.Trackdisk.TrackdiskDeviceServices;
 using CopperStartTrackdiskRawTrack = CopperMod.Amiga.CopperStart.Devices.Trackdisk.TrackdiskRawTrack;
 using CopperStartTimerDeviceServices = CopperMod.Amiga.CopperStart.Devices.Timer.TimerDeviceServices;
+using CopperStartAudioDeviceServices = CopperMod.Amiga.CopperStart.Devices.Audio.AudioDeviceServices;
 using CopperStartKeyboardDeviceServices = CopperMod.Amiga.CopperStart.Devices.Keyboard.KeyboardDeviceServices;
 using CopperStartInputDeviceServices = CopperMod.Amiga.CopperStart.Devices.Input.InputDeviceServices;
 using CopperStartGameportDeviceServices = CopperMod.Amiga.CopperStart.Devices.Gameport.GameportDeviceServices;
 using CopperStartConsoleDeviceServices = CopperMod.Amiga.CopperStart.Devices.Console.ConsoleDeviceServices;
 using CopperStartConsoleContext = CopperMod.Amiga.CopperStart.Devices.Console.CopperStartConsoleContext;
 using CopperStartClipboardDeviceServices = CopperMod.Amiga.CopperStart.Devices.Clipboard.ClipboardDeviceServices;
+using CopperStartUtilityContext = CopperMod.Amiga.CopperStart.Utility.CopperStartUtilityContext;
+using CopperStartUtilityLibraryServices = CopperMod.Amiga.CopperStart.Utility.UtilityLibraryServices;
 using CopperMod.Amiga.Input;
 using CopperStartEncodedTrack = CopperMod.Amiga.Storage.Floppy.AmigaEncodedTrack;
 using CopperStartDiskImage = CopperMod.Amiga.Storage.Floppy.IAmigaDiskImage;
@@ -382,6 +386,7 @@ namespace CopperMod.Amiga
         private readonly CopperStartExecTrapServices _execTrapServices;
         private readonly CopperStartExecNameServices _execNameServices;
         private readonly CopperStartExecResidentServices _execResidentServices;
+        private readonly CopperStartCopperOsResidentServices _copperOsResidentServices;
         private readonly CopperStartRuntime _copperStartRuntime;
         private readonly CopperStartWorkbenchServices _workbenchServices;
         private readonly CopperStartIntuitionServices _intuitionServices;
@@ -398,11 +403,13 @@ namespace CopperMod.Amiga
         private readonly CopperStartExecIoServices _execIoServices;
         private readonly CopperStartTrackdiskDeviceServices _trackdiskDeviceServices;
         private readonly CopperStartTimerDeviceServices _timerDeviceServices;
+        private readonly CopperStartAudioDeviceServices _audioDeviceServices;
         private readonly CopperStartKeyboardDeviceServices _keyboardDeviceServices;
         private readonly CopperStartInputDeviceServices _inputDeviceServices;
         private readonly CopperStartGameportDeviceServices _gameportDeviceServices;
         private readonly CopperStartConsoleDeviceServices _consoleDeviceServices;
         private readonly CopperStartClipboardDeviceServices _clipboardDeviceServices;
+        private readonly CopperStartUtilityLibraryServices _utilityLibraryServices;
         private uint _activeExecBase;
         private KickstartRomExecTakeoverState _kickstartRomExecTakeoverState;
         private readonly CopperStartRuntimeInstructionBoundary _runtimeInstructionBoundary;
@@ -478,6 +485,10 @@ namespace CopperMod.Amiga
             _execMakeLibraryServices = new CopperStartExecMakeLibraryServices(_execContext, _execInitStructServices, ExecMakeLibraryContinuationAddress);
             _execResidentServices = new CopperStartExecResidentServices(
                 _execContext, GetExecListServices(), _execMakeLibraryServices, ExecMakeLibraryContinuationAddress);
+            _copperOsResidentServices = new CopperStartCopperOsResidentServices(_execContext);
+            _utilityLibraryServices = new CopperStartUtilityLibraryServices(new CopperStartUtilityContext(
+                _machine.Bus, _guestMemory, _execContext.MemoryOperations.Allocate, _execContext.MemoryOperations.Free,
+                StartGuestExecSubroutine, _execPortServices.ReplyMessage));
             _execIoServices = new CopperStartExecIoServices(_execContext, _execSignalServices, HostDoIo);
             _execSignalServices.SetIoActiveProbe(_execIoServices.IsActive);
             _trackdiskDeviceServices = new CopperStartTrackdiskDeviceServices(
@@ -497,6 +508,10 @@ namespace CopperMod.Amiga
                 _machine.Bus,
                 ReplyTrackdiskMessage,
                 message => _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_TIMER", message)));
+            _audioDeviceServices = new CopperStartAudioDeviceServices(
+                _machine.Bus,
+                ReplyTrackdiskMessage,
+                message => _diagnostics.Add(new AmigaBootDiagnostic("AMIGA_AUDIO", message)));
             _keyboardDeviceServices = new CopperStartKeyboardDeviceServices(
                 _machine.Bus,
                 _execContext.MemoryOperations,
@@ -516,7 +531,10 @@ namespace CopperMod.Amiga
             _execFormatServices = new CopperStartExecFormatServices(_machine.Bus, RawDoFmtContinuationAddress, ReadNullTerminatedString);
             _execGatewayServices = new CopperStartExecGatewayServices(
                 LogExecCall, _execMemoryServices, _execTaskServices, GetExecListServices(), _execSignalServices,
-                _execSemaphoreServices, _execTrapServices, _execPortServices, _execPoolServices, _execInitStructServices, AddInterruptServer, RemoveInterruptServer,
+                _execSemaphoreServices, _execTrapServices, _execPortServices, _execPoolServices,
+                new CopperMod.Amiga.CopperStart.Exec.ExecRegistryServices(
+                    _execContext, GetExecListServices(), _execSignalServices, _execSemaphoreServices), _execInitStructServices,
+                _copperOsResidentServices.AddResident, AddInterruptServer, RemoveInterruptServer,
                 GetMessage, WaitPort, _execFormatServices.RawDoFmt);
             _execLibraryGatewayServices = new CopperStartExecLibraryGatewayServices(
                 () => _kickstartRomExecTakeoverState == KickstartRomExecTakeoverState.Active,
@@ -578,6 +596,9 @@ namespace CopperMod.Amiga
         public AmigaFloppyDrive Drive2 => _machine.Bus.Disk.Drive2;
 
         public AmigaFloppyDrive Drive3 => _machine.Bus.Disk.Drive3;
+
+        internal void MixHostAudioSample(long cycle, Span<float> destination, int frameIndex, int channels)
+            => _audioDeviceServices.MixSample(cycle, destination, frameIndex, channels);
 
         /// <summary>Accepts primary clipboard text from the host UI without touching guest state on the UI thread.</summary>
         public void QueueHostClipboardText(string text) => _clipboardDeviceServices.QueuePrimaryTextFromHost(text);
@@ -792,11 +813,14 @@ namespace CopperMod.Amiga
         {
             _trackdiskDeviceServices.Reset();
             _timerDeviceServices.Reset();
+            _audioDeviceServices.Reset();
             _keyboardDeviceServices.Reset();
             _inputDeviceServices.Reset();
             _gameportDeviceServices.Reset();
             _consoleDeviceServices.Reset();
             _clipboardDeviceServices.Reset();
+            _utilityLibraryServices.Reset();
+            _copperOsResidentServices.Reset();
             _copperStartRuntime.Reset();
             _romExecLibraryServices = null;
             _execListServices = null;
@@ -1065,6 +1089,7 @@ namespace CopperMod.Amiga
             bus.ConfigureAutoconfigFastRamForHost();
             bus.ConfigureAutoconfigRtgForHost();
             InstallKickstartMemoryList();
+            _ = _copperOsResidentServices.Install();
             if (bus.RtgVram.IsPresent)
             {
                 var diagnosticCopy = AllocateMemoryFromMemList(
@@ -1102,6 +1127,7 @@ namespace CopperMod.Amiga
                     _gameportDeviceServices.TryInstall(_activeExecBase);
                     _consoleDeviceServices.TryInstall(_activeExecBase);
                     _clipboardDeviceServices.TryInstall(_activeExecBase);
+                    _utilityLibraryServices.TryInstall(_activeExecBase);
                     ProcessHostDevices();
                 }
 
@@ -1137,17 +1163,21 @@ namespace CopperMod.Amiga
             _kickstartRomExecTakeoverState = KickstartRomExecTakeoverState.Active;
             _trackdiskDeviceServices.TryInstall(execBase);
             _timerDeviceServices.TryInstall(execBase);
+            _audioDeviceServices.TryInstall(execBase);
             _inputDeviceServices.TryInstall(execBase);
             _keyboardDeviceServices.TryInstall(execBase);
             _gameportDeviceServices.TryInstall(execBase);
             _consoleDeviceServices.TryInstall(execBase);
             _clipboardDeviceServices.TryInstall(execBase);
+            _utilityLibraryServices.TryInstall(execBase);
+            _ = _copperOsResidentServices.Install();
         }
 
         private void ProcessHostDevices()
         {
             _trackdiskDeviceServices.ProcessPending(_machine.Cpu.State);
             _timerDeviceServices.ProcessPending(_machine.Cpu.State);
+            _audioDeviceServices.ProcessPending(_machine.Cpu.State);
             _keyboardDeviceServices.ProcessPending(_machine.Cpu.State);
             _inputDeviceServices.ProcessPending();
             _gameportDeviceServices.ProcessPending(_machine.Cpu.State);
@@ -1164,7 +1194,7 @@ namespace CopperMod.Amiga
         }
 
         private long GetNextHostDeviceBoundary(long currentCycle, long targetCycle)
-            => _gameportDeviceServices.GetNextDeadline(currentCycle, _keyboardDeviceServices.GetNextDeadline(currentCycle, _timerDeviceServices.GetNextDeadline(currentCycle, targetCycle)));
+            => _gameportDeviceServices.GetNextDeadline(currentCycle, _keyboardDeviceServices.GetNextDeadline(currentCycle, _audioDeviceServices.GetNextDeadline(currentCycle, _timerDeviceServices.GetNextDeadline(currentCycle, targetCycle))));
 
         private bool IsValidKickstartRomExecBase(uint execBase)
         {

@@ -36,16 +36,30 @@ internal sealed class ExecResidentServices
     }
     public void FindResident(M68kCpuState state)
     {
-        if (!_context.UsesRomExec()) { state.D[0] = Contains(state.A[1], "dos") ? _context.EnsureCompatibilityDosResident() : 0; return; }
         if (state.A[1] == 0) { state.D[0] = 0; return; }
-        var target = _context.ReadString(state.A[1], 96); var entry = _context.Memory.ReadLong(_context.GetExecBase() + ResModulesOffset);
+        var target = _context.ReadString(state.A[1], 96);
+        var execBase = _context.GetExecBase();
+        if (execBase != 0 && _context.Memory.IsMapped(execBase + ResModulesOffset, 4) &&
+            TryFindResident(target, _context.Memory.ReadLong(execBase + ResModulesOffset), out var resident))
+        {
+            state.D[0] = resident;
+            return;
+        }
+
+        if (!_context.UsesRomExec()) { state.D[0] = Contains(state.A[1], "dos") ? _context.EnsureCompatibilityDosResident() : 0; return; }
+        state.D[0] = 0;
+    }
+
+    private bool TryFindResident(string target, uint entry, out uint found)
+    {
+        found = 0;
         for (var scanned = 0; entry != 0 && entry != 0xFFFF_FFFF && scanned < 2048; scanned++, entry += 4)
         {
             if (!_context.Memory.IsMapped(entry, 4)) break; var resident = _context.Memory.ReadLong(entry);
             if (resident == 0 || resident == 0xFFFF_FFFF || !_context.Memory.IsMapped(resident, 0x16) || _context.Memory.ReadWord(resident) != 0x4AFC) continue;
-            if (string.Equals(target, _context.ReadString(_context.Memory.ReadLong(resident + ResidentNameOffset), 96), StringComparison.OrdinalIgnoreCase)) { state.D[0] = resident; return; }
+            if (string.Equals(target, _context.ReadString(_context.Memory.ReadLong(resident + ResidentNameOffset), 96), StringComparison.OrdinalIgnoreCase)) { found = resident; return true; }
         }
-        state.D[0] = 0;
+        return false;
     }
 
     /// <summary>InitResident(resident=A1, segList=D1), limited to AUTOINIT libraries and devices.</summary>

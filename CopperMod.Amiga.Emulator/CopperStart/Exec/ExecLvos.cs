@@ -20,4 +20,11 @@ internal static class ExecLvos
     // Emulator-private compatibility calls.  They deliberately live below the
     // synthetic catch-all table and are registered directly, never ROM-overlaid.
     public const int PrivateWait = -1206, PrivateReschedule = -1212;
+    // MorphOS exec.library extension slots.  The aligned allocation entries
+    // are native System-V interfaces on MorphOS; CopperStart uses these slots
+    // for its explicit 68k gateway bridge, not as a claim of PPC ABI support.
+    public const int AllocVecPooled = -894, FreeVecPooled = -900;
+    public const int AllocateAligned = -930, AllocMemAligned = -936, AllocVecAligned = -942;
+    public const int AllocPooledAligned = -984;
+    public const int FindExecNode = -960, AddExecNodeA = -966, AddResident = -990, AvailPool = -1050, PutMsgHead = -1062;
 }

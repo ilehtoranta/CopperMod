@@ -26,6 +26,52 @@ internal sealed class ExecPoolServices
         var puddleBytes = Math.Max(pool.PuddleSize, bytes); if (puddleBytes > int.MaxValue) return 0; var puddleBase = _context.MemoryOperations.Allocate((int)puddleBytes, pool.Flags); if (puddleBase == 0) return 0;
         pool.Puddles.Add(new Puddle(puddleBase, puddleBytes) { Next = bytes }); pool.Allocations[puddleBase] = new(puddleBase, bytes, false); if ((pool.Flags & MemfClear) != 0) _context.MemoryOperations.Clear(puddleBase, checked((int)bytes)); return puddleBase;
     }
+    /// <summary>Portable MorphOS-style aligned pool allocation.</summary>
+    public uint AllocPooledAligned(M68kCpuState state)
+    {
+        if (!_pools.TryGetValue(state.A[0], out var pool) || state.D[0] == 0) return 0;
+        var align = state.D[1]; var offset = state.D[2]; var size = state.D[0];
+        if (align < 4 || (align & (align - 1)) != 0 || (offset & 3) != 0 || size > uint.MaxValue - align || size + align > int.MaxValue) return 0;
+        var bytes = checked((int)(size + align));
+        var block = _context.MemoryOperations.Allocate(bytes, pool.Flags); if (block == 0) return 0;
+        var memory = unchecked((uint)(((ulong)block + offset + align - 1) & ~(ulong)(align - 1)) - offset);
+        if (memory < block || (ulong)memory + size > (ulong)block + (uint)bytes) { _context.MemoryOperations.Free(block, bytes); return 0; }
+        pool.Allocations[memory] = new(block, (uint)bytes, true); return memory;
+    }
+    public uint AllocVecPooled(M68kCpuState state)
+    {
+        if (state.D[0] > int.MaxValue - 4) return 0;
+        var size = state.D[0]; state.D[0] = size + 4;
+        var block = AllocPooled(state); state.D[0] = size;
+        if (block == 0) return 0;
+        _context.Memory.WriteLong(block, size + 4); return block + 4;
+    }
+    public uint FreeVecPooled(M68kCpuState state)
+    {
+        if (state.A[1] < 4) return 0;
+        var user = state.A[1]; state.A[1] = user - 4;
+        var result = FreePooled(state); state.A[1] = user; return result;
+    }
+    /// <summary>Returns current, largest, or total allocated pool capacity.</summary>
+    public uint AvailPool(M68kCpuState state)
+    {
+        const uint MemfLargest = 0x0002_0000, MemfTotal = 0x0008_0000;
+        if (!_pools.TryGetValue(state.A[0], out var pool)) return 0;
+        if ((state.D[0] & ~(MemfLargest | MemfTotal)) != 0 || (state.D[0] & (MemfLargest | MemfTotal)) == (MemfLargest | MemfTotal)) return 0;
+        ulong available = 0;
+        uint largest = 0;
+        ulong allocated = 0;
+        foreach (var puddle in pool.Puddles)
+        {
+            available += puddle.Remaining;
+            largest = Math.Max(largest, puddle.Remaining);
+            allocated += puddle.Size;
+        }
+        foreach (var allocation in pool.Allocations.Values)
+            if (allocation.Direct) allocated += allocation.Bytes;
+        return (state.D[0] & MemfTotal) != 0 ? (uint)Math.Min(allocated, uint.MaxValue) :
+            (state.D[0] & MemfLargest) != 0 ? largest : (uint)Math.Min(available, uint.MaxValue);
+    }
     public uint FreePooled(M68kCpuState state) { if (_pools.TryGetValue(state.A[0], out var pool) && pool.Allocations.Remove(state.A[1], out var allocation) && allocation.Direct) _context.MemoryOperations.Free(allocation.Base, checked((int)allocation.Bytes)); return 0; }
     public uint DeletePool(M68kCpuState state)
     {

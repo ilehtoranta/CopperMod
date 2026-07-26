@@ -18,6 +18,8 @@ internal sealed class ExecGatewayServices
     private readonly ExecTrapServices _traps;
     private readonly ExecPortServices _ports;
     private readonly ExecPoolServices _pools;
+    private readonly ExecRegistryServices _registries;
+    private readonly Func<M68kCpuState, uint> _addResident;
     private readonly ExecInitStructServices _initStruct;
     private readonly Func<M68kCpuState, uint> _addInterruptServer;
     private readonly Func<M68kCpuState, uint> _removeInterruptServer;
@@ -28,7 +30,8 @@ internal sealed class ExecGatewayServices
     public ExecGatewayServices(
         Action<int> logCall, ExecMemoryServices memory, ExecTaskServices tasks,
         ExecListServices lists, ExecSignalServices signals, ExecSemaphoreServices semaphores, ExecTrapServices traps,
-        ExecPortServices ports, ExecPoolServices pools, ExecInitStructServices initStruct,
+        ExecPortServices ports, ExecPoolServices pools, ExecRegistryServices registries, ExecInitStructServices initStruct,
+        Func<M68kCpuState, uint> addResident,
         Func<M68kCpuState, uint> addInterruptServer,
         Func<M68kCpuState, uint> removeInterruptServer,
         Func<M68kCpuState, uint> getMessage,
@@ -44,7 +47,9 @@ internal sealed class ExecGatewayServices
         _traps = traps ?? throw new ArgumentNullException(nameof(traps));
         _ports = ports ?? throw new ArgumentNullException(nameof(ports));
         _pools = pools ?? throw new ArgumentNullException(nameof(pools));
+        _registries = registries ?? throw new ArgumentNullException(nameof(registries));
         _initStruct = initStruct ?? throw new ArgumentNullException(nameof(initStruct));
+        _addResident = addResident ?? throw new ArgumentNullException(nameof(addResident));
         _addInterruptServer = addInterruptServer ?? throw new ArgumentNullException(nameof(addInterruptServer));
         _removeInterruptServer = removeInterruptServer ?? throw new ArgumentNullException(nameof(removeInterruptServer));
         _getMessage = getMessage ?? throw new ArgumentNullException(nameof(getMessage));
@@ -79,7 +84,12 @@ internal sealed class ExecGatewayServices
             -372 => _getMessage(state), -378 => _ports.ReplyMsg(state), -390 => _ports.FindPort(state),
             -522 => _rawDoFmt(state), -534 => _memory.TypeOfMem(state), -624 => _memory.CopyMem(state),
             -630 => _memory.CopyMemQuick(state), -684 => _memory.AllocVec(state), -690 => _memory.FreeVec(state),
+            ExecLvos.AllocMemAligned => _memory.AllocMemAligned(state), ExecLvos.AllocateAligned => _memory.AllocateAligned(state), ExecLvos.AllocVecAligned => _memory.AllocVecAligned(state),
             -696 => _pools.CreatePool(state), -702 => _pools.DeletePool(state), -708 => _pools.AllocPooled(state), -714 => _pools.FreePooled(state),
+            ExecLvos.AllocPooledAligned => _pools.AllocPooledAligned(state), ExecLvos.AllocVecPooled => _pools.AllocVecPooled(state), ExecLvos.FreeVecPooled => _pools.FreeVecPooled(state),
+            ExecLvos.PutMsgHead => _ports.PutMsgHead(state), ExecLvos.AddResident => _addResident(state),
+            ExecLvos.AvailPool => _pools.AvailPool(state), ExecLvos.FindExecNode => _registries.FindExecNode(state),
+            ExecLvos.AddExecNodeA => _registries.AddExecNodeA(state),
             -558 => _semaphores.InitSemaphore(state), -576 => _semaphores.AttemptExclusive(state), -720 => _semaphores.AttemptShared(state),
             _ => 0
         };

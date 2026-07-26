@@ -26,6 +26,7 @@ internal sealed class ExecServices : IDisposable
     private readonly AmigaBus _bus;
     private readonly List<HostLibraryGateway> _gateways;
     private readonly Func<M68kCpuState, M68kHostGatewayResult> _reschedule;
+    private readonly Func<M68kCpuState, int, M68kHostGatewayResult> _generic;
     private readonly List<(uint Address, uint Token)> _privateGateways = new();
     private HostLibraryGatewayRegistry _registry;
 
@@ -44,6 +45,7 @@ internal sealed class ExecServices : IDisposable
     {
         _bus = bus ?? throw new ArgumentNullException(nameof(bus));
         _reschedule = reschedule ?? throw new ArgumentNullException(nameof(reschedule));
+        _generic = generic ?? throw new ArgumentNullException(nameof(generic));
         ExecBase = execBase;
         _registry = new HostLibraryGatewayRegistry(_bus);
         var dedicated = new HashSet<int>(DedicatedLvos);
@@ -98,5 +100,21 @@ internal sealed class ExecServices : IDisposable
         if (_privateGateways.Count != 0) return;
         _privateGateways.Add((unchecked((uint)((int)ExecBase + ExecLvos.PrivateWait)), _bus.RegisterHostGateway(unchecked((uint)((int)ExecBase + ExecLvos.PrivateWait)), state => _gateways.Find(g => g.Lvo == -318).Handler(state))));
         _privateGateways.Add((unchecked((uint)((int)ExecBase + ExecLvos.PrivateReschedule)), _bus.RegisterHostGateway(unchecked((uint)((int)ExecBase + ExecLvos.PrivateReschedule)), _reschedule)));
+        RegisterPrivate(ExecLvos.AllocMemAligned);
+        RegisterPrivate(ExecLvos.AllocateAligned);
+        RegisterPrivate(ExecLvos.AllocVecAligned);
+        RegisterPrivate(ExecLvos.AllocPooledAligned);
+        RegisterPrivate(ExecLvos.AllocVecPooled);
+        RegisterPrivate(ExecLvos.FreeVecPooled);
+        RegisterPrivate(ExecLvos.FindExecNode);
+        RegisterPrivate(ExecLvos.AddExecNodeA);
+        RegisterPrivate(ExecLvos.AddResident);
+        RegisterPrivate(ExecLvos.AvailPool);
+        RegisterPrivate(ExecLvos.PutMsgHead);
+    }
+    private void RegisterPrivate(int lvo)
+    {
+        var address = unchecked((uint)((int)ExecBase + lvo));
+        _privateGateways.Add((address, _bus.RegisterHostGateway(address, state => _generic(state, lvo))));
     }
 }

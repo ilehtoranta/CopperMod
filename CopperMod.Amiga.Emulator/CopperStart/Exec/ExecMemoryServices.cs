@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Copper68k;
 using CopperMod.Amiga.Bus;
 
@@ -32,16 +33,34 @@ internal sealed class ExecMemoryServices
 {
     private const uint MemfPublicClear = 0x0001_0001;
     private readonly ExecMemoryContext _context;
+    private readonly Dictionary<uint, (uint Block, int Bytes)> _aligned = new();
     public ExecMemoryServices(ExecMemoryContext context) => _context = context ?? throw new ArgumentNullException(nameof(context));
     public void AllocMem(M68kCpuState state) { var size = (int)Math.Min(state.D[0], int.MaxValue); var flags = state.D[1]; state.D[0] = _context.Allocate(Math.Max(4, size), flags); _context.RecordAlloc(size, flags, state.D[0]); }
     public void AllocMemAndStore(M68kCpuState state) { AllocMem(state); if (state.A[0] != 0) _context.Bus.WriteLong(state.A[0], state.D[0], state.Cycles); }
     public void AvailMem(M68kCpuState state) => state.D[0] = _context.Available(state.D[1]);
     public void AllocAbs(M68kCpuState state) { var size = (int)Math.Min(state.D[0], int.MaxValue); var location = state.A[1]; state.D[0] = _context.AllocateAbsolute(Math.Max(4, size), location); _context.RecordAllocAbs(size, location, state.D[0]); }
-    public void FreeMem(M68kCpuState state) { var address = state.A[1]; var size = (int)Math.Min(state.D[0], int.MaxValue); _context.Free(address, size); _context.RecordFree(address, size); state.D[0] = 0; }
+    public void FreeMem(M68kCpuState state) { var address = state.A[1]; var size = (int)Math.Min(state.D[0], int.MaxValue); if (_aligned.Remove(address, out var allocation)) { _context.Free(allocation.Block, allocation.Bytes); _context.RecordFree(address, size); state.D[0] = 0; return; } _context.Free(address, size); _context.RecordFree(address, size); state.D[0] = 0; }
     public uint AllocVec(M68kCpuState state) { var requested = (int)Math.Min(state.D[0], int.MaxValue - 4); if (requested < 0) return 0; var bytes = Math.Max(4, requested + 4); var block = _context.Allocate(bytes, state.D[1]); if (block == 0) return 0; _context.Bus.WriteLong(block, (uint)bytes, state.Cycles); return block + 4; }
-    public uint FreeVec(M68kCpuState state) { var user = state.A[1]; if (user < 4 || !_context.Bus.IsMappedMemoryRange(user - 4, 4)) return 0; var block = user - 4; var bytes = _context.Bus.ReadLong(block); if (bytes is >= 4 and <= int.MaxValue) _context.Free(block, (int)bytes); return 0; }
+    public uint FreeVec(M68kCpuState state) { var user = state.A[1]; if (_aligned.Remove(user, out var aligned)) { _context.Free(aligned.Block, aligned.Bytes); return 0; } if (user < 4 || !_context.Bus.IsMappedMemoryRange(user - 4, 4)) return 0; var block = user - 4; var bytes = _context.Bus.ReadLong(block); if (bytes is >= 4 and <= int.MaxValue) _context.Free(block, (int)bytes); return 0; }
     public uint Allocate(M68kCpuState state) => _context.AllocateFromHeader(state.A[0], (int)Math.Min(state.D[0], int.MaxValue), 0);
+    public uint AllocMemAligned(M68kCpuState state) => AllocateAlignedCore((int)Math.Min(state.D[0], int.MaxValue), state.D[1], state.D[2], state.D[3], state);
+    public uint AllocateAligned(M68kCpuState state) => AllocateAlignedCore((int)Math.Min(state.D[0], int.MaxValue), 0, state.D[1], state.D[2], state);
+    public uint AllocVecAligned(M68kCpuState state)
+    {
+        var user = AllocateAlignedCore((int)Math.Min(state.D[0], int.MaxValue), state.D[1], state.D[2], state.D[3], state);
+        return user;
+    }
     public uint Deallocate(M68kCpuState state) { _context.DeallocateToHeader(state.A[0], state.A[1], (int)Math.Min(state.D[0], int.MaxValue)); return 0; }
+    private uint AllocateAlignedCore(int size, uint flags, uint alignSize, uint alignOffset, M68kCpuState state)
+    {
+        if (size < 0 || alignSize < 4 || (alignSize & (alignSize - 1)) != 0 || (alignOffset & 3) != 0) return 0;
+        var total64 = (long)Math.Max(4, size) + alignSize;
+        if (total64 > int.MaxValue) return 0;
+        var block = _context.Allocate((int)total64, flags); if (block == 0) return 0;
+        var user = unchecked((uint)(((ulong)block + alignOffset + alignSize - 1) & ~(ulong)(alignSize - 1)) - alignOffset);
+        if (user < block || (ulong)user + (uint)Math.Max(4, size) > (ulong)block + (ulong)total64) { _context.Free(block, (int)total64); return 0; }
+        _aligned[user] = (block, (int)total64); return user;
+    }
     public uint AllocEntry(M68kCpuState state)
     {
         var template = state.A[0]; if (template == 0 || !_context.Bus.IsMappedMemoryRange(template, 16)) return 0x8000_0000;
