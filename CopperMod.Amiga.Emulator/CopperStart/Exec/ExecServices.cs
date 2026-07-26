@@ -9,17 +9,12 @@ namespace CopperMod.Amiga.CopperStart.Exec;
 /// <summary>Exec LVO contribution owned by CopperStart's host-library layer.</summary>
 internal sealed class ExecServices : IDisposable
 {
-    private static readonly int[] ConcreteGenericLvos =
-    [
-        -120, -126, -132, -138, -150, -156, -168, -174, -186, -192, -222, -228, -234, -240, -246, -252, -258, -264, -270,
-        // Task, signal, and trap LVOs mutate only the active ROM ExecBase and
-        // hand every actual context transition to the untouched KS Schedule/
-        // Switch vectors.  This keeps task frames ROM-owned while allowing the
-        // host implementations to share one wait/wakeup state machine.
-        -282, -288, -294, -300, -306, -312, -318, -324, -330, -336, -342, -348,
-        -354, -360, -366,
-        -372, -378, -390, -522, -534, -558, -564, -570, -576, -624, -630, -678, -684, -690, -696, -702, -708, -714, -720
-    ];
+    // ROM takeover is deliberately more conservative than CopperStart's
+    // synthetic compatibility table.  These functions operate directly on
+    // the mature ROM-created MemList and do not alter boot-time task or
+    // library lifecycle state.  Every other vector remains native until its
+    // real-ROM startup and lifecycle contract has its own smoke coverage.
+    private static readonly int[] RomSafeOverlayLvos = [ -276, -198, -204, -210, -216 ];
     private static readonly int[] DedicatedLvos =
     [ -456, -462, -468, -474, -480, -102, -96, -90, -84, -78, -276, -198, -204, -210, -216, -396, -402, -408, -414, -432, -438, -444, -450, -486, -492, -498, -552 ];
 
@@ -73,19 +68,7 @@ internal sealed class ExecServices : IDisposable
         Dispose();
         _registry = new HostLibraryGatewayRegistry(_bus);
         _registry.AddLibrary(ExecBase, _gateways.FindAll(gateway =>
-            // Device I/O is owned by the opened device.  The CopperStart
-            // compatibility shim has a small synchronous boot-disk path,
-            // but installing that as a ROM Exec DoIO/SendIO replacement
-            // would redirect every request (input, timer, trackdisk, ...)
-            // away from its device BeginIO vector.  Keep the KS 3.1 I/O LVOs
-            // native until a concrete replacement device registers its own
-            // BeginIO/AbortIO gateways.
-            gateway.Lvo is not (-456 or -462 or -468 or -474 or -480) &&
-            // InitResident has one ROM vector for every resident type. Keep it
-            // native until resources and the remaining resident classes have
-            // the same complete lifecycle as AUTOINIT libraries/devices.
-            gateway.Lvo is -96 or -90 or -84 or -78 or -276 or -198 or -204 or -210 or -216 or -396 or -402 or -408 or -414 or -432 or -438 or -444 or -450 or -486 or -492 or -498 or -552 ||
-            Array.IndexOf(ConcreteGenericLvos, gateway.Lvo) >= 0));
+            Array.IndexOf(RomSafeOverlayLvos, gateway.Lvo) >= 0));
         _registry.InstallRomOverlays();
         InstallPrivateGateways();
     }

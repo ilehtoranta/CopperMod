@@ -1149,7 +1149,11 @@ namespace CopperMod.Amiga
 
             if (!IsValidKickstartRomExecBase(execBase))
             {
-                _kickstartRomExecTakeoverState = KickstartRomExecTakeoverState.Unavailable;
+                // KS 3.1 publishes AbsExecBase before all of the structures
+                // used by validation (notably ThisTask and MemList) are live.
+                // Treat that as an in-progress ROM initialization and retry
+                // at later instruction boundaries.  Marking it unavailable
+                // here permanently prevented every later host-device install.
                 return;
             }
 
