@@ -253,7 +253,12 @@ namespace Copper68k
         DbccExpired,
         BranchLongTaken,
         BranchLongNotTaken,
-        BsrLong
+        BsrLong,
+        TstLongData,
+        MoveLongDataToPredecrement,
+        MoveLongAddressToPredecrement,
+        MoveLongPostIncrementToAddressDisplacement,
+        MoveLongAddressDisplacementToPredecrement
     }
 
     internal readonly record struct M68kInstructionPlan(

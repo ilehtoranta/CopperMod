@@ -205,6 +205,33 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(0x2FECu, cpu.State.A[7]);
 		Assert.Equal(0x1234_5678u, bus.ReadLong(0x2FFC));
 	}
+
+	[Fact]
+	public void LinkWordAndUnlinkCreateAndRestoreFrame()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(
+			bus,
+			CodeBase,
+			0x4E56, 0xFFF0, // LINK.W A6,#-16
+			0x4E5E); // UNLK A6
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.A[6] = 0x1234_5678;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(CodeBase + 4u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFCu, cpu.State.A[6]);
+		Assert.Equal(0x2FECu, cpu.State.A[7]);
+		Assert.Equal(0x1234_5678u, bus.ReadLong(0x2FFC));
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(CodeBase + 6u, cpu.State.ProgramCounter);
+		Assert.Equal(0x1234_5678u, cpu.State.A[6]);
+		Assert.Equal(0x3000u, cpu.State.A[7]);
+	}
 	[Fact]
 	public void ExtbSignExtendsByteToLong()
 	{
@@ -964,6 +991,26 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(4, cpu.State.NativeCycles);
 		Assert.Equal(2, cpu.State.Cycles);
 	}
+
+	[Fact]
+	public void MoveLongDataToPredecrementUpdatesAddressBeforeWriting()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x2702); // MOVE.L D2,-(A3)
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[2] = 0x89AB_CDEF;
+		cpu.State.A[3] = 0x0000_2404;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_2400u, cpu.State.A[3]);
+		Assert.Equal(0x89AB_CDEFu, bus.ReadLong(0x0000_2400));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
+		Assert.Equal(4, cpu.State.NativeCycles);
+		Assert.Equal(2, cpu.State.Cycles);
+	}
 	[Fact]
 	public void MoveLongDataToAddressDisplacementWritesMemoryAndSetsFlags()
 	{
@@ -1232,6 +1279,25 @@ public sealed class M68020InterpreterTests
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
+		Assert.Equal(4, cpu.State.NativeCycles);
+		Assert.Equal(2, cpu.State.Cycles);
+	}
+
+	[Fact]
+	public void MoveLongAddressToStackPredecrementCapturesSourceBeforeUpdatingA7()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x2F0F); // MOVE.L A7,-(A7)
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_2FFCu, cpu.State.A[7]);
+		Assert.Equal(0x0000_3000u, bus.ReadLong(0x0000_2FFC));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
 		Assert.Equal(4, cpu.State.NativeCycles);
 		Assert.Equal(2, cpu.State.Cycles);
@@ -3950,6 +4016,53 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(2, cpu.State.NativeCycles);
 		Assert.Equal(1, cpu.State.Cycles);
 	}
+
+	[Fact]
+	public void TstLongDataRegisterSetsConditionCodes()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x4A81); // TST.L D1
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[1] = 0x8000_0000;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Extend |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow |
+			M68kCpuState.Carry;
+
+		cpu.ExecuteInstruction();
+
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
+		Assert.Equal(2, cpu.State.NativeCycles);
+		Assert.Equal(1, cpu.State.Cycles);
+	}
+
+	[Fact]
+	public void SubqLongDataRegisterSubtractsImmediateAndSetsFlags()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x5381); // SUBQ.L #1,D1
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[1] = 1;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0u, cpu.State.D[1]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
+		Assert.Equal(2, cpu.State.NativeCycles);
+		Assert.Equal(1, cpu.State.Cycles);
+	}
 	[Fact]
 	public void AsrLongImmediateDataRegisterShiftsWithSignAndSetsExtend()
 	{
@@ -4597,6 +4710,44 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(0x0000_2FFCu, cpu.State.A[7]);
 		Assert.Equal(CodeBase + 6u, bus.ReadLong(0x0000_2FFC));
 		Assert.Equal(7, cpu.State.NativeCycles);
+		Assert.Equal(4, cpu.State.Cycles);
+	}
+
+	[Fact]
+	public void MoveLongAddressDisplacementToPredecrementEvaluatesSourceFirst()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x272B, 0x0008); // MOVE.L 8(A3),-(A3)
+		bus.WriteLong(0x0000_2408, 0xCAFE_BABE);
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.A[3] = 0x0000_2400;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_23FCu, cpu.State.A[3]);
+		Assert.Equal(0xCAFE_BABEu, bus.ReadLong(0x0000_23FC));
+		Assert.Equal(CodeBase + 4u, cpu.State.ProgramCounter);
+		Assert.Equal(10, cpu.State.NativeCycles);
+		Assert.Equal(5, cpu.State.Cycles);
+	}
+
+	[Fact]
+	public void MoveLongPostIncrementToAddressDisplacementEvaluatesSourceFirst()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x275B, 0x0004); // MOVE.L (A3)+,4(A3)
+		bus.WriteLong(0x0000_2400, 0x1234_5678);
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.A[3] = 0x0000_2400;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_2404u, cpu.State.A[3]);
+		Assert.Equal(0x1234_5678u, bus.ReadLong(0x0000_2408));
+		Assert.Equal(CodeBase + 4u, cpu.State.ProgramCounter);
+		Assert.Equal(8, cpu.State.NativeCycles);
 		Assert.Equal(4, cpu.State.Cycles);
 	}
 	[Fact]

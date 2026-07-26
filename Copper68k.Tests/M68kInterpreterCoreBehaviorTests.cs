@@ -1134,6 +1134,40 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.True(sampleCycle < targetExtension.CompletedCycle);
 		Assert.True(firstExceptionTransfer.RequestedCycle >= targetExtension.CompletedCycle);
 	}
+
+	[Fact]
+	public void InterruptAbandonsTakenBranchSuccessorWhenTargetOpcodeIsStillFuture()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x006C, Words(0x0000, 0x2000));
+		Write(bus.Memory, 0x2000, Words(0x4E71, 0x4E71));
+		var cpu = CreateCycleParityCpu(bus, enableOpcodePlan: true, M68kOpcodePlanDispatch.PackedPlan);
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		cpu.State.Cycles = 6;
+		var transfer = Assert.IsAssignableFrom<IM68000PipelineStateTransfer>(cpu);
+		var state = transfer.ExportM68000PipelineState() with
+		{
+			PrefetchAddress = 0x1000,
+			Word0 = 0x60FE,
+			Word1 = 0x4E71,
+			ReadyCycle0 = 24,
+			ReadyCycle1 = 28,
+			PrefetchCount = 2,
+			NextBusTransferCycle = 28,
+			LastBusReadyCycle = 28,
+			RetireBusCycle = 28,
+			ExceptionEntryNotBeforeCycle = 24
+		};
+		transfer.ImportM68000PipelineState(in state);
+
+		cpu.RequestInterrupt(3, (24u + 3u) * 4u);
+
+		var firstExceptionTransfer = bus.CpuBusPhases.First(phase =>
+			phase.AccessKind == M68kBusAccessKind.CpuDataWrite);
+		Assert.Equal(30, firstExceptionTransfer.RequestedCycle);
+		Assert.Equal(68, cpu.State.Cycles);
+	}
+
 	[Theory]
 	[InlineData((int)M68kOpcodePlanDispatch.KindTable)]
 	[InlineData((int)M68kOpcodePlanDispatch.PackedPlan)]
@@ -4603,6 +4637,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		public int CompletedBatchInstructions { get; private set; }
 		public bool IsDeferredCpuBusBatchActive { get; private set; }
 		public bool IsInternalNoBusWindowEnabled => false;
+		public bool RequiresControlFlowBatchBoundary => false;
 		public bool TryGetInstructionFetchWindow(uint address, out M68kInstructionFetchWindow window)
 		{
 			window = new M68kInstructionFetchWindow(
@@ -4675,11 +4710,13 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			M68kCpuState state,
 			long currentCycle,
 			long? targetCycle,
+			bool allowChipInstructionFetchEpoch,
 			out long batchTargetCycle,
 			out M68kTraceBatchWakeSource wakeSource)
 		{
 			_ = state;
 			_ = targetCycle;
+			_ = allowChipInstructionFetchEpoch;
 			batchTargetCycle = currentCycle + 100;
 			wakeSource = M68kTraceBatchWakeSource.Unknown;
 			IsDeferredCpuBusBatchActive = true;

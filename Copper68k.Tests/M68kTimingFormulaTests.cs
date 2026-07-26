@@ -202,6 +202,7 @@ public sealed class M68kTimingFormulaTests
 	{
 		var keyName = key.ToString();
 		return key is M68kInstructionTimingKey.Moveq or M68kInstructionTimingKey.TstWordData ||
+			keyName.StartsWith("Tst", StringComparison.Ordinal) ||
 			keyName.StartsWith("MoveLong", StringComparison.Ordinal) ||
 			keyName.StartsWith("MoveWord", StringComparison.Ordinal) ||
 			keyName.StartsWith("MoveByte", StringComparison.Ordinal) ||
