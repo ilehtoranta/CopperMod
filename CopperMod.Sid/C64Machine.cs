@@ -1486,8 +1486,11 @@ namespace CopperMod.Sid
             {
                 _pendingIrqSource = _cpuCycleIrqSource;
             }
-            Cpu.SetReadyLine(!_module.IsRsid || !_vic.IsCpuReadBlocked());
-            Cpu.SetBusAvailable(!_module.IsRsid || !_vic.IsCpuWriteBlocked());
+            // VIC-II cycle stealing is a physical bus property, not a PSID/RSID policy: the
+            // badline and sprite DMA windows model IsCpuReadBlocked/IsCpuWriteBlocked identically
+            // for every module kind, so honor them unconditionally (PSID no longer bypasses stalls).
+            Cpu.SetReadyLine(!_vic.IsCpuReadBlocked());
+            Cpu.SetBusAvailable(!_vic.IsCpuWriteBlocked());
         }
 
         [HotPath]
@@ -1496,7 +1499,7 @@ namespace CopperMod.Sid
             if (!_cpuBusCallbackThisCycle)
             {
                 var cycle = Cpu.Cycles - 1;
-                var vicOwned = _module.IsRsid && _vic.IsCpuWriteBlocked();
+                var vicOwned = _vic.IsCpuWriteBlocked();
                 CpuBusTrace?.Add(new CpuBusTraceFrame(
                     cycle,
                     Cpu.LastOpcode,
@@ -1504,7 +1507,7 @@ namespace CopperMod.Sid
                     null,
                     kind: null,
                     cpuAdvanced: result.CpuAdvanced,
-                    ready: !_module.IsRsid || !_vic.IsCpuReadBlocked(),
+                    ready: !_vic.IsCpuReadBlocked(),
                     busAvailable: !vicOwned,
                     vicOwned: vicOwned));
             }
@@ -1551,7 +1554,7 @@ namespace CopperMod.Sid
         [HotPath]
         private void CaptureCpuBusRead(long busCycle, ushort address, byte value, Mos6510BusAccessKind kind)
         {
-            var blocked = _cpuInstructionActive && _module.IsRsid && _vic.IsCpuReadBlocked();
+            var blocked = _cpuInstructionActive && _vic.IsCpuReadBlocked();
             CpuBusTrace?.Add(new CpuBusTraceFrame(
                 busCycle,
                 kind == Mos6510BusAccessKind.OpcodeFetch ? value : Cpu.LastOpcode,

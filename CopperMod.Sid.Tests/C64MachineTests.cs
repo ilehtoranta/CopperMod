@@ -1213,6 +1213,111 @@ public sealed class C64MachineTests
 		Assert.Equal(stackPointer, machine.Cpu.StackPointer);
 	}
 
+	[Fact]
+	public void PsidCpuSidWriteWhoseFetchHitsBadlineIsDelayedToFirstFreeBusCycle()
+	{
+		// PSID must honor VIC badline cycle stealing exactly like RSID: a cycle-counted
+		// SID write whose opcode fetch lands on a badline BA-low cycle is stalled to the
+		// first free bus cycle. Before the unconditional-stall fix this write landed early
+		// because PSID forced RDY/BA high, so this assertion proves the bypass is gone.
+		var machine = CreatePsidInstructionMachine(new byte[] { 0x8D, 0x04, 0xD4 }, a: 0x21, x: 0, y: 0);
+		machine.Write(0xD011, 0x10, 0);
+		var targetWriteCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 15, dataCycleOffset: 3);
+		var expectedWriteCycle = targetWriteCycle + 43;
+		var cpuTrace = new CpuBusTrace();
+		machine.CpuBusTrace = cpuTrace;
+
+		machine.RunCycles(4);
+
+		var write = Assert.Single(machine.SidWrites);
+		Assert.Equal(expectedWriteCycle, write.Cycle);
+		Assert.Equal(0x04, write.Register);
+		Assert.Equal(0x21, write.Value);
+		Assert.Equal(43, write.Cycle - targetWriteCycle);
+		var targetFetchCycle = targetWriteCycle - 3;
+		AssertStalledCpuRead(
+			cpuTrace,
+			targetFetchCycle,
+			targetFetchCycle + 43,
+			Mos6510BusAccessKind.OpcodeFetch);
+		Assert.Contains(cpuTrace.Frames, frame => frame.VicOwned && !frame.Ready && !frame.CpuAdvanced);
+		Assert.True(machine.DebugState.Vic.BadlineActive);
+	}
+
+	[Fact]
+	public void PsidCpuSidWriteOutsideBadlineKeepsOriginalCycleTiming()
+	{
+		// Control: on a non-badline raster line the PSID write must retain its natural
+		// timing and the CPU must never see a VIC-owned stall cycle.
+		var machine = CreatePsidInstructionMachine(new byte[] { 0x8D, 0x04, 0xD4 }, a: 0x23, x: 0, y: 0);
+		machine.Write(0xD011, 0x10, 0);
+		var targetWriteCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x31, publicCycle: 15, dataCycleOffset: 3);
+		var expectedEndCycle = machine.Cpu.Cycles + 4;
+		var cpuTrace = new CpuBusTrace();
+		machine.CpuBusTrace = cpuTrace;
+
+		machine.RunCycles(4);
+
+		var write = Assert.Single(machine.SidWrites);
+		Assert.Equal(targetWriteCycle, write.Cycle);
+		Assert.Equal(expectedEndCycle, machine.Cpu.Cycles);
+		Assert.DoesNotContain(cpuTrace.Frames, frame => frame.VicOwned || !frame.CpuAdvanced);
+	}
+
+	[Fact]
+	public void PsidBadlineOpcodeFetchStallLocksVicOwnedWindow()
+	{
+		// Regression lock for the PSID badline stall contract: an opcode fetch that hits a
+		// badline stalls across the full BA-low window to the first free bus cycle, exposing
+		// VIC-owned cycles on the CPU bus trace. Guards against re-introducing an IsRsid gate.
+		var machine = CreatePsidInstructionMachine(new byte[] { 0xA9, 0x42 }, a: 0, x: 0, y: 0);
+		machine.Write(0xD011, 0x10, 0);
+		var targetOperandCycle = PositionCpuForDataBusCycle(machine, rasterLine: 0x30, publicCycle: 12, dataCycleOffset: 1);
+		var trace = new CpuBusTrace();
+		machine.CpuBusTrace = trace;
+
+		machine.RunCycles(2);
+
+		AssertStalledCpuRead(
+			trace,
+			targetOperandCycle,
+			targetOperandCycle + 43,
+			Mos6510BusAccessKind.OperandFetch);
+		Assert.Equal(targetOperandCycle + 44, machine.Cpu.Cycles);
+		Assert.Contains(trace.Frames, frame => frame.VicOwned && !frame.BusAvailable);
+		Assert.Equal(0x42, machine.Cpu.A);
+	}
+
+	private static C64Machine CreatePsidInstructionMachine(byte[] program, byte a, byte x, byte y)
+	{
+		// Mirror of CreateInstructionMachine but for a PAL VBI PSID module, so the badline
+		// stall behavior is exercised through the PSID code path. The PSID VBI raster IRQ is
+		// neutralized to isolate the DMA stall contract, matching the RSID harness.
+		var module = SidParser.Parse(SidFixtureBuilder.CreatePsid(
+			new byte[] { 0x60 },
+			loadAddress: 0x1000,
+			initAddress: 0x1000,
+			playAddress: 0x1000,
+			songs: 1,
+			startSong: 1,
+			flags: (1 << 2) | (1 << 4)));
+		var machine = new C64Machine(module);
+		machine.Reset(0);
+		machine.Write(0xD01A, 0x00, 0); // disable VIC raster IRQ mask
+		machine.Write(0xD019, 0x0F, 0); // acknowledge any pending VIC IRQ latch
+		machine.Sid.Reset();
+		machine.Cpu.InitializeState(0x2000);
+		machine.Cpu.A = a;
+		machine.Cpu.X = x;
+		machine.Cpu.Y = y;
+		for (var i = 0; i < program.Length; i++)
+		{
+			machine.Ram[0x2000 + i] = program[i];
+		}
+
+		return machine;
+	}
+
 	private static C64Machine CreateRsidMachine(byte[] program)
 	{
 		var module = SidParser.Parse(SidFixtureBuilder.CreateRsid(program));
