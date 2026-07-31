@@ -21,12 +21,21 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 var bitplaneDmaWasEnabled = IsBitplaneDmaEnabled(_dmacon);
                 var liveCopperDmaWasEnabled = IsLiveCopperDmaEnabled();
+                var spriteDmaWasEnabled = IsSpriteDmaEnabled();
                 if (bitplaneDmaWasEnabled && !IsBitplaneDmaEnabledAfterSetClear(_dmacon, value))
                 {
                     AnchorActiveBitplanePointersToCurrentRow();
                 }
 
                 ApplySetClear(ref _dmacon, value);
+                if (_advancingLiveDma &&
+                    !spriteDmaWasEnabled &&
+                    IsSpriteDmaEnabled() &&
+                    cycle != long.MinValue)
+                {
+                    AdvanceLiveSpriteFetchCursorToCycle(cycle);
+                }
+
                 if (_advancingLiveDma && cycle != long.MinValue)
                 {
                     var row = GetOutputRowForCycle(_liveFrameStartCycle, cycle);
@@ -588,12 +597,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     if ((offset & 2) == 0)
                     {
                         _sprites[sprite].Pointer = WriteDmaPointerHigh(_sprites[sprite].Pointer, value);
-                        UpdateLiveSpriteDmaPointerFromRegisterWrite(sprite, GetCurrentSpriteDmaControlRow());
+                        UpdateLiveSpriteDmaPointerFromRegisterWrite(
+                            sprite,
+                            GetCurrentSpriteDmaControlRow(),
+                            cycle);
                     }
                     else
                     {
                         _sprites[sprite].Pointer = WriteDmaPointerLow(_sprites[sprite].Pointer, value);
-                        UpdateLiveSpriteDmaPointerFromRegisterWrite(sprite, GetCurrentSpriteDmaControlRow());
+                        UpdateLiveSpriteDmaPointerFromRegisterWrite(
+                            sprite,
+                            GetCurrentSpriteDmaControlRow(),
+                            cycle);
                     }
                 }
 

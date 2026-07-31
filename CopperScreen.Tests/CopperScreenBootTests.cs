@@ -4,7 +4,9 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using Avalonia.Input;
+using Copper68k;
 using CopperMod.Amiga;
+using CopperMod.Amiga.Bus;
 using CopperScreen;
 using AmigaDosTrackEncoder = CopperDisk.AmigaDosTrackEncoder;
 using IpfDecodeOptions = CopperDisk.IpfDecodeOptions;
@@ -125,6 +127,340 @@ public sealed class CopperScreenBootTests
 			catch (IOException)
 			{
 			}
+		}
+	}
+
+	[Fact]
+	public void Kickstart31HostExecBootDiscoversRomConsoleDeviceAndInstallsDirectGatewaysWhenRomAvailable()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");
+		var profilePath = Path.Combine(AppContext.BaseDirectory, "Profiles", "a500-kickstart31-host-exec.json");
+		if (romPath == null || !File.Exists(profilePath))
+		{
+			return;
+		}
+
+		using var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", profilePath, "--kickstart-rom", romPath },
+			AppContext.BaseDirectory);
+		var bus = GetMachine(emulator).Bus;
+		uint consoleDevice = 0;
+		for (var frame = 0; frame < 1_500 && consoleDevice == 0 && !ContainsFatalBootStatus(emulator.StatusText); frame++)
+		{
+			emulator.RenderNextFrame();
+			var execBase = bus.ReadLong(4);
+			consoleDevice = FindNamedExecDevice(bus, execBase, "console.device");
+		}
+
+		var boot = (AmigaBootController)typeof(CopperScreenEmulator)
+			.GetField("_boot", BindingFlags.NonPublic | BindingFlags.Instance)!
+			.GetValue(emulator)!;
+		var takeoverState = typeof(AmigaBootController)
+			.GetField("_kickstartRomExecTakeoverState", BindingFlags.NonPublic | BindingFlags.Instance)!
+			.GetValue(boot);
+		var diagnostic = $"status='{emulator.StatusText}', takeover={takeoverState}, exec=0x{bus.ReadLong(4):X8}, pc=0x{GetMachine(emulator).Cpu.State.ProgramCounter:X8}";
+		Assert.False(ContainsFatalBootStatus(emulator.StatusText), diagnostic);
+		Assert.True(consoleDevice != 0, diagnostic);
+		Assert.True(bus.HasHostGateway(unchecked((uint)((int)bus.ReadLong(4) - 198))), diagnostic);
+		Assert.False(bus.HasHostGateway(unchecked((uint)((int)bus.ReadLong(4) - 408))), diagnostic);
+		foreach (var lvo in new[] { -6, -12, -18, -24, -30, -36, -42, -48 })
+		{
+			Assert.True(bus.HasHostGateway(unchecked((uint)((int)consoleDevice + lvo))), $"lvo={lvo}, {diagnostic}");
+		}
+	}
+
+	[Fact]
+	public void Kickstart31HostExecClipboardDeviceBridgesPrimaryTextWhenRomAvailable()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");
+		var profilePath = Path.Combine(AppContext.BaseDirectory, "Profiles", "a500-kickstart31-host-exec.json");
+		if (romPath == null || !File.Exists(profilePath))
+		{
+			return;
+		}
+
+		using var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", profilePath, "--kickstart-rom", romPath },
+			AppContext.BaseDirectory);
+		var machine = GetMachine(emulator);
+		var bus = machine.Bus;
+		var clipboardDevice = 0u;
+		for (var frame = 0; frame < 1_500 && clipboardDevice == 0 && !ContainsFatalBootStatus(emulator.StatusText); frame++)
+		{
+			emulator.RenderNextFrame();
+			clipboardDevice = FindNamedExecDevice(bus, bus.ReadLong(4), "clipboard.device");
+		}
+
+		var diagnostic = $"status='{emulator.StatusText}', exec=0x{bus.ReadLong(4):X8}, pc=0x{machine.Cpu.State.ProgramCounter:X8}";
+		Assert.False(ContainsFatalBootStatus(emulator.StatusText), diagnostic);
+		Assert.NotEqual(0u, clipboardDevice);
+		foreach (var lvo in new[] { -6, -12, -18, -24, -30, -36 })
+		{
+			Assert.True(bus.HasHostGateway(unchecked((uint)((int)clipboardDevice + lvo))), $"lvo={lvo}, {diagnostic}");
+		}
+
+		var state = new M68kCpuState { Cycles = machine.Cpu.State.Cycles };
+		uint Allocate(uint bytes)
+		{
+			state.D[0] = bytes;
+			state.D[1] = 0x0001_0001;
+			Assert.True(bus.TryInvokeHostGatewayAt(unchecked((uint)((int)bus.ReadLong(4) - 198)), state), diagnostic);
+			return state.D[0];
+		}
+
+		var request = Allocate(0x34);
+		var target = Allocate(128);
+		state.A[1] = request;
+		state.D[0] = 0;
+		Assert.True(bus.TryInvokeHostGatewayAt(clipboardDevice - 6, state), diagnostic);
+		Assert.Equal(clipboardDevice, bus.ReadLong(request + 0x14));
+
+		emulator.QueueHostClipboardText("CopperStart clipboard");
+		emulator.RenderNextFrame();
+		bus.WriteWord(request + 0x1C, 2, state.Cycles); // CMD_READ
+		bus.WriteByte(request + 0x1E, 1, state.Cycles); // IOF_QUICK
+		bus.WriteLong(request + 0x24, 128, state.Cycles);
+		bus.WriteLong(request + 0x28, target, state.Cycles);
+		bus.WriteLong(request + 0x2C, 0, state.Cycles);
+		bus.WriteLong(request + 0x30, 0, state.Cycles);
+		state.A[1] = request;
+		Assert.True(bus.TryInvokeHostGatewayAt(clipboardDevice - 30, state), diagnostic);
+		Assert.True(bus.ReadLong(request + 0x20) > 12, diagnostic);
+		Assert.Equal("FORM", Encoding.ASCII.GetString(Enumerable.Range(0, 4).Select(index => bus.ReadByte(target + (uint)index)).ToArray()));
+
+		state.A[1] = request;
+		Assert.True(bus.TryInvokeHostGatewayAt(clipboardDevice - 12, state), diagnostic);
+	}
+
+	[Fact]
+	public void Kickstart31HostExecConsoleGatewayOpensAndClosesAStandardUnitWhenRomAvailable()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");
+		var profilePath = Path.Combine(AppContext.BaseDirectory, "Profiles", "a500-kickstart31-host-exec.json");
+		if (romPath == null || !File.Exists(profilePath))
+		{
+			return;
+		}
+
+		using var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", profilePath, "--kickstart-rom", romPath },
+			AppContext.BaseDirectory);
+		var machine = GetMachine(emulator);
+		var bus = machine.Bus;
+		var consoleDevice = 0u;
+		for (var frame = 0; frame < 1_500 && consoleDevice == 0 && !ContainsFatalBootStatus(emulator.StatusText); frame++)
+		{
+			emulator.RenderNextFrame();
+			consoleDevice = FindNamedExecDevice(bus, bus.ReadLong(4), "console.device");
+		}
+
+		var diagnostic = $"status='{emulator.StatusText}', exec=0x{bus.ReadLong(4):X8}, pc=0x{machine.Cpu.State.ProgramCounter:X8}";
+		Assert.False(ContainsFatalBootStatus(emulator.StatusText), diagnostic);
+		Assert.NotEqual(0u, consoleDevice);
+		var state = new M68kCpuState { Cycles = machine.Cpu.State.Cycles };
+		uint Allocate(uint bytes)
+		{
+			state.D[0] = bytes;
+			state.D[1] = 0x0001_0001;
+			Assert.True(bus.TryInvokeHostGatewayAt(unchecked((uint)((int)bus.ReadLong(4) - 198)), state), diagnostic);
+			Assert.NotEqual(0u, state.D[0]);
+			return state.D[0];
+		}
+
+		var request = Allocate(0x34);
+		var window = Allocate(0x40);
+		var rastPort = Allocate(0x40);
+		bus.WriteLong(window + 0x32, rastPort, state.Cycles);
+		bus.WriteWord(window + 0x08, 640, state.Cycles);
+		bus.WriteWord(window + 0x0A, 200, state.Cycles);
+		bus.WriteWord(rastPort + 0x3A, 8, state.Cycles);
+		bus.WriteWord(rastPort + 0x3C, 8, state.Cycles);
+		bus.WriteWord(rastPort + 0x3E, 7, state.Cycles);
+		bus.WriteLong(request + 0x28, window, state.Cycles);
+		state.A[1] = request;
+		state.D[0] = 0; // CONU_STANDARD
+		Assert.True(bus.TryInvokeHostGatewayAt(unchecked((uint)((int)consoleDevice - 6)), state), diagnostic);
+		Assert.Equal(0u, state.D[0]);
+		Assert.Equal(consoleDevice, bus.ReadLong(request + 0x14));
+		Assert.Equal(request, bus.ReadLong(request + 0x18));
+
+		bus.WriteWord(request + 0x1C, 5, state.Cycles); // CMD_CLEAR
+		state.A[1] = request;
+		Assert.True(bus.TryInvokeHostGatewayAt(unchecked((uint)((int)consoleDevice - 30)), state), diagnostic);
+		Assert.Equal((byte)0, bus.ReadByte(request + 0x1F));
+
+		state.A[1] = request;
+		Assert.True(bus.TryInvokeHostGatewayAt(unchecked((uint)((int)consoleDevice - 12)), state), diagnostic);
+		Assert.Equal(0u, state.D[0]);
+	}
+
+	[Fact]
+	public void Kickstart31HostExecConsoleVectorsReturnThroughNormalGuestJsrWhenRomAvailable()
+	{
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");
+		var profilePath = Path.Combine(AppContext.BaseDirectory, "Profiles", "a500-kickstart31-host-exec.json");
+		if (romPath == null || !File.Exists(profilePath))
+		{
+			return;
+		}
+
+		using var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", profilePath, "--kickstart-rom", romPath },
+			AppContext.BaseDirectory);
+		var machine = GetMachine(emulator);
+		var bus = machine.Bus;
+		var consoleDevice = 0u;
+		for (var frame = 0; frame < 1_500 && consoleDevice == 0 && !ContainsFatalBootStatus(emulator.StatusText); frame++)
+		{
+			emulator.RenderNextFrame();
+			consoleDevice = FindNamedExecDevice(bus, bus.ReadLong(4), "console.device");
+		}
+
+		var diagnostic = $"status='{emulator.StatusText}', exec=0x{bus.ReadLong(4):X8}, pc=0x{machine.Cpu.State.ProgramCounter:X8}";
+		Assert.False(ContainsFatalBootStatus(emulator.StatusText), diagnostic);
+		Assert.NotEqual(0u, consoleDevice);
+		var setup = new M68kCpuState { Cycles = machine.Cpu.State.Cycles };
+		uint Allocate(uint bytes)
+		{
+			setup.D[0] = bytes;
+			setup.D[1] = 0x0001_0001;
+			Assert.True(bus.TryInvokeHostGatewayAt(unchecked((uint)((int)bus.ReadLong(4) - 198)), setup), diagnostic);
+			Assert.NotEqual(0u, setup.D[0]);
+			return setup.D[0];
+		}
+
+		var request = Allocate(0x34);
+		var window = Allocate(0x40);
+		var rastPort = Allocate(0x40);
+		var text = Allocate(8);
+		var graphicsStorage = Allocate(0x300);
+		var graphics = graphicsStorage + 0x200;
+		var program = Allocate(64);
+		var stack = Allocate(0x400);
+		bus.WriteLong(window + 0x32, rastPort, setup.Cycles);
+		bus.WriteWord(window + 0x08, 640, setup.Cycles);
+		bus.WriteWord(window + 0x0A, 200, setup.Cycles);
+		bus.WriteWord(rastPort + 0x3A, 8, setup.Cycles);
+		bus.WriteWord(rastPort + 0x3C, 8, setup.Cycles);
+		bus.WriteWord(rastPort + 0x3E, 7, setup.Cycles);
+		bus.WriteByte(text, (byte)'O', setup.Cycles);
+		bus.WriteByte(text + 1, (byte)'K', setup.Cycles);
+		bus.WriteLong(request + 0x28, window, setup.Cycles);
+		bus.WriteWord(request + 0x1C, 3, setup.Cycles); // CMD_WRITE
+		bus.WriteLong(request + 0x24, 2, setup.Cycles);
+		bus.WriteByte(request + 0x1E, 1, setup.Cycles); // IOF_QUICK: no reply port needed
+
+		// The test's graphics.library is an ordinary guest library node whose
+		// three LVOs are six-byte host gateways.  It lets the console traverse
+		// its real clear/text/cursor continuation chain without requiring a
+		// display bitmap or changing any KS 3.1 ROM byte.
+		const int libraryListOffset = 0x17A;
+		var libraryList = bus.ReadLong(4) + libraryListOffset;
+		var previousFirstLibrary = bus.ReadLong(libraryList);
+		var graphicsName = graphics + 0x60;
+		foreach (var (index, value) in "graphics.library\0".Select((value, index) => (index, value)))
+		{
+			bus.WriteByte(graphicsName + (uint)index, (byte)value, setup.Cycles);
+		}
+		bus.WriteLong(graphics, previousFirstLibrary, setup.Cycles);
+		bus.WriteLong(graphics + 4, libraryList, setup.Cycles);
+		bus.WriteLong(graphics + 0x0A, graphicsName, setup.Cycles);
+		bus.WriteLong(libraryList, graphics, setup.Cycles);
+		if (previousFirstLibrary != libraryList + 4)
+		{
+			bus.WriteLong(previousFirstLibrary + 4, graphics, setup.Cycles);
+		}
+
+		var graphicsClearCalls = 0;
+		var graphicsTextCalls = 0;
+		var graphicsFillCalls = 0;
+		var graphicsGateways = new List<(uint Address, uint Token)>();
+		void InstallGraphicsGateway(int lvo, Action callback)
+		{
+			var address = unchecked((uint)((int)graphics + lvo));
+			var token = bus.RegisterHostGateway(address, _ => { callback(); return M68kHostGatewayResult.Completed; });
+			bus.WriteWord(address, 0xFF00, setup.Cycles);
+			bus.WriteLong(address + 2, token, setup.Cycles);
+			graphicsGateways.Add((address, token));
+		}
+		InstallGraphicsGateway(-0xEA, () => graphicsClearCalls++); // SetRast
+		InstallGraphicsGateway(-0x3C, () => graphicsTextCalls++);  // Text
+		InstallGraphicsGateway(-0x132, () => graphicsFillCalls++); // RectFill
+		Assert.True(bus.IsCpuPhysicalAddressMapped(graphics - 0xEA, 2, AmigaBusAccessKind.CpuInstructionFetch), diagnostic);
+		Assert.True(bus.IsCpuPhysicalAddressMapped(graphics - 0x3C, 2, AmigaBusAccessKind.CpuInstructionFetch), diagnostic);
+		Assert.True(bus.IsCpuPhysicalAddressMapped(graphics - 0x132, 2, AmigaBusAccessKind.CpuInstructionFetch), diagnostic);
+
+		var cursor = program;
+		void EmitWord(ushort value) { bus.WriteWord(cursor, value, setup.Cycles); cursor += 2; }
+		void EmitLong(uint value) { bus.WriteLong(cursor, value, setup.Cycles); cursor += 4; }
+		void EmitCall(uint entry)
+		{
+			EmitWord(0x227C); EmitLong(request); // MOVEA.L #request,A1
+			EmitWord(0x7000);                   // MOVEQ #0,D0 (CONU_STANDARD for Open)
+			EmitWord(0x4EB9); EmitLong(entry);  // JSR absolute long
+		}
+		EmitCall(unchecked((uint)((int)consoleDevice - 6)));
+		EmitWord(0x23FC); EmitLong(text); EmitLong(request + 0x28); // MOVE.L #text,io_Data
+		EmitWord(0x23FC); EmitLong(2); EmitLong(request + 0x24);    // MOVE.L #2,io_Length
+		EmitCall(unchecked((uint)((int)consoleDevice - 30)));
+		EmitCall(unchecked((uint)((int)consoleDevice - 12)));
+		EmitWord(0x4E72); EmitWord(0x2700); // STOP #$2700
+
+		var state = machine.Cpu.State;
+		state.SetActiveStackPointer(stack + 0x300);
+		state.ProgramCounter = program;
+		state.Stopped = false;
+		state.Halted = false;
+		for (var instruction = 0; instruction < 32 && !state.Stopped && !state.Halted; instruction++)
+		{
+			machine.Cpu.ExecuteInstruction();
+		}
+
+		Assert.True(state.Stopped, $"guest program did not stop, pc=0x{state.ProgramCounter:X8}, {diagnostic}");
+		Assert.False(state.Halted, diagnostic);
+		Assert.Equal((byte)0, bus.ReadByte(request + 0x1F));
+		Assert.Equal(2u, bus.ReadLong(request + 0x20));
+		Assert.Equal(text + 2, bus.ReadLong(request + 0x28));
+		Assert.Equal(0u, bus.ReadLong(request + 0x24));
+		Assert.Equal(0u, state.D[0]);
+		Assert.Equal(1, graphicsClearCalls);
+		Assert.Equal(1, graphicsTextCalls);
+		Assert.Equal(1, graphicsFillCalls);
+		foreach (var gateway in graphicsGateways)
+		{
+			bus.RemoveHostGateway(gateway.Address, gateway.Token);
+		}
+	}
+
+	[Fact]
+	public void Kickstart31HostExecBootsWorkbench13DiskWithoutLosingConsoleGatewaysWhenFixtureAvailable()
+	{
+		const string workbenchDisk = @"D:\TestData\TestImages\Workbench v1.3 rev 34.20 (1988)(Commodore)(A500-A2000)(Disk 1 of 2)(Workbench)[m].zip";
+		var romPath = TryFindWorkspaceFile("CopperScreen", "ROM", "kickstart-3.1-a500.rom");
+		var profilePath = Path.Combine(AppContext.BaseDirectory, "Profiles", "a500-kickstart31-host-exec.json");
+		if (romPath == null || !File.Exists(profilePath) || !File.Exists(workbenchDisk))
+		{
+			return;
+		}
+
+		using var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", profilePath, "--kickstart-rom", romPath, workbenchDisk },
+			AppContext.BaseDirectory);
+		var machine = GetMachine(emulator);
+		var bus = machine.Bus;
+		uint consoleDevice = 0;
+		for (var frame = 0; frame < 3_000 && !ContainsFatalBootStatus(emulator.StatusText); frame++)
+		{
+			emulator.RenderNextFrame();
+			consoleDevice = FindNamedExecDevice(bus, bus.ReadLong(4), "console.device");
+		}
+
+		var diagnostic = $"status='{emulator.StatusText}', exec=0x{bus.ReadLong(4):X8}, pc=0x{machine.Cpu.State.ProgramCounter:X8}, cycles={machine.Cpu.State.Cycles}";
+		Assert.False(ContainsFatalBootStatus(emulator.StatusText), diagnostic);
+		Assert.NotEqual(0u, consoleDevice);
+		foreach (var lvo in new[] { -6, -12, -18, -24, -30, -36, -42, -48 })
+		{
+			Assert.True(bus.HasHostGateway(unchecked((uint)((int)consoleDevice + lvo))), $"lvo={lvo}, {diagnostic}");
 		}
 	}
 
@@ -2899,6 +3235,43 @@ public sealed class CopperScreenBootTests
 			3 => machine.Bus.Disk.Drive3,
 			_ => throw new ArgumentOutOfRangeException(nameof(driveIndex))
 		};
+	}
+
+	private static uint FindNamedExecDevice(AmigaBus bus, uint execBase, string name)
+	{
+		const int deviceListOffset = 0x15E;
+		if (execBase == 0 || !bus.IsMappedMemoryRange(execBase + deviceListOffset, 12))
+		{
+			return 0;
+		}
+
+		var list = execBase + deviceListOffset;
+		var tail = list + 4;
+		for (var device = bus.ReadLong(list); device != 0 && device != tail && bus.IsMappedMemoryRange(device + 0x0A, 4); device = bus.ReadLong(device))
+		{
+			var nameAddress = bus.ReadLong(device + 0x0A);
+			if (nameAddress == 0 || !bus.IsMappedMemoryRange(nameAddress, name.Length + 1))
+			{
+				continue;
+			}
+
+			var matches = true;
+			for (var index = 0; index < name.Length; index++)
+			{
+				if (bus.ReadByte(nameAddress + (uint)index) == (byte)name[index])
+				{
+					continue;
+				}
+				matches = false;
+				break;
+			}
+			if (matches && bus.ReadByte(nameAddress + (uint)name.Length) == 0)
+			{
+				return device;
+			}
+		}
+
+		return 0;
 	}
 
 	private static byte[] CreateMinimalKickstartRom()

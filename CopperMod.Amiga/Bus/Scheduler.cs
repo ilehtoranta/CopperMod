@@ -339,7 +339,7 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            if (_bus.Blitter.Busy ||
+            if (_bus.Blitter.BusPipelineActive ||
                 _bus.Disk.ActiveDma)
             {
                 _copperQuiescentFastPathRejectedDynamicDma++;

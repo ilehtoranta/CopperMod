@@ -2907,6 +2907,71 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(libraryList + 4, bus.ReadLong(library));
 	}
 
+	[Fact]
+	public void CopperStartPublishesCopperOsResidentThroughFindResident()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint nameAddress = 0x0000_1800;
+		WriteCString(bus, nameAddress, "CopperOS");
+		var state = new M68kCpuState();
+		state.A[1] = nameAddress;
+
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -96), state));
+		var resident = state.D[0];
+		Assert.NotEqual(0u, resident);
+		Assert.Equal(0x4AFC, bus.ReadWord(resident));
+		Assert.Equal(resident, bus.ReadLong(resident + 2));
+		Assert.Equal("CopperOS", ReadCString(bus, bus.ReadLong(resident + 0x0E), 32));
+		Assert.Equal("CopperOS 1.0", ReadCString(bus, bus.ReadLong(resident + 0x12), 32));
+	}
+
+	[Fact]
+	public void MorphOsExecCompatibilitySlotsProvideFocusedRegistryPoolAndMessageOperations()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var execBase = AmigaKickstartHost.ExecLibraryBase;
+		const uint memfTotal = 0x0008_0000;
+
+		var createPool = new M68kCpuState(); createPool.D[0] = MemfPublic;
+		Assert.True(InvokeHostTrap(bus, Lvo(execBase, -696), createPool));
+		var pool = createPool.D[0];
+		var pooled = new M68kCpuState(); pooled.A[0] = pool; pooled.D[0] = 32;
+		Assert.True(InvokeHostTrap(bus, Lvo(execBase, -708), pooled));
+		var available = new M68kCpuState(); available.A[0] = pool; available.D[0] = memfTotal;
+		Assert.True(InvokeHostTrap(bus, Lvo(execBase, -1050), available));
+		Assert.Equal(32u, available.D[0]);
+
+		const uint port = 0x0000_4200, first = 0x0000_4260, second = 0x0000_42A0;
+		InvokeExecPort(bus, -366, port, first);
+		Assert.Equal(0u, InvokeExecPort(bus, -1062, port, second));
+		Assert.Equal(second, bus.ReadLong(port + MsgPortMsgListOffset));
+		Assert.Equal(first, bus.ReadLong(second));
+
+		const uint library = 0x0000_4300, libraryName = 0x0000_4380;
+		InitializeExecList(bus, execBase + ExecLibListOffset);
+		WriteCString(bus, libraryName, "registry.library");
+		bus.WriteLong(library + MemNodeNameOffset, libraryName);
+		bus.WriteLong(execBase + ExecLibListOffset, library);
+		bus.WriteLong(library + 4, execBase + ExecLibListOffset);
+		bus.WriteLong(library, execBase + ExecLibListOffset + 4);
+		bus.WriteLong(execBase + ExecLibListOffset + 8, library);
+		var findNode = new M68kCpuState(); findNode.D[0] = 9; findNode.A[0] = libraryName;
+		Assert.True(InvokeHostTrap(bus, Lvo(execBase, -960), findNode));
+		Assert.Equal(library, findNode.D[0]);
+
+		const uint resident = 0x0000_4400, residentName = 0x0000_4440;
+		WriteCString(bus, residentName, "test.resident");
+		bus.WriteWord(resident, 0x4AFC); bus.WriteLong(resident + 2, resident); bus.WriteLong(resident + 6, resident + 0x30);
+		bus.WriteLong(resident + 0x0E, residentName);
+		var addResident = new M68kCpuState(); addResident.A[1] = resident;
+		Assert.True(InvokeHostTrap(bus, Lvo(execBase, -990), addResident));
+		var findResident = new M68kCpuState(); findResident.A[1] = residentName;
+		Assert.True(InvokeHostTrap(bus, Lvo(execBase, -96), findResident));
+		Assert.Equal(resident, findResident.D[0]);
+	}
+
 	private static Machine StartBootShim(MachineProfile profile)
 	{
 		var machine = new Machine(MachineOptions

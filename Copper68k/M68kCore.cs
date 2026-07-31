@@ -255,6 +255,8 @@ namespace Copper68k
 
         bool RequiresControlFlowBatchBoundary { get; }
 
+        bool UsesExtendedChipVisibleAdmissionRetry => false;
+
         bool IsDeferredCpuBusBatchEligibleInstructionFetchWindow(in M68kInstructionFetchWindow window);
 
         ulong CaptureDeferredCpuInstructionFetchTimingToken();
@@ -264,6 +266,8 @@ namespace Copper68k
             long currentCycle,
             long? targetCycle,
             bool allowChipInstructionFetchEpoch,
+            uint chipInstructionFetchPreflightAddress,
+            long chipInstructionFetchPreflightCycle,
             out long batchTargetCycle,
             out M68kTraceBatchWakeSource wakeSource);
 
@@ -431,6 +435,19 @@ namespace Copper68k
         bool CpuBusPhaseTracingEnabled { get; }
 
         void RecordCpuBusPhase(in M68kCpuBusPhase phase);
+    }
+
+    internal readonly record struct M68kInstructionRetirementTrace(
+        uint ProgramCounter,
+        ushort Opcode,
+        long StartCycle,
+        long RetireCycle);
+
+    internal interface IM68kInstructionRetirementTrace
+    {
+        bool InstructionRetirementTracingEnabled { get; }
+
+        void RecordInstructionRetirement(in M68kInstructionRetirementTrace trace);
     }
 
     internal readonly record struct M68000BusAccessTiming(
@@ -1904,6 +1921,7 @@ namespace Copper68k
         private readonly IM68kFastMemoryBus? _fastMemoryBus;
         private readonly IM68kDeferredCpuInstructionTiming? _deferredCpuInstructionTiming;
         private readonly IM68kCpuBusPhaseTrace? _cpuBusPhaseTrace;
+        private readonly IM68kInstructionRetirementTrace? _instructionRetirementTrace;
         private readonly IM68000BusCycleTiming? _m68000BusCycleTiming;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
         private readonly M68kOpcodePlanDispatch _opcodePlanDispatch;
@@ -2034,6 +2052,8 @@ namespace Copper68k
                 bus is IM68kCpuBusPhaseTrace { CpuBusPhaseTracingEnabled: true } trace
                     ? trace
                     : null;
+            _instructionRetirementTrace =
+                bus as IM68kInstructionRetirementTrace;
             _instructionFetchWindow = M68kInstructionFetchWindow.Empty;
             State = state ?? throw new ArgumentNullException(nameof(state));
             _instructionFrequency = instructionFrequency ?? new M68kInstructionFrequencyMatrix();
@@ -2321,9 +2341,10 @@ namespace Copper68k
         }
 
         private const int DeferredCpuBusBatchNoTargetInstructionLimit = 256;
+        private const byte DeferredCpuBusBatchAdmissionRetryInstructionCount = 24;
         // A short chip-visible batch predicts poor locality. Amortize the next
         // admission scan across enough scalar instructions to cover its cost.
-        private const byte DeferredCpuBusBatchAdmissionRetryInstructionCount = 24;
+        private const byte DeferredCpuBusBatchShortChipExitAdmissionRetryInstructionCount = 160;
         private const int DeferredCpuBusBatchShortChipExitInstructionLimit = 3;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2367,16 +2388,26 @@ namespace Copper68k
                 !IsDeferredCpuBatchControlFlowOpcode(_prefetchWord0) &&
                 (_prefetchCount < 2 ||
                     !IsDeferredCpuBatchControlFlowOpcode(_prefetchWord1));
+            var chipInstructionFetchPreflightAddress = _hasPendingPrefetch
+                ? _pendingPrefetchAddress
+                : _prefetchAddress + (uint)(_prefetchCount * 2);
+            var chipInstructionFetchPreflightCycle = _hasPendingPrefetch
+                ? Math.Max(_pendingPrefetchEarliestCycle, _cpuBusCycle)
+                : Math.Max(currentCycle, _cpuBusCycle);
             if (!deferredCpuInstructionTiming!.TryBeginDeferredCpuBusBatch(
                 State,
                 currentCycle,
                 targetCycle,
                 allowChipInstructionFetchEpoch,
+                chipInstructionFetchPreflightAddress,
+                chipInstructionFetchPreflightCycle,
                 out var batchTargetCycle,
                 out _))
             {
                 _deferredCpuBusBatchAdmissionRetryInstructions =
-                    DeferredCpuBusBatchAdmissionRetryInstructionCount;
+                    deferredCpuInstructionTiming.UsesExtendedChipVisibleAdmissionRetry
+                        ? DeferredCpuBusBatchShortChipExitAdmissionRetryInstructionCount
+                        : DeferredCpuBusBatchAdmissionRetryInstructionCount;
                 return false;
             }
 
@@ -2617,7 +2648,9 @@ namespace Copper68k
                     accountedInstructions <= DeferredCpuBusBatchShortChipExitInstructionLimit)
                 {
                     _deferredCpuBusBatchAdmissionRetryInstructions =
-                        DeferredCpuBusBatchAdmissionRetryInstructionCount;
+                        deferredCpuInstructionTiming.UsesExtendedChipVisibleAdmissionRetry
+                            ? DeferredCpuBusBatchShortChipExitAdmissionRetryInstructionCount
+                            : DeferredCpuBusBatchAdmissionRetryInstructionCount;
                 }
 
                 _deferredCpuBusBatchExecutionActive = false;
@@ -5698,6 +5731,14 @@ namespace Copper68k
                     ExecutePlannedAddLongToDataRegister(opcode);
                     RecordPlannedFast(kind);
                     return PlannedRetireMode.SequentialOneWordRefill;
+                case M68kOpcodePlanKind.RegisterShift:
+                    ExecutePlannedRegisterShift(opcode);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.SequentialOneWordRefill;
+                case M68kOpcodePlanKind.RegisterAddSubExtend:
+                    ExecutePlannedRegisterAddSubExtend(opcode);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 default:
                     return PlannedRetireMode.Unsupported;
             }
@@ -5780,6 +5821,14 @@ namespace Copper68k
                     return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
                     ExecutePackedAddLongToDataRegister(in plan);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.SequentialOneWordRefill;
+                case M68kOpcodePlanKind.RegisterShift:
+                    ExecutePlannedRegisterShift(opcode);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.SequentialOneWordRefill;
+                case M68kOpcodePlanKind.RegisterAddSubExtend:
+                    ExecutePlannedRegisterAddSubExtend(opcode);
                     RecordPlannedFast(kind);
                     return PlannedRetireMode.SequentialOneWordRefill;
                 default:
@@ -6128,7 +6177,7 @@ namespace Copper68k
                 !destination.IsRegister &&
                 MoveDestinationHasExtensionWord(destinationMode, destinationRegister))
             {
-                PrefetchFallthroughBeforeMemoryWriteback();
+                PrefetchNextOpcodeBeforeMoveMemoryWriteback();
             }
 
             WritePlannedEaValue(in destination, value);
@@ -6679,6 +6728,52 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePlannedRegisterShift(ushort opcode)
+        {
+            var register = opcode & 7;
+            var size = ((opcode >> 6) & 3) switch
+            {
+                0 => M68kOperandSize.Byte,
+                1 => M68kOperandSize.Word,
+                _ => M68kOperandSize.Long
+            };
+            var count = (opcode >> 9) & 7;
+            if ((opcode & 0x0020) != 0)
+            {
+                count = (int)(State.D[count] & 63);
+            }
+            else if (count == 0)
+            {
+                count = 8;
+            }
+
+            var type = (opcode >> 3) & 3;
+            var left = (opcode & 0x0100) != 0;
+            var value = State.D[register] & M68kCpuState.Mask(size);
+            WriteDataRegister(register, Shift(value, count, size, type, left), size);
+            AddInstructionCycles((size == M68kOperandSize.Long ? 8 : 6) + (count * 2));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecutePlannedRegisterAddSubExtend(ushort opcode)
+        {
+            var size = ((opcode >> 6) & 7) switch
+            {
+                4 => M68kOperandSize.Byte,
+                5 => M68kOperandSize.Word,
+                _ => M68kOperandSize.Long
+            };
+            var destinationRegister = (opcode >> 9) & 7;
+            var source = State.D[opcode & 7];
+            var destination = State.D[destinationRegister];
+            var result = (opcode & 0xF000) == 0xD000
+                ? AddWithExtend(destination, source, size)
+                : SubtractWithExtend(destination, source, size);
+            WriteDataRegister(destinationRegister, result, size);
+            AddInstructionCycles(size == M68kOperandSize.Long ? 8 : 4);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecuteDataRegisterArithmetic(
             int line,
             int opmode,
@@ -7133,7 +7228,7 @@ namespace Copper68k
                 !destination.IsRegister &&
                 MoveDestinationHasExtensionWord(plan.DestinationMode, plan.DestinationRegister))
             {
-                PrefetchFallthroughBeforeMemoryWriteback();
+                PrefetchNextOpcodeBeforeMoveMemoryWriteback();
             }
 
             WritePlannedEaValue(in destination, value);
@@ -7861,7 +7956,9 @@ namespace Copper68k
         bool IM68000InterruptRecognition.HasRecognizedInterrupt(long pinAssertCycle)
             => State.Stopped ||
                 (_lastInterruptSampleCycle != long.MinValue &&
-                    pinAssertCycle <= _lastInterruptSampleCycle - M68000InterruptSetupCycles);
+                    // A transition exactly on the four-clock setup boundary is
+                    // staged until the following instruction's interrupt poll.
+                    pinAssertCycle < _lastInterruptSampleCycle - M68000InterruptSetupCycles);
 
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
@@ -8205,7 +8302,7 @@ namespace Copper68k
                 !dest.IsRegister &&
                 MoveDestinationHasExtensionWord(destMode, destReg))
             {
-                PrefetchFallthroughBeforeMemoryWriteback();
+                PrefetchNextOpcodeBeforeMoveMemoryWriteback();
             }
 
             dest.Write(value);
@@ -11109,7 +11206,14 @@ namespace Copper68k
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
             TopUpPrefetchOne();
-            TopUpPrefetchOne(out _instructionInterruptSampleCycle);
+            var targetExtensionReadyCycle =
+                TopUpPrefetchOne(out _instructionInterruptSampleCycle);
+            // CE000 polls IPL after the target opcode transfer, then commits
+            // the target-extension transfer. If the poll accepts an interrupt,
+            // exception entry must still wait for that physical transfer.
+            _exceptionEntryNotBeforeCycle = Math.Max(
+                _exceptionEntryNotBeforeCycle,
+                targetExtensionReadyCycle);
         }
 
         private void JumpToSubroutine(uint target, uint stackedProgramCounter, bool prefetchFallthroughBeforeStackWrite)
@@ -11477,6 +11581,27 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void PrefetchNextOpcodeBeforeMoveMemoryWriteback()
+        {
+            if ((State.ProgramCounter & 1) != 0)
+            {
+                return;
+            }
+
+            // An ordinary 68000 MOVE with a destination extension commits the
+            // next opcode before memory writeback, but not the word after it.
+            // Long immediate sources can already leave that opcode queued.
+            // Filling the second queue slot here would fetch the successor's
+            // extension before both longword write phases and add one bus slot
+            // to forms such as MOVE.L #imm,(d16,An).
+            if (_prefetchCount == 0)
+            {
+                _prefetchAddress = State.ProgramCounter;
+                TopUpPrefetchOne();
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void PrefetchFallthroughAfterMemoryWriteback()
         {
             _skipRetirePrefetchTopUp = true;
@@ -11490,6 +11615,20 @@ namespace Copper68k
             // CompleteInstruction clears pending internal progress before its
             // generic retirement top-up, so commit this physical fetch here.
             PrefetchFallthroughAfterMoveSourceRead();
+            if (_instructionEntryPrefetchCount < 2 && _prefetchCount < 2)
+            {
+                var publicationContext = CaptureInstructionFetchPublicationContext() with
+                {
+                    PredecessorToken = _prefetchTimingToken0,
+                    RequiresIrcGap = _prefetchTimingToken0 != 0
+                };
+                var readyCycle = TopUpPrefetchOne(
+                    out _,
+                    M68kInstructionFetchPublicationPhase.Required,
+                    long.MinValue,
+                    publicationContext);
+                _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, readyCycle);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -12280,6 +12419,15 @@ namespace Copper68k
             }
 
             _lastInterruptSampleCycle = _instructionInterruptSampleCycle;
+            if (_instructionRetirementTrace is { InstructionRetirementTracingEnabled: true })
+            {
+                var trace = new M68kInstructionRetirementTrace(
+                    State.LastInstructionProgramCounter,
+                    State.LastOpcode,
+                    startCycle,
+                    State.Cycles);
+                _instructionRetirementTrace.RecordInstructionRetirement(in trace);
+            }
 
             return (int)(State.Cycles - startCycle);
         }

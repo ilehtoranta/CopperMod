@@ -10,6 +10,8 @@ namespace CopperMod.Amiga.Bus
 {
     internal sealed partial class Bus
     {
+        internal const int DmaconBltpriVisibilityDelaySlots = 2;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool PublishCustomRegisterState(ushort offset, ushort value, long cycle)
             => _customRegisterFile.PublishStoredValue(offset, value, cycle);
@@ -390,9 +392,13 @@ namespace CopperMod.Amiga.Bus
             long requestedCycle)
         {
             const AmigaBusAccessTarget target = AmigaBusAccessTarget.CustomRegisters;
-            var grantRequestCycle = requestedCycle + AgnusChipSlotScheduler.SlotCycles;
+            // M68kCore's BeginCpuBusAccessCycle has already applied the 68000
+            // bus-cycle start delay. Adding another slot here inserts a bubble
+            // before every split custom-register longword (unlike word and
+            // ordinary longword accesses).
+            var grantRequestCycle = requestedCycle;
             _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite: true, AmigaBusAccessSize.Long);
-            if (Blitter.Busy)
+            if (Blitter.BusPipelineActive)
             {
                 grantRequestCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(grantRequestCycle);
             }
@@ -421,7 +427,7 @@ namespace CopperMod.Amiga.Bus
             WriteCpuCustomRegisterWord(address, (ushort)(value >> 16), firstWordCycle);
 
             var secondSearchCycle = firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles;
-            if (Blitter.Busy)
+            if (Blitter.BusPipelineActive)
             {
                 secondSearchCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(secondSearchCycle);
             }
@@ -561,34 +567,76 @@ namespace CopperMod.Amiga.Bus
             ref readonly var entry = ref _customRegisterFile.Get(write.Offset);
             var targets = entry.WriteTargets;
             _customRegisterFile.ApplyRegisterFileWrite(write.Offset, write.Value, write.Cycle);
+
+            var deferBltpri =
+                write.Requester != AmigaBusRequester.Host &&
+                write.Offset == 0x096 &&
+                (write.Value & 0x0400) != 0;
+            var immediateValue = deferBltpri
+                ? (ushort)(write.Value & ~0x0400)
+                : write.Value;
+            var hasImmediateDeviceWrite =
+                !deferBltpri ||
+                (immediateValue & 0x7FFF) != 0;
+
             // Custom-register writes are broadcast on the shared chip fabric.
             // Ownership metadata is descriptive; each device filters offsets.
-            ApplyAgnusRegisterWrite(write.Offset, write.Value, write.Cycle);
-
-            if (write.Offset == 0x096)
+            if (hasImmediateDeviceWrite)
             {
-                // DMACON takes effect after every device has reached the write
-                // cycle. In particular, a DMA-gated blit must not resume from
-                // its stale trigger cycle when this write enables it.
+                ApplyAgnusRegisterWrite(write.Offset, immediateValue, write.Cycle);
+
+                if (write.Offset == 0x096)
+                {
+                    // Non-priority DMACON bits retain the existing write
+                    // boundary. In particular, a DMA-gated blit must not
+                    // resume from its stale trigger cycle when this write
+                    // enables it.
+                    _hardwareScheduler.SynchronizeBlitterThrough(write.Cycle);
+                    Blitter.AdvanceDmaGateHorizonTo(write.Cycle);
+                }
+
+                if ((targets & CustomRegisterWriteTarget.Paula) != 0)
+                {
+                    Paula.ScheduleWrite(write.Cycle, write.Offset, immediateValue);
+                    Paula.AdvanceTo(write.Cycle);
+                }
+
+                Display.ScheduleWrite(new AgnusDisplayRegisterWrite(
+                    GetDisplayWriteCycle(in write),
+                    write.Offset,
+                    immediateValue));
+
                 _hardwareScheduler.SynchronizeBlitterThrough(write.Cycle);
-                Blitter.AdvanceDmaGateHorizonTo(write.Cycle);
+                Blitter.WriteRegister(write.Offset, immediateValue, write.Cycle);
+
+                Disk.WriteRegister(write.Offset, immediateValue, write.Cycle);
             }
 
-            if ((targets & CustomRegisterWriteTarget.Paula) != 0)
+            if (deferBltpri)
             {
-                Paula.ScheduleWrite(write.Cycle, write.Offset, write.Value);
-                Paula.AdvanceTo(write.Cycle);
+                var effectCycle =
+                    write.Cycle +
+                    (DmaconBltpriVisibilityDelaySlots *
+                     AgnusChipSlotScheduler.SlotCycles);
+                var priorityValue = (ushort)(
+                    (write.Value & 0x8000) |
+                    0x0400);
+
+                // BLTPRI is sampled by Agnus two DMA cycles after the DMACON
+                // bus transfer. Queue that one bit on the existing Paula and
+                // display timelines so Copper can publish intervening slots
+                // before the priority boundary becomes visible.
+                if ((targets & CustomRegisterWriteTarget.Paula) != 0)
+                {
+                    Paula.ScheduleWrite(effectCycle, write.Offset, priorityValue);
+                }
+
+                Display.ScheduleWrite(new AgnusDisplayRegisterWrite(
+                    effectCycle,
+                    write.Offset,
+                    priorityValue));
+                _hardwareScheduler.NotifyWorkScheduled(effectCycle);
             }
-
-            Display.ScheduleWrite(new AgnusDisplayRegisterWrite(
-                GetDisplayWriteCycle(in write),
-                write.Offset,
-                write.Value));
-
-            _hardwareScheduler.SynchronizeBlitterThrough(write.Cycle);
-            Blitter.WriteRegister(write.Offset, write.Value, write.Cycle);
-
-            Disk.WriteRegister(write.Offset, write.Value, write.Cycle);
 
             if (entry.StorageMode == CustomRegisterStorageMode.DevicePublished &&
                 _agnusRegisters.TryRead(

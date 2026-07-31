@@ -3415,7 +3415,7 @@ public sealed class AmigaDiskDisplayTests
         _ = normalBus.ReadWord(0x00001000, ref normalCycle, AmigaBusAccessKind.CpuDataRead);
         Assert.True(normalCycle > 0, $"normalCycle={normalCycle}");
         Assert.True(normalCycle <= normalBus.Blitter.GetPredictedCompletionCycle() + (2 * AgnusChipSlotScheduler.SlotCycles), $"normalCycle={normalCycle}");
-        Assert.False(normalBus.Blitter.CaptureSnapshot().Busy);
+        Assert.True(normalBus.Blitter.CaptureSnapshot().Busy);
     }
 
     [Fact]

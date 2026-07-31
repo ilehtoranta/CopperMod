@@ -5,6 +5,62 @@ namespace CopperScreen.Tests;
 public sealed class CopperScreenStartupArgumentTests
 {
 	[Fact]
+	public void AgnusSlotKernelSupportsExplicitOptInAndForcedLegacyRollback()
+	{
+		var defaults = CopperScreenStartupOptions.Parse([], AppContext.BaseDirectory);
+		var enabled = CopperScreenStartupOptions.Parse(
+			["--agnus-slot-kernel"], AppContext.BaseDirectory);
+		var rollback = CopperScreenStartupOptions.Parse(
+			["--agnus-legacy"], AppContext.BaseDirectory);
+
+		Assert.Equal(AgnusBusArbitrationMode.Legacy, defaults.AgnusBusArbitration);
+		Assert.Equal(AgnusBusArbitrationMode.SlotKernel, enabled.AgnusBusArbitration);
+		Assert.Equal(AgnusBusArbitrationMode.ForcedLegacy, rollback.AgnusBusArbitration);
+		Assert.Null(enabled.Error);
+		Assert.Null(rollback.Error);
+	}
+
+	[Fact]
+	public void AgnusSlotKernelOptInFailsClosedUntilProductionRoutingExists()
+	{
+		using var emulator = CopperScreenEmulator.Create(
+			["--profile", "expanded-copperstart", "--agnus-slot-kernel"],
+			AppContext.BaseDirectory);
+
+		Assert.Equal(
+			"Agnus slot-kernel production routing is not connected. Gate G6 is STOP; use --agnus-legacy.",
+			emulator.StatusText);
+	}
+
+	[Fact]
+	public void DeferredCpuChipInstructionFetchBatchSupportsEnableAndRollback()
+	{
+		var enabled = CopperScreenStartupOptions.Parse(
+			["--cpu-deferred-chip-instruction-fetch-batch"], AppContext.BaseDirectory);
+		var disabled = CopperScreenStartupOptions.Parse(
+			["--no-cpu-deferred-chip-instruction-fetch-batch"], AppContext.BaseDirectory);
+
+		Assert.True(enabled.DeferredCpuChipInstructionFetchBatch);
+		Assert.True(enabled.DeferredCpuChipInstructionFetchBatchConfigured);
+		Assert.False(disabled.DeferredCpuChipInstructionFetchBatch);
+		Assert.True(disabled.DeferredCpuChipInstructionFetchBatchConfigured);
+	}
+
+	[Fact]
+	public void DeferredCpuChipInstructionFetchShadowSupportsEnableAndRollback()
+	{
+		var enabled = CopperScreenStartupOptions.Parse(
+			["--cpu-deferred-chip-instruction-fetch-shadow"], AppContext.BaseDirectory);
+		var disabled = CopperScreenStartupOptions.Parse(
+			["--no-cpu-deferred-chip-instruction-fetch-shadow"], AppContext.BaseDirectory);
+
+		Assert.True(enabled.DeferredCpuChipInstructionFetchShadow);
+		Assert.True(enabled.DeferredCpuChipInstructionFetchShadowConfigured);
+		Assert.False(disabled.DeferredCpuChipInstructionFetchShadow);
+		Assert.True(disabled.DeferredCpuChipInstructionFetchShadowConfigured);
+	}
+
+	[Fact]
 	public void DeferredChipReadSegmentsRemainAnIndependentKillSwitch()
 	{
 		var options = CopperScreenStartupOptions.Parse(

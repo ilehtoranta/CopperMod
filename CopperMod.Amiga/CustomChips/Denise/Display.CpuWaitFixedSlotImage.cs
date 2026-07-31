@@ -198,6 +198,54 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return true;
         }
 
+        // Unlike the scalar CPU-wait lookup above, this query validates only
+        // the prefix through the candidate slot.  It is for executor-owned
+        // speculative proof: callers must still stop at the next Copper or
+        // pending-write barrier, and must revalidate before commitment.
+        internal bool TryGetCpuChipFetchFixedSlotOwner(
+            long slotCycle,
+            out CpuWaitFixedSlotOwner owner,
+            out CpuWaitFixedSlotImageUnsupported unsupported)
+        {
+            if (!_timing.IsCanonicalPal)
+            {
+                owner = CpuWaitFixedSlotOwner.Free;
+                unsupported = CpuWaitFixedSlotImageUnsupported.Frame;
+                return false;
+            }
+
+            slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, slotCycle));
+            if (_bus.IsMandatoryRefreshSlot(slotCycle))
+            {
+                owner = CpuWaitFixedSlotOwner.Refresh;
+                unsupported = CpuWaitFixedSlotImageUnsupported.None;
+                return true;
+            }
+
+            if (!TryGetCpuWaitFixedSlotLine(slotCycle, out var beamLine, out var lineStart, out var row))
+            {
+                owner = CpuWaitFixedSlotOwner.Free;
+                unsupported = CpuWaitFixedSlotImageUnsupported.Frame;
+                return false;
+            }
+
+            if (!TryEnsureCpuWaitFixedSlotImage(
+                    beamLine,
+                    lineStart,
+                    row,
+                    slotCycle,
+                    out unsupported))
+            {
+                owner = CpuWaitFixedSlotOwner.Free;
+                return false;
+            }
+
+            var slot = (int)((slotCycle - lineStart) / AgnusChipSlotScheduler.SlotCycles);
+            owner = (CpuWaitFixedSlotOwner)_cpuWaitFixedSlotOwners[
+                (beamLine * CpuWaitFixedSlotsPerLine) + slot];
+            return true;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryGetBlitterFixedSlotOwner(
             long slotCycle,

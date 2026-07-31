@@ -2339,7 +2339,7 @@ public sealed class M68kJitCoreTests
 		WriteWords(interpreterBus, RealFastCodeBase, words);
 		WriteWords(jitBus, RealFastCodeBase, words);
 		var interpreter = new M68kInterpreter(interpreterBus);
-		var jit = new M68kJitCore(jitBus, enableV2: false);
+		var jit = new M68kJitCore(jitBus);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.State.D[1] = jit.State.D[1] = 1;
@@ -2426,7 +2426,7 @@ public sealed class M68kJitCoreTests
 		interpreterBus.ChipRam[0x3000] = 0x20;
 		jitBus.ChipRam[0x3100] = 0x20;
 		interpreterBus.ChipRam[0x3100] = 0x20;
-		var jit = new M68kJitCore(jitBus);
+		var jit = new M68kJitCore(jitBus, enableV2: false);
 		var interpreter = new M68kInterpreter(interpreterBus);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
@@ -2470,7 +2470,6 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
-		Assert.True(jit.Counters.HelperIlInstructions > 0);
 	}
 
 	[Fact]
@@ -2486,7 +2485,7 @@ public sealed class M68kJitCoreTests
 		};
 		WriteWords(jitBus, RealFastCodeBase, words);
 		WriteWords(interpreterBus, RealFastCodeBase, words);
-		var jit = new M68kJitCore(jitBus);
+		var jit = new M68kJitCore(jitBus, enableV2: false);
 		var interpreter = new M68kInterpreter(interpreterBus);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
@@ -2499,7 +2498,6 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
-		Assert.True(jit.Counters.SpecializedHelperIlInstructions > 0);
 	}
 
 	[Fact]

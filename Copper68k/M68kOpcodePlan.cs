@@ -32,7 +32,9 @@ namespace Copper68k
         DataRegisterLongOrToRegister,
         DataRegisterLongEorToDestination,
         DataRegisterLongAndToRegister,
-        DataRegisterLongAddToRegister
+        DataRegisterLongAddToRegister,
+        RegisterShift,
+        RegisterAddSubExtend
     }
 
     internal enum M68000MicrosequenceClass : byte
@@ -423,7 +425,9 @@ namespace Copper68k
                 M68kOpcodePlanKind.DataRegisterLongOrToRegister or
                 M68kOpcodePlanKind.DataRegisterLongEorToDestination or
                 M68kOpcodePlanKind.DataRegisterLongAndToRegister or
-                M68kOpcodePlanKind.DataRegisterLongAddToRegister)
+                M68kOpcodePlanKind.DataRegisterLongAddToRegister or
+                M68kOpcodePlanKind.RegisterShift or
+                M68kOpcodePlanKind.RegisterAddSubExtend)
             {
                 return M68000MicrosequenceClass.SequentialFinalPrefetch;
             }
@@ -484,6 +488,16 @@ namespace Copper68k
             if (TryCreateRegisterArithmeticKind(opcode, out var arithmeticKind))
             {
                 return arithmeticKind;
+            }
+
+            if (TryCreateRegisterShiftKind(opcode, out var shiftKind))
+            {
+                return shiftKind;
+            }
+
+            if (TryCreateRegisterAddSubExtendKind(opcode, out var addSubExtendKind))
+            {
+                return addSubExtendKind;
             }
 
             return M68kOpcodePlanKind.Unsupported;
@@ -555,6 +569,16 @@ namespace Copper68k
             if (TryCreateRegisterArithmeticPackedPlan(opcode, out var arithmeticPlan))
             {
                 return arithmeticPlan;
+            }
+
+            if (TryCreateRegisterShiftKind(opcode, out var shiftKind))
+            {
+                return new M68kPackedOpcodePlan(shiftKind);
+            }
+
+            if (TryCreateRegisterAddSubExtendKind(opcode, out var addSubExtendKind))
+            {
+                return new M68kPackedOpcodePlan(addSubExtendKind);
             }
 
             return default;
@@ -944,6 +968,36 @@ namespace Copper68k
 
             kind = M68kOpcodePlanKind.Unsupported;
             return false;
+        }
+
+        private static bool TryCreateRegisterShiftKind(ushort opcode, out M68kOpcodePlanKind kind)
+        {
+            kind = M68kOpcodePlanKind.Unsupported;
+            if ((opcode & 0xF000) != 0xE000 ||
+                (opcode & 0x00C0) == 0x00C0 ||
+                ((opcode >> 6) & 3) == 3)
+            {
+                return false;
+            }
+
+            kind = M68kOpcodePlanKind.RegisterShift;
+            return true;
+        }
+
+        private static bool TryCreateRegisterAddSubExtendKind(ushort opcode, out M68kOpcodePlanKind kind)
+        {
+            kind = M68kOpcodePlanKind.Unsupported;
+            var line = opcode >> 12;
+            var opmode = (opcode >> 6) & 7;
+            if (line is not (0x9 or 0xD) ||
+                opmode is < 4 or > 6 ||
+                ((opcode >> 3) & 7) != 0)
+            {
+                return false;
+            }
+
+            kind = M68kOpcodePlanKind.RegisterAddSubExtend;
+            return true;
         }
 
         private static bool IsSupportedMoveSource(int mode, int register, M68kOperandSize size)

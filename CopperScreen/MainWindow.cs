@@ -10,10 +10,12 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CopperMod.Amiga;
+using CopperMod.Amiga.CopperStart.Devices.Clipboard;
 using CopperPad;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -263,6 +265,8 @@ internal sealed class MainWindow : Window
 		if (_runtime != null)
 		{
 			_runtime.FramePublished += QueueFramePresentation;
+			_runtime.HostClipboardTextChanged += PublishGuestClipboardText;
+			_runtime.HostClipboardImageChanged += PublishGuestClipboardImage;
 		}
 
 		Opened += (_, _) =>
@@ -278,6 +282,7 @@ internal sealed class MainWindow : Window
 			}
 
 			_runtime?.Start();
+			_ = QueueHostClipboardTextAsync();
 			StartGamepadHost();
 			PresentNextFrame(forceStatus: true);
 		};
@@ -333,6 +338,8 @@ internal sealed class MainWindow : Window
 			if (_runtime != null)
 			{
 				_runtime.FramePublished -= QueueFramePresentation;
+				_runtime.HostClipboardTextChanged -= PublishGuestClipboardText;
+				_runtime.HostClipboardImageChanged -= PublishGuestClipboardImage;
 				_runtime.Dispose();
 			}
 
@@ -1058,6 +1065,81 @@ internal sealed class MainWindow : Window
 	internal static Point MapPresentationPointToAmigaMousePoint(Point framebufferPoint)
 		=> new(framebufferPoint.X * 0.5, framebufferPoint.Y * 0.5);
 
+	private void PublishGuestClipboardText(string text)
+		=> Dispatcher.UIThread.Post(async () =>
+		{
+			var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+			if (clipboard == null) return;
+			try { await clipboard.SetTextAsync(text); }
+			catch (Exception ex) { Debug.WriteLine($"Unable to update host clipboard: {ex.Message}"); }
+		});
+
+	private void PublishGuestClipboardImage(ClipboardImage image)
+		=> Dispatcher.UIThread.Post(async () =>
+		{
+			var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+			if (clipboard == null) return;
+			try
+			{
+				using var bitmap = CreateClipboardBitmap(image);
+				await clipboard.SetBitmapAsync(bitmap);
+			}
+			catch (Exception ex) { Debug.WriteLine($"Unable to update host clipboard image: {ex.Message}"); }
+		});
+
+	private async Task QueueHostClipboardTextAsync()
+	{
+		if (_runtime == null) return;
+		var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+		if (clipboard == null) return;
+		try
+		{
+			var bitmap = await clipboard.TryGetBitmapAsync();
+			if (bitmap != null)
+			{
+				using (bitmap) _runtime.SetHostClipboardImage(ReadClipboardBitmap(bitmap));
+				return;
+			}
+			var text = await clipboard.TryGetTextAsync();
+			if (text != null) _runtime.SetHostClipboardText(text);
+		}
+		catch (Exception ex) { Debug.WriteLine($"Unable to read host clipboard: {ex.Message}"); }
+	}
+
+	private static ClipboardImage ReadClipboardBitmap(Bitmap bitmap)
+	{
+		var width = bitmap.PixelSize.Width; var height = bitmap.PixelSize.Height;
+		if (width <= 0 || height <= 0 || width > 2048 || height > 2048 || (long)width * height > 2_000_000)
+			throw new InvalidOperationException("Clipboard image is outside the supported ILBM bounds.");
+		using var copy = new WriteableBitmap(
+			new PixelSize(width, height),
+			bitmap.Dpi,
+			PixelFormat.Bgra8888,
+			AlphaFormat.Unpremul);
+		using var locked = copy.Lock();
+		bitmap.CopyPixels(locked);
+		var pixels = new uint[checked(width * height)]; var row = new byte[checked(width * 4)];
+		for (var y = 0; y < height; y++)
+		{
+			Marshal.Copy(IntPtr.Add(locked.Address, y * locked.RowBytes), row, 0, row.Length);
+			Buffer.BlockCopy(row, 0, pixels, y * row.Length, row.Length);
+		}
+		return new ClipboardImage(width, height, pixels);
+	}
+
+	private static WriteableBitmap CreateClipboardBitmap(ClipboardImage image)
+	{
+		var bitmap = new WriteableBitmap(new PixelSize(image.Width, image.Height), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Opaque);
+		using var locked = bitmap.Lock();
+		var row = new byte[checked(image.Width * 4)];
+		for (var y = 0; y < image.Height; y++)
+		{
+			Buffer.BlockCopy(image.Bgra32, y * row.Length, row, 0, row.Length);
+			Marshal.Copy(row, 0, IntPtr.Add(locked.Address, y * locked.RowBytes), row.Length);
+		}
+		return bitmap;
+	}
+
 	private async void OnKeyDown(object? sender, KeyEventArgs args)
 	{
 		if (_settingsVisible)
@@ -1151,6 +1233,11 @@ internal sealed class MainWindow : Window
 			args.Handled = true;
 			PresentFrame(catchUpAudio: false);
 			return;
+		}
+
+		if (args.Key == Key.V && (args.KeyModifiers & KeyModifiers.Control) != 0)
+		{
+			await QueueHostClipboardTextAsync();
 		}
 
 		if (AmigaHostKeyMapper.TryMap(args.Key, args.PhysicalKey, _numpadMode, out var rawKey))
@@ -2506,11 +2593,15 @@ internal sealed class MainWindow : Window
 		if (_runtime != null)
 		{
 			_runtime.FramePublished -= QueueFramePresentation;
+			_runtime.HostClipboardTextChanged -= PublishGuestClipboardText;
+			_runtime.HostClipboardImageChanged -= PublishGuestClipboardImage;
 			_runtime.Dispose();
 		}
 
 		_runtime = CopperScreenRuntime.Create(options);
 		_runtime.FramePublished += QueueFramePresentation;
+		_runtime.HostClipboardTextChanged += PublishGuestClipboardText;
+		_runtime.HostClipboardImageChanged += PublishGuestClipboardImage;
 		_latestState = _runtime.CurrentState;
 		ApplyCurrentGamepadSnapshots();
 		_lastSeenFrameNumber = 0;
@@ -2519,6 +2610,7 @@ internal sealed class MainWindow : Window
 		_settingsVisible = false;
 		_settingsWindow.Hide();
 		_runtime.Start();
+		_ = QueueHostClipboardTextAsync();
 		await _bench.RefreshAsync(_latestState.DiskPath).ConfigureAwait(true);
 		RefreshDebuggerUi(_latestState.DebugSnapshot);
 		RefreshCopperBenchUi();

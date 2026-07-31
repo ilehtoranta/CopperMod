@@ -219,6 +219,28 @@ public sealed class ClipboardDeviceServicesTests
     }
 
     [Fact]
+    public void ClearPublishesAnEmptyPrimaryClipboardToTheHost()
+    {
+        var bus = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithLiveAgnusDma(false)).Bus;
+        InitializeList(bus);
+        using var service = new ClipboardDeviceServices(bus,
+            new ExecMemoryOperations((size, _) => size == 0x100 ? Allocation : 0x4400, (_, _) => { }, (address, length) => bus.ClearMemory(address, length)),
+            _ => { }, (_, _, _) => { }, (_, _, _) => { }, 0xF08930);
+        Assert.True(service.TryInstall(ExecBase));
+        var state = new M68kCpuState { Cycles = 7 }; state.A[1] = Request; state.D[0] = 0;
+        Assert.True(Invoke(bus, service.DeviceBase - 6, state));
+
+        service.QueuePrimaryTextFromHost("old value");
+        service.ProcessPending(state);
+        PrepareIo(bus, 5, 0, 0, 0); // CMD_CLEAR
+        Assert.True(Invoke(bus, service.DeviceBase - 30, state));
+
+        Assert.True(service.TryTakePrimaryTextForHost(out var text));
+        Assert.Equal(string.Empty, text);
+        Assert.False(service.TryTakePrimaryImageForHost(out _));
+    }
+
+    [Fact]
     public void HostAndGuestImagesCrossTheBoundaryAsIlbm()
     {
         var bus = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithLiveAgnusDma(false)).Bus;

@@ -160,7 +160,7 @@ namespace Copper68k
         BclrImmediateData,
         BclrDynamicData,
         SwapData,
-        ExtWordData,
+        ExtLongData,
         TstWordData,
         TstLongData,
         BitField,
@@ -1028,7 +1028,7 @@ namespace Copper68k
 
             if ((opcode & 0xFFF8) == 0x48C0)
             {
-                return M68020OpcodeKind.ExtWordData;
+                return M68020OpcodeKind.ExtLongData;
             }
 
             if ((opcode & 0xFFF8) == 0x4A40)
@@ -1340,7 +1340,7 @@ namespace Copper68k
         SubLongDataToData,
         AddqLongData,
         CmpLongDataToData,
-        ExtWordData,
+        ExtLongData,
         SwapData,
         AndByteDataToData,
         MoveLongImmediateToAddress,
@@ -1591,7 +1591,7 @@ namespace Copper68k
                     M68020OpcodeKind.SubLongDataToData => M68kAdvancedFastKind.SubLongDataToData,
                     M68020OpcodeKind.AddqLongData => M68kAdvancedFastKind.AddqLongData,
                     M68020OpcodeKind.CmpLongDataToData => M68kAdvancedFastKind.CmpLongDataToData,
-                    M68020OpcodeKind.ExtWordData => M68kAdvancedFastKind.ExtWordData,
+                    M68020OpcodeKind.ExtLongData => M68kAdvancedFastKind.ExtLongData,
                     M68020OpcodeKind.SwapData => M68kAdvancedFastKind.SwapData,
                     M68020OpcodeKind.AndByteDataToData => M68kAdvancedFastKind.AndByteDataToData,
                     M68020OpcodeKind.MoveLongImmediateToAddress => M68kAdvancedFastKind.MoveLongImmediateToAddress,
@@ -2358,8 +2358,8 @@ namespace Copper68k
                 case M68kAdvancedFastKind.CmpLongDataToData:
                     ExecuteFastCmpLongDataToData(opcode);
                     return;
-                case M68kAdvancedFastKind.ExtWordData:
-                    ExecuteFastExtWordData(opcode);
+                case M68kAdvancedFastKind.ExtLongData:
+                    ExecuteFastExtLongData(opcode);
                     return;
                 case M68kAdvancedFastKind.SwapData:
                     ExecuteFastSwapData(opcode);
@@ -2428,8 +2428,8 @@ namespace Copper68k
                     ExecuteFastCmpLongDataToData(opcode);
                     return true;
 
-                case M68kAdvancedFastKind.ExtWordData:
-                    ExecuteFastExtWordData(opcode);
+                case M68kAdvancedFastKind.ExtLongData:
+                    ExecuteFastExtLongData(opcode);
                     return true;
 
                 case M68kAdvancedFastKind.SwapData:
@@ -2591,15 +2591,15 @@ namespace Copper68k
             CompleteFastTiming(M68kInstructionTimingKey.CmpLongDataToData);
         }
 
-        private void ExecuteFastExtWordData(ushort opcode)
+        private void ExecuteFastExtLongData(ushort opcode)
         {
             BeginInstruction(opcode);
             ConsumeFastOpcode(opcode);
             var register = opcode & 7;
-            var result = unchecked((ushort)(short)(sbyte)(State.D[register] & 0xFF));
-            WriteDataRegisterWord(register, result);
-            SetMoveFlags(result, M68kOperandSize.Word);
-            CompleteFastTiming(M68kInstructionTimingKey.ExtWordData);
+            var result = M68kCpuState.SignExtend(State.D[register] & 0xFFFF, M68kOperandSize.Word);
+            State.D[register] = result;
+            SetMoveFlags(result, M68kOperandSize.Long);
+            CompleteFastTiming(M68kInstructionTimingKey.ExtLongData);
         }
 
         private void ExecuteFastSwapData(ushort opcode)
@@ -3499,8 +3499,8 @@ namespace Copper68k
                     ExecuteSwapData(opcode);
                     return true;
 
-                case M68020OpcodeKind.ExtWordData:
-                    ExecuteExtWordData(opcode);
+                case M68020OpcodeKind.ExtLongData:
+                    ExecuteExtLongData(opcode);
                     return true;
 
                 case M68020OpcodeKind.TstWordData:
@@ -6767,15 +6767,15 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.SwapData);
         }
 
-        private void ExecuteExtWordData(ushort opcode)
+        private void ExecuteExtLongData(ushort opcode)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
             var register = opcode & 7;
-            var result = unchecked((ushort)(short)(sbyte)(State.D[register] & 0xFF));
-            WriteDataRegisterWord(register, result);
-            SetMoveFlags(result, M68kOperandSize.Word);
-            CompleteTiming(M68kInstructionTimingKey.ExtWordData);
+            var result = M68kCpuState.SignExtend(State.D[register] & 0xFFFF, M68kOperandSize.Word);
+            State.D[register] = result;
+            SetMoveFlags(result, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.ExtLongData);
         }
 
         private void ExecuteTstWordData(ushort opcode)

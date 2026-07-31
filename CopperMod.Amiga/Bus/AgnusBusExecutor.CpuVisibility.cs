@@ -216,7 +216,7 @@ namespace CopperMod.Amiga.Bus
                 }
             }
 
-            var blitterCompletion = _bus.Blitter.Busy
+            var blitterCompletion = _bus.Blitter.BusPipelineActive
                 ? _bus.Blitter.GetPredictedCompletionCycle()
                 : long.MaxValue;
             if (blitterCompletion <= currentCycle)
@@ -317,6 +317,67 @@ namespace CopperMod.Amiga.Bus
                 Math.Min(cycle, targetCycle),
                 MapReason(root.Source),
                 root.DiskReason);
+        }
+
+        private CpuVisibilityHorizon GetNextCpuVisibilityHorizonIgnoringCopper(
+            long currentCycle,
+            long targetCycle,
+            int cpuInterruptMask)
+        {
+            currentCycle = Math.Max(0, currentCycle);
+            targetCycle = Math.Max(currentCycle, targetCycle);
+            if (targetCycle <= currentCycle)
+            {
+                return new CpuVisibilityHorizon(
+                    currentCycle,
+                    CpuVisibilityHorizonReason.TargetCycle,
+                    AmigaDiskController.SchedulerWakeReason.None);
+            }
+            if (_bus.HasPendingCiaInterrupts)
+            {
+                return new CpuVisibilityHorizon(
+                    currentCycle + 1,
+                    CpuVisibilityHorizonReason.PendingInterrupt,
+                    AmigaDiskController.SchedulerWakeReason.None);
+            }
+
+            RefreshCpuVisibilityAgenda(currentCycle, targetCycle);
+            var mask = cpuInterruptMask < 0 ? 0 : cpuInterruptMask & 7;
+            var bestCycle = targetCycle;
+            var bestSource = CpuVisibilityDeadlineSource.Count;
+            var bestDiskReason = AmigaDiskController.SchedulerWakeReason.None;
+            for (var sourceIndex = 0;
+                 sourceIndex < (int)CpuVisibilityDeadlineSource.Count;
+                 sourceIndex++)
+            {
+                var source = (CpuVisibilityDeadlineSource)sourceIndex;
+                if (source == CpuVisibilityDeadlineSource.Copper)
+                {
+                    continue;
+                }
+
+                var (cycle, diskReason) = _cpuVisibilityAgenda.GetLeaf(mask, source);
+                if (cycle <= currentCycle)
+                {
+                    cycle = currentCycle + 1;
+                }
+                if (cycle < bestCycle)
+                {
+                    bestCycle = cycle;
+                    bestSource = source;
+                    bestDiskReason = diskReason;
+                }
+            }
+
+            return bestSource == CpuVisibilityDeadlineSource.Count
+                ? new CpuVisibilityHorizon(
+                    targetCycle,
+                    CpuVisibilityHorizonReason.TargetCycle,
+                    AmigaDiskController.SchedulerWakeReason.None)
+                : new CpuVisibilityHorizon(
+                    bestCycle,
+                    MapReason(bestSource),
+                    bestDiskReason);
         }
 
         private void RefreshCpuVisibilityAgenda(long currentCycle, long targetCycle)

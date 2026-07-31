@@ -83,7 +83,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return OcsCpuWaitLiveSlotResult.CopperBarrier;
                 }
 
-                StepLiveCopper(slotCycle);
+                if (_liveCopperRequesterEnabled)
+                {
+                    StepLiveCopperRequester(slotCycle);
+                }
+                else
+                {
+                    StepLiveCopper(slotCycle);
+                }
                 completedSafeCopper = true;
             }
 
@@ -181,6 +188,26 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             return _liveCopper.PendingMoveSuppress ||
                 register >= 0x180 && register < 0x1C0 && (register & 1) == 0;
+        }
+
+        internal bool TryGetSafeCpuChipFetchCopperMoveBoundary(
+            long boundaryCycle,
+            out long moveCycle)
+        {
+            moveCycle = 0;
+            if (!_liveDmaEnabled ||
+                !_bus.LiveAgnusDmaEnabled ||
+                !_liveFrameValid ||
+                !IsLiveCopperDmaEnabled() ||
+                !_liveCopper.PendingMove ||
+                _liveCopper.PendingMoveStopCycle != boundaryCycle)
+            {
+                return false;
+            }
+
+            moveCycle = _liveCopper.PendingMoveCycle;
+            return moveCycle < boundaryCycle &&
+                CanCompleteSafeCpuWaitCopperOperation(moveCycle);
         }
 
         internal void CaptureLiveDisplayDmaBeforeHrmGrant(long requestedCycle)

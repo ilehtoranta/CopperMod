@@ -291,6 +291,7 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.LinkLong => ("LINK.L", 16, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.ExtbLong => ("EXTB.L", 4, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.ExtWordData => ("EXT.W Dn", 2, M68kTimingBarrier.None),
+			M68kInstructionTimingKey.ExtLongData => ("EXT.L Dn", 4, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.SwapData => ("SWAP Dn", 4, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.JsrAbsoluteLong => ("JSR (xxx).L", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAddressIndirect => ("JMP (An)", 4, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
@@ -308,6 +309,7 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.LinkLong => (2, 2),
 			M68kInstructionTimingKey.ExtbLong => (2, 2),
 			M68kInstructionTimingKey.ExtWordData => (1, 1),
+			M68kInstructionTimingKey.ExtLongData => (1, 1),
 			M68kInstructionTimingKey.SwapData => (1, 1),
 			_ => (0, 0)
 		};

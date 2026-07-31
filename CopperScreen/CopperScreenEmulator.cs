@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using CopperMod.Amiga;
+using CopperMod.Amiga.CopperStart.Devices.Clipboard;
 
 namespace CopperScreen;
 
@@ -75,9 +76,18 @@ internal sealed class CopperScreenEmulator : IDisposable
 	private string _diskName;
 	private CopperScreenDebugSnapshot? _debugSnapshot;
 
-	private CopperScreenEmulator(CopperScreenStartupOptions startupOptions, AmigaDiskImage? initialDiskImageOverride = null)
+	private CopperScreenEmulator(
+		CopperScreenStartupOptions startupOptions,
+		AmigaDiskImage? initialDiskImageOverride = null,
+		int agnusLiveRequesterStageForTesting = 0)
 	{
 		var machineOptions = CreateMachineOptions(startupOptions, out _startupError);
+		if (agnusLiveRequesterStageForTesting != 0)
+		{
+			machineOptions.WithAgnusLiveRequesterStageForTesting(
+				agnusLiveRequesterStageForTesting);
+		}
+
 		_profile = startupOptions.Profile;
 		_baseDirectory = startupOptions.BaseDirectory;
 		_floppyDriveAudioOptions = startupOptions.FloppyDriveAudio;
@@ -301,6 +311,16 @@ internal sealed class CopperScreenEmulator : IDisposable
 		return new CopperScreenEmulator(CopperScreenStartupOptions.Parse(args, baseDirectory), disk);
 	}
 
+	internal static CopperScreenEmulator CreateForAgnusLiveRequesterStageTests(
+		string[] args,
+		string baseDirectory,
+		int stage)
+	{
+		return new CopperScreenEmulator(
+			CopperScreenStartupOptions.Parse(args, baseDirectory),
+			agnusLiveRequesterStageForTesting: stage);
+	}
+
 	public static CopperScreenEmulator CreateWithoutDisk()
 	{
 		return new CopperScreenEmulator(CopperScreenStartupOptions.Default(AppContext.BaseDirectory));
@@ -353,6 +373,18 @@ internal sealed class CopperScreenEmulator : IDisposable
 				startupOptions.DeferredCpuChipReadSegments);
 		}
 
+		if (startupOptions.DeferredCpuChipInstructionFetchBatchConfigured)
+		{
+			machineOptions.WithDeferredCpuChipInstructionFetchBatch(
+				startupOptions.DeferredCpuChipInstructionFetchBatch);
+		}
+
+		if (startupOptions.DeferredCpuChipInstructionFetchShadowConfigured)
+		{
+			machineOptions.WithDeferredCpuChipInstructionFetchShadow(
+				startupOptions.DeferredCpuChipInstructionFetchShadow);
+		}
+
 		if (startupOptions.DeferredCpuCustomPointerWritesConfigured)
 		{
 			machineOptions.WithDeferredCpuCustomPointerWrites(
@@ -368,6 +400,13 @@ internal sealed class CopperScreenEmulator : IDisposable
 		if (startupOptions.CpuWaitSlotReference)
 		{
 			machineOptions.WithCpuWaitSlotReferencePath(true);
+		}
+
+		machineOptions.WithAgnusBusArbitration(startupOptions.AgnusBusArbitration);
+		if (startupOptions.AgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel)
+		{
+			startupError ??=
+				"Agnus slot-kernel production routing is not connected. Gate G6 is STOP; use --agnus-legacy.";
 		}
 
 		if (startupOptions.HardwareSpecialization)
@@ -1170,6 +1209,16 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 	}
 
+	/// <summary>Queues host clipboard text for the primary Amiga clipboard unit.</summary>
+	public void QueueHostClipboardText(string text) => _boot.QueueHostClipboardText(text);
+
+	public void QueueHostClipboardImage(ClipboardImage image) => _boot.QueueHostClipboardImage(image);
+
+	/// <summary>Retrieves a guest clipboard update after an outer emulation boundary.</summary>
+	public bool TryTakeHostClipboardText(out string text) => _boot.TryTakeHostClipboardText(out text);
+
+	public bool TryTakeHostClipboardImage(out ClipboardImage? image) => _boot.TryTakeHostClipboardImage(out image);
+
 	[HotPath]
 	public void RenderNextFrame()
 		=> RenderNextFrame(Framebuffer, renderPresentation: true);
@@ -1397,13 +1446,31 @@ internal sealed class CopperScreenEmulator : IDisposable
 	[System.Diagnostics.CodeAnalysis.DoesNotReturn]
 	[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
 	private void ThrowCpuBehindPresentationHorizon(long frameTargetCycle, in AmigaBootResult result)
-		=> throw new InvalidOperationException(
+	{
+		var state = _machine.Cpu.State;
+		var stackPointer = state.A[7];
+		var stackWords = _machine.Bus.IsMappedMemoryRange(stackPointer, 8)
+			? $"{_machine.Bus.ReadWord(stackPointer):X4}," +
+				$"{_machine.Bus.ReadWord(stackPointer + 2):X4}," +
+				$"{_machine.Bus.ReadWord(stackPointer + 4):X4}," +
+				$"{_machine.Bus.ReadWord(stackPointer + 6):X4}"
+			: "unmapped";
+		var lastCode = _machine.Bus.IsMappedMemoryRange(state.LastInstructionProgramCounter, 8)
+			? $"{_machine.Bus.ReadWord(state.LastInstructionProgramCounter):X4}," +
+				$"{_machine.Bus.ReadWord(state.LastInstructionProgramCounter + 2):X4}," +
+				$"{_machine.Bus.ReadWord(state.LastInstructionProgramCounter + 4):X4}," +
+				$"{_machine.Bus.ReadWord(state.LastInstructionProgramCounter + 6):X4}"
+			: "unmapped";
+		throw new InvalidOperationException(
 			$"CPU did not reach presentation frame horizon: cpu={_machine.Cpu.State.Cycles}, " +
 			$"frame={frameTargetCycle}, instructions={result.InstructionsExecuted}, completed={result.CompletedBootBlock}, " +
-			$"stopped={_machine.Cpu.State.Stopped}, halted={_machine.Cpu.State.Halted}, " +
-			$"pc=0x{_machine.Cpu.State.ProgramCounter:X8}, d0=0x{_machine.Cpu.State.D[0]:X8}, " +
-			$"sp=0x{_machine.Cpu.State.A[7]:X8}, " +
+			$"stopped={state.Stopped}, halted={state.Halted}, " +
+			$"pc=0x{state.ProgramCounter:X8}, lastPc=0x{state.LastInstructionProgramCounter:X8}, " +
+			$"lastOpcode=0x{state.LastOpcode:X4}, lastCode={lastCode}, sr=0x{state.StatusRegister:X4}, " +
+			$"d0=0x{state.D[0]:X8}, d1=0x{state.D[1]:X8}, a0=0x{state.A[0]:X8}, " +
+			$"a1=0x{state.A[1]:X8}, a6=0x{state.A[6]:X8}, sp=0x{stackPointer:X8}, stack={stackWords}, " +
 			$"diagnostics='{string.Join(" | ", FormatDiagnostics(result.Diagnostics))}'.");
+	}
 
 	private bool TryRenderRtgPresentation(
 		Span<int> destination,
@@ -1694,6 +1761,16 @@ internal sealed class CopperScreenEmulator : IDisposable
 				_frameAudioSampleIndex,
 				DefaultAudioChannels,
 				advanceRegisterObservable: false);
+			_boot.MixHostAudioSample(
+				_frameAudioNextSampleCycle,
+				_frameAudio,
+				_frameAudioSampleIndex,
+				DefaultAudioChannels);
+			var audioOffset = _frameAudioSampleIndex * DefaultAudioChannels;
+			for (var channel = 0; channel < DefaultAudioChannels; channel++)
+			{
+				_frameAudio[audioOffset + channel] = Math.Clamp(_frameAudio[audioOffset + channel], -1f, 1f);
+			}
 			_frameAudioSampleIndex++;
 			_frameAudioNextSampleCycle = GetFrameAudioSampleCycle(_frameAudioSampleIndex);
 		}

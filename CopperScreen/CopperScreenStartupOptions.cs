@@ -36,7 +36,12 @@ internal sealed class CopperScreenStartupOptions
 		CopperScreenInputOptions input,
 		string baseDirectory,
 		bool hasExplicitProfile,
-		string? error)
+		string? error,
+		bool deferredCpuChipInstructionFetchBatch = false,
+		bool deferredCpuChipInstructionFetchBatchConfigured = false,
+		bool deferredCpuChipInstructionFetchShadow = false,
+		bool deferredCpuChipInstructionFetchShadowConfigured = false,
+		AgnusBusArbitrationMode agnusBusArbitration = AgnusBusArbitrationMode.Legacy)
 	{
 		Profile = profile;
 		DiskPath = diskPath;
@@ -65,6 +70,11 @@ internal sealed class CopperScreenStartupOptions
 		BaseDirectory = baseDirectory;
 		HasExplicitProfile = hasExplicitProfile;
 		Error = error;
+		DeferredCpuChipInstructionFetchBatch = deferredCpuChipInstructionFetchBatch;
+		DeferredCpuChipInstructionFetchBatchConfigured = deferredCpuChipInstructionFetchBatchConfigured;
+		DeferredCpuChipInstructionFetchShadow = deferredCpuChipInstructionFetchShadow;
+		DeferredCpuChipInstructionFetchShadowConfigured = deferredCpuChipInstructionFetchShadowConfigured;
+		AgnusBusArbitration = agnusBusArbitration;
 	}
 
 	public CopperScreenProfile Profile { get; }
@@ -98,6 +108,16 @@ internal sealed class CopperScreenStartupOptions
 	public bool DeferredCpuChipReadSegments { get; }
 
 	public bool DeferredCpuChipReadSegmentsConfigured { get; }
+
+	public bool DeferredCpuChipInstructionFetchBatch { get; }
+
+	public bool DeferredCpuChipInstructionFetchBatchConfigured { get; }
+
+	public bool DeferredCpuChipInstructionFetchShadow { get; }
+
+	public bool DeferredCpuChipInstructionFetchShadowConfigured { get; }
+
+	public AgnusBusArbitrationMode AgnusBusArbitration { get; }
 
 	public bool DeferredCpuCustomPointerWrites { get; }
 
@@ -138,10 +158,13 @@ internal sealed class CopperScreenStartupOptions
 		bool deferredCpuBusBatch = false,
 		bool deferredCpuChipWriteJournal = false,
 		bool deferredCpuChipReadSegments = false,
+		bool deferredCpuChipInstructionFetchBatch = false,
+		bool deferredCpuChipInstructionFetchShadow = false,
 		bool deferredCpuCustomPointerWrites = false,
 		bool deferredCpuCustomCompositionWrites = false,
 		bool cpuWaitSlotReference = false,
-		bool hardwareSpecialization = true)
+		bool hardwareSpecialization = true,
+		AgnusBusArbitrationMode agnusBusArbitration = AgnusBusArbitrationMode.Legacy)
 	{
 		var normalizedDriveDiskPaths = NormalizeDrivePaths(driveDiskPaths, baseDirectory);
 		var normalizedWriteProtected = NormalizeDriveWriteProtected(driveWriteProtected);
@@ -173,7 +196,12 @@ internal sealed class CopperScreenStartupOptions
 			input,
 			baseDirectory,
 			hasExplicitProfile,
-			error);
+			error,
+			deferredCpuChipInstructionFetchBatch,
+			deferredCpuChipInstructionFetchBatch,
+			deferredCpuChipInstructionFetchShadow,
+			deferredCpuChipInstructionFetchShadow,
+			agnusBusArbitration);
 	}
 
 	public static CopperScreenStartupOptions Default(string baseDirectory)
@@ -229,6 +257,11 @@ internal sealed class CopperScreenStartupOptions
 		var deferredCpuChipWriteJournalConfigured = false;
 		var deferredCpuChipReadSegments = false;
 		var deferredCpuChipReadSegmentsConfigured = false;
+		var deferredCpuChipInstructionFetchBatch = false;
+		var deferredCpuChipInstructionFetchBatchConfigured = false;
+		var deferredCpuChipInstructionFetchShadow = false;
+		var deferredCpuChipInstructionFetchShadowConfigured = false;
+		var agnusBusArbitration = AgnusBusArbitrationMode.Legacy;
 		var deferredCpuCustomPointerWrites = false;
 		var deferredCpuCustomPointerWritesConfigured = false;
 		var deferredCpuCustomCompositionWrites = false;
@@ -321,6 +354,46 @@ internal sealed class CopperScreenStartupOptions
 			{
 				deferredCpuBusBatch = false;
 				deferredCpuBusBatchConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--cpu-deferred-chip-instruction-fetch-batch"))
+			{
+				deferredCpuChipInstructionFetchBatch = true;
+				deferredCpuChipInstructionFetchBatchConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--no-cpu-deferred-chip-instruction-fetch-batch"))
+			{
+				deferredCpuChipInstructionFetchBatch = false;
+				deferredCpuChipInstructionFetchBatchConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--cpu-deferred-chip-instruction-fetch-shadow"))
+			{
+				deferredCpuChipInstructionFetchShadow = true;
+				deferredCpuChipInstructionFetchShadowConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--no-cpu-deferred-chip-instruction-fetch-shadow"))
+			{
+				deferredCpuChipInstructionFetchShadow = false;
+				deferredCpuChipInstructionFetchShadowConfigured = true;
+				continue;
+			}
+
+			if (IsOption(arg, "--agnus-slot-kernel"))
+			{
+				agnusBusArbitration = AgnusBusArbitrationMode.SlotKernel;
+				continue;
+			}
+
+			if (IsOption(arg, "--agnus-legacy"))
+			{
+				agnusBusArbitration = AgnusBusArbitrationMode.ForcedLegacy;
 				continue;
 			}
 
@@ -622,7 +695,12 @@ internal sealed class CopperScreenStartupOptions
 			profile.Input,
 			baseDirectory,
 			profileExplicit,
-			error);
+			error,
+			deferredCpuChipInstructionFetchBatch,
+			deferredCpuChipInstructionFetchBatchConfigured,
+			deferredCpuChipInstructionFetchShadow,
+			deferredCpuChipInstructionFetchShadowConfigured,
+			agnusBusArbitration);
 	}
 
 	private static string?[] CreateDriveDiskPathArray(CopperScreenProfile profile, string? diskPath, string baseDirectory)

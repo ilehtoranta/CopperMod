@@ -250,6 +250,12 @@ namespace CopperMod.Amiga.Diagnostics
             _start = (_start + 1) % _buffer.Length;
         }
 
+        public void Clear()
+        {
+            _start = 0;
+            _count = 0;
+        }
+
         public IEnumerator<CpuChipRamWriteTrace> GetEnumerator()
         {
             for (var i = 0; i < _count; i++)

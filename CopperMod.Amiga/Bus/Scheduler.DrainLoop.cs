@@ -68,7 +68,8 @@ namespace CopperMod.Amiga.Bus
 
             try
             {
-                var blitterWasBusyAtDrainStart = _bus.Blitter.Busy;
+                var blitterWasBusyAtDrainStart =
+                    _bus.Blitter.BusPipelineActive;
                 var forceCatchUp = (mask & AmigaHardwareEventMask.ForceCatchUp) != 0;
                 var cpuBoundary = (mask & AmigaHardwareEventMask.CpuBoundary) != 0;
                 // Disk DMA writes Chip RAM.  Its transfers must be interleaved
@@ -80,7 +81,7 @@ namespace CopperMod.Amiga.Bus
                     _bus.Disk.HasSlotDmaWakeSourceThrough(targetCycle);
                 if ((mask & AmigaHardwareEventMask.Agnus) != 0 &&
                     !cpuBoundary &&
-                    !_bus.Blitter.Busy &&
+                    !_bus.Blitter.BusPipelineActive &&
                     !diskDmaMayAffectDisplay &&
                     (forceCatchUp || _bus.Display.HasLiveDisplayWork()))
                 {
@@ -331,7 +332,8 @@ namespace CopperMod.Amiga.Bus
 
             try
             {
-                var blitterWasBusyAtDrainStart = _bus.Blitter.Busy;
+                var blitterWasBusyAtDrainStart =
+                    _bus.Blitter.BusPipelineActive;
                 if (TrySkipDrainWithWakeAgenda(targetCycle, SlotContendedMemoryAccessMask))
                 {
                     MarkClean(targetCycle, SlotContendedMemoryAccessMask);

@@ -103,18 +103,33 @@ namespace CopperMod.Amiga.Bus
             }
 
             requestedCycle = Math.Max(0, requestedCycle);
-
-            // Hardware before the CPU request cannot observe the pending request.
-            if (requestedCycle > 0)
-            {
-                DrainSlotContendedAccess(requestedCycle - 1);
-            }
+            var entryExecutorHorizon =
+                _bus.CausalBusExecutor.ExecutedThroughCycle;
 
             var firstCandidateCycle = requestedCycle;
-            var blitterStallReleased = _bus.Blitter.CpuStallActive;
-            if (blitterStallReleased)
+            if (_bus.Blitter.CpuStallActive &&
+                !_bus.AgnusLiveBlitterEnabled)
             {
-                firstCandidateCycle = ExecuteThroughBlitterCpuStall(requestedCycle);
+                firstCandidateCycle =
+                    ExecuteThroughBlitterCpuStall(requestedCycle);
+            }
+
+            // An expansion/RTC/custom-register access can enter this shared
+            // slot path after another requester has already advanced Agnus
+            // past the CPU's nominal request cycle. Never drain, publish, or
+            // arbitrate a retroactive slot; start after the executed horizon.
+            // Equality remains legal because the horizon can identify the
+            // current unresolved memory cycle rather than a consumed slot.
+            if (_bus.AgnusLiveBlitterEnabled &&
+                firstCandidateCycle < entryExecutorHorizon)
+            {
+                firstCandidateCycle = entryExecutorHorizon + 1;
+            }
+
+            // Hardware before the CPU request cannot observe the pending request.
+            if (firstCandidateCycle > 0)
+            {
+                DrainSlotContendedAccess(firstCandidateCycle - 1);
             }
 
             _busAccessDrainCount++;
@@ -149,12 +164,37 @@ namespace CopperMod.Amiga.Bus
                         DrainSlotContendedAccess(candidate);
                     }
 
+                    var causalCandidate =
+                        _bus.AdvancePendingCpuGrantToCausalBusHorizon(
+                            target,
+                            candidate);
+                    if (causalCandidate != candidate)
+                    {
+                        _bus.CausalBusExecutor.ObservePendingCpuDmaCycle(
+                            candidate);
+                        candidate = AgnusChipSlotScheduler.AlignToSlot(
+                            causalCandidate);
+                        continue;
+                    }
+
+                    if (_bus.AgnusLiveBlitterEnabled)
+                    {
+                        _bus.CausalBusExecutor
+                            .ExecuteEligibleAtPendingCpuBoundary(candidate);
+                    }
+
+                    // The HRM nice-blitter rule counts every memory cycle for
+                    // which the pending CPU request remains unsatisfied, not
+                    // only blitter-owned cycles. Record the committed owner
+                    // before its completion horizon moves the retry forward.
+                    _bus.CausalBusExecutor.ObservePendingCpuDmaCycle(candidate);
+
                     // A competing requester may have committed the candidate
                     // while the CPU intent remained pending.  Its completion
                     // advances the data-bus horizon beyond that candidate, so
                     // retry from the first causally usable CPU cycle instead of
                     // attempting to grant the already-executed slot again.
-                    var causalCandidate = _bus.AdvancePendingCpuGrantToCausalBusHorizon(
+                    causalCandidate = _bus.AdvancePendingCpuGrantToCausalBusHorizon(
                         target,
                         candidate);
                     if (causalCandidate != candidate)
@@ -178,14 +218,9 @@ namespace CopperMod.Amiga.Bus
                         return CpuWaitGrantAdvanceResult.Granted;
                     }
 
-                    // A Copper-owned half of the HRM pair consumes the adjacent
-                    // CPU opportunity as well. The reference allocator skips the
-                    // whole pair; the chronological retry loop must do the same
-                    // after materializing the Copper slot.
-                    candidate += _bus.TryGetCommittedAgnusSlotOwner(candidate, out var deniedOwner) &&
-                        deniedOwner == AgnusChipSlotOwner.Copper
-                            ? 2 * AgnusChipSlotScheduler.SlotCycles
-                            : AgnusChipSlotScheduler.SlotCycles;
+                    // A Copper transfer occupies one memory cycle. The adjacent
+                    // cycle remains a legal CPU opportunity.
+                    candidate += AgnusChipSlotScheduler.SlotCycles;
                 }
             }
             finally

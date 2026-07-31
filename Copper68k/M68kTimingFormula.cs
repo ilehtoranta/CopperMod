@@ -381,6 +381,7 @@ namespace Copper68k
                 M68kInstructionTimingKey.LinkLong or
                 M68kInstructionTimingKey.ExtbLong or
                 M68kInstructionTimingKey.ExtWordData or
+                M68kInstructionTimingKey.ExtLongData or
                 M68kInstructionTimingKey.SwapData or
                 M68kInstructionTimingKey.JsrAbsoluteLong or
                 M68kInstructionTimingKey.JmpAddressIndirect or
@@ -404,6 +405,7 @@ namespace Copper68k
                 M68kInstructionTimingKey.LinkLong => "LINK.L",
                 M68kInstructionTimingKey.ExtbLong => "EXTB.L",
                 M68kInstructionTimingKey.ExtWordData => "EXT.W Dn",
+                M68kInstructionTimingKey.ExtLongData => "EXT.L Dn",
                 M68kInstructionTimingKey.SwapData => "SWAP Dn",
                 M68kInstructionTimingKey.JsrAbsoluteLong => "JSR (xxx).L",
                 M68kInstructionTimingKey.JmpAddressIndirect => "JMP (An)",
@@ -423,6 +425,7 @@ namespace Copper68k
                 M68kInstructionTimingKey.LinkLong => (2, 2),
                 M68kInstructionTimingKey.ExtbLong => (2, 2),
                 M68kInstructionTimingKey.ExtWordData => (1, 1),
+                M68kInstructionTimingKey.ExtLongData => (1, 1),
                 M68kInstructionTimingKey.SwapData => (1, 1),
                 _ => (0, 0)
             };

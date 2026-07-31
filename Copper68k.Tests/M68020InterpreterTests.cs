@@ -248,13 +248,13 @@ public sealed class M68020InterpreterTests
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
 	}
 	[Fact]
-	public void ExtWordDataRegisterSignExtendsByteToWord()
+	public void ExtLongDataRegisterSignExtendsWordToLong()
 	{
 		var bus = new ZeroWaitCodeBus();
-		WriteWords(bus, CodeBase, 0x48C0); // EXT.W D0
+		WriteWords(bus, CodeBase, 0x48C0); // EXT.L D0
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
 		cpu.Reset(CodeBase, 0x3000);
-		cpu.State.D[0] = 0x1234_0003;
+		cpu.State.D[0] = 0x1234_8003;
 		cpu.State.StatusRegister = M68kCpuState.Supervisor |
 			M68kCpuState.Extend |
 			M68kCpuState.Negative |
@@ -262,15 +262,15 @@ public sealed class M68020InterpreterTests
 			M68kCpuState.Overflow |
 			M68kCpuState.Carry;
 		cpu.ExecuteInstruction();
-		Assert.Equal(0x1234_0003u, cpu.State.D[0]);
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.Equal(0xFFFF_8003u, cpu.State.D[0]);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
 		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
-		Assert.Equal(2, cpu.State.NativeCycles);
-		Assert.Equal(1, cpu.State.Cycles);
+		Assert.Equal(4, cpu.State.NativeCycles);
+		Assert.Equal(2, cpu.State.Cycles);
 	}
 	[Fact]
 	public void NotByteDataRegisterComplementsLowByteAndPreservesExtend()

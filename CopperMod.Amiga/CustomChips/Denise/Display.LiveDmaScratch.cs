@@ -1991,7 +1991,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             return true;
                         }
 
-                        if (_display._bus.Blitter.Busy)
+                        if (_display._bus.Blitter.BusPipelineActive)
                         {
                             _unsupported = "copper-blitter-wait";
                             return false;
@@ -2027,11 +2027,26 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         return true;
                     }
 
-                    var comparisonStartCycle = _copper.Cycle;
-                    var resumeCycle = GetCopperWaitRestartArmCycle(
-                        waitCycle,
-                        _copper.WaitSecond,
-                        _copper.WaitObservedBlitterBusy);
+                    var bfdReleasedByTermination =
+                        _copper.WaitObservedBlitterBusy;
+                    var comparisonStartCycle = bfdReleasedByTermination
+                        ? waitCycle
+                        : _copper.Cycle;
+                    var resumeCycle = bfdReleasedByTermination
+                        ? GetCopperBfdReleaseFetchCycle(waitCycle)
+                        : GetCopperWaitRestartArmCycle(
+                            waitCycle,
+                            _copper.WaitSecond,
+                            observedBlitterBusy: false);
+                    var reuseVerticalWrapControlPhase =
+                        !bfdReleasedByTermination &&
+                        IsCopperVerticalComparatorWrapWait(
+                            _copper.WaitFirst,
+                            _copper.WaitSecond);
+                    if (reuseVerticalWrapControlPhase)
+                    {
+                        resumeCycle -= AgnusChipSlotScheduler.SlotCycles;
+                    }
                     var fourPlanePreTailWait =
                         _display.GetAgnusBitplaneFetchPlaneCount() == 4 &&
                         (_copper.WaitFirst & 0x00FE) < 0x00C0;
@@ -2158,6 +2173,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         (!restartIncomingRgaBlocked &&
                          (reuseInheritedAdjacentControlPhase ||
                           reuseExhaustedAdjacentCarryPhase ||
+                          reuseVerticalWrapControlPhase ||
                           fourPlaneWaitRunReusesControlPhase ||
                           (_copper.WaitRunControlBlocked &&
                            _copper.SatisfiedWaitRunCount >= 2 &&
@@ -2193,7 +2209,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             restartIncomingRgaBlocked,
                             reuseRunControlPhase,
                             restoreControlPhaseAfterMove,
-                            presentNextMoveFromReusedWaitTail);
+                            presentNextMoveFromReusedWaitTail,
+                            readyAtWakeCycle: bfdReleasedByTermination);
                         _copper.PendingWaitTailPresentationX = waitTailPresentationX;
                         _copper.PendingWaitPaletteTailX =
                             _display.GetCopperWaitPaletteTailX(_copper.WaitFirst);
@@ -2205,7 +2222,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         restartIncomingRgaBlocked,
                         reuseRunControlPhase,
                         restoreControlPhaseAfterMove,
-                        presentNextMoveFromReusedWaitTail);
+                        presentNextMoveFromReusedWaitTail,
+                        readyAtWakeCycle: bfdReleasedByTermination);
                     _copper.PendingWaitTailPresentationX = waitTailPresentationX;
                     _copper.PendingWaitPaletteTailX =
                         _display.GetCopperWaitPaletteTailX(_copper.WaitFirst);
@@ -2309,7 +2327,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         out var plane,
                         out var capturedWord))
                 {
-                    var maskIndex = GetLiveBitplaneMaskIndex(row, plane);
+                    var maskIndex = _display.GetLiveBitplaneMaskIndex(row, plane);
                     _display._liveBitplaneCopperCollisionMasks[maskIndex] |=
                         (UInt128)1 << capturedWord;
                 }
@@ -2659,7 +2677,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     _spritePointers[sprite] = (register & 2) == 0
                         ? _display.WriteDmaPointerHigh(_spritePointers[sprite], value)
                         : _display.WriteDmaPointerLow(_spritePointers[sprite], value);
-                    UpdateSpriteDmaPointerFromRegisterWrite(sprite, GetSpriteControlRow(cycle));
+                    UpdateSpriteDmaPointerFromRegisterWrite(
+                        sprite,
+                        GetSpriteControlRow(cycle),
+                        cycle);
                     return;
                 }
 
@@ -2692,7 +2713,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
             }
 
-            private void UpdateSpriteDmaPointerFromRegisterWrite(int spriteIndex, int controlRow)
+            private void UpdateSpriteDmaPointerFromRegisterWrite(
+                int spriteIndex,
+                int controlRow,
+                long cycle)
             {
                 if ((uint)spriteIndex >= (uint)_spriteStates.Length)
                 {
@@ -2729,6 +2753,31 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _nextSpriteRow = Math.Min(_nextSpriteRow, state.ControlRow);
                 _nextSpriteIndex = 0;
                 _nextSpriteWord = 0;
+                AdvanceSpriteCursorToCycle(cycle);
+            }
+
+            private void AdvanceSpriteCursorToCycle(long cycle)
+            {
+                var causalRow = Math.Clamp(
+                    _display.GetOutputRowForCycle(_display._liveFrameStartCycle, cycle),
+                    0,
+                    LowResOutputHeight);
+                if (_nextSpriteRow < causalRow)
+                {
+                    _nextSpriteRow = causalRow;
+                    _nextSpriteIndex = 0;
+                    _nextSpriteWord = 0;
+                }
+
+                while (_nextSpriteRow < LowResOutputHeight &&
+                    _display.GetSpriteDmaFetchCycle(
+                        _display._liveFrameStartCycle,
+                        _nextSpriteRow,
+                        _nextSpriteIndex,
+                        _nextSpriteWord) < cycle)
+                {
+                    AdvanceSpriteCursor();
+                }
             }
 
             private int GetSpriteControlRow(long cycle)

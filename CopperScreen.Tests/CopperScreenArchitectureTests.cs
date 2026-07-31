@@ -69,6 +69,10 @@ public sealed class CopperScreenArchitectureTests
 		Assert.Equal("expanded-diagrom", diagRom.Id);
 		Assert.Equal("ROM/DiagROM/diagrom-a500.rom", diagRom.KickstartRomPath);
 		Assert.True(diagRom.BootsWithoutDisk);
+
+		Assert.True(CopperScreenProfile.TryLoad("a500-kickstart31-host-exec", AppContext.BaseDirectory, out var hostExec, out var hostExecError), hostExecError);
+		Assert.Equal(CopperScreenKickstartSource.KickstartRom, hostExec.KickstartSource);
+		Assert.Equal(KickstartVersion.Kickstart31, hostExec.KickstartVersion);
 	}
 
 	[Fact]

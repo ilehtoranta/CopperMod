@@ -16,6 +16,8 @@ if (Move16AlignmentBenchmark.TryRun(args) ||
     AmigaFastRamBenchmark.TryRun(args) ||
     AmigaBusSaturationBenchmark.TryRun(args) ||
     AmigaInstructionFetchArbitrationBenchmark.TryRun(args) ||
+    AgnusSlotKernelBenchmark.TryRun(args) ||
+    AgnusLiveBlitterSlotBenchmark.TryRun(args) ||
     EcsTimingBenchmark.TryRun(args) ||
     CustomRegisterDispatchBenchmark.TryRun(args))
 {
@@ -97,7 +99,7 @@ if (options.DiskDivergenceTrace)
     return;
 }
 
-Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus=hrm, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, BlitterAdvance={options.BlitterAdvanceMode.ToString().ToLowerInvariant()}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuChipWriteJournal={options.DeferredCpuChipWriteJournal}, DeferredCpuChipReadSegments={options.DeferredCpuChipReadSegments}, DeferredCpuCustomPointerWrites={options.DeferredCpuCustomPointerWrites}, DeferredCpuCustomCompositionWrites={options.DeferredCpuCustomCompositionWrites}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
+Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus={options.AgnusBusArbitration}, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, BlitterAdvance={options.BlitterAdvanceMode.ToString().ToLowerInvariant()}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuChipWriteJournal={options.DeferredCpuChipWriteJournal}, DeferredCpuChipReadSegments={options.DeferredCpuChipReadSegments}, DeferredCpuChipInstructionFetchBatch={options.DeferredCpuChipInstructionFetchBatch}, DeferredCpuChipInstructionFetchShadow={options.DeferredCpuChipInstructionFetchShadow}, DeferredCpuCustomPointerWrites={options.DeferredCpuCustomPointerWrites}, DeferredCpuCustomCompositionWrites={options.DeferredCpuCustomCompositionWrites}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
 WriteBenchmarkHeader();
 
 foreach (var workload in workloads)
@@ -424,6 +426,25 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     }
 
     var benchmarkBus = GetMachine(emulator).Bus;
+    var chipFetchTimelineTrace =
+        Environment.GetEnvironmentVariable("COPPER_CHIP_FETCH_TIMELINE_TRACE") == "1";
+    var unsafeChipFetchPresentationTrace =
+        chipFetchTimelineTrace &&
+        Environment.GetEnvironmentVariable(
+            "COPPER_CHIP_FETCH_UNSAFE_PRESENTATION_TRACE") == "1";
+    if (unsafeChipFetchPresentationTrace)
+    {
+        Environment.SetEnvironmentVariable(
+            "COPPER_CHIP_FETCH_UNSAFE_PRESENTATION_TRACE",
+            null);
+    }
+    if (chipFetchTimelineTrace)
+    {
+        benchmarkBus.CaptureCpuChipRamWriteTrace(
+            startAddress: 0,
+            byteCount: (uint)benchmarkBus.ChipRam.Length,
+            capacity: 65536);
+    }
     benchmarkBus.SetBlitterAdvanceMode(options.BlitterAdvanceMode);
     benchmarkBus.Blitter.SetBoundedFixedSlotExecutionEnabledForTest(
         options.BlitterAdvanceMode == BlitterAdvanceMode.Bounded);
@@ -447,6 +468,16 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     }
 
     LaunchWorkbenchPathIfNeeded(emulator, workload);
+    if (chipFetchTimelineTrace)
+    {
+        benchmarkBus.ResetBusVisibleWriteTrace();
+    }
+    if (unsafeChipFetchPresentationTrace)
+    {
+        Environment.SetEnvironmentVariable(
+            "COPPER_CHIP_FETCH_UNSAFE_PRESENTATION_TRACE",
+            "1");
+    }
 
     if (options.InstructionMatrix)
     {
@@ -675,6 +706,13 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         : ProfileFrames(emulator, Math.Min(120, options.MeasuredFrames));
     var display = GetDisplay(emulator);
     var agnus = GetAgnusSnapshot(emulator);
+    if (chipFetchTimelineTrace)
+    {
+        WriteChipFetchTimelineTrace(
+            workload.Name,
+            options.DeferredCpuChipInstructionFetchBatch ? "chip-fetch" : "scalar",
+            benchmarkBus);
+    }
     return new BenchmarkRunResult(
         workload,
         timingMode,
@@ -705,6 +743,42 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         emulator.CopperStartRuntimeHandoffActive,
         emulator.CopperStartRuntimeHandoffCount,
         CaptureStatusText(emulator));
+}
+
+static void WriteChipFetchTimelineTrace(string workload, string mode, AmigaBus bus)
+{
+    var startCycle = long.TryParse(
+        Environment.GetEnvironmentVariable("COPPER_CHIP_FETCH_TIMELINE_START"),
+        CultureInfo.InvariantCulture,
+        out var parsedStart)
+        ? parsedStart
+        : 0;
+    var stopCycle = long.TryParse(
+        Environment.GetEnvironmentVariable("COPPER_CHIP_FETCH_TIMELINE_STOP"),
+        CultureInfo.InvariantCulture,
+        out var parsedStop)
+        ? parsedStop
+        : long.MaxValue;
+
+    Console.WriteLine(
+        $"chip-fetch-timeline\t{workload}\t{mode}\trange={startCycle}-{stopCycle}");
+    foreach (var write in bus.CustomRegisterWrites)
+    {
+        if (write.Cycle >= startCycle && write.Cycle <= stopCycle)
+        {
+            Console.WriteLine(
+                $"chip-fetch-event\tcustom\t{write.Cycle}\t{write.Address:X3}\t{write.Value:X4}");
+        }
+    }
+
+    foreach (var write in bus.CpuChipRamWriteTrace)
+    {
+        if (write.Cycle >= startCycle && write.Cycle <= stopCycle)
+        {
+            Console.WriteLine(
+                $"chip-fetch-event\tchip-write\t{write.Cycle}\t{write.Address:X8}\t{write.Size}\t{write.Value:X8}");
+        }
+    }
 }
 
 static void RunDiskDivergenceTrace(BenchmarkWorkload workload, BenchmarkOptions options)
@@ -1151,8 +1225,11 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
         1 + // Explicit enable/rollback keeps benchmark modes independent of runtime defaults.
         1 + // Explicit enable/rollback keeps Stage 3 independent of runtime defaults.
         1 + // Explicit enable/rollback keeps Stage 4 independent of runtime defaults.
+        1 + // Explicit Chip instruction-fetch batching enable/rollback.
+        1 + // Explicit Chip instruction-fetch shadow enable/rollback.
         1 + // Explicit Stage 5 pointer enable/rollback.
         1 + // Explicit Stage 5 composition enable/rollback.
+        1 + // Explicit Agnus slot-kernel enable/forced-legacy selection.
         (options.CpuWaitSlotReference ? 1 : 0) +
         (options.HardwareSpecialization ? 1 : 0);
     if (count == 0)
@@ -1232,6 +1309,19 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
 		args[index++] = "--no-cpu-deferred-chip-read-segments";
 	}
 
+    if (options.DeferredCpuChipInstructionFetchBatch)
+    {
+        args[index++] = "--cpu-deferred-chip-instruction-fetch-batch";
+    }
+    else
+    {
+        args[index++] = "--no-cpu-deferred-chip-instruction-fetch-batch";
+    }
+
+    args[index++] = options.DeferredCpuChipInstructionFetchShadow
+        ? "--cpu-deferred-chip-instruction-fetch-shadow"
+        : "--no-cpu-deferred-chip-instruction-fetch-shadow";
+
     if (options.DeferredCpuCustomPointerWrites)
     {
         args[index++] = "--cpu-deferred-custom-pointer-writes";
@@ -1249,6 +1339,10 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
 	{
 		args[index++] = "--no-cpu-deferred-custom-composition-writes";
 	}
+
+    args[index++] = options.AgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel
+        ? "--agnus-slot-kernel"
+        : "--agnus-legacy";
 
     if (options.CpuWaitSlotReference)
     {
@@ -2169,6 +2263,19 @@ static void WriteLaunchPathProbeDirectory(AmigaDosFileSystem fileSystem, string 
 static string FormatDeferredCpuBusBatchSummary(AmigaHardwareSchedulerSnapshot scheduler)
 {
     var batch = $"{scheduler.DeferredCpuBusBatchAttempts}/{scheduler.DeferredCpuBusBatchUsed}/{scheduler.DeferredCpuBusBatchInstructions}/{scheduler.DeferredCpuBusBatchSkippedInstructionFlushes}/{scheduler.DeferredCpuBusBatchFlushes}";
+    var chipFetchCoverage = scheduler.CpuChipRamInstructionFetchGrantedWords == 0
+        ? 0d
+        : 100d * scheduler.CpuChipFetchCommittedWords / scheduler.CpuChipRamInstructionFetchGrantedWords;
+    var chipFetchCallsPerWord = scheduler.CpuChipFetchCommittedWords == 0
+        ? 0d
+        : (double)scheduler.CpuChipFetchCommitAttempts / scheduler.CpuChipFetchCommittedWords;
+    var chipFetchAverageScan = scheduler.CpuChipFetchCommittedWords == 0
+        ? 0d
+        : (double)scheduler.CpuChipFetchFixedSlotsScanned / scheduler.CpuChipFetchCommittedWords;
+    var chipFetch = $"chipfetch=lease:{scheduler.CpuChipFetchLeaseAttempts}/{scheduler.CpuChipFetchLeaseAccepted}/{scheduler.CpuChipFetchLeaseRejected},reject:{scheduler.CpuChipFetchLeaseRejectedInvalid}/{scheduler.CpuChipFetchLeaseRejectedNoStableInterval},copperlook:{scheduler.CpuChipFetchCopperLookaheadAttempts}/{scheduler.CpuChipFetchCopperLookaheadAccepted}/{scheduler.CpuChipFetchCopperLookaheadContinuationAttempts}/{scheduler.CpuChipFetchCopperLookaheadContinuations},prove:{scheduler.CpuChipFetchWordsProven},proofreject:{scheduler.CpuChipFetchProofRejectedLease}[{scheduler.CpuChipFetchProofRejectedLeaseExpired}/{scheduler.CpuChipFetchProofRejectedFixedPlan}/{scheduler.CpuChipFetchProofRejectedMapping}/{scheduler.CpuChipFetchProofRejectedLeaseWriter}]/{scheduler.CpuChipFetchProofRejectedInput}/{scheduler.CpuChipFetchProofRejectedWriter}/{scheduler.CpuChipFetchProofRejectedDynamic}/{scheduler.CpuChipFetchProofRejectedUnsupportedOwner},commit:{scheduler.CpuChipFetchCommitAttempts}/{scheduler.CpuChipFetchCompletedRuns}/{scheduler.CpuChipFetchPartialRuns}/{scheduler.CpuChipFetchCommittedWords},coverage:{chipFetchCoverage:F3}%,calls/word:{chipFetchCallsPerWord:F3},mismatch:{scheduler.CpuChipFetchGrantMismatches}/{scheduler.CpuChipFetchValueMismatches}";
+    var chipFetchAdmission = $"chipadmit={scheduler.CpuChipFetchAdmissionAttempts}/{scheduler.CpuChipFetchAdmissionAccepted},reject:inactive={scheduler.CpuChipFetchAdmissionInactive},env={scheduler.CpuChipFetchAdmissionEnvironment},map={scheduler.CpuChipFetchAdmissionMapping},mixed={scheduler.CpuChipFetchAdmissionMixedJournal},capacity={scheduler.CpuChipFetchAdmissionCapacity},lease={scheduler.CpuChipFetchAdmissionLeaseRejected},proof={scheduler.CpuChipFetchAdmissionProofRejected},fixedscope={scheduler.CpuChipFetchFixedPlanFirstRejects}[batch={scheduler.CpuChipFetchFixedPlanRejectBatchActive},exec={scheduler.CpuChipFetchFixedPlanRejectExecutionStarted},empty={scheduler.CpuChipFetchFixedPlanRejectJournalEmpty},nonempty={scheduler.CpuChipFetchFixedPlanRejectJournalNonEmpty},rebase={scheduler.CpuChipFetchFixedPlanRejectRebased},first={scheduler.CpuChipFetchFixedPlanFirstTrace}]";
+    var chipFetchRun = $"chipfetchrun=hist:{scheduler.CpuChipFetchRunLength1}/{scheduler.CpuChipFetchRunLength2}/{scheduler.CpuChipFetchRunLength3To4}/{scheduler.CpuChipFetchRunLength5To8}/{scheduler.CpuChipFetchRunLength9To16}/{scheduler.CpuChipFetchRunLength17To32}/{scheduler.CpuChipFetchRunLength33To64},fixed:{scheduler.CpuChipFetchFixedSlotsRefresh}/{scheduler.CpuChipFetchFixedSlotsBitplane}/{scheduler.CpuChipFetchFixedSlotsSprite},scan:{scheduler.CpuChipFetchFixedSlotsScanned}/{chipFetchAverageScan:F3}/{scheduler.CpuChipFetchMaxFixedSlotsScannedPerWord},wait:{scheduler.CpuChipFetchTotalWaitCycles}";
+    var chipFetchShadow = $"chipshadow={scheduler.DeferredCpuChipInstructionFetchShadowAttempts}/{scheduler.DeferredCpuChipInstructionFetchShadowSupported}/{scheduler.DeferredCpuChipInstructionFetchShadowMismatches},first={scheduler.DeferredCpuChipInstructionFetchShadowFirstMismatch}";
     var timingProjection = $"timingproj={scheduler.DeferredCpuTimingProjectionAttempts}/{scheduler.DeferredCpuTimingProjectionSupported}/{scheduler.DeferredCpuTimingProjectionMatches}/{scheduler.DeferredCpuTimingProjectionMismatches},first={scheduler.DeferredCpuTimingProjectionFirstMismatch}";
     var exits = $"exit={scheduler.DeferredCpuBusBatchExitTargetCycle}/{scheduler.DeferredCpuBusBatchExitMaxInstructions}/{scheduler.DeferredCpuBusBatchExitChipVisibleAccess}/{scheduler.DeferredCpuBusBatchExitPcLeftFastWindow}/{scheduler.DeferredCpuBusBatchExitException}/{scheduler.DeferredCpuBusBatchExitUnsupported}";
     var wakes = $"wake={scheduler.DeferredCpuBusBatchWakeTargetCycle}/{scheduler.DeferredCpuBusBatchWakePendingInterrupt}/{scheduler.DeferredCpuBusBatchWakeVerticalBlank}/{scheduler.DeferredCpuBusBatchWakeHorizontalSyncTod}/{scheduler.DeferredCpuBusBatchWakeCiaTimer}/{scheduler.DeferredCpuBusBatchWakeDisk}/{scheduler.DeferredCpuBusBatchWakePaula}/{scheduler.DeferredCpuBusBatchWakeCopper}/{scheduler.DeferredCpuBusBatchWakeBlitter}";
@@ -2179,8 +2286,8 @@ static string FormatDeferredCpuBusBatchSummary(AmigaHardwareSchedulerSnapshot sc
     var fixedImage = $"fixedimg=cache:{scheduler.DeferredCpuWaitFixedImageBuilds}/{scheduler.DeferredCpuWaitFixedImageHits}/{scheduler.DeferredCpuWaitFixedImageMisses}/{scheduler.DeferredCpuWaitFixedImageInvalidations},slots={scheduler.DeferredCpuWaitFixedImagePredictedSlots},unsup={scheduler.DeferredCpuWaitFixedImageUnsupportedFrame}/{scheduler.DeferredCpuWaitFixedImageUnsupportedCopper}/{scheduler.DeferredCpuWaitFixedImageUnsupportedPendingWrite}/{scheduler.DeferredCpuWaitFixedImageUnsupportedRasterlinePlan}/{scheduler.DeferredCpuWaitFixedImageUnsupportedSpriteState}";
     var fixedProduction = $"fixedprod={scheduler.DeferredCpuWaitFixedImageProductionAttempts}/{scheduler.DeferredCpuWaitFixedImageProductionUsed}/{scheduler.DeferredCpuWaitFixedImageProductionPreGrantDrainsSkipped}/{scheduler.DeferredCpuWaitFixedImageProductionPostGrantCatchups}/{scheduler.DeferredCpuWaitFixedImageProductionPredictedWaitCycles},fallback={scheduler.DeferredCpuWaitFixedImageProductionFallbackUnsupported}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackDynamicDma}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackFrame}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackCopper}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackPendingWrite}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackRasterlinePlan}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackSpriteState}/{scheduler.DeferredCpuWaitFixedImageProductionFallbackUnstable},disabled={(scheduler.DeferredCpuWaitFixedImageProductionDisabled ? 1 : 0)}";
     var blitterOverlap = $"bltoverlap={scheduler.DeferredCpuWaitBlitterOverlapAttempts}/{scheduler.DeferredCpuWaitBlitterOverlapSupported}/{scheduler.DeferredCpuWaitBlitterOverlapUnsupported}/{scheduler.DeferredCpuWaitBlitterOverlapNasty}";
-    var cpuKinds = $"cpukind={scheduler.CpuInstructionFetchGrantedWords}/{scheduler.CpuDataGrantedWords}";
-    return $"{batch},{timingProjection},{exits},{wakes},{diskWakes},{internalWindow},{waitWindow},{waitFast},{fixedImage},{fixedProduction},{blitterOverlap},{cpuKinds}";
+    var cpuKinds = $"cpukind={scheduler.CpuInstructionFetchGrantedWords}/{scheduler.CpuChipRamInstructionFetchGrantedWords}/{scheduler.CpuDataGrantedWords}";
+    return $"{batch},{chipFetch},{chipFetchAdmission},{chipFetchRun},{chipFetchShadow},{timingProjection},{exits},{wakes},{diskWakes},{internalWindow},{waitWindow},{waitFast},{fixedImage},{fixedProduction},{blitterOverlap},{cpuKinds}";
 }
 
 static string FormatHardwareProfile(AmigaHardwareSchedulerSnapshot scheduler)
@@ -2206,7 +2313,9 @@ static string FormatHardwareProfile(AmigaHardwareSchedulerSnapshot scheduler)
         scheduler.DeferredCpuWaitWindowAttempts != 0 ||
         scheduler.DeferredCpuWaitWindowEligible != 0 ||
         scheduler.DeferredCpuWaitWindowFastPathAttempts != 0 ||
-        scheduler.DeferredCpuWaitWindowFastPathUsed != 0;
+        scheduler.DeferredCpuWaitWindowFastPathUsed != 0 ||
+        scheduler.CpuChipFetchLeaseAttempts != 0 ||
+        scheduler.CpuChipFetchCommittedWords != 0;
     if (!scheduler.HostProfilingEnabled && scheduler.HostDrainTicks == 0)
     {
         return string.Join(",", new[] { hasCopperQuiescence ? copperQuiescence : string.Empty, hasDeferredCpuBatch ? deferredCpuBatch : string.Empty }.Where(static value => value.Length != 0));
@@ -2772,8 +2881,11 @@ internal readonly record struct BenchmarkOptions(
     bool DeferredCpuBusBatch,
     bool DeferredCpuChipWriteJournal,
     bool DeferredCpuChipReadSegments,
+    bool DeferredCpuChipInstructionFetchBatch,
+    bool DeferredCpuChipInstructionFetchShadow,
     bool DeferredCpuCustomPointerWrites,
     bool DeferredCpuCustomCompositionWrites,
+    AgnusBusArbitrationMode AgnusBusArbitration,
     bool CpuWaitSlotReference,
     bool HardwareSpecialization,
     BlitterAdvanceMode BlitterAdvanceMode,
@@ -2826,8 +2938,11 @@ internal readonly record struct BenchmarkOptions(
         var deferredCpuBusBatch = false;
         var deferredCpuChipWriteJournal = false;
         var deferredCpuChipReadSegments = false;
+        var deferredCpuChipInstructionFetchBatch = false;
+        var deferredCpuChipInstructionFetchShadow = false;
         var deferredCpuCustomPointerWrites = false;
         var deferredCpuCustomCompositionWrites = false;
+        var agnusBusArbitration = AgnusBusArbitrationMode.ForcedLegacy;
         var cpuWaitSlotReference = false;
         var hardwareSpecialization = false;
         var blitterAdvanceMode = BlitterAdvanceMode.Reference;
@@ -3069,6 +3184,23 @@ internal readonly record struct BenchmarkOptions(
             {
                 deferredCpuChipReadSegments = true;
             }
+
+            else if (string.Equals(args[i], "--cpu-deferred-chip-instruction-fetch-batch", StringComparison.OrdinalIgnoreCase))
+            {
+                deferredCpuChipInstructionFetchBatch = true;
+            }
+            else if (string.Equals(args[i], "--no-cpu-deferred-chip-instruction-fetch-batch", StringComparison.OrdinalIgnoreCase))
+            {
+                deferredCpuChipInstructionFetchBatch = false;
+            }
+            else if (string.Equals(args[i], "--cpu-deferred-chip-instruction-fetch-shadow", StringComparison.OrdinalIgnoreCase))
+            {
+                deferredCpuChipInstructionFetchShadow = true;
+            }
+            else if (string.Equals(args[i], "--no-cpu-deferred-chip-instruction-fetch-shadow", StringComparison.OrdinalIgnoreCase))
+            {
+                deferredCpuChipInstructionFetchShadow = false;
+            }
 			else if (string.Equals(args[i], "--no-cpu-deferred-chip-read-segments", StringComparison.OrdinalIgnoreCase))
 			{
 				deferredCpuChipReadSegments = false;
@@ -3093,6 +3225,14 @@ internal readonly record struct BenchmarkOptions(
 			{
 				deferredCpuCustomCompositionWrites = false;
 			}
+            else if (string.Equals(args[i], "--agnus-slot-kernel", StringComparison.OrdinalIgnoreCase))
+            {
+                agnusBusArbitration = AgnusBusArbitrationMode.SlotKernel;
+            }
+            else if (string.Equals(args[i], "--agnus-legacy", StringComparison.OrdinalIgnoreCase))
+            {
+                agnusBusArbitration = AgnusBusArbitrationMode.ForcedLegacy;
+            }
             else if (string.Equals(args[i], "--cpu-wait-slot-reference", StringComparison.OrdinalIgnoreCase))
             {
                 cpuWaitSlotReference = true;
@@ -3179,8 +3319,11 @@ internal readonly record struct BenchmarkOptions(
             deferredCpuBusBatch,
             deferredCpuChipWriteJournal,
             deferredCpuChipReadSegments,
+            deferredCpuChipInstructionFetchBatch,
+            deferredCpuChipInstructionFetchShadow,
             deferredCpuCustomPointerWrites,
             deferredCpuCustomCompositionWrites,
+            agnusBusArbitration,
             cpuWaitSlotReference,
             hardwareSpecialization,
             blitterAdvanceMode,

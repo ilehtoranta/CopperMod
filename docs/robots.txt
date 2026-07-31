@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://ilehtoranta.github.io/CopperMod/sitemap.xml

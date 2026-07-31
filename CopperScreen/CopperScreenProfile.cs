@@ -503,9 +503,11 @@ internal sealed class CopperScreenProfile
 		}
 
 		var version = value.Trim();
-		return version.StartsWith("2", StringComparison.Ordinal)
-			? KickstartVersion.Kickstart20
-			: KickstartVersion.Kickstart13;
+		return version.StartsWith("3", StringComparison.Ordinal)
+			? KickstartVersion.Kickstart31
+			: version.StartsWith("2", StringComparison.Ordinal)
+				? KickstartVersion.Kickstart20
+				: KickstartVersion.Kickstart13;
 	}
 
 	private static DmaChipModel ParseDmaChipModel(string? value)

@@ -40,6 +40,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveFirstDisplayDmaCycle = -1;
             _liveLastDisplayDmaCycle = -1;
             _liveCopper = new CopperPresentationState(_copperListPointer, 0);
+            ResetLiveCopperRequester(resetDiagnostics: true);
             _displayTimeline.Reset(0);
             _liveWakeVersion++;
             InvalidateLiveDisplayEventCycle();
@@ -57,7 +58,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if (!_liveDmaEnabled || !HasLiveDisplayWork())
             {
                 AdvanceIdleLiveDmaTo(targetCycle);
-                RenderBoundPresentationLinesIfReady(_liveCapturedThroughCycle);
+                if (!_presentationIndependentDisplayLedgerEnabled)
+                {
+                    RenderBoundPresentationLinesIfReady(_liveCapturedThroughCycle);
+                }
                 return;
             }
 
@@ -98,7 +102,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void EndLiveDmaCapture(bool savedAdvancingLiveDma)
         {
             _advancingLiveDma = savedAdvancingLiveDma;
-            if (!savedAdvancingLiveDma)
+            if (!savedAdvancingLiveDma &&
+                !_presentationIndependentDisplayLedgerEnabled)
             {
                 RenderBoundPresentationLinesIfReady(_liveCapturedThroughCycle);
             }
@@ -274,6 +279,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveFirstDisplayDmaCycle = -1;
             _liveLastDisplayDmaCycle = -1;
             _liveCopper = CreateLiveCopperFrameStartState(frameStartCycle);
+            ResetLiveCopperRequester(resetDiagnostics: false);
 
             ResetLiveDisplayWindowStateTracking();
             InvalidateLiveDisplayEventCycle();
@@ -301,6 +307,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
+            _committedDisplayLedger?.Append(
+                AgnusCommittedDisplayEvent.RegisterWrite(
+                    cycle,
+                    offset,
+                    value,
+                    isCopper));
             var replayCycle = Math.Max(cycle, _liveFrameStartCycle);
             if (replayCycle > _liveFrameStartCycle && IsTimelineUnsafeFrameWrite(offset, isCopper))
             {
@@ -346,6 +358,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveCapturedThroughCycle = frameStartCycle;
             _liveCausalDisplayStateThroughCycle = frameStartCycle;
             _liveFinalizedPresentationThroughCycle = frameStartCycle - 1;
+            _committedDisplayLedger?.Reset(
+                frameStartCycle,
+                GetFrameStopCycle(frameStartCycle));
+            _committedDisplayPresentationCursor = 0;
+            _presentationCallsDuringLiveCapture = 0;
             var savedAdvancingLiveDma = _advancingLiveDma;
             _advancingLiveDma = false;
             try
