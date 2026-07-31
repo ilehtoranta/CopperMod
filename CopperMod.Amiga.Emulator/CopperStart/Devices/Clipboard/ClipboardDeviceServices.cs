@@ -183,6 +183,11 @@ internal sealed class ClipboardDeviceServices : IDisposable
 
     public void Dispose()
     {
+        // A hook may have yielded to guest code when the machine is reset.
+        // The continuation will be discarded with the reset, so reclaim its
+        // temporary message here rather than retaining it in Exec memory.
+        if (_activeHookMessage != 0)
+            _memory.Free(_activeHookMessage, 12);
         RemoveFromDeviceList();
         for (var index = _gateways.Count - 1; index >= 0; index--)
             _bus.RemoveHostGateway(_gateways[index].Address, _gateways[index].Token);
@@ -317,7 +322,7 @@ internal sealed class ClipboardDeviceServices : IDisposable
         unit.Committed = Array.Empty<byte>(); unit.Pending = Array.Empty<byte>(); unit.HasPendingWrite = false;
         unit.PostPort = 0; unit.PostId = 0; unit.SatisfySent = false;
         AdvanceClipIds(unit);
-        QueuePrimaryTextForHost(unit); QueueChangeHooks(unit, CmdUpdate);
+        QueuePrimaryClearForHost(unit); QueueChangeHooks(unit, CmdUpdate);
         CompletePendingReads(unit, state.Cycles);
         return 0;
     }
@@ -500,6 +505,15 @@ internal sealed class ClipboardDeviceServices : IDisposable
         _primaryTextForHost = null; _primaryImageForHost = null;
         if (ClipboardIffImage.TryDecode(unit.Committed, out var image)) _primaryImageForHost = image;
         else if (ClipboardIffText.TryDecode(unit.Committed, out var text)) _primaryTextForHost = text;
+    }
+    private void QueuePrimaryClearForHost(ClipboardUnit unit)
+    {
+        if (!_units.TryGetValue(0, out var primary) || !ReferenceEquals(primary, unit)) return;
+        // An explicit guest CMD_CLEAR is different from an unsupported opaque
+        // stream: it must replace the host clipboard as well.  An empty text
+        // payload is the bridge's portable representation of that operation.
+        _primaryImageForHost = null;
+        _primaryTextForHost = string.Empty;
     }
     private void Complete(uint request, byte error, long cycle, bool reply)
     {
