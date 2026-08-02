@@ -225,6 +225,7 @@ namespace CopperMod.Sid
         public RenderResult RenderTick(Span<float> destination, AudioRenderOptions? options = null)
         {
             options ??= AudioRenderOptions.Default;
+            _machine.Sid.ConfigureOutput(options.SampleRate);
             var sampleClock = GetSampleClock(options);
             var tickCycles = GetCurrentTickCycleCount();
             var frames = sampleClock.PeekFrameCount(_machine.Cycle, tickCycles);

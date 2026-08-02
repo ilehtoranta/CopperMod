@@ -32,6 +32,8 @@ namespace CopperMod.Sid
         private int _captureSampleRate;
         private int _mutedVoicesMask;
         private SidCycleTrace? _trace;
+        private const int DefaultOutputSampleRate = 44100;
+        private readonly SidWindowedSincResampler _resampler;
 
         public SidSystem(
             IReadOnlyList<SidChipPlacement> placements,
@@ -57,6 +59,7 @@ namespace CopperMod.Sid
             }
 
             _channelCount = Chips.Length * 3;
+            _resampler = new SidWindowedSincResampler(cpuCyclesPerSecond, DefaultOutputSampleRate);
         }
 
         public SidChip[] Chips { get; }
@@ -94,6 +97,20 @@ namespace CopperMod.Sid
             }
         }
 
+        public void ConfigureOutput(int sampleRate)
+        {
+            _resampler.Configure(sampleRate);
+        }
+
+        /// <summary>
+        /// When true, RenderSample returns the raw full-rate average instead of the
+        /// band-limited resampler output. Analysis consumers (loop/duration detection,
+        /// D418 transition measurement) opt in so the anti-aliasing filter's group delay
+        /// and smoothing do not reshape the signal envelope they inspect. Real audio
+        /// playback leaves this false.
+        /// </summary>
+        public bool UseUnfilteredOutput { get; set; }
+
         public void Reset()
         {
             _lastCycle = 0;
@@ -101,6 +118,7 @@ namespace CopperMod.Sid
             _registerBusLastCycle = 0;
             _sampleAccumulator = 0;
             _sampleCycles = 0;
+            _resampler.Reset();
             _pendingWriteIndex = 0;
             _registerPendingWriteIndex = 0;
             _registerBusPendingWriteIndex = 0;
@@ -137,6 +155,7 @@ namespace CopperMod.Sid
             }
 
             DiscardAccumulatedOutput();
+            _resampler.Reset();
             CompactPendingWrites();
         }
 
@@ -255,7 +274,11 @@ namespace CopperMod.Sid
                 AccumulateOneCycle(_lastCycle + 1);
             }
 
-            var sample = _sampleAccumulator / _sampleCycles;
+            // Real audio output is band-limited by the windowed-sinc resampler. Analysis
+            // consumers opt into the raw full-rate average (see UseUnfilteredOutput), since
+            // they inspect the signal envelope and must not be reshaped or delayed by the
+            // anti-aliasing filter.
+            var sample = UseUnfilteredOutput ? _sampleAccumulator / _sampleCycles : _resampler.Read();
             CaptureChannelSample();
             DiscardAccumulatedOutput();
             return (float)Math.Clamp(sample, -1.0, 1.0);
@@ -430,28 +453,14 @@ namespace CopperMod.Sid
                 return;
             }
 
-            if (CanUseSingleChipBatchAccumulation())
-            {
-                _sampleAccumulator += Chips[0].RenderAndSumFast(_lastCycle + 1, cycles);
-                _sampleCycles += cycles;
-                _lastCycle += cycles;
-                return;
-            }
-
+            // Every synthesized cycle must be pushed into the windowed-sinc resampler's
+            // delay line, so the former single-chip batch-sum fast path cannot be used.
             for (var i = 0; i < cycles; i++)
             {
                 AccumulateOneCycle(_lastCycle + i + 1);
             }
 
             _lastCycle += cycles;
-        }
-
-        [HotPath]
-        private bool CanUseSingleChipBatchAccumulation()
-        {
-            return Chips.Length == 1 &&
-                _captureSamples == null &&
-                _trace == null;
         }
 
         [HotPath]
@@ -523,6 +532,11 @@ namespace CopperMod.Sid
             // declared chip is silent. Final headroom limiting happens at the sample boundary.
             _sampleAccumulator += sample;
             _sampleCycles++;
+
+            // Feed the full-rate mixed sample into the anti-aliasing resampler. The
+            // boxcar bookkeeping above is retained only for channel-capture averaging
+            // and the timing snapshot; the audio output is taken from the resampler.
+            _resampler.Push(sample);
         }
 
         [HotPath]

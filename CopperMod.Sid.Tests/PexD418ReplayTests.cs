@@ -103,6 +103,8 @@ public sealed class PexD418ReplayTests
 			SidFilterProfileId.Auto,
 			sidEmulationProfile);
 
+		// Measure the raw D418 transition envelope, not the band-limited audio output.
+		sid.UseUnfilteredOutput = true;
 		ApplyPexSidSetup(sid);
 		sid.RenderSample(CycleForSample(WarmupSampleIndex));
 
