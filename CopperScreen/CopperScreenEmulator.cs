@@ -316,8 +316,17 @@ internal sealed class CopperScreenEmulator : IDisposable
 		string baseDirectory,
 		int stage)
 	{
-		return new CopperScreenEmulator(
+		return CreateForAgnusLiveRequesterStageTests(
 			CopperScreenStartupOptions.Parse(args, baseDirectory),
+			stage);
+	}
+
+	internal static CopperScreenEmulator CreateForAgnusLiveRequesterStageTests(
+		CopperScreenStartupOptions startupOptions,
+		int stage)
+	{
+		return new CopperScreenEmulator(
+			startupOptions,
 			agnusLiveRequesterStageForTesting: stage);
 	}
 
@@ -403,11 +412,6 @@ internal sealed class CopperScreenEmulator : IDisposable
 		}
 
 		machineOptions.WithAgnusBusArbitration(startupOptions.AgnusBusArbitration);
-		if (startupOptions.AgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel)
-		{
-			startupError ??=
-				"Agnus slot-kernel production routing is not connected. Gate G6 is STOP; use --agnus-legacy.";
-		}
 
 		if (startupOptions.HardwareSpecialization)
 		{

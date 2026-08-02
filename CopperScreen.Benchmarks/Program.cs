@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using CopperMod.Amiga;
 using CopperMod.Amiga.CustomChips.Blitter;
+using CopperMod.Amiga.CustomChips.Cia;
 using CopperScreen;
 
 const int SampleRate = 44_100;
@@ -99,7 +100,7 @@ if (options.DiskDivergenceTrace)
     return;
 }
 
-Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus={options.AgnusBusArbitration}, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, BlitterAdvance={options.BlitterAdvanceMode.ToString().ToLowerInvariant()}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuChipWriteJournal={options.DeferredCpuChipWriteJournal}, DeferredCpuChipReadSegments={options.DeferredCpuChipReadSegments}, DeferredCpuChipInstructionFetchBatch={options.DeferredCpuChipInstructionFetchBatch}, DeferredCpuChipInstructionFetchShadow={options.DeferredCpuChipInstructionFetchShadow}, DeferredCpuCustomPointerWrites={options.DeferredCpuCustomPointerWrites}, DeferredCpuCustomCompositionWrites={options.DeferredCpuCustomCompositionWrites}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
+Console.WriteLine($"Warmup={options.WarmupFrames} frames, measured={options.MeasuredFrames} frames, repeats={options.RepeatCount}, Release={IsRelease()}, Profile={options.Profile ?? "workload/default"}, Agnus={options.AgnusBusArbitration}, AgnusLiveRequesterStage={options.AgnusLiveRequesterStage}, CPU={options.CpuBackend ?? "profile"}, OpcodeDispatch={options.OpcodeDispatch?.ToString() ?? "default"}, JitFallbackAttribution={options.JitFallbackAttribution}, HardwareSpecialization={options.HardwareSpecialization}, BlitterAdvance={options.BlitterAdvanceMode.ToString().ToLowerInvariant()}, CopperQuiescenceFastPath={options.CopperQuiescenceFastPath}, CopperQuiescenceFastPathVerify={options.CopperQuiescenceFastPathVerify}, DeferredCpuBusBatch={options.DeferredCpuBusBatch}, DeferredCpuChipWriteJournal={options.DeferredCpuChipWriteJournal}, DeferredCpuChipReadSegments={options.DeferredCpuChipReadSegments}, DeferredCpuChipInstructionFetchBatch={options.DeferredCpuChipInstructionFetchBatch}, DeferredCpuChipInstructionFetchShadow={options.DeferredCpuChipInstructionFetchShadow}, DeferredCpuCustomPointerWrites={options.DeferredCpuCustomPointerWrites}, DeferredCpuCustomCompositionWrites={options.DeferredCpuCustomCompositionWrites}, CpuWaitSlotReference={options.CpuWaitSlotReference}, Kickstart={FormatKickstartOption(options)}");
 WriteBenchmarkHeader();
 
 foreach (var workload in workloads)
@@ -426,6 +427,11 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     }
 
     var benchmarkBus = GetMachine(emulator).Bus;
+    using var slotScheduleAudit = CreateSlotScheduleAuditWriter(options, workload);
+    if (Environment.GetEnvironmentVariable("COPPER_AGNUS_AUDIT_MACHINE_WARMUP") == "1")
+    {
+        slotScheduleAudit?.AttachMachineEvents(GetMachine(emulator));
+    }
     var chipFetchTimelineTrace =
         Environment.GetEnvironmentVariable("COPPER_CHIP_FETCH_TIMELINE_TRACE") == "1";
     var unsafeChipFetchPresentationTrace =
@@ -498,8 +504,7 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
         machine.Bus.SetHardwareSchedulerHostProfilingEnabled(true);
     }
 
-    using var slotScheduleAudit = CreateSlotScheduleAuditWriter(options, workload);
-    slotScheduleAudit?.Attach(GetMachine(emulator).Bus);
+    slotScheduleAudit?.Attach(GetMachine(emulator));
 
     GC.Collect();
     GC.WaitForPendingFinalizers();
@@ -680,6 +685,29 @@ static BenchmarkRunResult RunBenchmark(BenchmarkWorkload workload, BenchmarkOpti
     var diskSummary = CaptureDiskSummary(emulator);
     var specializationSummary = CaptureSpecializationSummary(emulator);
     var schedulerSummary = CaptureHardwareSchedulerSnapshot(emulator);
+    if (Environment.GetEnvironmentVariable("COPPER_AGNUS_G6_DIAGNOSTICS") == "1" &&
+        benchmarkBus.AgnusSlotKernelSelected)
+    {
+        var diagnostics = benchmarkBus.AgnusLiveSlotKernelDiagnostics;
+        Console.WriteLine(
+            $"agnus-slot-kernel-diagnostics\t" +
+            $"cpu={diagnostics.CpuGrantCalls}\t" +
+            $"words={diagnostics.CpuWordPhases}\t" +
+            $"iterations={diagnostics.SlotIterations}\t" +
+            $"empty={diagnostics.EmptySlotsInspected}\t" +
+                $"disk-range={diagnostics.DiskRangeAdvanceCalls}\t" +
+                $"disk-transitions={diagnostics.DiskTransitionCommits}\t" +
+                $"paula-range={diagnostics.PaulaRangeAdvanceCalls}\t" +
+                $"paula-transitions={diagnostics.PaulaTransitionCommits}\t" +
+            $"display-prepare-range={diagnostics.DisplayPreparationRangeCalls}\t" +
+            $"display-requester-range={diagnostics.DisplayRequesterRangeCalls}\t" +
+                $"display-transitions={diagnostics.DisplayTransitionCommits}\t" +
+                $"blitter-transitions={diagnostics.BlitterTransitionCommits}\t" +
+            $"display-range={diagnostics.DisplayRangeAdvanceCalls}\t" +
+            $"blitter-range={diagnostics.BlitterRangeAdvanceCalls}\t" +
+            $"range={diagnostics.RangeAdvanceCalls}\t" +
+            $"forbidden={diagnostics.ForbiddenCalls}");
+    }
     if (options.HardwareProfile)
     {
         GetMachine(emulator).Bus.SetHardwareSchedulerHostProfilingEnabled(false);
@@ -1191,9 +1219,9 @@ static CopperScreenEmulator? CreateEmulator(BenchmarkWorkload workload, Benchmar
         var args = CreateEmulatorArgs(fileName, options, workload.Profile);
         if (fileName == null)
         {
-            return args.Length == 0
+            return args.Length == 0 && options.AgnusLiveRequesterStage == 0
                 ? CopperScreenEmulator.CreateWithoutDisk()
-                : CopperScreenEmulator.Create(args, AppContext.BaseDirectory);
+                : CreateConfiguredBenchmarkEmulator(args, options);
         }
 
         var diskPath = TryFindWorkspaceFile("CopperScreen", "TestImages", fileName);
@@ -1202,7 +1230,9 @@ static CopperScreenEmulator? CreateEmulator(BenchmarkWorkload workload, Benchmar
             return null;
         }
 
-        return CopperScreenEmulator.Create(CreateEmulatorArgs(diskPath, options, workload.Profile), AppContext.BaseDirectory);
+        return CreateConfiguredBenchmarkEmulator(
+            CreateEmulatorArgs(diskPath, options, workload.Profile),
+            options);
     }
     finally
     {
@@ -1229,7 +1259,7 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
         1 + // Explicit Chip instruction-fetch shadow enable/rollback.
         1 + // Explicit Stage 5 pointer enable/rollback.
         1 + // Explicit Stage 5 composition enable/rollback.
-        1 + // Explicit Agnus slot-kernel enable/forced-legacy selection.
+        (options.AgnusBusArbitration == AgnusBusArbitrationMode.Legacy ? 0 : 1) +
         (options.CpuWaitSlotReference ? 1 : 0) +
         (options.HardwareSpecialization ? 1 : 0);
     if (count == 0)
@@ -1340,9 +1370,12 @@ static string[] CreateEmulatorArgs(string? diskPath, BenchmarkOptions options, s
 		args[index++] = "--no-cpu-deferred-custom-composition-writes";
 	}
 
-    args[index++] = options.AgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel
-        ? "--agnus-slot-kernel"
-        : "--agnus-legacy";
+    if (options.AgnusBusArbitration != AgnusBusArbitrationMode.Legacy)
+    {
+        args[index++] = options.AgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel
+            ? "--agnus-slot-kernel"
+            : "--agnus-legacy";
+    }
 
     if (options.CpuWaitSlotReference)
     {
@@ -1839,6 +1872,16 @@ static StreamWriter? CreateAudioAuditWriter(BenchmarkOptions options, BenchmarkW
         "status"));
     return writer;
 }
+
+static CopperScreenEmulator CreateConfiguredBenchmarkEmulator(
+    string[] args,
+    BenchmarkOptions options)
+    => options.AgnusLiveRequesterStage == 0
+        ? CopperScreenEmulator.Create(args, AppContext.BaseDirectory)
+        : CopperScreenEmulator.CreateForAgnusLiveRequesterStageTests(
+            args,
+            AppContext.BaseDirectory,
+            options.AgnusLiveRequesterStage);
 
 static void ValidateExpectedChecksums(BenchmarkRunResult result, BenchmarkOptions options)
 {
@@ -2886,6 +2929,7 @@ internal readonly record struct BenchmarkOptions(
     bool DeferredCpuCustomPointerWrites,
     bool DeferredCpuCustomCompositionWrites,
     AgnusBusArbitrationMode AgnusBusArbitration,
+    int AgnusLiveRequesterStage,
     bool CpuWaitSlotReference,
     bool HardwareSpecialization,
     BlitterAdvanceMode BlitterAdvanceMode,
@@ -2943,6 +2987,7 @@ internal readonly record struct BenchmarkOptions(
         var deferredCpuCustomPointerWrites = false;
         var deferredCpuCustomCompositionWrites = false;
         var agnusBusArbitration = AgnusBusArbitrationMode.ForcedLegacy;
+        var agnusLiveRequesterStage = 0;
         var cpuWaitSlotReference = false;
         var hardwareSpecialization = false;
         var blitterAdvanceMode = BlitterAdvanceMode.Reference;
@@ -3233,6 +3278,16 @@ internal readonly record struct BenchmarkOptions(
             {
                 agnusBusArbitration = AgnusBusArbitrationMode.ForcedLegacy;
             }
+            else if (string.Equals(args[i], "--agnus-live-requester-stage", StringComparison.OrdinalIgnoreCase) &&
+                i + 1 < args.Length)
+            {
+                if (!int.TryParse(args[++i], out agnusLiveRequesterStage) ||
+                    agnusLiveRequesterStage is < 0 or > 5)
+                {
+                    throw new ArgumentException(
+                        "--agnus-live-requester-stage must be an integer from 0 through 5.");
+                }
+            }
             else if (string.Equals(args[i], "--cpu-wait-slot-reference", StringComparison.OrdinalIgnoreCase))
             {
                 cpuWaitSlotReference = true;
@@ -3280,6 +3335,13 @@ internal readonly record struct BenchmarkOptions(
             }
         }
 
+        if (agnusLiveRequesterStage != 0 &&
+            agnusBusArbitration == AgnusBusArbitrationMode.SlotKernel)
+        {
+            throw new ArgumentException(
+                "--agnus-live-requester-stage cannot be combined with --agnus-slot-kernel.");
+        }
+
         return new BenchmarkOptions(
             smoke,
             Math.Max(0, warmup),
@@ -3324,6 +3386,7 @@ internal readonly record struct BenchmarkOptions(
             deferredCpuCustomPointerWrites,
             deferredCpuCustomCompositionWrites,
             agnusBusArbitration,
+            agnusLiveRequesterStage,
             cpuWaitSlotReference,
             hardwareSpecialization,
             blitterAdvanceMode,
@@ -3718,12 +3781,22 @@ internal sealed class OpcodeDispatchBenchmarkBus : IM68kBus, IM68kInstructionFet
 internal sealed class SlotScheduleAuditWriter : IDisposable
 {
     private readonly StreamWriter _writer;
+    private readonly string _customReadPath;
+    private readonly string _instructionPath;
+    private readonly string _interruptPath;
+    private readonly string _ciaInterruptPath;
+    private readonly string _ciaRegisterPath;
     private readonly int _limit;
+    private readonly bool _instructionOnly;
+    private Machine? _machine;
     private AmigaBus? _bus;
+    private StreamWriter? _instructionWriter;
+    private StreamWriter? _ciaRegisterWriter;
     private int _absoluteFrame;
     private int _measuredFrame;
     private int _rowsWritten;
     private bool _limitReached;
+    private bool _customReadsWritten;
     private bool _disposed;
 
     public SlotScheduleAuditWriter(string path, string workloadName, int limit)
@@ -3737,6 +3810,15 @@ internal sealed class SlotScheduleAuditWriter : IDisposable
 
         var writeHeader = !File.Exists(fullPath) || new FileInfo(fullPath).Length == 0;
         _writer = new StreamWriter(fullPath, append: true);
+        _customReadPath = fullPath + ".custom-reads.tsv";
+        _instructionPath = fullPath + ".instructions.tsv";
+        _interruptPath = fullPath + ".interrupts.tsv";
+        _ciaInterruptPath = fullPath + ".cia-interrupts.tsv";
+        _ciaRegisterPath = fullPath + ".cia-registers.tsv";
+        _instructionOnly = string.Equals(
+            Environment.GetEnvironmentVariable("COPPER_AGNUS_INSTRUCTION_AUDIT_ONLY"),
+            "1",
+            StringComparison.OrdinalIgnoreCase);
         _limit = Math.Max(1, limit);
         _writer.WriteLine("# workload\t" + Sanitize(workloadName));
         _writer.WriteLine("# created\t" + DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture));
@@ -3775,17 +3857,157 @@ internal sealed class SlotScheduleAuditWriter : IDisposable
         }
     }
 
-    public void Attach(AmigaBus bus)
+    public void Attach(Machine machine)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        _bus = bus ?? throw new ArgumentNullException(nameof(bus));
-        _bus.SetSlotScheduleAuditSink(Record);
+        AttachMachineEvents(machine);
+        _bus = machine.Bus;
+        _bus.CaptureCustomRegisterReadTrace(0, 0x200, _limit);
+        _instructionWriter = new StreamWriter(_instructionPath, append: false);
+        _instructionWriter.WriteLine("pc\topcode\tstart_cycle\tretire_cycle");
+        _bus.SetCpuInstructionRetirementObserver(RecordInstruction);
+        if (!_instructionOnly)
+        {
+            _bus.SetSlotScheduleAuditSink(Record);
+        }
+    }
+
+    public void AttachMachineEvents(Machine machine)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(machine);
+        if (_machine != null)
+        {
+            if (!ReferenceEquals(_machine, machine))
+            {
+                throw new InvalidOperationException("The audit writer is already attached to another machine.");
+            }
+
+            return;
+        }
+
+        _machine = machine;
+        machine.CaptureInterruptDispatchTrace(_limit);
+        _ciaRegisterWriter = new StreamWriter(_ciaRegisterPath, append: false);
+        _ciaRegisterWriter.WriteLine("cia\tregister\tvalue\tcycle");
+        machine.Bus.CiaA.RegisterWriteObserver = RecordCiaRegisterWrite;
+        machine.Bus.CiaB.RegisterWriteObserver = RecordCiaRegisterWrite;
     }
 
     public void Detach()
     {
-        _bus?.SetSlotScheduleAuditSink(null);
+        if (_machine != null)
+        {
+            _machine.Bus.CiaA.RegisterWriteObserver = null;
+            _machine.Bus.CiaB.RegisterWriteObserver = null;
+            WriteInterrupts(_machine.InterruptDispatchTrace);
+            WriteCiaInterrupts(_machine.CiaInterruptDispatchTrace);
+        }
+
+        if (_bus != null)
+        {
+            _bus.SetSlotScheduleAuditSink(null);
+            _bus.SetCpuInstructionRetirementObserver(null);
+            WriteCustomReads(_bus.CustomRegisterReadTrace);
+            _bus.CaptureCustomRegisterReadTrace(0, 0, 1);
+        }
+
+        _instructionWriter?.Dispose();
+        _instructionWriter = null;
+        _ciaRegisterWriter?.Dispose();
+        _ciaRegisterWriter = null;
+        _machine = null;
         _bus = null;
+    }
+
+    private void RecordCiaRegisterWrite(CiaRegisterWriteTrace write)
+    {
+        _ciaRegisterWriter?.WriteLine(string.Join(
+            '\t',
+            write.Cia.ToString(),
+            "0x" + write.Register.ToString("X2", CultureInfo.InvariantCulture),
+            "0x" + write.Value.ToString("X2", CultureInfo.InvariantCulture),
+            write.Cycle.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    private void WriteInterrupts(IReadOnlyList<InterruptDispatchTrace> interrupts)
+    {
+        using var writer = new StreamWriter(_interruptPath, append: false);
+        writer.WriteLine(
+            "level\tactive_bits\tcpu_visible_cycle\tcpu_sample_cycle\tacceptance_cycle\t" +
+            "entry_completed_cycle\tinterrupted_pc\thandler_pc\tsaved_sr\td3");
+        foreach (var interrupt in interrupts)
+        {
+            writer.WriteLine(string.Join(
+                '\t',
+                interrupt.Level.ToString(CultureInfo.InvariantCulture),
+                "0x" + interrupt.ActiveInterruptBits.ToString("X4", CultureInfo.InvariantCulture),
+                interrupt.CpuVisibleCycle.ToString(CultureInfo.InvariantCulture),
+                interrupt.CpuSampleCycle.ToString(CultureInfo.InvariantCulture),
+                interrupt.AcceptanceCycle.ToString(CultureInfo.InvariantCulture),
+                interrupt.EntryCompletedCycle.ToString(CultureInfo.InvariantCulture),
+                "0x" + interrupt.InterruptedProgramCounter.ToString("X8", CultureInfo.InvariantCulture),
+                "0x" + interrupt.HandlerProgramCounter.ToString("X8", CultureInfo.InvariantCulture),
+                "0x" + interrupt.SavedStatusRegister.ToString("X4", CultureInfo.InvariantCulture),
+                "0x" + interrupt.DataRegister3.ToString("X8", CultureInfo.InvariantCulture)));
+        }
+    }
+
+    private void WriteCiaInterrupts(IReadOnlyList<CiaInterruptDispatchTrace> interrupts)
+    {
+        using var writer = new StreamWriter(_ciaInterruptPath, append: false);
+        writer.WriteLine(
+            "cia\tevent_bits\tpending_bits\tmask_bits\ttimer_b_latch\ttimer_b_control\t" +
+            "event_cycle\tdispatch_cycle\tforwarded");
+        foreach (var interrupt in interrupts)
+        {
+            writer.WriteLine(string.Join(
+                '\t',
+                interrupt.Cia.ToString(),
+                "0x" + interrupt.EventBits.ToString("X2", CultureInfo.InvariantCulture),
+                "0x" + interrupt.PendingBits.ToString("X2", CultureInfo.InvariantCulture),
+                "0x" + interrupt.MaskBits.ToString("X2", CultureInfo.InvariantCulture),
+                "0x" + interrupt.TimerBLatch.ToString("X4", CultureInfo.InvariantCulture),
+                "0x" + interrupt.TimerBControl.ToString("X2", CultureInfo.InvariantCulture),
+                interrupt.EventCycle.ToString(CultureInfo.InvariantCulture),
+                interrupt.DispatchCycle.ToString(CultureInfo.InvariantCulture),
+                interrupt.ForwardedToPaula ? "1" : "0"));
+        }
+    }
+
+    private void RecordInstruction(M68kInstructionRetirementTrace trace)
+    {
+        _instructionWriter?.WriteLine(string.Join(
+            '\t',
+            "0x" + trace.ProgramCounter.ToString("X8", CultureInfo.InvariantCulture),
+            "0x" + trace.Opcode.ToString("X4", CultureInfo.InvariantCulture),
+            trace.StartCycle.ToString(CultureInfo.InvariantCulture),
+            trace.RetireCycle.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    private void WriteCustomReads(IReadOnlyList<CustomRegisterRead> reads)
+    {
+        if (_customReadsWritten)
+        {
+            return;
+        }
+
+        using var writer = new StreamWriter(_customReadPath, append: false);
+        writer.WriteLine("address\tvalue\trequested_cycle\tgranted_cycle\tcompleted_cycle\tsample_cycle\tkind");
+        foreach (var read in reads)
+        {
+            writer.WriteLine(string.Join(
+                '\t',
+                "0x" + read.Address.ToString("X3", CultureInfo.InvariantCulture),
+                "0x" + read.Value.ToString("X4", CultureInfo.InvariantCulture),
+                read.RequestedCycle.ToString(CultureInfo.InvariantCulture),
+                read.GrantedCycle.ToString(CultureInfo.InvariantCulture),
+                read.CompletedCycle.ToString(CultureInfo.InvariantCulture),
+                read.SampleCycle.ToString(CultureInfo.InvariantCulture),
+                read.Kind.ToString()));
+        }
+
+        _customReadsWritten = true;
     }
 
     public void SetFrame(int absoluteFrame, int measuredFrame)

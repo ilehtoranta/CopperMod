@@ -21,15 +21,16 @@ public sealed class CopperScreenStartupArgumentTests
 	}
 
 	[Fact]
-	public void AgnusSlotKernelOptInFailsClosedUntilProductionRoutingExists()
+	public void AgnusSlotKernelOptInReachesMachineStartupAfterG6Connection()
 	{
 		using var emulator = CopperScreenEmulator.Create(
 			["--profile", "expanded-copperstart", "--agnus-slot-kernel"],
 			AppContext.BaseDirectory);
 
-		Assert.Equal(
-			"Agnus slot-kernel production routing is not connected. Gate G6 is STOP; use --agnus-legacy.",
-			emulator.StatusText);
+		Assert.DoesNotContain(
+			"production routing is not connected",
+			emulator.StatusText,
+			StringComparison.Ordinal);
 	}
 
 	[Fact]
