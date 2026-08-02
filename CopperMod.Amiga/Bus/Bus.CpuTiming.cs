@@ -30,6 +30,9 @@ namespace CopperMod.Amiga.Bus
         internal void SetCpuWaitSlotContendedCleanThroughForTest(long cycle)
             => _hardwareScheduler.SetCpuWaitSlotContendedCleanThroughForTest(cycle);
 
+        internal void SetCpuWaitPreviouslyDrainedThroughForTest(long cycle)
+            => _hardwareScheduler.SetCpuWaitPreviouslyDrainedThroughForTest(cycle);
+
         void IM68kDeferredCpuInstructionTiming.BeginDeferredCpuInstructionTiming(long cycle)
         {
             if (_deferredCpuBusBatchActive)
@@ -1518,6 +1521,7 @@ namespace CopperMod.Amiga.Bus
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void FlushDeferredCpuDataTimingForAccess(
             AmigaBusAccessTarget target,
+            AmigaBusAccessSize size,
             AmigaBusAccessKind kind,
             bool isWrite,
             ref long cycle)
@@ -1525,6 +1529,22 @@ namespace CopperMod.Amiga.Bus
             FlushDeferredCpuDataTiming(
                 ref cycle,
                 CanKeepDeferredCpuBusBatchForAccess(target, kind, isWrite, cycle));
+            if (size != AmigaBusAccessSize.Long &&
+                target is (AmigaBusAccessTarget.ChipRam or
+                    AmigaBusAccessTarget.ExpansionRam or
+                    AmigaBusAccessTarget.RealTimeClock or
+                    AmigaBusAccessTarget.CustomRegisters) &&
+                (AgnusSlotKernelSelected ||
+                 (_agnusBusExecutor.ProductionEnabled &&
+                  AgnusLiveBlitterEnabled)))
+            {
+                // The live CPU boundary publishes the original request before
+                // advancing an already-due requester. Rebasing to the current
+                // DMA horizon here would erase same-cycle CPU priority and
+                // shift the three-cycle nice-blitter quota.
+                return;
+            }
+
             AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
         }
 
@@ -2470,6 +2490,36 @@ namespace CopperMod.Amiga.Bus
             completedCycle = 0;
             chronologicalGrantCommitted = false;
 
+            if (TryGrantCpuAccessThroughLiveSlotKernel(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out secondWordCycle,
+                    out completedCycle))
+            {
+                chronologicalGrantCommitted = true;
+                if (grantedCycle > requestedCycle)
+                {
+                    Agnus.RecordCpuChipWaitCycles(grantedCycle - requestedCycle);
+                }
+
+                CaptureExactCpuAccess(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    isWrite,
+                    grantedCycle,
+                    completedCycle);
+
+                return true;
+            }
+
 			if ((!_exactCpuChipSlotFastPathEnabled && !_agnusBusExecutor.ProductionEnabled) ||
                 !ShouldUseChipSlotScheduler(target))
             {
@@ -2480,16 +2530,24 @@ namespace CopperMod.Amiga.Bus
             var slotContendedClean = _hardwareScheduler.IsSlotContendedCleanThrough(grantRequestCycle);
             var cpuGrantCommitted = false;
             var deferredPreparationUsed = false;
-            if (!slotContendedClean &&
-                _agnusBusExecutor.ProductionEnabled &&
+            var retroactiveLiveBlitterRequest =
+                AgnusLiveBlitterEnabled &&
+                grantRequestCycle < _agnusBusExecutor.ExecutedThroughCycle;
+            if (_agnusBusExecutor.ProductionEnabled &&
                 size != AmigaBusAccessSize.Long &&
-                (target == AmigaBusAccessTarget.CustomRegisters ||
-                    Blitter.BusPipelineActive))
+                ((!slotContendedClean &&
+                  (target == AmigaBusAccessTarget.CustomRegisters ||
+                   Blitter.BusPipelineActive)) ||
+                 retroactiveLiveBlitterRequest))
             {
                 // A pending CPU request must be visible before any DMA at its
                 // request cycle commits. The generic preparation path below
                 // drains through that cycle first, which adds a fourth
                 // blitter denial to every nice-mode CPU word.
+                // A timestamp behind the live executor horizon is also never
+                // clean for a new CPU claim: its physical slot already has an
+                // owner even when the cached clean-through marker covers the
+                // older request cycle.
                 var advanceResult = _hardwareScheduler.AdvanceUntilCpuGrant(
                     kind,
                     target,
@@ -2649,7 +2707,9 @@ namespace CopperMod.Amiga.Bus
                 }
             }
 
-            if (!cpuGrantCommitted && Blitter.BusPipelineActive)
+            if (!cpuGrantCommitted &&
+                Blitter.BusPipelineActive &&
+                !AgnusLiveBlitterEnabled)
             {
                 grantRequestCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(grantRequestCycle);
                 AdvanceCpuAccessToCausalBusHorizon(target, ref grantRequestCycle);
@@ -2720,23 +2780,47 @@ namespace CopperMod.Amiga.Bus
 
             chronologicalGrantCommitted = cpuGrantCommitted;
 
-            if (_captureBusAccesses)
-            {
-                var request = new AmigaBusAccessRequest(
-                    AmigaBusRequester.Cpu,
-                    kind,
-                    target,
-                    address,
-                    size,
-                    requestedCycle,
-                    isWrite);
-                var access = new AmigaBusAccessResult(request, grantedCycle, completedCycle);
-                _busAccesses.Add(access);
-                Agnus.RecordCpuChipAccess(access);
-                _ = RememberCpuBusAccess(access);
-            }
+            CaptureExactCpuAccess(
+                kind,
+                target,
+                address,
+                size,
+                requestedCycle,
+                isWrite,
+                grantedCycle,
+                completedCycle);
 
             return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CaptureExactCpuAccess(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            long grantedCycle,
+            long completedCycle)
+        {
+            if (!_captureBusAccesses)
+            {
+                return;
+            }
+
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Cpu,
+                kind,
+                target,
+                address,
+                size,
+                requestedCycle,
+                isWrite);
+            var access = new AmigaBusAccessResult(request, grantedCycle, completedCycle);
+            _busAccesses.Add(access);
+            Agnus.RecordCpuChipAccess(access);
+            _ = RememberCpuBusAccess(access);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -3075,7 +3159,11 @@ namespace CopperMod.Amiga.Bus
                 requestedCycle,
                 slotCycle,
                 isWrite,
-                allowNiceBlitterSteal: true,
+                // A live nice blitter sees the published CPU request before
+                // committing its candidate. If it already committed this
+                // physical slot, the CPU wait quota only affects the next
+                // candidate; replacing the current slot double-books it.
+                allowNiceBlitterSteal: !AgnusLiveBlitterEnabled,
                 out completedCycle);
 
         internal void CaptureCpuWaitFixedImageDisplayDma(long grantCycle)
@@ -3538,30 +3626,55 @@ namespace CopperMod.Amiga.Bus
             out long secondWordCycle,
             out long completedCycle)
         {
-            _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
-                kind,
-                target,
-                address,
-                requestedCycle,
-                requestedCycle,
-                isWrite: false,
-                out grantedCycle,
-                out var firstCompletedCycle);
+            if (!TryGrantCpuDataLongWordPhaseChronologically(
+                    kind,
+                    target,
+                    address,
+                    requestedCycle,
+                    requestedCycle,
+                    isWrite: false,
+                    out grantedCycle,
+                    out var firstCompletedCycle))
+            {
+                _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
+                    kind,
+                    target,
+                    address,
+                    requestedCycle,
+                    requestedCycle,
+                    isWrite: false,
+                    out grantedCycle,
+                    out firstCompletedCycle);
+            }
+
+            var secondPhaseSearchCycle =
+                firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles;
             PrepareLiveDisplayBeforeCpuLongReadPhaseUntilStable(
                 target,
                 address,
                 kind,
                 requestedCycle,
-                firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles);
-            _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
-                kind,
-                target,
-                address,
-                firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles,
-                requestedCycle,
-                isWrite: false,
-                out secondWordCycle,
-                out completedCycle);
+                secondPhaseSearchCycle);
+            if (!TryGrantCpuDataLongWordPhaseChronologically(
+                    kind,
+                    target,
+                    address,
+                    secondPhaseSearchCycle,
+                    requestedCycle,
+                    isWrite: false,
+                    out secondWordCycle,
+                    out completedCycle))
+            {
+                _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
+                    kind,
+                    target,
+                    address,
+                    secondPhaseSearchCycle,
+                    requestedCycle,
+                    isWrite: false,
+                    out secondWordCycle,
+                    out completedCycle);
+            }
         }
 
         private void GrantCpuDataLongWriteSlots(
@@ -3579,30 +3692,89 @@ namespace CopperMod.Amiga.Bus
                 kind,
                 requestedCycle,
                 requestedCycle);
-            _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
-                kind,
-                target,
-                address,
-                requestedCycle,
-                requestedCycle,
-                isWrite: true,
-                out grantedCycle,
-                out var firstCompletedCycle);
+            if (!TryGrantCpuDataLongWordPhaseChronologically(
+                    kind,
+                    target,
+                    address,
+                    requestedCycle,
+                    requestedCycle,
+                    isWrite: true,
+                    out grantedCycle,
+                    out var firstCompletedCycle))
+            {
+                _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
+                    kind,
+                    target,
+                    address,
+                    requestedCycle,
+                    requestedCycle,
+                    isWrite: true,
+                    out grantedCycle,
+                    out firstCompletedCycle);
+            }
+
+            var secondPhaseSearchCycle =
+                firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles;
             PrepareLiveDisplayBeforeCpuLongWritePhaseUntilStable(
                 target,
                 address,
                 kind,
                 requestedCycle,
-                firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles);
-            _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
-                kind,
-                target,
-                address,
-                firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles,
-                requestedCycle,
-                isWrite: true,
-                out secondWordCycle,
-                out completedCycle);
+                secondPhaseSearchCycle);
+            if (!TryGrantCpuDataLongWordPhaseChronologically(
+                    kind,
+                    target,
+                    address,
+                    secondPhaseSearchCycle,
+                    requestedCycle,
+                    isWrite: true,
+                    out secondWordCycle,
+                    out completedCycle))
+            {
+                _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
+                    kind,
+                    target,
+                    address,
+                    secondPhaseSearchCycle,
+                    requestedCycle,
+                    isWrite: true,
+                    out secondWordCycle,
+                    out completedCycle);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryGrantCpuDataLongWordPhaseChronologically(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            long searchCycle,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle,
+            out long completedCycle)
+        {
+            grantedCycle = 0;
+            completedCycle = 0;
+            if (!_agnusBusExecutor.ProductionEnabled ||
+                !HasNonDisplayDynamicCpuWaitSlotWorkThrough(searchCycle + LineCycles))
+            {
+                return false;
+            }
+
+            // A longword is two independent 68000 word bus cycles. Publish
+            // each phase before executing dynamic DMA through its candidate;
+            // otherwise a later requester can retrospectively overwrite a CPU
+            // slot that has already been returned to the core.
+            return _hardwareScheduler.AdvanceUntilCpuLongWordPhaseGrant(
+                    kind,
+                    target,
+                    address,
+                    searchCycle,
+                    requestedCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out completedCycle) == CpuWaitGrantAdvanceResult.Granted;
         }
 
 
@@ -3860,6 +4032,25 @@ namespace CopperMod.Amiga.Bus
             out long secondWordCycle,
             out long completedCycle)
         {
+            if (TryGrantCpuAccessThroughLiveSlotKernel(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    isWrite,
+                    out grantedCycle,
+                    out secondWordCycle,
+                    out completedCycle))
+            {
+                if (grantedCycle > requestedCycle)
+                {
+                    Agnus.RecordCpuChipWaitCycles(grantedCycle - requestedCycle);
+                }
+
+                return;
+            }
+
             var originalRequestedCycle = requestedCycle;
             if (target == AmigaBusAccessTarget.ChipRam ||
                 target == AmigaBusAccessTarget.ExpansionRam ||
@@ -3867,7 +4058,7 @@ namespace CopperMod.Amiga.Bus
                 target == AmigaBusAccessTarget.CustomRegisters)
             {
                 _hardwareScheduler.DrainForCpuAccess(target, address, requestedCycle, isWrite, size);
-                if (Blitter.BusPipelineActive)
+                if (Blitter.BusPipelineActive && !AgnusLiveBlitterEnabled)
                 {
                     requestedCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(requestedCycle);
                 }
@@ -3903,15 +4094,40 @@ namespace CopperMod.Amiga.Bus
 
             if (size == AmigaBusAccessSize.Long)
             {
-                _agnusBusExecutor.GrantCpuDataLongSlots(
-                    kind,
-                    target,
-                    address,
-                    requestedCycle,
-                    isWrite,
-                    out grantedCycle,
-                    out secondWordCycle,
-                    out completedCycle);
+                if (!isWrite)
+                {
+                    GrantCpuDataLongReadSlots(
+                        kind,
+                        target,
+                        address,
+                        requestedCycle,
+                        out grantedCycle,
+                        out secondWordCycle,
+                        out completedCycle);
+                }
+                else if (target is AmigaBusAccessTarget.ChipRam or AmigaBusAccessTarget.ExpansionRam)
+                {
+                    GrantCpuDataLongWriteSlots(
+                        kind,
+                        target,
+                        address,
+                        requestedCycle,
+                        out grantedCycle,
+                        out secondWordCycle,
+                        out completedCycle);
+                }
+                else
+                {
+                    _agnusBusExecutor.GrantCpuDataLongSlots(
+                        kind,
+                        target,
+                        address,
+                        requestedCycle,
+                        isWrite,
+                        out grantedCycle,
+                        out secondWordCycle,
+                        out completedCycle);
+                }
             }
             else
             {

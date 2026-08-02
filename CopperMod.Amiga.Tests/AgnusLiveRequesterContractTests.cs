@@ -56,6 +56,35 @@ public sealed class AgnusLiveRequesterContractTests
     }
 
     [Fact]
+    public void DeferralPreservesIntentAndGenerationWhileMovingEligibilityForward()
+    {
+        var latch = new AgnusLiveRequestLatch(AgnusChipSlotOwner.Disk);
+        var published = latch.Publish(
+            AmigaBusAccessKind.DiskDma,
+            address: 0x2600,
+            requestedCycle: 20,
+            earliestEligibleCycle: 24,
+            AgnusLiveWordTransfer.Write,
+            writeValue: 0x4489);
+
+        var deferred = latch.Defer(published.Generation, 28);
+
+        Assert.Equal(published.Generation, deferred.Generation);
+        Assert.Equal(published.Owner, deferred.Owner);
+        Assert.Equal(published.Kind, deferred.Kind);
+        Assert.Equal(published.Address, deferred.Address);
+        Assert.Equal(published.RequestedCycle, deferred.RequestedCycle);
+        Assert.Equal(published.Transfer, deferred.Transfer);
+        Assert.Equal(published.WriteValue, deferred.WriteValue);
+        Assert.Equal(published.Channel, deferred.Channel);
+        Assert.Equal(28, deferred.EarliestEligibleCycle);
+        Assert.True(latch.TryPeek(out var pending));
+        Assert.Equal(deferred, pending);
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => latch.Defer(published.Generation, 28));
+    }
+
+    [Fact]
     public void DuplicatePublicationAndStaleGrantFailClosed()
     {
         var latch = new AgnusLiveRequestLatch(AgnusChipSlotOwner.Paula);

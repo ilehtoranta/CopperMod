@@ -1328,6 +1328,22 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void SkipLiveSpriteSlotsWithoutFetches()
         {
+            if (_bus.AgnusSlotKernelSelected &&
+                IsSpriteDmaEnabled() &&
+                _liveNextSpriteRow < LowResOutputHeight &&
+                GetSpriteDmaFetchCycle(
+                    _liveFrameStartCycle,
+                    _liveNextSpriteRow,
+                    _liveNextSpriteIndex,
+                    _liveNextSpriteWord) < _liveCycle)
+            {
+                // A requester can be dormant while the lightweight kernel
+                // advances causal display time. When it becomes visible again,
+                // fixed slots before that horizon are physically expired; keep
+                // an equal-cycle slot eligible and resume at the first later one.
+                AdvanceLiveSpriteFetchCursorToCycle(_liveCycle);
+            }
+
             while (_liveNextSpriteRow < LowResOutputHeight)
             {
                 if (!IsLiveLineValid(_liveNextSpriteRow))

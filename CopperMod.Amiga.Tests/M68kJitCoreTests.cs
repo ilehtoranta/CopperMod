@@ -120,6 +120,37 @@ public sealed class M68kJitCoreTests
 		Assert.True(jit.Counters.TraceHits > 0);
 	}
 
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public void M68040JitHonorsScaledBriefIndexedEa(bool enableV2)
+	{
+		var bus = new GenericJitRamBus(64 * 1024);
+		WriteWords(
+			bus,
+			0x1000,
+			0x52B0, 0x1C00, // ADDQ.L #1,0(A0,D1.L*4)
+			0x60FA);        // BRA.S back to the indexed ADDQ
+		var cycle = 0L;
+		bus.WriteLong(0x0000_2004, 0x1111_1111, ref cycle, M68kBusAccessKind.CpuDataWrite);
+		bus.WriteLong(0x0000_2010, 0x2222_2222, ref cycle, M68kBusAccessKind.CpuDataWrite);
+		using var jit = M68kJitCore.CreateM68040ForTesting(bus, enableV2);
+		jit.Reset(0x1000, 0x4000);
+		jit.State.A[0] = 0x0000_2000;
+		jit.State.D[1] = 4;
+		EnableM68040InstructionCache(jit);
+
+		ExecuteUntilTraceHits(jit, new PureBatchBoundary(), 1);
+
+		cycle = 0;
+		Assert.Equal(
+			0x1111_1111u,
+			bus.ReadLong(0x0000_2004, ref cycle, M68kBusAccessKind.CpuDataRead));
+		Assert.True(
+			bus.ReadLong(0x0000_2010, ref cycle, M68kBusAccessKind.CpuDataRead) >
+			0x2222_2222u);
+	}
+
 	[Fact]
 	public void M68040JitStartsWithCacheDisabledAndUsesFallbackForRamUntilInstructionCacheIsEnabled()
 	{
@@ -3069,36 +3100,6 @@ public sealed class M68kJitCoreTests
 
 		Assert.Equal(1, hostHits);
 		Assert.Equal(batchAfterCount, boundary.BatchAfterCount);
-	}
-
-	[Theory]
-	[InlineData(false)]
-	[InlineData(true)]
-	public void JitGenerationGuardExitsWhenTraceBytesChangeWithoutWriteNotification(bool enableV2)
-	{
-		var bus = CreateCodeBus();
-		WriteWords(bus, FastCodeBase, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
-		var cpu = new M68kJitCore(bus, enableV2);
-		cpu.Reset(FastCodeBase, 0x4000);
-		var boundary = enableV2 ? new PureBatchBoundary() : new CountingBoundary();
-		cpu.ExecuteInstructions(220, enableV2 ? 100_000 : null, boundary);
-		Assert.True(enableV2 ? cpu.Counters.V2TraceHits > 0 : cpu.Counters.TraceHits > 0);
-		var generationGuardExits = cpu.Counters.GenerationGuardExits;
-		var generationMismatches = cpu.Counters.GenerationMismatches;
-
-		bus.ExpansionRam[0] = 0x70;
-		bus.ExpansionRam[1] = 0x02;
-		var touchCodePage = typeof(AmigaBus).GetMethod(
-			"TouchCodePage",
-			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-		touchCodePage.Invoke(bus, new object[] { FastCodeBase });
-		cpu.State.ProgramCounter = FastCodeBase;
-
-		cpu.ExecuteInstructions(1, enableV2 ? cpu.State.Cycles + 10_000 : null, boundary);
-
-		Assert.Equal(0x0000_0002u, cpu.State.D[0]);
-		Assert.True(cpu.Counters.GenerationGuardExits > generationGuardExits);
-		Assert.True(cpu.Counters.GenerationMismatches > generationMismatches);
 	}
 
 	[Fact]

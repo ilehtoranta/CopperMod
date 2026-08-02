@@ -294,17 +294,73 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
-	public void DsklenZeroLengthCancelsPendingDma()
+	public void ZeroLengthSecondDsklenStrobeCompletesImmediatelyAndRequestsDskblk()
+	{
+		var bus = CreateBusWithTrack(0x1234);
+		var cycle = PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase, cycle);
+
+		bus.WriteWord(0x00DFF024, 0x4000, cycle);
+		bus.WriteWord(0x00DFF024, 0x80FF, cycle);
+		bus.WriteWord(0x00DFF024, 0x8000, cycle);
+
+		var snapshot = bus.Disk.CaptureSnapshot();
+		Assert.False(snapshot.ActiveDma);
+		Assert.Equal(1, snapshot.TransferCount);
+		Assert.Equal(0, snapshot.LastTransferWords);
+		Assert.Equal(DmaBase, snapshot.DiskPointer);
+		Assert.Equal(0x8000, snapshot.Dsklen);
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqDiskBlock);
+		Assert.Equal(0, ReadChipWord(bus, DmaBase));
+		var trace = bus.Disk.CaptureDmaTrace();
+		Assert.Collection(
+			trace,
+			started =>
+			{
+				Assert.Equal(AmigaDiskDmaTraceKind.Started, started.Kind);
+				Assert.Equal(0, started.RequestedWords);
+			},
+			completed =>
+			{
+				Assert.Equal(AmigaDiskDmaTraceKind.Completed, completed.Kind);
+				Assert.Equal(0, completed.TransferredWords);
+			});
+		Assert.Equal(trace[0].Cycle, trace[1].Cycle);
+		Assert.Equal(trace[0].Cycle, trace[1].CompletionCycle);
+	}
+
+	[Fact]
+	public void ZeroLengthDsklenRequiresTwoDmaenStrobes()
+	{
+		var bus = CreateBusWithTrack(0x1234);
+		var cycle = PrepareDiskDma(bus);
+
+		bus.WriteWord(0x00DFF024, 0x8000, cycle);
+
+		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqDiskBlock);
+
+		bus.WriteWord(0x00DFF024, 0x8000, cycle);
+
+		Assert.Equal(1, bus.Disk.CaptureSnapshot().TransferCount);
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqDiskBlock);
+	}
+
+	[Fact]
+	public void DmaenClearDsklenWriteCancelsPendingArm()
 	{
 		var bus = CreateBusWithTrack(0x1234);
 		var cycle = PrepareDiskDma(bus);
 		SetDiskPointer(bus, DmaBase, cycle);
 
 		bus.WriteWord(0x00DFF024, 0x8001, cycle);
-		bus.WriteWord(0x00DFF024, 0x8000, cycle);
+		bus.WriteWord(0x00DFF024, 0x0000, cycle);
 		bus.WriteWord(0x00DFF024, 0x8001, cycle);
 
-		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+		var snapshot = bus.Disk.CaptureSnapshot();
+		Assert.False(snapshot.ActiveDma);
+		Assert.Equal(0, snapshot.TransferCount);
+		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqDiskBlock);
 	}
 
 	[Theory]

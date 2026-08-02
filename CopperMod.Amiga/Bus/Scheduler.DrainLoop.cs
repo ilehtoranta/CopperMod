@@ -346,6 +346,18 @@ namespace CopperMod.Amiga.Bus
                     cursor = Math.Min(cursor, _earliestDirtyCycle);
                 }
 
+                if (_bus.CausalBusExecutor.ProductionEnabled)
+                {
+                    // Scheduler source-specific drain markers may be ahead of
+                    // the causal slot executor (for example after an interrupt
+                    // poll that had no slot work). They are not proof that the
+                    // intervening physical bus timeline was executed. Always
+                    // resume production scanning from the executor's horizon.
+                    cursor = Math.Min(
+                        cursor,
+                        _bus.CausalBusExecutor.ExecutedThroughCycle);
+                }
+
                 while (true)
                 {
                     if (_bus.CausalBusExecutor.ProductionEnabled &&

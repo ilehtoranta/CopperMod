@@ -2503,7 +2503,8 @@ namespace Copper68k
                 _bus,
                 State,
                 _instructionFrequency,
-                enableOpcodePlan: false);
+                enableOpcodePlan: false,
+                useM68020BriefIndexedAddressing: true);
         }
 
         public override int ExecuteInstruction()

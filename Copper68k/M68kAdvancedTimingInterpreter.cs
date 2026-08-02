@@ -75,6 +75,10 @@ namespace Copper68k
         MoveLongAddressDisplacementToAddress,
         MoveLongAddressDisplacementToPredecrement,
         MoveLongAddressDisplacementToPostIncrement,
+        MoveLongPcDisplacementToData,
+        MoveLongPcDisplacementToAddress,
+        MoveLongPcDisplacementToPredecrement,
+        MoveLongPcDisplacementToPostIncrement,
         MoveLongBriefIndexedToData,
         MoveLongBriefIndexedToAddress,
         MoveLongAddressIndirectToAddressIndirect,
@@ -591,6 +595,26 @@ namespace Copper68k
             if ((opcode & 0xF1F8) == 0x20E8)
             {
                 return M68020OpcodeKind.MoveLongAddressDisplacementToPostIncrement;
+            }
+
+            if ((opcode & 0xF1FF) == 0x203A)
+            {
+                return M68020OpcodeKind.MoveLongPcDisplacementToData;
+            }
+
+            if ((opcode & 0xF1FF) == 0x207A)
+            {
+                return M68020OpcodeKind.MoveLongPcDisplacementToAddress;
+            }
+
+            if ((opcode & 0xF1FF) == 0x213A)
+            {
+                return M68020OpcodeKind.MoveLongPcDisplacementToPredecrement;
+            }
+
+            if ((opcode & 0xF1FF) == 0x20FA)
+            {
+                return M68020OpcodeKind.MoveLongPcDisplacementToPostIncrement;
             }
 
             if ((opcode & 0xF1F8) == 0x2030)
@@ -3159,6 +3183,22 @@ namespace Copper68k
                     ExecuteMoveLongAddressDisplacementToPostIncrement(opcode);
                     return true;
 
+                case M68020OpcodeKind.MoveLongPcDisplacementToData:
+                    ExecuteMoveLongPcDisplacementToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongPcDisplacementToAddress:
+                    ExecuteMoveLongPcDisplacementToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongPcDisplacementToPredecrement:
+                    ExecuteMoveLongPcDisplacementToPredecrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongPcDisplacementToPostIncrement:
+                    ExecuteMoveLongPcDisplacementToPostIncrement(opcode);
+                    return true;
+
                 case M68020OpcodeKind.MoveLongBriefIndexedToData:
                     ExecuteMoveLongBriefIndexedToData(opcode);
                     return true;
@@ -4803,6 +4843,64 @@ namespace Copper68k
             WriteGeneralRegister(true, destination, destinationAddress + 4);
             SetMoveFlags(value, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.MoveLongAddressDisplacementToPostIncrement);
+        }
+
+        private void ExecuteMoveLongPcDisplacementToData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destination = (opcode >> 9) & 7;
+            var sourceAddress = GetPcDisplacementAddress();
+            var value = ReadLong(sourceAddress);
+            State.D[destination] = value;
+            SetMoveFlags(value, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongAddressDisplacementToData);
+        }
+
+        private void ExecuteMoveLongPcDisplacementToAddress(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destination = (opcode >> 9) & 7;
+            var sourceAddress = GetPcDisplacementAddress();
+            var value = ReadLong(sourceAddress);
+            WriteGeneralRegister(true, destination, value);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongAddressDisplacementToAddress);
+        }
+
+        private void ExecuteMoveLongPcDisplacementToPredecrement(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destination = (opcode >> 9) & 7;
+            var sourceAddress = GetPcDisplacementAddress();
+            var value = ReadLong(sourceAddress);
+            var destinationAddress = State.A[destination] - 4;
+            WriteGeneralRegister(true, destination, destinationAddress);
+            WriteLong(destinationAddress, value);
+            SetMoveFlags(value, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongAddressDisplacementToPredecrement);
+        }
+
+        private void ExecuteMoveLongPcDisplacementToPostIncrement(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destination = (opcode >> 9) & 7;
+            var sourceAddress = GetPcDisplacementAddress();
+            var value = ReadLong(sourceAddress);
+            var destinationAddress = State.A[destination];
+            WriteLong(destinationAddress, value);
+            WriteGeneralRegister(true, destination, destinationAddress + 4);
+            SetMoveFlags(value, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongAddressDisplacementToPostIncrement);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint GetPcDisplacementAddress()
+        {
+            var extensionAddress = State.ProgramCounter;
+            return unchecked((uint)(extensionAddress + (int)(short)FetchWord()));
         }
 
         private void ExecuteMoveLongBriefIndexedToData(ushort opcode)

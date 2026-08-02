@@ -275,6 +275,9 @@ namespace CopperMod.Amiga.Bus
         private readonly AgnusLiveFixedDisplaySlotKernel? _agnusLiveFixedDisplaySlotKernel;
         private readonly AgnusLiveCopperSlotKernel? _agnusLiveCopperSlotKernel;
         private readonly AgnusLiveBlitterSlotKernel? _agnusLiveBlitterSlotKernel;
+        private readonly AgnusLivePaulaSlotKernel? _agnusLivePaulaSlotKernel;
+        private readonly AgnusLiveDiskSlotKernel? _agnusLiveDiskSlotKernel;
+        private readonly AgnusLiveSlotKernel? _agnusLiveSlotKernel;
         private readonly AmigaRasterlineScheduleCache _rasterlineScheduleCache;
         private readonly AmigaHardwareScheduler _hardwareScheduler;
         private readonly CpuBusBankKind[] _cpuBusBankKinds = new CpuBusBankKind[CpuBusBankCount];
@@ -399,6 +402,8 @@ namespace CopperMod.Amiga.Bus
         private readonly bool _agnusLiveDisplayLedgerEnabled;
         private readonly bool _agnusLiveCopperEnabled;
         private readonly bool _agnusLiveBlitterEnabled;
+        private readonly bool _agnusLivePaulaEnabled;
+        private readonly bool _agnusLiveDiskEnabled;
         private bool _endingDeferredCpuBusBatch;
         private bool _deferredCpuBusBatchExecutionStarted;
         private M68kTraceBatchWakeSource _deferredCpuBusBatchPendingWakeSource;
@@ -548,7 +553,9 @@ namespace CopperMod.Amiga.Bus
             AgnusBusArbitrationMode agnusBusArbitration = AgnusBusArbitrationMode.Legacy,
             bool enableAgnusLiveDisplayLedger = false,
             bool enableAgnusLiveCopper = false,
-            bool enableAgnusLiveBlitter = false)
+            bool enableAgnusLiveBlitter = false,
+            bool enableAgnusLivePaula = false,
+            bool enableAgnusLiveDisk = false)
         {
             var selectedChipset = chipset ?? AmigaChipset.OcsPal;
             if (selectedChipset.HasAgaComponent)
@@ -576,6 +583,20 @@ namespace CopperMod.Amiga.Bus
                 throw new ArgumentException(
                     "G3L live blitter requires the accepted G2L live-Copper path.",
                     nameof(enableAgnusLiveBlitter));
+            }
+
+            if (enableAgnusLivePaula && !enableAgnusLiveBlitter)
+            {
+                throw new ArgumentException(
+                    "G4L live Paula requires the accepted G3L live-blitter path.",
+                    nameof(enableAgnusLivePaula));
+            }
+
+            if (enableAgnusLiveDisk && !enableAgnusLivePaula)
+            {
+                throw new ArgumentException(
+                    "G5L live disk requires the accepted G4L live-Paula path.",
+                    nameof(enableAgnusLiveDisk));
             }
 
             _customRegisterFile = new CustomRegisterFile(selectedChipset);
@@ -673,6 +694,8 @@ namespace CopperMod.Amiga.Bus
             _agnusLiveDisplayLedgerEnabled = enableAgnusLiveDisplayLedger;
             _agnusLiveCopperEnabled = enableAgnusLiveCopper;
             _agnusLiveBlitterEnabled = enableAgnusLiveBlitter;
+            _agnusLivePaulaEnabled = enableAgnusLivePaula;
+            _agnusLiveDiskEnabled = enableAgnusLiveDisk;
             _deferredCpuInternalNoBusWindowEnabled = enableDeferredCpuInternalNoBusWindow;
             _forceCpuWaitSlotReference = forceCpuWaitSlotReference;
             Paula = new Paula(this);
@@ -697,6 +720,9 @@ namespace CopperMod.Amiga.Bus
                 this,
                 _hrmSlotEngine,
                 cpuEventJournalCapacity);
+            _agnusLiveSlotKernel = agnusBusArbitration == AgnusBusArbitrationMode.SlotKernel
+                ? new AgnusLiveSlotKernel(this)
+                : null;
             _agnusLiveFixedDisplaySlotKernel = enableAgnusLiveDisplayLedger
                 ? new AgnusLiveFixedDisplaySlotKernel(this)
                 : null;
@@ -705,6 +731,12 @@ namespace CopperMod.Amiga.Bus
                 : null;
             _agnusLiveBlitterSlotKernel = enableAgnusLiveBlitter
                 ? new AgnusLiveBlitterSlotKernel(this)
+                : null;
+            _agnusLivePaulaSlotKernel = enableAgnusLivePaula
+                ? new AgnusLivePaulaSlotKernel(this)
+                : null;
+            _agnusLiveDiskSlotKernel = enableAgnusLiveDisk
+                ? new AgnusLiveDiskSlotKernel(this)
                 : null;
             Display = new OcsDisplay(
                 this,
@@ -1031,6 +1063,15 @@ namespace CopperMod.Amiga.Bus
         internal bool AgnusLiveBlitterEnabled =>
             _agnusLiveBlitterEnabled;
 
+        internal bool AgnusLivePaulaEnabled =>
+            _agnusLivePaulaEnabled;
+
+        internal bool AgnusLiveDiskEnabled =>
+            _agnusLiveDiskEnabled;
+
+        internal AgnusLiveSlotKernelDiagnostics AgnusLiveSlotKernelDiagnostics =>
+            _agnusLiveSlotKernel?.CaptureDiagnostics() ?? default;
+
         internal AgnusLiveFixedDisplayDiagnostics AgnusLiveFixedDisplayDiagnostics =>
             _agnusLiveFixedDisplaySlotKernel?.CaptureDiagnostics() ?? default;
 
@@ -1041,6 +1082,14 @@ namespace CopperMod.Amiga.Bus
         internal AgnusLiveBlitterDiagnostics AgnusLiveBlitterDiagnostics =>
             _agnusLiveBlitterSlotKernel?.CaptureDiagnostics(
                 Blitter.CaptureLiveBlitterDeviceDiagnostics()) ?? default;
+
+        internal AgnusLivePaulaDiagnostics AgnusLivePaulaDiagnostics =>
+            _agnusLivePaulaSlotKernel?.CaptureDiagnostics(
+                Paula.CaptureLivePaulaDeviceDiagnostics()) ?? default;
+
+        internal AgnusLiveDiskDiagnostics AgnusLiveDiskDiagnostics =>
+            _agnusLiveDiskSlotKernel?.CaptureDiagnostics(
+                Disk.CaptureLiveDiskDeviceDiagnostics()) ?? default;
 
         internal ulong CapturedFixedDisplayWordHash =>
             _capturedFixedDisplayWordHash;
@@ -1093,6 +1142,18 @@ namespace CopperMod.Amiga.Bus
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void RecordPrevalidatedLiveCopperTransitionCommit()
+        {
+            if (_agnusLiveCopperSlotKernel == null)
+            {
+                throw new InvalidOperationException(
+                    "The G2L live Copper slot kernel is not enabled.");
+            }
+
+            _agnusLiveCopperSlotKernel.RecordPrevalidatedTransitionCommit();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryCommitLiveBlitterRequest(
             IAgnusLiveSlotRequester requester,
             out long observedSlotCycle)
@@ -1118,6 +1179,56 @@ namespace CopperMod.Amiga.Bus
             }
 
             _agnusLiveBlitterSlotKernel.CommitPendingTransition(requester);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool TryCommitLivePaulaRequest(
+            IAgnusLiveSlotRequester requester,
+            out long observedSlotCycle)
+        {
+            if (_agnusLivePaulaSlotKernel == null)
+            {
+                throw new InvalidOperationException(
+                    "The G4L live Paula slot kernel is not enabled.");
+            }
+
+            return _agnusLivePaulaSlotKernel.TryCommitPendingWord(
+                requester,
+                out observedSlotCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool TryCommitLivePaulaRequestAtSlot(
+            IAgnusLiveSlotRequester requester,
+            long slotCycle,
+            out long observedSlotCycle)
+        {
+            if (_agnusLivePaulaSlotKernel == null)
+            {
+                throw new InvalidOperationException(
+                    "The G4L live Paula slot kernel is not enabled.");
+            }
+
+            return _agnusLivePaulaSlotKernel.TryCommitPendingWordAtSlot(
+                requester,
+                slotCycle,
+                out observedSlotCycle);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool TryCommitLiveDiskRequest(
+            IAgnusLiveSlotRequester requester,
+            out long observedSlotCycle)
+        {
+            if (_agnusLiveDiskSlotKernel == null)
+            {
+                throw new InvalidOperationException(
+                    "The G5L live disk slot kernel is not enabled.");
+            }
+
+            return _agnusLiveDiskSlotKernel.TryCommitPendingWord(
+                requester,
+                out observedSlotCycle);
         }
 
         internal bool CopperQuiescentFastPathEnabled { get; }
@@ -1478,6 +1589,9 @@ namespace CopperMod.Amiga.Bus
             _agnusLiveFixedDisplaySlotKernel?.Reset();
             _agnusLiveCopperSlotKernel?.Reset();
             _agnusLiveBlitterSlotKernel?.Reset();
+            _agnusLivePaulaSlotKernel?.Reset();
+            _agnusLiveDiskSlotKernel?.Reset();
+            _agnusLiveSlotKernel?.Reset();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
             _realTimeClock?.ResetControlRegisters();
             ResetCiaAForHardwareReset();
@@ -1636,6 +1750,7 @@ namespace CopperMod.Amiga.Bus
             ResetChipDataBusLatch();
             ResetDeferredCpuBusBatchState(resetCounters: true);
             ClearChipSlots();
+            _agnusLiveSlotKernel?.Reset();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
             ResetCiaAForHardwareReset();
             InvalidateInstructionFetchWindows();
@@ -2733,7 +2848,12 @@ namespace CopperMod.Amiga.Bus
             }
 
             var target = ClassifyTarget(address);
-            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: false, ref cycle);
+            FlushDeferredCpuDataTimingForAccess(
+                target,
+                AmigaBusAccessSize.Byte,
+                accessKind,
+                isWrite: false,
+                ref cycle);
         RetryCausalGrant:
             if (_useFastZeroWaitAccesses)
             {
@@ -3031,7 +3151,12 @@ namespace CopperMod.Amiga.Bus
         {
             var target = ClassifyTarget(address);
             var requestedCycle = cycle;
-            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: true, ref cycle);
+            FlushDeferredCpuDataTimingForAccess(
+                target,
+                AmigaBusAccessSize.Byte,
+                accessKind,
+                isWrite: true,
+                ref cycle);
             if (_useFastZeroWaitAccesses)
             {
                 WriteCpuByteFast(target, address, value, ref cycle, accessKind, requestedCycle);
@@ -3047,6 +3172,7 @@ namespace CopperMod.Amiga.Bus
             var requestedCycle = cycle;
             FlushDeferredCpuDataTimingForAccess(
                 target,
+                AmigaBusAccessSize.Byte,
                 AmigaBusAccessKind.CpuDataWrite,
                 isWrite: true,
                 ref cycle);
@@ -3111,7 +3237,12 @@ namespace CopperMod.Amiga.Bus
             }
 
             var requestedCycle = cycle;
-            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: true, ref cycle);
+            FlushDeferredCpuDataTimingForAccess(
+                target,
+                AmigaBusAccessSize.Word,
+                accessKind,
+                isWrite: true,
+                ref cycle);
             if (_useFastZeroWaitAccesses)
             {
                 WriteCpuWordFast(target, address, value, ref cycle, accessKind, requestedCycle);
@@ -3147,7 +3278,12 @@ namespace CopperMod.Amiga.Bus
             var target = accessKind == AmigaBusAccessKind.CpuInstructionFetch
                 ? ClassifyInstructionFetchTarget(address)
                 : ClassifyTarget(address);
-            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: false, ref cycle);
+            FlushDeferredCpuDataTimingForAccess(
+                target,
+                AmigaBusAccessSize.Word,
+                accessKind,
+                isWrite: false,
+                ref cycle);
             if (accessKind == AmigaBusAccessKind.CpuInstructionFetch &&
                 (target == AmigaBusAccessTarget.ChipRam ||
                     target == AmigaBusAccessTarget.ExpansionRam))
@@ -3273,7 +3409,12 @@ namespace CopperMod.Amiga.Bus
                 return ((uint)high << 16) | low;
             }
 
-            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: false, ref cycle);
+            FlushDeferredCpuDataTimingForAccess(
+                target,
+                AmigaBusAccessSize.Long,
+                accessKind,
+                isWrite: false,
+                ref cycle);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
@@ -3356,7 +3497,12 @@ namespace CopperMod.Amiga.Bus
                 return;
             }
 
-            FlushDeferredCpuDataTimingForAccess(target, accessKind, isWrite: true, ref cycle);
+            FlushDeferredCpuDataTimingForAccess(
+                target,
+                AmigaBusAccessSize.Long,
+                accessKind,
+                isWrite: true,
+                ref cycle);
             var requestedCycle = cycle;
             if (_useFastZeroWaitAccesses)
             {
@@ -4727,10 +4873,60 @@ namespace CopperMod.Amiga.Bus
         {
             var originalRequestedCycle = cpuRequestedCycle ?? requestedCycle;
             if (requester == AmigaBusRequester.Cpu &&
+                TryGrantCpuAccessThroughLiveSlotKernel(
+                    kind,
+                    target,
+                    address,
+                    size,
+                    requestedCycle,
+                    isWrite,
+                    out var liveGrantedCycle,
+                    out _,
+                    out var liveCompletedCycle))
+            {
+                var liveRequest = new AmigaBusAccessRequest(
+                    requester,
+                    kind,
+                    target,
+                    address,
+                    size,
+                    originalRequestedCycle,
+                    isWrite,
+                    channel);
+                var liveResult = new AmigaBusAccessResult(
+                    liveRequest,
+                    liveGrantedCycle,
+                    liveCompletedCycle);
+                if (liveGrantedCycle > originalRequestedCycle)
+                {
+                    Agnus.RecordCpuChipWaitCycles(
+                        liveGrantedCycle - originalRequestedCycle);
+                }
+
+                if (_captureBusAccesses)
+                {
+                    _busAccesses.Add(liveResult);
+                }
+
+                return RememberCpuBusAccess(liveResult);
+            }
+
+            var retroactiveLiveBlitterRequest =
+                requester == AmigaBusRequester.Cpu &&
+                AgnusLiveBlitterEnabled &&
+                requestedCycle < _agnusBusExecutor.ExecutedThroughCycle;
+            if (requester == AmigaBusRequester.Cpu &&
                 _agnusBusExecutor.ProductionEnabled &&
                 _useChipSlotScheduler &&
-                target == AmigaBusAccessTarget.CustomRegisters &&
+                target is (AmigaBusAccessTarget.ChipRam or
+                    AmigaBusAccessTarget.ExpansionRam or
+                    AmigaBusAccessTarget.RealTimeClock or
+                    AmigaBusAccessTarget.CustomRegisters) &&
                 size != AmigaBusAccessSize.Long &&
+                (target == AmigaBusAccessTarget.CustomRegisters ||
+                    AgnusLiveCopperEnabled ||
+                    Blitter.BusPipelineActive ||
+                    retroactiveLiveBlitterRequest) &&
                 _hardwareScheduler.AdvanceUntilCpuGrant(
                     kind,
                     target,
@@ -4742,6 +4938,10 @@ namespace CopperMod.Amiga.Bus
                     out var chronologicalCompletedCycle) ==
                     CpuWaitGrantAdvanceResult.Granted)
             {
+                // Publish the CPU request before draining DMA through its
+                // physical request slot. Re-basing after that drain changes
+                // the nice-blitter denial count and can reverse the owner of
+                // the eventual BLTPRI arbitration slot.
                 var chronologicalRequest = new AmigaBusAccessRequest(
                     requester,
                     kind,
@@ -4803,6 +5003,7 @@ namespace CopperMod.Amiga.Bus
                 _agnusBusExecutor.ProductionEnabled &&
                 _useChipSlotScheduler &&
                 (target == AmigaBusAccessTarget.CustomRegisters ||
+                    AgnusLiveCopperEnabled ||
                     Blitter.BusPipelineActive) &&
                 target is (AmigaBusAccessTarget.ChipRam or
                     AmigaBusAccessTarget.ExpansionRam or

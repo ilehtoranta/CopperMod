@@ -25,6 +25,12 @@ namespace CopperMod.Amiga.CustomChips.Cia
         public long Cycle { get; }
     }
 
+    internal readonly record struct CiaRegisterWriteTrace(
+        AmigaCiaId Cia,
+        int Register,
+        byte Value,
+        long Cycle);
+
     internal sealed class Cia
     {
         public const byte TimerAInterruptMask = 0x01;
@@ -68,6 +74,8 @@ namespace CopperMod.Amiga.CustomChips.Cia
         public ushort TimerALatch => _timerA.Latch;
 
         public ushort TimerBLatch => _timerB.Latch;
+
+        internal Action<CiaRegisterWriteTrace>? RegisterWriteObserver { get; set; }
 
         public long TimerAIntervalCycles => _timerA.LatchTicks * _cpuCyclesPerCiaTick;
 
@@ -145,6 +153,7 @@ namespace CopperMod.Amiga.CustomChips.Cia
         {
             AdvanceTo(cycle, interruptEvents);
             register &= 0x0F;
+            RegisterWriteObserver?.Invoke(new CiaRegisterWriteTrace(Id, register, value, cycle));
             switch (register)
             {
                 case 0x04:

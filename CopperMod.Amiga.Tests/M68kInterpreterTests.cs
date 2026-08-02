@@ -644,6 +644,58 @@ public sealed class M68kInterpreterTests
 	}
 
 	[Fact]
+	public void MovemPredecrementRetainsSequentialFetchCommittedAfterContendedFinalWrite()
+	{
+		var bus = new M68000CycleCountingBus();
+		Write(bus.Memory, 0x1000,
+			0x48, 0xE7, 0x40, 0xC0, // MOVEM.L D1/A0/A1,-(A7)
+			0x72, 0x00,             // MOVEQ #0,D1
+			0x4E, 0x71);
+		bus.QueueDataWriteDelay(0x3FF4, 2);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x4000);
+		cpu.State.Cycles = 20;
+		cpu.State.D[1] = 0x11223344;
+		cpu.State.A[0] = 0x55667788;
+		cpu.State.A[1] = 0x99AABBCC;
+		((IM68000PipelineStateTransfer)cpu).ImportM68000PipelineState(
+			new M68000PipelineState(
+				0x1000,
+				0x48E7,
+				0x40C0,
+				16,
+				20,
+				false,
+				false,
+				2,
+				false,
+				false,
+				22,
+				20,
+				20,
+				0));
+
+		var movemStart = cpu.State.Cycles;
+		var movemCycles = cpu.ExecuteInstruction();
+		var movemPhases = bus.CpuBusPhases
+			.Where(phase => phase.InstructionProgramCounter == 0x1000)
+			.ToArray();
+		var finalWrite = movemPhases.Last(phase =>
+			phase.AccessKind == M68kBusAccessKind.CpuDataWrite);
+		var sequentialFetch = movemPhases.LastOrDefault(phase =>
+			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.Address == 0x1006);
+		var diagnostic =
+			$"start={movemStart}, cycles={movemCycles}, " +
+			$"phases={FormatCpuBusPhases(movemPhases)}";
+
+		Assert.True(movemCycles == 34, diagnostic);
+		Assert.True(sequentialFetch.Address == 0x1006, diagnostic);
+		Assert.Equal(finalWrite.CompletedCycle, sequentialFetch.RequestedCycle);
+		Assert.Equal(sequentialFetch.CompletedCycle, cpu.State.Cycles);
+	}
+
+	[Fact]
 	public void VAmigaTsWritecharInnerLoopStoresRowsEveryDocumentedLoopBody()
 	{
 		const uint codeAddress = 0x1000;
@@ -1602,8 +1654,8 @@ public sealed class M68kInterpreterTests
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 24L, 26L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1006u, M68kOperandSize.Word, false, 26L, 28L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 28L, 30L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 30L, 32L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 28L, 30L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 30L, 32L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x2000u, M68kOperandSize.Word, false, 32L, 34L));
 	}
 
@@ -1631,8 +1683,8 @@ public sealed class M68kInterpreterTests
 			bus.CpuBusPhases,
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1000u, M68kOperandSize.Word, false, 20L, 22L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 24L, 26L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 26L, 28L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 24L, 26L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 26L, 28L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 28L, 30L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1006u, M68kOperandSize.Word, false, 30L, 32L));
 	}
@@ -1732,8 +1784,8 @@ public sealed class M68kInterpreterTests
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1000u, M68kOperandSize.Word, false, 20L, 22L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 24L, 26L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 26L, 28L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 28L, 30L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 26L, 28L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 28L, 30L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x2000u, M68kOperandSize.Word, false, 30L, 32L));
 	}
 
@@ -1763,8 +1815,8 @@ public sealed class M68kInterpreterTests
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1000u, M68kOperandSize.Word, false, 20L, 22L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 24L, 26L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 26L, 28L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 28L, 30L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 26L, 28L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 28L, 30L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1006u, M68kOperandSize.Word, false, 30L, 32L));
 	}
 
@@ -4643,7 +4695,7 @@ public sealed class M68kInterpreterTests
 			Memory[address + 1] = (byte)value;
 		}
 	}
-	private sealed class CycleCountingBus : IM68kBus, IM68kCpuBusPhaseTrace
+	private class CycleCountingBus : IM68kBus, IM68kCpuBusPhaseTrace
 	{
 		private const int AccessCycles = 2;
 		private readonly Dictionary<uint, Queue<int>> _instructionFetchDelays = new();
@@ -4760,6 +4812,29 @@ public sealed class M68kInterpreterTests
 		{
 			Memory[address] = (byte)(value >> 8);
 			Memory[address + 1] = (byte)value;
+		}
+	}
+
+	private sealed class M68000CycleCountingBus : CycleCountingBus, IM68000BusCycleTiming
+	{
+		public int M68000BusCycleStartDelay => 2;
+
+		public bool RequiresExactM68000PipelineFallback => false;
+
+		public M68000BusAccessTiming GetM68000BusAccessTiming(
+			uint address,
+			M68kOperandSize size,
+			M68kBusAccessKind accessKind,
+			bool isWrite,
+			long requestedCycle,
+			long completedCycle)
+		{
+			_ = address;
+			_ = size;
+			_ = accessKind;
+			_ = isWrite;
+			_ = requestedCycle;
+			return new M68000BusAccessTiming(completedCycle, completedCycle + 2);
 		}
 	}
 }

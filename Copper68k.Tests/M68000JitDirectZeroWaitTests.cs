@@ -4,6 +4,40 @@ namespace Copper68k.Tests;
 
 public sealed class M68000JitDirectZeroWaitTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CompiledJsrWritesReturnAddressLowWordBeforeHighWord(bool enableV2)
+    {
+        const uint code = 0x1000;
+        const uint stack = 0x4000;
+        var bus = new DirectZeroWaitBus();
+        bus.WriteWords(
+            code,
+            [
+                0x4EB9, 0x0000, 0x1008, // JSR $1008.L
+                0x60F8,                 // BRA.S back to JSR
+                0x4E75                  // RTS
+            ]);
+
+        using var jit = new M68kJitCore(bus, enableV2: enableV2);
+        jit.Reset(code, stack);
+
+        var executed = jit.ExecuteInstructions(400, 500_000, new BatchBoundary());
+
+        Assert.Equal(400, executed);
+        Assert.True(
+            enableV2 ? jit.Counters.V2TraceHits > 0 : jit.Counters.TraceHits > 0,
+            $"compiled={jit.Counters.CompiledTraces}, classicHits={jit.Counters.TraceHits}, v2Hits={jit.Counters.V2TraceHits}");
+
+        var pushWrites = bus.WordWrites
+            .Where(write => write.Address >= stack - 4 && write.Address < stack)
+            .Take(2)
+            .ToArray();
+        Assert.Equal(new uint[] { stack - 2, stack - 4 }, pushWrites.Select(write => write.Address));
+        Assert.Equal(new ushort[] { 0x1006, 0x0000 }, pushWrites.Select(write => write.Value));
+    }
+
     public static IEnumerable<object[]> ImmediateShiftCases()
     {
         for (var type = 0; type < 4; type++)
@@ -788,6 +822,8 @@ public sealed class M68000JitDirectZeroWaitTests
 
         public int DirectWriteCompletions { get; private set; }
 
+        public List<(uint Address, ushort Value)> WordWrites { get; } = new();
+
         public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
         {
             if (accessKind == M68kBusAccessKind.CpuDataRead)
@@ -826,6 +862,7 @@ public sealed class M68000JitDirectZeroWaitTests
 
         public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
         {
+            WordWrites.Add((address, value));
             WriteWordValue(address, value);
             Invalidate(address, 2);
         }

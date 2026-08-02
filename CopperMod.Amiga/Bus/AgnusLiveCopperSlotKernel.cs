@@ -113,6 +113,18 @@ namespace CopperMod.Amiga.Bus
             _contractViolations = 0;
         }
 
+        /// <summary>
+        /// Accounts for an exact WAIT comparison whose already-published
+        /// transition was validated and consumed by the concrete Copper
+        /// requester. No comparison is skipped or projected.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void RecordPrevalidatedTransitionCommit()
+        {
+            _publishedTransitions++;
+            _committedTransitions++;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryCommitPendingWord(
             IAgnusLiveSlotRequester requester,

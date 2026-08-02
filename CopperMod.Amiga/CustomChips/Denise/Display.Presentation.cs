@@ -2022,8 +2022,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             long cycle,
             bool blitterFinished)
         {
-            var line = GetBeamLineForCycle(frameStartCycle, cycle);
-            var horizontal = GetCopperHorizontalForCycle(frameStartCycle, cycle);
+            GetCopperBeamPositionForCycle(
+                frameStartCycle,
+                cycle,
+                out var line,
+                out var horizontal);
             return IsCopperComparisonSatisfied(first, second, line - StandardVStart, horizontal, blitterFinished);
         }
 

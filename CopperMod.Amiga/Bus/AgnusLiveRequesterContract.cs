@@ -328,6 +328,37 @@ namespace CopperMod.Amiga.Bus
             return _pending;
         }
 
+        public AgnusLiveSlotRequest Defer(
+            ulong generation,
+            long earliestEligibleCycle)
+        {
+            if (!_hasPending || generation == 0 ||
+                generation != _pending.Generation)
+            {
+                throw new InvalidOperationException(
+                    "A live requester can defer only its current pending generation.");
+            }
+
+            if (earliestEligibleCycle <= _pending.EarliestEligibleCycle)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(earliestEligibleCycle),
+                    "A denied live request must move to a later eligibility cycle.");
+            }
+
+            _pending = new AgnusLiveSlotRequest(
+                _pending.Owner,
+                _pending.Generation,
+                _pending.Kind,
+                _pending.Address,
+                _pending.RequestedCycle,
+                earliestEligibleCycle,
+                _pending.Transfer,
+                _pending.WriteValue,
+                _pending.Channel);
+            return _pending;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void RequireCurrent(in AgnusLiveSlotRequest request)
         {

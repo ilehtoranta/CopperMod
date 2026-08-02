@@ -104,6 +104,27 @@ public sealed class M68040InterpreterTests
 	}
 
 	[Fact]
+	public void ApproximateIntegerFallbackHonorsM68020BriefIndexedScale()
+	{
+		var bus = new Copper68kTestBus();
+		WriteWords(
+			bus,
+			CodeBase,
+			0x52B0, 0x1C00); // ADDQ.L #1,0(A0,D1.L*4)
+		bus.WriteLong(0x0000_2004, 0x1111_1111);
+		bus.WriteLong(0x0000_2010, 0x2222_2222);
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, StackBase);
+		cpu.State.A[0] = 0x0000_2000;
+		cpu.State.D[1] = 4;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1111_1111u, bus.ReadLong(0x0000_2004));
+		Assert.Equal(0x2222_2223u, bus.ReadLong(0x0000_2010));
+	}
+
+	[Fact]
 	public void M68040ProfilesUseOneNativeCycleForDirectInstructionTiming()
 	{
 		var bus = new Copper68kTestBus();

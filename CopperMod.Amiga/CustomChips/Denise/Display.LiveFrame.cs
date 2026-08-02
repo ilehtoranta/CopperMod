@@ -10,11 +10,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
 {
     internal sealed partial class Display
     {
+        private long _liveFrameStopCycle;
+
         internal void ResetLiveDma()
         {
             _liveFrameValid = false;
             _liveCycle = 0;
             _liveFrameStartCycle = 0;
+            _liveFrameStopCycle = 0;
             _liveCapturedThroughCycle = -1;
             _liveCausalDisplayStateThroughCycle = -1;
             _liveFinalizedPresentationThroughCycle = -1;
@@ -113,7 +116,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
             => _bus.GetFrameStopCycle(frameStartCycle);
 
         private long GetLiveFrameStopCycle()
-            => GetFrameStopCycle(_liveFrameStartCycle);
+            => _liveFrameStopCycle;
+
+        internal void RefreshLiveFrameStopAfterTimingChange()
+        {
+            if (!_liveDmaEnabled || !_liveFrameValid)
+            {
+                return;
+            }
+
+            var frameStopCycle = GetFrameStopCycle(_liveFrameStartCycle);
+            if (frameStopCycle == _liveFrameStopCycle)
+            {
+                return;
+            }
+
+            _liveFrameStopCycle = frameStopCycle;
+            _liveWakeVersion++;
+            InvalidateLiveDisplayEventCycle();
+        }
 
         private long GetNextFrameStartCycle(long cycle)
             => _bus.GetNextFrameStartCycle(cycle);
@@ -355,12 +376,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             _liveFrameValid = true;
             _liveFrameStartCycle = frameStartCycle;
+            _liveFrameStopCycle = GetFrameStopCycle(frameStartCycle);
             _liveCapturedThroughCycle = frameStartCycle;
             _liveCausalDisplayStateThroughCycle = frameStartCycle;
             _liveFinalizedPresentationThroughCycle = frameStartCycle - 1;
             _committedDisplayLedger?.Reset(
                 frameStartCycle,
-                GetFrameStopCycle(frameStartCycle));
+                _liveFrameStopCycle);
             _committedDisplayPresentationCursor = 0;
             _presentationCallsDuringLiveCapture = 0;
             var savedAdvancingLiveDma = _advancingLiveDma;

@@ -974,6 +974,34 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             return candidate;
         }
 
+        public static long AlignToDiskSlot(long requestedCycle)
+        {
+            var candidate = AgnusChipSlotScheduler.AlignToSlot(
+                Math.Max(0, requestedCycle));
+            var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+            var lineStart = candidate - (candidate % lineCycles);
+            var lineOffset = candidate - lineStart;
+            var first = 0x08 * AgnusChipSlotScheduler.SlotCycles;
+            var second = 0x0A * AgnusChipSlotScheduler.SlotCycles;
+            var third = 0x0C * AgnusChipSlotScheduler.SlotCycles;
+            if (lineOffset <= first)
+            {
+                return lineStart + first;
+            }
+
+            if (lineOffset <= second)
+            {
+                return lineStart + second;
+            }
+
+            if (lineOffset <= third)
+            {
+                return lineStart + third;
+            }
+
+            return lineStart + lineCycles + first;
+        }
+
         internal static bool TryGetPaulaHorizontal(int channel, out int horizontal)
         {
             if ((uint)channel < AudioSlotsPerLine)
@@ -1767,7 +1795,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
 
             if (TryGetSlot(slotCycle, out var existing) &&
                 !SlotMatchesRequest(slotCycle, existing, request) &&
-                existing.Priority >= AgnusChipSlotPriority.Blitter)
+                (existing.Owner == AgnusChipSlotOwner.Cpu ||
+                    existing.Priority >= AgnusChipSlotPriority.Blitter))
             {
                 result = new AmigaBusAccessResult(request, slotCycle, slotCycle);
                 _lastDeniedFixedSlot = new AgnusChipSlotSnapshot(

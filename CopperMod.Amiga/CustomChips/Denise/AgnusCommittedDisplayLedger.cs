@@ -5,6 +5,7 @@
 
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 using CopperMod.Amiga.CustomChips.Agnus;
 
 namespace CopperMod.Amiga.CustomChips.Denise
@@ -226,7 +227,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     $"row={previous.Row}/channel={previous.Channel}/word={previous.Word}, " +
                     $"next={entry.Kind}@{entry.Cycle}/reg=0x{entry.Register:X3}/" +
                     $"row={entry.Row}/channel={entry.Channel}/word={entry.Word}, count={_count}, " +
-                    $"frame=[{_frameStartCycle},{_frameStopCycle}).");
+                    $"frame=[{_frameStartCycle},{_frameStopCycle}), tail={DescribeTail()}.");
             }
 
             if (_count >= _events.Length)
@@ -237,6 +238,30 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             _events[_count++] = entry;
             return true;
+        }
+
+        private string DescribeTail()
+        {
+            var start = Math.Max(0, _count - 8);
+            var description = new StringBuilder();
+            for (var index = start; index < _count; index++)
+            {
+                if (description.Length > 0)
+                {
+                    description.Append(';');
+                }
+
+                ref readonly var item = ref _events[index];
+                description.Append(item.Kind)
+                    .Append('@').Append(item.Cycle)
+                    .Append("/reg=0x").Append(item.Register.ToString("X3"))
+                    .Append("/value=0x").Append(item.Value.ToString("X4"))
+                    .Append("/row=").Append(item.Row)
+                    .Append("/channel=").Append(item.Channel)
+                    .Append("/word=").Append(item.Word);
+            }
+
+            return description.ToString();
         }
 
         public ref readonly AgnusCommittedDisplayEvent GetEvent(int index)

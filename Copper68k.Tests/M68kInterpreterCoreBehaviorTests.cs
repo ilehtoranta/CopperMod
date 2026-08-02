@@ -998,7 +998,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		}
 	}
 	[Fact]
-	public void ShortBsrPushesReturnAddressHighWordBeforeLowWord()
+	public void ShortBsrPushesReturnAddressLowWordBeforeHighWord()
 	{
 		var bus = new CycleCountingBus();
 		Write(bus.Memory, 0x1000, Words(0x6104, 0x4E71, 0x4E71, 0x4E71));
@@ -1010,7 +1010,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		var stackWrites = bus.CpuBusPhases
 			.Where(phase => phase.AccessKind == M68kBusAccessKind.CpuDataWrite)
 			.ToArray();
-		Assert.Equal(new uint[] { 0x2FFC, 0x2FFE }, stackWrites.Select(phase => phase.Address));
+		Assert.Equal(new uint[] { 0x2FFE, 0x2FFC }, stackWrites.Select(phase => phase.Address));
 		Assert.Equal(new byte[] { 0x00, 0x00, 0x10, 0x02 }, bus.Memory[0x2FFC..0x3000]);
 		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
 	}

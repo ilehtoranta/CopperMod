@@ -377,7 +377,110 @@ namespace CopperMod.Amiga.Bus
                 : new CpuVisibilityHorizon(
                     bestCycle,
                     MapReason(bestSource),
-                    bestDiskReason);
+                bestDiskReason);
+        }
+
+        internal CpuVisibilityHorizon GetNextLiveSlotKernelCpuVisibilityHorizon(
+            long currentCycle,
+            long targetCycle,
+            int cpuInterruptMask)
+        {
+            currentCycle = Math.Max(0, currentCycle);
+            targetCycle = Math.Max(currentCycle, targetCycle);
+            if (targetCycle <= currentCycle)
+            {
+                return new CpuVisibilityHorizon(
+                    currentCycle,
+                    CpuVisibilityHorizonReason.TargetCycle,
+                    AmigaDiskController.SchedulerWakeReason.None);
+            }
+
+            _cpuVisibilityQueries++;
+            if (_bus.HasPendingCiaInterrupts)
+            {
+                return new CpuVisibilityHorizon(
+                    currentCycle + 1,
+                    CpuVisibilityHorizonReason.PendingInterrupt,
+                    AmigaDiskController.SchedulerWakeReason.None);
+            }
+
+            var mask = cpuInterruptMask < 0 ? 0 : cpuInterruptMask & 7;
+            var bestCycle = targetCycle;
+            var bestReason = CpuVisibilityHorizonReason.TargetCycle;
+            var bestDiskReason = AmigaDiskController.SchedulerWakeReason.None;
+
+            void Consider(
+                long? candidate,
+                CpuVisibilityHorizonReason reason,
+                AmigaDiskController.SchedulerWakeReason diskReason =
+                    AmigaDiskController.SchedulerWakeReason.None)
+            {
+                if (!candidate.HasValue)
+                {
+                    return;
+                }
+
+                var cycle = candidate.Value <= currentCycle
+                    ? currentCycle + 1
+                    : candidate.Value;
+                if (cycle >= bestCycle || cycle > targetCycle)
+                {
+                    return;
+                }
+
+                bestCycle = cycle;
+                bestReason = reason;
+                bestDiskReason = diskReason;
+            }
+
+            Consider(
+                _bus.Paula.GetNextCpuVisibleInterruptCycle(
+                    currentCycle,
+                    targetCycle,
+                    mask),
+                CpuVisibilityHorizonReason.PendingInterrupt);
+            Consider(
+                _bus.NextVerticalBlankCycle,
+                CpuVisibilityHorizonReason.VerticalBlank);
+            Consider(
+                _bus.CiaB.GetNextTodInterruptCycle(
+                    targetCycle,
+                    _bus.NextHorizontalSyncCycle,
+                    _bus.LineCycles),
+                CpuVisibilityHorizonReason.HorizontalSyncTod);
+            Consider(
+                _bus.GetNextCiaInterruptCycle(targetCycle),
+                CpuVisibilityHorizonReason.CiaTimer);
+            var disk = _bus.Disk.GetNextCpuVisibleWakeCandidateCycle(
+                currentCycle,
+                targetCycle,
+                mask,
+                out var diskReason);
+            Consider(disk, CpuVisibilityHorizonReason.Disk, diskReason);
+            Consider(
+                _bus.Paula.GetNextCpuWakeCandidateCycle(
+                    currentCycle,
+                    targetCycle,
+                    mask),
+                CpuVisibilityHorizonReason.Paula);
+            Consider(
+                _bus.Display.GetNextLiveCopperCpuBatchBarrierCycle(
+                    currentCycle,
+                    targetCycle),
+                CpuVisibilityHorizonReason.Copper);
+            Consider(
+                _agenda.Get(AgnusBusAgendaSource.Control),
+                CpuVisibilityHorizonReason.ControlEvent);
+            Consider(
+                _bus.Blitter.GetNextWakeCandidateCycle(
+                    currentCycle,
+                    targetCycle),
+                CpuVisibilityHorizonReason.Blitter);
+
+            return new CpuVisibilityHorizon(
+                bestCycle,
+                bestReason,
+                bestDiskReason);
         }
 
         private void RefreshCpuVisibilityAgenda(long currentCycle, long targetCycle)

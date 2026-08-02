@@ -5908,6 +5908,7 @@ namespace Copper68k
                     dirtyDataRegisters,
                     dirtyAddressRegisters,
                     m68040TranslationChecksEnabled,
+                    !useM68000MemoryHelpers,
                     useM68000MemoryHelpers,
                     minimalCycleTiming)
                 : CompileV2BusAccessBatch(
@@ -5967,6 +5968,7 @@ namespace Copper68k
             int dirtyDataRegisters,
             int dirtyAddressRegisters,
             bool m68040TranslationChecksEnabled,
+            bool useM68020BriefIndexedAddressing,
             bool deferM68000CycleFloor,
             bool minimalCycleTiming)
         {
@@ -5994,6 +5996,7 @@ namespace Copper68k
                 loadAddressRegisters,
                 dirtyDataRegisters,
                 dirtyAddressRegisters);
+            context.SetM68020BriefIndexedAddressing(useM68020BriefIndexedAddressing);
             context.SetM68040TranslationChecks(m68040TranslationChecksEnabled);
             context.SetDeferredM68000CycleFloor(deferM68000CycleFloor);
             context.SetFpuExceptionRegisterWriteback(dirtyDataRegisters, dirtyAddressRegisters);
@@ -6118,6 +6121,7 @@ namespace Copper68k
                 loadAddressRegisters,
                 dirtyDataRegisters,
                 dirtyAddressRegisters);
+            context.SetM68020BriefIndexedAddressing(!useM68000MemoryHelpers);
             context.SetM68040TranslationChecks(m68040TranslationChecksEnabled);
             context.SetM68000MemoryHelpers(useM68000MemoryHelpers);
             context.SetM68040DirectRamEnabled(m68040DirectRamEnabled);
@@ -8672,6 +8676,16 @@ namespace Copper68k
             {
                 il.Emit(OpCodes.Conv_I2);
                 il.Emit(OpCodes.Conv_U4);
+            }
+
+            if (context.UseM68020BriefIndexedAddressing)
+            {
+                var scale = 1 << ((extension >> 9) & 3);
+                if (scale != 1)
+                {
+                    EmitLoadUIntConstant(il, (uint)scale);
+                    il.Emit(OpCodes.Mul);
+                }
             }
         }
 
@@ -12785,7 +12799,9 @@ namespace Copper68k
         }
 
         private uint ResolveIndex(ushort extension)
-            => M68kIntegerSemantics.CalculateM68000BriefIndexValue(extension, State.D, State.A);
+            => _cpuModel == M68kJitCpuModel.M68040
+                ? M68kIntegerSemantics.CalculateM68020BriefIndexedIndexValue(extension, State.D, State.A)
+                : M68kIntegerSemantics.CalculateM68000BriefIndexValue(extension, State.D, State.A);
 
         private uint ReadMemoryValue(uint address, M68kOperandSize size)
         {
@@ -13719,7 +13735,13 @@ namespace Copper68k
         private void PushLong(uint value)
         {
             State.SetActiveStackPointer(State.A[7] - 4);
-            WriteLong(State.A[7], value);
+            WriteLongDescending(State.A[7], value);
+        }
+
+        private void WriteLongDescending(uint address, uint value)
+        {
+            WriteWord(address + 2, (ushort)value);
+            WriteWord(address, (ushort)(value >> 16));
         }
 
         private ushort PullWord()
@@ -15361,6 +15383,8 @@ namespace Copper68k
 
             public bool M68040DirectRamEnabled { get; private set; }
 
+            public bool UseM68020BriefIndexedAddressing { get; private set; }
+
             public bool M68000MemoryHelpers { get; private set; }
 
             public bool DeferredM68000CycleFloor { get; private set; }
@@ -15405,6 +15429,11 @@ namespace Copper68k
             public void SetM68040DirectRamEnabled(bool enabled)
             {
                 M68040DirectRamEnabled = enabled;
+            }
+
+            public void SetM68020BriefIndexedAddressing(bool enabled)
+            {
+                UseM68020BriefIndexedAddressing = enabled;
             }
 
             public void SetM68000MemoryHelpers(bool enabled)

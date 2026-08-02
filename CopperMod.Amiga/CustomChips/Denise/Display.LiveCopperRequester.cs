@@ -758,6 +758,47 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 GetCopperWaitPaletteTailX(_liveCopper.WaitFirst);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool TryCommitUnsatisfiedLiveCopperRequesterWaitComparison(
+            LiveCopperRequester requester,
+            long cycle,
+            long targetCycle)
+        {
+            if (cycle > targetCycle ||
+                !requester.IsCurrentWaitComparisonAt(cycle))
+            {
+                return false;
+            }
+
+            var bfdBusy =
+                (_liveCopper.WaitSecond & 0x8000) == 0 &&
+                _bus.Blitter.BusPipelineActive;
+            if (!bfdBusy &&
+                IsCopperComparisonSatisfied(
+                    _liveCopper.WaitFirst,
+                    _liveCopper.WaitSecond,
+                    _liveFrameStartCycle,
+                    cycle,
+                    blitterFinished: true))
+            {
+                return false;
+            }
+
+            requester.ConsumeCurrentWaitComparison(cycle);
+            _bus.RecordPrevalidatedLiveCopperTransitionCommit();
+            _liveCopperRequesterWaitComparisons++;
+            if (bfdBusy)
+            {
+                _liveCopper.WaitObservedBlitterBusy = true;
+                _liveCopperRequesterBfdBusyObservations++;
+            }
+
+            _liveCopperRequesterNextWaitComparisonCycle =
+                cycle + CopperHpCycles;
+            InvalidateLiveDisplayEventCycle();
+            return true;
+        }
+
         private static long GetNextLiveCopperControlPhase(
             long cycle,
             bool incomingRgaBlocked,
@@ -990,6 +1031,36 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _display.CommitLiveCopperRequesterTransition(
                     _transitionKind,
                     transition.Cycle);
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool IsCurrentWaitComparisonAt(long cycle)
+                => _transitionKind == LiveCopperTransitionKind.WaitComparison &&
+                   _transitionLatch.TryPeek(out var transition) &&
+                   transition.Cycle == cycle &&
+                   transition.Phase ==
+                       AgnusLiveTransitionPhase.BeforeSlotSelection;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public void ConsumeCurrentWaitComparison(long cycle)
+            {
+                if (_requestLatch.TryPeek(out _))
+                {
+                    throw new InvalidOperationException(
+                        "Copper cannot commit a WAIT transition beside a pending word.");
+                }
+
+                if (!_transitionLatch.TryPeek(out var transition) ||
+                    _transitionKind != LiveCopperTransitionKind.WaitComparison ||
+                    transition.Cycle != cycle ||
+                    transition.Phase !=
+                        AgnusLiveTransitionPhase.BeforeSlotSelection)
+                {
+                    throw new InvalidOperationException(
+                        "The live Copper requester has no current WAIT comparison transition.");
+                }
+
+                _transitionLatch.Consume(transition);
             }
 
             public void RetryDeniedWord(long observedSlotCycle)

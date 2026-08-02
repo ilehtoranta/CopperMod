@@ -400,8 +400,13 @@ public sealed class AgnusLiveBlitterRequesterTests
             widthWords: 4,
             height: 1,
             nasty: true);
-        var legacyCycle = 2L;
-        var candidateCycle = 2L;
+        var candidateSlotAudit = new List<AgnusSlotScheduleAuditEntry>();
+        candidate.SetSlotScheduleAuditSink(candidateSlotAudit.Add);
+        // Enter arbitration when the first blitter word is eligible. Starting
+        // the CPU at cycle 2 only proves that it can use a genuinely idle slot
+        // before this fixture's first DMA request at cycle 8.
+        var legacyCycle = 8L;
+        var candidateCycle = 8L;
 
         var legacyValue = legacy.ReadWord(
             SourceA,
@@ -417,6 +422,10 @@ public sealed class AgnusLiveBlitterRequesterTests
             candidateCycle < legacyCycle,
             "The live requester must not reproduce the retrospective legacy " +
             $"BLTPRI idle slots: legacy={legacyCycle}, candidate={candidateCycle}.");
+        Assert.DoesNotContain(candidateSlotAudit, entry =>
+            entry.ReplacedExisting &&
+            entry.Owner is AgnusChipSlotOwner.Cpu or AgnusChipSlotOwner.Blitter &&
+            entry.ReplacedOwner is AgnusChipSlotOwner.Cpu or AgnusChipSlotOwner.Blitter);
         var accesses = BlitterAccesses(candidate);
         Assert.NotEmpty(accesses);
         foreach (var access in accesses)
@@ -1208,9 +1217,13 @@ public sealed class AgnusLiveBlitterRequesterTests
                 access.GrantedCycle < target.GrantedCycle)
             .Last();
 
+        // A taken short branch completes the queued fall-through fetch, spends
+        // one internal slot, and then publishes the target fetch. Measure from
+        // completion so the assertion does not count the fall-through bus slot
+        // itself as an additional internal slot.
         Assert.Equal(
-            3 * AgnusChipSlotScheduler.SlotCycles,
-            target.Request.RequestedCycle - fallthrough.GrantedCycle);
+            fallthrough.CompletedCycle + AgnusChipSlotScheduler.SlotCycles,
+            target.Request.RequestedCycle);
         Assert.Equal(
             3 * AgnusChipSlotScheduler.SlotCycles,
             target.GrantedCycle - target.Request.RequestedCycle);

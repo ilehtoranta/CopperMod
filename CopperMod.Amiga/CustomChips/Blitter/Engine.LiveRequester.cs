@@ -26,6 +26,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private bool _liveAreaPendingDCompletesBlit;
         private bool _liveAreaFinalDDrainActive;
         private long _liveAreaFinalDDrainRequestCycle;
+        private long _liveBlitterCpuAfterSlotBarrierCycle = -1;
 
         private enum LiveBlitterTransitionKind : byte
         {
@@ -79,6 +80,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _liveAreaPendingDCompletesBlit = false;
             _liveAreaFinalDDrainActive = false;
             _liveAreaFinalDDrainRequestCycle = 0;
+            _liveBlitterCpuAfterSlotBarrierCycle = -1;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -136,6 +138,27 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 : long.MaxValue;
         }
 
+        internal long GetNextLiveAgnusSlotKernelCycle()
+        {
+            if (!_bus.AgnusLiveBlitterEnabled || !_busy)
+            {
+                return long.MaxValue;
+            }
+
+            if (!RequiresDmaForCurrentBlit())
+            {
+                // A zero-channel area blit (or a line blit without its DMA
+                // source) still consumes sequencer time, but it must not
+                // publish a bus request. Let the slot kernel visit its scalar
+                // completion edge directly.
+                return GetPredictedCompletionCycle();
+            }
+
+            return IsBlitterDmaEnabled()
+                ? GetNextLiveBlitterRequesterCycle()
+                : long.MaxValue;
+        }
+
         private void StepLiveBlitterRequester(long targetCycle)
         {
             var requester = RequireLiveBlitterRequester();
@@ -155,14 +178,27 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     return;
                 }
 
+                var executedBusHorizon = Math.Max(
+                    _bus.ExecutedChipBusHorizon,
+                    _bus.LiveSlotKernelCommittedCpuThroughCycle);
                 var causalEligibleCycle =
                     AgnusChipSlotScheduler.AlignToSlot(
-                        Math.Max(
-                            request.EarliestEligibleCycle,
-                            _bus.ExecutedChipBusHorizon));
+                        request.EarliestEligibleCycle <= executedBusHorizon
+                            ? executedBusHorizon +
+                              AgnusChipSlotScheduler.SlotCycles
+                            : request.EarliestEligibleCycle);
                 if (causalEligibleCycle > request.EarliestEligibleCycle)
                 {
                     requester.DeferPendingWord(causalEligibleCycle);
+                    if (causalEligibleCycle > targetCycle)
+                    {
+                        // The G6 caller prepared fixed ownership only through
+                        // targetCycle. Do not reserve the causally deferred
+                        // future slot until its own arbitration pass has
+                        // materialized that fixed suffix.
+                        PublishLiveBlitterWakeChange();
+                        return;
+                    }
                 }
 
                 if (!_bus.TryCommitLiveBlitterRequest(
@@ -188,11 +224,337 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
         }
 
+        internal void AdvanceLiveAgnusSlotKernelTo(long slotCycle)
+        {
+            if (!_bus.AgnusLiveBlitterEnabled ||
+                !_busy)
+            {
+                return;
+            }
+
+            if (!RequiresDmaForCurrentBlit())
+            {
+                if (HasAdvanceWorkThrough(slotCycle))
+                {
+                    ExecuteAdmittedWorkThrough(slotCycle);
+                }
+
+                return;
+            }
+
+            if (!IsBlitterDmaEnabled())
+            {
+                return;
+            }
+
+            var requester = RequireLiveBlitterRequester();
+            var settlingDeferredAfterSlot = false;
+            for (var step = 0; step < 16; step++)
+            {
+                var nextCycle = GetNextLiveBlitterRequesterCycle();
+                if (nextCycle > slotCycle)
+                {
+                    return;
+                }
+
+                EnsureLiveBlitterRequesterPublication(requester);
+                if (requester.TryPeekNextTransition(out var transition) &&
+                    transition.Cycle == slotCycle &&
+                    transition.Phase == AgnusLiveTransitionPhase.AfterSlotCommit &&
+                    !settlingDeferredAfterSlot)
+                {
+                    // Selection at this canonical cycle precedes an after-slot
+                    // transition. Committing it here could publish and grant
+                    // the next blitter word in the very slot that caused the
+                    // transition. Leave it pending until the following slot.
+                    return;
+                }
+
+                if (requester.TryPeekNextTransition(out transition) &&
+                    transition.Cycle < slotCycle &&
+                    transition.Phase == AgnusLiveTransitionPhase.AfterSlotCommit)
+                {
+                    // This edge was deliberately held at the preceding slot.
+                    // Its internal transition chain is now part of the current
+                    // pre-selection boundary; do not impose the same barrier a
+                    // second time on a transition it publishes at slotCycle.
+                    var crossedCpuBarrier =
+                        transition.Cycle == _liveBlitterCpuAfterSlotBarrierCycle;
+                    settlingDeferredAfterSlot = !crossedCpuBarrier;
+                    if (crossedCpuBarrier)
+                    {
+                        _liveBlitterCpuAfterSlotBarrierCycle = -1;
+                    }
+                }
+
+                var version = _wakeVersion;
+                // Settle the requester against the arbitration boundary the
+                // G6 caller has actually prepared. Passing nextCycle here
+                // fragments one Stage-5 target into several artificial calls:
+                // a word deferred from an occupied earlier slot then becomes
+                // invisible to arbitration at slotCycle.
+                StepLiveBlitterRequester(slotCycle);
+
+                if (_wakeVersion == version &&
+                    GetNextLiveBlitterRequesterCycle() == nextCycle)
+                {
+                    throw new InvalidOperationException(
+                        $"The G6L blitter requester made no progress at cycle {nextCycle}.");
+                }
+            }
+
+            var remainingCycle = GetNextLiveBlitterRequesterCycle();
+            throw new InvalidOperationException(
+                $"The G6L blitter requester did not settle slot {slotCycle}: " +
+                $"next={remainingCycle}, bus={_bus.ExecutedChipBusHorizon}, " +
+                $"line={_lineMode}, areaIndex={_areaMicroOpIndex}/{GetAreaMicroOpCount()}, " +
+                $"lineIndex={_lineMicroOpIndex}/{_lineMicroOpCount}.");
+        }
+
+        internal void AdvanceLiveAgnusCpuPreGrantTo(long slotCycle)
+        {
+            if (!_bus.AgnusLiveBlitterEnabled ||
+                !_busy ||
+                !RequiresDmaForCurrentBlit() ||
+                !IsBlitterDmaEnabled())
+            {
+                AdvanceLiveAgnusSlotKernelTo(slotCycle);
+                return;
+            }
+
+            var requester = RequireLiveBlitterRequester();
+            var carriedCpuBarrier =
+                _liveBlitterCpuAfterSlotBarrierCycle >= 0 &&
+                _liveBlitterCpuAfterSlotBarrierCycle < slotCycle;
+            var finishesPriorAreaWord =
+                requester.TransitionKind == LiveBlitterTransitionKind.FinishAreaWord;
+            if ((carriedCpuBarrier || finishesPriorAreaWord) &&
+                HasLiveAgnusSlotKernelAfterSlotTransitionAt(slotCycle))
+            {
+                // Stage 5 can enter this pre-grant drain one internal
+                // transition behind the slot kernel after returning across a
+                // CPU-owned boundary. Consume exactly that carried transition;
+                // the regular slot settle below still stops at any new
+                // after-slot edge produced by the current transfer.
+                StepLiveBlitterRequester(slotCycle);
+                _liveBlitterCpuAfterSlotBarrierCycle = -1;
+            }
+
+            AdvanceLiveAgnusSlotKernelTo(slotCycle);
+        }
+
+        internal bool TryCommitNextLiveAgnusCpuPreGrantTransition(
+            long slotCycle,
+            ref bool cpuBoundaryPrepared,
+            ref bool settlingDeferredAfterSlot)
+        {
+            if (!_bus.AgnusLiveBlitterEnabled || !_busy)
+            {
+                return false;
+            }
+
+            if (!RequiresDmaForCurrentBlit())
+            {
+                if (!HasAdvanceWorkThrough(slotCycle))
+                {
+                    return false;
+                }
+
+                var previousCycle = _currentCycle;
+                var previousBusy = _busy;
+                var previousCompletionPending = _completionPending;
+                var schedulerWake = CaptureSchedulerWakeSignature();
+                try
+                {
+                    if (_completionPending)
+                    {
+                        FinalizePendingCompletion();
+                    }
+                    else if (_lineMode)
+                    {
+                        StepLinePixel(slotCycle);
+                    }
+                    else
+                    {
+                        StepAreaWord(slotCycle);
+                    }
+                }
+                finally
+                {
+                    if (_currentCycle != previousCycle ||
+                        _busy != previousBusy ||
+                        _completionPending != previousCompletionPending)
+                    {
+                        _wakeVersion++;
+                    }
+
+                    UpdateSchedulerWakeVersionIfChanged(schedulerWake);
+                    _bus.PublishDmaconrState(_currentCycle);
+                }
+
+                return true;
+            }
+
+            if (!IsBlitterDmaEnabled())
+            {
+                return false;
+            }
+
+            var requester = RequireLiveBlitterRequester();
+            if (!cpuBoundaryPrepared)
+            {
+                cpuBoundaryPrepared = true;
+                var carriedCpuBarrier =
+                    _liveBlitterCpuAfterSlotBarrierCycle >= 0 &&
+                    _liveBlitterCpuAfterSlotBarrierCycle < slotCycle;
+                var finishesPriorAreaWord =
+                    requester.TransitionKind == LiveBlitterTransitionKind.FinishAreaWord;
+                if ((carriedCpuBarrier || finishesPriorAreaWord) &&
+                    HasLiveAgnusSlotKernelAfterSlotTransitionAt(slotCycle))
+                {
+                    StepLiveBlitterRequester(slotCycle);
+                    _liveBlitterCpuAfterSlotBarrierCycle = -1;
+                    return true;
+                }
+            }
+
+            var nextCycle = GetNextLiveBlitterRequesterCycle();
+            if (nextCycle > slotCycle)
+            {
+                return false;
+            }
+
+            EnsureLiveBlitterRequesterPublication(requester);
+            if (requester.TryPeekNextTransition(out var transition) &&
+                transition.Cycle == slotCycle &&
+                transition.Phase == AgnusLiveTransitionPhase.AfterSlotCommit &&
+                !settlingDeferredAfterSlot)
+            {
+                return false;
+            }
+
+            if (requester.TryPeekNextTransition(out transition) &&
+                transition.Cycle < slotCycle &&
+                transition.Phase == AgnusLiveTransitionPhase.AfterSlotCommit)
+            {
+                var crossedCpuBarrier =
+                    transition.Cycle == _liveBlitterCpuAfterSlotBarrierCycle;
+                settlingDeferredAfterSlot = !crossedCpuBarrier;
+                if (crossedCpuBarrier)
+                {
+                    _liveBlitterCpuAfterSlotBarrierCycle = -1;
+                }
+            }
+
+            var version = _wakeVersion;
+            StepLiveBlitterRequester(slotCycle);
+            if (_wakeVersion == version &&
+                GetNextLiveBlitterRequesterCycle() == nextCycle)
+            {
+                throw new InvalidOperationException(
+                    $"The G6L blitter requester made no progress at cycle {nextCycle}.");
+            }
+
+            return true;
+        }
+
+        internal bool HasLiveAgnusSlotKernelAfterSlotTransitionThrough(
+            long slotCycle)
+        {
+            if (!_bus.AgnusLiveBlitterEnabled ||
+                !_busy ||
+                !RequiresDmaForCurrentBlit() ||
+                !IsBlitterDmaEnabled())
+            {
+                return false;
+            }
+
+            var requester = RequireLiveBlitterRequester();
+            EnsureLiveBlitterRequesterPublication(requester);
+            return requester.TryPeekNextTransition(out var transition) &&
+                transition.Cycle <= slotCycle &&
+                transition.Phase == AgnusLiveTransitionPhase.AfterSlotCommit;
+        }
+
+        internal bool HasLiveAgnusSlotKernelAfterSlotTransitionAt(long slotCycle)
+        {
+            if (!_bus.AgnusLiveBlitterEnabled ||
+                !_busy ||
+                !RequiresDmaForCurrentBlit() ||
+                !IsBlitterDmaEnabled())
+            {
+                return false;
+            }
+
+            var requester = RequireLiveBlitterRequester();
+            EnsureLiveBlitterRequesterPublication(requester);
+            return requester.TryPeekNextTransition(out var transition) &&
+                transition.Cycle == slotCycle &&
+                transition.Phase == AgnusLiveTransitionPhase.AfterSlotCommit;
+        }
+
+        internal bool HasLiveAgnusCpuBoundaryFinishTransitionAt(long slotCycle)
+        {
+            if (!_bus.AgnusLiveBlitterEnabled ||
+                !_busy ||
+                !RequiresDmaForCurrentBlit() ||
+                !IsBlitterDmaEnabled())
+            {
+                return false;
+            }
+
+            var requester = RequireLiveBlitterRequester();
+            EnsureLiveBlitterRequesterPublication(requester);
+            return requester.TransitionKind == LiveBlitterTransitionKind.FinishAreaWord &&
+                requester.TryPeekNextTransition(out var transition) &&
+                transition.Cycle == slotCycle &&
+                transition.Phase == AgnusLiveTransitionPhase.AfterSlotCommit;
+        }
+
+        internal bool HasLiveAgnusCpuGrantAfterSlotBarrierAt(long slotCycle)
+            => _liveBlitterCpuAfterSlotBarrierCycle == slotCycle &&
+                HasLiveAgnusSlotKernelAfterSlotTransitionAt(slotCycle);
+
+        internal void ObserveLiveAgnusSlotKernelCpuGrant(long slotCycle)
+        {
+            if (!_bus.AgnusLiveBlitterEnabled || !_busy)
+            {
+                return;
+            }
+
+            var requester = RequireLiveBlitterRequester();
+            EnsureLiveBlitterRequesterPublication(requester);
+            if (requester.TryPeekNextTransition(out var transition) &&
+                transition.Cycle == slotCycle &&
+                transition.Phase == AgnusLiveTransitionPhase.AfterSlotCommit)
+            {
+                // A CPU word samples this slot before the transition can be
+                // committed. Preserve that boundary across the return to the
+                // CPU so the next G6 entry does not collapse both the deferred
+                // edge and the transition it publishes into one slot.
+                _liveBlitterCpuAfterSlotBarrierCycle = slotCycle;
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void PublishLiveBlitterWakeChange()
         {
             _wakeVersion++;
             _schedulerWakeVersion++;
+            // DMACONR is a device-published register. The Stage-5 executor
+            // republishes it from Blitter.AdvanceTo's epilogue, but the G6L
+            // slot kernel commits requester words and transitions directly.
+            // Keep BBUSY/BLTZERO readback coherent at the same device edge.
+            _bus.PublishDmaconrState(_currentCycle);
+            var nextCycle = GetNextLiveBlitterRequesterCycle();
+            if (nextCycle != long.MaxValue)
+            {
+                // The Stage-5 scheduler can have a clean-through horizon ahead
+                // of the word that just committed. Publishing the following
+                // micro-op must retract that horizon or a later CPU access can
+                // be granted before an already-due blitter word.
+                _bus.NotifyHardwareWorkScheduled(nextCycle);
+            }
         }
 
         private void EnsureLiveBlitterRequesterPublication(

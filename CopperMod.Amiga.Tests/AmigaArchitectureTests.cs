@@ -6,7 +6,7 @@ namespace CopperMod.Amiga.Tests;
 public sealed class AmigaArchitectureTests
 {
 	[Fact]
-	public void AgnusSlotKernelRequestIsExplicitAndLegacyRemainsActiveUntilConnected()
+	public void AgnusSlotKernelRequestIsExplicitAndConnectsOnlyForTheSupportedProfile()
 	{
 		using var legacy = new Machine(
 			MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton));
@@ -19,9 +19,14 @@ public sealed class AmigaArchitectureTests
 		Assert.False(legacy.Bus.AgnusSlotKernelSelected);
 		Assert.Equal(AgnusBusArbitrationMode.SlotKernel, kernel.Options.AgnusBusArbitration);
 		Assert.True(Machine.IsAgnusSlotKernelConfigurationSupported(kernel.Options));
-		Assert.False(Machine.AgnusSlotKernelProductionConnected);
-		Assert.Equal(AgnusBusArbitrationMode.Legacy, kernel.Bus.AgnusBusArbitration);
-		Assert.False(kernel.Bus.AgnusSlotKernelSelected);
+		Assert.True(Machine.AgnusSlotKernelProductionConnected);
+		Assert.Equal(AgnusBusArbitrationMode.SlotKernel, kernel.Bus.AgnusBusArbitration);
+		Assert.True(kernel.Bus.AgnusSlotKernelSelected);
+		Assert.True(kernel.Bus.AgnusLiveDisplayLedgerEnabled);
+		Assert.True(kernel.Bus.AgnusLiveCopperEnabled);
+		Assert.True(kernel.Bus.AgnusLiveBlitterEnabled);
+		Assert.True(kernel.Bus.AgnusLivePaulaEnabled);
+		Assert.True(kernel.Bus.AgnusLiveDiskEnabled);
 	}
 
 	[Fact]

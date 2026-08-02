@@ -370,9 +370,10 @@ namespace CopperMod.Amiga.Bus
         private int EncodeVhposrHorizontal(int beamHorizontal, long cycle)
         {
             var physicalHorizontal = Math.Clamp(beamHorizontal, 0, 0xE2);
-            // Internal RGA slot coordinates precede externally visible Agnus
-            // HPOS by three CCKs. VHPOSR then returns the position after the
-            // register access advances the horizontal counter once.
+            // CPU reads sample VHPOSR in the granted RGA phase. The externally
+            // visible horizontal counter is four color clocks ahead of that
+            // internal slot coordinate; transfer completion does not advance
+            // the sampled value.
             return (int)((physicalHorizontal + 4) % Math.Max(
                 1,
                 _beamClock.GetLineCyclesAt(cycle) / _rasterTiming.CpuCyclesPerColorClock));
@@ -398,7 +399,7 @@ namespace CopperMod.Amiga.Bus
             // ordinary longword accesses).
             var grantRequestCycle = requestedCycle;
             _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite: true, AmigaBusAccessSize.Long);
-            if (Blitter.BusPipelineActive)
+            if (Blitter.BusPipelineActive && !AgnusLiveBlitterEnabled)
             {
                 grantRequestCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(grantRequestCycle);
             }
@@ -427,7 +428,7 @@ namespace CopperMod.Amiga.Bus
             WriteCpuCustomRegisterWord(address, (ushort)(value >> 16), firstWordCycle);
 
             var secondSearchCycle = firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles;
-            if (Blitter.BusPipelineActive)
+            if (Blitter.BusPipelineActive && !AgnusLiveBlitterEnabled)
             {
                 secondSearchCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(secondSearchCycle);
             }
@@ -474,15 +475,27 @@ namespace CopperMod.Amiga.Bus
                 accessKind,
                 requestedCycle,
                 searchCycle);
-            _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
-                accessKind,
-                target,
-                address,
-                searchCycle,
-                requestedCycle,
-                isWrite: true,
-                out grantedCycle,
-                out completedCycle);
+            if (!Blitter.BusPipelineActive ||
+                !TryGrantCpuDataLongWordPhaseChronologically(
+                    accessKind,
+                    target,
+                    address,
+                    searchCycle,
+                    requestedCycle,
+                    isWrite: true,
+                    out grantedCycle,
+                    out completedCycle))
+            {
+                _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
+                    accessKind,
+                    target,
+                    address,
+                    searchCycle,
+                    requestedCycle,
+                    isWrite: true,
+                    out grantedCycle,
+                    out completedCycle);
+            }
         }
 
 
@@ -685,6 +698,7 @@ namespace CopperMod.Amiga.Bus
             if (offset == AgnusRegisterBank.Vposw)
             {
                 _beamClock.ApplyVposw(value, writeCycle);
+                Display.RefreshLiveFrameStopAfterTimingChange();
                 _agnusBusExecutor.UpdateGeometry(_beamClock.GetPosition(writeCycle).FrameCycles);
                 _lineCycles = _beamClock.MaximumLineCycles;
                 RecalculateRasterEvents(writeCycle);

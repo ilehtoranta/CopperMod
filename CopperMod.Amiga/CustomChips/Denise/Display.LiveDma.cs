@@ -28,8 +28,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             if (!_liveDmaEnabled ||
                 !_bus.LiveAgnusDmaEnabled ||
-                !_liveFrameValid ||
-                !HasLiveDisplayWork())
+                !_liveFrameValid)
             {
                 return false;
             }
@@ -43,6 +42,65 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         GetNextLiveSpriteFetchCycle(),
                         GetNextLiveCopperCycle(Math.Min(targetCycle + 1, GetLiveFrameStopCycle())))));
             return nextCycle <= targetCycle;
+        }
+
+        internal void AdvanceLiveAgnusSlotKernelTo(long slotCycle)
+        {
+            if (!_liveDmaEnabled ||
+                !_bus.LiveAgnusDmaEnabled ||
+                !_liveFrameValid ||
+                !HasLiveDisplayWork())
+            {
+                return;
+            }
+
+            // An exact CPU-slot request can be the first hardware action after
+            // a frame boundary. Use the frame-aware entry point so the old
+            // frame is closed and the new frame's Copper requester is
+            // published before arbitration at this slot.
+            AdvanceLiveDmaTo(Math.Max(_liveFrameStartCycle, slotCycle));
+        }
+
+        internal long GetNextLiveAgnusSlotKernelCycle()
+        {
+            if (!_liveDmaEnabled ||
+                !_bus.LiveAgnusDmaEnabled ||
+                !_liveFrameValid ||
+                !HasLiveDisplayWork())
+            {
+                return long.MaxValue;
+            }
+
+            // Use only the exact local transition cursors. The general display
+            // wake candidate is CPU-visibility oriented and rebuilds a broader
+            // query that the one-slot G6 boundary neither needs nor consumes.
+            return Math.Min(
+                GetLiveFrameStopCycle(),
+                Math.Min(
+                    GetNextLiveLineStateCycle(),
+                    Math.Min(
+                        GetNextLiveBitplaneFetchCycle(),
+                        Math.Min(
+                            GetNextLiveSpriteFetchCycle(),
+                            Math.Min(
+                                GetNextLivePendingWriteCycle(),
+                                GetNextLiveCopperRequesterCycle())))));
+        }
+
+        internal bool HasLiveAgnusFrameBoundaryThrough(long slotCycle)
+            => _liveDmaEnabled &&
+               _bus.LiveAgnusDmaEnabled &&
+               _liveFrameValid &&
+               HasLiveDisplayWork() &&
+               slotCycle >= GetLiveFrameStopCycle();
+
+        internal bool HasLiveAgnusFixedRequestAt(long slotCycle)
+        {
+            slotCycle = AgnusChipSlotScheduler.AlignToSlot(
+                Math.Max(0, slotCycle));
+            return GetNextPreparedLiveBitplaneFetchCycle() == slotCycle ||
+                GetNextLiveBitplaneFetchCycle() == slotCycle ||
+                GetNextLiveSpriteFetchCycle() == slotCycle;
         }
 
         internal OcsCpuWaitLiveSlotResult AdvanceCpuWaitLiveSlot(
@@ -338,6 +396,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 if (before < frameStopCycle)
                 {
+                    // A pre-grant display scan may reach a future fixed slot
+                    // before the causal executor has advanced Disk or Paula.
+                    // Settle those higher-priority fixed requesters first so
+                    // Copper may reuse the slot only when its owner is idle.
+                    _bus.AdvanceDueLiveFixedRequestersTo(before);
                     AdvanceLiveDmaWithinFrame(before, includeCopper);
                 }
 

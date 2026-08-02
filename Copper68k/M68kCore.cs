@@ -1550,6 +1550,30 @@ namespace Copper68k
         }
 
         /// <summary>
+        /// Updates the negative, zero, overflow, and carry condition codes for a
+        /// logical result of any operand size in a single status-register update.
+        /// </summary>
+        /// <param name="value">The result to test.</param>
+        /// <param name="size">The operand size that defines the mask and sign bit.</param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void SetSizedLogicFlags(uint value, M68kOperandSize size)
+        {
+            value &= Mask(size);
+            var status = _statusRegister & unchecked((ushort)~(Negative | Zero | Overflow | Carry));
+            if (value == 0)
+            {
+                status |= Zero;
+            }
+
+            if ((value & SignBit(size)) != 0)
+            {
+                status |= Negative;
+            }
+
+            _statusRegister = (ushort)status;
+        }
+
+        /// <summary>
         /// Updates the negative and zero condition codes from a long-sized value
         /// without the Mask/SignBit dispatch overhead.
         /// </summary>
@@ -1925,6 +1949,7 @@ namespace Copper68k
         private readonly IM68000BusCycleTiming? _m68000BusCycleTiming;
         private readonly M68kInstructionFrequencyMatrix _instructionFrequency;
         private readonly M68kOpcodePlanDispatch _opcodePlanDispatch;
+        private readonly bool _useM68020BriefIndexedAddressing;
         private M68kInstructionFetchWindow _instructionFetchWindow;
         private readonly M68000ExecutionTimeline _executionTimeline = new();
         private readonly M68000BusTimeline _busTimeline = new();
@@ -2034,7 +2059,8 @@ namespace Copper68k
             bool enableInstructionFetchWindow = true,
             bool enableCpuBusPhaseTrace = true,
             bool enableOpcodePlan = true,
-            M68kOpcodePlanDispatch opcodePlanDispatch = M68kOpcodePlanDispatch.KindTable)
+            M68kOpcodePlanDispatch opcodePlanDispatch = M68kOpcodePlanDispatch.KindTable,
+            bool useM68020BriefIndexedAddressing = false)
         {
             _typedBus = bus ?? throw new ArgumentNullException(nameof(bus));
             _bus = bus;
@@ -2058,6 +2084,7 @@ namespace Copper68k
             State = state ?? throw new ArgumentNullException(nameof(state));
             _instructionFrequency = instructionFrequency ?? new M68kInstructionFrequencyMatrix();
             _opcodePlanDispatch = enableOpcodePlan ? opcodePlanDispatch : M68kOpcodePlanDispatch.Scalar;
+            _useM68020BriefIndexedAddressing = useM68020BriefIndexedAddressing;
             if (_fixedPlanRunBus != null && _opcodePlanDispatch != M68kOpcodePlanDispatch.Scalar)
             {
                 _fixedPlanRunSlots = new M68000FixedPlanRunSlot[FixedPlanRunCacheSlotCount];
@@ -2163,6 +2190,7 @@ namespace Copper68k
                 targetCycle.HasValue &&
                 !_instructionFrequency.Enabled &&
                 busAccessBatchBoundary != null;
+            var cachedRunAdmissionRetryInstructions = 0;
             while (!State.Halted &&
                 instructions < maxInstructions &&
                 (!targetCycle.HasValue || State.Cycles < targetCycle.Value))
@@ -2191,7 +2219,11 @@ namespace Copper68k
                     continue;
                 }
 
-                if ((fixedPlanRunAdmissionEnabled || fastMemoryRunAdmissionEnabled) &&
+                if (cachedRunAdmissionRetryInstructions != 0)
+                {
+                    cachedRunAdmissionRetryInstructions--;
+                }
+                else if ((fixedPlanRunAdmissionEnabled || fastMemoryRunAdmissionEnabled) &&
                     _prefetchCount > 0 &&
                     _prefetchAddress == State.ProgramCounter)
                 {
@@ -2213,10 +2245,15 @@ namespace Copper68k
                     // run has actually executed. Hardware-bound execution
                     // re-enters this method at the next boundary, while
                     // generic or memory-heavy batches avoid paying a probe on
-                    // every unsupported instruction.
+                    // every unsupported instruction. A fast-memory bus keeps
+                    // its admission alive across the whole call, so back the
+                    // probe off for a bounded instruction window instead of
+                    // rescanning the window on every scalar instruction.
                     if (!_hasPendingPrefetch)
                     {
                         fixedPlanRunAdmissionEnabled = false;
+                        cachedRunAdmissionRetryInstructions =
+                            CachedFixedPlanRunAdmissionRetryInstructionCount;
                     }
 
                     if (fastBatchAdmissionPending &&
@@ -2346,6 +2383,10 @@ namespace Copper68k
         // admission scan across enough scalar instructions to cover its cost.
         private const byte DeferredCpuBusBatchShortChipExitAdmissionRetryInstructionCount = 160;
         private const int DeferredCpuBusBatchShortChipExitInstructionLimit = 3;
+        // A failed cached fixed-plan-run probe rescans the whole run window.
+        // Amortize the next probe across enough scalar instructions to cover
+        // that scan instead of paying it on every unsupported instruction.
+        private const int CachedFixedPlanRunAdmissionRetryInstructionCount = 24;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool CanAttemptDeferredCpuBusBatch(int maxInstructions)
@@ -7519,7 +7560,7 @@ namespace Copper68k
                     var extensionAddress = State.ProgramCounter;
                     var extension = FetchWord();
                     return PlannedEaOperand.Memory(
-                        M68kIntegerSemantics.CalculateM68000BriefIndexedAddress(State.A[register], extension, State.D, State.A),
+                        CalculateBriefIndexedAddress(State.A[register], extension),
                         size,
                         GetEaOperandCycles(mode, register, size),
                         unchecked((uint)(extensionAddress +
@@ -7595,7 +7636,7 @@ namespace Copper68k
                     var extensionAddress = State.ProgramCounter;
                     var extension = FetchWord();
                     return PlannedEaOperand.Memory(
-                        M68kIntegerSemantics.CalculateM68000BriefIndexedAddress(extensionAddress, extension, State.D, State.A),
+                        CalculateBriefIndexedAddress(extensionAddress, extension),
                         size,
                         GetEaOperandCycles(7, register, size),
                         extensionAddress,
@@ -8803,6 +8844,18 @@ namespace Copper68k
 
         private bool DecodeLine4(ushort opcode, uint instructionPc)
         {
+            // The unary group (NEGX, CLR, NEG, NOT, TST) dominates line 4 in
+            // real code, while every other form in this method either uses
+            // size bits 0b11 or a 0x41/0x48/0x4E prefix. Dispatching it first
+            // keeps the hot path off the rare control/supervisor chain below
+            // without changing which form any opcode selects.
+            var unaryGroup = opcode & 0xFF00;
+            if (((opcode >> 6) & 3) != 3 &&
+                unaryGroup is 0x4000 or 0x4200 or 0x4400 or 0x4600 or 0x4A00)
+            {
+                return ExecuteLine4Unary(opcode, instructionPc, unaryGroup);
+            }
+
             switch (opcode)
             {
                 case 0x44FC:
@@ -9221,76 +9274,7 @@ namespace Copper68k
 
             if (unary is 0x4000 or 0x4200 or 0x4400 or 0x4600 or 0x4A00)
             {
-                var size = DecodeImmediateSize(opcode);
-                if (size == 0)
-                {
-                    RaiseException(4, instructionPc, 34);
-                    return true;
-                }
-
-                var mode = (opcode >> 3) & 7;
-                var reg = opcode & 7;
-                if (!IsDataAlterableEffectiveAddress(mode, reg))
-                {
-                    RaiseException(4, instructionPc, 34);
-                    return true;
-                }
-
-                var writesEffectiveAddress = unary != 0x4A00;
-                var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
-                    size == M68kOperandSize.Long &&
-                    mode is 4 or 5 or 6
-                        ? -2
-                        : 0;
-                var ea = ResolveEa(
-                    mode,
-                    reg,
-                    size,
-                    write: writesEffectiveAddress,
-                    completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word,
-                    addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
-                if (writesEffectiveAddress && size == M68kOperandSize.Long && mode == 4)
-                {
-                    SetAddressRegister(reg, ea.Address);
-                }
-
-                if (size != M68kOperandSize.Long && !ea.IsRegister)
-                {
-                    AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
-                }
-
-                var value = ea.Read();
-                switch (unary)
-                {
-                    case 0x4000:
-                        value = SubtractWithExtend(0, value, size);
-                        ea.Write(value);
-                        break;
-                    case 0x4200:
-                        value = 0;
-                        ea.Write(value);
-                        State.SetNegativeZero(0, size);
-                        State.SetFlag(M68kCpuState.Overflow, false);
-                        State.SetFlag(M68kCpuState.Carry, false);
-                        break;
-                    case 0x4400:
-                        value = Subtract(0, value, size, setExtend: true);
-                        ea.Write(value);
-                        break;
-                    case 0x4600:
-                        value = (~value) & M68kCpuState.Mask(size);
-                        ea.Write(value);
-                        SetLogicFlags(value, size);
-                        break;
-                    case 0x4A00:
-                        State.SetNegativeZero(value, size);
-                        State.SetFlag(M68kCpuState.Overflow, false);
-                        State.SetFlag(M68kCpuState.Carry, false);
-                        break;
-                }
-
-                AddInstructionCycles(GetUnaryCycles(unary, mode, reg, size));
-                return true;
+                return ExecuteLine4Unary(opcode, instructionPc, unary);
             }
 
             if ((opcode & 0xF1C0) == 0x4180)
@@ -9698,6 +9682,115 @@ namespace Copper68k
                 ? 4
                 : size == M68kOperandSize.Long ? 12 : 8;
             return baseCycles + GetEaOperandCycles(mode, reg, size);
+        }
+
+        /// <summary>
+        /// Executes the line-4 unary group (NEGX, CLR, NEG, NOT, TST).
+        /// </summary>
+        private bool ExecuteLine4Unary(ushort opcode, uint instructionPc, int unary)
+        {
+            var size = DecodeImmediateSize(opcode);
+            if (size == 0)
+            {
+                RaiseException(4, instructionPc, 34);
+                return true;
+            }
+
+            var mode = (opcode >> 3) & 7;
+            var reg = opcode & 7;
+            if (mode == 0)
+            {
+                // Data-register direct needs no effective-address operand:
+                // there is no extension word, no bus access, no register
+                // side effect, and no odd-address fault to account for.
+                var registerMask = M68kCpuState.Mask(size);
+                var current = State.D[reg] & registerMask;
+                switch (unary)
+                {
+                    case 0x4000:
+                        WriteDataRegister(reg, SubtractWithExtend(0, current, size) & registerMask, size);
+                        break;
+                    case 0x4200:
+                        WriteDataRegister(reg, 0, size);
+                        State.SetSizedLogicFlags(0, size);
+                        break;
+                    case 0x4400:
+                        WriteDataRegister(reg, Subtract(0, current, size, setExtend: true) & registerMask, size);
+                        break;
+                    case 0x4600:
+                    {
+                        var inverted = (~current) & registerMask;
+                        WriteDataRegister(reg, inverted, size);
+                        State.SetSizedLogicFlags(inverted, size);
+                        break;
+                    }
+                    default:
+                        State.SetSizedLogicFlags(current, size);
+                        break;
+                }
+
+                AddInstructionCycles(
+                    unary == 0x4A00 || size != M68kOperandSize.Long ? 4 : 6);
+                return true;
+            }
+
+            if (!IsDataAlterableEffectiveAddress(mode, reg))
+            {
+                RaiseException(4, instructionPc, 34);
+                return true;
+            }
+
+            var writesEffectiveAddress = unary != 0x4A00;
+            var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
+                size == M68kOperandSize.Long &&
+                mode is 4 or 5 or 6
+                    ? -2
+                    : 0;
+            var ea = ResolveEa(
+                mode,
+                reg,
+                size,
+                write: writesEffectiveAddress,
+                completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word,
+                addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
+            if (writesEffectiveAddress && size == M68kOperandSize.Long && mode == 4)
+            {
+                SetAddressRegister(reg, ea.Address);
+            }
+
+            if (size != M68kOperandSize.Long && !ea.IsRegister)
+            {
+                AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+            }
+
+            var value = ea.Read();
+            switch (unary)
+            {
+                case 0x4000:
+                    value = SubtractWithExtend(0, value, size);
+                    ea.Write(value);
+                    break;
+                case 0x4200:
+                    value = 0;
+                    ea.Write(value);
+                    State.SetSizedLogicFlags(0, size);
+                    break;
+                case 0x4400:
+                    value = Subtract(0, value, size, setExtend: true);
+                    ea.Write(value);
+                    break;
+                case 0x4600:
+                    value = (~value) & M68kCpuState.Mask(size);
+                    ea.Write(value);
+                    SetLogicFlags(value, size);
+                    break;
+                case 0x4A00:
+                    State.SetSizedLogicFlags(value, size);
+                    break;
+            }
+
+            AddInstructionCycles(GetUnaryCycles(unary, mode, reg, size));
+            return true;
         }
 
         private static bool IsDataAlterableEffectiveAddress(int mode, int reg)
@@ -10554,6 +10647,7 @@ namespace Copper68k
 
                 SetAddressRegister(reg, address);
                 AddInstructionCycles(8 + CountBits(registerMask) * predecrementTransferCycles);
+                CommitMovemRetirementPrefetchIfRequestPhaseStarted();
                 return;
             }
 
@@ -10698,7 +10792,7 @@ namespace Copper68k
                     var extension = FetchWord();
                     return EaOperand.Memory(
                         this,
-                        M68kIntegerSemantics.CalculateM68000BriefIndexedAddress(State.A[reg], extension, State.D, State.A),
+                        CalculateBriefIndexedAddress(State.A[reg], extension),
                         size,
                         GetEaOperandCycles(mode, reg, size),
                         unchecked((uint)(extensionAddress +
@@ -10738,6 +10832,28 @@ namespace Copper68k
             {
                 _consumeWithoutPrefetch = previous;
             }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private uint CalculateBriefIndexedAddress(uint baseAddress, ushort extension)
+        {
+            if (_useM68020BriefIndexedAddressing &&
+                (extension & 0x0100) == 0 &&
+                M68kIntegerSemantics.TryCalculateM68020BriefIndexedAddress(
+                    baseAddress,
+                    extension,
+                    State.D,
+                    State.A,
+                    out var scaledAddress))
+            {
+                return scaledAddress;
+            }
+
+            return M68kIntegerSemantics.CalculateM68000BriefIndexedAddress(
+                baseAddress,
+                extension,
+                State.D,
+                State.A);
         }
 
         private uint GetPredecrementStackedProgramCounter(M68kOperandSize size)
@@ -10803,7 +10919,7 @@ namespace Copper68k
             var extension = FetchWord();
             return EaOperand.Memory(
                 this,
-                M68kIntegerSemantics.CalculateM68000BriefIndexedAddress(extensionAddress, extension, State.D, State.A),
+                CalculateBriefIndexedAddress(extensionAddress, extension),
                 size,
                 GetEaOperandCycles(7, 3, size),
                 extensionAddress,
@@ -10922,11 +11038,10 @@ namespace Copper68k
             State.StatusRegister = (ushort)((State.StatusRegister & 0xFFE0) | (value & 0x001F));
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void SetLogicFlags(uint value, M68kOperandSize size)
         {
-            State.SetNegativeZero(value, size);
-            State.SetFlag(M68kCpuState.Overflow, false);
-            State.SetFlag(M68kCpuState.Carry, false);
+            State.SetSizedLogicFlags(value, size);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -11155,8 +11270,6 @@ namespace Copper68k
             _skipRetirePrefetchTopUp = true;
         }
 
-
-
         private void CompleteExpiredDbccRefill(uint abandonedTarget, uint stackedProgramCounter)
         {
             ValidateBranchTarget(abandonedTarget, stackedProgramCounter);
@@ -11243,8 +11356,7 @@ namespace Copper68k
         private void PushSubroutineReturnAddress(uint value)
         {
             State.SetActiveStackPointer(State.A[7] - 4);
-            WriteWord(State.A[7], (ushort)(value >> 16));
-            WriteWord(State.A[7] + 2, (ushort)value);
+            WriteLongDescending(State.A[7], value);
         }
 
         private void ResetPrefetchPipeline()
@@ -11550,6 +11662,37 @@ namespace Copper68k
                 // instruction (notably CMP; Bcc at a refresh boundary).
                 _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, readyCycle);
             }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CommitMovemRetirementPrefetchIfRequestPhaseStarted()
+        {
+            if (_m68000BusCycleTiming == null ||
+                _prefetchCount >= 2 ||
+                _prefetchAddress != State.ProgramCounter)
+            {
+                return;
+            }
+
+            var earliestCycle = _hasPendingPrefetch
+                ? Math.Max(_pendingPrefetchEarliestCycle, _cpuBusCycle)
+                : Math.Max(
+                    State.Cycles + _m68000BusCycleTiming.M68000BusCycleStartDelay,
+                    _cpuBusCycle);
+            var physicalRequestCycle =
+                earliestCycle - _m68000BusCycleTiming.M68000BusCycleStartDelay;
+            if (physicalRequestCycle >= _instructionCycleFloor ||
+                earliestCycle + 2 <= _instructionCycleFloor)
+            {
+                return;
+            }
+
+            var readyCycle = TopUpPrefetchOne(
+                out _,
+                M68kInstructionFetchPublicationPhase.RetirementQueue,
+                _instructionCycleFloor,
+                CaptureInstructionFetchPublicationContext());
+            _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, readyCycle);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -13061,7 +13204,8 @@ namespace Copper68k
             bool enableInstructionFetchWindow = true,
             bool enableCpuBusPhaseTrace = true,
             bool enableOpcodePlan = true,
-            M68kOpcodePlanDispatch opcodePlanDispatch = M68kOpcodePlanDispatch.KindTable)
+            M68kOpcodePlanDispatch opcodePlanDispatch = M68kOpcodePlanDispatch.KindTable,
+            bool useM68020BriefIndexedAddressing = false)
             : base(
                 bus,
                 default,
@@ -13070,7 +13214,8 @@ namespace Copper68k
                 enableInstructionFetchWindow,
                 enableCpuBusPhaseTrace,
                 enableOpcodePlan,
-                opcodePlanDispatch)
+                opcodePlanDispatch,
+                useM68020BriefIndexedAddressing)
         {
         }
 

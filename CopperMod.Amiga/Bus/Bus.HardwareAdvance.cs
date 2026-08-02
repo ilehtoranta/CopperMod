@@ -176,6 +176,9 @@ namespace CopperMod.Amiga.Bus
             => _hardwareScheduler.DrainTo(
                 targetCycle,
                 AmigaHardwareEventMask.PaulaRegister |
+                    (_agnusLivePaulaEnabled
+                        ? AmigaHardwareEventMask.PaulaDma
+                        : AmigaHardwareEventMask.None) |
                     AmigaHardwareEventMask.DiskEvents |
                     (advancePassiveDiskInput ? AmigaHardwareEventMask.DiskPassiveInput : AmigaHardwareEventMask.None) |
                     (advanceLiveAgnus ? AmigaHardwareEventMask.Agnus : AmigaHardwareEventMask.None) |
@@ -381,6 +384,18 @@ namespace CopperMod.Amiga.Bus
             long grantedCycle,
             bool isWrite)
         {
+            if (AgnusSlotKernelSelected &&
+                target is (AmigaBusAccessTarget.ChipRam or
+                    AmigaBusAccessTarget.ExpansionRam or
+                    AmigaBusAccessTarget.RealTimeClock or
+                    AmigaBusAccessTarget.CustomRegisters))
+            {
+                // The live slot kernel already admitted every published
+                // requester through the granted slot. Re-entering the generic
+                // drain here would duplicate DMA and violate the G6 boundary.
+                return;
+            }
+
             _hardwareScheduler.DrainForCpuAccess(
                 target,
                 address,
@@ -479,10 +494,15 @@ namespace CopperMod.Amiga.Bus
         {
             if (_agnusBusExecutor.ProductionEnabled)
             {
-                var horizon = _agnusBusExecutor.GetNextCpuVisibilityHorizon(
-                    currentCycle,
-                    targetCycle,
-                    cpuInterruptMask);
+                var horizon = AgnusSlotKernelSelected
+                    ? _agnusBusExecutor.GetNextLiveSlotKernelCpuVisibilityHorizon(
+                        currentCycle,
+                        targetCycle,
+                        cpuInterruptMask)
+                    : _agnusBusExecutor.GetNextCpuVisibilityHorizon(
+                        currentCycle,
+                        targetCycle,
+                        cpuInterruptMask);
                 wakeSource = AgnusBusExecutor.MapLegacyReason(horizon.Reason);
                 diskWakeReason = horizon.DiskReason;
                 return horizon.Cycle;

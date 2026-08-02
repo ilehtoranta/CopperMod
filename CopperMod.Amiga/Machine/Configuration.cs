@@ -155,6 +155,17 @@ namespace CopperMod.Amiga.Runtime
 		M68000PrefetchDiagnosticState? PrefetchBefore,
 		M68000PrefetchDiagnosticState? PrefetchAfter);
 
+    internal readonly record struct CiaInterruptDispatchTrace(
+        AmigaCiaId Cia,
+        byte EventBits,
+        byte PendingBits,
+        byte MaskBits,
+        ushort TimerBLatch,
+        byte TimerBControl,
+        long EventCycle,
+        long DispatchCycle,
+        bool ForwardedToPaula);
+
     internal sealed record InterruptBusPhaseTrace(
         int Level,
         long CpuVisibleCycle,
@@ -410,12 +421,12 @@ namespace CopperMod.Amiga.Runtime
 
         public MachineOptions WithAgnusLiveRequesterStageForTesting(int stage)
         {
-            if (stage is < 0 or > 3)
+            if (stage is < 0 or > 5)
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(stage),
                     stage,
-                    "The test-only live Agnus requester stage must be between G0L and G3L.");
+                    "The test-only live Agnus requester stage must be between G0L and G5L.");
             }
 
             AgnusLiveRequesterStageForTesting = stage;
@@ -518,9 +529,10 @@ namespace CopperMod.Amiga.Runtime
 
     internal sealed class Machine : IDisposable
     {
-        internal const bool AgnusSlotKernelProductionConnected = false;
+        internal const bool AgnusSlotKernelProductionConnected = true;
 
         private List<InterruptDispatchTrace>? _interruptDispatchTrace;
+        private List<CiaInterruptDispatchTrace>? _ciaInterruptDispatchTrace;
         private int _interruptDispatchTraceCapacity;
         private List<InterruptBusPhaseTrace>? _interruptBusPhaseTrace;
         private InterruptBusPhaseTrace? _activeInterruptBusPhaseTrace;
@@ -585,13 +597,20 @@ namespace CopperMod.Amiga.Runtime
             }
 
             var enableAgnusLiveDisplayLedger =
-                (options.AgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel &&
-                    IsAgnusSlotKernelConfigurationSupported(options)) ||
+                activeAgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel ||
                 options.AgnusLiveRequesterStageForTesting >= 1;
             var enableAgnusLiveCopper =
+                activeAgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel ||
                 options.AgnusLiveRequesterStageForTesting >= 2;
             var enableAgnusLiveBlitter =
+                activeAgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel ||
                 options.AgnusLiveRequesterStageForTesting >= 3;
+            var enableAgnusLivePaula =
+                activeAgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel ||
+                options.AgnusLiveRequesterStageForTesting >= 4;
+            var enableAgnusLiveDisk =
+                activeAgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel ||
+                options.AgnusLiveRequesterStageForTesting >= 5;
             Bus = new AmigaBus(
                 options.ChipRamSize,
                 options.BusArbiter,
@@ -623,7 +642,9 @@ namespace CopperMod.Amiga.Runtime
                 agnusBusArbitration: activeAgnusBusArbitration,
                 enableAgnusLiveDisplayLedger: enableAgnusLiveDisplayLedger,
                 enableAgnusLiveCopper: enableAgnusLiveCopper,
-                enableAgnusLiveBlitter: enableAgnusLiveBlitter);
+                enableAgnusLiveBlitter: enableAgnusLiveBlitter,
+                enableAgnusLivePaula: enableAgnusLivePaula,
+                enableAgnusLiveDisk: enableAgnusLiveDisk);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
             if (Bus.DiskDivergenceTraceEnabled)
             {
@@ -661,6 +682,9 @@ namespace CopperMod.Amiga.Runtime
         internal IReadOnlyList<InterruptDispatchTrace> InterruptDispatchTrace
             => _interruptDispatchTrace ?? (IReadOnlyList<InterruptDispatchTrace>)Array.Empty<InterruptDispatchTrace>();
 
+        internal IReadOnlyList<CiaInterruptDispatchTrace> CiaInterruptDispatchTrace
+            => _ciaInterruptDispatchTrace ?? (IReadOnlyList<CiaInterruptDispatchTrace>)Array.Empty<CiaInterruptDispatchTrace>();
+
         internal IReadOnlyList<InterruptBusPhaseTrace> InterruptBusPhaseTrace
             => _interruptBusPhaseTrace ?? (IReadOnlyList<InterruptBusPhaseTrace>)Array.Empty<InterruptBusPhaseTrace>();
 
@@ -672,6 +696,7 @@ namespace CopperMod.Amiga.Runtime
             }
 
             _interruptDispatchTrace = new List<InterruptDispatchTrace>(capacity);
+            _ciaInterruptDispatchTrace = new List<CiaInterruptDispatchTrace>(capacity);
             _interruptDispatchTraceCapacity = capacity;
             _interruptBusPhaseWindowCycles = busPhaseWindowCycles;
             _interruptBusPhaseTrace = busPhaseWindowCycles > 0
@@ -716,7 +741,23 @@ namespace CopperMod.Amiga.Runtime
             {
                 var ciaEvent = ciaEvents[i];
                 var cia = Bus.GetCia(ciaEvent.Cia);
-                if ((cia.PendingInterrupts & cia.InterruptMask) == 0)
+                var forwarded = (cia.PendingInterrupts & cia.InterruptMask) != 0;
+                var ciaTrace = _ciaInterruptDispatchTrace;
+                if (ciaTrace != null && ciaTrace.Count < _interruptDispatchTraceCapacity)
+                {
+                    ciaTrace.Add(new CiaInterruptDispatchTrace(
+                        ciaEvent.Cia,
+                        ciaEvent.IcrBits,
+                        cia.PendingInterrupts,
+                        cia.InterruptMask,
+                        cia.TimerBLatch,
+                        cia.ReadRegister(0x0F),
+                        ciaEvent.Cycle,
+                        Cpu.State.Cycles,
+                        forwarded));
+                }
+
+                if (!forwarded)
                 {
                     continue;
                 }

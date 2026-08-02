@@ -50,6 +50,15 @@ its reusable components. Notable Build Week changes include:
   the correct data without sacrificing cycle accuracy. Copper WAIT restart phases
   are modeled as internal, non-reserving control phases on that same physical
   timeline, including DMA, refresh, and phase-polarity interactions.
+- **CPU-visible horizon batching without retrospective emulation.** The Accurate
+  MC68000 interpreter can execute ROM and Fast RAM instructions in batches up to
+  the next indexed CPU-visible deadline. CIA, Paula, disk, Copper, blitter,
+  raster, interrupt, and queued control deadlines live in the causal Agnus
+  executor; production wake queries read that agenda instead of rescanning every
+  device. Chip RAM accesses and custom-register effects still end or segment the
+  batch at their exact bus cycles, so batching never reconstructs past memory or
+  moves an event behind the executed bus horizon. Independent rollback switches
+  remain available while the final corpus matrix is stabilized.
 - **68EC020 CPU support with executable timing evidence.** `Copper68k` now exposes
   the 68EC020 as a distinct CPU model: it retains the MC68020 instruction set,
   32-bit registers, exception behavior, and timing profile while applying the
@@ -344,6 +353,23 @@ run the release script with `-TagOnly`, then create the GitHub release manually
 and upload the generated zip files plus `SHA256SUMS.txt`.
 
 ## NuGet Packages
+
+CopperFloat 1.0.0 is the stable release of the deterministic, allocation-free
+extended 80-bit floating-point library. Build, test, pack, and validate it with:
+
+```powershell
+.\scripts\nuget\pack-copperfloat.ps1 -Version 1.0.0
+```
+
+After reviewing the generated package, publish it and its symbols with:
+
+```powershell
+.\scripts\nuget\publish-copperfloat.ps1 `
+    -PackagePath .\artifacts\packages\CopperFloat.1.0.0.nupkg
+```
+
+The publisher requires `NUGET_API_KEY` or an explicit `-ApiKey`; use `-WhatIf`
+to inspect the push operations without publishing.
 
 Copper6510 2.0.0 is a breaking API release. Build, test, pack, and validate it
 with:
