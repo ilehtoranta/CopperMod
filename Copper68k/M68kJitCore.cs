@@ -150,6 +150,9 @@ namespace Copper68k
         private readonly IM68kJitFallbackFetchSynchronization? _fallbackFetchSynchronization;
         private readonly IM68000PipelineStateTransfer? _fallbackPipelineStateTransfer;
         private readonly IM68000BusCycleTiming? _m68000BusCycleTiming;
+        private readonly IM68kInstructionFetchWindowBus? _instructionFetchWindowBus;
+        private readonly IM68kDeferredCpuInstructionTiming? _deferredCpuInstructionTiming;
+        private M68kInstructionFetchWindow _instructionFetchWindow = M68kInstructionFetchWindow.Empty;
         private readonly Func<uint, uint> _readPhysicalLongForM68040Mmu;
         private readonly M68kJitCpuModel _cpuModel;
         private readonly bool _cacheFlushOnlyInvalidation;
@@ -578,6 +581,7 @@ namespace Copper68k
         private bool _m68000PipelineStateValid;
         private bool _compiledM68000PipelineActive;
         private M68000MicrosequenceDescriptor _compiledM68000Microsequence;
+        private M68kInstructionFetchPublicationContext _compiledM68000PublicationContext;
 
         public M68kJitCore(IM68kBus bus)
             : this(
@@ -757,6 +761,12 @@ namespace Copper68k
             _m68000BusCycleTiming = _cpuModel == M68kJitCpuModel.M68000
                 ? bus as IM68000BusCycleTiming
                 : null;
+            _instructionFetchWindowBus = _cpuModel == M68kJitCpuModel.M68000
+                ? bus as IM68kInstructionFetchWindowBus
+                : null;
+            _deferredCpuInstructionTiming = _cpuModel == M68kJitCpuModel.M68000
+                ? bus as IM68kDeferredCpuInstructionTiming
+                : null;
             _requiresExactM68000PipelineFallback =
                 _cpuModel == M68kJitCpuModel.M68000 &&
                 bus is IM68000BusCycleTiming { RequiresExactM68000PipelineFallback: true };
@@ -781,7 +791,7 @@ namespace Copper68k
             M68kJitCpuModel cpuModel)
             => cpuModel == M68kJitCpuModel.M68040
                 ? new M68040Interpreter(bus, M68020CpuProfile.Ocs68040JitMaxSpeed, state, instructionFrequency)
-                : new M68kInterpreter(bus, state, instructionFrequency, enableInstructionFetchWindow: false);
+                : new M68kInterpreter(bus, state, instructionFrequency, enableInstructionFetchWindow: true);
 
         public M68kCpuState State { get; }
 
@@ -6440,11 +6450,18 @@ namespace Copper68k
                 var address = il.DeclareLocal(typeof(uint));
                 EmitV2ResolveMemoryWriteAddress(il, context, instruction.Destination, instruction.Size);
                 il.Emit(OpCodes.Stloc, address);
-                EmitV2StoreMemoryValue(il, context, address, value, instruction.Size);
+                EmitV2StoreMemoryValue(
+                    il,
+                    context,
+                    address,
+                    value,
+                    instruction.Size,
+                    m68000PreWriteCycles: Math.Max(0, instruction.Length * 2 - 2));
             }
 
             context.EmitSetPendingLogic(value, instruction.Size);
             context.EmitAddCycles(EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
+            context.EmitCompleteM68000SlowWriteRetirement();
         }
 
         private static bool TryEmitV2RegisterToSimpleMemoryMove(
@@ -6488,9 +6505,16 @@ namespace Copper68k
                 context.EmitStoreAddressRegister(instruction.Destination.Register, updated);
             }
 
-            EmitV2StoreMemoryValue(il, context, address, value, instruction.Size);
+            EmitV2StoreMemoryValue(
+                il,
+                context,
+                address,
+                value,
+                instruction.Size,
+                m68000PreWriteCycles: Math.Max(0, instruction.Length * 2 - 2));
             context.EmitSetPendingLogic(value, instruction.Size);
             context.EmitAddCycles(EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
+            context.EmitCompleteM68000SlowWriteRetirement();
             return true;
         }
 
@@ -8122,7 +8146,8 @@ namespace Copper68k
             V2EmitContext context,
             LocalBuilder address,
             LocalBuilder value,
-            M68kOperandSize size)
+            M68kOperandSize size,
+            int m68000PreWriteCycles = 0)
         {
             var slowWrite = il.DefineLabel();
             var done = il.DefineLabel();
@@ -8240,6 +8265,11 @@ namespace Copper68k
                 context.EmitIncrementZeroWaitSlowWrite();
             }
 
+            if (context.M68000MemoryHelpers && m68000PreWriteCycles != 0)
+            {
+                context.EmitAddCycles(m68000PreWriteCycles);
+            }
+
             context.EmitStoreInstructionContext();
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldloca_S, context.Cycles);
@@ -8253,6 +8283,10 @@ namespace Copper68k
             {
                 il.Emit(OpCodes.Ldc_I4, (int)size);
                 il.Emit(OpCodes.Call, WriteMemoryValueForV2BatchSlowRefMethod);
+            }
+            if (context.M68000MemoryHelpers)
+            {
+                context.EmitMarkM68000SlowWrite();
             }
             il.MarkLabel(done);
         }
@@ -9894,6 +9928,21 @@ namespace Copper68k
             if (_cpuModel == M68kJitCpuModel.M68000 && _m68000PipelineStateValid)
             {
                 var microsequence = new M68000MicrosequenceDescriptor(microsequenceKind);
+                var originalPipeline = _m68000PipelineState;
+                var entryPipeline = originalPipeline with
+                {
+                    PublicationGroup = _m68000PipelineState.PublicationGroup + 1
+                };
+                _m68000PipelineState = entryPipeline;
+                _compiledM68000PublicationContext = new M68kInstructionFetchPublicationContext(
+                    entryPipeline.PublicationGroup,
+                    entryPipeline.NextBusTransferCycle,
+                    entryPipeline.PrefetchCount,
+                    entryPipeline.ReadyCycle0,
+                    entryPipeline.ReadyCycle1,
+                    entryPipeline.TimingToken0,
+                    entryPipeline.TimingToken1,
+                    _compiledInstructionPreviousCycle);
                 if (!microsequence.CanCompileExactly ||
                     !TryConsumeCompiledM68000Instruction(
                         programCounter,
@@ -9901,6 +9950,7 @@ namespace Copper68k
                         microsequence.ExtensionWordsToConsume == 0 ? 0 : extensionCount,
                         expectedExtension0))
                 {
+                    _m68000PipelineState = originalPipeline;
                     return false;
                 }
 
@@ -9964,6 +10014,22 @@ namespace Copper68k
             TopUpCompiledM68000PrefetchAtRetirement(
                 _compiledInstructionPreviousCycle,
                 State.Cycles);
+
+            // Retirement owns every instruction fetch that was committed by
+            // the compiled microsequence. Nominal opcode timing can end before
+            // that transfer completes, especially when a queued fetch starts
+            // at the end of the internal execution window. The fallback core
+            // observes the same physical completion before exposing the next
+            // instruction boundary, so compiled execution must do so too.
+            State.Cycles = Math.Max(
+                State.Cycles,
+                _m68000PipelineState.RetireBusCycle);
+            _m68000PipelineState = _m68000PipelineState with
+            {
+                RetireBusCycle = Math.Max(
+                    _m68000PipelineState.RetireBusCycle,
+                    State.Cycles)
+            };
             _compiledM68000PipelineActive = false;
             _compiledM68000Microsequence = default;
         }
@@ -9974,6 +10040,9 @@ namespace Copper68k
                 _compiledM68000Microsequence.Kind == M68000CompiledMicrosequenceKind.TakenShortBranch)
             {
                 var target = State.ProgramCounter;
+                var branchRetireCycle = Math.Max(
+                    _m68000PipelineState.RetireBusCycle,
+                    _compiledInstructionPreviousCycle + 10);
                 var pipeline = _m68000PipelineState with
                 {
                     PrefetchAddress = target,
@@ -9981,6 +10050,12 @@ namespace Copper68k
                     HasPendingPrefetch = false,
                     PendingPrefetchAddress = 0,
                     PendingPrefetchEarliestCycle = 0,
+                    PendingPublicationPhase = M68kInstructionFetchPublicationPhase.Required,
+                    PendingRetirementFloor = long.MinValue,
+                    PendingPublicationContext = default,
+                    PendingVirtualRequestedCycle = 0,
+                    TimingToken0 = 0,
+                    TimingToken1 = 0,
                     DeferredBatchEligible0 = false,
                     DeferredBatchEligible1 = false
                 };
@@ -9988,10 +10063,23 @@ namespace Copper68k
                 // SYNC(2), read target opcode, prefetch target + 2.
                 pipeline = TopUpCompiledM68000PrefetchOne(
                     pipeline,
-                    _compiledInstructionPreviousCycle + 2);
+                    _compiledInstructionPreviousCycle + 2,
+                    publicationContext: _compiledM68000PublicationContext);
                 pipeline = TopUpCompiledM68000PrefetchOne(
                     pipeline,
-                    _compiledInstructionPreviousCycle + 2);
+                    _compiledInstructionPreviousCycle + 2,
+                    publicationContext: _compiledM68000PublicationContext with
+                    {
+                        PredecessorToken = pipeline.TimingToken0,
+                        RequiresIrcGap = pipeline.TimingToken0 != 0
+                    });
+                pipeline = pipeline with
+                {
+                    RetireBusCycle = branchRetireCycle,
+                    ExceptionEntryNotBeforeCycle = Math.Max(
+                        pipeline.ExceptionEntryNotBeforeCycle,
+                        pipeline.RetireBusCycle)
+                };
                 _m68000PipelineState = pipeline;
 
                 _compiledM68000PipelineActive = false;
@@ -10149,14 +10237,18 @@ namespace Copper68k
                     PrefetchAddress = unchecked(address + 2),
                     Word0 = pipeline.Word1,
                     ReadyCycle0 = pipeline.ReadyCycle1,
+                    TimingToken0 = pipeline.TimingToken1,
                     DeferredBatchEligible0 = pipeline.DeferredBatchEligible1,
                     PrefetchCount = 1,
+                    TimingToken1 = 0,
                     DeferredBatchEligible1 = false
                 }
                 : pipeline with
                 {
                     PrefetchAddress = unchecked(address + 2),
                     PrefetchCount = 0,
+                    TimingToken0 = 0,
+                    TimingToken1 = 0,
                     DeferredBatchEligible0 = false,
                     DeferredBatchEligible1 = false
                 };
@@ -10165,7 +10257,11 @@ namespace Copper68k
 
         private M68000PipelineState TopUpCompiledM68000PrefetchOne(
             M68000PipelineState pipeline,
-            long instructionStartCycle)
+            long instructionStartCycle,
+            M68kInstructionFetchPublicationPhase publicationPhase =
+                M68kInstructionFetchPublicationPhase.Required,
+            long retirementFloor = long.MinValue,
+            M68kInstructionFetchPublicationContext publicationContext = default)
         {
             if (pipeline.PrefetchCount >= 2)
             {
@@ -10174,13 +10270,45 @@ namespace Copper68k
 
             var slot = pipeline.PrefetchCount;
             var address = unchecked(pipeline.PrefetchAddress + (uint)(slot * 2));
+            if (pipeline.HasPendingPrefetch)
+            {
+                publicationPhase = pipeline.PendingPublicationPhase;
+                retirementFloor = pipeline.PendingRetirementFloor;
+                publicationContext = pipeline.PendingPublicationContext;
+            }
+            var busCycleStart =
+                instructionStartCycle + (_m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0);
             var cycle = pipeline.HasPendingPrefetch
-                ? Math.Max(pipeline.NextBusTransferCycle, pipeline.PendingPrefetchEarliestCycle)
-                : Math.Max(
-                    pipeline.NextBusTransferCycle,
-                    instructionStartCycle + (_m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0));
+                ? Math.Max(
+                    Math.Max(pipeline.NextBusTransferCycle, pipeline.PendingPrefetchEarliestCycle),
+                    busCycleStart)
+                : Math.Max(pipeline.NextBusTransferCycle, busCycleStart);
             var requestedCycle = cycle;
-            var value = _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+            var deferredBatchEligible = false;
+            ushort value;
+            if (_instructionFetchWindowBus != null &&
+                (_instructionFetchWindow.ContainsWord(address) ||
+                    (_instructionFetchWindowBus.TryGetInstructionFetchWindow(
+                        address,
+                        out _instructionFetchWindow) &&
+                     _instructionFetchWindow.ContainsWord(address))))
+            {
+                value = _instructionFetchWindowBus.ReadInstructionFetchWindowWord(
+                    in _instructionFetchWindow,
+                    address,
+                    ref cycle,
+                    publicationPhase,
+                    retirementFloor,
+                    in publicationContext);
+                deferredBatchEligible =
+                    _deferredCpuInstructionTiming?
+                        .IsDeferredCpuBusBatchEligibleInstructionFetchWindow(
+                            in _instructionFetchWindow) == true;
+            }
+            else
+            {
+                value = _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+            }
             var timing = _m68000BusCycleTiming?.GetM68000BusAccessTiming(
                 address,
                 M68kOperandSize.Word,
@@ -10197,11 +10325,29 @@ namespace Copper68k
                 HasPendingPrefetch = false,
                 PendingPrefetchAddress = 0,
                 PendingPrefetchEarliestCycle = 0,
+                PendingPublicationPhase = M68kInstructionFetchPublicationPhase.Required,
+                PendingRetirementFloor = long.MinValue,
+                PendingPublicationContext = default,
+                PendingVirtualRequestedCycle = 0,
                 PrefetchCount = slot + 1
             };
+            var timingToken = _deferredCpuInstructionTiming?
+                .CaptureDeferredCpuInstructionFetchTimingToken() ?? 0;
             return slot == 0
-                ? pipeline with { Word0 = value, ReadyCycle0 = timing.ReadyCycle, DeferredBatchEligible0 = false }
-                : pipeline with { Word1 = value, ReadyCycle1 = timing.ReadyCycle, DeferredBatchEligible1 = false };
+                ? pipeline with
+                {
+                    Word0 = value,
+                    ReadyCycle0 = timing.ReadyCycle,
+                    TimingToken0 = timingToken,
+                    DeferredBatchEligible0 = deferredBatchEligible
+                }
+                : pipeline with
+                {
+                    Word1 = value,
+                    ReadyCycle1 = timing.ReadyCycle,
+                    TimingToken1 = timingToken,
+                    DeferredBatchEligible1 = deferredBatchEligible
+                };
         }
 
         private void TopUpCompiledM68000PrefetchAtRetirement(long instructionStartCycle, long instructionFloor)
@@ -10239,13 +10385,23 @@ namespace Copper68k
                             HasPendingPrefetch = true,
                             PendingPrefetchAddress = unchecked(
                                 pipeline.PrefetchAddress + (uint)(pipeline.PrefetchCount * 2)),
-                            PendingPrefetchEarliestCycle = earliestCycle
+                            PendingPrefetchEarliestCycle = earliestCycle,
+                            PendingPublicationPhase =
+                                M68kInstructionFetchPublicationPhase.CancellableSuccessor,
+                            PendingRetirementFloor = instructionFloor,
+                            PendingPublicationContext = _compiledM68000PublicationContext,
+                            PendingVirtualRequestedCycle = earliestCycle
                         };
                     }
                     break;
                 }
 
-                pipeline = TopUpCompiledM68000PrefetchOne(pipeline, instructionStartCycle);
+                pipeline = TopUpCompiledM68000PrefetchOne(
+                    pipeline,
+                    instructionStartCycle,
+                    M68kInstructionFetchPublicationPhase.RetirementQueue,
+                    instructionFloor,
+                    _compiledM68000PublicationContext);
             }
 
             _m68000PipelineState = pipeline;
@@ -15292,6 +15448,7 @@ namespace Copper68k
                 Executed = il.DeclareLocal(typeof(int));
                 InstructionStartCycles = il.DeclareLocal(typeof(long));
                 InstructionCycleFloor = il.DeclareLocal(typeof(long));
+                M68000SlowWrite = il.DeclareLocal(typeof(bool));
                 LastOpcode = il.DeclareLocal(typeof(int));
                 LastInstructionProgramCounter = il.DeclareLocal(typeof(uint));
                 PreviousLastOpcode = il.DeclareLocal(typeof(int));
@@ -15342,6 +15499,8 @@ namespace Copper68k
             public LocalBuilder InstructionStartCycles { get; }
 
             public LocalBuilder InstructionCycleFloor { get; }
+
+            public LocalBuilder M68000SlowWrite { get; }
 
             public LocalBuilder LastOpcode { get; }
 
@@ -15585,6 +15744,7 @@ namespace Copper68k
                 _il.Emit(OpCodes.Ldc_I4_1);
                 _il.Emit(OpCodes.Add);
                 _il.Emit(OpCodes.Stloc, Executed);
+                EmitStoreBool(M68000SlowWrite, false);
             }
 
             public void EmitSaveFastReadFailureBookkeeping()
@@ -15999,6 +16159,23 @@ namespace Copper68k
                 _il.Emit(OpCodes.Ldloc, InstructionCycleFloor);
                 _il.Emit(OpCodes.Bge, done);
                 _il.Emit(OpCodes.Ldloc, InstructionCycleFloor);
+                _il.Emit(OpCodes.Stloc, Cycles);
+                _il.MarkLabel(done);
+            }
+
+            public void EmitMarkM68000SlowWrite()
+            {
+                EmitStoreBool(M68000SlowWrite, true);
+            }
+
+            public void EmitCompleteM68000SlowWriteRetirement()
+            {
+                var done = _il.DefineLabel();
+                _il.Emit(OpCodes.Ldloc, M68000SlowWrite);
+                _il.Emit(OpCodes.Brfalse, done);
+                _il.Emit(OpCodes.Ldloc, Cycles);
+                _il.Emit(OpCodes.Ldc_I8, 4L);
+                _il.Emit(OpCodes.Add);
                 _il.Emit(OpCodes.Stloc, Cycles);
                 _il.MarkLabel(done);
             }

@@ -32,6 +32,10 @@ public sealed class AmigaBootMemoryTests
 	private const int ExecLibListOffset = 0x17A;
 	private const int LibraryVersionOffset = 0x14;
 	private const int LibraryOpenCountOffset = 0x20;
+	private const int GfxBaseTextFontsOffset = 0x8C;
+	private const int GfxBaseTextFontsTailOffset = 0x90;
+	private const int GfxBaseDefaultFontOffset = 0x9A;
+	private const int GfxBaseChipRevBits0Offset = 0xEC;
 	private const int MemNodeNameOffset = 0x0A;
 	private const int MemHeaderAttributesOffset = 0x0E;
 	private const int MemHeaderFirstChunkOffset = 0x10;
@@ -435,6 +439,43 @@ public sealed class AmigaBootMemoryTests
 		Assert.True(machine.Bus.HasHostGateway(Lvo(AmigaKickstartHost.ExecLibraryBase, -1212)));
 		Assert.True(machine.Bus.HasHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -30)));
 		Assert.True(machine.Bus.HasHostGateway(Lvo(AmigaKickstartHost.DosLibraryBase, -798)));
+	}
+
+	[Fact]
+	public void HostShimPublishesGfxBaseFontListForCompatibilityFont()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var gfxBase = AmigaKickstartHost.GraphicsLibraryBase;
+
+		Assert.True(bus.IsMappedMemoryRange(gfxBase, AmigaKickstartHost.GraphicsLibraryImageSize));
+		Assert.Equal((ushort)40, bus.ReadWord(gfxBase + LibraryVersionOffset));
+		Assert.Equal((ushort)0x7C, bus.ReadWord(gfxBase + 0x12));
+		Assert.Equal(gfxBase + GfxBaseTextFontsTailOffset, bus.ReadLong(gfxBase + GfxBaseTextFontsOffset));
+
+		var state = new M68kCpuState();
+		Assert.True(InvokeHostTrap(bus, Lvo(gfxBase, -72), state)); // OpenFont
+		var font = state.D[0];
+		Assert.NotEqual(0u, font);
+		Assert.Equal(font, bus.ReadLong(gfxBase + GfxBaseDefaultFontOffset));
+		Assert.Equal(font, bus.ReadLong(gfxBase + GfxBaseTextFontsOffset));
+		Assert.Equal(gfxBase + GfxBaseTextFontsTailOffset, bus.ReadLong(font));
+		Assert.Equal(gfxBase + GfxBaseTextFontsOffset, bus.ReadLong(font + 4));
+	}
+
+	[Theory]
+	[InlineData((int)MachineProfile.A500Pal512KBoot, 0u)]
+	[InlineData((int)MachineProfile.A500PlusEcsPal, 3u)]
+	public void HostShimSetChipRevPublishesOcsAndEcsCapabilities(int profile, uint expectedBits)
+	{
+		var machine = StartBootShim((MachineProfile)profile);
+		var bus = machine.Bus;
+		var state = new M68kCpuState { D = { [0] = 0xFFFF_FFFFu } };
+
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -888), state));
+		Assert.Equal(expectedBits, state.D[0]);
+		Assert.Equal((byte)expectedBits, bus.ReadByte(
+			AmigaKickstartHost.GraphicsLibraryBase + (uint)GfxBaseChipRevBits0Offset));
 	}
 
 	[Fact]
@@ -1534,6 +1575,7 @@ public sealed class AmigaBootMemoryTests
 			throw;
 		}
 		Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 0));
+		Assert.Equal(view, bus.ReadLong(AmigaKickstartHost.GraphicsLibraryBase + 0x22));
 
 		bus.WriteLong(view + ViewLofCprListOffset, 0);
 		state.Cycles = frameCycles;
@@ -1549,6 +1591,10 @@ public sealed class AmigaBootMemoryTests
 			throw;
 		}
 		Assert.Equal(0xFF00FF00u, Pixel(frame, 0, 0));
+
+		state.A[1] = 0;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
+		Assert.Equal(0u, bus.ReadLong(AmigaKickstartHost.GraphicsLibraryBase + 0x22));
 	}
 
 	[Fact]
@@ -1579,6 +1625,128 @@ public sealed class AmigaBootMemoryTests
 
 		Assert.Equal((ushort)(copperList >> 16), bus.ReadWord(0x00DFF080));
 		Assert.Equal((ushort)copperList, bus.ReadWord(0x00DFF082));
+	}
+
+	[Fact]
+	public void ChangeVPBitMapRequestsCopperRebuildForTheActiveView()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		const uint nextBitMap = 0x2500;
+		const uint nextPlane = 0x2520;
+		WriteMinimalViewPort(bus, viewPort);
+		bus.WriteLong(view + ViewViewPortOffset, viewPort);
+		bus.WriteWord(nextBitMap + BitMapBytesPerRowOffset, 2);
+		bus.WriteWord(nextBitMap + BitMapRowsOffset, 1);
+		bus.WriteByte(nextBitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteLong(nextBitMap + BitMapPlanesOffset, nextPlane);
+		bus.WriteWord(nextPlane, 0x4000);
+
+		var make = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), make));
+		var firstCopper = bus.ReadLong(viewPort + ViewPortDspInsOffset);
+		Assert.NotEqual(0u, firstCopper);
+
+		var load = new M68kCpuState { A = { [1] = view } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), load));
+
+		var change = new M68kCpuState
+		{
+			A = { [0] = viewPort, [1] = nextBitMap, [2] = 0 },
+		};
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -942), change));
+		Assert.NotEqual(firstCopper, bus.ReadLong(viewPort + ViewPortDspInsOffset));
+		var rasInfo = bus.ReadLong(viewPort + ViewPortRasInfoOffset);
+		Assert.Equal(nextBitMap, bus.ReadLong(rasInfo + 4));
+	}
+
+	[Fact]
+	public void NativeChangeVPBitMapRepliesDBufInfoMessagesAtFrameBoundaries()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var bus = machine.Bus;
+		const uint viewPort = 0x2300;
+		const uint view = 0x2200;
+		const uint nextBitMap = 0x2500;
+		const uint nextPlane = 0x2520;
+		const uint dbufInfo = 0x2800;
+		const uint replyPort = 0x2A00;
+		const uint task = 0x2B00;
+		const int safeMessageOffset = 0x08;
+		const int displayMessageOffset = 0x28;
+
+		WriteMinimalViewPort(bus, viewPort);
+		bus.WriteLong(view + ViewViewPortOffset, viewPort);
+		bus.WriteWord(nextBitMap + BitMapBytesPerRowOffset, 2);
+		bus.WriteWord(nextBitMap + BitMapRowsOffset, 1);
+		bus.WriteByte(nextBitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteLong(nextBitMap + BitMapPlanesOffset, nextPlane);
+		bus.WriteWord(nextPlane, 0x4000);
+
+		for (var offset = 0; offset < 0x54; offset++)
+			bus.WriteByte(dbufInfo + (uint)offset, 0, 0);
+		for (var offset = 0; offset < 0x40; offset++)
+			bus.WriteByte(task + (uint)offset, 0, 0);
+		InitializeExecList(bus, replyPort + MsgPortMsgListOffset);
+		bus.WriteLong(replyPort + MsgPortSigTaskOffset, task);
+		bus.WriteByte(replyPort + MsgPortSigBitOffset, 3, 0);
+		bus.WriteLong(dbufInfo + (uint)safeMessageOffset + MessageReplyPortOffset, replyPort);
+		bus.WriteLong(dbufInfo + (uint)displayMessageOffset + MessageReplyPortOffset, replyPort);
+
+		var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+		var change = new M68kCpuState
+		{
+			A = { [0] = viewPort, [1] = nextBitMap, [2] = dbufInfo },
+			Cycles = frameCycles / 2
+		};
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -942), change));
+		var messageList = replyPort + MsgPortMsgListOffset;
+		Assert.Equal(messageList + 4, bus.ReadLong(messageList));
+		Assert.Equal(replyPort, bus.ReadLong(safeMessageOffset + (uint)dbufInfo + MessageReplyPortOffset));
+		var execPortServices = typeof(AmigaBootController)
+			.GetField("_execPortServices", BindingFlags.Instance | BindingFlags.NonPublic)!
+			.GetValue(boot)!;
+
+		InvokeAdvanceSyntheticVBlankInterruptServers(boot, change.Cycles, frameCycles);
+		var safeMessage = dbufInfo + (uint)safeMessageOffset;
+		Assert.Equal(safeMessage, bus.ReadLong(messageList));
+		var getMessageMethod = execPortServices.GetType().GetMethod("GetMsg")!;
+		var safeGetState = new M68kCpuState { A = { [0] = replyPort } };
+		Assert.Equal(safeMessage, (uint)getMessageMethod.Invoke(execPortServices, new object[] { safeGetState })!);
+		Assert.Equal(messageList + 4, bus.ReadLong(messageList));
+
+		InvokeAdvanceSyntheticVBlankInterruptServers(boot, frameCycles, frameCycles * 2);
+		var displayMessage = dbufInfo + (uint)displayMessageOffset;
+		Assert.Equal(displayMessage, bus.ReadLong(messageList));
+		var displayGetState = new M68kCpuState { A = { [0] = replyPort } };
+		Assert.Equal(displayMessage, (uint)getMessageMethod.Invoke(execPortServices, new object[] { displayGetState })!);
+	}
+
+	[Fact]
+	public void ScrollVPortRequestsCopperRebuildForTheActiveView()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		WriteMinimalViewPort(bus, viewPort);
+		bus.WriteLong(view + ViewViewPortOffset, viewPort);
+
+		var make = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), make));
+		var load = new M68kCpuState { A = { [1] = view } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), load));
+		var firstCopper = bus.ReadLong(viewPort + ViewPortDspInsOffset);
+
+		var scroll = new M68kCpuState { A = { [0] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -588), scroll));
+		Assert.NotEqual(firstCopper, bus.ReadLong(viewPort + ViewPortDspInsOffset));
 	}
 
 	[Fact]
@@ -2757,6 +2925,44 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(0xDEAD_BEEFu, bus.ReadLong(view + 0x0C));
 		Assert.Equal(0xCAFE_BABEu, bus.ReadLong(view + 0x10));
 		Assert.Equal(bus.ReadLong(lofCprList + CprListStartOffset), bus.ReadLong(viewPort + ViewPortDspInsOffset));
+
+		var freeViewPortState = new M68kCpuState();
+		freeViewPortState.A[0] = viewPort;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -540), freeViewPortState));
+		Assert.Equal(0u, freeViewPortState.D[0]);
+		Assert.Equal(0u, bus.ReadLong(viewPort + ViewPortDspInsOffset));
+
+		// FreeVPortCopLists owns the viewport's intermediate list, while the
+		// View's hardware cprlist remains an explicit FreeCprList operation.
+		var freeCprState = new M68kCpuState();
+		freeCprState.A[0] = lofCprList;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -564), freeCprState));
+		Assert.Equal(0u, freeCprState.D[0]);
+	}
+
+	[Fact]
+	public void MakeVPortReportsNoDisplayWhenTheValidatedViewportHasNoBitmap()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		const uint rasInfo = 0x2380;
+		bus.WriteLong(view + ViewViewPortOffset, viewPort);
+		bus.WriteWord(viewPort + ViewPortDWidthOffset, 16);
+		bus.WriteWord(viewPort + ViewPortDHeightOffset, 1);
+		bus.WriteWord(viewPort + 0x1C, 0);
+		bus.WriteWord(viewPort + 0x1E, 0);
+		bus.WriteWord(viewPort + ViewPortModesOffset, 0);
+		bus.WriteLong(viewPort + ViewPortRasInfoOffset, rasInfo);
+		bus.WriteLong(rasInfo + 0x00, 0);
+		bus.WriteLong(rasInfo + 0x04, 0);
+		bus.WriteWord(rasInfo + 0x08, 0);
+		bus.WriteWord(rasInfo + 0x0A, 0);
+
+		var state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		Assert.Equal(4u, state.D[0]); // MVP_NO_DISPLAY
 	}
 
 	[Fact]

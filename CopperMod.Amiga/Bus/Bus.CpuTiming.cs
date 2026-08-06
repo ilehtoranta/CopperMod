@@ -1370,6 +1370,7 @@ namespace CopperMod.Amiga.Bus
             return true;
         }
 
+
         private void CompareScalarCpuChipInstructionFetchShadow(
             in CpuChipFetchWordRequest proof,
             long grantedCycle,

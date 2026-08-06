@@ -793,7 +793,15 @@ namespace Copper68k
         uint PendingPrefetchAddress = 0,
         long PendingPrefetchEarliestCycle = 0,
         long ExceptionEntryNotBeforeCycle = 0,
-        bool PendingBlocksInstructionEntry = false);
+        bool PendingBlocksInstructionEntry = false,
+        ulong TimingToken0 = 0,
+        ulong TimingToken1 = 0,
+        M68kInstructionFetchPublicationPhase PendingPublicationPhase =
+            M68kInstructionFetchPublicationPhase.Required,
+        long PendingRetirementFloor = long.MinValue,
+        M68kInstructionFetchPublicationContext PendingPublicationContext = default,
+        long PendingVirtualRequestedCycle = 0,
+        long PublicationGroup = 0);
 
     internal interface IM68000PipelineStateTransfer
     {
@@ -3726,8 +3734,17 @@ namespace Copper68k
             State.A[4] = registers.A4;
             State.A[5] = registers.A5;
             State.A[6] = registers.A6;
-            State.A[7] = registers.A7;
             State.StatusRegister = registers.StatusRegister;
+            // A7 must go through SetActiveStackPointer so the saved supervisor or
+            // user stack pointer tracks it, exactly as SetAddressRegister does on
+            // the scalar path. ADDQ/SUBQ with an address-register destination is
+            // an admitted kind, so a run can legitimately move A7; assigning
+            // State.A[7] directly leaves the saved copy stale and the next
+            // supervisor/user transition then restores that stale value.
+            // The status register is committed first so the active stack mode is
+            // settled before the pointer is stored, which keeps this correct even
+            // if a future kind is admitted that can change the supervisor bit.
+            State.SetActiveStackPointer(registers.A7);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -3988,6 +4005,12 @@ namespace Copper68k
                 case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
                     ExecuteFixedPlanRunAddLong(ref registers, in plan);
                     instructionCycles = 8;
+                    break;
+                case M68kOpcodePlanKind.DataRegisterUnary:
+                    instructionCycles = ExecuteFixedPlanRunDataRegisterUnary(ref registers, in plan);
+                    break;
+                case M68kOpcodePlanKind.RegisterShift:
+                    instructionCycles = ExecuteFixedPlanRunRegisterShift(ref registers, opcode);
                     break;
                 default:
                     throw new InvalidOperationException(
@@ -4411,6 +4434,26 @@ namespace Copper68k
                 case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
                     ExecuteFixedPlanRunAddLong(ref registers, in plan);
                     return;
+                case M68kOpcodePlanKind.DataRegisterUnary:
+                    _ = ExecuteFixedPlanRunDataRegisterUnary(ref registers, in plan);
+                    return;
+                case M68kOpcodePlanKind.RegisterShift:
+                    _ = ExecuteFixedPlanRunRegisterShift(ref registers, instruction.Opcode);
+                    return;
+                default:
+                    // Control-flow kinds have no architectural effect to replay
+                    // here. Anything else admitted to the fixed-plan batch must
+                    // be listed above: silently skipping it would let the loop
+                    // fast-forward charge an instruction's cycles while dropping
+                    // its register and flag effect.
+                    if (IsFixedPlanBatchKind(instruction.Kind))
+                    {
+                        throw new InvalidOperationException(
+                            $"Fixed-plan-run loop replay is missing an architectural " +
+                            $"operation for {instruction.Kind}.");
+                    }
+
+                    return;
             }
         }
 
@@ -4556,6 +4599,49 @@ namespace Copper68k
                 flags);
         }
 
+        /// <summary>
+        /// The cached fixed-plan-run form of the NEGX/SUBX condition codes: the
+        /// extend flag is an input borrow, zero is only ever <em>cleared</em>
+        /// (never set), and carry drives both C and X. Mirrors
+        /// <see cref="SubtractWithExtend"/> exactly.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void SetFixedPlanRunExtendArithmeticFlags(
+            ref ushort statusRegister,
+            uint value,
+            M68kOperandSize size,
+            bool overflow,
+            bool carry)
+        {
+            var status = statusRegister;
+            if (value != 0)
+            {
+                status &= unchecked((ushort)~M68kCpuState.Zero);
+            }
+
+            status &= unchecked((ushort)~(
+                M68kCpuState.Negative |
+                M68kCpuState.Overflow |
+                M68kCpuState.Carry |
+                M68kCpuState.Extend));
+            if ((value & M68kCpuState.SignBit(size)) != 0)
+            {
+                status |= M68kCpuState.Negative;
+            }
+
+            if (overflow)
+            {
+                status |= M68kCpuState.Overflow;
+            }
+
+            if (carry)
+            {
+                status |= (ushort)(M68kCpuState.Carry | M68kCpuState.Extend);
+            }
+
+            statusRegister = status;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static uint GetFixedPlanRunDataRegister(
             in M68000FixedPlanRunRegisters registers,
@@ -4589,6 +4675,95 @@ namespace Copper68k
                 case 6: registers.D6 = value; break;
                 default: registers.D7 = value; break;
             }
+        }
+
+        /// <summary>
+        /// The cached fixed-plan-run form of <see cref="ExecuteDataRegisterUnaryOperation"/>,
+        /// operating on the run's register snapshot instead of <see cref="State"/>.
+        /// </summary>
+        /// <returns>The retirement cycles for the instruction.</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int ExecuteFixedPlanRunDataRegisterUnary(
+            ref M68000FixedPlanRunRegisters registers,
+            in M68kPackedOpcodePlan plan)
+        {
+            var operation = plan.Variant << 8;
+            var size = plan.Size;
+            var register = plan.Register;
+            var mask = M68kCpuState.Mask(size);
+            var current = GetFixedPlanRunDataRegister(in registers, register) & mask;
+            switch (operation)
+            {
+                case 0x4000:
+                {
+                    var borrowIn = (registers.StatusRegister & M68kCpuState.Extend) != 0 ? 1u : 0u;
+                    var negatedWithExtend = M68kIntegerSemantics.Subtract(0, current, size, borrowIn);
+                    SetFixedPlanRunSizedDataRegister(
+                        ref registers,
+                        register,
+                        negatedWithExtend.Value & mask,
+                        size,
+                        mask);
+                    SetFixedPlanRunExtendArithmeticFlags(
+                        ref registers.StatusRegister,
+                        negatedWithExtend.Value,
+                        size,
+                        negatedWithExtend.Overflow,
+                        negatedWithExtend.Carry);
+                    break;
+                }
+                case 0x4200:
+                    SetFixedPlanRunSizedDataRegister(ref registers, register, 0, size, mask);
+                    SetFixedPlanRunLogicFlags(ref registers.StatusRegister, 0, size);
+                    break;
+                case 0x4400:
+                {
+                    var negated = M68kIntegerSemantics.Subtract(0, current, size);
+                    SetFixedPlanRunSizedDataRegister(
+                        ref registers,
+                        register,
+                        negated.Value & mask,
+                        size,
+                        mask);
+                    SetFixedPlanRunArithmeticFlags(
+                        ref registers.StatusRegister,
+                        negated.Value,
+                        size,
+                        negated.Overflow,
+                        negated.Carry);
+                    break;
+                }
+                case 0x4600:
+                {
+                    var inverted = (~current) & mask;
+                    SetFixedPlanRunSizedDataRegister(ref registers, register, inverted, size, mask);
+                    SetFixedPlanRunLogicFlags(ref registers.StatusRegister, inverted, size);
+                    break;
+                }
+                default:
+                    SetFixedPlanRunLogicFlags(ref registers.StatusRegister, current, size);
+                    break;
+            }
+
+            return GetDataRegisterUnaryCycles(operation, size);
+        }
+
+        /// <summary>
+        /// Writes a sized result into a run-snapshot data register, preserving the
+        /// bits above the operand size exactly as <see cref="WriteDataRegister"/> does.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void SetFixedPlanRunSizedDataRegister(
+            ref M68000FixedPlanRunRegisters registers,
+            int register,
+            uint value,
+            M68kOperandSize size,
+            uint mask)
+        {
+            var merged = size == M68kOperandSize.Long
+                ? value
+                : (GetFixedPlanRunDataRegister(in registers, register) & ~mask) | (value & mask);
+            SetFixedPlanRunDataRegister(ref registers, register, merged);
         }
 
         private bool TryExecuteFixedPlanBatch(
@@ -4975,6 +5150,24 @@ namespace Copper68k
                     ExecuteAddLongRegisterOperation((opcode >> 9) & 7, opcode & 7);
                     SetFixedBatchInstructionCycles(ref context, 8);
                     break;
+                case M68kOpcodePlanKind.DataRegisterUnary:
+                {
+                    var unaryOperation = opcode & 0xFF00;
+                    var unarySize = DecodeImmediateSize(opcode);
+                    ExecuteDataRegisterUnaryOperationWithoutCycles(
+                        unaryOperation,
+                        opcode & 7,
+                        unarySize);
+                    SetFixedBatchInstructionCycles(
+                        ref context,
+                        GetDataRegisterUnaryCycles(unaryOperation, unarySize));
+                    break;
+                }
+                case M68kOpcodePlanKind.RegisterShift:
+                    SetFixedBatchInstructionCycles(
+                        ref context,
+                        ExecutePlannedRegisterShiftWithoutCycles(opcode));
+                    break;
                 default:
                     return PlannedRetireMode.Unsupported;
             }
@@ -5036,6 +5229,23 @@ namespace Copper68k
                 case M68kOpcodePlanKind.DataRegisterLongAddToRegister:
                     ExecuteAddLongRegisterOperation(plan.Register, plan.SourceRegister);
                     SetFixedBatchInstructionCycles(ref context, 8);
+                    break;
+                case M68kOpcodePlanKind.DataRegisterUnary:
+                {
+                    var unaryOperation = plan.Variant << 8;
+                    ExecuteDataRegisterUnaryOperationWithoutCycles(
+                        unaryOperation,
+                        plan.Register,
+                        plan.Size);
+                    SetFixedBatchInstructionCycles(
+                        ref context,
+                        GetDataRegisterUnaryCycles(unaryOperation, plan.Size));
+                    break;
+                }
+                case M68kOpcodePlanKind.RegisterShift:
+                    SetFixedBatchInstructionCycles(
+                        ref context,
+                        ExecutePlannedRegisterShiftWithoutCycles(opcode));
                     break;
                 default:
                     return PlannedRetireMode.Unsupported;
@@ -5477,7 +5687,14 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsFixedPlanBatchOpcode(ushort opcode, M68kOpcodePlanKind kind)
             => IsFixedPlanBatchKind(kind) &&
-                (kind != M68kOpcodePlanKind.ShortUnconditionalBranch || (opcode & 1) == 0);
+                (kind != M68kOpcodePlanKind.ShortUnconditionalBranch || (opcode & 1) == 0) &&
+                // A register-sourced shift count makes the instruction's cycle
+                // cost depend on register state, which breaks the constant
+                // cycles-per-iteration invariant that
+                // AdvanceCachedFixedPlanRunLoop relies on. Immediate counts are
+                // fixed-cost, so only those are admitted; register counts stay
+                // on the planned dispatch.
+                (kind != M68kOpcodePlanKind.RegisterShift || (opcode & 0x0020) == 0);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsFixedPlanBatchKind(M68kOpcodePlanKind kind)
@@ -5487,6 +5704,8 @@ namespace Copper68k
                 M68kOpcodePlanKind.ShortUnconditionalBranch or
                 M68kOpcodePlanKind.QuickRegister or
                 M68kOpcodePlanKind.QuickLongDataRegister or
+                M68kOpcodePlanKind.DataRegisterUnary or
+                M68kOpcodePlanKind.RegisterShift or
                 M68kOpcodePlanKind.DataRegisterLongOrToRegister or
                 M68kOpcodePlanKind.DataRegisterLongEorToDestination or
                 M68kOpcodePlanKind.DataRegisterLongAndToRegister or
@@ -5695,7 +5914,7 @@ namespace Copper68k
             };
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private PlannedRetireMode TryExecutePlannedKind(ushort opcode, uint instructionPc, M68kOpcodePlanKind kind)
         {
             switch (kind)
@@ -5715,7 +5934,7 @@ namespace Copper68k
                 case M68kOpcodePlanKind.ShortUnconditionalBranch:
                     ExecutePlannedShortUnconditionalBranch(opcode, instructionPc);
                     RecordPlannedFast(kind);
-                    return PlannedRetireMode.PrefetchHandled;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.Dbcc:
                     ExecutePlannedDbcc(opcode);
                     RecordPlannedFast(kind);
@@ -5780,12 +5999,19 @@ namespace Copper68k
                     ExecutePlannedRegisterAddSubExtend(opcode);
                     RecordPlannedFast(kind);
                     return PlannedRetireMode.SequentialOneWordRefill;
+                case M68kOpcodePlanKind.DataRegisterUnary:
+                    ExecuteDataRegisterUnaryOperation(
+                        opcode & 0xFF00,
+                        opcode & 7,
+                        DecodeImmediateSize(opcode));
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.SequentialOneWordRefill;
                 default:
                     return PlannedRetireMode.Unsupported;
             }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private PlannedRetireMode TryExecutePackedPlan(ushort opcode, uint instructionPc, in M68kPackedOpcodePlan plan)
         {
             _ = opcode;
@@ -5807,7 +6033,7 @@ namespace Copper68k
                 case M68kOpcodePlanKind.ShortUnconditionalBranch:
                     ExecutePackedShortUnconditionalBranch(opcode, in plan, instructionPc);
                     RecordPlannedFast(kind);
-                    return PlannedRetireMode.PrefetchHandled;
+                    return PlannedRetireMode.General;
                 case M68kOpcodePlanKind.Dbcc:
                     ExecutePackedDbcc(opcode, in plan);
                     RecordPlannedFast(kind);
@@ -5870,6 +6096,10 @@ namespace Copper68k
                     return PlannedRetireMode.SequentialOneWordRefill;
                 case M68kOpcodePlanKind.RegisterAddSubExtend:
                     ExecutePlannedRegisterAddSubExtend(opcode);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.SequentialOneWordRefill;
+                case M68kOpcodePlanKind.DataRegisterUnary:
+                    ExecuteDataRegisterUnaryOperation(plan.Variant << 8, plan.Register, plan.Size);
                     RecordPlannedFast(kind);
                     return PlannedRetireMode.SequentialOneWordRefill;
                 default:
@@ -5943,7 +6173,7 @@ namespace Copper68k
             }
 
             AddInstructionCycles(10);
-            PrimePlannedBranchTargetOpcode(target, branchBase);
+            BranchToAndRefillTarget(target, branchBase);
         }
 
         private void ExecutePlannedDbcc(ushort opcode)
@@ -6770,6 +7000,16 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePlannedRegisterShift(ushort opcode)
+            => AddInstructionCycles(ExecutePlannedRegisterShiftWithoutCycles(opcode));
+
+        /// <summary>
+        /// The register and condition-code effect of a register shift or rotate
+        /// without charging retirement cycles, for callers that account cycles
+        /// through the fixed-plan batch context instead.
+        /// </summary>
+        /// <returns>The retirement cycles for the instruction.</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int ExecutePlannedRegisterShiftWithoutCycles(ushort opcode)
         {
             var register = opcode & 7;
             var size = ((opcode >> 6) & 3) switch
@@ -6792,7 +7032,105 @@ namespace Copper68k
             var left = (opcode & 0x0100) != 0;
             var value = State.D[register] & M68kCpuState.Mask(size);
             WriteDataRegister(register, Shift(value, count, size, type, left), size);
-            AddInstructionCycles((size == M68kOperandSize.Long ? 8 : 6) + (count * 2));
+            return GetRegisterShiftCycles(size, count);
+        }
+
+        /// <summary>
+        /// MC68000 retirement cycles for a register shift or rotate: six cycles
+        /// for byte and word forms, eight for long, plus two per shifted bit.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int GetRegisterShiftCycles(M68kOperandSize size, int count)
+            => (size == M68kOperandSize.Long ? 8 : 6) + (count * 2);
+
+        /// <summary>
+        /// The cached fixed-plan-run form of <see cref="ExecutePlannedRegisterShiftWithoutCycles"/>,
+        /// operating on the run's register snapshot instead of <see cref="State"/>.
+        /// </summary>
+        /// <returns>The retirement cycles for the instruction.</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int ExecuteFixedPlanRunRegisterShift(
+            ref M68000FixedPlanRunRegisters registers,
+            ushort opcode)
+        {
+            var register = opcode & 7;
+            var size = ((opcode >> 6) & 3) switch
+            {
+                0 => M68kOperandSize.Byte,
+                1 => M68kOperandSize.Word,
+                _ => M68kOperandSize.Long
+            };
+            var count = (opcode >> 9) & 7;
+            if ((opcode & 0x0020) != 0)
+            {
+                count = (int)(GetFixedPlanRunDataRegister(in registers, count) & 63);
+            }
+            else if (count == 0)
+            {
+                count = 8;
+            }
+
+            var mask = M68kCpuState.Mask(size);
+            var shifted = M68kIntegerSemantics.Shift(
+                GetFixedPlanRunDataRegister(in registers, register) & mask,
+                count,
+                size,
+                (opcode >> 3) & 3,
+                (opcode & 0x0100) != 0,
+                (registers.StatusRegister & M68kCpuState.Extend) != 0);
+            SetFixedPlanRunShiftFlags(
+                ref registers.StatusRegister,
+                shifted.Value,
+                size,
+                shifted.Carry,
+                shifted.ExtendChanged,
+                shifted.Extend,
+                shifted.Overflow);
+            SetFixedPlanRunSizedDataRegister(
+                ref registers,
+                register,
+                shifted.Value & mask,
+                size,
+                mask);
+            return GetRegisterShiftCycles(size, count);
+        }
+
+        /// <summary>
+        /// The cached fixed-plan-run form of the shift/rotate condition codes.
+        /// Mirrors <see cref="Shift"/>: negative and zero from the result, carry
+        /// always assigned, extend only when the operation touched it, and
+        /// overflow from the operation.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void SetFixedPlanRunShiftFlags(
+            ref ushort statusRegister,
+            uint value,
+            M68kOperandSize size,
+            bool carry,
+            bool extendChanged,
+            bool extend,
+            bool overflow)
+        {
+            var status = (ushort)((statusRegister & ~M68kIntegerSemantics.LogicFlags) |
+                M68kIntegerSemantics.GetNegativeZeroFlags(value, size));
+            if (carry)
+            {
+                status |= M68kCpuState.Carry;
+            }
+
+            if (overflow)
+            {
+                status |= M68kCpuState.Overflow;
+            }
+
+            if (extendChanged)
+            {
+                status = extend
+                    ? (ushort)(status | M68kCpuState.Extend)
+                    : (ushort)(status & ~M68kCpuState.Extend);
+            }
+
+            statusRegister = status;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -8099,7 +8437,14 @@ namespace Copper68k
                 _pendingPrefetchAddress,
                 _pendingPrefetchEarliestCycle,
                 _exceptionEntryNotBeforeCycle,
-                _pendingPrefetchBlocksInstructionEntry);
+                _pendingPrefetchBlocksInstructionEntry,
+                _prefetchTimingToken0,
+                _prefetchTimingToken1,
+                _pendingPrefetchPublicationPhase,
+                _pendingPrefetchRetirementFloor,
+                _pendingPrefetchPublicationContext,
+                _pendingPrefetchVirtualRequestedCycle,
+                _instructionFetchPublicationGroup);
 
         void IM68000PipelineStateTransfer.ImportM68000PipelineState(in M68000PipelineState state)
         {
@@ -8108,8 +8453,8 @@ namespace Copper68k
             _prefetchWord1 = state.Word1;
             _prefetchCompletedCycle0 = state.ReadyCycle0;
             _prefetchCompletedCycle1 = state.ReadyCycle1;
-            _prefetchTimingToken0 = 0;
-            _prefetchTimingToken1 = 0;
+            _prefetchTimingToken0 = state.TimingToken0;
+            _prefetchTimingToken1 = state.TimingToken1;
             _prefetchDeferredCpuBusBatchEligible0 = state.DeferredBatchEligible0;
             _prefetchDeferredCpuBusBatchEligible1 = state.DeferredBatchEligible1;
             _prefetchCount = state.PrefetchCount;
@@ -8122,9 +8467,14 @@ namespace Copper68k
             _hasPendingPrefetch = state.HasPendingPrefetch;
             _pendingPrefetchAddress = state.PendingPrefetchAddress;
             _pendingPrefetchEarliestCycle = state.PendingPrefetchEarliestCycle;
+            _pendingPrefetchPublicationPhase = state.PendingPublicationPhase;
+            _pendingPrefetchRetirementFloor = state.PendingRetirementFloor;
+            _pendingPrefetchPublicationContext = state.PendingPublicationContext;
+            _pendingPrefetchVirtualRequestedCycle = state.PendingVirtualRequestedCycle;
             _pendingPrefetchBlocksInstructionEntry =
                 state.PendingBlocksInstructionEntry;
             _exceptionEntryNotBeforeCycle = state.ExceptionEntryNotBeforeCycle;
+            _instructionFetchPublicationGroup = state.PublicationGroup;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -8597,6 +8947,17 @@ namespace Copper68k
                     return true;
                 }
 
+                if (bitMode == 0)
+                {
+                    // Data-register direct: no effective-address operand, no bus
+                    // access, and the bit number is already masked to 31.
+                    ExecuteDataRegisterBitOperation(operation, bitReg, (int)bit);
+                    AddInstructionCycles(operation == 0
+                        ? GetImmediateBtstCycles(bitMode, bitReg)
+                        : GetImmediateBitChangeCycles(operation, bitMode, bitReg, bit));
+                    return true;
+                }
+
                 var bitEa = ResolveEa(bitMode, bitReg, bitSize, write: operation != 0);
                 var value = bitEa.Read();
                 var mask = 1u << (int)(bitMode == 0 ? bit : bit & 7);
@@ -8644,6 +9005,16 @@ namespace Copper68k
                 }
 
                 var bitSize = bitMode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
+                if (bitMode == 0)
+                {
+                    var registerBit = (int)(State.D[bitRegister] & 31u);
+                    ExecuteDataRegisterBitOperation(operation, bitReg, registerBit);
+                    AddInstructionCycles(operation == 0
+                        ? GetDynamicBtstCycles(bitMode, bitReg)
+                        : GetDynamicBitChangeCycles(operation, bitMode, bitReg, (uint)registerBit));
+                    return true;
+                }
+
                 var bitEa = ResolveEa(bitMode, bitReg, bitSize, write: operation != 0);
                 var value = bitEa.Read();
                 var bit = State.D[bitRegister] & (bitMode == 0 ? 31u : 7u);
@@ -9685,6 +10056,74 @@ namespace Copper68k
         }
 
         /// <summary>
+        /// Executes CLR, NEGX, NEG, NOT, or TST against a data register.
+        /// Register-direct needs no effective-address operand: there is no
+        /// extension word, no bus access, no register side effect, and no
+        /// odd-address fault to account for. Shared by the scalar decoder, the
+        /// planned dispatch, and the fixed-plan batch so all three agree by
+        /// construction.
+        /// </summary>
+        /// <param name="operation">The line-4 unary group, masked with 0xFF00.</param>
+        /// <param name="register">The data register operand.</param>
+        /// <param name="size">The operand size.</param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteDataRegisterUnaryOperation(
+            int operation,
+            int register,
+            M68kOperandSize size)
+        {
+            ExecuteDataRegisterUnaryOperationWithoutCycles(operation, register, size);
+            AddInstructionCycles(GetDataRegisterUnaryCycles(operation, size));
+        }
+
+        /// <summary>
+        /// The register and condition-code effect of <see cref="ExecuteDataRegisterUnaryOperation"/>
+        /// without charging retirement cycles, for callers that account cycles
+        /// through the fixed-plan batch context instead.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteDataRegisterUnaryOperationWithoutCycles(
+            int operation,
+            int register,
+            M68kOperandSize size)
+        {
+            var mask = M68kCpuState.Mask(size);
+            var current = State.D[register] & mask;
+            switch (operation)
+            {
+                case 0x4000:
+                    WriteDataRegister(register, SubtractWithExtend(0, current, size) & mask, size);
+                    break;
+                case 0x4200:
+                    WriteDataRegister(register, 0, size);
+                    State.SetSizedLogicFlags(0, size);
+                    break;
+                case 0x4400:
+                    WriteDataRegister(register, Subtract(0, current, size, setExtend: true) & mask, size);
+                    break;
+                case 0x4600:
+                {
+                    var inverted = (~current) & mask;
+                    WriteDataRegister(register, inverted, size);
+                    State.SetSizedLogicFlags(inverted, size);
+                    break;
+                }
+                default:
+                    State.SetSizedLogicFlags(current, size);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// MC68000 retirement cycles for a register-direct line-4 unary form:
+        /// four cycles, except CLR/NEGX/NEG/NOT with a long operand, which take
+        /// six. Matches <see cref="GetUnaryCycles"/> with mode zero.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int GetDataRegisterUnaryCycles(int operation, M68kOperandSize size)
+            => operation == 0x4A00 || size != M68kOperandSize.Long ? 4 : 6;
+
+        /// <summary>
         /// Executes the line-4 unary group (NEGX, CLR, NEG, NOT, TST).
         /// </summary>
         private bool ExecuteLine4Unary(ushort opcode, uint instructionPc, int unary)
@@ -9700,37 +10139,7 @@ namespace Copper68k
             var reg = opcode & 7;
             if (mode == 0)
             {
-                // Data-register direct needs no effective-address operand:
-                // there is no extension word, no bus access, no register
-                // side effect, and no odd-address fault to account for.
-                var registerMask = M68kCpuState.Mask(size);
-                var current = State.D[reg] & registerMask;
-                switch (unary)
-                {
-                    case 0x4000:
-                        WriteDataRegister(reg, SubtractWithExtend(0, current, size) & registerMask, size);
-                        break;
-                    case 0x4200:
-                        WriteDataRegister(reg, 0, size);
-                        State.SetSizedLogicFlags(0, size);
-                        break;
-                    case 0x4400:
-                        WriteDataRegister(reg, Subtract(0, current, size, setExtend: true) & registerMask, size);
-                        break;
-                    case 0x4600:
-                    {
-                        var inverted = (~current) & registerMask;
-                        WriteDataRegister(reg, inverted, size);
-                        State.SetSizedLogicFlags(inverted, size);
-                        break;
-                    }
-                    default:
-                        State.SetSizedLogicFlags(current, size);
-                        break;
-                }
-
-                AddInstructionCycles(
-                    unary == 0x4A00 || size != M68kOperandSize.Long ? 4 : 6);
+                ExecuteDataRegisterUnaryOperation(unary, reg, size);
                 return true;
             }
 
@@ -9791,6 +10200,33 @@ namespace Copper68k
 
             AddInstructionCycles(GetUnaryCycles(unary, mode, reg, size));
             return true;
+        }
+
+        /// <summary>
+        /// Applies BTST, BCHG, BCLR, or BSET to a data register. Register-direct
+        /// bit operations are long-sized, need no effective-address operand, and
+        /// perform no bus access, so the whole EA machinery is redundant.
+        /// </summary>
+        /// <param name="operation">0 = BTST, 1 = BCHG, 2 = BCLR, 3 = BSET.</param>
+        /// <param name="register">The data register operand.</param>
+        /// <param name="bit">The bit number, already reduced to 0..31.</param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteDataRegisterBitOperation(int operation, int register, int bit)
+        {
+            var mask = 1u << bit;
+            var current = State.D[register];
+            State.SetFlag(M68kCpuState.Zero, (current & mask) == 0);
+            if (operation == 0)
+            {
+                return;
+            }
+
+            State.D[register] = operation switch
+            {
+                1 => current ^ mask,
+                2 => current & ~mask,
+                _ => current | mask
+            };
         }
 
         private static bool IsDataAlterableEffectiveAddress(int mode, int reg)
@@ -10115,17 +10551,38 @@ namespace Copper68k
             if ((line == 0x9 || line == 0xD || line == 0xB) && (opmode == 3 || opmode == 7))
             {
                 var size = opmode == 3 ? M68kOperandSize.Word : M68kOperandSize.Long;
-                var ea = ResolveEa(
-                    mode,
-                    eaReg,
-                    size,
-                    completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
-                if (size != M68kOperandSize.Long && !ea.IsRegister)
+                uint value;
+                bool sourceIsRegister;
+                int sourceEaCycles;
+                if (mode <= 1)
                 {
-                    AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+                    // Register-direct source: no extension word, no bus access,
+                    // and no effective-address cycles to add.
+                    value = mode == 0
+                        ? State.D[eaReg] & M68kCpuState.Mask(size)
+                        : size == M68kOperandSize.Word
+                            ? State.A[eaReg] & 0xFFFFu
+                            : State.A[eaReg];
+                    sourceIsRegister = true;
+                    sourceEaCycles = 0;
+                }
+                else
+                {
+                    var ea = ResolveEa(
+                        mode,
+                        eaReg,
+                        size,
+                        completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word);
+                    if (size != M68kOperandSize.Long && !ea.IsRegister)
+                    {
+                        AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+                    }
+
+                    value = ea.Read();
+                    sourceIsRegister = ea.IsRegister;
+                    sourceEaCycles = ea.EaCycles;
                 }
 
-                var value = ea.Read();
                 if (line == 0xB)
                 {
                     var compareValue = size == M68kOperandSize.Word
@@ -10143,8 +10600,8 @@ namespace Copper68k
                 }
 
                 AddInstructionCycles(line == 0xB
-                    ? GetCompareAddressCycles(mode, eaReg, ea.IsRegister, ea.EaCycles, size)
-                    : GetAddressArithmeticCycles(mode, eaReg, ea.IsRegister, ea.EaCycles, size));
+                    ? GetCompareAddressCycles(mode, eaReg, sourceIsRegister, sourceEaCycles, size)
+                    : GetAddressArithmeticCycles(mode, eaReg, sourceIsRegister, sourceEaCycles, size));
                 return true;
             }
 
@@ -11207,9 +11664,22 @@ namespace Copper68k
             // entry cannot pass the completion of that second transfer.
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
-            var targetOpcodeReadyCycle = TopUpPrefetchOne();
+            var targetPublicationContext = CaptureInstructionFetchPublicationContext();
+            var targetOpcodeReadyCycle = TopUpPrefetchOne(
+                out _,
+                M68kInstructionFetchPublicationPhase.CancellableSuccessor,
+                long.MinValue,
+                targetPublicationContext);
             _instructionInterruptSampleCycle = targetOpcodeReadyCycle;
-            var targetExtensionReadyCycle = TopUpPrefetchOne();
+            var targetExtensionReadyCycle = TopUpPrefetchOne(
+                out _,
+                M68kInstructionFetchPublicationPhase.CancellableSuccessor,
+                long.MinValue,
+                targetPublicationContext with
+                {
+                    PredecessorToken = _prefetchTimingToken0,
+                    RequiresIrcGap = _prefetchTimingToken0 != 0
+                });
 
             // The generated CE000 microsequence does not finish until this
             // transfer does.  Its frozen completion therefore constrains both
@@ -11241,9 +11711,22 @@ namespace Copper68k
             // an interrupt and discards the prefetched values.
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
-            var targetOpcodeReadyCycle = TopUpPrefetchOne();
+            var targetPublicationContext = CaptureInstructionFetchPublicationContext();
+            var targetOpcodeReadyCycle = TopUpPrefetchOne(
+                out _,
+                M68kInstructionFetchPublicationPhase.Required,
+                long.MinValue,
+                targetPublicationContext);
             _instructionInterruptSampleCycle = targetOpcodeReadyCycle;
-            var targetExtensionReadyCycle = TopUpPrefetchOne();
+            var targetExtensionReadyCycle = TopUpPrefetchOne(
+                out _,
+                M68kInstructionFetchPublicationPhase.Required,
+                long.MinValue,
+                targetPublicationContext with
+                {
+                    PredecessorToken = _prefetchTimingToken0,
+                    RequiresIrcGap = _prefetchTimingToken0 != 0
+                });
             _cpuRetireBusCycle = Math.Max(
                 _cpuRetireBusCycle,
                 targetExtensionReadyCycle);
@@ -11258,9 +11741,22 @@ namespace Copper68k
             ValidateBranchTarget(target, stackedProgramCounter);
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
-            var targetOpcodeReadyCycle = TopUpPrefetchOne();
+            var targetPublicationContext = CaptureInstructionFetchPublicationContext();
+            var targetOpcodeReadyCycle = TopUpPrefetchOne(
+                out _,
+                M68kInstructionFetchPublicationPhase.Required,
+                long.MinValue,
+                targetPublicationContext);
             _instructionInterruptSampleCycle = targetOpcodeReadyCycle;
-            var targetExtensionReadyCycle = TopUpPrefetchOne();
+            var targetExtensionReadyCycle = TopUpPrefetchOne(
+                out _,
+                M68kInstructionFetchPublicationPhase.Required,
+                long.MinValue,
+                targetPublicationContext with
+                {
+                    PredecessorToken = _prefetchTimingToken0,
+                    RequiresIrcGap = _prefetchTimingToken0 != 0
+                });
             _cpuRetireBusCycle = Math.Max(
                 _cpuRetireBusCycle,
                 targetExtensionReadyCycle);
@@ -11301,32 +11797,6 @@ namespace Copper68k
                 isWrite: false,
                 M68kBusAccessKind.CpuInstructionFetch,
                 useDataAccessStackedProgramCounter: true);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void PrimePlannedBranchTargetOpcode(uint target, uint stackedProgramCounter)
-        {
-            if ((target & 1) != 0)
-            {
-                _dataAccessStackedProgramCounter = stackedProgramCounter;
-                ThrowOddAddressAccess(
-                    target,
-                    isWrite: false,
-                    M68kBusAccessKind.CpuInstructionFetch,
-                    useDataAccessStackedProgramCounter: true);
-            }
-
-            SetProgramCounterAndFlushPrefetch(target);
-            _prefetchAddress = target;
-            TopUpPrefetchOne();
-            var targetExtensionReadyCycle =
-                TopUpPrefetchOne(out _instructionInterruptSampleCycle);
-            // CE000 polls IPL after the target opcode transfer, then commits
-            // the target-extension transfer. If the poll accepts an interrupt,
-            // exception entry must still wait for that physical transfer.
-            _exceptionEntryNotBeforeCycle = Math.Max(
-                _exceptionEntryNotBeforeCycle,
-                targetExtensionReadyCycle);
         }
 
         private void JumpToSubroutine(uint target, uint stackedProgramCounter, bool prefetchFallthroughBeforeStackWrite)

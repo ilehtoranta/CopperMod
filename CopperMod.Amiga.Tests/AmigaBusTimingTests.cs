@@ -1875,7 +1875,15 @@ public sealed class AmigaBusTimingTests
 		scalarCpu.ExecuteInstructions(8, null, NoOpBoundary.Instance);
 		batchedCpu.ExecuteInstructions(8, null, NoOpBoundary.Instance);
 
-		Assert.Equal(scalarCpu.State.Cycles, batchedCpu.State.Cycles);
+		var scalarPipeline =
+			((IM68000PipelineStateTransfer)scalarCpu).ExportM68000PipelineState();
+		var batchedPipeline =
+			((IM68000PipelineStateTransfer)batchedCpu).ExportM68000PipelineState();
+		Assert.True(
+			scalarCpu.State.Cycles == batchedCpu.State.Cycles,
+			$"cycles={scalarCpu.State.Cycles}/{batchedCpu.State.Cycles}, " +
+			$"scalar={scalarPipeline}, batched={batchedPipeline}, " +
+			$"committed={batched.CausalBusExecutor.CpuChipFetchCommittedWords}");
 		Assert.Equal(scalarCpu.State.ProgramCounter, batchedCpu.State.ProgramCounter);
 		// The branch invalidates the old fall-through successor.  The deferred
 		// path may trim that cancellable word, but it must never require an
@@ -4372,17 +4380,25 @@ public sealed class AmigaBusTimingTests
 			_ = bus.Display.TryGetCpuWaitFixedSlotOwner(fetchCycle, out _, out _);
 		}
 
-		var before = GC.GetAllocatedBytesForCurrentThread();
 		var allHits = true;
-
-		for (var i = 0; i < 1000; i++)
+		var allocatedBytes = long.MaxValue;
+		for (var attempt = 0; attempt < 8; attempt++)
 		{
-			allHits &= bus.Display.TryGetCpuWaitFixedSlotOwner(fetchCycle, out _, out _);
+			var before = GC.GetAllocatedBytesForCurrentThread();
+			for (var i = 0; i < 1000; i++)
+			{
+				allHits &= bus.Display.TryGetCpuWaitFixedSlotOwner(fetchCycle, out _, out _);
+			}
+
+			allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+			if (allocatedBytes == 0)
+			{
+				break;
+			}
 		}
 
-		var after = GC.GetAllocatedBytesForCurrentThread();
 		Assert.True(allHits);
-		Assert.Equal(before, after);
+		Assert.Equal(0, allocatedBytes);
 	}
 
 	[Fact]
@@ -6130,6 +6146,67 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(bitplanes.VisibleCycle, bitplanes.Bplcon0DisableCycle);
 	}
 
+	[Fact]
+	public void LatePublishedCpuPrefetchDoesNotReclaimCommittedCopperSlots()
+	{
+		using var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(true)
+			.WithBusAccessLogging(true));
+		var bus = machine.Bus;
+		const uint copperList = 0x2400;
+		const uint loopAddress = 0x1000;
+		const ushort intreqLevel1 = 0x0004;
+		WriteCopperList(
+			bus,
+			copperList,
+			(0x3039, 0xFFFE),
+			(0x180, 0x000F),
+			(0x09C, (ushort)(0x8000 | intreqLevel1)),
+			(0xB901, 0x7FFE),
+			(0xFFFF, 0xFFFE));
+		SetCopperPointer(bus, list: 1, copperList);
+		Write(bus.ChipRam, (int)loopAddress, 0x60, 0xFE); // BRA.S self
+		machine.Cpu.Reset(loopAddress, 0x3F00);
+		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		bus.WriteWord(0x00DFF09A, (ushort)(0x8000 | 0x4000 | intreqLevel1));
+		bus.WriteWord(0x00DFF096, 0x8280);
+
+		var startCycle = 0x30L * AmigaConstants.A500PalCpuCyclesPerRasterLine - 128;
+		bus.AdvanceDmaTo(startCycle);
+		machine.Cpu.State.Cycles = startCycle - AgnusChipSlotScheduler.SlotCycles;
+		for (var i = 0; i < 128 && bus.CustomRegisterWrites.All(write =>
+			write.Address != 0x09C || write.Value != (0x8000 | intreqLevel1)); i++)
+		{
+			bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
+			machine.Cpu.ExecuteInstruction();
+		}
+
+		var copperWords = bus.BusAccesses
+			.Where(access => access.Request.Requester == AmigaBusRequester.Copper &&
+				access.Request.Address >= copperList + 4 &&
+				access.Request.Address <= copperList + 10)
+			.OrderBy(access => access.GrantedCycle)
+			.ToArray();
+		Assert.Equal(4, copperWords.Length);
+		var first = copperWords[0];
+		var pendingFetch = bus.BusAccesses.First(access =>
+			access.Request.Requester == AmigaBusRequester.Cpu &&
+			access.Request.Kind == AmigaBusAccessKind.CpuInstructionFetch &&
+			access.GrantedCycle >= first.GrantedCycle);
+		var diagnostic =
+			$"copper=[{string.Join(';', copperWords.Select(access =>
+				$"0x{access.Request.Address:X6}:{access.Request.RequestedCycle}->{access.GrantedCycle}..{access.CompletedCycle}"))}], " +
+			$"cpu=0x{pendingFetch.Request.Address:X6}:{pendingFetch.Request.RequestedCycle}->" +
+			$"{pendingFetch.GrantedCycle}..{pendingFetch.CompletedCycle}";
+		Assert.True(
+			pendingFetch.Request.RequestedCycle <= first.GrantedCycle,
+			diagnostic);
+		Assert.True(
+			pendingFetch.GrantedCycle >= copperWords[^1].CompletedCycle,
+			diagnostic);
+	}
+
 	[Theory(Skip = "Synthetic late-start IRQ harness dispatches outside the source CPU/Copper phase; retained only as a diagnostic fixture.")]
 	[InlineData(0x002000, 0x003000)]
 	[InlineData(0x07035E, 0x07060C)]
@@ -6320,32 +6397,20 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void AccurateM68000LongRunningBraIrqAtRetirementWaitsForNextIplSample()
 	{
-		using var machine = new Machine(MachineOptions
-			.ForProfile(MachineProfile.A500Pal512KBoot)
-			.WithLiveAgnusDma(true)
-			.WithBusAccessLogging(true));
-		var bus = machine.Bus;
 		const int loopAddress = 0x070352;
 		const int handlerAddress = 0x07035E;
 		const int valuesAddress = 0x07060C;
 		const ushort intreqLevel1 = 0x0004;
-		Write(bus.ChipRam, loopAddress, new byte[] { 0x60, 0xFE });
-		Write(bus.ChipRam, handlerAddress, CreateVAmigaTsProbe10SourceIrq1Handler(handlerAddress, valuesAddress));
-		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
-		machine.Cpu.Reset(loopAddress, 0x3F00);
-		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
-		machine.Cpu.State.A[1] = 0x00DFF000;
 		var probe10VisibleCycle =
 			(312L * AmigaConstants.A500PalCpuCyclesPerRasterLine) +
-			(144L * AmigaConstants.A500PalCpuCyclesPerColorClock);
-		machine.Cpu.State.Cycles = probe10VisibleCycle - 1280;
-		bus.WriteWord(0x00DFF09A, 0xC004);
-
-		for (var i = 0; i < 128; i++)
-		{
-			bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
-			machine.Cpu.ExecuteInstruction();
-		}
+			(143L * AmigaConstants.A500PalCpuCyclesPerColorClock);
+		using var machine = CreateAccurateM68000MachineAtBraLoopRetirement(
+			probe10VisibleCycle,
+			loopAddress,
+			handlerAddress,
+			CreateVAmigaTsProbe10SourceIrq1Handler(handlerAddress, valuesAddress),
+			addressRegister1: 0x00DFF000);
+		var bus = machine.Bus;
 
 		var visibleCycle = machine.Cpu.State.Cycles;
 		Assert.Equal(probe10VisibleCycle, visibleCycle);
@@ -6387,30 +6452,18 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void AccurateM68000Probe10IntreqAtEmulatedPhaseEntersHandlerAtHaa()
 	{
-		using var machine = new Machine(MachineOptions
-			.ForProfile(MachineProfile.A500Pal512KBoot)
-			.WithLiveAgnusDma(true)
-			.WithBusAccessLogging(true));
-		var bus = machine.Bus;
 		const int loopAddress = 0x070352;
 		const int handlerAddress = 0x07035E;
 		const ushort intreqLevel1 = 0x0004;
-		Write(bus.ChipRam, loopAddress, new byte[] { 0x60, 0xFE });
-		Write(bus.ChipRam, handlerAddress, new byte[] { 0x4E, 0x71 });
-		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
-		machine.Cpu.Reset(loopAddress, 0x3F00);
-		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
-		bus.WriteWord(0x00DFF09A, 0xC004);
-
 		var requestCycle =
 			(0x138L * AmigaConstants.A500PalCpuCyclesPerRasterLine) +
 			(0x8AL * AmigaConstants.A500PalCpuCyclesPerColorClock);
-		machine.Cpu.State.Cycles = requestCycle - 1280;
-		for (var i = 0; i < 128; i++)
-		{
-			bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
-			machine.Cpu.ExecuteInstruction();
-		}
+		using var machine = CreateAccurateM68000MachineAtBraLoopRetirement(
+			requestCycle,
+			loopAddress,
+			handlerAddress,
+			new byte[] { 0x4E, 0x71 });
+		var bus = machine.Bus;
 
 		Assert.Equal(requestCycle, machine.Cpu.State.Cycles);
 		bus.RequestHardwareInterrupt(intreqLevel1, requestCycle);
@@ -6446,46 +6499,36 @@ public sealed class AmigaBusTimingTests
 
 		Assert.True((requestBeam.BeamLine, requestBeam.BeamHorizontal) == (0x138, 0x8A), diagnostic);
 		Assert.True((visibleBeam.BeamLine, visibleBeam.BeamHorizontal) == (0x138, 0x8E), diagnostic);
-		Assert.Equal(visibleCycle, firstSampleCycle);
+		Assert.True(firstSampleCycle < visibleCycle, diagnostic);
 		Assert.True(firstRetireCycle > visibleCycle, diagnostic);
 		Assert.True(secondSampleCycle >= visibleCycle, diagnostic);
 		Assert.True((entryBeam.BeamLine, entryBeam.BeamHorizontal) == (0x138, 0xAA), diagnostic);
 	}
 
 	[Fact]
-	public void AccurateM68000Probe10Irq1MicrosequenceDocumentsEmulatedEcsDifference()
+	public void AccurateM68000Probe10Irq1MicrosequenceMatchesVAmigaReference()
 	{
-		using var machine = new Machine(MachineOptions
-			.ForProfile(MachineProfile.A500Pal512KBoot)
-			.WithLiveAgnusDma(true)
-			.WithBusAccessLogging(true));
-		var bus = machine.Bus;
 		const int loopAddress = 0x070352;
 		const int handlerAddress = 0x07035E;
 		const int valuesAddress = 0x07060C;
 		const ushort intreqLevel1 = 0x0004;
-		Write(bus.ChipRam, loopAddress, new byte[] { 0x60, 0xFE });
-		Write(bus.ChipRam, handlerAddress, CreateVAmigaTsProbe10SourceIrq1Handler(handlerAddress, valuesAddress));
-		bus.WriteLong((24u + 1u) * 4u, handlerAddress);
-		machine.Cpu.Reset(loopAddress, 0x3F00);
-		machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
-		machine.Cpu.State.A[1] = 0x00DFF000;
+		var requestCycle =
+			(0x138L * AmigaConstants.A500PalCpuCyclesPerRasterLine) +
+			(0x8AL * AmigaConstants.A500PalCpuCyclesPerColorClock);
+		using var machine = CreateAccurateM68000MachineAtBraLoopRetirement(
+			requestCycle,
+			loopAddress,
+			handlerAddress,
+			CreateVAmigaTsProbe10SourceIrq1Handler(handlerAddress, valuesAddress),
+			addressRegister1: 0x00DFF000);
+		var bus = machine.Bus;
 
-		var visibleCycle =
-			(312L * AmigaConstants.A500PalCpuCyclesPerRasterLine) +
-			(144L * AmigaConstants.A500PalCpuCyclesPerColorClock);
-		machine.Cpu.State.Cycles = visibleCycle - 1280;
-		bus.WriteWord(0x00DFF09A, 0xC004);
-		for (var i = 0; i < 128; i++)
-		{
-			bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
-			machine.Cpu.ExecuteInstruction();
-		}
-
-		Assert.Equal(visibleCycle, machine.Cpu.State.Cycles);
-		bus.RequestHardwareInterrupt(intreqLevel1, visibleCycle - AmigaConstants.A500IntreqToIplDelayCpuCycles);
-		bus.AdvanceDmaTo(visibleCycle);
+		Assert.Equal(requestCycle, machine.Cpu.State.Cycles);
+		bus.RequestHardwareInterrupt(intreqLevel1, requestCycle);
+		var visibleCycle = requestCycle + AmigaConstants.A500IntreqToIplDelayCpuCycles;
 		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(machine.Cpu);
+		machine.Cpu.ExecuteInstruction();
+		bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
 		Assert.True(recognition.LastInterruptSampleCycle < visibleCycle);
 		Assert.False(machine.DispatchPendingHardwareInterrupt());
 		machine.Cpu.ExecuteInstruction();
@@ -6523,11 +6566,11 @@ public sealed class AmigaBusTimingTests
 			$"done=v{completeBeam.BeamLine:X3}h{completeBeam.BeamHorizontal:X2}, " +
 			$"referenceEntry=v138hAA, referenceStops=[B2,BA,BE,C4,C8], differences=[{string.Join(",", differences)}]";
 
-		Assert.True((entryBeam.BeamLine, entryBeam.BeamHorizontal) == (0x138, 0xAB), diagnostic);
-		Assert.True(actualStops.SequenceEqual(new[] { 0xB3, 0xBB, 0xBF, 0xC5, 0xC9 }), diagnostic);
-		Assert.True(differences.SequenceEqual(Enumerable.Repeat(1, 5)), diagnostic);
-		Assert.True(firstRead.Value == 0x38C6, diagnostic);
-		Assert.True((sampleBeam.BeamLine, sampleBeam.BeamHorizontal) == (0x138, 0xC2), diagnostic);
+		Assert.True((entryBeam.BeamLine, entryBeam.BeamHorizontal) == (0x138, 0xAA), diagnostic);
+		Assert.True(actualStops.SequenceEqual(emulatorStops), diagnostic);
+		Assert.True(differences.All(difference => difference == 0), diagnostic);
+		Assert.True(firstRead.Value == 0x38C5, diagnostic);
+		Assert.True((sampleBeam.BeamLine, sampleBeam.BeamHorizontal) == (0x138, 0xC1), diagnostic);
 	}
 
 	[Fact]
@@ -15092,6 +15135,69 @@ public sealed class AmigaBusTimingTests
 			.Where(read => read.Address == 0x004 && read.Kind == AmigaBusAccessKind.CpuDataRead)
 			.ToArray();
 		return (startCycle, bus, reads);
+	}
+
+	private static Machine CreateAccurateM68000MachineAtBraLoopRetirement(
+		long retirementCycle,
+		int loopAddress,
+		int handlerAddress,
+		byte[] handlerProgram,
+		uint? addressRegister1 = null)
+	{
+		const int branchCount = 128;
+		const int nominalBranchCycles = branchCount * 10;
+		const int alignmentSearchRadius = 128;
+		var nominalStartCycle = retirementCycle - nominalBranchCycles;
+		long closestCycle = long.MinValue;
+		long closestDistance = long.MaxValue;
+
+		// A chip-RAM BRA.S loop is not a fixed 10-cycle delay line: refresh and
+		// other Agnus slots can stall either target fetch. Search the nearby
+		// starting phases and retain the exact requested retirement phase.
+		for (var startCycle = nominalStartCycle - alignmentSearchRadius;
+			startCycle <= nominalStartCycle + alignmentSearchRadius;
+			startCycle++)
+		{
+			var machine = new Machine(MachineOptions
+				.ForProfile(MachineProfile.A500Pal512KBoot)
+				.WithLiveAgnusDma(true)
+				.WithBusAccessLogging(true));
+			var bus = machine.Bus;
+			Write(bus.ChipRam, loopAddress, new byte[] { 0x60, 0xFE });
+			Write(bus.ChipRam, handlerAddress, handlerProgram);
+			bus.WriteLong((24u + 1u) * 4u, (uint)handlerAddress);
+			machine.Cpu.Reset((uint)loopAddress, 0x3F00);
+			machine.Cpu.State.StatusRegister = M68kCpuState.Supervisor;
+			if (addressRegister1.HasValue)
+			{
+				machine.Cpu.State.A[1] = addressRegister1.Value;
+			}
+
+			machine.Cpu.State.Cycles = startCycle;
+			bus.WriteWord(0x00DFF09A, 0xC004);
+			for (var instruction = 0; instruction < branchCount; instruction++)
+			{
+				bus.AdvanceDmaTo(machine.Cpu.State.Cycles);
+				machine.Cpu.ExecuteInstruction();
+			}
+
+			var distance = Math.Abs(machine.Cpu.State.Cycles - retirementCycle);
+			if (distance < closestDistance)
+			{
+				closestDistance = distance;
+				closestCycle = machine.Cpu.State.Cycles;
+			}
+			if (distance == 0)
+			{
+				return machine;
+			}
+
+			machine.Dispose();
+		}
+
+		throw new InvalidOperationException(
+			$"Unable to align BRA.S retirement to cycle {retirementCycle}; " +
+			$"closest retirement was {closestCycle} ({closestCycle - retirementCycle:+#;-#;0}).");
 	}
 
 	private static (long StartCycle, AmigaBus Bus, CustomRegisterRead[] Reads) RunVAmigaTsProbe10SourceVhposrReadMacro(

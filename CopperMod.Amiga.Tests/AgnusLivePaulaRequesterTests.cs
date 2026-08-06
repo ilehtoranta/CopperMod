@@ -226,6 +226,71 @@ public sealed class AgnusLivePaulaRequesterTests
     }
 
     [Fact]
+    public void AudioLeadingLiveDmaLatchesDoNotGrowAfterRegisterCatchUp()
+    {
+        var candidate = CreateBus(candidate: true, captureBusAccesses: false);
+        ConfigureFourChannels(candidate, lengthWords: 32, period: 64);
+        var samples = new float[2];
+
+        const long audioLeadCycle = 2_000;
+        const long catchUpCycle = 40_000;
+        candidate.Paula.RenderSample(
+            audioLeadCycle,
+            samples,
+            frame: 0,
+            channels: 2,
+            advanceRegisterObservable: false);
+        candidate.AdvanceDmaTo(catchUpCycle);
+        candidate.Paula.RenderSample(
+            catchUpCycle,
+            samples,
+            frame: 0,
+            channels: 2,
+            advanceRegisterObservable: false);
+
+        Assert.True(candidate.AgnusLivePaulaDiagnostics.GrantedRequests > 0);
+        var warmedCapacities = new int[AmigaConstants.PaulaChannelCount];
+
+        for (var channel = 0; channel < AmigaConstants.PaulaChannelCount; channel++)
+        {
+            var queue = CaptureDmaReadLatchQueue(candidate, channel);
+            Assert.True(
+                queue.Count is >= 0 and <= 1,
+                $"channel={channel}, count={queue.Count}, capacity={queue.Capacity}, " +
+                $"audioOffset={queue.AudioOffset}, registerOffset={queue.RegisterOffset}, " +
+                $"diagnostics={candidate.AgnusLivePaulaDiagnostics}");
+            warmedCapacities[channel] = queue.Capacity;
+        }
+
+        const long secondAudioLeadCycle = catchUpCycle + 2_000;
+        const long secondCatchUpCycle = catchUpCycle * 2;
+        candidate.Paula.RenderSample(
+            secondAudioLeadCycle,
+            samples,
+            frame: 0,
+            channels: 2,
+            advanceRegisterObservable: false);
+        candidate.AdvanceDmaTo(secondCatchUpCycle);
+        candidate.Paula.RenderSample(
+            secondCatchUpCycle,
+            samples,
+            frame: 0,
+            channels: 2,
+            advanceRegisterObservable: false);
+
+        for (var channel = 0; channel < AmigaConstants.PaulaChannelCount; channel++)
+        {
+            var queue = CaptureDmaReadLatchQueue(candidate, channel);
+            Assert.True(
+                queue.Count is >= 0 and <= 1,
+                $"channel={channel}, count={queue.Count}, capacity={queue.Capacity}, " +
+                $"audioOffset={queue.AudioOffset}, registerOffset={queue.RegisterOffset}, " +
+                $"diagnostics={candidate.AgnusLivePaulaDiagnostics}");
+            Assert.Equal(warmedCapacities[channel], queue.Capacity);
+        }
+    }
+
+    [Fact]
     public void WarmedCandidateExecutionAllocatesNoManagedMemory()
     {
         _ = RunAllocationFixture(measure: false);
@@ -428,6 +493,47 @@ public sealed class AgnusLivePaulaRequesterTests
         }
 
         return hash;
+    }
+
+    private static (int Count, int Capacity, int AudioOffset, int RegisterOffset)
+        CaptureDmaReadLatchQueue(
+        AmigaBus bus,
+        int channel)
+    {
+        var queuesField = bus.Paula.GetType().GetField(
+            "_dmaReadLatchQueues",
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(queuesField);
+        var queues = Assert.IsAssignableFrom<Array>(queuesField.GetValue(bus.Paula));
+        var queue = queues.GetValue(channel);
+        Assert.NotNull(queue);
+        var countField = queue.GetType().GetField(
+            "_count",
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic);
+        var recordsField = queue.GetType().GetField(
+            "_records",
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic);
+        var audioOffsetField = queue.GetType().GetField(
+            "_audioSearchOffset",
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic);
+        var registerOffsetField = queue.GetType().GetField(
+            "_registerSearchOffset",
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(countField);
+        Assert.NotNull(recordsField);
+        Assert.NotNull(audioOffsetField);
+        Assert.NotNull(registerOffsetField);
+        var records = Assert.IsAssignableFrom<Array>(recordsField.GetValue(queue));
+        return (
+            Assert.IsType<int>(countField.GetValue(queue)),
+            records.Length,
+            Assert.IsType<int>(audioOffsetField.GetValue(queue)),
+            Assert.IsType<int>(registerOffsetField.GetValue(queue)));
     }
 
     private static AmigaBus CreateBus(

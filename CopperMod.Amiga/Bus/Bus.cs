@@ -7750,7 +7750,12 @@ namespace CopperMod.Amiga.Bus
                 cycle <= ExecutedChipBusHorizon)
             {
                 var executedThrough = ExecutedChipBusHorizon;
-                cycle = executedThrough + AgnusChipSlotScheduler.SlotCycles;
+                var causalTailSlots =
+                    _agnusBusExecutor.LastCopperGrantedCycle == executedThrough
+                        ? 2
+                        : 1;
+                cycle = executedThrough +
+                    causalTailSlots * AgnusChipSlotScheduler.SlotCycles;
             }
         }
 

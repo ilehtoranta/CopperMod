@@ -19,7 +19,7 @@ public sealed class CopperScreenAllocationTests
 
 	[Theory]
 	[MemberData(nameof(Workloads))]
-	public void RenderFrameAndAudioAllocateZeroBytesAfterWarmup(string name, string? fileName)
+	public void SlotKernelRenderFrameAndAudioAllocateZeroBytesAfterWarmup(string name, string? fileName)
 	{
 		var emulator = CreateEmulator(fileName);
 		if (emulator == null)
@@ -62,7 +62,7 @@ public sealed class CopperScreenAllocationTests
 		if (fileName == null)
 		{
 			return CopperScreenEmulator.Create(
-				["--profile", CausalBatchingProfile],
+				["--profile", CausalBatchingProfile, "--agnus-slot-kernel"],
 				AppContext.BaseDirectory);
 		}
 
@@ -70,7 +70,7 @@ public sealed class CopperScreenAllocationTests
 		return diskPath == null
 			? null
 			: CopperScreenEmulator.Create(
-				["--profile", CausalBatchingProfile, diskPath],
+				["--profile", CausalBatchingProfile, "--agnus-slot-kernel", diskPath],
 				AppContext.BaseDirectory);
 	}
 

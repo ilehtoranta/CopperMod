@@ -163,3 +163,18 @@ intentionally small public API. Applications should create cores through
 `M68kCoreFactory` and depend on `IM68kBus`, `IM68kCore`, `M68kCpuModel`,
 `M68kCpuState`, and the optional JIT capability interfaces rather than
 implementation-specific interpreter or JIT classes.
+
+### MC68000 fast-path coverage
+
+The MC68000 interpreter retires instructions through one of several paths: a
+cycle-accurate scalar decoder, a planned dispatch that skips decoding, and
+cached fixed-plan runs that hoist the prefetch and bus-timing machinery out of
+hot loops entirely. All paths are held to byte-identical retired cycle counts by
+a differential test harness.
+
+Register-direct forms of the following are admitted to the cached fixed-plan-run
+path, so loops built from them stay on the fastest tier: `NOP`, `MOVEQ`, short
+unconditional branches, `ADDQ`/`SUBQ`, long register `OR`/`AND`/`EOR`/`ADD`,
+`CLR`/`NEG`/`NEGX`/`NOT`/`TST`, and shifts and rotates with an immediate count.
+Shifts with a register-sourced count stay on the planned dispatch because their
+cycle cost depends on register state.

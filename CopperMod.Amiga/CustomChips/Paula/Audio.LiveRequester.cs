@@ -325,7 +325,16 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 grant.Request.RequestedCycle,
                 grant.SampledValue,
                 access);
-            _dmaReadLatchQueues[channel].AddConsumed(
+            var queue = _dmaReadLatchQueues[channel];
+            // Audio can already be one word ahead of the register timeline.
+            // Retire its oldest audio-only record before publishing this live
+            // word, or that prefix can never compact and the queue grows forever.
+            _ = queue.TryConsume(
+                grant.Request.Address,
+                grant.Request.RequestedCycle,
+                PaulaTimelineKind.Register,
+                out _);
+            queue.AddConsumed(
                 latch,
                 PaulaTimelineKind.Register);
             RememberRegisterDmaReadLatch(

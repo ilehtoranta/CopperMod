@@ -997,6 +997,40 @@ public sealed class M68kInterpreterCoreBehaviorTests
 				((IM68000InterruptRecognition)planned).LastInterruptSampleCycle);
 		}
 	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedShortBranchInterruptEntryMatchesScalarPhysicalLedger(int dispatchValue)
+	{
+		var scalarBus = new CycleCountingBus();
+		var plannedBus = new CycleCountingBus();
+		var program = Words(0x60FE); // BRA.S self
+		Write(scalarBus.Memory, 0x1000, program);
+		Write(plannedBus.Memory, 0x1000, program);
+		Write(scalarBus.Memory, 0x0064, Words(0x0000, 0x2000));
+		Write(plannedBus.Memory, 0x0064, Words(0x0000, 0x2000));
+		Write(scalarBus.Memory, 0x2000, Words(0x4E71, 0x4E71));
+		Write(plannedBus.Memory, 0x2000, Words(0x4E71, 0x4E71));
+		var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+		var planned = CreateCycleParityCpu(
+			plannedBus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		scalar.State.StatusRegister = M68kCpuState.Supervisor;
+		planned.State.StatusRegister = M68kCpuState.Supervisor;
+
+		scalar.ExecuteInstruction();
+		planned.ExecuteInstruction();
+		scalar.RequestInterrupt(1, 0x0064);
+		planned.RequestInterrupt(1, 0x0064);
+
+		AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+		Assert.Equal(
+			scalarBus.CpuBusPhases.Select(phase =>
+				(phase.Address, phase.RequestedCycle, phase.CompletedCycle, phase.AccessKind)),
+			plannedBus.CpuBusPhases.Select(phase =>
+				(phase.Address, phase.RequestedCycle, phase.CompletedCycle, phase.AccessKind)));
+	}
 	[Fact]
 	public void ShortBsrPushesReturnAddressLowWordBeforeHighWord()
 	{
@@ -1688,12 +1722,18 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	[MemberData(nameof(OpcodePlanDispatchVariants))]
 	public void PlannedFixedPlanBatchExitsToScalarAtUnsupportedOpcode(int dispatchValue)
 	{
+		// NBCD is the sentinel for "the plan table does not cover this opcode":
+		// one word, register-direct, no memory access, and no BCD plan kind
+		// exists. Guarded so that widening plan coverage to NBCD fails here
+		// loudly instead of silently voiding the test.
+		const ushort unplannedOpcode = 0x4800; // NBCD D0
+		Assert.Equal(M68kOpcodePlanKind.Unsupported, M68kOpcodePlanTable.Kinds[unplannedOpcode]);
 		var program = Words(
 			0x7001, // MOVEQ #1,D0
 			0x7202, // MOVEQ #2,D1
 			0x7403, // MOVEQ #3,D2
 			0x7604, // MOVEQ #4,D3
-			0x4280, // CLR.L D0
+			unplannedOpcode,
 			0x4E71); // NOP
 		var scalarBus = new CycleCountingBus();
 		var plannedBus = new CycleCountingBus();
@@ -1712,10 +1752,162 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(5, ((IM68kBatchCore)planned).ExecuteInstructions(5, long.MaxValue, plannedBoundary));
 
 		AssertCycleParity(scalar, scalarBus, planned, plannedBus);
-		Assert.Equal(0x4280, planned.State.LastOpcode);
+		Assert.Equal(unplannedOpcode, planned.State.LastOpcode);
 		Assert.Equal(0, plannedBoundary.BusAccessBatchInstructions);
 		Assert.Equal(1, planned.CapturePlannedInterpreterCounters().ScalarFallbackInstructions);
 	}
+	[Theory]
+	// Long forms of CLR/NEG/NOT retire in six cycles: four for the opcode plus
+	// two internal. Every other currently supported long register form takes
+	// eight, so this is the one genuinely new timing shape in the group.
+	[InlineData((ushort)0x4280, 6)] // CLR.L D0
+	[InlineData((ushort)0x4487, 6)] // NEG.L D7
+	[InlineData((ushort)0x4682, 6)] // NOT.L D2
+	// TST never writes back, so even the long form is a plain four-cycle form.
+	[InlineData((ushort)0x4A80, 4)] // TST.L D0
+	[InlineData((ushort)0x4A40, 4)] // TST.W D0
+	[InlineData((ushort)0x4A00, 4)] // TST.B D0
+	// Byte and word forms are four cycles across the whole group.
+	[InlineData((ushort)0x4200, 4)] // CLR.B D0
+	[InlineData((ushort)0x4240, 4)] // CLR.W D0
+	[InlineData((ushort)0x4400, 4)] // NEG.B D0
+	[InlineData((ushort)0x4441, 4)] // NEG.W D1
+	[InlineData((ushort)0x4600, 4)] // NOT.B D0
+	[InlineData((ushort)0x4643, 4)] // NOT.W D3
+	public void DataRegisterUnaryRetiresInTheDocumentedCycleCount(ushort opcode, int expectedCycles)
+	{
+		foreach (var enableOpcodePlan in new[] { false, true })
+		{
+			foreach (var dispatch in new[] { M68kOpcodePlanDispatch.KindTable, M68kOpcodePlanDispatch.PackedPlan })
+			{
+				var bus = new CycleCountingBus();
+				Write(bus.Memory, 0x1000, Words(opcode, 0x4E71));
+				var cpu = CreateCycleParityCpu(bus, enableOpcodePlan, dispatch);
+				cpu.State.D[0] = 0x8123_4567;
+				cpu.State.D[1] = 0x0000_8000;
+				cpu.State.D[2] = 0xFFFF_FFFF;
+				cpu.State.D[3] = 0x0000_0001;
+				cpu.State.D[7] = 0x0000_0000;
+
+				var cycles = cpu.ExecuteInstruction();
+
+				Assert.Equal(expectedCycles, cycles);
+				Assert.Equal(expectedCycles, cpu.State.Cycles);
+				// One opcode word plus the sequential lookahead, both serial and
+				// both placed before the internal cycles are charged.
+				Assert.Equal(
+					new[] { (Address: 0x1000u, Cycle: 0L), (Address: 0x1002u, Cycle: 2L) },
+					bus.InstructionFetchCycles.Take(2).ToArray());
+			}
+		}
+	}
+
+	[Theory]
+	[InlineData((ushort)0x4280)] // CLR.L D0
+	[InlineData((ushort)0x4480)] // NEG.L D0
+	[InlineData((ushort)0x4680)] // NOT.L D0
+	[InlineData((ushort)0x4A80)] // TST.L D0
+	[InlineData((ushort)0x4200)] // CLR.B D0
+	[InlineData((ushort)0x4240)] // CLR.W D0
+	public void DataRegisterUnaryKeepsBusPhaseParityWithTheScalarDecoder(ushort opcode)
+	{
+		// Three placements that stress prefetch accounting differently: the
+		// instruction alone, the instruction as the second half of a queued
+		// prefetch pair, and the instruction immediately before a taken branch.
+		var programs = new[]
+		{
+			Words(opcode, 0x4E71, 0x4E71, 0x4E71),
+			Words(0x7001, opcode, 0x4E71, 0x4E71),
+			Words(0x7001, opcode, 0x60FC, 0x4E71)
+		};
+
+		foreach (var program in programs)
+		{
+			foreach (var dispatch in new[] { M68kOpcodePlanDispatch.KindTable, M68kOpcodePlanDispatch.PackedPlan })
+			{
+				var scalarBus = new CycleCountingBus();
+				var plannedBus = new CycleCountingBus();
+				Write(scalarBus.Memory, 0x1000, program);
+				Write(plannedBus.Memory, 0x1000, program);
+				var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+				var planned = CreateCycleParityCpu(plannedBus, enableOpcodePlan: true, dispatch);
+				scalar.State.D[0] = 0x8123_4567;
+				planned.State.D[0] = 0x8123_4567;
+
+				ExecuteSequentially(scalar, 6);
+				ExecuteSequentially(planned, 6);
+
+				AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+			}
+		}
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void DataRegisterUnaryLongFormRetiresSixCyclesInsideAnInstructionStream(int dispatchValue)
+	{
+		// CLR.L D0 sits between two four-cycle forms so the six-cycle retirement
+		// has to be visible as a cycle delta rather than only in a total.
+		var program = Words(
+			0x7001, // MOVEQ #1,D0    4
+			0x4280, // CLR.L D0       6
+			0x4A80, // TST.L D0       4
+			0x4680, // NOT.L D0       6
+			0x4E71); // NOP           4
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, program);
+		var cpu = CreateCycleParityCpu(bus, enableOpcodePlan: true, (M68kOpcodePlanDispatch)dispatchValue);
+
+		var deltas = new int[5];
+		for (var i = 0; i < deltas.Length; i++)
+		{
+			deltas[i] = cpu.ExecuteInstruction();
+		}
+
+		Assert.Equal(new[] { 4, 6, 4, 6, 4 }, deltas);
+		Assert.Equal(24, cpu.State.Cycles);
+		Assert.Equal(0xFFFF_FFFFu, cpu.State.D[0]);
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedFixedPlanBatchExecutesDataRegisterUnaryWithoutFallingBack(int dispatchValue)
+	{
+		// A stream that mixes an admitted kind (MOVEQ, which the cached run graph
+		// can start on) with the register unary forms must retire every
+		// instruction through a planned path and stay cycle-identical to the
+		// scalar decoder. Nothing here may reach the scalar fallback.
+		var program = Words(
+			0x7001, // MOVEQ #1,D0
+			0x4280, // CLR.L D0
+			0x4680, // NOT.L D0
+			0x4A80, // TST.L D0
+			0x4240, // CLR.W D0
+			0x4400, // NEG.B D0
+			0x60F2); // BRA.S MOVEQ
+		var scalarBus = new CycleCountingBus();
+		var plannedBus = new CycleCountingBus();
+		Write(scalarBus.Memory, 0x1000, program);
+		Write(plannedBus.Memory, 0x1000, program);
+		var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+		var planned = CreateCycleParityCpu(
+			plannedBus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		planned.PlannedInterpreterCountersEnabled = true;
+		planned.ResetPlannedInterpreterCounters();
+		var scalarBoundary = new BusAccessBatchBoundary();
+		var plannedBoundary = new BusAccessBatchBoundary();
+
+		Assert.Equal(28, ((IM68kBatchCore)scalar).ExecuteInstructions(28, long.MaxValue, scalarBoundary));
+		Assert.Equal(28, ((IM68kBatchCore)planned).ExecuteInstructions(28, long.MaxValue, plannedBoundary));
+
+		AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+		var counters = planned.CapturePlannedInterpreterCounters();
+		Assert.Equal(0, counters.ScalarFallbackInstructions);
+		Assert.Equal(28, counters.FastInstructions);
+	}
+
 	[Theory]
 	[MemberData(nameof(OpcodePlanDispatchVariants))]
 	public void PlannedFixedPlanBatchHonorsTargetCycleAndInstructionLimit(int dispatchValue)

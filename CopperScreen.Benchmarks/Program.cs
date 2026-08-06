@@ -2986,7 +2986,9 @@ internal readonly record struct BenchmarkOptions(
         var deferredCpuChipInstructionFetchShadow = false;
         var deferredCpuCustomPointerWrites = false;
         var deferredCpuCustomCompositionWrites = false;
-        var agnusBusArbitration = AgnusBusArbitrationMode.ForcedLegacy;
+        // Legacy means the benchmark emits no arbitration override and follows
+        // the application default. ForcedLegacy remains the explicit rollback.
+        var agnusBusArbitration = AgnusBusArbitrationMode.Legacy;
         var agnusLiveRequesterStage = 0;
         var cpuWaitSlotReference = false;
         var hardwareSpecialization = false;
