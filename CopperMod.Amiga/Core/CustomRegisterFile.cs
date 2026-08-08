@@ -580,13 +580,13 @@ internal sealed class CustomRegisterFile
         }
 
         if (offset is 0x02E or >= 0x080 and <= 0x08A or >= 0x08E and <= 0x094 or
-            >= 0x0E0 and <= 0x0F6 or 0x108 or 0x10A or >= 0x120 and < 0x140)
+            >= 0x0E0 and <= 0x0FE or 0x108 or 0x10A or 0x1FC or >= 0x120 and < 0x140)
         {
             return CustomRegisterWriteTarget.Agnus | CustomRegisterWriteTarget.Display;
         }
 
-        if (offset is 0x098 or 0x100 or 0x102 or 0x104 or 0x106 or
-            >= 0x110 and <= 0x11A or >= 0x140 and < 0x1C0)
+        if (offset is 0x098 or 0x100 or 0x102 or 0x104 or 0x106 or 0x10C or 0x10E or
+            >= 0x110 and <= 0x11E or >= 0x140 and < 0x1C0)
         {
             return CustomRegisterWriteTarget.Display;
         }
@@ -617,8 +617,8 @@ internal sealed class CustomRegisterFile
 
         if (offset is >= 0x180 and < 0x1C0 ||
             offset is >= 0x120 and < 0x180 ||
-            offset is >= 0x0E0 and <= 0x0F6 ||
-            offset is >= 0x110 and <= 0x11A)
+            offset is >= 0x0E0 and <= 0x0FE ||
+            offset is >= 0x110 and <= 0x11E)
         {
             return HardwareScheduleImpact.Composition;
         }
@@ -655,7 +655,7 @@ internal sealed class CustomRegisterFile
             return HardwareScheduleImpact.Bitplane | HardwareScheduleImpact.Composition;
         }
 
-        if (offset is 0x092 or 0x094 or 0x108 or 0x10A)
+        if (offset is 0x092 or 0x094 or 0x108 or 0x10A or 0x1FC)
         {
             return HardwareScheduleImpact.Bitplane;
         }

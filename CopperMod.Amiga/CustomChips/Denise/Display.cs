@@ -59,6 +59,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             DmaconBitplaneEnable |
             DmaconSpriteEnable;
         private const ushort EcsBplcon3WritableMask = 0x0037;
+        private const ushort AgaBplcon3WritableMask = 0xFEF7;
         private const ushort EcsDiwHighWritableMask = 0x2F2F;
         private const ushort Bplcon0EcsEnable = 0x0001;
         private const ushort Bplcon0SuperHires = 0x0040;
@@ -92,6 +93,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private const int CanonicalLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
         private const int CanonicalCopperHpCycles = AmigaConstants.A500PalCpuCyclesPerColorClock;
         private const int PaletteColorCount = 64;
+        private const int AgaPaletteColorCount = 256;
         private const int MaxDeniseSamplesPerLowResSpan = 4;
         private const int RasterlineRingSize = AgnusRasterlineDmaPlanRing.LineCount;
         private const int MaxPaletteFrameSpans = MaxRasterlinePresentationEvents;
@@ -138,7 +140,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private readonly LiveCopperRequester? _liveCopperRequester;
         private readonly List<PendingCustomWrite> _pendingWrites = new List<PendingCustomWrite>(MaxPendingWrites);
         private readonly ushort[] _colors = new ushort[32];
+        private readonly ushort[] _agaColorHighNibbles = new ushort[AgaPaletteColorCount];
+        private readonly ushort[] _agaColorLowNibbles = new ushort[AgaPaletteColorCount];
+        // Legacy Denise code uses this table's 64-entry bound for EHB fallback.
         private readonly uint[] _convertedColors = new uint[PaletteColorCount];
+        private readonly uint[] _agaConvertedColors = new uint[AgaPaletteColorCount];
         private readonly uint[] _bitplanePointers = new uint[MaxBitplaneCapacity];
         private readonly int[] _bitplaneBaseRows = new int[MaxBitplaneCapacity];
         private readonly byte[] _playfieldPriorityMasks = new byte[MaxLowResWidth * MaxDeniseSamplesPerLowResSpan];
@@ -175,6 +181,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private ushort _bplcon1;
         private ushort _bplcon2;
         private ushort _bplcon3;
+        private ushort _bplcon4;
+        private ushort _clxcon2;
+        private ushort _fmode;
         private ushort _diwHigh;
         private bool _diwHighValid;
         private ushort _agnusDiwHigh;
@@ -625,6 +634,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         internal int PaletteFrameSnapshotCount => _paletteFrameSnapshots.Count;
 
+        internal uint GetCurrentConvertedColor(int colorIndex)
+            => _chipset.DisplayChip == DisplayChipModel.AgaLisa
+                ? _agaConvertedColors[colorIndex]
+                : ConvertColorIndex(colorIndex);
+
         internal int PaletteSnapshotReservedBytes
             => _paletteFrameSnapshots.ReservedBytes +
                 _livePaletteSnapshots.ReservedBytes;
@@ -880,6 +894,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _bplcon1 = 0;
             _bplcon2 = 0;
             _bplcon3 = 0;
+            _bplcon4 = _chipset.DisplayChip == DisplayChipModel.AgaLisa ? (ushort)0x0011 : (ushort)0;
+            _clxcon2 = 0;
+            _fmode = 0;
             _diwHigh = 0;
             _diwHighValid = false;
             _agnusDiwHigh = _agnusRegisters.DiwHigh;
@@ -901,8 +918,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _currentRenderRow = -1;
             ResetFrameCounters();
             Array.Clear(_colors);
+            Array.Clear(_agaColorHighNibbles);
+            Array.Clear(_agaColorLowNibbles);
+            Array.Clear(_agaConvertedColors);
             _colors[0] = 0x000;
             _colors[1] = 0xFFF;
+            _agaColorHighNibbles[1] = 0xFFF;
             UpdateConvertedPalette();
             foreach (var sprite in _sprites)
             {
@@ -1983,7 +2004,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var window = GetEffectiveDisplayWindow();
             var paletteSnapshotIndex = _paletteFrameSnapshots.GetOrAdd(
                 _colors,
-                _convertedColors,
+                _convertedColors.AsSpan(0, PaletteColorCount),
                 MaxPaletteFrameSpans);
             for (var row = rowStart; row < rowStop; row++)
             {
@@ -2556,11 +2577,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
             saved.Bplcon1 = _bplcon1;
             saved.Bplcon2 = _bplcon2;
             saved.Bplcon3 = _bplcon3;
+            saved.Bplcon4 = _bplcon4;
+            saved.Clxcon2 = _clxcon2;
+            saved.Fmode = _fmode;
             saved.Dmacon = _dmacon;
             saved.Bpl1Mod = _bpl1mod;
             saved.Bpl2Mod = _bpl2mod;
             Array.Copy(_colors, saved.Colors, _colors.Length);
+            Array.Copy(_agaColorHighNibbles, saved.AgaColorHighNibbles, _agaColorHighNibbles.Length);
+            Array.Copy(_agaColorLowNibbles, saved.AgaColorLowNibbles, _agaColorLowNibbles.Length);
             Array.Copy(_convertedColors, saved.ConvertedColors, _convertedColors.Length);
+            Array.Copy(_agaConvertedColors, saved.AgaConvertedColors, _agaConvertedColors.Length);
             Array.Copy(_bitplanePointers, saved.BitplanePointers, _bitplanePointers.Length);
             Array.Copy(_bitplaneBaseRows, saved.BitplaneBaseRows, _bitplaneBaseRows.Length);
             Array.Copy(_bitplaneDataRegisters, saved.BitplaneDataRegisters, _bitplaneDataRegisters.Length);
@@ -2589,11 +2616,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
             destination.Bplcon1 = source.Bplcon1;
             destination.Bplcon2 = source.Bplcon2;
             destination.Bplcon3 = source.Bplcon3;
+            destination.Bplcon4 = source.Bplcon4;
+            destination.Clxcon2 = source.Clxcon2;
+            destination.Fmode = source.Fmode;
             destination.Dmacon = source.Dmacon;
             destination.Bpl1Mod = source.Bpl1Mod;
             destination.Bpl2Mod = source.Bpl2Mod;
             Array.Copy(source.Colors, destination.Colors, source.Colors.Length);
+            Array.Copy(source.AgaColorHighNibbles, destination.AgaColorHighNibbles, source.AgaColorHighNibbles.Length);
+            Array.Copy(source.AgaColorLowNibbles, destination.AgaColorLowNibbles, source.AgaColorLowNibbles.Length);
             Array.Copy(source.ConvertedColors, destination.ConvertedColors, source.ConvertedColors.Length);
+            Array.Copy(source.AgaConvertedColors, destination.AgaConvertedColors, source.AgaConvertedColors.Length);
             Array.Copy(source.BitplanePointers, destination.BitplanePointers, source.BitplanePointers.Length);
             Array.Copy(source.BitplaneBaseRows, destination.BitplaneBaseRows, source.BitplaneBaseRows.Length);
             Array.Copy(source.BitplaneDataRegisters, destination.BitplaneDataRegisters, source.BitplaneDataRegisters.Length);
@@ -2620,11 +2653,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _bplcon1 = saved.Bplcon1;
             _bplcon2 = saved.Bplcon2;
             _bplcon3 = saved.Bplcon3;
+            _bplcon4 = saved.Bplcon4;
+            _clxcon2 = saved.Clxcon2;
+            _fmode = saved.Fmode;
             _dmacon = saved.Dmacon;
             _bpl1mod = saved.Bpl1Mod;
             _bpl2mod = saved.Bpl2Mod;
             Array.Copy(saved.Colors, _colors, _colors.Length);
+            Array.Copy(saved.AgaColorHighNibbles, _agaColorHighNibbles, _agaColorHighNibbles.Length);
+            Array.Copy(saved.AgaColorLowNibbles, _agaColorLowNibbles, _agaColorLowNibbles.Length);
             Array.Copy(saved.ConvertedColors, _convertedColors, _convertedColors.Length);
+            Array.Copy(saved.AgaConvertedColors, _agaConvertedColors, _agaConvertedColors.Length);
             Array.Copy(saved.BitplanePointers, _bitplanePointers, _bitplanePointers.Length);
             Array.Copy(saved.BitplaneBaseRows, _bitplaneBaseRows, _bitplaneBaseRows.Length);
             Array.Copy(saved.BitplaneDataRegisters, _bitplaneDataRegisters, _bitplaneDataRegisters.Length);
@@ -2656,7 +2695,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _livePaletteSnapshots.CopyTo(
                     state.PaletteSnapshotIndex,
                     _colors,
-                    _convertedColors);
+                    _convertedColors.AsSpan(0, PaletteColorCount));
                 _lastAppliedLivePaletteSnapshotIndex = state.PaletteSnapshotIndex;
             }
 
@@ -4494,8 +4533,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public ushort Dmacon;
             public short Bpl1Mod;
             public short Bpl2Mod;
+            public ushort Bplcon4;
+            public ushort Clxcon2;
+            public ushort Fmode;
             public readonly ushort[] Colors = new ushort[32];
-            public readonly uint[] ConvertedColors = new uint[64];
+            public readonly ushort[] AgaColorHighNibbles = new ushort[AgaPaletteColorCount];
+            public readonly ushort[] AgaColorLowNibbles = new ushort[AgaPaletteColorCount];
+            public readonly uint[] ConvertedColors = new uint[PaletteColorCount];
+            public readonly uint[] AgaConvertedColors = new uint[AgaPaletteColorCount];
             public readonly uint[] BitplanePointers = new uint[MaxBitplaneCapacity];
             public readonly int[] BitplaneBaseRows = new int[MaxBitplaneCapacity];
             public readonly ushort[] BitplaneDataRegisters = new ushort[MaxBitplaneCapacity];

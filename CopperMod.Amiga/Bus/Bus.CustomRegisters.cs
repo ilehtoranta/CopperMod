@@ -549,6 +549,30 @@ namespace CopperMod.Amiga.Bus
             offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
             _customRegisterFile.RecordWrite(offset, value, width, lane, cycle, requester, cause);
             _customRegisterWrites.Add(new CustomRegisterWrite(cycle, offset, value));
+            if (_chipset.HasAgaComponent)
+            {
+                if (offset == (ushort)CustomRegister.Fmode && (value & 0xC00F) != 0)
+                {
+                    TraceUnsupportedAgaFeature(offset, value, cycle, "FMODE wide bitplane/sprite fetch");
+                }
+                else if (offset == (ushort)CustomRegister.Bplcon0 &&
+                    (value & 0x0800) != 0 && (value & 0x0010) != 0)
+                {
+                    TraceUnsupportedAgaFeature(offset, value, cycle, "HAM8 composition");
+                }
+                else if (offset == (ushort)CustomRegister.Bplcon3 && (value & 0x00C0) != 0)
+                {
+                    TraceUnsupportedAgaFeature(offset, value, cycle, "AGA sprite resolution");
+                }
+                else if (offset == (ushort)CustomRegister.Bplcon4 && (value & 0xFF00) != 0)
+                {
+                    TraceUnsupportedAgaFeature(offset, value, cycle, "AGA bitplane palette XOR mask");
+                }
+                else if (offset == (ushort)CustomRegister.Clxcon2 && value != 0)
+                {
+                    TraceUnsupportedAgaFeature(offset, value, cycle, "AGA extended collision control");
+                }
+            }
             if (requester != AmigaBusRequester.Host &&
                 cause != CustomRegisterWriteCause.UnreadableReadSideEffect)
             {

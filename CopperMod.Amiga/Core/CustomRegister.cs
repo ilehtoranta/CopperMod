@@ -32,6 +32,10 @@ namespace CopperMod.Amiga.Core
         Bplcon3 = 0x106,
         Bpl1mod = 0x108,
         Bpl2mod = 0x10A,
+        Bplcon4 = 0x10C,
+        Clxcon2 = 0x10E,
+        Bpl7dat = 0x11C,
+        Bpl8dat = 0x11E,
         Htotal = 0x1C0,
         Hsstop = 0x1C2,
         Hbstrt = 0x1C4,
@@ -50,6 +54,7 @@ namespace CopperMod.Amiga.Core
         Hsstrt = 0x1DE,
         Vsstrt = 0x1E0,
         Hcenter = 0x1E2,
-        Diwhigh = 0x1E4
+        Diwhigh = 0x1E4,
+        Fmode = 0x1FC
     }
 }

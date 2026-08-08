@@ -50,6 +50,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         RealTimeClock,
         CustomRegisters,
         Cia,
+        PlatformIo,
         Rom,
         HostTrap,
         Unmapped

@@ -25,6 +25,10 @@ namespace CopperMod.Amiga.Runtime
                     M68kBackendKind.AccurateM68000 => M68kCoreFactory.CreateM68000Core(amigaBus, default(AmigaCpuDataAccess)),
                     M68kBackendKind.JitM68000 => M68kJitCore.CreateM68000(
                         new M68000JitBusAdapter(amigaBus)),
+                    M68kBackendKind.AccurateM68EC020 when
+                        amigaBus.Chipset is var chipset &&
+                        (chipset == AmigaChipset.AgaPal || chipset == AmigaChipset.AgaNtsc) =>
+                        new M68EC020Interpreter(amigaBus, M68020CpuProfile.A1200Ec02014Mhz),
                     _ => M68kCoreFactory.Default.Create(backend, bus)
                 }
                 : M68kCoreFactory.Default.Create(backend, bus);

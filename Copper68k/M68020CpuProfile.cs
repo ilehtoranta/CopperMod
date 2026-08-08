@@ -22,6 +22,7 @@ namespace Copper68k
         RealFastRam,
         CustomRegisters,
         Cia,
+        PlatformIo,
         Rom,
         HostTrap,
         Unmapped
@@ -85,6 +86,23 @@ namespace Copper68k
                 new M68020BusTimingRule(M68020MemoryTarget.CustomRegisters, M68020BusWidth.Word, 0),
                 new M68020BusTimingRule(M68020MemoryTarget.Cia, M68020BusWidth.Byte, 0),
                 new M68020BusTimingRule(M68020MemoryTarget.Rom, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.HostTrap, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.Unmapped, M68020BusWidth.Word, 0)
+            });
+
+        internal static M68020CpuProfile A1200Ec02014Mhz { get; } = new(
+            "A1200_68EC020_14MHz",
+            M68kAcceleratorModel.M68020,
+            nativeCyclesPerMachineCycle: 2,
+            new[]
+            {
+                new M68020BusTimingRule(M68020MemoryTarget.ChipRam, M68020BusWidth.Long, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.ExpansionRam, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.RealFastRam, M68020BusWidth.Long, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.CustomRegisters, M68020BusWidth.Word, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.Cia, M68020BusWidth.Byte, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.PlatformIo, M68020BusWidth.Byte, 0),
+                new M68020BusTimingRule(M68020MemoryTarget.Rom, M68020BusWidth.Long, 0),
                 new M68020BusTimingRule(M68020MemoryTarget.HostTrap, M68020BusWidth.Word, 0),
                 new M68020BusTimingRule(M68020MemoryTarget.Unmapped, M68020BusWidth.Word, 0)
             });
@@ -180,7 +198,9 @@ namespace Copper68k
 
         internal M68020BusTimingRule GetBusTimingRule(uint address)
         {
-            var target = ClassifyTarget(address);
+            var target = ReferenceEquals(this, A1200Ec02014Mhz) && IsA1200PlatformIoAddress(address)
+                ? M68020MemoryTarget.PlatformIo
+                : ClassifyTarget(address);
             for (var i = 0; i < BusTiming.Count; i++)
             {
                 if (BusTiming[i].Target == target)
@@ -190,6 +210,14 @@ namespace Copper68k
             }
 
             return new M68020BusTimingRule(target, M68020BusWidth.Word, 0);
+        }
+
+        private static bool IsA1200PlatformIoAddress(uint address)
+        {
+            address &= 0x00FF_FFFF;
+            return address is >= 0x0060_0000u and < 0x00A8_0000u ||
+                address is >= 0x00DA_0000u and < 0x00DB_0000u ||
+                address is >= 0x00DE_0000u and < 0x00DF_0000u;
         }
 
         internal bool IsInstructionCacheableAddress(uint address)

@@ -179,7 +179,9 @@ namespace CopperMod.Amiga.Runtime
         A500Pal512KChipOnlyBoot,
         A500Pal512KBoot,
         A500PlusEcsPal,
-        A500PlusEcsNtsc
+        A500PlusEcsNtsc,
+        A1200AgaPal,
+        A1200AgaNtsc
     }
 
     internal enum AgnusBusArbitrationMode
@@ -299,6 +301,19 @@ namespace CopperMod.Amiga.Runtime
                 options.FloppyDriveCount = 2;
                 options.RealTimeClockEnabled = true;
                 options.KickstartConfiguration = KickstartConfiguration.HostShim20;
+            }
+            else if (profile is MachineProfile.A1200AgaPal or MachineProfile.A1200AgaNtsc)
+            {
+                options.Chipset = profile == MachineProfile.A1200AgaNtsc
+                    ? AmigaChipset.AgaNtsc
+                    : AmigaChipset.AgaPal;
+                options.ChipRamSize = 2 * 1024 * 1024;
+                options.ExpansionRamSize = 0;
+                options.RealFastRamSize = 0;
+                options.FloppyDriveCount = 1;
+                options.RealTimeClockEnabled = false;
+                options.CpuBackend = M68kBackendKind.AccurateM68EC020;
+                options.AgnusBusArbitration = AgnusBusArbitrationMode.Legacy;
             }
 
             return options;
@@ -541,6 +556,13 @@ namespace CopperMod.Amiga.Runtime
         public Machine(MachineOptions options)
         {
             Options = options ?? throw new ArgumentNullException(nameof(options));
+            if (options.Profile is MachineProfile.A1200AgaPal or MachineProfile.A1200AgaNtsc &&
+                (options.KickstartConfiguration.Backend != KickstartBackendKind.RomImage ||
+                 options.KickstartConfiguration.Version != KickstartVersion.Kickstart30))
+            {
+                throw new InvalidOperationException(
+                    "A1200 profiles require a ROM-backed Kickstart 3.0 image; host shims and other Kickstart versions are not supported.");
+            }
             if (!ChipDmaAddressing.SupportsPhysicalSize(options.Chipset.DmaChip, options.ChipRamSize))
             {
                 throw new InvalidOperationException(
@@ -646,6 +668,10 @@ namespace CopperMod.Amiga.Runtime
                 enableAgnusLivePaula: enableAgnusLivePaula,
                 enableAgnusLiveDisk: enableAgnusLiveDisk);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
+            if (options.Chipset.HasAgaComponent)
+            {
+                Bus.ConfigureAgaUnsupportedFeatureTrace(() => Cpu.State.ProgramCounter);
+            }
             if (Bus.DiskDivergenceTraceEnabled)
             {
                 Bus.ConfigureDiskDivergenceTrace(

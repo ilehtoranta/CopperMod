@@ -1,0 +1,23 @@
+{
+  "id": "a1200-aga-pal",
+  "displayName": "Amiga 1200 AGA PAL",
+  "description": "Amiga 1200 PAL with Alice/Lisa, 2 MiB chip RAM, one empty floppy drive, and a required Kickstart 3.0 ROM.",
+  "machine": {
+    "model": "A1200",
+    "agnus": "Alice",
+    "denise": "Lisa",
+    "videoStandard": "PAL",
+    "chipRamKb": 2048,
+    "pseudoFastRamKb": 0,
+    "realFastRamKb": 0,
+    "rtcEnabled": false,
+    "floppyDriveCount": 1
+  },
+  "cpu": {
+    "backend": "AccurateM68EC020"
+  },
+  "kickstart": {
+    "source": "KickstartRom",
+    "version": "3.0"
+  }
+}

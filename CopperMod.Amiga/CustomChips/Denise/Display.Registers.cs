@@ -106,15 +106,27 @@ namespace CopperMod.Amiga.CustomChips.Denise
             case CustomRegister.Bplcon3:
                 if (_chipset.SupportsEcsDisplayRegisters)
                 {
-                    var impact = CustomRegisterScheduleClassifier.GetChangedImpact(
-                        _chipset,
-                        offset,
-                        _bplcon3,
-                        value);
-                    if (impact != HardwareScheduleImpact.None)
-                    {
-                        _bplcon3 = (ushort)(value & EcsBplcon3WritableMask);
-                    }
+                    _bplcon3 = (ushort)(value & (_chipset.DisplayChip == DisplayChipModel.AgaLisa
+                        ? AgaBplcon3WritableMask
+                        : EcsBplcon3WritableMask));
+                }
+                return;
+            case CustomRegister.Bplcon4:
+                if (_chipset.DisplayChip == DisplayChipModel.AgaLisa)
+                {
+                    _bplcon4 = value;
+                }
+                return;
+            case CustomRegister.Clxcon2:
+                if (_chipset.DisplayChip == DisplayChipModel.AgaLisa)
+                {
+                    _clxcon2 = (ushort)(value & 0x00FF);
+                }
+                return;
+            case CustomRegister.Fmode:
+                if (_chipset == AmigaChipset.AgaPal || _chipset == AmigaChipset.AgaNtsc)
+                {
+                    _fmode = (ushort)(value & 0xC00F);
                 }
                 return;
             case CustomRegister.Copcon:
@@ -212,7 +224,26 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if (offset >= 0x180 && offset < 0x1C0)
             {
                 var colorIndex = (offset - 0x180) / 2;
-                _colors[colorIndex] = (ushort)(value & 0x0FFF);
+                if (_chipset.DisplayChip == DisplayChipModel.AgaLisa)
+                {
+                    colorIndex += ((_bplcon3 >> 13) & 0x7) * 32;
+                    if ((_bplcon3 & 0x0200) != 0)
+                    {
+                        _agaColorLowNibbles[colorIndex] = (ushort)(value & 0x0FFF);
+                    }
+                    else
+                    {
+                        _agaColorHighNibbles[colorIndex] = (ushort)(value & 0x0FFF);
+                        if (colorIndex < _colors.Length)
+                        {
+                            _colors[colorIndex] = (ushort)(value & 0x0FFF);
+                        }
+                    }
+                }
+                else
+                {
+                    _colors[colorIndex] = (ushort)(value & 0x0FFF);
+                }
                 UpdateConvertedColor(colorIndex);
                 _livePaletteSnapshotDirty = true;
                 return;

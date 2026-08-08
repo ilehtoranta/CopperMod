@@ -10,6 +10,15 @@ using System.Runtime.CompilerServices;
 
 namespace CopperMod.Amiga.Bus
 {
+    internal readonly record struct AgaUnsupportedFeatureTrace(
+        long Cycle,
+        int BeamLine,
+        int BeamHorizontal,
+        uint ProgramCounter,
+        ushort Register,
+        ushort Value,
+        string Feature);
+
     internal readonly struct HostGatewayStub
     {
         public HostGatewayStub(uint address, uint token, Func<M68kCpuState, M68kHostGatewayResult> callback)
@@ -79,6 +88,7 @@ namespace CopperMod.Amiga.Bus
         private const int MaxCapturedCpuBusPhases = 65536;
         private const int MaxCapturedCustomRegisterReads = 65536;
         private const int MaxCapturedCustomRegisterWrites = 65536;
+        private const int MaxAgaUnsupportedFeatureTraceEntries = 4096;
         private const ulong FixedDisplayWordHashOffset = 14695981039346656037UL;
         private const ulong FixedDisplayWordHashPrime = 1099511628211UL;
         private const int MaxPendingInterruptEvents = 65536;
@@ -260,6 +270,8 @@ namespace CopperMod.Amiga.Bus
         private Action<AmigaCpuBusPhaseTrace>? _cpuBusPhaseObserver;
         private readonly BoundedReadLog _customRegisterReads = new BoundedReadLog(MaxCapturedCustomRegisterReads);
         private readonly BoundedWriteLog _customRegisterWrites = new BoundedWriteLog(MaxCapturedCustomRegisterWrites);
+        private readonly List<AgaUnsupportedFeatureTrace> _agaUnsupportedFeatureTrace = new(MaxAgaUnsupportedFeatureTraceEntries);
+        private Func<uint>? _agaTraceProgramCounterProvider;
         private ulong _capturedFixedDisplayWordHash = FixedDisplayWordHashOffset;
         private int _capturedFixedDisplayWordCount;
         private readonly CustomRegisterFile _customRegisterFile;
@@ -301,6 +313,7 @@ namespace CopperMod.Amiga.Bus
         private readonly bool _liveAgnusDmaDefault;
         private readonly bool _hardwareSpecializationEnabled;
         private readonly AmigaRealTimeClock? _realTimeClock;
+        private readonly A1200PlatformIo? _a1200PlatformIo;
         private readonly GamePortState[] _gamePorts = { new GamePortState(), new GamePortState() };
         private readonly RasterTiming _rasterTiming;
         private readonly AgnusBeamClock _beamClock;
@@ -558,13 +571,18 @@ namespace CopperMod.Amiga.Bus
             bool enableAgnusLiveDisk = false)
         {
             var selectedChipset = chipset ?? AmigaChipset.OcsPal;
-            if (selectedChipset.HasAgaComponent)
+            if (selectedChipset.HasAgaComponent &&
+                selectedChipset != AmigaChipset.AgaPal &&
+                selectedChipset != AmigaChipset.AgaNtsc)
             {
                 throw new NotSupportedException(
-                    "AGA Alice/Lisa execution is not implemented. The AGA register profile is available for inspection only.");
+                    "AGA execution requires a matched Alice/Lisa chipset; mixed AGA and OCS/ECS components are not supported.");
             }
 
             _chipset = selectedChipset;
+            _a1200PlatformIo = selectedChipset == AmigaChipset.AgaPal || selectedChipset == AmigaChipset.AgaNtsc
+                ? new A1200PlatformIo()
+                : null;
             if (enableAgnusLiveDisplayLedger && selectedChipset != AmigaChipset.OcsPal)
             {
                 throw new NotSupportedException(
@@ -953,6 +971,29 @@ namespace CopperMod.Amiga.Bus
         }
 
         public IReadOnlyList<CustomRegisterWrite> CustomRegisterWrites => _customRegisterWrites;
+
+        internal IReadOnlyList<AgaUnsupportedFeatureTrace> AgaUnsupportedFeatureTrace => _agaUnsupportedFeatureTrace;
+
+        internal void ConfigureAgaUnsupportedFeatureTrace(Func<uint> programCounterProvider)
+            => _agaTraceProgramCounterProvider = programCounterProvider ?? throw new ArgumentNullException(nameof(programCounterProvider));
+
+        private void TraceUnsupportedAgaFeature(ushort register, ushort value, long cycle, string feature)
+        {
+            if (_agaUnsupportedFeatureTrace.Count >= MaxAgaUnsupportedFeatureTraceEntries)
+            {
+                return;
+            }
+
+            var beam = _beamClock.GetPosition(Math.Max(0, cycle));
+            _agaUnsupportedFeatureTrace.Add(new AgaUnsupportedFeatureTrace(
+                cycle,
+                beam.BeamLine,
+                beam.BeamHorizontal,
+                _agaTraceProgramCounterProvider?.Invoke() ?? 0,
+                register,
+                value,
+                feature));
+        }
 
         internal AmigaChipset Chipset => _chipset;
 
@@ -1581,6 +1622,7 @@ namespace CopperMod.Amiga.Bus
             _customRegisterReads.Clear();
             _customRegisterWrites.Clear();
             _customRegisterFile.Reset();
+            _a1200PlatformIo?.Reset();
             _lastCpuBusAccess = null;
             _lastCpuBusGrantedSlot = null;
             ResetChipDataBusLatch();
@@ -2595,27 +2637,6 @@ namespace CopperMod.Amiga.Bus
                 _hardwareScheduler.IsSlotContendedCleanThrough(cycle);
             var hasScalarChipFetchShadow = target == AmigaBusAccessTarget.ChipRam &&
                 TryPredictScalarCpuChipInstructionFetch(address, cycle, out scalarChipFetchProof);
-            if (publicationPhase ==
-                    M68kInstructionFetchPublicationPhase.InterruptibleBranchTarget &&
-                target == AmigaBusAccessTarget.ChipRam)
-            {
-                var interruptMask = (publicationContext.StatusRegister >> 8) & 0x07;
-                var interruptibleResult = AdvanceInterruptibleCpuInstructionFetch(
-                    target,
-                    address,
-                    ref cycle,
-                    interruptMask,
-                    out _);
-                if (interruptibleResult == CpuWaitGrantAdvanceResult.InterruptBoundary)
-                {
-                    throw new M68kInstructionFetchInterruptedException(cycle);
-                }
-
-                if (interruptibleResult == CpuWaitGrantAdvanceResult.Granted)
-                {
-                    return window.ReadWord(address);
-                }
-            }
             if (target == AmigaBusAccessTarget.ChipRam &&
                 TryDeferCpuChipInstructionFetch(
                     address,
@@ -5582,6 +5603,10 @@ namespace CopperMod.Amiga.Bus
             var bankEndExclusive = bankAddress + CpuBusBankSize;
             if (RangesOverlap(bankAddress, bankEndExclusive, 0x00DFF000u, 0x00DFF200u) ||
                 RangesOverlap(bankAddress, bankEndExclusive, 0x00BFD000u, 0x00BFF000u) ||
+                (_a1200PlatformIo != null &&
+                 (RangesOverlap(bankAddress, bankEndExclusive, A1200PlatformIo.PcmciaStart, A1200PlatformIo.PcmciaEndExclusive) ||
+                  RangesOverlap(bankAddress, bankEndExclusive, A1200PlatformIo.IdeStart, A1200PlatformIo.GayleEndExclusive) ||
+                  RangesOverlap(bankAddress, bankEndExclusive, A1200PlatformIo.MotherboardResourcesStart, A1200PlatformIo.MotherboardResourcesEndExclusive))) ||
                 HasHostTrapInCpuBusBank(bankAddress) ||
                 (_realTimeClock != null && RangesOverlap(
                     bankAddress,
@@ -5718,6 +5743,11 @@ namespace CopperMod.Amiga.Bus
                 return AmigaBusAccessTarget.Cia;
             }
 
+            if (_a1200PlatformIo != null && A1200PlatformIo.ContainsAddress(address))
+            {
+                return AmigaBusAccessTarget.PlatformIo;
+            }
+
             if (TryReadHostTrapStubByte(address, out _))
             {
                 return AmigaBusAccessTarget.HostTrap;
@@ -5794,6 +5824,11 @@ namespace CopperMod.Amiga.Bus
                 return ReadCiaRegisterValue(cia, ciaRegister);
             }
 
+            if (_a1200PlatformIo != null && A1200PlatformIo.ContainsAddress(address))
+            {
+                return _a1200PlatformIo.ReadByte(address);
+            }
+
             if (_autoconfig.TryReadByte(address, out var autoconfigValue))
             {
                 return autoconfigValue;
@@ -5856,7 +5891,8 @@ namespace CopperMod.Amiga.Bus
                 (_realTimeClock != null && AmigaRealTimeClock.ContainsAddress(address)) ||
                 IsExpansionRamAddress(address) ||
                 (address >= 0x00DFF000 && address < 0x00DFF200) ||
-                TryGetCiaRegister(address, out _, out _);
+                TryGetCiaRegister(address, out _, out _) ||
+                (_a1200PlatformIo != null && A1200PlatformIo.ContainsAddress(address));
         }
 
         private byte ReadCiaRegisterValue(AmigaCia cia, int ciaRegister, long? sampleCycle = null)
@@ -7591,6 +7627,12 @@ namespace CopperMod.Amiga.Bus
 
             if (_autoconfig.TryWriteByte(address, value))
             {
+                return;
+            }
+
+            if (_a1200PlatformIo != null && A1200PlatformIo.ContainsAddress(address))
+            {
+                _a1200PlatformIo.WriteByte(address, value);
                 return;
             }
 

@@ -780,7 +780,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var index = _livePaletteSnapshots.GetOrAddForRasterline(
                 row,
                 _colors,
-                _convertedColors);
+                _convertedColors.AsSpan(0, PaletteColorCount));
             _liveCurrentPaletteSnapshotIndex = index;
             _liveCurrentPaletteSnapshotRow = row;
             _livePaletteSnapshotDirty = false;

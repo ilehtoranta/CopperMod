@@ -793,7 +793,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _livePaletteSnapshots.CopyTo(
                     state.PaletteSnapshotIndex,
                     _colors,
-                    _convertedColors);
+                    _convertedColors.AsSpan(0, PaletteColorCount));
                 _lastAppliedLivePaletteSnapshotIndex = state.PaletteSnapshotIndex;
             }
 
@@ -1464,7 +1464,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     RecordBitplanePixel(colorIndex, priorityMask, x, row);
                 }
 
-                WriteLowResolutionOutputPixel(bgra, x, row, _convertedColors[colorIndex]);
+                WriteLowResolutionOutputPixel(bgra, x, row, ConvertColorIndex(colorIndex));
             }
 
             return true;

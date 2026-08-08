@@ -65,6 +65,22 @@ public sealed class CopperScreenArchitectureTests
 		Assert.Equal(AmigaChipset.EcsPal, a500PlusOptions.Chipset);
 		Assert.Same(KickstartConfiguration.HostShim20, a500PlusOptions.KickstartConfiguration);
 
+		Assert.True(CopperScreenProfile.TryLoad("a1200-aga-pal", AppContext.BaseDirectory, out var a1200Pal, out var a1200PalError), a1200PalError);
+		Assert.Equal(MachineProfile.A1200AgaPal, a1200Pal.MachineProfile);
+		Assert.Equal(AmigaChipset.AgaPal, a1200Pal.Chipset);
+		Assert.Equal(2 * 1024 * 1024, a1200Pal.ChipRamSize);
+		Assert.Equal(0, a1200Pal.ExpansionRamSize);
+		Assert.False(a1200Pal.RtcEnabled);
+		Assert.Equal(1, a1200Pal.FloppyDriveCount);
+		Assert.Equal(M68kBackendKind.AccurateM68EC020, a1200Pal.CpuBackend);
+		Assert.Equal(CopperScreenKickstartSource.KickstartRom, a1200Pal.KickstartSource);
+		Assert.Equal(KickstartVersion.Kickstart30, a1200Pal.KickstartVersion);
+
+		Assert.True(CopperScreenProfile.TryLoad("a1200-aga-ntsc", AppContext.BaseDirectory, out var a1200Ntsc, out var a1200NtscError), a1200NtscError);
+		Assert.Equal(MachineProfile.A1200AgaNtsc, a1200Ntsc.MachineProfile);
+		Assert.Equal(AmigaChipset.AgaNtsc, a1200Ntsc.Chipset);
+		Assert.Equal(KickstartVersion.Kickstart30, a1200Ntsc.KickstartVersion);
+
 		Assert.True(CopperScreenProfile.TryLoad("diagrom", AppContext.BaseDirectory, out var diagRom, out var diagRomError), diagRomError);
 		Assert.Equal("expanded-diagrom", diagRom.Id);
 		Assert.Equal("ROM/DiagROM/diagrom-a500.rom", diagRom.KickstartRomPath);
