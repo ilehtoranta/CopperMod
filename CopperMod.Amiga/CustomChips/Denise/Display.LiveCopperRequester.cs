@@ -65,9 +65,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             slotCycle = AgnusChipSlotScheduler.AlignToSlot(
                 Math.Max(0, slotCycle));
             var requester = RequireLiveCopperRequester();
-            for (var transitionCount = 0;
-                 transitionCount < 8;
-                 transitionCount++)
+            var previousTransitionCycle = -1L;
+            var previousTransitionGeneration = 0UL;
+            var hasPreviousTransition = false;
+            var sameCycleTransitions = 0;
+            while (true)
             {
                 EnsureLiveCopperRequesterPublication(requester);
                 if (requester.TryPeekPendingRequest(out var request))
@@ -97,15 +99,42 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return false;
                 }
 
+                if (hasPreviousTransition &&
+                    transition.Generation == previousTransitionGeneration)
+                {
+                    throw new InvalidOperationException(
+                        "Copper did not consume its before-slot transition generation.");
+                }
+
+                if (transition.Cycle < previousTransitionCycle)
+                {
+                    throw new InvalidOperationException(
+                        "Copper moved backwards while settling its before-slot transitions.");
+                }
+
+                if (transition.Cycle == previousTransitionCycle)
+                {
+                    sameCycleTransitions++;
+                    if (sameCycleTransitions >= 8)
+                    {
+                        throw new InvalidOperationException(
+                            "Copper did not make cycle progress while settling its before-slot transitions.");
+                    }
+                }
+                else
+                {
+                    sameCycleTransitions = 0;
+                }
+
                 // A WAIT comparison/restart can expose a Copper word on the
                 // same physical slot. Settle those bus-free stages before the
                 // blitter reserves that slot; otherwise call-site order lets
                 // a lower-priority nice blitter steal Copper's grant.
                 _bus.CommitLiveCopperTransition(requester);
+                previousTransitionCycle = transition.Cycle;
+                previousTransitionGeneration = transition.Generation;
+                hasPreviousTransition = true;
             }
-
-            throw new InvalidOperationException(
-                "Copper did not settle its before-slot transitions.");
         }
 
         private void ResetLiveCopperRequester(bool resetDiagnostics)

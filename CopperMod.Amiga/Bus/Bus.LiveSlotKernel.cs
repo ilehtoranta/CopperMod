@@ -94,8 +94,29 @@ namespace CopperMod.Amiga.Bus
             _agnusLiveSlotKernel?.CommittedCpuThroughCycle ?? -1;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void SynchronizeLiveSlotKernelPassiveDiskTo(long targetCycle)
-            => Disk.SynchronizeInputThrough(targetCycle);
+        internal void SynchronizeLiveSlotKernelCustomReadBoundaryTo(long targetCycle)
+        {
+            // The Stage-5 custom-register read barrier publishes non-bus
+            // observables before the CPU samples the register. DMA ownership
+            // remains with the live requesters; only their register-visible
+            // timelines are synchronized here.
+            if (GetNextRasterEventCycle(targetCycle, targetCycle) <= targetCycle)
+            {
+                AdvanceRasterCoreTo(targetCycle);
+            }
+
+            if (GetNextCiaTimerEventCycle(targetCycle, targetCycle) <= targetCycle)
+            {
+                AdvanceCiaTimersCoreTo(targetCycle);
+            }
+
+            if (Paula.HasRegisterObservableWorkThrough(targetCycle))
+            {
+                Paula.AdvanceRegisterObservableTo(targetCycle);
+            }
+
+            Disk.SynchronizeInputThrough(targetCycle);
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void AdvanceDueLiveFixedRequestersTo(long slotCycle)

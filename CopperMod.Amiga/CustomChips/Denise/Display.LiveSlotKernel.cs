@@ -123,6 +123,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return false;
                 }
 
+                if (_boundPresentationActive &&
+                    !_boundPresentationCompleted &&
+                    _boundPresentationFrameStartCycle == _liveFrameStartCycle)
+                {
+                    RenderBoundPresentationLinesThrough(frameStopCycle - 1, completing: true);
+                    _boundPresentationCompleted = true;
+                }
+
                 StartLiveFrame(frameStopCycle);
                 return true;
             }

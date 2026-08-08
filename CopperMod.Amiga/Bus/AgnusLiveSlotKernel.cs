@@ -171,15 +171,10 @@ namespace CopperMod.Amiga.Bus
 
             _cpuGrantCalls++;
             requestedCycle = Math.Max(0, requestedCycle);
-            if (target == AmigaBusAccessTarget.CustomRegisters && !isWrite)
-            {
-                // Stage 5 makes passive disk-input state CPU-visible at the
-                // custom-register read boundary. It is not a bus requester unless
-                // the resulting sync transition publishes DMA, so reproduce
-                // that visibility checkpoint once here rather than advancing
-                // the passive latch at every inspected chip slot.
-                _bus.SynchronizeLiveSlotKernelPassiveDiskTo(requestedCycle);
-            }
+            var customReadVisibilityCycle =
+                target == AmigaBusAccessTarget.CustomRegisters && !isWrite
+                    ? requestedCycle
+                    : -1;
 
             if (size != AmigaBusAccessSize.Long)
             {
@@ -192,6 +187,7 @@ namespace CopperMod.Amiga.Bus
                     requestedCycle,
                     isWrite,
                     deferAfterSlotBlitterTransitions: false,
+                    customReadVisibilityCycle,
                     out grantedCycle,
                     out completedCycle);
                 secondWordCycle = grantedCycle;
@@ -207,6 +203,7 @@ namespace CopperMod.Amiga.Bus
                 requestedCycle,
                 isWrite,
                 deferAfterSlotBlitterTransitions: true,
+                customReadVisibilityCycle,
                 out grantedCycle,
                 out var firstCompletedCycle);
             GrantCpuWordPhase(
@@ -218,6 +215,7 @@ namespace CopperMod.Amiga.Bus
                 requestedCycle,
                 isWrite,
                 deferAfterSlotBlitterTransitions: false,
+                customReadVisibilityCycle: -1,
                 out secondWordCycle,
                 out completedCycle);
         }
@@ -232,6 +230,7 @@ namespace CopperMod.Amiga.Bus
             long requestedCycle,
             bool isWrite,
             bool deferAfterSlotBlitterTransitions,
+            long customReadVisibilityCycle,
             out long grantedCycle,
             out long completedCycle)
         {
@@ -259,7 +258,31 @@ namespace CopperMod.Amiga.Bus
                     // can be published by a device transition on this exact
                     // cycle, so settle the matured fixed requesters explicitly
                     // before materializing the display/Copper suffix.
-                    _bus.AdvanceDueLiveFixedRequestersTo(candidate);
+                    if (customReadVisibilityCycle >= 0 &&
+                        candidate >= customReadVisibilityCycle)
+                    {
+                        // Stage 5 makes raster, CIA, Paula-register, and passive
+                        // disk state visible at every custom-register read
+                        // boundary. Settle older physical disk slots first:
+                        // synchronizing before this loop can reanchor WORDSYNC
+                        // state that older grants must still sample. Conversely,
+                        // a transition on this exact candidate belongs after the
+                        // read barrier. Catch up only through the preceding slot,
+                        // publish the boundary, then settle this candidate. Repeat
+                        // this checkpoint after every denied candidate: Stage 5
+                        // advances register-visible state through the eventual
+                        // grant, not merely through the original request. A sync
+                        // transition may itself publish DMA for the final pass.
+                        _bus.AdvanceDueLiveFixedRequestersTo(
+                            candidate - AgnusChipSlotScheduler.SlotCycles);
+                        _bus.SynchronizeLiveSlotKernelCustomReadBoundaryTo(
+                            candidate);
+                        _bus.AdvanceDueLiveFixedRequestersTo(candidate);
+                    }
+                    else
+                    {
+                        _bus.AdvanceDueLiveFixedRequestersTo(candidate);
+                    }
                     // The display control horizon can be ahead of its
                     // uncommitted fixed-fetch cursor. Materialize the same
                     // candidate-bounded display/Copper suffix used by the

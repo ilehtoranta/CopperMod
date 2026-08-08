@@ -240,6 +240,35 @@ public sealed class AgnusCommittedDisplayLedgerTests
     }
 
     [Fact]
+    public void SlotKernelFrameBoundaryFinalizesBoundPresentationBeforeTimelineReset()
+    {
+        var bus = CreateConfiguredDisplayBus(
+            enableCommittedDisplayLedger: true,
+            AgnusBusArbitrationMode.SlotKernel);
+        var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+        var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+        bus.Display.BeginPresentationFrame(new PresentationFrameTarget(frame), 0, frameCycles);
+
+        try
+        {
+            var cycle = (long)frameCycles;
+            _ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+            Assert.True(cycle >= frameCycles);
+
+            bus.Display.CompletePresentationFrame(frameCycles);
+        }
+        catch
+        {
+            bus.Display.AbortPresentationFrame();
+            throw;
+        }
+
+        var snapshot = bus.Display.CaptureSnapshot();
+        Assert.True(snapshot.LastTimelineSegmentCount > 0);
+        Assert.Contains(frame, pixel => pixel != 0xFF000000u);
+    }
+
+    [Fact]
     public void DelayedLedgerPresentationMatchesLegacyIncrementalPresentation()
     {
         var (legacy, legacyPointer) =
@@ -845,12 +874,20 @@ public sealed class AgnusCommittedDisplayLedgerTests
     }
 
     private static AmigaBus CreateConfiguredDisplayBus(
-        bool enableCommittedDisplayLedger)
+        bool enableCommittedDisplayLedger,
+        AgnusBusArbitrationMode agnusBusArbitration = AgnusBusArbitrationMode.Legacy)
     {
+        var enableSlotKernel = agnusBusArbitration == AgnusBusArbitrationMode.SlotKernel;
         var bus = new AmigaBus(
             captureBusAccesses: false,
             enableLiveAgnusDma: true,
-            enableAgnusLiveDisplayLedger: enableCommittedDisplayLedger);
+            enableHardwareSpecialization: enableSlotKernel,
+            agnusBusArbitration: agnusBusArbitration,
+            enableAgnusLiveDisplayLedger: enableCommittedDisplayLedger,
+            enableAgnusLiveCopper: enableSlotKernel,
+            enableAgnusLiveBlitter: enableSlotKernel,
+            enableAgnusLivePaula: enableSlotKernel,
+            enableAgnusLiveDisk: enableSlotKernel);
         bus.WriteWord(0x00DFF180, 0x0000);
         bus.WriteWord(0x00DFF182, 0x0F00);
         bus.WriteWord(0x00DFF08E, 0x9381);

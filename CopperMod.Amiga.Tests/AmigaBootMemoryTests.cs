@@ -1,6 +1,7 @@
 using System.Reflection;
 using CopperMod.Amiga;
 using CopperMod.Amiga.CopperStart.Devices.Trackdisk;
+using CopperMod.Amiga.CopperStart.Graphics.Portable;
 
 namespace CopperMod.Amiga.Tests;
 
@@ -73,6 +74,13 @@ public sealed class AmigaBootMemoryTests
 	private const int VBlankInterruptNumber = 5;
 	private const int ScreenWidthOffset = 0x0C;
 	private const int ScreenHeightOffset = 0x0E;
+	private const int ScreenLeftEdgeOffset = 0x08;
+	private const int ScreenTopEdgeOffset = 0x0A;
+	private const int ScreenFlagsOffset = 0x14;
+	private const int ScreenTitleOffset = 0x18;
+	private const int ScreenDefaultTitleOffset = 0x1C;
+	private const int ScreenDetailPenOffset = 0x14A;
+	private const int ScreenBlockPenOffset = 0x14B;
 	private const int ScreenViewPortOffset = 0x2C;
 	private const int ScreenRastPortOffset = 0x54;
 	private const int WindowRPortOffset = 0x32;
@@ -97,6 +105,8 @@ public sealed class AmigaBootMemoryTests
 	private const int ViewViewPortOffset = 0x00;
 	private const int ViewLofCprListOffset = 0x04;
 	private const int ViewShfCprListOffset = 0x08;
+	private const int ViewDyOffset = 0x0C;
+	private const int ViewDxOffset = 0x0E;
 	private const int ViewStructSize = 0x12;
 	private const int BitMapBytesPerRowOffset = 0x00;
 	private const int BitMapRowsOffset = 0x02;
@@ -107,12 +117,24 @@ public sealed class AmigaBootMemoryTests
 	private const int NewScreenHeightOffset = 0x06;
 	private const int NewScreenDepthOffset = 0x08;
 	private const int NewScreenViewModesOffset = 0x0C;
+	private const int NewScreenDefaultTitleOffset = 0x14;
 	private const int ViewPortDspInsOffset = 0x08;
 	private const int ViewPortDWidthOffset = 0x18;
 	private const int ViewPortDHeightOffset = 0x1A;
 	private const int ViewPortModesOffset = 0x20;
 	private const int ViewPortRasInfoOffset = 0x24;
+	private const int ViewPortDxOffset = 0x1C;
+	private const int ViewPortDyOffset = 0x1E;
+	private const uint ScreenTagDClip = 0x8000_0033;
+	private const uint ScreenTagOverscan = 0x8000_0034;
+	private const uint ScreenTagDetailPen = 0x8000_0026;
+	private const uint ScreenTagBlockPen = 0x8000_0027;
+	private const uint ScreenTagPens = 0x8000_004A;
 	private const ushort ViewModeHires = 0x8000;
+	private const ushort ViewModeInterlace = 0x0004;
+	private const ushort ViewModeExtraHalfBrite = 0x0080;
+	private const ushort ViewModeSuperHires = 0x0020;
+	private const ushort ViewModeHam = 0x0800;
 	private const uint IdcmpGadgetDown = 0x0000_0020;
 	private const uint IdcmpGadgetUp = 0x0000_0040;
 	private const uint MemfPublic = 0x0000_0001;
@@ -1014,6 +1036,39 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void RethinkDisplayKeepsThePublishedCopperListWhenViewPortRebuildFails()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint cprList = 0x2300;
+		const uint oldCopperList = 0x2400;
+		const uint newCprList = 0x2500;
+		const uint newCopperList = 0x2600;
+		const uint malformedViewPort = 0x2800;
+		WriteCopperColorList(bus, oldCopperList, 0x0F00);
+		WriteCopperColorList(bus, newCopperList, 0x00F0);
+		bus.WriteLong(cprList + CprListStartOffset, oldCopperList);
+		bus.WriteLong(newCprList + CprListStartOffset, newCopperList);
+		bus.WriteLong(view + ViewLofCprListOffset, cprList);
+
+		var state = new M68kCpuState { A = { [1] = view } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
+
+		// A cyclic ViewPort chain makes the rebuild fail before any new copper
+		// list is allocated.  RethinkDisplay must keep the list already loaded
+		// by LoadView instead of publishing the newly edited cprlist.
+		bus.WriteLong(view + ViewViewPortOffset, malformedViewPort);
+		bus.WriteLong(malformedViewPort, malformedViewPort);
+		bus.WriteLong(view + ViewLofCprListOffset, newCprList);
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IntuitionLibraryBase, -0x186), state));
+
+		var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
+		bus.Display.RenderFrame(frame);
+		Assert.Equal(0xFFFF0000u, Pixel(frame, 0, 0));
+	}
+
+	[Fact]
 	public void GraphicsV39AllocatesLinearRtgBitMapsAndBltBitMapRastPortCopiesPlanarPixels()
 	{
 		var machine = new Machine(MachineOptions
@@ -1598,6 +1653,23 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void GraphicsWaitTofUsesTheSelectedNtscBeamClockBoundary()
+	{
+		var machine = StartBootShim(MachineProfile.A500PlusEcsNtsc);
+		var bus = machine.Bus;
+		const long cycle = 1_000;
+		var expected = bus.GetNextFrameStartCycle(cycle);
+		var palBoundary = ((cycle / AmigaConstants.A500PalCpuCyclesPerFrame) + 1) *
+			AmigaConstants.A500PalCpuCyclesPerFrame;
+		var state = new M68kCpuState { Cycles = cycle, D = { [0] = 0xCAFE_BABEu } };
+
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -270), state));
+		Assert.Equal(0u, state.D[0]);
+		Assert.Equal(expected, state.Cycles);
+		Assert.NotEqual(palBoundary, state.Cycles);
+	}
+
+	[Fact]
 	public void LoadViewDefersMidFrameCopperListPublicationUntilFrameBoundary()
 	{
 		var machine = new Machine(MachineOptions
@@ -1625,6 +1697,121 @@ public sealed class AmigaBootMemoryTests
 
 		Assert.Equal((ushort)(copperList >> 16), bus.ReadWord(0x00DFF080));
 		Assert.Equal((ushort)copperList, bus.ReadWord(0x00DFF082));
+	}
+
+	[Fact]
+	public void LoadViewUsesTheSelectedNtscBeamBoundaryForCopperPublication()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500PlusEcsNtsc)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint lofCprList = 0x2300;
+		const uint copperList = 0x2400;
+		WriteCopperColorList(bus, copperList, 0x0F00);
+		bus.WriteLong(lofCprList + CprListStartOffset, copperList);
+		bus.WriteLong(view + ViewLofCprListOffset, lofCprList);
+
+		var firstFrameCycles = bus.GetNextFrameStartCycle(0);
+		var midFrameCycle = firstFrameCycles / 2;
+		var expectedBoundary = bus.GetNextFrameStartCycle(midFrameCycle);
+		var state = new M68kCpuState { Cycles = midFrameCycle };
+		state.A[1] = view;
+
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
+		Assert.Equal((ushort)0, bus.ReadWord(0x00DFF080));
+		Assert.Equal((ushort)0, bus.ReadWord(0x00DFF082));
+		Assert.Equal(expectedBoundary, InvokeGetNextSyntheticVBlankBoundaryCycle(boot, state.Cycles, expectedBoundary + firstFrameCycles));
+		Assert.NotEqual(AmigaConstants.A500PalCpuCyclesPerFrame, expectedBoundary);
+
+		InvokeAdvanceSyntheticVBlankInterruptServers(boot, state.Cycles, expectedBoundary);
+
+		Assert.Equal((ushort)(copperList >> 16), bus.ReadWord(0x00DFF080));
+		Assert.Equal((ushort)copperList, bus.ReadWord(0x00DFF082));
+	}
+
+	[Fact]
+	public void LoadViewNullCancelsAQueuedCopperListAtTheNextFrameBoundary()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500Pal512KBoot)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint cprList = 0x2300;
+		const uint copperList = 0x2400;
+		WriteCopperColorList(bus, copperList, 0x0F00);
+		bus.WriteLong(cprList + CprListStartOffset, copperList);
+		bus.WriteLong(view + ViewLofCprListOffset, cprList);
+		bus.WriteLong(view + ViewShfCprListOffset, cprList);
+
+		var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
+		var state = new M68kCpuState { Cycles = frameCycles / 2 };
+		state.A[1] = view;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
+		Assert.Equal((ushort)0, bus.ReadWord(0x00DFF080));
+		Assert.Equal(frameCycles, InvokeGetNextSyntheticVBlankBoundaryCycle(boot, state.Cycles, frameCycles * 2));
+
+		// Replacing the pending view with NULL must queue the blanking request,
+		// not leave the old CPR list eligible for the next frame.
+		state.A[1] = 0;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), state));
+		Assert.Equal(0u, bus.ReadLong(AmigaKickstartHost.GraphicsLibraryBase + 0x22));
+
+		InvokeAdvanceSyntheticVBlankInterruptServers(boot, state.Cycles, frameCycles);
+
+		Assert.Equal((ushort)0, bus.ReadWord(0x00DFF080));
+		Assert.Equal((ushort)0, bus.ReadWord(0x00DFF082));
+	}
+
+	[Fact]
+	public void LoadViewKeepsThePreviouslyPublishedViewWhenCopperResolutionFails()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		bus.EnableLiveAgnusDma();
+		const uint view = 0x2200;
+		const uint cprList = 0x2300;
+		const uint copperList = 0x2400;
+		const uint failedView = 0x2800;
+		const uint malformedCprList = 0x2900;
+
+		WriteCopperColorList(bus, copperList, 0x0F00);
+		bus.WriteLong(cprList + CprListStartOffset, copperList);
+		bus.WriteLong(view + ViewLofCprListOffset, cprList);
+		bus.WriteLong(view + ViewShfCprListOffset, cprList);
+
+		var load = new M68kCpuState { A = { [1] = view } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), load));
+		Assert.Equal(view, bus.ReadLong(AmigaKickstartHost.GraphicsLibraryBase + 0x22));
+		var oldCopperHigh = bus.ReadWord(0x00DFF080);
+		var oldCopperLow = bus.ReadWord(0x00DFF082);
+
+		// The portable View envelope is valid, but its nonzero CPR pointer does
+		// not resolve to a wrapped or raw copper list.  LoadView must decline
+		// without changing the active guest publication or hardware stream.
+		bus.WriteLong(failedView + ViewLofCprListOffset, malformedCprList);
+		bus.WriteLong(failedView + ViewShfCprListOffset, 0);
+		var failed = new M68kCpuState
+		{
+			A = { [1] = failedView },
+			D = { [0] = 0xA5A5_5A5A },
+			Cycles = AmigaConstants.A500PalCpuCyclesPerFrame
+		};
+
+		// GraphicsServices owns the compatibility trap even when the portable
+		// adapter declines; the observable contract is that the failed call is
+		// a no-op and leaves the native/provider boundary available.
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), failed));
+		Assert.Equal(0xA5A5_5A5Au, failed.D[0]);
+		Assert.Equal(view, bus.ReadLong(AmigaKickstartHost.GraphicsLibraryBase + 0x22));
+		Assert.Equal(oldCopperHigh, bus.ReadWord(0x00DFF080));
+		Assert.Equal(oldCopperLow, bus.ReadWord(0x00DFF082));
 	}
 
 	[Fact]
@@ -2636,6 +2823,558 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void OpenScreenTagListAppliesNativeGeometryAndDisplayIdTags()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var newScreen = InvokeAllocMem(bus, 0x20, 0);
+		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
+		bus.WriteWord(newScreen + NewScreenHeightOffset, 256);
+		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+
+		// SA_Width, SA_Height, SA_Depth, SA_DisplayID, TAG_DONE.
+		var tags = InvokeAllocMem(bus, 5 * 8, 0);
+		bus.WriteLong(tags, 0x8000_0023);
+		bus.WriteLong(tags + 4, 640);
+		bus.WriteLong(tags + 8, 0x8000_0024);
+		bus.WriteLong(tags + 12, 200);
+		bus.WriteLong(tags + 16, 0x8000_0025);
+		bus.WriteLong(tags + 20, 3);
+		bus.WriteLong(tags + 24, 0x8000_0032);
+		bus.WriteLong(tags + 28, 0x0002_9000); // PAL monitor + HIRES_KEY.
+		bus.WriteLong(tags + 32, 0);
+
+		var open = new M68kCpuState { A = { [0] = newScreen, [1] = tags } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -612),
+			open));
+
+		var screen = open.D[0];
+		Assert.NotEqual(0u, screen);
+		Assert.Equal(640, bus.ReadWord(screen + ScreenWidthOffset));
+		Assert.Equal(200, bus.ReadWord(screen + ScreenHeightOffset));
+		Assert.Equal(3, bus.ReadByte(screen + ScreenBitMapOffset + BitMapDepthOffset));
+		Assert.Equal(
+			ViewModeHires,
+			bus.ReadWord(screen + ScreenViewPortOffset + ViewPortModesOffset));
+	}
+
+	[Fact]
+	public void OpenScreenTagListUsesNtscNativeDisplayIdForZeroHeight()
+	{
+		var machine = StartBootShim(MachineProfile.A500PlusEcsNtsc);
+		var bus = machine.Bus;
+		var tags = InvokeAllocMem(bus, 4 * 8, 0);
+		bus.WriteLong(tags, 0x8000_0023); // SA_Width
+		bus.WriteLong(tags + 4, 640);
+		bus.WriteLong(tags + 8, 0x8000_0032); // SA_DisplayID
+		bus.WriteLong(tags + 12, 0x0001_9000); // NTSC monitor + HIRES_KEY.
+		bus.WriteLong(tags + 16, 0x8000_0024); // SA_Height
+		bus.WriteLong(tags + 20, 0);
+		bus.WriteLong(tags + 24, 0);
+
+		var open = new M68kCpuState { A = { [1] = tags } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -612),
+			open));
+
+		var screen = open.D[0];
+		Assert.Equal(640, bus.ReadWord(screen + ScreenWidthOffset));
+		Assert.Equal(AmigaConstants.NtscLowResStandardHeight, bus.ReadWord(screen + ScreenHeightOffset));
+		Assert.Equal(
+			ViewModeHires,
+			bus.ReadWord(screen + ScreenViewPortOffset + ViewPortModesOffset));
+	}
+
+	[Fact]
+	public void OpenScreenTagListAppliesPositionPaletteAndStandardScreenFlags()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var newScreen = InvokeAllocMem(bus, 0x20, 0);
+		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
+		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
+		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+
+		var colors = InvokeAllocMem(bus, 3 * 8, 0);
+		bus.WriteWord(colors, 1);
+		bus.WriteWord(colors + 2, 0x000F);
+		bus.WriteWord(colors + 4, 0x0000);
+		bus.WriteWord(colors + 6, 0x0001);
+		bus.WriteWord(colors + 8, ushort.MaxValue);
+
+		// SA_Left, SA_Top, SA_Colors, SA_ShowTitle, SA_Behind,
+		// SA_Quiet, SA_AutoScroll, TAG_DONE.
+		var tags = InvokeAllocMem(bus, 8 * 8, 0);
+		bus.WriteLong(tags, 0x8000_0021);
+		bus.WriteLong(tags + 4, unchecked((uint)-4));
+		bus.WriteLong(tags + 8, 0x8000_0022);
+		bus.WriteLong(tags + 12, 7);
+		bus.WriteLong(tags + 16, 0x8000_0029);
+		bus.WriteLong(tags + 20, colors);
+		bus.WriteLong(tags + 24, 0x8000_0044);
+		bus.WriteLong(tags + 28, 1);
+		bus.WriteLong(tags + 32, 0x8000_0045);
+		bus.WriteLong(tags + 36, 1);
+		bus.WriteLong(tags + 40, 0x8000_0046);
+		bus.WriteLong(tags + 44, 1);
+		bus.WriteLong(tags + 48, 0x8000_0047);
+		bus.WriteLong(tags + 52, 1);
+		bus.WriteLong(tags + 56, 0);
+
+		var open = new M68kCpuState { A = { [0] = newScreen, [1] = tags } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -612),
+			open));
+
+		var screen = open.D[0];
+		var viewPort = screen + ScreenViewPortOffset;
+		Assert.Equal(-4, unchecked((short)bus.ReadWord(screen + ScreenLeftEdgeOffset)));
+		Assert.Equal(7, unchecked((short)bus.ReadWord(screen + ScreenTopEdgeOffset)));
+		Assert.Equal(-4, unchecked((short)bus.ReadWord(viewPort + ViewPortDxOffset)));
+		Assert.Equal(7, unchecked((short)bus.ReadWord(viewPort + ViewPortDyOffset)));
+		Assert.Equal(
+			(ushort)0x4190,
+			(ushort)(bus.ReadWord(screen + ScreenFlagsOffset) & 0x4190));
+
+		var viewState = new M68kCpuState();
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -294),
+			viewState));
+		var view = viewState.D[0];
+		var copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal((ushort)0x0F01, ReadCopperMoveValue(bus, copperList, 0x0182));
+	}
+
+	[Fact]
+	public void OpenScreenTagListProjectsColors32IntoOcsPaletteMoves()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var colors32 = InvokeAllocMem(bus, 4 + 12 + 4, 0);
+		bus.WriteLong(colors32, 0x0001_0002); // one entry starting at COLOR2
+		bus.WriteLong(colors32 + 4, 0xF000_0000);
+		bus.WriteLong(colors32 + 8, 0x1000_0000);
+		bus.WriteLong(colors32 + 12, 0xA000_0000);
+		bus.WriteLong(colors32 + 16, 0);
+		var tags = InvokeAllocMem(bus, 2 * 8, 0);
+		bus.WriteLong(tags, 0x8000_0043); // SA_Colors32
+		bus.WriteLong(tags + 4, colors32);
+		bus.WriteLong(tags + 8, 0);
+
+		var open = new M68kCpuState { A = { [1] = tags } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -612),
+			open));
+
+		var viewState = new M68kCpuState();
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -294),
+			viewState));
+		var view = viewState.D[0];
+		var copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal((ushort)0xF1A, ReadCopperMoveValue(bus, copperList, 0x0184));
+	}
+
+	[Fact]
+	public void OpenScreenPublishesLegacyAndTaggedDefaultScreenTitles()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var title = InvokeAllocMem(bus, 16, 0);
+		WriteCString(bus, title, "Legacy");
+		var newScreen = InvokeAllocMem(bus, 0x20, 0);
+		bus.WriteLong(newScreen + NewScreenDefaultTitleOffset, title);
+		var legacyOpen = new M68kCpuState { A = { [0] = newScreen } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198),
+			legacyOpen));
+		Assert.Equal(title, bus.ReadLong(legacyOpen.D[0] + ScreenDefaultTitleOffset));
+		var close = new M68kCpuState { A = { [0] = legacyOpen.D[0] } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -66),
+			close));
+
+		var taggedTitle = InvokeAllocMem(bus, 16, 0);
+		WriteCString(bus, taggedTitle, "Tagged");
+		var tags = InvokeAllocMem(bus, 2 * 8, 0);
+		bus.WriteLong(tags, 0x8000_0028); // SA_Title
+		bus.WriteLong(tags + 4, taggedTitle);
+		bus.WriteLong(tags + 8, 0);
+		var taggedOpen = new M68kCpuState { A = { [1] = tags } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -612),
+			taggedOpen));
+		Assert.Equal(taggedTitle, bus.ReadLong(taggedOpen.D[0] + ScreenDefaultTitleOffset));
+		Assert.Equal(0u, bus.ReadLong(taggedOpen.D[0] + ScreenTitleOffset));
+		Assert.NotEqual(0, bus.ReadWord(taggedOpen.D[0] + ScreenFlagsOffset) & 0x0010);
+		var activeTitle = InvokeAllocMem(bus, 16, 0);
+		WriteCString(bus, activeTitle, "Active");
+		var setTitles = new M68kCpuState { A = { [2] = activeTitle } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -276),
+			setTitles));
+		Assert.Equal(activeTitle, bus.ReadLong(taggedOpen.D[0] + ScreenTitleOffset));
+
+		var hideTitle = new M68kCpuState { A = { [0] = taggedOpen.D[0] } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -282),
+			hideTitle));
+		Assert.Equal(0u, hideTitle.D[0]);
+		Assert.Equal(0, bus.ReadWord(taggedOpen.D[0] + ScreenFlagsOffset) & 0x0010);
+
+		var showTitle = new M68kCpuState { A = { [0] = taggedOpen.D[0] }, D = { [0] = 1 } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -282),
+			showTitle));
+		Assert.NotEqual(0, bus.ReadWord(taggedOpen.D[0] + ScreenFlagsOffset) & 0x0010);
+	}
+
+	[Fact]
+	public void OpenScreenTagListUsesDisplayClipForUnspecifiedScreenGeometry()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var clip = InvokeAllocMem(bus, 8, 0);
+		bus.WriteWord(clip, 10);
+		bus.WriteWord(clip + 2, 5);
+		bus.WriteWord(clip + 4, 329);
+		bus.WriteWord(clip + 6, 204);
+		var tags = InvokeAllocMem(bus, 2 * 8, 0);
+		bus.WriteLong(tags, ScreenTagDClip);
+		bus.WriteLong(tags + 4, clip);
+		bus.WriteLong(tags + 8, 0);
+
+		var open = new M68kCpuState { A = { [1] = tags } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -612),
+			open));
+
+		var screen = open.D[0];
+		Assert.Equal(10, unchecked((short)bus.ReadWord(screen + ScreenLeftEdgeOffset)));
+		Assert.Equal(5, unchecked((short)bus.ReadWord(screen + ScreenTopEdgeOffset)));
+		Assert.Equal(320, bus.ReadWord(screen + ScreenWidthOffset));
+		Assert.Equal(200, bus.ReadWord(screen + ScreenHeightOffset));
+	}
+
+	[Fact]
+	public void OpenScreenTagListAppliesPensAndProfileOverscanGeometry()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var pens = InvokeAllocMem(bus, 6, 0);
+		bus.WriteWord(pens, 5);
+		bus.WriteWord(pens + 2, 6);
+		bus.WriteWord(pens + 4, ushort.MaxValue);
+
+		var tags = InvokeAllocMem(bus, 3 * 8, 0);
+		bus.WriteLong(tags, ScreenTagPens);
+		bus.WriteLong(tags + 4, pens);
+		bus.WriteLong(tags + 8, ScreenTagOverscan);
+		bus.WriteLong(tags + 12, 2); // OSCAN_STANDARD
+		bus.WriteLong(tags + 16, 0);
+
+		var open = new M68kCpuState { A = { [1] = tags } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -612),
+			open));
+
+		var screen = open.D[0];
+		Assert.Equal((byte)5, bus.ReadByte(screen + ScreenDetailPenOffset));
+		Assert.Equal((byte)6, bus.ReadByte(screen + ScreenBlockPenOffset));
+		Assert.Equal(AmigaConstants.PalLowResWidth, bus.ReadWord(screen + ScreenWidthOffset));
+		Assert.Equal(AmigaConstants.PalLowResHeight, bus.ReadWord(screen + ScreenHeightOffset));
+	}
+
+	[Fact]
+	public void OpenScreenTagListDetailAndBlockPenTagsOverrideLegacyPens()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var newScreen = InvokeAllocMem(bus, 0x20, 0);
+		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
+		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
+		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteByte(newScreen + 10, 9, 0); // NewScreen.DetailPen
+		bus.WriteByte(newScreen + 11, 10, 0); // NewScreen.BlockPen
+
+		var tags = InvokeAllocMem(bus, 3 * 8, 0);
+		bus.WriteLong(tags, ScreenTagDetailPen);
+		bus.WriteLong(tags + 4, 11);
+		bus.WriteLong(tags + 8, ScreenTagBlockPen);
+		bus.WriteLong(tags + 12, 12);
+		bus.WriteLong(tags + 16, 0);
+
+		var open = new M68kCpuState { A = { [0] = newScreen, [1] = tags } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -612),
+			open));
+
+		var screen = open.D[0];
+		Assert.Equal((byte)11, bus.ReadByte(screen + ScreenDetailPenOffset));
+		Assert.Equal((byte)12, bus.ReadByte(screen + ScreenBlockPenOffset));
+	}
+
+	[Fact]
+	public void OpenScreenTagListUsesNtscOverscanEnvelope()
+	{
+		var machine = StartBootShim(MachineProfile.A500PlusEcsNtsc);
+		var bus = machine.Bus;
+		var tags = InvokeAllocMem(bus, 2 * 8, 0);
+		bus.WriteLong(tags, ScreenTagOverscan);
+		bus.WriteLong(tags + 4, 2); // OSCAN_STANDARD
+		bus.WriteLong(tags + 8, 0);
+
+		var open = new M68kCpuState { A = { [1] = tags } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -612),
+			open));
+
+		var screen = open.D[0];
+		Assert.Equal(AmigaConstants.NtscLowResWidth, bus.ReadWord(screen + ScreenWidthOffset));
+		Assert.Equal(AmigaConstants.NtscLowResHeight, bus.ReadWord(screen + ScreenHeightOffset));
+	}
+
+	[Fact]
+	public void OpenScreenUsesNtscStandardHeightWhenNewScreenHeightIsZero()
+	{
+		var machine = StartBootShim(MachineProfile.A500PlusEcsNtsc);
+		var bus = machine.Bus;
+		var newScreen = InvokeAllocMem(bus, 0x20, 0);
+		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
+		bus.WriteWord(newScreen + NewScreenHeightOffset, 0);
+		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteWord(newScreen + NewScreenViewModesOffset, 0);
+
+		var openScreenState = new M68kCpuState { A = { [0] = newScreen } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198),
+			openScreenState));
+
+		var screen = openScreenState.D[0];
+		Assert.Equal(AmigaConstants.NtscLowResStandardHeight, bus.ReadWord(screen + ScreenHeightOffset));
+		Assert.Equal(
+			AmigaConstants.NtscLowResStandardHeight,
+			bus.ReadWord(screen + ScreenBitMapOffset + BitMapRowsOffset));
+		Assert.Equal(
+			AmigaConstants.NtscLowResStandardHeight,
+			bus.ReadWord(screen + ScreenViewPortOffset + ViewPortDHeightOffset));
+	}
+
+	[Fact]
+	public void CloseScreenBlanksSyntheticViewAndAllowsFreshOpenScreenGeometry()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var firstOpen = new M68kCpuState();
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198),
+			firstOpen));
+		var firstScreen = firstOpen.D[0];
+		Assert.NotEqual(0u, firstScreen);
+		var firstViewPort = firstScreen + ScreenViewPortOffset;
+		Assert.NotEqual(0u, bus.ReadLong(firstViewPort + ViewPortDspInsOffset));
+		var firstViewState = new M68kCpuState();
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -294),
+			firstViewState));
+		var firstView = firstViewState.D[0];
+		Assert.NotEqual(0u, bus.ReadLong(firstView + ViewLofCprListOffset));
+
+		var close = new M68kCpuState
+		{
+			A = { [0] = firstScreen },
+			Cycles = 1234
+		};
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -66),
+			close));
+		Assert.Equal(1u, close.D[0]);
+		Assert.Equal(
+			0u,
+			bus.ReadLong(AmigaKickstartHost.GraphicsLibraryBase + 0x22));
+		Assert.Equal(0u, bus.ReadLong(firstViewPort + ViewPortDspInsOffset));
+		Assert.Equal(0u, bus.ReadLong(firstView + ViewLofCprListOffset));
+		Assert.Equal(0u, bus.ReadLong(firstView + ViewShfCprListOffset));
+
+		var newScreen = InvokeAllocMem(bus, 0x20, 0);
+		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
+		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
+		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		var secondOpen = new M68kCpuState { A = { [0] = newScreen } };
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198),
+			secondOpen));
+		Assert.NotEqual(firstScreen, secondOpen.D[0]);
+		Assert.Equal(640, bus.ReadWord(secondOpen.D[0] + ScreenWidthOffset));
+		Assert.Equal(200, bus.ReadWord(secondOpen.D[0] + ScreenHeightOffset));
+	}
+
+	[Fact]
+	public void OpenScreenPreservesHamAndEhbModesWithSixPlaneDepth()
+	{
+		var hamMachine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var hamBus = hamMachine.Bus;
+		var hamNewScreen = InvokeAllocMem(hamBus, 0x20, 0);
+		hamBus.WriteWord(hamNewScreen + NewScreenWidthOffset, 320);
+		hamBus.WriteWord(hamNewScreen + NewScreenHeightOffset, 200);
+		hamBus.WriteByte(hamNewScreen + NewScreenDepthOffset, 2, 0);
+		hamBus.WriteWord(hamNewScreen + NewScreenViewModesOffset, ViewModeHam);
+		var hamOpen = new M68kCpuState { A = { [0] = hamNewScreen } };
+
+		Assert.True(InvokeHostTrap(
+			hamBus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198),
+			hamOpen));
+
+		var hamScreen = hamOpen.D[0];
+		Assert.Equal(6, hamBus.ReadByte(hamScreen + ScreenBitMapOffset + BitMapDepthOffset));
+		Assert.Equal(
+			ViewModeHam,
+			hamBus.ReadWord(hamScreen + ScreenViewPortOffset + ViewPortModesOffset));
+
+		var ehbMachine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var ehbBus = ehbMachine.Bus;
+		var ehbNewScreen = InvokeAllocMem(ehbBus, 0x20, 0);
+		ehbBus.WriteWord(ehbNewScreen + NewScreenWidthOffset, 320);
+		ehbBus.WriteWord(ehbNewScreen + NewScreenHeightOffset, 200);
+		ehbBus.WriteByte(ehbNewScreen + NewScreenDepthOffset, 2, 0);
+		ehbBus.WriteWord(ehbNewScreen + NewScreenViewModesOffset, ViewModeExtraHalfBrite);
+		var ehbOpen = new M68kCpuState { A = { [0] = ehbNewScreen } };
+
+		Assert.True(InvokeHostTrap(
+			ehbBus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198),
+			ehbOpen));
+
+		var ehbScreen = ehbOpen.D[0];
+		Assert.Equal(6, ehbBus.ReadByte(ehbScreen + ScreenBitMapOffset + BitMapDepthOffset));
+		Assert.Equal(
+			ViewModeExtraHalfBrite,
+			ehbBus.ReadWord(ehbScreen + ScreenViewPortOffset + ViewPortModesOffset));
+
+		var superMachine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var superBus = superMachine.Bus;
+		var superNewScreen = InvokeAllocMem(superBus, 0x20, 0);
+		superBus.WriteWord(superNewScreen + NewScreenWidthOffset, 1280);
+		superBus.WriteWord(superNewScreen + NewScreenHeightOffset, 200);
+		superBus.WriteByte(superNewScreen + NewScreenDepthOffset, 2, 0);
+		superBus.WriteWord(superNewScreen + NewScreenViewModesOffset, ViewModeSuperHires);
+		var superOpen = new M68kCpuState { A = { [0] = superNewScreen } };
+
+		Assert.True(InvokeHostTrap(
+			superBus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198),
+			superOpen));
+
+		var superScreen = superOpen.D[0];
+		Assert.Equal(1280, superBus.ReadWord(superScreen + ScreenWidthOffset));
+		Assert.Equal(160, superBus.ReadWord(superScreen + ScreenBitMapOffset + BitMapBytesPerRowOffset));
+		Assert.Equal(
+			(ushort)(ViewModeHires | ViewModeSuperHires),
+			superBus.ReadWord(superScreen + ScreenViewPortOffset + ViewPortModesOffset));
+	}
+
+	[Fact]
+	public void OpenScreenBuildsSharedDualPlayfieldRasInfoChain()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var newScreen = InvokeAllocMem(bus, 0x20, 0);
+		var requestedModes = (ushort)(GraphicsModeIds.DualPlayfieldMode | GraphicsModeIds.PlayfieldBitAssignment);
+		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
+		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
+		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteWord(newScreen + NewScreenViewModesOffset, requestedModes);
+		var openScreenState = new M68kCpuState { A = { [0] = newScreen } };
+
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198),
+			openScreenState));
+
+		var screen = openScreenState.D[0];
+		var bitMap = screen + ScreenBitMapOffset;
+		var viewPort = screen + ScreenViewPortOffset;
+		var firstRasInfo = bus.ReadLong(viewPort + ViewPortRasInfoOffset);
+		var secondRasInfo = bus.ReadLong(firstRasInfo);
+		Assert.NotEqual(0u, firstRasInfo);
+		Assert.NotEqual(0u, secondRasInfo);
+		var firstBitMap = bus.ReadLong(firstRasInfo + 4);
+		Assert.NotEqual(0u, firstBitMap);
+		Assert.Equal(firstBitMap, bus.ReadLong(secondRasInfo + 4));
+		Assert.Equal(2, bus.ReadByte(bitMap + BitMapDepthOffset));
+		Assert.Equal(requestedModes, bus.ReadWord(viewPort + ViewPortModesOffset));
+
+		var getViewState = new M68kCpuState();
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -294),
+			getViewState));
+		var view = getViewState.D[0];
+		var cprList = bus.ReadLong(view + ViewLofCprListOffset);
+		var copperList = bus.ReadLong(cprList + CprListStartOffset);
+		Assert.NotEqual(0u, copperList);
+		Assert.Equal((ushort)0x2400, ReadCopperMoveValue(bus, copperList, 0x0100));
+		Assert.Equal((ushort)0x0040, ReadCopperMoveValue(bus, copperList, 0x0104));
+	}
+
+	[Fact]
+	public void OpenScreenPreservesInterlaceGeometryAndCopperMode()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		var newScreen = InvokeAllocMem(bus, 0x20, 0);
+		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
+		bus.WriteWord(newScreen + NewScreenHeightOffset, 512);
+		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteWord(newScreen + NewScreenViewModesOffset, ViewModeInterlace);
+		var openScreenState = new M68kCpuState { A = { [0] = newScreen } };
+
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198),
+			openScreenState));
+
+		var screen = openScreenState.D[0];
+		var viewPort = screen + ScreenViewPortOffset;
+		Assert.Equal(512, bus.ReadWord(screen + ScreenHeightOffset));
+		Assert.Equal(512, bus.ReadWord(screen + ScreenBitMapOffset + BitMapRowsOffset));
+		Assert.Equal(ViewModeInterlace, bus.ReadWord(viewPort + ViewPortModesOffset));
+
+		var getViewState = new M68kCpuState();
+		Assert.True(InvokeHostTrap(
+			bus,
+			Lvo(AmigaKickstartHost.IntuitionLibraryBase, -294),
+			getViewState));
+		var view = getViewState.D[0];
+		var cprList = bus.ReadLong(view + ViewLofCprListOffset);
+		var copperList = bus.ReadLong(cprList + CprListStartOffset);
+		Assert.Equal((ushort)0x2004, ReadCopperMoveValue(bus, copperList, 0x0100));
+	}
+
+	[Fact]
 	public void SyntheticMouseClickQueuesGadgetUpIntuiMessage()
 	{
 		var machine = new Machine(MachineOptions
@@ -2744,6 +3483,35 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void EmptySyntheticWaitPortUsesTheSelectedNtscFrameBoundary()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500PlusEcsNtsc)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var bus = machine.Bus;
+		var waitPort = Lvo(AmigaKickstartHost.ExecLibraryBase, -384);
+		const long cycle = 1234;
+		var expected = bus.GetNextFrameStartCycle(cycle);
+		var palBoundary = ((cycle / AmigaConstants.A500PalCpuCyclesPerFrame) + 1) *
+			AmigaConstants.A500PalCpuCyclesPerFrame;
+		var state = new M68kCpuState
+		{
+			LastInstructionProgramCounter = waitPort,
+			ProgramCounter = waitPort + 4,
+			Cycles = cycle
+		};
+
+		Assert.True(InvokeHostTrap(bus, waitPort, state));
+
+		Assert.Equal(0u, state.D[0]);
+		Assert.Equal(waitPort, state.ProgramCounter);
+		Assert.Equal(expected, state.Cycles);
+		Assert.NotEqual(palBoundary, state.Cycles);
+	}
+
+	[Fact]
 	public void ExecAddIntServerTicksSyntheticVBlankCounterAtFrameBoundaries()
 	{
 		var machine = new Machine(MachineOptions
@@ -2782,6 +3550,36 @@ public sealed class AmigaBootMemoryTests
 			boot,
 			AmigaConstants.A500PalCpuCyclesPerFrame * 3L + 42,
 			AmigaConstants.A500PalCpuCyclesPerFrame * 5L);
+
+		Assert.Equal(3u, bus.ReadLong(counter));
+	}
+
+	[Fact]
+	public void ExecAddIntServerTicksSyntheticVBlankAtNtscBeamBoundaries()
+	{
+		var machine = new Machine(MachineOptions
+			.ForProfile(MachineProfile.A500PlusEcsNtsc)
+			.WithLiveAgnusDma(false));
+		var boot = new AmigaBootController(machine);
+		boot.StartBootFromDisk(CreateBootableDisk());
+		var bus = machine.Bus;
+		var interrupt = InvokeAllocMem(bus, 0x20, 0);
+		var counter = InvokeAllocMem(bus, 4, 0);
+		bus.WriteLong(interrupt + InterruptDataOffset, counter);
+		bus.WriteLong(interrupt + InterruptCodeOffset, 0x0000_2000);
+		var addState = new M68kCpuState
+		{
+			D = { [0] = VBlankInterruptNumber },
+			A = { [1] = interrupt }
+		};
+
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -168), addState));
+		var firstFrame = bus.GetNextFrameStartCycle(0);
+		var thirdFrame = bus.GetNextFrameStartCycle(
+			bus.GetNextFrameStartCycle(firstFrame));
+		Assert.Equal(firstFrame, InvokeGetNextSyntheticVBlankBoundaryCycle(boot, 0, thirdFrame + 42));
+
+		InvokeAdvanceSyntheticVBlankInterruptServers(boot, 0, thirdFrame + 42);
 
 		Assert.Equal(3u, bus.ReadLong(counter));
 	}
@@ -2941,6 +3739,525 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
+	public void MakeVPortRebuildsANonHeadViewportWithoutRetargetingTheView()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint firstViewPort = 0x2300;
+		const uint secondViewPort = 0x2600;
+
+		WriteMinimalViewPort(bus, firstViewPort);
+		WriteMinimalViewPort(bus, secondViewPort);
+		bus.WriteLong(view + ViewViewPortOffset, firstViewPort);
+		bus.WriteLong(firstViewPort, secondViewPort);
+		bus.WriteLong(secondViewPort, 0);
+
+		var state = new M68kCpuState { A = { [0] = view, [1] = firstViewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		var publishedLof = bus.ReadLong(view + ViewLofCprListOffset);
+		var publishedShf = bus.ReadLong(view + ViewShfCprListOffset);
+		var firstDisplayInstructions = bus.ReadLong(firstViewPort + ViewPortDspInsOffset);
+		Assert.NotEqual(0u, publishedLof);
+		Assert.Equal(publishedLof, publishedShf);
+
+		state = new M68kCpuState { A = { [0] = view, [1] = secondViewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+
+		Assert.Equal(firstViewPort, bus.ReadLong(view + ViewViewPortOffset));
+		Assert.Equal(publishedLof, bus.ReadLong(view + ViewLofCprListOffset));
+		Assert.Equal(publishedShf, bus.ReadLong(view + ViewShfCprListOffset));
+		Assert.Equal(firstDisplayInstructions, bus.ReadLong(firstViewPort + ViewPortDspInsOffset));
+		Assert.NotEqual(0u, bus.ReadLong(secondViewPort + ViewPortDspInsOffset));
+	}
+
+	[Fact]
+	public void MakeVPortComposesViewAndViewPortOffsetsIntoDisplayOrigin()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		WriteMinimalViewPort(bus, viewPort);
+		bus.WriteWord(view + ViewDyOffset, 3);
+		bus.WriteWord(view + ViewDxOffset, 5);
+		bus.WriteWord(viewPort + 0x1C, 2);
+		bus.WriteWord(viewPort + 0x1E, 4);
+
+		var state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+
+		var copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		// InitView's standard origin is (H=$81,V=$2C); the ViewPort offsets
+		// are relative to it, so (dx=5+2, dy=3+4) yields DIWSTRT=$3388.
+		Assert.Equal((ushort)0x3388, ReadCopperMoveValue(bus, copperList, 0x008E));
+	}
+
+	[Fact]
+	public void MakeVPortProjectsFeatureModesIntoBplcon0()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		const uint rasInfo = 0x2380;
+		const uint secondRasInfo = 0x2400;
+		const uint bitMap = 0x23A0;
+		const uint planeBase = 0x3000;
+		bus.WriteWord(viewPort + 0x18, 16);
+		bus.WriteWord(viewPort + 0x1A, 1);
+		bus.WriteLong(viewPort + 0x24, rasInfo);
+		// DUALPF requires the second playfield RasInfo node even when the
+		// host display backend uses the same standard-planar surface for both
+		// playfields.
+		bus.WriteLong(rasInfo, secondRasInfo);
+		bus.WriteLong(rasInfo + 0x04, bitMap);
+		bus.WriteLong(secondRasInfo, 0);
+		bus.WriteLong(secondRasInfo + 0x04, bitMap);
+		bus.WriteWord(bitMap, 2);
+		bus.WriteWord(bitMap + 0x02, 1);
+		bus.WriteByte(bitMap + 0x05, 6, 0);
+		for (var plane = 0; plane < 6; plane++)
+			bus.WriteLong(bitMap + 0x08u + (uint)(plane * 4), planeBase + (uint)(plane * 0x20));
+
+		bus.WriteWord(viewPort + 0x20, GraphicsModeIds.HamMode);
+		var state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		var copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal((ushort)0x6800, ReadCopperMoveValue(bus, copperList, 0x0100));
+
+		bus.WriteByte(bitMap + 0x05, 4, 0);
+		bus.WriteWord(viewPort + 0x20, (ushort)(GraphicsModeIds.HiresMode | GraphicsModeIds.DualPlayfieldMode));
+		state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal((ushort)0xC400, ReadCopperMoveValue(bus, copperList, 0x0100));
+
+		bus.WriteWord(viewPort + 0x20, (ushort)(GraphicsModeIds.HiresMode | GraphicsModeIds.DualPlayfieldMode | GraphicsModeIds.PlayfieldBitAssignment));
+		state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal((ushort)0xC400, ReadCopperMoveValue(bus, copperList, 0x0100));
+		Assert.Equal((ushort)0x0040, ReadCopperMoveValue(bus, copperList, 0x0104));
+
+		bus.WriteByte(bitMap + 0x05, 2, 0);
+		bus.WriteWord(viewPort + 0x20, (ushort)(GraphicsModeIds.HiresMode | GraphicsModeIds.SuperHiresMode));
+		state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal((ushort)0xA040, ReadCopperMoveValue(bus, copperList, 0x0100));
+		Assert.Equal((ushort)0x0000, ReadCopperMoveValue(bus, copperList, 0x0104));
+	}
+
+	[Fact]
+	public void MakeVPortProjectsDistinctDualPlayfieldRasInfosIntoAllPlanePointers()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		const uint firstRasInfo = 0x2380;
+		const uint secondRasInfo = 0x2400;
+		const uint firstBitMap = 0x2500;
+		const uint secondBitMap = 0x2600;
+		const uint colorMap = 0x2700;
+		const uint colorTable = 0x2740;
+		const uint firstPlane0 = 0x3000;
+		const uint firstPlane1 = 0x3020;
+		const uint secondPlane0 = 0x3040;
+		const uint secondPlane1 = 0x3060;
+
+		bus.WriteWord(viewPort + ViewPortDWidthOffset, 16);
+		bus.WriteWord(viewPort + ViewPortDHeightOffset, 1);
+		bus.WriteWord(viewPort + ViewPortModesOffset, GraphicsModeIds.DualPlayfieldMode);
+		bus.WriteLong(viewPort + ViewPortRasInfoOffset, firstRasInfo);
+		bus.WriteLong(viewPort + GraphicsLayouts.ViewPortColorMap, colorMap);
+		bus.WriteWord(colorMap + GraphicsLayouts.ColorMapCount, 16);
+		bus.WriteLong(colorMap + GraphicsLayouts.ColorMapColorTable, colorTable);
+		for (var color = 0; color < 16; color++)
+			bus.WriteWord(colorTable + (uint)(color * 2), (ushort)(0x010 + color));
+		bus.WriteLong(firstRasInfo + 0x00, secondRasInfo);
+		bus.WriteLong(firstRasInfo + 0x04, firstBitMap);
+		bus.WriteWord(firstRasInfo + 0x08, 3);
+		bus.WriteLong(secondRasInfo + 0x00, 0);
+		bus.WriteLong(secondRasInfo + 0x04, secondBitMap);
+		bus.WriteWord(secondRasInfo + 0x08, 9);
+
+		foreach (var bitMap in new[] { firstBitMap, secondBitMap })
+		{
+			bus.WriteWord(bitMap + 0x00, (ushort)(bitMap == firstBitMap ? 4 : 6));
+			bus.WriteWord(bitMap + 0x02, 1);
+			bus.WriteByte(bitMap + 0x05, 2, 0);
+		}
+
+		bus.WriteLong(firstBitMap + 0x08, firstPlane0);
+		bus.WriteLong(firstBitMap + 0x0C, firstPlane1);
+		bus.WriteLong(secondBitMap + 0x08, secondPlane0);
+		bus.WriteLong(secondBitMap + 0x0C, secondPlane1);
+
+		var state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		Assert.Equal(0u, state.D[0]);
+
+		var copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal((ushort)0x4400, ReadCopperMoveValue(bus, copperList, 0x0100));
+		Assert.Equal((ushort)0x0093, ReadCopperMoveValue(bus, copperList, 0x0102));
+		Assert.Equal((ushort)0x0002, ReadCopperMoveValue(bus, copperList, 0x0108));
+		Assert.Equal((ushort)0x0004, ReadCopperMoveValue(bus, copperList, 0x010A));
+		Assert.Equal((ushort)(firstPlane0 >> 16), ReadCopperMoveValue(bus, copperList, 0x00E0));
+		Assert.Equal((ushort)firstPlane0, ReadCopperMoveValue(bus, copperList, 0x00E2));
+		Assert.Equal((ushort)(secondPlane0 >> 16), ReadCopperMoveValue(bus, copperList, 0x00E4));
+		Assert.Equal((ushort)secondPlane0, ReadCopperMoveValue(bus, copperList, 0x00E6));
+		Assert.Equal((ushort)(firstPlane1 >> 16), ReadCopperMoveValue(bus, copperList, 0x00E8));
+		Assert.Equal((ushort)firstPlane1, ReadCopperMoveValue(bus, copperList, 0x00EA));
+		Assert.Equal((ushort)(secondPlane1 >> 16), ReadCopperMoveValue(bus, copperList, 0x00EC));
+		Assert.Equal((ushort)secondPlane1, ReadCopperMoveValue(bus, copperList, 0x00EE));
+		Assert.Equal((ushort)0x010, ReadCopperMoveValue(bus, copperList, 0x0180));
+		Assert.Equal((ushort)0x011, ReadCopperMoveValue(bus, copperList, 0x0182));
+		Assert.Equal((ushort)0x018, ReadCopperMoveValue(bus, copperList, 0x0190));
+		Assert.Equal((ushort)0x019, ReadCopperMoveValue(bus, copperList, 0x0192));
+
+		bus.WriteWord(firstRasInfo + 0x08, unchecked((ushort)-3));
+		state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal((ushort)0x009D, ReadCopperMoveValue(bus, copperList, 0x0102));
+		Assert.Equal((ushort)((firstPlane0 - 2) >> 16), ReadCopperMoveValue(bus, copperList, 0x00E0));
+		Assert.Equal((ushort)(firstPlane0 - 2), ReadCopperMoveValue(bus, copperList, 0x00E2));
+	}
+
+	[Fact]
+	public void MakeVPortProjectsAsymmetricDualPlayfieldDepthsWithoutGaps()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		const uint firstRasInfo = 0x2380;
+		const uint secondRasInfo = 0x2400;
+		const uint firstBitMap = 0x2500;
+		const uint secondBitMap = 0x2600;
+		const uint firstPlane0 = 0x3000;
+		const uint firstPlane1 = 0x3020;
+		const uint secondPlane0 = 0x3040;
+
+		bus.WriteWord(viewPort + ViewPortDWidthOffset, 16);
+		bus.WriteWord(viewPort + ViewPortDHeightOffset, 2);
+		bus.WriteWord(viewPort + ViewPortModesOffset, GraphicsModeIds.DualPlayfieldMode);
+		bus.WriteLong(viewPort + ViewPortRasInfoOffset, firstRasInfo);
+		bus.WriteLong(firstRasInfo + 0x00, secondRasInfo);
+		bus.WriteLong(firstRasInfo + 0x04, firstBitMap);
+		bus.WriteLong(secondRasInfo + 0x00, 0);
+		bus.WriteLong(secondRasInfo + 0x04, secondBitMap);
+
+		bus.WriteWord(firstBitMap + 0x00, 2);
+		bus.WriteWord(firstBitMap + 0x02, 2);
+		bus.WriteByte(firstBitMap + 0x05, 2, 0);
+		bus.WriteLong(firstBitMap + 0x08, firstPlane0);
+		bus.WriteLong(firstBitMap + 0x0C, firstPlane1);
+		bus.WriteWord(secondBitMap + 0x00, 2);
+		bus.WriteWord(secondBitMap + 0x02, 1);
+		bus.WriteByte(secondBitMap + 0x05, 1, 0);
+		bus.WriteLong(secondBitMap + 0x08, secondPlane0);
+
+		var state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		Assert.Equal(0u, state.D[0]);
+
+		var copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal((ushort)0x2D00, ReadCopperMoveValue(bus, copperList, 0x0090));
+		Assert.Equal((ushort)0x3400, ReadCopperMoveValue(bus, copperList, 0x0100));
+		Assert.Equal((ushort)(firstPlane0 >> 16), ReadCopperMoveValue(bus, copperList, 0x00E0));
+		Assert.Equal((ushort)firstPlane0, ReadCopperMoveValue(bus, copperList, 0x00E2));
+		Assert.Equal((ushort)(secondPlane0 >> 16), ReadCopperMoveValue(bus, copperList, 0x00E4));
+		Assert.Equal((ushort)secondPlane0, ReadCopperMoveValue(bus, copperList, 0x00E6));
+		Assert.Equal((ushort)(firstPlane1 >> 16), ReadCopperMoveValue(bus, copperList, 0x00E8));
+		Assert.Equal((ushort)firstPlane1, ReadCopperMoveValue(bus, copperList, 0x00EA));
+	}
+
+	[Fact]
+	public void MakeVPortProjectsGuestColorMapIntoCopperPalette()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		const uint colorMap = 0x2500;
+		const uint colorTable = 0x2540;
+		WriteMinimalViewPort(bus, viewPort);
+
+		bus.WriteLong(viewPort + (uint)GraphicsLayouts.ViewPortColorMap, colorMap);
+		bus.WriteWord(colorMap + (uint)GraphicsLayouts.ColorMapCount, 2);
+		bus.WriteLong(colorMap + (uint)GraphicsLayouts.ColorMapColorTable, colorTable);
+		bus.WriteWord(colorTable, 0x0123);
+		bus.WriteWord(colorTable + 2, 0x0A5);
+
+		var state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+
+		var copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal((ushort)0x0123, ReadCopperMoveValue(bus, copperList, 0x0180));
+		Assert.Equal((ushort)0x00A5, ReadCopperMoveValue(bus, copperList, 0x0182));
+	}
+
+	[Fact]
+	public void SetRgb4RefreshesTheActiveGuestColorMapCopperList()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		WriteMinimalViewPort(bus, viewPort);
+
+		var mapState = new M68kCpuState { D = { [0] = 2 } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -570), mapState));
+		Assert.NotEqual(0u, mapState.D[0]);
+		bus.WriteLong(viewPort + (uint)GraphicsLayouts.ViewPortColorMap, mapState.D[0]);
+
+		var makeState = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), makeState));
+		var loadState = new M68kCpuState { A = { [1] = view } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xDE), loadState));
+
+		var setState = new M68kCpuState
+		{
+			A = { [0] = viewPort },
+			D = { [0] = 1, [1] = 0x0F, [2] = 0, [3] = 0 }
+		};
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0x120), setState));
+
+		var copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		Assert.Equal((ushort)0x0F00, ReadCopperMoveValue(bus, copperList, 0x0182));
+	}
+
+	[Fact]
+	public void MakeVPortProjectsUserCopperMoveAndWaitInstructions()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		const uint userList = 0x2500;
+		const uint copList = 0x2520;
+		const uint instructions = 0x2560;
+		WriteMinimalViewPort(bus, viewPort);
+
+		bus.WriteLong(viewPort + (uint)GraphicsLayouts.ViewPortUCopIns, userList);
+		bus.WriteLong(userList + (uint)GraphicsLayouts.UCopListFirstCopList, copList);
+		bus.WriteLong(userList + (uint)GraphicsLayouts.UCopListCopList, copList);
+		bus.WriteLong(userList + (uint)GraphicsLayouts.UCopListNext, 0);
+		bus.WriteLong(copList + (uint)GraphicsLayouts.CopListCopIns, instructions);
+		bus.WriteLong(copList + (uint)GraphicsLayouts.CopListNext, 0);
+		bus.WriteWord(copList + (uint)GraphicsLayouts.CopListCount, 2);
+		bus.WriteWord(copList + (uint)GraphicsLayouts.CopListMaxCount, 2);
+		bus.WriteWord(instructions + (uint)GraphicsLayouts.CopInsOpCode, 0);
+		bus.WriteWord(instructions + (uint)GraphicsLayouts.CopInsArg0, 0x0180);
+		bus.WriteWord(instructions + (uint)GraphicsLayouts.CopInsArg1, 0x00F0);
+		bus.WriteWord(instructions + (uint)GraphicsLayouts.CopInsSize + (uint)GraphicsLayouts.CopInsOpCode, 1);
+		bus.WriteWord(instructions + (uint)GraphicsLayouts.CopInsSize + (uint)GraphicsLayouts.CopInsArg0, 42);
+		bus.WriteWord(instructions + (uint)GraphicsLayouts.CopInsSize + (uint)GraphicsLayouts.CopInsArg1, 12);
+
+		var state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+
+		var copperList = bus.ReadLong(bus.ReadLong(view + ViewLofCprListOffset) + CprListStartOffset);
+		var foundMove = false;
+		var foundWait = false;
+		for (var offset = 0u; offset < 0x100; offset += 4)
+		{
+			var first = bus.ReadWord(copperList + offset);
+			var second = bus.ReadWord(copperList + offset + 2);
+			if (first == 0xFFFF && second == 0xFFFE)
+				break;
+
+			if (first == 0x0180 && second == 0x00F0)
+				foundMove = true;
+			if (first == (ushort)((42 << 8) | 12) && second == 0xFFFE)
+				foundWait = true;
+		}
+
+		Assert.True(foundMove);
+		Assert.True(foundWait);
+	}
+
+	[Fact]
+	public void MakeVPortRejectsMalformedOrOverCapacityUserCopperLists()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		const uint userList = 0x2500;
+		const uint copList = 0x2520;
+		const uint instructions = 0x2560;
+		WriteMinimalViewPort(bus, viewPort);
+		bus.WriteLong(viewPort + (uint)GraphicsLayouts.ViewPortUCopIns, userList);
+		bus.WriteLong(userList + (uint)GraphicsLayouts.UCopListFirstCopList, copList);
+		bus.WriteLong(userList + (uint)GraphicsLayouts.UCopListCopList, copList);
+		bus.WriteLong(userList + (uint)GraphicsLayouts.UCopListNext, 0);
+		bus.WriteLong(copList + (uint)GraphicsLayouts.CopListCopIns, instructions);
+		bus.WriteWord(copList + (uint)GraphicsLayouts.CopListCount, 1);
+		bus.WriteWord(copList + (uint)GraphicsLayouts.CopListMaxCount, 1);
+		bus.WriteWord(instructions + (uint)GraphicsLayouts.CopInsOpCode, 2);
+		bus.WriteLong(copList + (uint)GraphicsLayouts.CopListNext, copList);
+		const uint lofSentinel = 0xDEAD_BEEFu;
+		bus.WriteLong(view + ViewLofCprListOffset, lofSentinel);
+
+		var state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		Assert.Equal(4u, state.D[0]); // MVP_NO_DISPLAY
+		Assert.Equal(lofSentinel, bus.ReadLong(view + ViewLofCprListOffset));
+
+		// A syntactically valid list that cannot fit in the fixed compatibility
+		// stream is rejected just like a malformed list.
+		bus.WriteLong(copList + (uint)GraphicsLayouts.CopListNext, 0);
+		bus.WriteWord(copList + (uint)GraphicsLayouts.CopListCount, 64);
+		bus.WriteWord(copList + (uint)GraphicsLayouts.CopListMaxCount, 64);
+		for (var index = 0; index < 64; index++)
+		{
+			var instruction = instructions + (uint)(index * GraphicsLayouts.CopInsSize);
+			bus.WriteWord(instruction + (uint)GraphicsLayouts.CopInsOpCode, 0);
+			bus.WriteWord(instruction + (uint)GraphicsLayouts.CopInsArg0, 0);
+			bus.WriteWord(instruction + (uint)GraphicsLayouts.CopInsArg1, 0);
+		}
+
+		state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		Assert.Equal(4u, state.D[0]); // MVP_NO_DISPLAY
+		Assert.Equal(lofSentinel, bus.ReadLong(view + ViewLofCprListOffset));
+	}
+
+	[Fact]
+	public void MrgCopBuildsEveryLinkedViewPortAndKeepsTheFirstListActive()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint firstViewPort = 0x2300;
+		const uint secondViewPort = 0x2400;
+		const uint secondRasInfo = 0x2480;
+		const uint secondBitMap = 0x24A0;
+		const uint secondPlane = 0x24C0;
+
+		WriteMinimalViewPort(bus, firstViewPort);
+		bus.WriteLong(firstViewPort, secondViewPort);
+		bus.WriteWord(secondViewPort + 0x18, 16);
+		bus.WriteWord(secondViewPort + 0x1A, 1);
+		bus.WriteLong(secondViewPort + 0x24, secondRasInfo);
+		bus.WriteLong(secondRasInfo + 0x04, secondBitMap);
+		bus.WriteWord(secondBitMap, 2);
+		bus.WriteWord(secondBitMap + 0x02, 1);
+		bus.WriteByte(secondBitMap + 0x05, 1, 0);
+		bus.WriteLong(secondBitMap + 0x08, secondPlane);
+		bus.WriteWord(secondPlane, 0x4000);
+		bus.WriteLong(view + ViewViewPortOffset, firstViewPort);
+
+		var state = new M68kCpuState { A = { [1] = view } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD2), state));
+		Assert.Equal(0u, state.D[0]);
+
+		var firstDspIns = bus.ReadLong(firstViewPort + ViewPortDspInsOffset);
+		var secondDspIns = bus.ReadLong(secondViewPort + ViewPortDspInsOffset);
+		Assert.NotEqual(0u, firstDspIns);
+		Assert.NotEqual(0u, secondDspIns);
+		Assert.NotEqual(firstDspIns, secondDspIns);
+		Assert.Equal(firstViewPort, bus.ReadLong(view + ViewViewPortOffset));
+
+		var activeCpr = bus.ReadLong(view + ViewLofCprListOffset);
+		Assert.NotEqual(0u, activeCpr);
+		Assert.Equal(firstDspIns, bus.ReadLong(activeCpr + CprListStartOffset));
+		Assert.Equal(activeCpr, bus.ReadLong(view + ViewShfCprListOffset));
+	}
+
+	[Fact]
+	public void MrgCopReportsNoMemoryWhenHostProjectionFailsAfterPortableValidation()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		const uint rasInfo = 0x2380;
+		WriteMinimalViewPort(bus, viewPort);
+		bus.WriteLong(view + ViewViewPortOffset, viewPort);
+		// ValidateView permits an assembling RasInfo without a bitmap.  The
+		// host copper projector cannot emit a display list for that surface and
+		// therefore reports MCOP_NOMEM while leaving the guest links untouched.
+		bus.WriteLong(rasInfo + 4, 0);
+
+		var state = new M68kCpuState { A = { [1] = view } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD2), state));
+		Assert.Equal(1u, state.D[0]); // MCOP_NOMEM
+		Assert.Equal(0u, bus.ReadLong(viewPort + ViewPortDspInsOffset));
+	}
+
+	[Fact]
+	public void MrgCopRollsBackWhenALaterViewportCannotBeProjected()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint firstViewPort = 0x2300;
+		const uint secondViewPort = 0x2600;
+		const uint secondRasInfo = 0x2A00;
+		const uint secondBitMap = 0x2A20;
+		const uint secondPlane = 0x2A40;
+		WriteMinimalViewPort(bus, firstViewPort);
+		WriteMinimalViewPort(bus, secondViewPort);
+		bus.WriteLong(firstViewPort, secondViewPort);
+		bus.WriteLong(secondViewPort, 0);
+		bus.WriteLong(secondViewPort + ViewPortRasInfoOffset, secondRasInfo);
+		bus.WriteLong(secondRasInfo, 0);
+		bus.WriteLong(secondRasInfo + 4, secondBitMap);
+		bus.WriteWord(secondBitMap, 2);
+		bus.WriteWord(secondBitMap + 2, 1);
+		bus.WriteByte(secondBitMap + 5, 1, 0);
+		bus.WriteLong(secondBitMap + 8, secondPlane);
+		bus.WriteWord(secondPlane, 0x8000);
+		bus.WriteLong(view + ViewViewPortOffset, firstViewPort);
+
+		var state = new M68kCpuState { A = { [1] = view } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD2), state));
+		Assert.Equal(0u, state.D[0]);
+		var originalLofCprList = bus.ReadLong(view + ViewLofCprListOffset);
+		var originalShfCprList = bus.ReadLong(view + ViewShfCprListOffset);
+		var originalFirstDspIns = bus.ReadLong(firstViewPort + ViewPortDspInsOffset);
+		var originalSecondDspIns = bus.ReadLong(secondViewPort + ViewPortDspInsOffset);
+
+		// The portable envelope still accepts an assembling RasInfo with no
+		// bitmap, but the host projection cannot emit that later viewport.
+		bus.WriteLong(secondRasInfo + 4, 0);
+		state = new M68kCpuState { A = { [1] = view } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD2), state));
+		Assert.Equal(1u, state.D[0]); // MCOP_NOMEM
+		Assert.Equal(originalLofCprList, bus.ReadLong(view + ViewLofCprListOffset));
+		Assert.Equal(originalShfCprList, bus.ReadLong(view + ViewShfCprListOffset));
+		Assert.Equal(originalFirstDspIns, bus.ReadLong(firstViewPort + ViewPortDspInsOffset));
+		Assert.Equal(originalSecondDspIns, bus.ReadLong(secondViewPort + ViewPortDspInsOffset));
+	}
+
+	[Fact]
+	public void MrgCopLeavesExistingViewListsWhenTheViewPortChainCycles()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		WriteMinimalViewPort(bus, viewPort);
+		bus.WriteLong(viewPort, viewPort);
+		bus.WriteLong(view + ViewViewPortOffset, viewPort);
+		const uint sentinel = 0xDEAD_BEEFu;
+		bus.WriteLong(view + ViewLofCprListOffset, sentinel);
+		bus.WriteLong(view + ViewShfCprListOffset, sentinel + 4);
+
+		var state = new M68kCpuState { A = { [1] = view } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD2), state));
+		Assert.Equal(0xFFFF_FFFFu, state.D[0]); // portable validation rejects the cycle.
+		Assert.Equal(sentinel, bus.ReadLong(view + ViewLofCprListOffset));
+		Assert.Equal(sentinel + 4, bus.ReadLong(view + ViewShfCprListOffset));
+		Assert.Equal(0u, bus.ReadLong(viewPort + ViewPortDspInsOffset));
+	}
+
+	[Fact]
 	public void MakeVPortReportsNoDisplayWhenTheValidatedViewportHasNoBitmap()
 	{
 		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
@@ -2963,6 +4280,33 @@ public sealed class AmigaBootMemoryTests
 		var state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
 		Assert.Equal(4u, state.D[0]); // MVP_NO_DISPLAY
+	}
+
+	[Fact]
+	public void MakeVPortRejectsUnmappedStandardPlanarPlaneStorage()
+	{
+		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
+		var bus = machine.Bus;
+		const uint view = 0x2200;
+		const uint viewPort = 0x2300;
+		const uint rasInfo = 0x2380;
+		const uint bitMap = 0x23A0;
+		const uint unmappedPlane = 0x00F0_0000;
+
+		bus.WriteWord(viewPort + ViewPortDWidthOffset, 16);
+		bus.WriteWord(viewPort + ViewPortDHeightOffset, 2);
+		bus.WriteLong(viewPort + ViewPortRasInfoOffset, rasInfo);
+		bus.WriteLong(rasInfo + 4, bitMap);
+		bus.WriteWord(bitMap + BitMapBytesPerRowOffset, 2);
+		bus.WriteWord(bitMap + BitMapRowsOffset, 2);
+		bus.WriteByte(bitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteLong(bitMap + BitMapPlanesOffset, unmappedPlane);
+
+		Assert.False(bus.IsMappedMemoryRange(unmappedPlane, 4));
+		var state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
+		Assert.Equal(4u, state.D[0]); // MVP_NO_DISPLAY
+		Assert.Equal(0u, bus.ReadLong(viewPort + ViewPortDspInsOffset));
 	}
 
 	[Fact]
@@ -2997,7 +4341,7 @@ public sealed class AmigaBootMemoryTests
 	}
 
 	[Fact]
-	public void InitViewClearsKickstartViewHeaderOnly()
+	public void InitViewClearsKickstartViewHeaderAndPublishesDefaultOrigin()
 	{
 		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
@@ -3013,8 +4357,16 @@ public sealed class AmigaBootMemoryTests
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0x168), state));
 		for (var offset = 0; offset < ViewStructSize; offset++)
 		{
+			if (offset >= ViewDyOffset && offset < ViewDxOffset + 2)
+			{
+				continue;
+			}
+
 			Assert.Equal((byte)0, bus.ReadByte(view + (uint)offset));
 		}
+
+		Assert.Equal((ushort)0x002C, bus.ReadWord(view + ViewDyOffset));
+		Assert.Equal((ushort)0x0081, bus.ReadWord(view + ViewDxOffset));
 
 		Assert.Equal((byte)0xAA, bus.ReadByte(view + ViewStructSize));
 		Assert.Equal((byte)0xAA, bus.ReadByte(view + 0x15));

@@ -7,6 +7,8 @@ internal sealed class HostGuestMemory
 {
     private readonly Bus _bus;
     public HostGuestMemory(Bus bus) => _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+    /// <summary>Underlying bus used by reversible ROM-overlay installation.</summary>
+    internal Bus Bus => _bus;
     public bool IsMapped(uint address, int size) => !IsHardware(address, size) && _bus.IsMappedMemoryRange(address, size);
     public byte ReadByte(uint address) { Check(address, 1); return _bus.ReadHostByte(address); }
     public ushort ReadWord(uint address) { Check(address, 2); return _bus.ReadHostWord(address); }

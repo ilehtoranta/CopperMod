@@ -1177,18 +1177,34 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		Assert.Equal(0x1234, ReadChipWord(bus, DmaBase));
 	}
 
-	[Fact]
-	public void ActiveWordSyncDmaTransfersCurrentWordBeforeBitSlippedSyncRealignsFollowingWord()
+	[Theory]
+	[InlineData("legacy")]
+	[InlineData("stage5")]
+	[InlineData("slot-kernel")]
+	public void ActiveWordSyncDmaTransfersCurrentWordBeforeBitSlippedSyncRealignsFollowingWord(
+		string mode)
 	{
+		var enableLiveRequesters = mode != "legacy";
+		var arbitrationMode = mode == "slot-kernel"
+			? AgnusBusArbitrationMode.SlotKernel
+			: AgnusBusArbitrationMode.Legacy;
 		var tracks = CreateEncodedTrackSet();
 		tracks[0] = CreateBitSlippedSyncTrack();
-		var bus = CreateDiskComponentBus();
+		var bus = CreateDiskComponentBus(
+			arbitrationMode: arbitrationMode,
+			enableLiveRequesters: enableLiveRequesters);
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
 		bus.WriteWord(0x00DFF09E, 0x8400);
 		bus.Paula.AdvanceTo(0);
 
 		StartDiskDma(bus, DmaBase, words: 4);
 		CompleteDiskDma(bus);
+		if (enableLiveRequesters)
+		{
+			var liveCompletionHorizon = MotorReadyCycle() + (DiskIndexPulseCycles() * 2);
+			bus.AdvanceDmaTo(liveCompletionHorizon);
+			bus.Paula.AdvanceTo(liveCompletionHorizon);
+		}
 
 		Assert.Equal(0x1111, ReadChipWord(bus, DmaBase));
 		Assert.Equal(0x2222, ReadChipWord(bus, DmaBase + 2));
@@ -2282,11 +2298,20 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		data[bitOffset >> 3] = (byte)(data[bitOffset >> 3] | (1 << (7 - (bitOffset & 7))));
 	}
 
-	private static AmigaBus CreateDiskComponentBus(int floppyDriveCount = 1)
+	private static AmigaBus CreateDiskComponentBus(
+		int floppyDriveCount = 1,
+		AgnusBusArbitrationMode arbitrationMode = AgnusBusArbitrationMode.Legacy,
+		bool enableLiveRequesters = false)
 	{
 		return new AmigaBus(
 			floppyDriveCount: floppyDriveCount,
-			enableLiveAgnusDma: false);
+			enableLiveAgnusDma: enableLiveRequesters,
+			enableAgnusLiveDisplayLedger: enableLiveRequesters,
+			enableAgnusLiveCopper: enableLiveRequesters,
+			enableAgnusLiveBlitter: enableLiveRequesters,
+			enableAgnusLivePaula: enableLiveRequesters,
+			enableAgnusLiveDisk: enableLiveRequesters,
+			agnusBusArbitration: arbitrationMode);
 	}
 
 	private sealed record DiskConformanceRow(string Group, string Name, DiskRowStatus Status, string Reason)

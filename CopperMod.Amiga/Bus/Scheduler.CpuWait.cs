@@ -13,7 +13,8 @@ namespace CopperMod.Amiga.Bus
     {
         Unsupported,
         Granted,
-        ReferenceContinuation
+        ReferenceContinuation,
+        InterruptBoundary
     }
 
     internal enum CpuWaitFixedImageProductionFallback : byte
@@ -31,6 +32,7 @@ namespace CopperMod.Amiga.Bus
 
     internal sealed partial class Scheduler
     {
+        private const int M68000InterruptSetupCycles = 4;
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool AdvanceCpuTimingSequence(
             in CpuTimingSequenceRequest request,
@@ -114,6 +116,28 @@ namespace CopperMod.Amiga.Bus
                 out grantedCycle,
                 out completedCycle);
 
+        internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrantOrInterrupt(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            int cpuInterruptMask,
+            out long grantedCycle,
+            out long completedCycle)
+            => AdvanceUntilCpuGrantCore(
+                kind,
+                target,
+                address,
+                size,
+                requestedCycle,
+                requestedCycle,
+                isWrite,
+                out grantedCycle,
+                out completedCycle,
+                cpuInterruptMask);
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal CpuWaitGrantAdvanceResult AdvanceUntilCpuLongWordPhaseGrant(
             AmigaBusAccessKind kind,
@@ -144,7 +168,8 @@ namespace CopperMod.Amiga.Bus
             long requestedCycle,
             bool isWrite,
             out long grantedCycle,
-            out long completedCycle)
+            out long completedCycle,
+            int cpuInterruptMask = -1)
         {
             grantedCycle = 0;
             completedCycle = 0;
@@ -256,6 +281,8 @@ namespace CopperMod.Amiga.Bus
             _bus.BeginPendingCpuSlotRequest(kind, target, address, size, requestedCycle, isWrite);
             try
             {
+                var interruptible = cpuInterruptMask >= 0;
+
                 if (searchCycle > requestedCycle)
                 {
                     // A 68000 longword keeps the CPU bus request pending across
@@ -270,6 +297,17 @@ namespace CopperMod.Amiga.Bus
                 var candidate = AgnusChipSlotScheduler.AlignToSlot(firstCandidateCycle);
                 while (true)
                 {
+                    if (interruptible &&
+                        TryGetCpuRecognitionEligibleInterruptCycle(
+                            cpuInterruptMask,
+                            candidate,
+                            out var interruptBoundaryCycle))
+                    {
+                        DrainSlotContendedAccess(interruptBoundaryCycle);
+                        completedCycle = interruptBoundaryCycle;
+                        return CpuWaitGrantAdvanceResult.InterruptBoundary;
+                    }
+
                     if (_bus.Display.HasLiveDisplayWork())
                     {
                         // Every CPU target using this exact causal grant path
@@ -380,6 +418,32 @@ namespace CopperMod.Amiga.Bus
             {
                 _bus.ClearPendingCpuSlotRequest();
             }
+        }
+
+        private bool TryGetCpuRecognitionEligibleInterruptCycle(
+            int cpuInterruptMask,
+            long candidateCycle,
+            out long recognitionCycle)
+        {
+            recognitionCycle = 0;
+            var level = _bus.Paula.GetHighestCpuVisibleInterruptLevel(candidateCycle);
+            if (level <= 0 || level <= (cpuInterruptMask & 0x07))
+            {
+                return false;
+            }
+
+            var pinAssertCycle =
+                _bus.Paula.GetCpuInterruptReleaseCycleForLevel(level, candidateCycle);
+            if (!pinAssertCycle.HasValue)
+            {
+                return false;
+            }
+
+            // A transition exactly four CPU clocks before the poll is staged
+            // until the next poll. The first eligible boundary is therefore
+            // assertion + setup + one clock.
+            recognitionCycle = pinAssertCycle.Value + M68000InterruptSetupCycles + 1;
+            return recognitionCycle <= candidateCycle;
         }
 
 

@@ -11,6 +11,59 @@ namespace CopperMod.Amiga.Bus
 {
     internal sealed partial class Bus
     {
+        internal CpuWaitGrantAdvanceResult AdvanceCpuInstructionFetchUntilInterruptForTest(
+            uint address,
+            long requestedCycle,
+            int cpuInterruptMask,
+            out long grantedCycle,
+            out long completedCycle)
+            => _hardwareScheduler.AdvanceUntilCpuGrantOrInterrupt(
+                AmigaBusAccessKind.CpuInstructionFetch,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite: false,
+                cpuInterruptMask,
+                out grantedCycle,
+                out completedCycle);
+
+        internal CpuWaitGrantAdvanceResult AdvanceInterruptibleCpuInstructionFetch(
+            AmigaBusAccessTarget target,
+            uint address,
+            ref long cycle,
+            int cpuInterruptMask,
+            out long grantedCycle)
+        {
+            if (_deferredCpuBusBatchActive)
+            {
+                FlushDeferredCpuDataTiming(ref cycle);
+                if (_deferredCpuBusBatchActive && !_endingDeferredCpuBusBatch)
+                {
+                    EndDeferredCpuBusBatchCore(
+                        ref cycle,
+                        M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
+                }
+            }
+
+            var requestedCycle = cycle;
+            var result = _hardwareScheduler.AdvanceUntilCpuGrantOrInterrupt(
+                AmigaBusAccessKind.CpuInstructionFetch,
+                target,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite: false,
+                cpuInterruptMask,
+                out grantedCycle,
+                out var completedCycle);
+            if (result != CpuWaitGrantAdvanceResult.Unsupported)
+            {
+                cycle = completedCycle;
+            }
+
+            return result;
+        }
         // Reuses the prepared display-owner segment while a CPU grant search walks
         // forward within the same raster line. The cursor self-invalidates when a
         // Copper/custom-register wake changes the live display generation.
@@ -23,6 +76,14 @@ namespace CopperMod.Amiga.Bus
         // Production CPU wait-slot searches reuse the causal fixed-owner image.
         // Unsupported dynamic cases conservatively fall back to scheduler draining.
         private const bool DeferredCpuWaitFastPathEnabled = true;
+
+        // Deferred CPU timing must follow the chronology owned by the selected
+        // arbitration backend. The slot kernel can commit speculative CPU fetch
+        // slots without publishing their values to the chip-data latch yet, so
+        // its explicit CPU horizon complements the ordinary committed-bus latch.
+        private long DeferredCpuPhysicalHorizon => AgnusSlotKernelSelected
+            ? Math.Max(ExecutedChipBusHorizon, LiveSlotKernelCommittedCpuThroughCycle)
+            : _agnusBusExecutor.ExecutedThroughCycle;
 
         internal void ArmDeferredCpuBatchExitForTest(long cycle)
             => _deferredCpuBatchExitChipAccessCycle = Math.Max(0, cycle);
@@ -106,10 +167,11 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
+            var physicalHorizon = DeferredCpuPhysicalHorizon;
             if (!Blitter.BusPipelineActive &&
-                currentCycle < _agnusBusExecutor.ExecutedThroughCycle)
+                currentCycle < physicalHorizon)
             {
-                currentCycle = _agnusBusExecutor.ExecutedThroughCycle;
+                currentCycle = physicalHorizon;
                 state.Cycles = currentCycle;
             }
 
@@ -354,15 +416,10 @@ namespace CopperMod.Amiga.Bus
                 var candidateIndex = firstTrimmedIndex - 1;
                 var candidatePhase =
                     _deferredCpuDataInstructionFetchPublicationPhases[candidateIndex];
-                if (candidatePhase == M68kInstructionFetchPublicationPhase.Required)
+                if (candidatePhase !=
+                    M68kInstructionFetchPublicationPhase.CancellableSuccessor)
                 {
-                    var candidateContext =
-                        _deferredCpuDataInstructionFetchPublicationContexts[candidateIndex];
-                    var isIdentityBoundIrc = candidateContext.RequiresIrcGap;
-                    if (isIdentityBoundIrc)
-                    {
-                        break;
-                    }
+                    break;
                 }
 
                 firstTrimmedIndex--;
@@ -427,7 +484,7 @@ namespace CopperMod.Amiga.Bus
             var firstRequestedCycle =
                 _deferredCpuDataRequestedCycles[0] +
                 _deferredCpuDataRequestedRetireDelays[0];
-            var executedThroughCycle = _agnusBusExecutor.ExecutedThroughCycle;
+            var executedThroughCycle = DeferredCpuPhysicalHorizon;
             if (firstRequestedCycle < executedThroughCycle)
             {
                 // A chip-visible operation can flush a preceding journal while
@@ -459,9 +516,9 @@ namespace CopperMod.Amiga.Bus
         private void SynchronizeDeferredCpuJournalStart(ref long cycle)
         {
             if (_deferredCpuDataAccessCount == 0 &&
-                cycle < _agnusBusExecutor.ExecutedThroughCycle)
+                cycle < DeferredCpuPhysicalHorizon)
             {
-                cycle = _agnusBusExecutor.ExecutedThroughCycle;
+                cycle = DeferredCpuPhysicalHorizon;
             }
         }
 
@@ -1881,7 +1938,7 @@ namespace CopperMod.Amiga.Bus
                 !_agnusBusExecutor.ProductionEnabled ||
                 !_useChipSlotScheduler ||
                 _deferredCpuWaitDiagnosticsEnabled ||
-                replayCycle < _agnusBusExecutor.ExecutedThroughCycle)
+                replayCycle < DeferredCpuPhysicalHorizon)
             {
                 return false;
             }
@@ -2189,7 +2246,7 @@ namespace CopperMod.Amiga.Bus
                 !_agnusBusExecutor.ProductionEnabled ||
                 !_useChipSlotScheduler ||
                 _deferredCpuWaitDiagnosticsEnabled ||
-                cycle < _agnusBusExecutor.ExecutedThroughCycle)
+                cycle < DeferredCpuPhysicalHorizon)
             {
                 return false;
             }

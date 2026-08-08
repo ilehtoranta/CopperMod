@@ -2595,6 +2595,27 @@ namespace CopperMod.Amiga.Bus
                 _hardwareScheduler.IsSlotContendedCleanThrough(cycle);
             var hasScalarChipFetchShadow = target == AmigaBusAccessTarget.ChipRam &&
                 TryPredictScalarCpuChipInstructionFetch(address, cycle, out scalarChipFetchProof);
+            if (publicationPhase ==
+                    M68kInstructionFetchPublicationPhase.InterruptibleBranchTarget &&
+                target == AmigaBusAccessTarget.ChipRam)
+            {
+                var interruptMask = (publicationContext.StatusRegister >> 8) & 0x07;
+                var interruptibleResult = AdvanceInterruptibleCpuInstructionFetch(
+                    target,
+                    address,
+                    ref cycle,
+                    interruptMask,
+                    out _);
+                if (interruptibleResult == CpuWaitGrantAdvanceResult.InterruptBoundary)
+                {
+                    throw new M68kInstructionFetchInterruptedException(cycle);
+                }
+
+                if (interruptibleResult == CpuWaitGrantAdvanceResult.Granted)
+                {
+                    return window.ReadWord(address);
+                }
+            }
             if (target == AmigaBusAccessTarget.ChipRam &&
                 TryDeferCpuChipInstructionFetch(
                     address,

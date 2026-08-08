@@ -545,7 +545,16 @@ namespace Copper68k
     {
         Required = 0,
         RetirementQueue = 1,
-        CancellableSuccessor = 2
+        CancellableSuccessor = 2,
+        InterruptibleBranchTarget = 3
+    }
+
+    internal sealed class M68kInstructionFetchInterruptedException : Exception
+    {
+        public M68kInstructionFetchInterruptedException(long boundaryCycle)
+            => BoundaryCycle = boundaryCycle;
+
+        public long BoundaryCycle { get; }
     }
 
     internal readonly record struct M68kInstructionFetchPublicationContext(
@@ -559,7 +568,8 @@ namespace Copper68k
         long InstructionEntryCycle = 0,
         ulong PredecessorToken = 0,
         bool RequiresIrcGap = false,
-        bool CapturedDuringDeferredBatch = false);
+        bool CapturedDuringDeferredBatch = false,
+        ushort StatusRegister = 0);
 
     internal interface IM68kInstructionFetchWindowBus
     {
@@ -2381,6 +2391,17 @@ namespace Copper68k
             catch (M68kIllegalInstructionException)
             {
                 _instructionCycleFloorActive = false;
+                return CompleteInstruction(startCycles);
+            }
+            catch (M68kInstructionFetchInterruptedException interrupted)
+            {
+                _instructionCycleFloorActive = false;
+                _instructionInterruptSampleCycle = interrupted.BoundaryCycle;
+                _cpuBusCycle = Math.Max(_cpuBusCycle, interrupted.BoundaryCycle);
+                _cpuBusReadyCycle = Math.Max(_cpuBusReadyCycle, interrupted.BoundaryCycle);
+                _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, interrupted.BoundaryCycle);
+                State.Cycles = Math.Max(State.Cycles, interrupted.BoundaryCycle);
+                _skipRetirePrefetchTopUp = true;
                 return CompleteInstruction(startCycles);
             }
         }
@@ -6139,7 +6160,10 @@ namespace Copper68k
                 }
 
                 AddInstructionCycles(10);
-                BranchToAndRefillTarget(target, branchBase);
+                BranchToAndRefillTarget(
+                    target,
+                    branchBase,
+                    interruptibleTargetFetch: condition != 1);
                 return;
             }
 
@@ -6173,7 +6197,7 @@ namespace Copper68k
             }
 
             AddInstructionCycles(10);
-            BranchToAndRefillTarget(target, branchBase);
+            BranchToAndRefillTarget(target, branchBase, interruptibleTargetFetch: true);
         }
 
         private void ExecutePlannedDbcc(ushort opcode)
@@ -7356,7 +7380,10 @@ namespace Copper68k
                 }
 
                 AddInstructionCycles(10);
-                BranchToAndRefillTarget(target, branchBase);
+                BranchToAndRefillTarget(
+                    target,
+                    branchBase,
+                    interruptibleTargetFetch: plan.Condition != 1);
                 return;
             }
 
@@ -8795,7 +8822,7 @@ namespace Copper68k
                     }
 
                     AddInstructionCycles(displacement == 0 ? 10 : 10);
-                    BranchToAndRefillTarget(target, branchBase);
+                    BranchToAndRefillTarget(target, branchBase, interruptibleTargetFetch: true);
                 }
                 else
                 {
@@ -8821,7 +8848,7 @@ namespace Copper68k
                     }
 
                     AddInstructionCycles(displacement == 0 ? 10 : 10);
-                    BranchToAndRefillTarget(target, branchBase);
+                    BranchToAndRefillTarget(target, branchBase, interruptibleTargetFetch: true);
                 }
                 else
                 {
@@ -8847,7 +8874,7 @@ namespace Copper68k
                     }
 
                     AddInstructionCycles(displacement == 0 ? 10 : 10);
-                    BranchToAndRefillTarget(target, branchBase);
+                    BranchToAndRefillTarget(target, branchBase, interruptibleTargetFetch: true);
                 }
                 else
                 {
@@ -8871,7 +8898,10 @@ namespace Copper68k
                 }
 
                 AddInstructionCycles(displacement == 0 ? 10 : 10);
-                BranchToAndRefillTarget(target, branchBase);
+                BranchToAndRefillTarget(
+                    target,
+                    branchBase,
+                    interruptibleTargetFetch: true);
             }
             else
             {
@@ -11736,7 +11766,10 @@ namespace Copper68k
             _skipRetirePrefetchTopUp = true;
         }
 
-        private void BranchToAndRefillTarget(uint target, uint stackedProgramCounter)
+        private void BranchToAndRefillTarget(
+            uint target,
+            uint stackedProgramCounter,
+            bool interruptibleTargetFetch)
         {
             ValidateBranchTarget(target, stackedProgramCounter);
             SetProgramCounterAndFlushPrefetch(target);
@@ -11744,7 +11777,9 @@ namespace Copper68k
             var targetPublicationContext = CaptureInstructionFetchPublicationContext();
             var targetOpcodeReadyCycle = TopUpPrefetchOne(
                 out _,
-                M68kInstructionFetchPublicationPhase.Required,
+                interruptibleTargetFetch
+                    ? M68kInstructionFetchPublicationPhase.InterruptibleBranchTarget
+                    : M68kInstructionFetchPublicationPhase.Required,
                 long.MinValue,
                 targetPublicationContext);
             _instructionInterruptSampleCycle = targetOpcodeReadyCycle;
@@ -12059,7 +12094,8 @@ namespace Copper68k
                 _instructionEntryTimingToken0,
                 _instructionEntryTimingToken1,
                 _instructionCycleStart,
-                CapturedDuringDeferredBatch: _deferredCpuBusBatchExecutionActive);
+                CapturedDuringDeferredBatch: _deferredCpuBusBatchExecutionActive,
+                StatusRegister: State.StatusRegister);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void TopUpPrefetchAtRetirement()

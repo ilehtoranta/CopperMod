@@ -3982,26 +3982,12 @@ namespace CopperMod.Amiga.Storage.Floppy
                             _liveDmaSyncMatched = true;
                             TryStartPendingDma(diskEvent.Cycle);
                         }
-                        else if (_activeDma &&
-                            _activeDmaSyncMode != AmigaDiskSyncMode.None)
-                        {
-                            if (_activeDmaRequestPending)
-                            {
-                                _activeDmaRequestNextSourceBit =
-                                    diskEvent.SyncNextBit;
-                                _activeDmaRequestNextWordStartCycle =
-                                    diskEvent.Cycle;
-                            }
-                            else
-                            {
-                                _activeDmaNextSourceBit =
-                                    diskEvent.SyncNextBit;
-                                _activeDmaNextWordStartCycle =
-                                    diskEvent.Cycle;
-                            }
 
-                            _activeDmaCachedWordPlanValid = false;
-                        }
+                        // An active transfer's word plan already preserves the
+                        // recovered words waiting for disk DMA slots and carries
+                        // this sync boundary into the following word. Applying
+                        // the chronological match again here would discard that
+                        // backlog and duplicate the WORDSYNC realignment.
                     }
                     break;
             }

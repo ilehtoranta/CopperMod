@@ -3375,47 +3375,50 @@ public sealed class AmigaDiskDisplayTests
         Assert.Equal(0x1234, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "ungated destination"));
     }
 
-    [Fact]
-    public void BlitterNastyModeStallsCpuChipAndPseudoFastAccessButNotRealFastRam()
+    [Theory]
+    [InlineData(0x00001000u, (int)AmigaBusAccessTarget.ChipRam)]
+    [InlineData(AmigaConstants.A500BootPseudoFastRamBase, (int)AmigaBusAccessTarget.ExpansionRam)]
+    public void BlitterNastyModeOwnsRequestedSlotBeforeContendedCpuAccess(
+        uint address,
+        int expectedTarget)
     {
-        var nastyBus = new AmigaBus(
-            expansionRamSize: 0x10000,
-            realFastRamSize: 0x10000);
-        nastyBus.ConfigureAutoconfigFastRamForHost();
-        BigEndian.WriteUInt16(nastyBus.ChipRam, 0x3000, 0x1234);
-        ConfigureFourWordCopyBlit(nastyBus);
-        nastyBus.WriteWord(0x00DFF096, 0x8640);
-        nastyBus.AdvanceDmaTo(0);
-        nastyBus.WriteWord(0x00DFF058, 0x0044);
+        var bus = CreateLiveNastyFourWordCopyBlit(expansionRamSize: 0x10000);
+        var blitterCycle = bus.Blitter.GetRawBusEligibilityCycle();
+        var cpuCycle = blitterCycle;
 
-        var expansionCycle = 0L;
-        _ = nastyBus.ReadWord(AmigaConstants.A500BootPseudoFastRamBase, ref expansionCycle, AmigaBusAccessKind.CpuDataRead);
-        Assert.True(expansionCycle > 0);
-        Assert.True(nastyBus.Blitter.CaptureSnapshot().Busy);
+        _ = bus.ReadWord(address, ref cpuCycle, AmigaBusAccessKind.CpuDataRead);
 
-        var realFastCycle = 0L;
-        _ = nastyBus.ReadWord(AmigaConstants.A500RealFastRamBase, ref realFastCycle, AmigaBusAccessKind.CpuDataRead);
-        Assert.Equal(0, realFastCycle);
-        Assert.True(nastyBus.Blitter.CaptureSnapshot().Busy);
+        var firstBlitter = bus.BusAccesses.First(access =>
+            access.Request.Requester == AmigaBusRequester.Blitter);
+        var cpu = Assert.Single(bus.BusAccesses, access =>
+            access.Request.Requester == AmigaBusRequester.Cpu &&
+            access.Request.Kind == AmigaBusAccessKind.CpuDataRead);
+        Assert.Equal(blitterCycle, firstBlitter.GrantedCycle);
+        Assert.Equal((AmigaBusAccessTarget)expectedTarget, cpu.Request.Target);
+        Assert.True(cpu.GrantedCycle > firstBlitter.GrantedCycle);
+        Assert.True(bus.Blitter.CaptureSnapshot().Busy);
+    }
 
-        var chipCycle = 0L;
-        _ = nastyBus.ReadWord(0x00001000, ref chipCycle, AmigaBusAccessKind.CpuDataRead);
-        Assert.True(chipCycle > 0);
-        var nastySnapshotAfterChipRead = nastyBus.Blitter.CaptureSnapshot();
-        Assert.False(nastySnapshotAfterChipRead.Busy);
-        Assert.True(chipCycle >= nastySnapshotAfterChipRead.CurrentCycle);
+    [Fact]
+    public void BlitterNastyModeDoesNotStallRealFastRamAccess()
+    {
+        const long startCycle = 596;
+        var bus = CreateLiveNastyFourWordCopyBlit(realFastRamSize: 0x10000);
+        var realFastCycle = startCycle + AgnusChipSlotScheduler.SlotCycles;
+        var requestedCycle = realFastCycle;
 
-        var normalBus = new AmigaBus();
-        BigEndian.WriteUInt16(normalBus.ChipRam, 0x3000, 0x1234);
-        ConfigureFourWordCopyBlit(normalBus);
-        EnableBlitterDma(normalBus);
-        normalBus.WriteWord(0x00DFF058, 0x0044);
+        _ = bus.ReadWord(
+            AmigaConstants.A500RealFastRamBase,
+            ref realFastCycle,
+            AmigaBusAccessKind.CpuDataRead);
 
-        var normalCycle = 0L;
-        _ = normalBus.ReadWord(0x00001000, ref normalCycle, AmigaBusAccessKind.CpuDataRead);
-        Assert.True(normalCycle > 0, $"normalCycle={normalCycle}");
-        Assert.True(normalCycle <= normalBus.Blitter.GetPredictedCompletionCycle() + (2 * AgnusChipSlotScheduler.SlotCycles), $"normalCycle={normalCycle}");
-        Assert.True(normalBus.Blitter.CaptureSnapshot().Busy);
+        Assert.Equal(requestedCycle, realFastCycle);
+        var cpu = Assert.Single(bus.BusAccesses, access =>
+            access.Request.Requester == AmigaBusRequester.Cpu &&
+            access.Request.Kind == AmigaBusAccessKind.CpuDataRead);
+        Assert.Equal(AmigaBusAccessTarget.RealFastRam, cpu.Request.Target);
+        Assert.Equal(requestedCycle, cpu.GrantedCycle);
+        Assert.True(bus.Blitter.CaptureSnapshot().Busy);
     }
 
     [Fact]
@@ -4430,6 +4433,29 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF052, 0x3000);
         bus.WriteWord(0x00DFF054, 0x0000);
         bus.WriteWord(0x00DFF056, 0x4000);
+    }
+
+    private static AmigaBus CreateLiveNastyFourWordCopyBlit(
+        int expansionRamSize = 0,
+        int realFastRamSize = 0,
+        long startCycle = 596)
+    {
+        var bus = new AmigaBus(
+            expansionRamSize: expansionRamSize,
+            realFastRamSize: realFastRamSize,
+            captureBusAccesses: true,
+            enableLiveAgnusDma: true,
+            enableLiveDisplayDma: true,
+            enableAgnusLiveDisplayLedger: true,
+            enableAgnusLiveCopper: true,
+            enableAgnusLiveBlitter: true);
+        bus.ConfigureAutoconfigFastRamForHost();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0x1234);
+        ConfigureFourWordCopyBlit(bus);
+        bus.WriteWord(0x00DFF096, 0x8640);
+        bus.AdvanceDmaTo(100);
+        bus.WriteWord(0x00DFF058, 0x0044, startCycle);
+        return bus;
     }
 
     private static void ConfigureLineBlit(

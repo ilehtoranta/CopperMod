@@ -1090,7 +1090,9 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		using var emulator = CopperScreenEmulator.Create(new[] { "--profile", "vanilla-kickstart13", diskPath }, AppContext.BaseDirectory);
+		using var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", "vanilla-kickstart13", diskPath },
+			AppContext.BaseDirectory);
 		var fatalFrame = -1;
 		var reachedLoadingScreen = false;
 		for (var frame = 0; frame < 1_230; frame++)
@@ -2000,7 +2002,7 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-copperstart", diskPath }, AppContext.BaseDirectory);
+		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "expanded-copperstart", "--agnus-slot-kernel", diskPath }, AppContext.BaseDirectory);
 		var deepOverscanShift = (AmigaConstants.PalLowResOverscanBorderX - 16) * 2;
 		for (var frame = 0; frame < 500; frame++)
 		{
@@ -2792,7 +2794,9 @@ public sealed class CopperScreenBootTests
 			return;
 		}
 
-		var emulator = CopperScreenEmulator.Create(new[] { "--profile", "vanilla-copperstart", diskPath }, AppContext.BaseDirectory);
+		var emulator = CopperScreenEmulator.Create(
+			new[] { "--profile", "vanilla-copperstart", diskPath },
+			AppContext.BaseDirectory);
 		var machine = GetMachine(emulator);
 		var observedFrames = 0;
 		var maxCylinder = 0;
