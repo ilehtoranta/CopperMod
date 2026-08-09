@@ -24,6 +24,8 @@ internal sealed class ZeroWaitCodeBus : IM68kBus, IM68kCodeReader
 	private readonly byte[] _memory = new byte[0x0100_0000];
 
 	public int InstructionFetchWords { get; private set; }
+	public int ExternalResetCount { get; private set; }
+	public long LastExternalResetCycle { get; private set; } = -1;
 
 	public int WriteMachineDelay { get; init; }
 
@@ -88,7 +90,8 @@ internal sealed class ZeroWaitCodeBus : IM68kBus, IM68kCodeReader
 
 	public void ResetExternalDevices(long cycle)
 	{
-		_ = cycle;
+		ExternalResetCount++;
+		LastExternalResetCycle = cycle;
 	}
 
 	public ushort ReadHostWord(uint address)

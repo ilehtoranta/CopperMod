@@ -193,6 +193,14 @@ public sealed class M68kTimingFormulaTests
 
 	private static bool IsDynamicTimingKey(M68kInstructionTimingKey key)
 		=> key is M68kInstructionTimingKey.MovemLongRegistersToPredecrement or
+			M68kInstructionTimingKey.MovemWordRegistersToPredecrement or
+			M68kInstructionTimingKey.MovemWordRegistersToAddressDisplacement or
+			M68kInstructionTimingKey.MovemWordAddressDisplacementToRegisters or
+			M68kInstructionTimingKey.MovemLongRegistersToAddressIndirect or
+			M68kInstructionTimingKey.MovemLongRegistersToAddressDisplacement or
+			M68kInstructionTimingKey.MovemLongRegistersToBriefIndexed or
+			M68kInstructionTimingKey.MovemLongAddressIndirectToRegisters or
+			M68kInstructionTimingKey.MovemLongAddressDisplacementToRegisters or
 			M68kInstructionTimingKey.MovemLongPostIncrementToRegisters;
 
 	private static bool IsM68040OnlyTimingKey(M68kInstructionTimingKey key)
@@ -218,6 +226,7 @@ public sealed class M68kTimingFormulaTests
 			keyName.StartsWith("Or", StringComparison.Ordinal) ||
 			keyName.StartsWith("And", StringComparison.Ordinal) ||
 			keyName.StartsWith("Eori", StringComparison.Ordinal) ||
+			keyName.StartsWith("Eor", StringComparison.Ordinal) ||
 			keyName.StartsWith("Cmpi", StringComparison.Ordinal) ||
 			keyName.StartsWith("Cmpa", StringComparison.Ordinal) ||
 			keyName.StartsWith("Cmp", StringComparison.Ordinal) ||
@@ -243,7 +252,8 @@ public sealed class M68kTimingFormulaTests
 			keyName.StartsWith("Mulu", StringComparison.Ordinal) ||
 			keyName.StartsWith("Muls", StringComparison.Ordinal) ||
 			keyName.StartsWith("Divu", StringComparison.Ordinal) ||
-			keyName.StartsWith("Divs", StringComparison.Ordinal);
+			keyName.StartsWith("Divs", StringComparison.Ordinal) ||
+			keyName.StartsWith("Exg", StringComparison.Ordinal);
 	}
 
 	private static M68kTimingFormulaKind ExpectedFormulaKind(M68kInstructionTimingKey key)
@@ -276,6 +286,8 @@ public sealed class M68kTimingFormulaTests
 		{
 			M68kInstructionTimingKey.Idle => ("IDLE", 2, M68kTimingBarrier.SynchronizeBus),
 			M68kInstructionTimingKey.Nop => ("NOP", 4, M68kTimingBarrier.SynchronizeBus),
+			M68kInstructionTimingKey.Reset => ("RESET", 518, M68kTimingBarrier.SynchronizeBus),
+			M68kInstructionTimingKey.Stop => ("STOP", 4, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.SynchronizeBus),
 			M68kInstructionTimingKey.LineAException => ("LINEA", 34, ExceptionBarrier()),
 			M68kInstructionTimingKey.LineFException => ("LINEF", 34, ExceptionBarrier()),
 			M68kInstructionTimingKey.IllegalInstruction => ("ILLEGAL", 20, ExceptionBarrier()),
@@ -285,6 +297,7 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.Movec => ("MOVEC", 12, useHeadTail
 				? M68kTimingBarrier.CacheControl | M68kTimingBarrier.SynchronizeBus
 				: M68kTimingBarrier.CacheControl),
+			M68kInstructionTimingKey.MoveUsp => ("MOVE USP", 4, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.Rte => ("RTE", 20, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.SynchronizeBus),
 			M68kInstructionTimingKey.Rtd => ("RTD", 16, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.Rts => ("RTS", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
@@ -293,9 +306,20 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.ExtWordData => ("EXT.W Dn", 2, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.ExtLongData => ("EXT.L Dn", 4, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.SwapData => ("SWAP Dn", 4, M68kTimingBarrier.None),
+			M68kInstructionTimingKey.JsrAddressIndirect => ("JSR (An)", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JsrAbsoluteLong => ("JSR (xxx).L", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
+			M68kInstructionTimingKey.JsrAddressDisplacement => ("JSR (d16,An)", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
+			M68kInstructionTimingKey.JsrPcBriefIndexed => ("JSR (d8,PC,Xn)", 11, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAddressIndirect => ("JMP (An)", 4, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
+			M68kInstructionTimingKey.JmpAddressDisplacement => ("JMP (d16,An)", 6, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
+			M68kInstructionTimingKey.JmpBriefIndexed => ("JMP (d8,An,Xn)", 8, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAbsoluteLong => ("JMP (xxx).L", 6, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
+			M68kInstructionTimingKey.PeaAddressDisplacement => ("PEA (d16,An)", 7, M68kTimingBarrier.None),
+			M68kInstructionTimingKey.PeaAddressIndirect => ("PEA (An)", 5, M68kTimingBarrier.None),
+			M68kInstructionTimingKey.PeaBriefIndexed => ("PEA (d8,An,Xn)", 9, M68kTimingBarrier.None),
+			M68kInstructionTimingKey.PeaAbsoluteWord => ("PEA (xxx).W", 7, M68kTimingBarrier.None),
+			M68kInstructionTimingKey.PeaAbsoluteLong => ("PEA (xxx).L", 7, M68kTimingBarrier.None),
+			M68kInstructionTimingKey.PeaPcDisplacement => ("PEA (d16,PC)", 7, M68kTimingBarrier.None),
 			_ => throw new ArgumentOutOfRangeException(nameof(key), key, null)
 		};
 
