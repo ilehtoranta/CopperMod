@@ -72,6 +72,9 @@ namespace CopperMod.Cust
         public const uint DtpAuthorName = 0x8000_4485;
         public const uint DtpInitNote = 0x8000_4486;
         public const uint TagDone = 0;
+        public const uint TagIgnore = 1;
+        public const uint TagMore = 2;
+        public const uint TagSkip = 3;
 
         public const int DtgAslBaseOffset = 0x00;
         public const int DtgDosBaseOffset = 0x04;

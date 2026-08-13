@@ -1,4 +1,5 @@
 using CopperMod.Abstractions;
+using CopperMod.Ahx;
 using CopperMod.Cust;
 using CopperMod.Med;
 using CopperMod.ProTracker;
@@ -12,6 +13,7 @@ public static class ModuleFormatRegistry
 	{
 		return new IModuleFormat[]
 		{
+			new AhxFormat(),
 			new MmdFormat(),
 			new ProTrackerFormat(),
 			new CustFormat(),

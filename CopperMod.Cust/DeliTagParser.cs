@@ -25,13 +25,6 @@ namespace CopperMod.Cust
 
     internal static class DeliTagParser
     {
-        private static readonly uint[] RequiredTags =
-        {
-            CustConstants.DtpCustomPlayer,
-            CustConstants.DtpInitPlayer,
-            CustConstants.DtpInitSound
-        };
-
         private static readonly uint[] SupportedIdentityTags =
         {
             CustConstants.DtpRequestDtVersion,
@@ -67,6 +60,7 @@ namespace CopperMod.Cust
 
         public static bool TryFindTags(HunkFile hunk, out DeliTagTable tags)
         {
+            DeliTagTable? bestMatch = null;
             foreach (var segment in hunk.Segments)
             {
                 if (segment.Kind != HunkSegmentKind.Code && segment.Kind != HunkSegmentKind.Data)
@@ -77,16 +71,25 @@ namespace CopperMod.Cust
                 var data = segment.Data;
                 for (var offset = 0; offset <= data.Length - 16; offset += 2)
                 {
-                    if (BigEndian.ReadUInt32(data, offset, "tag") != CustConstants.DtpCustomPlayer)
+                    var firstTag = BigEndian.ReadUInt32(data, offset, "tag");
+                    if ((firstTag & 0xFFFF_0000) != 0x8000_0000)
                     {
                         continue;
                     }
 
-                    if (TryReadTagTable(data, segment.Index, offset, out tags) && HasRequiredTags(tags))
+                    if (TryReadTagTable(data, segment.Index, offset, out var candidate) &&
+                        HasRequiredTags(candidate) &&
+                        (bestMatch is null || candidate.Values.Count > bestMatch.Values.Count))
                     {
-                        return true;
+                        bestMatch = candidate;
                     }
                 }
+            }
+
+            if (bestMatch is not null)
+            {
+                tags = bestMatch;
+                return true;
             }
 
             tags = new DeliTagTable(0, 0, new Dictionary<uint, uint>());
@@ -121,8 +124,14 @@ namespace CopperMod.Cust
         {
             var values = new Dictionary<uint, uint>();
             var cursor = offset;
-            while (cursor + 8 <= data.Length && values.Count < 64)
+            var visited = new HashSet<int>();
+            while (cursor + 8 <= data.Length && values.Count < 256)
             {
+                if (!visited.Add(cursor))
+                {
+                    break;
+                }
+
                 var tag = BigEndian.ReadUInt32(data, cursor, "DeliTracker tag");
                 cursor += 4;
                 if (tag == CustConstants.TagDone)
@@ -133,7 +142,38 @@ namespace CopperMod.Cust
 
                 var value = BigEndian.ReadUInt32(data, cursor, "DeliTracker tag value");
                 cursor += 4;
-                if ((tag & 0xFFFF_0000) != 0x8000_0000)
+                if (tag == CustConstants.TagIgnore)
+                {
+                    continue;
+                }
+
+                if (tag == CustConstants.TagSkip)
+                {
+                    if (value > int.MaxValue / 8 || cursor + (long)value * 8 > data.Length)
+                    {
+                        break;
+                    }
+
+                    cursor += (int)value * 8;
+                    continue;
+                }
+
+                if (tag == CustConstants.TagMore)
+                {
+                    // Same-segment relocations contain the target offset before
+                    // the Hunk is loaded. Cross-segment chains are followed
+                    // later from relocated emulated memory by CustMachine.
+                    if (value <= data.Length - 8)
+                    {
+                        cursor = (int)value;
+                        continue;
+                    }
+
+                    tags = new DeliTagTable(segmentIndex, offset, values);
+                    return values.Count > 0;
+                }
+
+                if (tag <= CustConstants.TagSkip)
                 {
                     break;
                 }
@@ -147,12 +187,18 @@ namespace CopperMod.Cust
 
         private static bool HasRequiredTags(DeliTagTable tags)
         {
-            foreach (var required in RequiredTags)
+            var hasInitPair = tags.Values.ContainsKey(CustConstants.DtpInitPlayer) &&
+                tags.Values.ContainsKey(CustConstants.DtpInitSound);
+            var hasDirectTick = tags.Values.ContainsKey(CustConstants.DtpInitSound) &&
+                tags.Values.ContainsKey(CustConstants.DtpInterrupt);
+            var hasInstalledInterrupt = tags.Values.ContainsKey(CustConstants.DtpStartInt) &&
+                tags.Values.ContainsKey(CustConstants.DtpStopInt);
+            var hasCustomTick = tags.Values.ContainsKey(CustConstants.DtpCustomPlayer) &&
+                tags.Values.ContainsKey(CustConstants.DtpInitPlayer) &&
+                tags.Values.ContainsKey(CustConstants.DtpInterrupt);
+            if (!hasInitPair && !hasDirectTick && !hasInstalledInterrupt && !hasCustomTick)
             {
-                if (!tags.Values.ContainsKey(required))
-                {
-                    return false;
-                }
+                return false;
             }
 
             foreach (var supported in SupportedIdentityTags)

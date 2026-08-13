@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CopperMod\CopperMod.csproj" />
+    <ProjectReference Include="..\CopperMod.Ahx\CopperMod.Ahx.csproj" />
     <ProjectReference Include="..\CopperMod.Cust\CopperMod.Cust.csproj" />
     <ProjectReference Include="..\CopperMod.Rendering\CopperMod.Rendering.csproj" />
     <ProjectReference Include="..\CopperMod.ProTracker\CopperMod.ProTracker.csproj" />

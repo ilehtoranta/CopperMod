@@ -169,6 +169,7 @@ Install the playback backends separately:
 ```powershell
 dotnet add package CopperMod.Med
 dotnet add package CopperMod.ProTracker
+dotnet add package CopperMod.Ahx
 dotnet add package CopperMod.Sid
 ```
 

@@ -1,0 +1,711 @@
+[
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/AYPlayers/ZXAYAMAD",
+    "Size": 1088,
+    "Sha256": "33A597F18D2134502380E8E55A00D4655A5ADC9B5E4D5C3566F5E2AFCA749632",
+    "Companion": true
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/AYPlayers/ZXAYEMUL",
+    "Size": 21788,
+    "Sha256": "1B36B40ADEF5E0C4748F691FBD03B618172365581CD13754900AA3FD0CB0164F",
+    "Companion": true
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/AYPlayers/ZXAYST11",
+    "Size": 848,
+    "Sha256": "07A44F17971A26C2B08A39C27A7D694960E4BD86409E223FEA25A839D1DB5E75",
+    "Companion": true
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/AYPlayers/ZXAYSTRC",
+    "Size": 848,
+    "Sha256": "CF8001CAEAD210EBE2E23F0E34EE0E0351C6A89B670CC8EFF3287CC30D596BCA",
+    "Companion": true
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Vectordean",
+    "Size": 5156,
+    "Sha256": "0AD698FB26205CE9DE5385994C361AAF254B40D2AFA38288F5488BCB81E92904",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/WAVE",
+    "Size": 6076,
+    "Sha256": "FD87625856B39E5C5F614B5772EBC9240402745DFAE41C6B87D946765489B9D4",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Wizard of Sound",
+    "Size": 6980,
+    "Sha256": "C028413F86D9AADB4B1CE24113B278BE2143E42CA0EAC85075F926FF33F37225",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/XMOD",
+    "Size": 368,
+    "Sha256": "A78C66053E7CBCBB30C6A7717E4C7584C3EB8A14FD81BD0E07854B1A34A30CF0",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Synth 4.0",
+    "Size": 11132,
+    "Sha256": "8715C70DA2574111253D553D272ADFB8EE0380F46C46E56827EC8D40CA0A4DD7",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/TFMX_1.5",
+    "Size": 6808,
+    "Sha256": "0E919C9E2E2F93D00C8C9972342AF658B2008346DD0A1670CA990DF8B987755D",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/TFMX_7V",
+    "Size": 45864,
+    "Sha256": "146C15FDCBFF000A86E9B7E7947B147842CF376F0949FD495FD592EA28A668F2",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/TFMX_Pro",
+    "Size": 13488,
+    "Sha256": "4E8998942F469405DFF52D260B4AC861D317BB818EFB93895770F55F000FEF11",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/THX",
+    "Size": 14428,
+    "Sha256": "56FC27A5BE73462263500C75170B82D098E36F6190E6DADEB71FDCB0CBD9DB1F",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Tim Follin II",
+    "Size": 4524,
+    "Sha256": "EE77BACC3445922CF5520355C64562D51017344FA0D21A8F30977F1CBECEB398",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Tiny Williams",
+    "Size": 752,
+    "Sha256": "48F53246A9FEC7F435EBB07D08093C0927DC51C635274FFF9A5FEAEC8A5D11CA",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/TME",
+    "Size": 6404,
+    "Sha256": "3CECFC3FD43365CDF1EB6A73E0A9809F1A58CEBE40622F9866089FDDD2131939",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Tronic",
+    "Size": 2892,
+    "Sha256": "65AB2465FE0C452AEC493353BD0D58A66046BFA6654DEB31EE3BA0B690E9CBEC",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/VSS",
+    "Size": 6504,
+    "Sha256": "B5D4852E3E50297655C4AFC53E672D7885E9068B0635DDB2E4878357BA1100A1",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SoundFX 2.0",
+    "Size": 3480,
+    "Sha256": "82FC79FC920036F5CAB4554782501F4D67562BCAD551139B46CAC33CE915C4E4",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SoundMaster",
+    "Size": 1668,
+    "Sha256": "19B30275F03D1F219C9056A369B16A9CB2C0CB372CA5B94DA7001B931EA32266",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SoundMon",
+    "Size": 4264,
+    "Sha256": "8FC234086414AD9CD05005FE8472499B1CBC836A54B63AD4B72BAD7BFD391901",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SoundMon 2.2",
+    "Size": 4884,
+    "Sha256": "E1553DD94467E80154FC5218435E800BEE3C27AA2AC9F1F47DE1309AD4E38453",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Soundtracker 2.6",
+    "Size": 4336,
+    "Sha256": "E984AAE394207059215F7F431429A7EA6F3DDB645D0A966796E0F0096C1FAAF8",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SoundTracker Pro II",
+    "Size": 8308,
+    "Sha256": "B8EA3841D99233551F73E8C87C803A896B3D6123EB374AB21E79D21CE39B173D",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Stonetracker",
+    "Size": 14576,
+    "Sha256": "BBBA95F3558D022564A50259D6ECE7EF89F9588038B13B4D98C3DB58494C104E",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Symphonie Pro",
+    "Size": 131848,
+    "Sha256": "EA9F97E8465AE422CDED117AB14CF6F61EA721F4A9B813B9AC484D2A676DCBA6",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SynTracker",
+    "Size": 4448,
+    "Sha256": "89F5C4CB752CB1CEB1D22820AA89BD8EDD4CA2F373D12521B6E4638CB7A25D4C",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Scott Johnston",
+    "Size": 9332,
+    "Sha256": "CCE6CEC7C60DD79898ABB6E7469430471FE33D6EF8CDC8FDE665E2315809CD1B",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Sean Connolly",
+    "Size": 728,
+    "Sha256": "6C56D6269076FF8ABBCFC568C09E88B6329AC9CAF396907D31EE3F98D02E849C",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Sean Conran",
+    "Size": 880,
+    "Sha256": "53B83564A3FD7076FB26216A6DB027BF8100CAF2483395AC1330C6C1B618CAAB",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SonicArranger",
+    "Size": 7736,
+    "Sha256": "671200C818AD27FDC9FB3BC47C72B061459735B085414C31881FD6CA41796DD0",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Sound Images",
+    "Size": 4532,
+    "Sha256": "6FEC87188B1B9D67D94DD39A43CDCE04C21D1AC241B053075ED4EA89F2D93A71",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SoundControl",
+    "Size": 7452,
+    "Sha256": "6D87C2680B970310B04A5DBE4D486261E70BA96819FC335BDBC692066CBBE16F",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SoundFX 1.3",
+    "Size": 3124,
+    "Sha256": "2B41C2466C805034D3E86C287C604111C4B2838D4AC447D7CEAA035C26604849",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SUNtronic",
+    "Size": 1324,
+    "Sha256": "E1CC940B2F60A4AB591E1C9060F662726DF276F376B7A096DE7092251B0133A5",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SUNtronic Custom",
+    "Size": 2268,
+    "Sha256": "E82CB1F5361770B7407C1EABEEC7E3310A6456E3CEC90415D9E0A20C4E67B8AF",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Promizer 4.0",
+    "Size": 9904,
+    "Sha256": "D0B04388894E0DDFCDB422FB684AE6702FC3B65729F26A38414A429B60CD4297",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Protracker4",
+    "Size": 10112,
+    "Sha256": "38DD2F32AEE7165EF666CECA44DDA1157F62BB76CF90CCB647DF9E160276C50F",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Pumatracker 1.0",
+    "Size": 5308,
+    "Sha256": "9C109EB628A99C060583770EA8B3CB8BDA3FD49A7E0F3360DA7C0D20C3D407B4",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Rob Hubbard",
+    "Size": 2132,
+    "Sha256": "346C5DE9468377AF1C025FA5F2912455F6CABCC3E605C68BCF431F0307EACC5A",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Rob Hubbard 2",
+    "Size": 4604,
+    "Sha256": "5BDABBBEB44121D710C631972F647ECBD5FD6FF9864A7DC5A2570C1D726C2596",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/RonKlaren",
+    "Size": 3108,
+    "Sha256": "1DB1766F235A9ACBC38D585BFE00957C720FFDAAA10367621F43201B68C8D77D",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SCUMM",
+    "Size": 2624,
+    "Sha256": "B95CBA46E54980EF11F5D3F624D96DD3D7D5E4A0BCBB4E8370E4D81FA975D8A9",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SIDMon 1.0",
+    "Size": 5808,
+    "Sha256": "4265536BABA48160465334E83154EF0E031D25E820950A0DDE61787AB488590A",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/SIDMon 2.0",
+    "Size": 4288,
+    "Sha256": "B546C7D16510EC69C0F73C04F49D802FF59836E02E892427E4107F514C3E637A",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Oktalyzer",
+    "Size": 7808,
+    "Sha256": "222E72626E38916E51094D3D1272C12A21B06160E61A2E28FEB9F59AE58418CB",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/PierreAdane",
+    "Size": 1924,
+    "Sha256": "083EBA16621B5785CBB9836DDD2D4F16901D660FB7FF48EB5280ADD749C90955",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/PlayAY",
+    "Size": 2516,
+    "Sha256": "EC90A6BE58701EE1CD4F3516C85D4071AB3613ACA46AC134848F8528028144DF",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/PlaySid",
+    "Size": 24388,
+    "Sha256": "9C01F7D603891598F0769CBF5DEC61218490986345F9A90BACCAA7252FFFCB76",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Polytracker",
+    "Size": 8892,
+    "Sha256": "C51883B4BAA2987B1FB2E54767541889A1DA9AC12BDD8819A28B894E27F12006",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Profiteam-Soundfactory",
+    "Size": 4668,
+    "Sha256": "874D22562654113FD302244C5DC77AD268A30B3B4601488793851461010C1E23",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Promizer 0.1",
+    "Size": 5972,
+    "Sha256": "E0D425FA01DFF9BE39F5E07521A1EE162286F7B0E52B69DF149957792949D2A0",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Promizer 1.x",
+    "Size": 2708,
+    "Sha256": "C22C5DE5F9127557BEA575155D6C40B012F19F87D6FE195A22E17B94278E85BB",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/PS3M",
+    "Size": 19920,
+    "Sha256": "35BDB885A1A0D611FC971B50EEC5B6697817B0145C6ABC640B3764DA77D13CB7",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/PSA",
+    "Size": 3112,
+    "Sha256": "351AD7481DA4081CB25D811399B399C807D2F2B1E5D5AB2108839D6C5A448EAA",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Mark Cooksey",
+    "Size": 3396,
+    "Sha256": "C556C4FF30F393E6D7F72509ADF60DF9A213A20724048D0B0824A6FBF399D7A7",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Mark II",
+    "Size": 1992,
+    "Sha256": "DCF136901C41ABCF9436C0A6EBA5088EB6864C7682A7BAFF88AA3AB9DF44DCD4",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Mark II Old",
+    "Size": 3536,
+    "Sha256": "DC57DFE85F330E40B9A310E292341878D365C76612386E093D8466239E82CDC1",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/MaxTrax",
+    "Size": 10764,
+    "Sha256": "445D5C6A5C372AAE9D1A07FA78D234AD248FAB0CDD505219E9E94BF9C6A17A16",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Music Assembler",
+    "Size": 2492,
+    "Sha256": "B47ED7BB337BA2CE098557092C246C9EE62F212B0421BE627E39EDBB58C071F3",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/MusiclineEditor",
+    "Size": 90948,
+    "Sha256": "07D1BC0D42DB68A802D37D69491092873011BD07A2152D410734310B34AFBA0D",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/MusicMaker4",
+    "Size": 8728,
+    "Sha256": "F69C01D186671F8884A650277F816263659B868250C235BFF54FE12CC2ED5EEB",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/MusicMaker8",
+    "Size": 25624,
+    "Sha256": "7A0E1C51200449FE8A7EE6B8C9DBEFFC628D601C7503777F900EF3958788A52C",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/OctaMED",
+    "Size": 15976,
+    "Sha256": "9751F7AB68C12328D293954298330A14BD6A41836CE619EC957E7AF456FC779E",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Jesper Olsen",
+    "Size": 10316,
+    "Sha256": "ED0FE9DFCD82D6101ECC4D7723B02B435E67F01C4990E89ABA0EDAF1A12C9CD9",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Laxity-Player",
+    "Size": 4312,
+    "Sha256": "5E501D9A2A6033FB2315782C7CE7DF010D8C5892BFE1C101BC10463C39BFB3D5",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/LME",
+    "Size": 4324,
+    "Sha256": "ACA2D6379677F6B79AB70618AD017F648119BB547465578CD8C5B9C5F958F357",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/M. Grouleff",
+    "Size": 1932,
+    "Sha256": "0EA94736878E16ED94A89258653A2158B15EBC0B1370D6682A27FF499AA8681A",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/M.O.N.",
+    "Size": 6656,
+    "Sha256": "D3B21B8C9C519CD0A789C3893B151102C1B9128DDF96ECA61284AEDE2687783B",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/M.O.N. Old",
+    "Size": 3100,
+    "Sha256": "FA1DC036C718C7AC82DD25B7DCC60B9C90159F1D2F375571D39B21DDEF27130F",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Major Tom 2.01",
+    "Size": 6732,
+    "Sha256": "2EE2CD4DA5727D04C25EB3F8DDF5972B1B2B4277DDF08B7E597CC1A4FE2730EF",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/MCMD",
+    "Size": 3248,
+    "Sha256": "BEAEECFA1A6948FC343051F6DEB65469B23B36645DD6A2EF01C05E0EEF98A741",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/MED",
+    "Size": 18576,
+    "Sha256": "EC64E48F721582BAFDDB4DAB86A9FB5F5DB1DAD773F804657A11E8A99375ADA1",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/MPEGAudio",
+    "Size": 12120,
+    "Sha256": "9616851E1CBA86E5D9CDE113B59F3AF412E783F174F5E4ABB44D8B80FF2D486C",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Hippel_7V",
+    "Size": 4048,
+    "Sha256": "D27DA8AD359EB531FA777CEAA68DE44CD86DD84140371AF087012004D4574852",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/IFF 8SVX",
+    "Size": 4180,
+    "Sha256": "E75AAE3BA903441EE81A41E299388D7CE3289FCB35FA92FA8007E5E37144A057",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/IFF EMOD",
+    "Size": 11284,
+    "Sha256": "9DD35B4606B8141E848D398A70A6AEFB33A9FC21C796FDFE245844C1C946F562",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/IFF-SMUS",
+    "Size": 8852,
+    "Sha256": "09233B2E3173B7CD9B75FC3576DCCC8E7FCAB7E5F4428987EA24B1ED2974A216",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/In Stereo 1.0",
+    "Size": 6376,
+    "Sha256": "ABA862C5B1788B6644E3F04EE2C939690FE619A0044D557F52CAA362FCFE90BF",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/In Stereo 2.0",
+    "Size": 6180,
+    "Sha256": "05F825B7E93F6BB1D01B4CDF7FE5900AD55FAB0166BBFE404E4D38B4A756E00B",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/J.C.Brooke",
+    "Size": 2832,
+    "Sha256": "ED480EE873799AE9FD2315CD756A1972DB351071A50E76E8DC37BE875C40EC7A",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/JamCracker",
+    "Size": 4916,
+    "Sha256": "A0271A4DEFB448AC12EBBA229FE16ED545A8D8CB806711989E2E563E9BA29AC8",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Jason Page New",
+    "Size": 13536,
+    "Sha256": "4A93962368CB0186B32DBAF5D004E3F1C9CB562E482897B19D89E1ECB037018F",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Jason Page Old",
+    "Size": 5084,
+    "Sha256": "089ECE5E753757A7472D69C2BCFC3FD139B623C2ABFB9D2AE7119FD908921B79",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Fasttracker II",
+    "Size": 15476,
+    "Sha256": "8C565DB1E880BBC512F6B646932CB7C09A295733C6CADF2F3BE42809B4B2977F",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Fred",
+    "Size": 3560,
+    "Sha256": "196BBA5A1FEB602D778CFC30A1F4F1D3760F247C328915DBC5C389A172BEFFD1",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/FutureComposer1.3",
+    "Size": 6224,
+    "Sha256": "25308012E0D907019F5D6AFB818F5C0C07BBFBEC2333E6DED8E57F24FADF9BB8",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/FutureComposer1.4",
+    "Size": 5212,
+    "Sha256": "A37631F63BC6FC4AF44EC0495F7A324918EC28820F9834B2B7FFC4B581BC1AA0",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/GlueMaster",
+    "Size": 3392,
+    "Sha256": "7C5D003EA629B4AA4F85A5F3D85FE669FBD5649EA7361E3260E118F492E8B886",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/GlueMon",
+    "Size": 3388,
+    "Sha256": "0D7B2B309027BDAE2AC1B89AB7DAFCB19288CA6870758AE399CC7673AF6A72C7",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/GMOD",
+    "Size": 1432,
+    "Sha256": "F0356DD8818F369B1DBE2AF5462BA67B52CF369E129A3B01D717BC413CC053EB",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Hippel",
+    "Size": 5568,
+    "Sha256": "175CD820EA083506E80D095B18E3DA530C95C076629F2617D42B95CA0003B998",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Hippel-COSO",
+    "Size": 5144,
+    "Sha256": "582FBA1FED5D65E169788E88C759E4055869F90597057027A85885465011CD45",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Hippel-ST_note",
+    "Size": 5524,
+    "Sha256": "525B973062CD597515CFBE4DC8376345C7F0F388717868D38033EF6317D7F866",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/DavidWhittaker",
+    "Size": 3776,
+    "Sha256": "69D60AF0605B73B7CDEBA22B9CDD552B533ED59DE8A0CA9CB651008C6A13CE05",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/DeltaMusic 1.0",
+    "Size": 3652,
+    "Sha256": "52A3DFD4F786F5B4B804EDE72145DBCA8167E340C75FD118FED1D49CEBF1653C",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/DeltaMusic 2.0",
+    "Size": 3168,
+    "Sha256": "62C5BCAE5C20C2DAD57CD8A37106E6F17B16301B64023C98B3DFBB10B8131EB2",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Digibooster",
+    "Size": 8620,
+    "Sha256": "DC55E027C3D4CEF56B23D95C2CE57010B4561AD71876048926DFD33CEFF79883",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/DigiBoosterPRO",
+    "Size": 20884,
+    "Sha256": "4DD013DB36B0A3C492231D53A1269BB719A2BEB5128061763D297C9EAC73E134",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Digital Mugician",
+    "Size": 6848,
+    "Sha256": "7FD57294EA265296A04EF86282201A802AD9F64B2A51BA1FD3080A9C5B14896D",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Dynamic Synthesizer",
+    "Size": 3184,
+    "Sha256": "971391A3F78B3824F2BF7E7768F41BCE28E9FCEEC2B2CE0CA6A56A20E8553B62",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/EMS",
+    "Size": 2660,
+    "Sha256": "882E64801672C14EA180E62AAEB614D286BB5509B12109ABF4C55D17D36747D8",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Face The Music",
+    "Size": 14052,
+    "Sha256": "AC607EDD46FB4F2A8C1442C69A5FFD81583A17D68A42DB168367CB21B5C0F01B",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Action Amics",
+    "Size": 4976,
+    "Sha256": "629D0428EE17DF191A575B22A32B097AD4E2C1AB78C3AA06186F44A3AF901892",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Activision Pro",
+    "Size": 3728,
+    "Sha256": "7EFC582F79C0CB70C8BE88E5DF73B0B71BEBFA2B3F9E170C7C8FDF3D7E4D57DA",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Art of Noise",
+    "Size": 10488,
+    "Sha256": "5280DD2F2778D4DEC747F72337EE8DA57EB48C21C7B3654A2A5F5C765F41470C",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Art&Magic",
+    "Size": 784,
+    "Sha256": "C89661BC4B22BB5C05AE8F69321DA6BDB54D59D21AE87453689CA3F056ED36AE",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Benn Daglish",
+    "Size": 3308,
+    "Sha256": "D2BEDD5B482F29B45D47FA7D2EFE9289659828BA3E4FFC759FF6AD08195BBE56",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/BFB Master",
+    "Size": 996,
+    "Sha256": "94233E13C721FF6392A070AEE289B9E0DBE010685040178982AEBDD5D8714509",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Chiptracker",
+    "Size": 6348,
+    "Sha256": "4BFAA525AB85D29D0B3FABB7BBE7EA1076EEFA9A2972E7628C44707166ABDB65",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/Datatype",
+    "Size": 2632,
+    "Sha256": "310A3E446056575648B59448C469AB8F34045942CC9B571AA1D8591FA8C14B30",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/David Hanney",
+    "Size": 9336,
+    "Sha256": "0686292F40206FC819A07551437BA6875D961F17718B01A2562D8E39C3B5B646",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/DSS",
+    "Size": 3736,
+    "Sha256": "D7D9EC576D00E7DCEB4A8570984A0255FAC36FEAF6F69BF9F2AA884BAD306935",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/669",
+    "Size": 2264,
+    "Sha256": "E49872AD5CB85532FA7A0E1A592AC3983273EAF51004BBCA4B73C83629E5123D",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/A.M.Composer 1.2",
+    "Size": 2624,
+    "Sha256": "05A317E7816E8892727B98AB63647817363877CB73620059B4F6ECDDEEEEBB1E",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/ADPCM",
+    "Size": 2212,
+    "Sha256": "375FD4DF57AA331366238D075814D50B11FE33ABA13C132F03E965364117D785",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/AIFF",
+    "Size": 7632,
+    "Sha256": "A6C897882C5F532A6086934DF03D28BAC901CADDBD5B88AA9D76FDC32A4304E7",
+    "Companion": false
+  },
+  {
+    "Name": "Eagleplayer_2.06/Eagleplayers/AProSys",
+    "Size": 10024,
+    "Sha256": "9385D3BAE2D6908EF2EE43DC284DB6F81D28E1E9F0D8488CB520788890EB8E65",
+    "Companion": false
+  }
+]
+

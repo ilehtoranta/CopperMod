@@ -42,6 +42,21 @@ public sealed class CustRenderTests
 	}
 
 	[Fact]
+	public void EmbeddedCustListDataStillUsesResolvedHunkSegment()
+	{
+		var data = File.ReadAllBytes(HunkParserTests.FindWorkspaceFile("TestTunes", "Amiga.CUST", "AlteredBeast.CUST"));
+		var hunk = HunkParser.Parse(data);
+		Assert.True(DeliTagParser.TryFindTags(hunk, out var tags));
+		var machine = new CustMachine(hunk, tags);
+		var expectedSegment = hunk.Segments.Single();
+
+		Assert.Equal(CustConstants.DefaultModuleBaseAddress, machine.ListDataAddress);
+		Assert.Equal(expectedSegment.DeclaredSizeBytes, machine.ListDataLength);
+		Assert.Equal(machine.ListDataAddress, machine.ReadHostBlockLong(CustConstants.DtgCheckDataOffset));
+		Assert.Equal((uint)machine.ListDataLength, machine.ReadHostBlockLong(CustConstants.DtgCheckSizeOffset));
+	}
+
+	[Fact]
 	public void AlteredBeastFixtureRendersFinitePcmAndTimedRegisterWrites()
 	{
 		using var song = (CustSong)new CustFormat().Load(File.ReadAllBytes(HunkParserTests.FindWorkspaceFile("TestTunes", "Amiga.CUST", "AlteredBeast.CUST")));
@@ -84,6 +99,77 @@ public sealed class CustRenderTests
 		Assert.Equal(0x4C, CustConstants.DtgAudioAllocOffset);
 		Assert.Equal(0x5C, CustConstants.DtgSongEndOffset);
 		Assert.Equal(0x68, CustConstants.DtgWaitAudioDmaOffset);
+	}
+
+	[Fact]
+	public void NormalEaglePlayerTableCanUseDirectTickWithoutCustomOrInitPlayerTags()
+	{
+		var bytes = new byte[0x60];
+		WriteLong(bytes, 0x00, 0x8000_4560); // EP_PlayerVersion
+		WriteLong(bytes, 0x04, 10);
+		WriteLong(bytes, 0x08, CustConstants.DtpPlayerVersion);
+		WriteLong(bytes, 0x0C, 1);
+		WriteLong(bytes, 0x10, CustConstants.DtpInitSound);
+		WriteLong(bytes, 0x14, 0x40);
+		WriteLong(bytes, 0x18, CustConstants.DtpInterrupt);
+		WriteLong(bytes, 0x1C, 0x42);
+		WriteLong(bytes, 0x20, CustConstants.TagDone);
+
+		Assert.True(DeliTagParser.TryFindTags(HunkParser.Parse(WrapSingleCodeHunk(bytes)), out var tags));
+		Assert.Equal(0, tags.Offset);
+		Assert.Contains(0x8000_4560u, tags.Values.Keys);
+		Assert.DoesNotContain(CustConstants.DtpCustomPlayer, tags.Values.Keys);
+		Assert.DoesNotContain(CustConstants.DtpInitPlayer, tags.Values.Keys);
+	}
+
+	[Fact]
+	public void TagReaderHandlesControlTagsLowApplicationTagsAndChaining()
+	{
+		var bytes = new byte[0x80];
+		WriteLong(bytes, 0x00, CustConstants.DtpPlayerVersion);
+		WriteLong(bytes, 0x04, 1);
+		WriteLong(bytes, 0x08, CustConstants.TagIgnore);
+		WriteLong(bytes, 0x0C, 0xDEAD_BEEF);
+		WriteLong(bytes, 0x10, 4); // Application-defined, non-control tag.
+		WriteLong(bytes, 0x14, 0x8000);
+		WriteLong(bytes, 0x18, CustConstants.TagMore);
+		WriteLong(bytes, 0x1C, 0x40);
+		WriteLong(bytes, 0x40, CustConstants.DtpInitPlayer);
+		WriteLong(bytes, 0x44, 0x60);
+		WriteLong(bytes, 0x48, CustConstants.DtpInitSound);
+		WriteLong(bytes, 0x4C, 0x62);
+		WriteLong(bytes, 0x50, CustConstants.TagDone);
+
+		Assert.True(DeliTagParser.TryFindTags(HunkParser.Parse(WrapSingleCodeHunk(bytes)), out var tags));
+		Assert.Equal(0x8000u, tags.Values[4]);
+		Assert.DoesNotContain(CustConstants.TagIgnore, tags.Values.Keys);
+		Assert.Contains(CustConstants.DtpInitPlayer, tags.Values.Keys);
+		Assert.Contains(CustConstants.DtpInitSound, tags.Values.Keys);
+	}
+
+	[Fact]
+	public void RuntimeTagLoaderIgnoresControlsAndPreservesLowApplicationTags()
+	{
+		var bytes = new byte[0x80];
+		WriteLong(bytes, 0x00, CustConstants.DtpPlayerVersion);
+		WriteLong(bytes, 0x04, 1);
+		WriteLong(bytes, 0x08, CustConstants.TagIgnore);
+		WriteLong(bytes, 0x0C, 0xDEAD_BEEF);
+		WriteLong(bytes, 0x10, 4);
+		WriteLong(bytes, 0x14, 0x8000);
+		WriteLong(bytes, 0x18, CustConstants.DtpInitPlayer);
+		WriteLong(bytes, 0x1C, CustConstants.DefaultModuleBaseAddress + 0x60);
+		WriteLong(bytes, 0x20, CustConstants.DtpInitSound);
+		WriteLong(bytes, 0x24, CustConstants.DefaultModuleBaseAddress + 0x62);
+		WriteLong(bytes, 0x28, CustConstants.TagDone);
+		WriteWord(bytes, 0x60, 0x4E75);
+		WriteWord(bytes, 0x62, 0x4E75);
+		var hunk = HunkParser.Parse(WrapSingleCodeHunk(bytes));
+		Assert.True(DeliTagParser.TryFindTags(hunk, out var tags));
+
+		var machine = new CustMachine(hunk, tags);
+
+		Assert.True(machine.UsesA500PalCustPlaybackProfile);
 	}
 
 	[Fact]
