@@ -946,6 +946,23 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             WriteSurfaceArgb(surface, x, y, surface.Palette[pen]);
         }
 
+        internal byte ReadSurfacePen(CyberGraphicsSurface surface, int x, int y)
+        {
+            if (!surface.Contains(x, y))
+                return 0;
+
+            if (surface.PixelFormat == CyberGraphicsPixelFormat.Lut8)
+            {
+                return surface.ReadByte(
+                    _bus,
+                    checked(y * surface.BytesPerRow + x));
+            }
+
+            return FindNearestPaletteIndex(
+                surface.Palette,
+                ReadSurfaceArgb(surface, x, y));
+        }
+
         private uint ReadRectanglePixel(
             uint address,
             CyberGraphicsRectangleFormat format,

@@ -6,3 +6,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("CopperScreen")]
 [assembly: InternalsVisibleTo("CopperScreen.Tests")]
 [assembly: InternalsVisibleTo("CopperScreen.Benchmarks")]
+[assembly: InternalsVisibleTo("CopperMod.Amiga.Layers.Benchmarks")]
