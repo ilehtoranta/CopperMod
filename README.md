@@ -114,6 +114,8 @@ but for sustaining a long, measurement-driven systems-engineering loop.
 
 - MED / OctaMED: MMD0-MMD3 parsing and Amiga-style playback work is underway.
 - ProTracker MOD: 4-channel ProTracker playback with Amiga-style sample output.
+- AHX0/AHX1: original 68000 replay on the cycle-scheduled A500 PAL OCS model;
+  requires a locally supplied, hash-verified AHX 2.3d replay binary.
 - SID / RSID: native C# C64/SID emulation with cycle-counted register scheduling.
 - CopperMod: terminal UI player with NAudio output and optional output shaping.
 
@@ -154,6 +156,7 @@ Reusable libraries are published on NuGet:
 | [CopperMod.Abstractions](https://www.nuget.org/packages/CopperMod.Abstractions) | Shared module loading and rendering interfaces. |
 | [CopperMod.Med](https://www.nuget.org/packages/CopperMod.Med) | MED / OctaMED MMD module parser and renderer. |
 | [CopperMod.ProTracker](https://www.nuget.org/packages/CopperMod.ProTracker) | ProTracker MOD parser and renderer. |
+| CopperMod.Ahx | AHX0/AHX1 loader using the original locally supplied 68000 replay binary. |
 | [CopperMod.Sid](https://www.nuget.org/packages/CopperMod.Sid) | PSID / RSID parser and SID renderer. |
 | [Copper68k](https://www.nuget.org/packages/Copper68k) | Reusable Motorola 68000-family CPU emulation core. |
 | [CopperFloat](https://www.nuget.org/packages/CopperFloat) | Allocation-free deterministic extF80 arithmetic for .NET. |
@@ -203,6 +206,11 @@ dotnet run --project .\CopperMod -- "path\to\tune.sid"
 
 If no file is provided, CopperMod tries to open the default MED test tune when it
 is available in the workspace.
+
+AHX playback requires local reference-player setup; see
+[`docs/AHX-reference-player.md`](docs/AHX-reference-player.md). The replay
+binary and songs are not distributed by CopperMod. User-supplied native replay
+binaries use the shared [`Replayers`](Replayers/README.md) directory convention.
 
 ## CopperScreen
 
