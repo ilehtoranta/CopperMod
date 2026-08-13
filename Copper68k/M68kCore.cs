@@ -811,7 +811,9 @@ namespace Copper68k
         long PendingRetirementFloor = long.MinValue,
         M68kInstructionFetchPublicationContext PendingPublicationContext = default,
         long PendingVirtualRequestedCycle = 0,
-        long PublicationGroup = 0);
+        long PublicationGroup = 0,
+        bool NextInstructionFollowsExpiredDbcc = false,
+        int InterruptEntryBranchTailAdjustmentCycles = 0);
 
     internal interface IM68000PipelineStateTransfer
     {
@@ -1952,6 +1954,8 @@ namespace Copper68k
         // becomes serviceable after the following instruction.
         private const int M68000InterruptSetupCycles = 4;
         private const int M68000DbccExceptionTailAfterCommittedFetchCycles = 6;
+        private const int M68000BranchInterruptInternalWindowCycles = 8;
+        private const int M68000BranchInterruptTailAdjustmentCycles = 2;
         private const int FixedPlanRunCacheSlotCount = 256;
         private const int FixedPlanRunMaximumInstructions = 32;
         private const byte FixedPlanRunExitIndex = byte.MaxValue;
@@ -2002,6 +2006,9 @@ namespace Copper68k
         private long _plannedMoveqInstructions;
         private long _plannedBranchInstructions;
         private long _plannedDbccInstructions;
+        private bool _nextInstructionFollowsExpiredDbcc;
+        private bool _instructionFollowsExpiredDbcc;
+        private int _interruptEntryBranchTailAdjustmentCycles;
         private long _plannedQuickRegisterInstructions;
         private long _plannedMoveInstructions;
         private long _plannedImmediateInstructions;
@@ -2396,6 +2403,16 @@ namespace Copper68k
             catch (M68kInstructionFetchInterruptedException interrupted)
             {
                 _instructionCycleFloorActive = false;
+                // A committed target word retains its two-cycle IRC tail. With
+                // no committed word, a complete remaining internal window lets
+                // exception setup overlap two cycles of the abandoned branch;
+                // a shorter window has no additional tail to retain or overlap.
+                _interruptEntryBranchTailAdjustmentCycles = _prefetchCount > 0
+                    ? M68000BranchInterruptTailAdjustmentCycles
+                    : interrupted.BoundaryCycle - _cpuRetireBusCycle >=
+                        M68000BranchInterruptInternalWindowCycles
+                        ? -M68000BranchInterruptTailAdjustmentCycles
+                        : 0;
                 _instructionInterruptSampleCycle = interrupted.BoundaryCycle;
                 _cpuBusCycle = Math.Max(_cpuBusCycle, interrupted.BoundaryCycle);
                 _cpuBusReadyCycle = Math.Max(_cpuBusReadyCycle, interrupted.BoundaryCycle);
@@ -6468,9 +6485,13 @@ namespace Copper68k
                 AddInstructionCycles(GetMoveLongDestinationWriteFaultCycles(cycles, destinationMode, destinationRegister));
             }
 
+            var writeBeforeSuccessorPrefetch =
+                ShouldWriteImmediateWordExtendedDestinationBeforeSuccessorPrefetch(
+                    size, sourceMode, sourceRegister, destinationMode, destinationRegister);
             if (moveWritesMemory &&
                 !destination.IsRegister &&
-                MoveDestinationHasExtensionWord(destinationMode, destinationRegister))
+                MoveDestinationHasExtensionWord(destinationMode, destinationRegister) &&
+                !writeBeforeSuccessorPrefetch)
             {
                 PrefetchNextOpcodeBeforeMoveMemoryWriteback();
             }
@@ -6479,6 +6500,10 @@ namespace Copper68k
             if (moveWritesMemory && destinationMode != 4 && !destination.IsRegister)
             {
                 PrefetchFallthroughAfterMoveSourceRead();
+                if (writeBeforeSuccessorPrefetch)
+                {
+                    PrefetchFallthroughAfterMoveSourceRead();
+                }
             }
 
             if (destinationMode != 1 && deferConditionCodesUntilSuccessfulWrite)
@@ -7630,9 +7655,17 @@ namespace Copper68k
                     plan.DestinationRegister));
             }
 
+            var writeBeforeSuccessorPrefetch =
+                ShouldWriteImmediateWordExtendedDestinationBeforeSuccessorPrefetch(
+                    plan.Size,
+                    plan.SourceMode,
+                    plan.SourceRegister,
+                    plan.DestinationMode,
+                    plan.DestinationRegister);
             if (moveWritesMemory &&
                 !destination.IsRegister &&
-                MoveDestinationHasExtensionWord(plan.DestinationMode, plan.DestinationRegister))
+                MoveDestinationHasExtensionWord(plan.DestinationMode, plan.DestinationRegister) &&
+                !writeBeforeSuccessorPrefetch)
             {
                 PrefetchNextOpcodeBeforeMoveMemoryWriteback();
             }
@@ -7641,6 +7674,10 @@ namespace Copper68k
             if (moveWritesMemory && !destination.IsRegister)
             {
                 PrefetchFallthroughAfterMoveSourceRead();
+                if (writeBeforeSuccessorPrefetch)
+                {
+                    PrefetchFallthroughAfterMoveSourceRead();
+                }
             }
 
             if (plan.DestinationMode != 1 && deferConditionCodesUntilSuccessfulWrite)
@@ -8404,7 +8441,10 @@ namespace Copper68k
             var interruptFenceCycle = preserveStartedBranchSuccessor
                 ? _cpuRetireBusCycle
                 : _exceptionEntryNotBeforeCycle;
-            var interruptStartCycle = Math.Max(State.Cycles, interruptFenceCycle);
+            var interruptStartCycle = Math.Max(
+                State.Cycles + _interruptEntryBranchTailAdjustmentCycles,
+                interruptFenceCycle);
+            _interruptEntryBranchTailAdjustmentCycles = 0;
             _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref interruptStartCycle);
             State.Cycles = interruptStartCycle;
             _exceptionEntryNotBeforeCycle = 0;
@@ -8471,7 +8511,9 @@ namespace Copper68k
                 _pendingPrefetchRetirementFloor,
                 _pendingPrefetchPublicationContext,
                 _pendingPrefetchVirtualRequestedCycle,
-                _instructionFetchPublicationGroup);
+                _instructionFetchPublicationGroup,
+                _nextInstructionFollowsExpiredDbcc,
+                _interruptEntryBranchTailAdjustmentCycles);
 
         void IM68000PipelineStateTransfer.ImportM68000PipelineState(in M68000PipelineState state)
         {
@@ -8502,6 +8544,10 @@ namespace Copper68k
                 state.PendingBlocksInstructionEntry;
             _exceptionEntryNotBeforeCycle = state.ExceptionEntryNotBeforeCycle;
             _instructionFetchPublicationGroup = state.PublicationGroup;
+            _nextInstructionFollowsExpiredDbcc =
+                state.NextInstructionFollowsExpiredDbcc;
+            _interruptEntryBranchTailAdjustmentCycles =
+                state.InterruptEntryBranchTailAdjustmentCycles;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -8716,9 +8762,13 @@ namespace Copper68k
                 AddInstructionCycles(8);
             }
 
+            var writeBeforeSuccessorPrefetch =
+                ShouldWriteImmediateWordExtendedDestinationBeforeSuccessorPrefetch(
+                    size, srcMode, srcReg, destMode, destReg);
             if (moveWritesMemory &&
                 !dest.IsRegister &&
-                MoveDestinationHasExtensionWord(destMode, destReg))
+                MoveDestinationHasExtensionWord(destMode, destReg) &&
+                !writeBeforeSuccessorPrefetch)
             {
                 PrefetchNextOpcodeBeforeMoveMemoryWriteback();
             }
@@ -8727,6 +8777,10 @@ namespace Copper68k
             if (moveWritesMemory && !dest.IsRegister)
             {
                 PrefetchFallthroughAfterMoveSourceRead();
+                if (writeBeforeSuccessorPrefetch)
+                {
+                    PrefetchFallthroughAfterMoveSourceRead();
+                }
             }
 
             if (destMode != 1 && deferConditionCodesUntilSuccessfulWrite)
@@ -11785,7 +11839,9 @@ namespace Copper68k
             _instructionInterruptSampleCycle = targetOpcodeReadyCycle;
             var targetExtensionReadyCycle = TopUpPrefetchOne(
                 out _,
-                M68kInstructionFetchPublicationPhase.Required,
+                interruptibleTargetFetch
+                    ? M68kInstructionFetchPublicationPhase.InterruptibleBranchTarget
+                    : M68kInstructionFetchPublicationPhase.Required,
                 long.MinValue,
                 targetPublicationContext with
                 {
@@ -11816,6 +11872,7 @@ namespace Copper68k
             _exceptionEntryNotBeforeCycle = Math.Max(
                 _exceptionEntryNotBeforeCycle,
                 readyCycle);
+            _nextInstructionFollowsExpiredDbcc = true;
             _skipRetirePrefetchTopUp = true;
         }
 
@@ -11871,6 +11928,9 @@ namespace Copper68k
             _cpuBusReadyCycle = State.Cycles;
             _cpuRetireBusCycle = State.Cycles;
             _exceptionEntryNotBeforeCycle = 0;
+            _nextInstructionFollowsExpiredDbcc = false;
+            _instructionFollowsExpiredDbcc = false;
+            _interruptEntryBranchTailAdjustmentCycles = 0;
             _pendingInternalCycles = 0;
         }
 
@@ -12283,6 +12343,19 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool MoveDestinationHasExtensionWord(int mode, int register)
             => mode is 5 or 6 || (mode == 7 && register <= 1);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool ShouldWriteImmediateWordExtendedDestinationBeforeSuccessorPrefetch(
+            M68kOperandSize size,
+            int sourceMode,
+            int sourceRegister,
+            int destinationMode,
+            int destinationRegister)
+            => size == M68kOperandSize.Word &&
+               sourceMode == 7 &&
+               sourceRegister == 4 &&
+               MoveDestinationHasExtensionWord(destinationMode, destinationRegister) &&
+               _instructionFollowsExpiredDbcc;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int GetMoveSourceExtensionWordCount(
@@ -12988,6 +13061,8 @@ namespace Copper68k
             _instructionEntryReadyCycle1 = _prefetchCompletedCycle1;
             _instructionEntryTimingToken0 = _prefetchTimingToken0;
             _instructionEntryTimingToken1 = _prefetchTimingToken1;
+            _instructionFollowsExpiredDbcc = _nextInstructionFollowsExpiredDbcc;
+            _nextInstructionFollowsExpiredDbcc = false;
             _instructionInterruptSampleCycle = long.MinValue;
             _instructionCycleFloor = startCycle;
             _cpuBusCycle = Math.Max(_cpuBusCycle, startCycle);

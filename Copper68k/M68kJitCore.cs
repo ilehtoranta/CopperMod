@@ -10064,10 +10064,12 @@ namespace Copper68k
                 pipeline = TopUpCompiledM68000PrefetchOne(
                     pipeline,
                     _compiledInstructionPreviousCycle + 2,
+                    M68kInstructionFetchPublicationPhase.InterruptibleBranchTarget,
                     publicationContext: _compiledM68000PublicationContext);
                 pipeline = TopUpCompiledM68000PrefetchOne(
                     pipeline,
                     _compiledInstructionPreviousCycle + 2,
+                    M68kInstructionFetchPublicationPhase.InterruptibleBranchTarget,
                     publicationContext: _compiledM68000PublicationContext with
                     {
                         PredecessorToken = pipeline.TimingToken0,
@@ -10075,12 +10077,13 @@ namespace Copper68k
                     });
                 pipeline = pipeline with
                 {
-                    RetireBusCycle = branchRetireCycle,
+                    RetireBusCycle = Math.Max(pipeline.RetireBusCycle, branchRetireCycle),
                     ExceptionEntryNotBeforeCycle = Math.Max(
                         pipeline.ExceptionEntryNotBeforeCycle,
-                        pipeline.RetireBusCycle)
+                        Math.Max(pipeline.RetireBusCycle, branchRetireCycle))
                 };
                 _m68000PipelineState = pipeline;
+				State.Cycles = Math.Max(State.Cycles, pipeline.RetireBusCycle);
 
                 _compiledM68000PipelineActive = false;
                 _compiledM68000Microsequence = default;
