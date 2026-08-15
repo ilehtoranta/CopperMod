@@ -2989,7 +2989,8 @@ namespace CopperMod.Amiga.Bus
                 (cycle == cpuFenceCycle && !allowPendingCpuBoundary))
             {
                 throw new InvalidOperationException(
-                    $"Cannot execute Agnus slot at cycle {cycle} across unresolved CPU fence {cpuFenceCycle}.");
+                    $"Cannot execute Agnus slot at cycle {cycle} across unresolved CPU fence {cpuFenceCycle} " +
+                    $"(timing={_unresolvedCpuTimingFenceCycle}, event={_unresolvedCpuEventFenceCycle}).");
             }
 
             if (cycle < _executedThroughCycle)

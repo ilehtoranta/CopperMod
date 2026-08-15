@@ -65,6 +65,43 @@ namespace CopperMod.Amiga.Bus
         }
     }
 
+    /// <summary>
+    /// Owns a reversible interceptor over an existing host gateway. The prior
+    /// token and callback are restored exactly when the scope is disposed.
+    /// Intended for deterministic host-boundary fault instrumentation.
+    /// </summary>
+    internal sealed class HostGatewayInterposition : IDisposable
+    {
+        private readonly AmigaBus _bus;
+        private readonly uint _address;
+        private readonly uint _token;
+        private readonly HostGatewayStub _previous;
+        private bool _disposed;
+
+        internal HostGatewayInterposition(
+            AmigaBus bus,
+            uint address,
+            uint token,
+            HostGatewayStub previous)
+        {
+            _bus = bus;
+            _address = address;
+            _token = token;
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            _bus.RestoreHostGatewayInterposition(
+                _address,
+                _token,
+                _previous);
+        }
+    }
+
     internal sealed partial class Bus :
         IM68kBus,
         IM68kCodeReader,
@@ -330,6 +367,7 @@ namespace CopperMod.Amiga.Bus
         private long _nextHorizontalSyncIndex;
         private long _nextHorizontalSyncCycle;
         private long _lastRasterAdvanceCycle;
+        private long _externalResetCount;
         private bool _externalResyncEnabled;
         private int _externalResyncLine;
         private bool _externalResyncLongFrame;
@@ -1023,6 +1061,8 @@ namespace CopperMod.Amiga.Bus
 
         public IReadOnlyList<AmigaBusAccessResult> BusAccesses => _busAccesses;
 
+        internal long ExternalResetCount => _externalResetCount;
+
 
         internal bool BusAccessCaptureEnabled => _captureBusAccesses;
 
@@ -1611,6 +1651,7 @@ namespace CopperMod.Amiga.Bus
             _nextHostTrapId = 1;
             _autoconfigRtg?.RefreshFirmwareAttachment(this);
             _mappedMemory.Clear();
+            _externalResetCount = 0;
             _romOverlayEnabled = true;
             InvalidateInstructionFetchWindows();
             StrictCpuPhysicalDataMapping = false;
@@ -1694,6 +1735,38 @@ namespace CopperMod.Amiga.Bus
             InvalidateInstructionFetchWindows();
             RebuildCpuBusBanksForHostGateway(address);
             return token;
+        }
+
+        internal HostGatewayInterposition InterposeHostGateway(
+            uint address,
+            Func<M68kCpuState, Func<M68kCpuState, M68kHostGatewayResult>, M68kHostGatewayResult> interceptor)
+        {
+            ArgumentNullException.ThrowIfNull(interceptor);
+            if (!_hostTrapStubs.TryGetValue(address, out var previous))
+                throw new InvalidOperationException(
+                    $"No host gateway exists at 0x{address:X8} to interpose.");
+            var token = RegisterHostGateway(
+                address,
+                state => interceptor(state, previous.Callback));
+            return new HostGatewayInterposition(this, address, token, previous);
+        }
+
+        internal void RestoreHostGatewayInterposition(
+            uint address,
+            uint token,
+            HostGatewayStub previous)
+        {
+            if (!_hostTrapStubs.TryGetValue(address, out var current) ||
+                current.Token != token)
+            {
+                throw new InvalidOperationException(
+                    $"Host gateway interposition at 0x{address:X8} is no longer current.");
+            }
+            _hostTrapStubs[address] = previous;
+            AddHostTrapStubAddress(address);
+            MarkHostTrapStubPages(address);
+            InvalidateInstructionFetchWindows();
+            RebuildCpuBusBanksForHostGateway(address);
         }
 
         /// <summary>
@@ -1784,6 +1857,7 @@ namespace CopperMod.Amiga.Bus
         public void ResetExternalDevices(long cycle)
         {
             _ = cycle;
+            _externalResetCount++;
             _pendingCiaInterrupts.Clear();
             _busAccesses.Clear();
             _cpuBusPhases.Clear();
@@ -1798,6 +1872,7 @@ namespace CopperMod.Amiga.Bus
             InvalidateInstructionFetchWindows();
             CiaB.Reset();
             Keyboard.Reset();
+            _a1200PlatformIo?.Reset();
             UpdateCiaAPortAOutputSideEffects();
             Paula.Reset();
             Disk.Reset();
@@ -1922,7 +1997,9 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            value = ReadHostByte(address);
+            value = accessKind == M68kBusAccessKind.CpuInstructionFetch
+                ? ReadHostByte(address)
+                : ReadRawByte(address);
             return true;
         }
 
@@ -1931,6 +2008,7 @@ namespace CopperMod.Amiga.Bus
 
         bool IM68000BusCycleTiming.RequiresExactM68000PipelineFallback
             => _hardwareSpecializationEnabled;
+
 
         M68000BusAccessTiming IM68000BusCycleTiming.GetM68000BusAccessTiming(
             uint address,
@@ -1961,7 +2039,9 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            value = ReadHostWord(address);
+            value = accessKind == M68kBusAccessKind.CpuInstructionFetch
+                ? ReadHostWord(address)
+                : ReadRawWord(address);
             return true;
         }
 
@@ -1973,7 +2053,9 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            value = ReadHostLong(address);
+            value = accessKind == M68kBusAccessKind.CpuInstructionFetch
+                ? ReadHostLong(address)
+                : ReadRawLong(address);
             return true;
         }
 
@@ -2638,6 +2720,67 @@ namespace CopperMod.Amiga.Bus
             var hasScalarChipFetchShadow = target == AmigaBusAccessTarget.ChipRam &&
                 TryPredictScalarCpuChipInstructionFetch(address, cycle, out scalarChipFetchProof);
             if (target == AmigaBusAccessTarget.ChipRam &&
+                publicationPhase == M68kInstructionFetchPublicationPhase.InterruptibleBranchTarget)
+            {
+                var interruptibleRequestedCycle = cycle;
+                var result = AdvanceInterruptibleCpuInstructionFetch(
+                    target,
+                    address,
+                    ref cycle,
+                    (publicationContext.StatusRegister >> 8) & 0x07,
+                    out var interruptibleGrantedCycle);
+                if (result == CpuWaitGrantAdvanceResult.InterruptBoundary)
+                {
+                    throw new M68kInstructionFetchInterruptedException(
+                        cycle,
+                        interruptibleRequestedCycle,
+                        in publicationContext);
+                }
+
+                if (result == CpuWaitGrantAdvanceResult.Granted)
+                {
+                    CaptureExactCpuAccess(
+                        AmigaBusAccessKind.CpuInstructionFetch,
+                        AmigaBusAccessTarget.ChipRam,
+                        address,
+                        AmigaBusAccessSize.Word,
+                        interruptibleRequestedCycle,
+                        isWrite: false,
+                        interruptibleGrantedCycle,
+                        cycle);
+                    return ReadCpuInstructionFetchChipWordAtGrantedSlot(
+                        address,
+                        interruptibleGrantedCycle);
+                }
+            }
+            if (target == AmigaBusAccessTarget.ChipRam &&
+                publicationPhase == M68kInstructionFetchPublicationPhase.CancellableSuccessor &&
+                Paula.GetHighestCpuVisibleInterruptLevel(cycle) >
+                    ((publicationContext.StatusRegister >> 8) & 0x07))
+            {
+                var successorRequestedCycle = cycle;
+                var result = AdvanceBranchSuccessorCpuInstructionFetch(
+                    target,
+                    address,
+                    ref cycle,
+                    out var successorGrantedCycle);
+                if (result == CpuWaitGrantAdvanceResult.Granted)
+                {
+                    CaptureExactCpuAccess(
+                        AmigaBusAccessKind.CpuInstructionFetch,
+                        AmigaBusAccessTarget.ChipRam,
+                        address,
+                        AmigaBusAccessSize.Word,
+                        successorRequestedCycle,
+                        isWrite: false,
+                        successorGrantedCycle,
+                        cycle);
+                    return ReadCpuInstructionFetchChipWordAtGrantedSlot(
+                        address,
+                        successorGrantedCycle);
+                }
+            }
+            if (target == AmigaBusAccessTarget.ChipRam &&
                 TryDeferCpuChipInstructionFetch(
                     address,
                     ref cycle,
@@ -2994,6 +3137,16 @@ namespace CopperMod.Amiga.Bus
                     isWrite: false);
                 sampleCycle = access.GrantedCycle;
                 completedCycle = access.CompletedCycle;
+            }
+
+            if (ciaRegister is >= 0x04 and <= 0x07)
+            {
+                // CIA timer counters are continuously driven by E-clock. The
+                // scheduler normally publishes timer state at underflows, but
+                // a counter read is an earlier observable boundary and must
+                // materialize the intermediate decrements through its bus
+                // sample cycle.
+                AdvanceCiaTimersTo(sampleCycle);
             }
 
             var value = ReadCiaRegisterValue(cia, ciaRegister, sampleCycle);
@@ -3974,6 +4127,21 @@ namespace CopperMod.Amiga.Bus
                 _rtgVram.IsAllocatedRange(address, byteCount);
         }
 
+        /// <summary>
+        /// Reports whether a complete guest span is addressable by native
+        /// OCS/ECS display DMA.  Agnus display fetches come from chip RAM;
+        /// this is deliberately an address-class query rather than a timing
+        /// operation so graphics.library can reject an unsafe publication
+        /// before a View reaches the display scheduler.
+        /// </summary>
+        internal bool IsDisplayDmaRange(uint address, int byteCount)
+        {
+            if (byteCount <= 0 || (address & 1u) != 0)
+                return false;
+
+            return IsChipRamRange(address, byteCount);
+        }
+
         public bool IsCpuPhysicalAddressMapped(uint address, int byteCount, AmigaBusAccessKind accessKind)
         {
             if (byteCount < 0)
@@ -4654,7 +4822,7 @@ namespace CopperMod.Amiga.Bus
                 if (LiveAgnusDmaEnabled &&
                     Display.HasLiveDisplayWork())
                 {
-                    Display.CaptureLiveDisplayDmaBeforeHrmGrant(requestedCycle);
+					Display.CaptureLiveDisplayDmaBeforeHrmGrant(requestedCycle);
                 }
 
                 access = _agnusBusExecutor.ReserveBlitterDmaWordSlot(address, requestedCycle, isWrite);
@@ -4891,7 +5059,7 @@ namespace CopperMod.Amiga.Bus
         {
             if (requester != AmigaBusRequester.Copper ||
                 (value & 0x8000) == 0 ||
-                (value & AmigaConstants.IntreqCopper) == 0 ||
+                (value & 0x3FFF) == 0 ||
                 address < 0x00DFF000 ||
                 address >= 0x00DFF200 ||
                 ((address - 0x00DFF000) & 0x01FE) != 0x09C)
@@ -4899,7 +5067,7 @@ namespace CopperMod.Amiga.Bus
                 return;
             }
 
-            Paula.DelayCopperInterruptRecognition(cycle);
+            Paula.DelayCopperInterruptRecognition(cycle, (ushort)(value & 0x3FFF));
         }
 
         private AmigaBusAccessResult Arbitrate(
@@ -6656,9 +6824,21 @@ namespace CopperMod.Amiga.Bus
             }
 
             var target = ClassifyTarget(address);
+            if (AgnusSlotKernelSelected &&
+                target == AmigaBusAccessTarget.ChipRam &&
+                size == M68kOperandSize.Long)
+            {
+                // The two 68000 word phases must be sampled independently.
+                // Selecting both slots first lets fixed DMA committed while
+                // finding the low-word slot overtake the unsampled high word.
+                return ReadLong(address, ref cycle, AmigaBusAccessKind.CpuDataRead);
+            }
+
             var accessSize = ToBusAccessSize(size);
+        RetryCausalGrant:
             if (_useFastZeroWaitAccesses)
             {
+                var requestedCycle = cycle;
                 GrantFastCpuAccessCycles(
                     target,
                     address,
@@ -6669,7 +6849,12 @@ namespace CopperMod.Amiga.Bus
                     out var fastGrantedCycle,
                     out var fastSecondWordCycle,
                     out var fastCompletedCycle);
-                AdvanceDmaBeforeCpuChipAccess(target, address, fastGrantedCycle, isWrite: false);
+                AdvanceDmaAfterCpuGrantIfNeeded(target, address, requestedCycle, fastGrantedCycle, isWrite: false);
+                if (IsCpuChipBusGrantOvertaken(target, fastGrantedCycle))
+                {
+                    AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
+                    goto RetryCausalGrant;
+                }
 
                 var fastValue = TryReadJitMappedMemory(target, address, size, out var fastMappedValue)
                     ? fastMappedValue
@@ -6683,8 +6868,14 @@ namespace CopperMod.Amiga.Bus
                 return fastValue;
             }
 
-            var access = Arbitrate(AmigaBusRequester.Cpu, AmigaBusAccessKind.CpuDataRead, target, address, accessSize, cycle, isWrite: false);
-            AdvanceDmaBeforeCpuChipAccess(target, address, access.GrantedCycle, isWrite: false);
+            var arbitrationRequestedCycle = cycle;
+            var access = Arbitrate(AmigaBusRequester.Cpu, AmigaBusAccessKind.CpuDataRead, target, address, accessSize, arbitrationRequestedCycle, isWrite: false);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, arbitrationRequestedCycle, access.GrantedCycle, isWrite: false);
+            if (IsCpuChipBusGrantOvertaken(target, access.GrantedCycle))
+            {
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
+                goto RetryCausalGrant;
+            }
 
             var value = TryReadJitMappedMemory(target, address, size, out var mappedValue)
                 ? mappedValue
@@ -6750,7 +6941,18 @@ namespace CopperMod.Amiga.Bus
             }
 
             var target = ClassifyTarget(address);
+            if (AgnusSlotKernelSelected &&
+                target == AmigaBusAccessTarget.ChipRam &&
+                size == M68kOperandSize.Long)
+            {
+                // Commit the high word before arbitration of the low word so
+                // intervening fixed DMA cannot overtake an unwritten phase.
+                WriteLong(address, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+                return;
+            }
+
             var accessSize = ToBusAccessSize(size);
+        RetryCausalGrant:
             long grantedCycle;
             long secondWordCycle;
             long completedCycle;
@@ -6775,7 +6977,13 @@ namespace CopperMod.Amiga.Bus
                 completedCycle = access.CompletedCycle;
             }
 
-            AdvanceDmaBeforeCpuChipAccess(target, address, grantedCycle, isWrite: true);
+            AdvanceDmaAfterCpuGrantIfNeeded(target, address, cycle, grantedCycle, isWrite: true);
+            if (IsCpuChipBusGrantOvertaken(target, grantedCycle))
+            {
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
+                goto RetryCausalGrant;
+            }
+
             WriteJitCpuDataTarget(target, address, value, size, grantedCycle, secondWordCycle);
 
             cycle = completedCycle +
@@ -6850,6 +7058,11 @@ namespace CopperMod.Amiga.Bus
             M68kOperandSize size,
             AmigaBusAccessResult access)
         {
+            if (target == AmigaBusAccessTarget.Cia && size == M68kOperandSize.Byte)
+            {
+                return ReadJitCiaByteAtGranted(address, access.GrantedCycle);
+            }
+
             if (target == AmigaBusAccessTarget.CustomRegisters)
             {
                 return size switch
@@ -6881,6 +7094,11 @@ namespace CopperMod.Amiga.Bus
             long grantedCycle,
             long secondWordCycle)
         {
+            if (target == AmigaBusAccessTarget.Cia && size == M68kOperandSize.Byte)
+            {
+                return ReadJitCiaByteAtGranted(address, grantedCycle);
+            }
+
             if (target == AmigaBusAccessTarget.CustomRegisters)
             {
                 return size switch
@@ -6903,6 +7121,21 @@ namespace CopperMod.Amiga.Bus
                 M68kOperandSize.Word => ReadRawWord(address),
                 _ => ReadRawLong(address)
             };
+        }
+
+        private byte ReadJitCiaByteAtGranted(uint address, long grantedCycle)
+        {
+            if (!TryGetCiaRegister(address, out var cia, out var ciaRegister))
+            {
+                return ReadRawByte(address);
+            }
+
+            if (ciaRegister is >= 0x04 and <= 0x07)
+            {
+                AdvanceCiaTimersTo(grantedCycle);
+            }
+
+            return ReadCiaRegisterValue(cia, ciaRegister, grantedCycle);
         }
 
 
@@ -7807,14 +8040,20 @@ namespace CopperMod.Amiga.Bus
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void AdvanceCpuAccessToCausalBusHorizon(
             AmigaBusAccessTarget target,
-            ref long cycle)
+            ref long cycle,
+            AmigaBusAccessKind kind = AmigaBusAccessKind.CpuDataRead,
+            bool allowAdjacentCopperPhase = false)
         {
             if (target is AmigaBusAccessTarget.ChipRam or AmigaBusAccessTarget.CustomRegisters &&
                 cycle <= ExecutedChipBusHorizon)
             {
-                var executedThrough = ExecutedChipBusHorizon;
-                var causalTailSlots =
-                    _agnusBusExecutor.LastCopperGrantedCycle == executedThrough
+				var executedThrough = ExecutedChipBusHorizon;
+				var causalTailSlots =
+					!allowAdjacentCopperPhase &&
+					(_agnusBusExecutor.LastCopperGrantedCycle == executedThrough ||
+					 (kind == AmigaBusAccessKind.CpuInstructionFetch &&
+					  _chipDataBusLatchRequester == AmigaBusRequester.Copper &&
+					  _chipDataBusLatchCycle == executedThrough))
                         ? 2
                         : 1;
                 cycle = executedThrough +

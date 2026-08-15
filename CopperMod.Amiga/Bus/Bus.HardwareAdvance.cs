@@ -262,6 +262,9 @@ namespace CopperMod.Amiga.Bus
         internal bool TryGetCommittedAgnusSlotOwner(long cycle, out AgnusChipSlotOwner owner)
             => _hrmSlotEngine.TryGetCommittedSlotOwner(cycle, out owner);
 
+        internal bool IsCpuGrantAfterNiceBlitterWait(long cycle)
+            => _hrmSlotEngine.IsCpuGrantAfterNiceBlitterWait(cycle);
+
         internal bool SlotScheduleAuditEnabled => _hrmSlotEngine.SlotScheduleAuditEnabled;
 
         internal AgnusSlotAuditSource PushSlotScheduleAuditSource(AgnusSlotAuditSource source)

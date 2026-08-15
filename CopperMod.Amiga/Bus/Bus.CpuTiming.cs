@@ -57,6 +57,7 @@ namespace CopperMod.Amiga.Bus
                 cpuInterruptMask,
                 out grantedCycle,
                 out var completedCycle);
+
             if (result != CpuWaitGrantAdvanceResult.Unsupported)
             {
                 cycle = completedCycle;
@@ -64,6 +65,44 @@ namespace CopperMod.Amiga.Bus
 
             return result;
         }
+
+        internal CpuWaitGrantAdvanceResult AdvanceBranchSuccessorCpuInstructionFetch(
+            AmigaBusAccessTarget target,
+            uint address,
+            ref long cycle,
+            out long grantedCycle)
+        {
+            if (_deferredCpuBusBatchActive)
+            {
+                FlushDeferredCpuDataTiming(ref cycle);
+                if (_deferredCpuBusBatchActive && !_endingDeferredCpuBusBatch)
+                {
+                    EndDeferredCpuBusBatchCore(
+                        ref cycle,
+                        M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
+                }
+            }
+
+            var requestedCycle = cycle;
+            var result = _hardwareScheduler.AdvanceUntilCpuGrant(
+                AmigaBusAccessKind.CpuInstructionFetch,
+                target,
+                address,
+                AmigaBusAccessSize.Word,
+				requestedCycle,
+				isWrite: false,
+				out grantedCycle,
+				out var completedCycle,
+				allowAdjacentCopperPhase: true);
+
+            if (result != CpuWaitGrantAdvanceResult.Unsupported)
+            {
+                cycle = completedCycle;
+            }
+
+            return result;
+        }
+
         // Reuses the prepared display-owner segment while a CPU grant search walks
         // forward within the same raster line. The cursor self-invalidates when a
         // Copper/custom-register wake changes the live display generation.
@@ -785,6 +824,12 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
+            // Timing and value events use separate fixed journals. Publish
+            // the older timing prefix before the Chip write becomes the next
+            // unresolved CPU boundary, so a later timing suffix cannot be
+            // replayed ahead of this write.
+            FlushDeferredCpuDataTiming(ref cycle, keepBatchActive: true);
+
             if (!_agnusBusExecutor.TryEnqueueCpuChipWordWrite(
                 address,
                 value,
@@ -831,6 +876,9 @@ namespace CopperMod.Amiga.Bus
                     M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
                 return false;
             }
+
+            // Preserve the same cross-journal chronology as the word path.
+            FlushDeferredCpuDataTiming(ref cycle, keepBatchActive: true);
 
             if (!_agnusBusExecutor.TryEnqueueCpuChipLongWrite(
                 address,
@@ -1466,6 +1514,15 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
+            if (_agnusBusExecutor.CpuEventJournal.Count != 0)
+            {
+                // A pending Chip/custom value event is an older physical CPU
+                // boundary. Commit it before opening a new speculative timing
+                // suffix; the executor must never advance that suffix across
+                // the value-event fence.
+                _agnusBusExecutor.FlushCpuEventJournal(ref cycle);
+            }
+
             SynchronizeDeferredCpuJournalStart(ref cycle);
 
             // Instruction-fetch delay feeds back into later chip-visible work.
@@ -1634,7 +1691,8 @@ namespace CopperMod.Amiga.Bus
                 _agnusBusExecutor.ClearUnresolvedCpuTiming();
                 if (!keepBatchActive &&
                     _deferredCpuBusBatchActive &&
-                    !_endingDeferredCpuBusBatch)
+                    !_endingDeferredCpuBusBatch &&
+                    !_agnusBusExecutor.IsFlushingCpuEventJournal)
                 {
                     EndDeferredCpuBusBatchCore(ref cycle, M68kDeferredCpuBusBatchExitReason.ChipVisibleAccess);
                 }
@@ -2310,12 +2368,12 @@ namespace CopperMod.Amiga.Bus
                 CommitExactCpuExpansionDataTiming(
                     region.Address,
                     size,
-                ref cycle,
-                isWrite,
-                kind,
-                OcsLiveDmaScratchCpuWrite.None,
-                out grantedCycle,
-                out secondWordCycle);
+                    ref cycle,
+                    isWrite,
+                    kind,
+                    OcsLiveDmaScratchCpuWrite.None,
+                    out grantedCycle,
+                    out secondWordCycle);
                 return;
             }
 
@@ -2364,6 +2422,17 @@ namespace CopperMod.Amiga.Bus
             out long grantedCycle,
             out long secondWordCycle)
         {
+            if (_deferredCpuDataAccessCount != 0)
+            {
+                // An access can remain eligible for the surrounding CPU batch while
+                // still requiring exact timing itself. Commit the older speculative
+                // prefix before publishing this exact request; otherwise its timing
+                // fence can remain behind DMA that wins the exact grant search.
+                FlushDeferredCpuDataTiming(
+                    ref cycle,
+                    CanKeepDeferredCpuBusBatchForAccess(target, kind, isWrite, cycle));
+            }
+
             if (!CanKeepDeferredCpuBusBatchForAccess(target, kind, isWrite, cycle))
             {
                 var deferInstructionFetchWindowExit =
@@ -2376,7 +2445,9 @@ namespace CopperMod.Amiga.Bus
                     FlushDeferredCpuDataTiming(ref cycle);
                 }
 
-                if (_deferredCpuBusBatchActive && !_endingDeferredCpuBusBatch)
+                if (_deferredCpuBusBatchActive &&
+                    !_endingDeferredCpuBusBatch &&
+                    !_agnusBusExecutor.IsFlushingCpuEventJournal)
                 {
                     if (!deferInstructionFetchWindowExit)
                     {
@@ -2413,7 +2484,7 @@ namespace CopperMod.Amiga.Bus
                     target == AmigaBusAccessTarget.ChipRam &&
                     grantedCycle <= ExecutedChipBusHorizon)
                 {
-                    AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
+                    AdvanceCpuAccessToCausalBusHorizon(target, ref cycle, kind);
                     goto RetryCausalCpuGrant;
                 }
 
@@ -2437,7 +2508,7 @@ namespace CopperMod.Amiga.Bus
                 if (target == AmigaBusAccessTarget.ChipRam &&
                     grantedCycle <= ExecutedChipBusHorizon)
                 {
-                    AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
+                    AdvanceCpuAccessToCausalBusHorizon(target, ref cycle, kind);
                     goto RetryCausalCpuGrant;
                 }
 
@@ -2457,7 +2528,7 @@ namespace CopperMod.Amiga.Bus
             if (target == AmigaBusAccessTarget.ChipRam &&
                 access.GrantedCycle <= ExecutedChipBusHorizon)
             {
-                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
+                AdvanceCpuAccessToCausalBusHorizon(target, ref cycle, kind);
                 goto RetryCausalCpuGrant;
             }
 
@@ -2738,7 +2809,7 @@ namespace CopperMod.Amiga.Bus
             if (!slotContendedClean && !cpuGrantCommitted)
             {
                 _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite, size);
-                AdvanceCpuAccessToCausalBusHorizon(target, ref grantRequestCycle);
+                AdvanceCpuAccessToCausalBusHorizon(target, ref grantRequestCycle, kind);
             }
 
             // Slot ownership must be resolved by executing every requester in
@@ -2770,7 +2841,7 @@ namespace CopperMod.Amiga.Bus
                 !AgnusLiveBlitterEnabled)
             {
                 grantRequestCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(grantRequestCycle);
-                AdvanceCpuAccessToCausalBusHorizon(target, ref grantRequestCycle);
+                AdvanceCpuAccessToCausalBusHorizon(target, ref grantRequestCycle, kind);
             }
 
             grantRequestCycle = Math.Max(0, grantRequestCycle);
@@ -3233,9 +3304,13 @@ namespace CopperMod.Amiga.Bus
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal long AdvancePendingCpuGrantToCausalBusHorizon(
             AmigaBusAccessTarget target,
-            long cycle)
+            long cycle,
+            bool allowAdjacentCopperPhase = false)
         {
-            AdvanceCpuAccessToCausalBusHorizon(target, ref cycle);
+            AdvanceCpuAccessToCausalBusHorizon(
+                target,
+                ref cycle,
+                allowAdjacentCopperPhase: allowAdjacentCopperPhase);
             return cycle;
         }
 
@@ -4121,7 +4196,7 @@ namespace CopperMod.Amiga.Bus
                     requestedCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(requestedCycle);
                 }
 
-                AdvanceCpuAccessToCausalBusHorizon(target, ref requestedCycle);
+                AdvanceCpuAccessToCausalBusHorizon(target, ref requestedCycle, kind);
             }
 
             requestedCycle = Math.Max(0, requestedCycle);

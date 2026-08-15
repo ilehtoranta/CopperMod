@@ -10,6 +10,8 @@ internal sealed class HostGuestMemory
     /// <summary>Underlying bus used by reversible ROM-overlay installation.</summary>
     internal Bus Bus => _bus;
     public bool IsMapped(uint address, int size) => !IsHardware(address, size) && _bus.IsMappedMemoryRange(address, size);
+    internal bool IsDisplayDmaRange(uint address, int size)
+        => size > 0 && _bus.IsDisplayDmaRange(address, size);
     public byte ReadByte(uint address) { Check(address, 1); return _bus.ReadHostByte(address); }
     public ushort ReadWord(uint address) { Check(address, 2); return _bus.ReadHostWord(address); }
     public uint ReadLong(uint address) { Check(address, 4); return _bus.ReadHostLong(address); }

@@ -62,6 +62,14 @@ namespace CopperMod.Amiga.Bus
             => _hrmSlotEngine.ClearPendingCpuSlotRequest();
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool WasCopperWordGrantedAt(long slotCycle)
+            => (_chipDataBusLatchRequester == AmigaBusRequester.Copper &&
+                _chipDataBusLatchCycle == slotCycle) ||
+               _agnusBusExecutor.LastCopperGrantedCycle == slotCycle ||
+               (TryGetCommittedAgnusSlotOwner(slotCycle, out var owner) &&
+                owner == AgnusChipSlotOwner.Copper);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryGrantLiveSlotKernelCpuWord(
             AmigaBusAccessKind kind,
             AmigaBusAccessTarget target,
@@ -71,7 +79,23 @@ namespace CopperMod.Amiga.Bus
             long slotCycle,
             bool isWrite,
             out long completedCycle)
-            => _hrmSlotEngine.TryGrantCpuDataSingleExactSlot(
+        {
+            if (slotCycle < ExecutedChipBusHorizon)
+            {
+                completedCycle = 0;
+                return false;
+            }
+
+            if (kind == AmigaBusAccessKind.CpuInstructionFetch &&
+                requestedCycle ==
+                    slotCycle - AgnusChipSlotScheduler.SlotCycles &&
+                WasCopperWordGrantedAt(requestedCycle))
+            {
+                completedCycle = 0;
+                return false;
+            }
+
+            return _hrmSlotEngine.TryGrantCpuDataSingleExactSlot(
                 kind,
                 target,
                 address,
@@ -81,6 +105,7 @@ namespace CopperMod.Amiga.Bus
                 isWrite,
                 allowNiceBlitterSteal: true,
                 out completedCycle);
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void ObserveLiveSlotKernelCpuWaitCycle(long slotCycle)

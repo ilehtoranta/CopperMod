@@ -4,6 +4,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
@@ -104,7 +105,8 @@ namespace CopperMod.Amiga.Bus
             long requestedCycle,
             bool isWrite,
             out long grantedCycle,
-            out long completedCycle)
+            out long completedCycle,
+            bool allowAdjacentCopperPhase = false)
             => AdvanceUntilCpuGrantCore(
                 kind,
                 target,
@@ -114,7 +116,8 @@ namespace CopperMod.Amiga.Bus
                 requestedCycle,
                 isWrite,
                 out grantedCycle,
-                out completedCycle);
+                out completedCycle,
+                allowAdjacentCopperPhase: allowAdjacentCopperPhase);
 
         internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrantOrInterrupt(
             AmigaBusAccessKind kind,
@@ -169,7 +172,8 @@ namespace CopperMod.Amiga.Bus
             bool isWrite,
             out long grantedCycle,
             out long completedCycle,
-            int cpuInterruptMask = -1)
+            int cpuInterruptMask = -1,
+            bool allowAdjacentCopperPhase = false)
         {
             grantedCycle = 0;
             completedCycle = 0;
@@ -303,6 +307,10 @@ namespace CopperMod.Amiga.Bus
                             candidate,
                             out var interruptBoundaryCycle))
                     {
+                        // Reaching the IPL recognition phase cancels a request
+                        // that has not won a physical slot. The issue cycle does
+                        // not commit a transfer; a granted transfer has already
+                        // returned from this search and cannot reach this path.
                         DrainSlotContendedAccess(interruptBoundaryCycle);
                         completedCycle = interruptBoundaryCycle;
                         return CpuWaitGrantAdvanceResult.InterruptBoundary;
@@ -353,7 +361,9 @@ namespace CopperMod.Amiga.Bus
                     var causalCandidate =
                         _bus.AdvancePendingCpuGrantToCausalBusHorizon(
                             target,
-                            candidate);
+                            candidate,
+                            allowAdjacentCopperPhase:
+                                interruptible || allowAdjacentCopperPhase);
                     if (causalCandidate != candidate)
                     {
                         _bus.CausalBusExecutor.ObservePendingCpuDmaCycle(
@@ -382,7 +392,9 @@ namespace CopperMod.Amiga.Bus
                     // attempting to grant the already-executed slot again.
                     causalCandidate = _bus.AdvancePendingCpuGrantToCausalBusHorizon(
                         target,
-                        candidate);
+                        candidate,
+                        allowAdjacentCopperPhase:
+                            interruptible || allowAdjacentCopperPhase);
                     if (causalCandidate != candidate)
                     {
                         candidate = AgnusChipSlotScheduler.AlignToSlot(causalCandidate);
@@ -432,20 +444,23 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            var pinAssertCycle =
+            var releaseCycle =
                 _bus.Paula.GetCpuInterruptReleaseCycleForLevel(level, candidateCycle);
-            if (!pinAssertCycle.HasValue)
+            if (!releaseCycle.HasValue)
             {
                 return false;
             }
 
             // A transition exactly four CPU clocks before the poll is staged
-            // until the next poll. The first eligible boundary is therefore
-            // assertion + setup + one clock.
-            recognitionCycle = pinAssertCycle.Value + M68000InterruptSetupCycles + 1;
-            return recognitionCycle <= candidateCycle;
+            // until the next poll. Polls occur on the MC68000's four-clock
+            // control phase, so assertion + setup + one clock must advance to
+            // that physical phase before it can cancel an unstarted fetch.
+            var earliestRecognitionCycle =
+                releaseCycle.Value + M68000InterruptSetupCycles + 1;
+            var eligiblePollCycle = (earliestRecognitionCycle + 3) & ~3L;
+            recognitionCycle = earliestRecognitionCycle;
+            return eligiblePollCycle <= candidateCycle;
         }
-
 
         internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrantUsingFixedSlotImage(
             AmigaBusAccessKind kind,
