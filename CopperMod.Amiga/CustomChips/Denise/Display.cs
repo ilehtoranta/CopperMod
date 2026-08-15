@@ -89,6 +89,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
         // instruction's first DMA word is available one Copper memory cycle later.
         private const int CopperWaitWakeHpUnits = 5;
         private const int CopperBfdNoBusyWakeHpUnits = 3;
+        private const int CopperBfdReleasePresentationPixelOffset = 4;
+        private const int CopperWaitReadyPresentationPixelOffset = 4;
         private const int CopperWaitLineEndBlackoutHpUnits = 4;
         private const int CanonicalLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
         private const int CanonicalCopperHpCycles = AmigaConstants.A500PalCpuCyclesPerColorClock;

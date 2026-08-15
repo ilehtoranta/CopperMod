@@ -20,6 +20,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private readonly System.Collections.Generic.List<long>
             _liveBlitterAfterSlotTransitionCycles = new();
         private bool _liveAreaFinalDCompletionPublished;
+        private bool _liveBOnlyFinalInterruptPublished;
         private bool _liveAreaPendingDValid;
         private ushort _liveAreaPendingDValue;
         private bool _liveAreaPendingDCompletesRow;
@@ -59,6 +60,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         {
             _liveBlitterRequester?.Reset();
             _liveAreaFinalDCompletionPublished = false;
+            _liveBOnlyFinalInterruptPublished = false;
             ResetLiveAreaDPipeline();
             if (!resetDiagnostics)
             {
@@ -570,9 +572,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 requester.CancelPendingWord();
             }
 
-            if (requester.TryPeekNextTransition(out _))
+            if (requester.TryPeekNextTransition(out var pendingTransition))
             {
-                if (IsLiveBlitterTransitionCurrent(requester.TransitionKind))
+                if (IsLiveBlitterTransitionCurrent(
+                        requester.TransitionKind,
+                        pendingTransition))
                 {
                     return;
                 }
@@ -757,7 +761,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         }
 
         private bool IsLiveBlitterTransitionCurrent(
-            LiveBlitterTransitionKind kind)
+            LiveBlitterTransitionKind kind,
+            in AgnusLiveTransition transition)
             => kind switch
             {
                 LiveBlitterTransitionKind.BeginAreaWord =>
@@ -785,10 +790,12 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     _areaMicroOpFinalWord &&
                     _areaMicroOpIndex >= GetAreaMicroOpCount() &&
                     _liveAreaPendingDValid &&
-                    !_liveAreaFinalDDrainActive,
+                    !_liveAreaFinalDDrainActive &&
+                    transition.Cycle == GetAreaMicroOpFinishCycle(),
                 LiveBlitterTransitionKind.FinishAreaWord =>
                     _areaMicroOpActive &&
-                    _areaMicroOpIndex >= GetAreaMicroOpCount(),
+                    _areaMicroOpIndex >= GetAreaMicroOpCount() &&
+                    transition.Cycle == GetAreaMicroOpFinishCycle(),
                 LiveBlitterTransitionKind.BeginLinePixel =>
                     _busy &&
                     !_completionPending &&
@@ -846,6 +853,14 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 }
 
                 CommitLiveAreaMicroOp(request.Channel, grant.SampledValue, access);
+                if (_areaMicroOpFinalWord &&
+                    IsBOnlyAreaBlit() &&
+                    _areaMicroOpIndex >= GetAreaMicroOpCount())
+                {
+                    PublishBOnlyFinalInterrupt(
+                        isFinalWord: true,
+                        access.CompletedCycle);
+                }
                 if (_areaMicroOpActive &&
                     _areaMicroOpIndex >= GetAreaMicroOpCount() &&
                     GetAreaMicroOpFinishCycle() <= grant.CompletedCycle)

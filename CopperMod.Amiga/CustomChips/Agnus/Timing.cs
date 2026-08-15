@@ -1054,6 +1054,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         private long _cpuDmaWaitRequestCycle;
         private int _cpuDmaWaitCycles;
         private long _cpuDmaWaitLastObservedCycle = -1;
+        private long _cpuGrantAfterNiceWaitCycle0 = -1;
+        private long _cpuGrantAfterNiceWaitCycle1 = -1;
         private long _slotGrantCount;
         private long _slotScheduleAuditSequence;
         private long _currentCycle;
@@ -1125,6 +1127,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             _cpuDmaWaitRequestCycle = source._cpuDmaWaitRequestCycle;
             _cpuDmaWaitCycles = source._cpuDmaWaitCycles;
             _cpuDmaWaitLastObservedCycle = source._cpuDmaWaitLastObservedCycle;
+            _cpuGrantAfterNiceWaitCycle0 = source._cpuGrantAfterNiceWaitCycle0;
+            _cpuGrantAfterNiceWaitCycle1 = source._cpuGrantAfterNiceWaitCycle1;
             _slotGrantCount = source._slotGrantCount;
             _slotScheduleAuditSequence = source._slotScheduleAuditSequence;
             _currentCycle = source._currentCycle;
@@ -1300,6 +1304,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             _cpuDmaWaitRequestCycle = requestedCycle;
             _cpuDmaWaitCycles = 0;
             _cpuDmaWaitLastObservedCycle = -1;
+            _cpuGrantAfterNiceWaitCycle0 = -1;
+            _cpuGrantAfterNiceWaitCycle1 = -1;
         }
 
         internal void PublishPendingCpuSlotRequest(
@@ -1326,6 +1332,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             _cpuDmaWaitRequestCycle = 0;
             _cpuDmaWaitCycles = 0;
             _cpuDmaWaitLastObservedCycle = -1;
+            _cpuGrantAfterNiceWaitCycle0 = -1;
+            _cpuGrantAfterNiceWaitCycle1 = -1;
         }
 
         internal void WithdrawPendingCpuSlotRequest()
@@ -1366,6 +1374,42 @@ namespace CopperMod.Amiga.CustomChips.Agnus
         {
             _cpuDmaWaitCycles = 0;
             _cpuDmaWaitLastObservedCycle = -1;
+        }
+
+        private void RecordCpuGrantAfterNiceWait(long slotCycle)
+        {
+            if (BlitterPriorityEnabled ||
+                _cpuDmaWaitCycles < CpuDmaWaitCyclesBeforeNiceBlitterYield)
+            {
+                return;
+            }
+
+            if (_cpuGrantAfterNiceWaitCycle0 < 0)
+            {
+                _cpuGrantAfterNiceWaitCycle0 = slotCycle;
+            }
+            else if (_cpuGrantAfterNiceWaitCycle0 != slotCycle)
+            {
+                _cpuGrantAfterNiceWaitCycle1 = slotCycle;
+            }
+        }
+
+        private bool ConsumeCpuGrantAfterNiceWait(long slotCycle)
+        {
+            if (_cpuGrantAfterNiceWaitCycle0 == slotCycle)
+            {
+                _cpuGrantAfterNiceWaitCycle0 = _cpuGrantAfterNiceWaitCycle1;
+                _cpuGrantAfterNiceWaitCycle1 = -1;
+                return true;
+            }
+
+            if (_cpuGrantAfterNiceWaitCycle1 == slotCycle)
+            {
+                _cpuGrantAfterNiceWaitCycle1 = -1;
+                return true;
+            }
+
+            return false;
         }
 
         public void SetSlotScheduleAuditSink(Action<AgnusSlotScheduleAuditEntry>? sink)
@@ -1895,6 +1939,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                     allowNiceBlitterSteal &&
                     _cpuDmaWaitCycles >= CpuDmaWaitCyclesBeforeNiceBlitterYield)
                 {
+                    RecordCpuGrantAfterNiceWait(slotCycle);
                     ResetCpuDmaWaitAfterGrant();
                 }
                 else
@@ -1905,6 +1950,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 }
             }
 
+            RecordCpuGrantAfterNiceWait(slotCycle);
             ResetCpuDmaWaitAfterGrant();
             CommitSlot(
                 slotCycle,
@@ -2545,6 +2591,14 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             return false;
         }
 
+        internal bool IsCpuGrantAfterNiceBlitterWait(long cycle)
+        {
+            var slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, cycle));
+            return TryGetSlot(slotCycle, out var slot) &&
+                slot.Owner == AgnusChipSlotOwner.Cpu &&
+                slot.CpuGrantAfterNiceBlitterWait;
+        }
+
 
         public bool IsFixedDmaReserved(long cycle)
         {
@@ -3011,6 +3065,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                     SlotMatchesRequest(candidate, existing, request) ||
                     existing.Priority < AgnusChipSlotPriority.Cpu)
                 {
+                    RecordCpuGrantAfterNiceWait(candidate);
                     ResetCpuDmaWaitAfterGrant();
                     return candidate;
                 }
@@ -3019,6 +3074,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                     !BlitterPriorityEnabled &&
                     _cpuDmaWaitCycles >= CpuDmaWaitCyclesBeforeNiceBlitterYield)
                 {
+                    RecordCpuGrantAfterNiceWait(candidate);
                     ResetCpuDmaWaitAfterGrant();
                     return candidate;
                 }
@@ -3065,6 +3121,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                     SlotMatchesRequest(candidate, existing, AmigaBusRequester.Cpu, kind, target, address, size, requestedCycle, isWrite) ||
                     existing.Priority < AgnusChipSlotPriority.Cpu)
                 {
+                    RecordCpuGrantAfterNiceWait(candidate);
                     ResetCpuDmaWaitAfterGrant();
                     return candidate;
                 }
@@ -3073,6 +3130,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                     !BlitterPriorityEnabled &&
                     _cpuDmaWaitCycles >= CpuDmaWaitCyclesBeforeNiceBlitterYield)
                 {
+                    RecordCpuGrantAfterNiceWait(candidate);
                     ResetCpuDmaWaitAfterGrant();
                     return candidate;
                 }
@@ -3330,12 +3388,16 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 return;
             }
 
+            var cpuGrantAfterNiceBlitterWait =
+                owner == AgnusChipSlotOwner.Cpu &&
+                ConsumeCpuGrantAfterNiceWait(slotCycle);
             _slots[index] = new AgnusHrmCommittedSlot(
                 slotCycle,
                 requester,
                 kind,
                 owner,
-                priority);
+                priority,
+                cpuGrantAfterNiceBlitterWait);
             _slotKeys[index] = new AgnusHrmCommittedSlotKey(
                 target,
                 address,
@@ -3586,13 +3648,15 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 AmigaBusRequester requester,
                 AmigaBusAccessKind kind,
                 AgnusChipSlotOwner owner,
-                AgnusChipSlotPriority priority)
+                AgnusChipSlotPriority priority,
+                bool cpuGrantAfterNiceBlitterWait = false)
             {
                 _slotCycleLow = unchecked((uint)slotCycle);
                 _owner = (byte)owner;
                 _priority = (byte)priority;
                 _requester = (byte)requester;
                 _kind = (byte)kind;
+                _flags = cpuGrantAfterNiceBlitterWait ? (byte)1 : (byte)0;
             }
 
             private readonly uint _slotCycleLow;
@@ -3605,6 +3669,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
 
             private readonly byte _kind;
 
+            private readonly byte _flags;
+
             public bool Valid => _owner != (byte)AgnusChipSlotOwner.Free;
 
             public AgnusChipSlotOwner Owner => (AgnusChipSlotOwner)_owner;
@@ -3614,6 +3680,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             public AmigaBusRequester Requester => (AmigaBusRequester)_requester;
 
             public AmigaBusAccessKind Kind => (AmigaBusAccessKind)_kind;
+
+            public bool CpuGrantAfterNiceBlitterWait => (_flags & 1) != 0;
 
             public bool IsForSlot(long slotCycle)
                 => _slotCycleLow == unchecked((uint)slotCycle);

@@ -137,6 +137,50 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
         }
 
+		internal bool HasIncomingLiveCopperWordClaimAt(long slotCycle)
+		{
+			slotCycle = AgnusChipSlotScheduler.AlignToSlot(
+				Math.Max(0, slotCycle));
+			if (_bus.IsMandatoryRefreshSlot(slotCycle))
+			{
+				return false;
+			}
+
+			if (!_liveCopperRequesterEnabled)
+			{
+				return _liveCopper.PendingInstructionSecondWord &&
+					_liveCopper.PendingInstructionSecondWordCycle == slotCycle;
+			}
+
+			var requester = RequireLiveCopperRequester();
+			EnsureLiveCopperRequesterPublication(requester);
+			if (!requester.TryPeekPendingRequest(out var request) ||
+				request.EarliestEligibleCycle > slotCycle)
+			{
+				return false;
+			}
+
+			if (AgnusChipSlotScheduler.AlignToSlot(request.RequestedCycle) !=
+				slotCycle - AgnusChipSlotScheduler.SlotCycles)
+			{
+				return false;
+			}
+
+			if (request.Channel == 0)
+			{
+				return false;
+			}
+
+			if (request.Channel == 2)
+			{
+				return ((slotCycle / AgnusChipSlotScheduler.SlotCycles) & 1) ==
+					((AgnusChipSlotScheduler.AlignToSlot(request.RequestedCycle) /
+					  AgnusChipSlotScheduler.SlotCycles) & 1);
+			}
+
+			return AgnusHrmOcsSlotTable.IsCopperAccessSlot(slotCycle);
+		}
+
         private void ResetLiveCopperRequester(bool resetDiagnostics)
         {
             _liveCopperRequester?.Reset();
@@ -553,23 +597,29 @@ namespace CopperMod.Amiga.CustomChips.Denise
                      _liveCopper.WaitSecond) &&
                  (!IsBitplaneDmaEnabled(_dmacon) ||
                   GetAgnusBitplaneFetchPlaneCount() == 0));
-            if (readyAtWakeCycle)
+            var beamSatisfiedAtBlitterTermination =
+                !bfdReleasedByTermination ||
+                IsCopperComparisonSatisfied(
+                    _liveCopper.WaitFirst,
+                    _liveCopper.WaitSecond,
+                    _liveFrameStartCycle,
+                    _bus.Blitter.LastTerminationCycle,
+                    blitterFinished: true);
+            if (bfdReleasedByTermination && beamSatisfiedAtBlitterTermination)
             {
-                // The physical fetch can resume directly from a future WAIT
-                // wake or from the BFD release pipeline. Denise still sees
-                // the following MOVE after the six-color-clock post-WAIT
-                // presentation phase in both cases.
+                // BLTDONE releases the Copper fetch pipeline two color clocks
+                // before the following MOVE reaches Denise. Keep that internal
+                // phase attached to the MOVE without reserving another bus slot.
                 _liveCopper.PendingWaitPresentationPixelOffset =
-                    2 * (CopperWaitWakeHpUnits + 1);
+                    CopperBfdReleasePresentationPixelOffset;
             }
-
+            else if (readyAtWakeCycle && beamSatisfiedAtBlitterTermination)
+            {
+                _liveCopper.PendingWaitPresentationPixelOffset =
+                    CopperWaitReadyPresentationPixelOffset;
+            }
             if (readyAtWakeCycle && !bfdReleasedByTermination)
             {
-                // A future WAIT with no bitplane requester reaches COP_FETCH at
-                // the programmed horizontal position. Collapse only the elapsed
-                // internal wake phase; the published word still arbitrates the
-                // exact target slot against CPU, refresh, sprites, and blitter.
-                resumeCycle = waitCycle;
                 if (_bus.Blitter.BusPipelineActive &&
                     _bus.BlitterNastyPriorityEnabled)
                 {

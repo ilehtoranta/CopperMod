@@ -157,11 +157,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (!_advancingLiveDma &&
                 _liveFrameValid &&
-                cycle <= _liveFinalizedPresentationThroughCycle)
+                cycle <= _liveFinalizedPresentationThroughCycle &&
+                !IsPresentationNeutralCopperPointerLatch(offset))
             {
+                var writeBeam = _bus.GetBeamPosition(cycle);
+                var presentationBeam = _bus.GetBeamPosition(_liveFinalizedPresentationThroughCycle);
                 throw new InvalidOperationException(
                     $"Cannot schedule display register 0x{offset:X3} at cycle {cycle} " +
-                    $"behind the finalized presentation horizon {_liveFinalizedPresentationThroughCycle}.");
+                    $"(beam {writeBeam.BeamLine}:{writeBeam.BeamHorizontal}) behind the finalized presentation " +
+                    $"horizon {_liveFinalizedPresentationThroughCycle} " +
+                    $"(beam {presentationBeam.BeamLine}:{presentationBeam.BeamHorizontal}); " +
+                    $"coverage={_liveCapturedThroughCycle}, causal={_liveCausalDisplayStateThroughCycle}, " +
+                    $"live={_liveCycle}, bus={_bus.ExecutedChipBusHorizon}, " +
+                    $"liveFrame={_liveFrameStartCycle}-{_liveFrameStopCycle}, " +
+                    $"presentationFrame={_boundPresentationFrameStartCycle}-{_boundPresentationFrameStopCycle}.");
             }
 
             if (!_advancingLiveDma &&
@@ -220,6 +229,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         internal void ScheduleWrite(long cycle, ushort offset, ushort value)
             => ScheduleWrite(new AgnusDisplayRegisterWrite(cycle, offset, value));
+
+        // COP1LC/COP2LC only store an address. They cannot change the displayed row
+        // until the corresponding COPJMP strobe reloads the Copper program counter.
+        private static bool IsPresentationNeutralCopperPointerLatch(ushort offset)
+            => offset is 0x080 or 0x082 or 0x084 or 0x086;
 
         private void MarkLiveCausalDisplayCommit(long cycle)
         {

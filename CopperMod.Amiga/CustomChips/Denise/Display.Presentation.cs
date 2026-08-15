@@ -2050,10 +2050,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private static long GetCopperBfdReleaseFetchCycle(
             long blitterTerminationCycle)
-            // vAmiga's slow-Blitter/Copper event sequence calls
-            // blitterDidTerminate from BLTDONE, then schedules COP_FETCH two
-            // DMA cycles later. Physical Copper phase alignment remains the
-            // requester's responsibility.
+            // BLTDONE arms the next Copper fetch two DMA cycles later. Physical
+            // Copper phase alignment remains the requester's responsibility.
             => blitterTerminationCycle +
                 (2L * AgnusChipSlotScheduler.SlotCycles);
 

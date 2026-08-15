@@ -34,11 +34,11 @@ namespace CopperMod.Amiga.CustomChips.Paula
         private readonly BoundedWriteLog _writes = new BoundedWriteLog(MaxCapturedWrites);
         private readonly byte[] _registerBytes = new byte[0x200];
         private readonly long[] _cpuInterruptReleaseCycles = new long[14];
+        private readonly long[] _copperInterruptRecognitionCycles = new long[14];
         private ushort _vposr;
         private ushort _vhposr;
         private ushort _lastCpuActiveInterruptBits;
         private ulong _cpuInterruptVisibilityVersion;
-        private long _copperInterruptRecognitionCycle = long.MinValue;
         private int _interruptSourcePendingWriteIndex;
         private ulong _registerWakeVersion;
         private ulong _registerWakeCandidateVersion = ulong.MaxValue;
@@ -68,6 +68,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
             _audioTimeline = new PaulaTimelineState(cpuCyclesPerColorClock);
             _registerTimeline = new PaulaTimelineState(cpuCyclesPerColorClock);
             _livePaulaRequesters = CreateLivePaulaRequesters();
+            Array.Fill(_copperInterruptRecognitionCycles, long.MinValue);
             PublishResetReadState();
         }
 
@@ -129,13 +130,13 @@ namespace CopperMod.Amiga.CustomChips.Paula
             _pendingInterrupts.Clear();
             _writes.Clear();
             Array.Clear(_cpuInterruptReleaseCycles);
+            Array.Fill(_copperInterruptRecognitionCycles, long.MinValue);
             _audioTimeline.Reset();
             _registerTimeline.Reset();
             _vposr = 0;
             _vhposr = 0;
             _lastCpuActiveInterruptBits = 0;
             _cpuInterruptVisibilityVersion = 0;
-            _copperInterruptRecognitionCycle = long.MinValue;
             _interruptSourcePendingWriteIndex = 0;
             InvalidateRegisterWakeCandidateCache();
             _captureSamples = null;
@@ -1066,10 +1067,23 @@ namespace CopperMod.Amiga.CustomChips.Paula
             RefreshCpuInterruptVisibility(cycle);
         }
 
-        internal void DelayCopperInterruptRecognition(long cycle)
-            => _copperInterruptRecognitionCycle = Math.Max(
-                _copperInterruptRecognitionCycle,
-                Math.Max(0, cycle) + AmigaConstants.A500CopperIntreqDelayCpuCycles);
+        internal void DelayCopperInterruptRecognition(long cycle, ushort bits)
+        {
+            var recognitionCycle =
+                Math.Max(0, cycle) + AmigaConstants.A500CopperIntreqDelayCpuCycles;
+            bits &= WritableIntreqMask;
+            for (var bitIndex = 0;
+                 bitIndex < _copperInterruptRecognitionCycles.Length;
+                 bitIndex++)
+            {
+                if ((bits & (1 << bitIndex)) != 0)
+                {
+                    _copperInterruptRecognitionCycles[bitIndex] = Math.Max(
+                        _copperInterruptRecognitionCycles[bitIndex],
+                        recognitionCycle);
+                }
+            }
+        }
 
         private ushort GetCpuVisibleInterruptBits(long cycle)
         {
@@ -1162,9 +1176,15 @@ namespace CopperMod.Amiga.CustomChips.Paula
         private long GetCpuInterruptReleaseCycle(ushort bit, long cycle, int? releaseDelayCycles = null)
         {
             var recognitionCycle = cycle;
-            if ((bit & AmigaConstants.IntreqCopper) != 0 && _copperInterruptRecognitionCycle > recognitionCycle)
+            var bitIndex = 0;
+            for (var remaining = bit; remaining > 1; remaining >>= 1)
             {
-                recognitionCycle = _copperInterruptRecognitionCycle;
+                bitIndex++;
+            }
+            if ((uint)bitIndex < (uint)_copperInterruptRecognitionCycles.Length &&
+                _copperInterruptRecognitionCycles[bitIndex] > recognitionCycle)
+            {
+                recognitionCycle = _copperInterruptRecognitionCycles[bitIndex];
             }
 
             return recognitionCycle +

@@ -831,7 +831,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private const ushort BltSizeVertical = 0x05C;
         private const ushort BltSizeHorizontal = 0x05E;
         private const int LegacyMaximumWidthWords = 64;
-        private const int BOnlyFinalPipelineDrainSlots = 8;
+        private const int BOnlyFinalPipelineDrainSlots = 1;
         private const int LegacyMaximumHeight = 1024;
         private const int EcsMaximumWidthWords = 2048;
         private const int EcsMaximumHeight = 32768;
@@ -2177,6 +2177,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _zeroFlag = true;
             _busy = true;
             _liveAreaFinalDCompletionPublished = false;
+            _liveBOnlyFinalInterruptPublished = false;
             _bus.PublishLiveBlitterPriority();
             _completionPending = false;
             _lastDmaCycle = 0;
@@ -2504,8 +2505,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetAreaWordCycles();
             stepEnd += GetAreaFillIdlePhaseDelay(stepStart, stepEnd);
-            var nextReadCycle = stepStart;
             var nextCycle = stepEnd;
+            var nextReadCycle = BeginAreaReadSequence(stepStart, ref stepEnd, ref nextCycle);
             var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
             var mask = 0xFFFF;
             if (_wordX == 0)
@@ -2552,6 +2553,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 nextCycle += stall;
                 nextReadCycle = access.CompletedCycle;
                 nextCycle = Math.Max(nextCycle, access.CompletedCycle);
+                PublishBOnlyFinalInterrupt(
+                    isFinalWord,
+                    access.CompletedCycle);
             }
 
             var rawC = _activeDataC;
@@ -3039,8 +3043,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     _areaMicroOpStepStart,
                     _areaMicroOpStepEnd);
             }
-            _areaMicroOpNextReadCycle = _areaMicroOpStepStart;
             _areaMicroOpNextCycle = _areaMicroOpStepEnd;
+            _areaMicroOpNextReadCycle = BeginAreaReadSequence(
+                _areaMicroOpStepStart,
+                ref _areaMicroOpStepEnd,
+                ref _areaMicroOpNextCycle);
             _areaMicroOpInternalCompletionCycle = _areaMicroOpStepEnd;
             _areaMicroOpRawA = _activeDataA;
             _areaMicroOpRawB = _activeDataB;
@@ -3097,6 +3104,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     AccountAreaMicroOpReadWait(requestCycle, access.CompletedCycle);
                     _areaMicroOpNextReadCycle = access.CompletedCycle;
                     _areaMicroOpNextCycle = Math.Max(_areaMicroOpNextCycle, access.CompletedCycle);
+                    PublishBOnlyFinalInterrupt(
+                        _areaMicroOpFinalWord,
+                        access.CompletedCycle);
                     return true;
                 }
 
@@ -3522,8 +3532,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             BeginDmaRollbackSnapshot();
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetAreaWordCycles();
-            var nextReadCycle = stepStart;
             var nextCycle = stepEnd;
+            var nextReadCycle = BeginAreaReadSequence(stepStart, ref stepEnd, ref nextCycle);
             var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
             var mask = GetCurrentAreaWordMask();
             var rawA = _activeDataA;
@@ -3667,6 +3677,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private bool IsBlitterSequencerPausedSlot(long slotCycle)
         {
+            if (_bus.IsCpuGrantAfterNiceBlitterWait(slotCycle))
+            {
+                return true;
+            }
+
             if (_bus.IsMandatoryRefreshSlot(slotCycle))
             {
                 return true;
@@ -4114,7 +4129,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
             _busy = false;
             _liveAreaFinalDCompletionPublished = false;
-            _bus.RequestHardwareInterrupt(AmigaConstants.IntreqBlitter, _currentCycle);
+            if (!_liveBOnlyFinalInterruptPublished)
+            {
+                _bus.RequestHardwareInterrupt(AmigaConstants.IntreqBlitter, _currentCycle);
+            }
+            _liveBOnlyFinalInterruptPublished = false;
             ApplyDeferredRegisterWrites();
             RestartDeferredBlitIfPending();
         }
@@ -4136,6 +4155,52 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private bool IsBOnlyAreaBlit()
             => !_lineMode && !_useA && _useB && !_useC && !_useD;
+
+		internal bool BOnlyAreaBlitActive => IsBOnlyAreaBlit();
+
+        private void PublishBOnlyFinalInterrupt(
+            bool isFinalWord,
+            long trailingControlPhaseCycle)
+        {
+            if (!isFinalWord ||
+                !IsBOnlyAreaBlit() ||
+                _liveBOnlyFinalInterruptPublished)
+            {
+                return;
+            }
+
+            // B-only area words use the physical idle,B,idle sequence. The
+            // final B transfer completes at the trailing control boundary,
+            // which publishes BLTDONE/INTREQ without reserving another slot.
+            // BBUSY remains asserted until the sequencer retires that phase.
+            _bus.RequestHardwareInterrupt(
+                AmigaConstants.IntreqBlitter,
+                trailingControlPhaseCycle);
+            _liveBOnlyFinalInterruptPublished = true;
+        }
+
+        private long BeginAreaReadSequence(
+            long stepStart,
+            ref long stepEnd,
+            ref long nextCycle)
+        {
+            if (!IsBOnlyAreaBlit())
+            {
+                return stepStart;
+            }
+
+            // The B-only cycle diagram is idle,B,idle. Its leading sequencer
+            // phase advances only on a physically available bus cycle.
+            var phaseCycle = stepStart;
+            while (IsBlitterSequencerPausedSlot(phaseCycle))
+            {
+                phaseCycle += ChipSlotCycles;
+                stepEnd += ChipSlotCycles;
+                nextCycle += ChipSlotCycles;
+            }
+
+            return phaseCycle + ChipSlotCycles;
+        }
 
         internal long LastCompletionCycle => _lastCompletionCycle;
 
@@ -4906,8 +4971,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 _opIndex = 0;
                 _stepStart = CurrentCycle;
                 _stepEnd = _stepStart + _owner.GetAreaWordCycles();
-                _nextReadCycle = _stepStart;
                 _nextCycle = _stepEnd;
+                _nextReadCycle = _owner.BeginAreaReadSequence(
+                    _stepStart,
+                    ref _stepEnd,
+                    ref _nextCycle);
                 _internalCompletionCycle = _stepEnd;
                 _outputReady = false;
                 _finalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;

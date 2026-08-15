@@ -2038,6 +2038,41 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             waitCycle,
                             _copper.WaitSecond,
                             observedBlitterBusy: false);
+                    var readyAtWakeCycle =
+                        bfdReleasedByTermination ||
+                        (waitCycle > comparisonStartCycle &&
+                         (_copper.WaitFirst & 0x00FE) != 0 &&
+                         !IsCopperVerticalComparatorWrapWait(
+                             _copper.WaitFirst,
+                             _copper.WaitSecond) &&
+                         (!IsBitplaneDmaEnabled(_dmacon) ||
+                          _display.GetAgnusBitplaneFetchPlaneCount(_bplcon0) == 0));
+                    var beamSatisfiedAtBlitterTermination =
+                        !bfdReleasedByTermination ||
+                        _display.IsCopperComparisonSatisfied(
+                            _copper.WaitFirst,
+                            _copper.WaitSecond,
+                            _display._liveFrameStartCycle,
+                            _display._bus.Blitter.LastTerminationCycle,
+                            blitterFinished: true);
+                    if (bfdReleasedByTermination && beamSatisfiedAtBlitterTermination)
+                    {
+                        _copper.PendingWaitPresentationPixelOffset =
+                            CopperBfdReleasePresentationPixelOffset;
+                    }
+                    else if (readyAtWakeCycle && beamSatisfiedAtBlitterTermination)
+                    {
+                        _copper.PendingWaitPresentationPixelOffset =
+                            CopperWaitReadyPresentationPixelOffset;
+                    }
+                    if (readyAtWakeCycle && !bfdReleasedByTermination)
+                    {
+                        if (_display._bus.Blitter.BusPipelineActive &&
+                            _display._bus.BlitterNastyPriorityEnabled)
+                        {
+                            resumeCycle += AgnusChipSlotScheduler.SlotCycles;
+                        }
+                    }
                     var reuseVerticalWrapControlPhase =
                         !bfdReleasedByTermination &&
                         IsCopperVerticalComparatorWrapWait(
@@ -2210,7 +2245,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             reuseRunControlPhase,
                             restoreControlPhaseAfterMove,
                             presentNextMoveFromReusedWaitTail,
-                            readyAtWakeCycle: bfdReleasedByTermination);
+                            readyAtWakeCycle);
                         _copper.PendingWaitTailPresentationX = waitTailPresentationX;
                         _copper.PendingWaitPaletteTailX =
                             _display.GetCopperWaitPaletteTailX(_copper.WaitFirst);
@@ -2223,7 +2258,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         reuseRunControlPhase,
                         restoreControlPhaseAfterMove,
                         presentNextMoveFromReusedWaitTail,
-                        readyAtWakeCycle: bfdReleasedByTermination);
+                        readyAtWakeCycle);
                     _copper.PendingWaitTailPresentationX = waitTailPresentationX;
                     _copper.PendingWaitPaletteTailX =
                         _display.GetCopperWaitPaletteTailX(_copper.WaitFirst);
