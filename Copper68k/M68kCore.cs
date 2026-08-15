@@ -551,11 +551,87 @@ namespace Copper68k
 
     internal sealed class M68kInstructionFetchInterruptedException : Exception
     {
-        public M68kInstructionFetchInterruptedException(long boundaryCycle)
-            => BoundaryCycle = boundaryCycle;
+        public M68kInstructionFetchInterruptedException(
+            long boundaryCycle,
+            long requestedCycle,
+            in M68kInstructionFetchPublicationContext publicationContext)
+        {
+            BoundaryCycle = boundaryCycle;
+            RequestedCycle = requestedCycle;
+            PublicationContext = publicationContext;
+        }
 
         public long BoundaryCycle { get; }
+        public long RequestedCycle { get; }
+        public M68kInstructionFetchPublicationContext PublicationContext { get; }
     }
+
+    internal static class M68000BranchInterruptTransition
+    {
+        private const int RetainedTargetOverlapCycles = 4;
+        private const int DrainedEntryQueueOverlapCycles = 5;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool HasRetainedCompletedTargetWord(
+            bool hasCancellableSuccessor,
+            int prefetchCount,
+            long firstWordReadyCycle,
+            long currentCycle)
+            => hasCancellableSuccessor &&
+                prefetchCount == 1 &&
+                firstWordReadyCycle <= currentCycle;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int GetExceptionEntryAdjustment(
+            int prefetchCount,
+            long firstWordReadyCycle,
+            long interruptBoundaryCycle,
+            int entryPrefetchCount,
+            long entryFirstWordReadyCycle)
+        {
+            if (prefetchCount == 0 &&
+                entryPrefetchCount == 2)
+            {
+                var elapsedEntryCycles =
+                    interruptBoundaryCycle - entryFirstWordReadyCycle;
+                // A caught branch can drain both entry words while the second
+                // transfer remains part of the physical branch tail. Once the
+                // full five-clock window has elapsed, exception microcode
+                // overlaps that already-completed work instead of charging it
+                // again at entry.
+                if (elapsedEntryCycles >= DrainedEntryQueueOverlapCycles)
+                {
+                    return -(int)Math.Min(elapsedEntryCycles, int.MaxValue);
+                }
+            }
+
+            return prefetchCount == 1 && firstWordReadyCycle <= interruptBoundaryCycle
+                ? -RetainedTargetOverlapCycles
+                : 0;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static M68000InterruptedBranchRetirement GetInterruptedRetirement(
+            long committedRetireCycle,
+            long interruptBoundaryCycle)
+            => new(
+                interruptBoundaryCycle,
+                Math.Max(committedRetireCycle, interruptBoundaryCycle));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static long GetExceptionEntryFence(
+            bool hasRetainedCompletedTargetWord,
+            long exceptionEntryNotBeforeCycle,
+            long firstWordReadyCycle)
+            => hasRetainedCompletedTargetWord
+                ? Math.Max(exceptionEntryNotBeforeCycle, firstWordReadyCycle)
+                : exceptionEntryNotBeforeCycle;
+
+    }
+
+    internal readonly record struct M68000InterruptedBranchRetirement(
+        long InternalRetireCycle,
+        long PhysicalTailCycle);
 
     internal readonly record struct M68kInstructionFetchPublicationContext(
         long Group,
@@ -772,7 +848,16 @@ namespace Copper68k
         long PendingVirtualRequestedCycle = 0,
         long PendingPublicationGroup = 0,
         long PendingPublicationEntryBusCycle = 0,
-        bool PendingBlocksInstructionEntry = false);
+        bool PendingBlocksInstructionEntry = false,
+        long ExceptionEntryNotBeforeCycle = 0,
+        int InterruptEntryBranchTailAdjustmentCycles = 0,
+        long BranchInterruptBoundaryCycle = long.MinValue,
+        long BranchInterruptRequestedCycle = long.MinValue,
+        long BranchInterruptRetireCycle = long.MinValue,
+        int BranchInterruptEntryPrefetchCount = 0,
+        long BranchInterruptEntryBusCycle = 0,
+        long BranchInterruptEntryReadyCycle0 = 0,
+        long BranchInterruptInstructionEntryCycle = 0);
 
     internal interface IM68kBatchCore : IM68kCore
     {
@@ -1954,8 +2039,6 @@ namespace Copper68k
         // becomes serviceable after the following instruction.
         private const int M68000InterruptSetupCycles = 4;
         private const int M68000DbccExceptionTailAfterCommittedFetchCycles = 6;
-        private const int M68000BranchInterruptInternalWindowCycles = 8;
-        private const int M68000BranchInterruptTailAdjustmentCycles = 2;
         private const int FixedPlanRunCacheSlotCount = 256;
         private const int FixedPlanRunMaximumInstructions = 32;
         private const byte FixedPlanRunExitIndex = byte.MaxValue;
@@ -2009,6 +2092,13 @@ namespace Copper68k
         private bool _nextInstructionFollowsExpiredDbcc;
         private bool _instructionFollowsExpiredDbcc;
         private int _interruptEntryBranchTailAdjustmentCycles;
+        private long _branchInterruptBoundaryCycle = long.MinValue;
+        private long _branchInterruptRequestedCycle = long.MinValue;
+        private long _branchInterruptRetireCycle = long.MinValue;
+        private int _branchInterruptEntryPrefetchCount;
+        private long _branchInterruptEntryBusCycle;
+        private long _branchInterruptEntryReadyCycle0;
+        private long _branchInterruptInstructionEntryCycle;
         private long _plannedQuickRegisterInstructions;
         private long _plannedMoveInstructions;
         private long _plannedImmediateInstructions;
@@ -2343,7 +2433,16 @@ namespace Copper68k
                 _pendingPrefetchVirtualRequestedCycle,
                 _pendingPrefetchPublicationContext.Group,
                 _pendingPrefetchPublicationContext.EntryBusCycle,
-                _pendingPrefetchBlocksInstructionEntry);
+                _pendingPrefetchBlocksInstructionEntry,
+                _exceptionEntryNotBeforeCycle,
+                _interruptEntryBranchTailAdjustmentCycles,
+                _branchInterruptBoundaryCycle,
+                _branchInterruptRequestedCycle,
+                _branchInterruptRetireCycle,
+                _branchInterruptEntryPrefetchCount,
+                _branchInterruptEntryBusCycle,
+                _branchInterruptEntryReadyCycle0,
+                _branchInterruptInstructionEntryCycle);
 
         int IM68kBatchCore.ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
             => ExecuteInstructions(maxInstructions, targetCycle, boundary);
@@ -2403,21 +2502,46 @@ namespace Copper68k
             catch (M68kInstructionFetchInterruptedException interrupted)
             {
                 _instructionCycleFloorActive = false;
-                // A committed target word retains its two-cycle IRC tail. With
-                // no committed word, a complete remaining internal window lets
-                // exception setup overlap two cycles of the abandoned branch;
-                // a shorter window has no additional tail to retain or overlap.
-                _interruptEntryBranchTailAdjustmentCycles = _prefetchCount > 0
-                    ? M68000BranchInterruptTailAdjustmentCycles
-                    : interrupted.BoundaryCycle - _cpuRetireBusCycle >=
-                        M68000BranchInterruptInternalWindowCycles
-                        ? -M68000BranchInterruptTailAdjustmentCycles
-                        : 0;
+                _branchInterruptBoundaryCycle = interrupted.BoundaryCycle;
+                _branchInterruptRequestedCycle = interrupted.RequestedCycle;
+                _branchInterruptRetireCycle = _cpuRetireBusCycle;
+                _branchInterruptEntryPrefetchCount =
+                    interrupted.PublicationContext.EntryPrefetchCount;
+                _branchInterruptEntryBusCycle =
+                    interrupted.PublicationContext.EntryBusCycle;
+                _branchInterruptEntryReadyCycle0 =
+                    interrupted.PublicationContext.EntryReadyCycle0;
+                _branchInterruptInstructionEntryCycle =
+                    interrupted.PublicationContext.InstructionEntryCycle;
+                _interruptEntryBranchTailAdjustmentCycles =
+                    M68000BranchInterruptTransition.GetExceptionEntryAdjustment(
+                        _prefetchCount,
+                        _prefetchCompletedCycle0,
+                        interrupted.BoundaryCycle,
+                        interrupted.PublicationContext.EntryPrefetchCount,
+                        interrupted.PublicationContext.EntryReadyCycle0);
                 _instructionInterruptSampleCycle = interrupted.BoundaryCycle;
-                _cpuBusCycle = Math.Max(_cpuBusCycle, interrupted.BoundaryCycle);
-                _cpuBusReadyCycle = Math.Max(_cpuBusReadyCycle, interrupted.BoundaryCycle);
-                _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, interrupted.BoundaryCycle);
-                State.Cycles = Math.Max(State.Cycles, interrupted.BoundaryCycle);
+                // The taken-branch cycle count is a completion floor for the
+                // normal refill sequence.  If IPL recognition cancels the
+                // still-ungranted target read, that future microsequence no
+                // longer exists.  Retire at the recognition boundary while
+                // retaining the frozen completion of any transfer already
+                // committed before it.
+                var interruptedRetirement =
+                    M68000BranchInterruptTransition.GetInterruptedRetirement(
+                    _cpuRetireBusCycle,
+                    interrupted.BoundaryCycle);
+                _instructionCycleFloor = interruptedRetirement.InternalRetireCycle;
+                _cpuBusCycle = Math.Max(
+                    _cpuBusCycle,
+                    interruptedRetirement.PhysicalTailCycle);
+                _cpuBusReadyCycle = Math.Max(
+                    _cpuBusReadyCycle,
+                    interruptedRetirement.PhysicalTailCycle);
+                _cpuRetireBusCycle = interruptedRetirement.InternalRetireCycle;
+                State.Cycles = Math.Max(
+                    _instructionCycleStart,
+                    interruptedRetirement.InternalRetireCycle);
                 _skipRetirePrefetchTopUp = true;
                 return CompleteInstruction(startCycles);
             }
@@ -6158,7 +6282,7 @@ namespace Copper68k
             var extensionDisplacement = displacement == 0;
             var condition = (opcode >> 8) & 0x0F;
             var taken = condition == 0 || CheckCondition(condition);
-            AddPendingInternalCycles(taken ? 2 : 4);
+			AddPendingInternalCycles(taken ? 2 : 4);
             _consumeWithoutPrefetch = taken;
             var offset = extensionDisplacement
                 ? unchecked((short)FetchWord())
@@ -6206,7 +6330,7 @@ namespace Copper68k
         private void ExecuteShortUnconditionalBranch(ushort opcode, int displacement, uint instructionPc)
         {
             var branchBase = State.ProgramCounter;
-            AddPendingInternalCycles(2);
+			AddPendingInternalCycles(2);
             var target = unchecked((uint)(branchBase + displacement));
             if (_instructionFrequency.Enabled)
             {
@@ -7384,9 +7508,9 @@ namespace Copper68k
 
         private void ExecutePackedBranch(in M68kPackedOpcodePlan plan, uint instructionPc)
         {
-            var branchBase = State.ProgramCounter;
-            var taken = plan.Condition == 0 || CheckCondition(plan.Condition);
-            AddPendingInternalCycles(taken ? 2 : 4);
+			var branchBase = State.ProgramCounter;
+			var taken = plan.Condition == 0 || CheckCondition(plan.Condition);
+			AddPendingInternalCycles(taken ? 2 : 4);
             _consumeWithoutPrefetch = taken;
             var offset = plan.ExtensionDisplacement
                 ? unchecked((short)FetchWord())
@@ -8342,6 +8466,20 @@ namespace Copper68k
         protected virtual uint GetInterruptVectorAddress(uint vectorAddress)
             => vectorAddress;
 
+        protected virtual ushort? GetInterruptFrameFormatWord(uint vectorAddress)
+        {
+            _ = vectorAddress;
+            return null;
+        }
+
+        protected virtual bool UsesFormatWordExceptionFrames => false;
+
+        protected virtual bool IsSupportedRteFrameFormat(ushort format)
+        {
+            _ = format;
+            return true;
+        }
+
         protected virtual bool TryHandleModelSpecificAddressError(
             uint faultAddress,
             bool isWrite,
@@ -8435,12 +8573,16 @@ namespace Copper68k
             var hasCancellableBranchSuccessor =
                 _exceptionEntryNotBeforeCycle < _cpuRetireBusCycle;
             var preserveStartedBranchSuccessor =
-                hasCancellableBranchSuccessor &&
-                _prefetchCount > 0 &&
-                _prefetchCompletedCycle0 <= State.Cycles;
-            var interruptFenceCycle = preserveStartedBranchSuccessor
-                ? _cpuRetireBusCycle
-                : _exceptionEntryNotBeforeCycle;
+                M68000BranchInterruptTransition.HasRetainedCompletedTargetWord(
+                    hasCancellableBranchSuccessor,
+                    _prefetchCount,
+                    _prefetchCompletedCycle0,
+                    State.Cycles);
+            var interruptFenceCycle =
+                M68000BranchInterruptTransition.GetExceptionEntryFence(
+                    preserveStartedBranchSuccessor,
+                    _exceptionEntryNotBeforeCycle,
+                    _prefetchCompletedCycle0);
             var interruptStartCycle = Math.Max(
                 State.Cycles + _interruptEntryBranchTailAdjustmentCycles,
                 interruptFenceCycle);
@@ -8458,7 +8600,8 @@ namespace Copper68k
                 M68kCpuState.Supervisor);
 
             var stackedProgramCounter = State.ProgramCounter;
-            var stackPointer = State.A[7] - 6;
+            var frameFormatWord = GetInterruptFrameFormatWord(vectorAddress);
+            var stackPointer = State.A[7] - (frameFormatWord.HasValue ? 8u : 6u);
             State.SetActiveStackPointer(stackPointer);
 
             AdvanceInterruptInternalCycles(6);
@@ -8467,6 +8610,10 @@ namespace Copper68k
             AdvanceInterruptInternalCycles(4);
             WriteWord(stackPointer, savedStatusRegister);
             WriteWord(stackPointer + 2, (ushort)(stackedProgramCounter >> 16));
+            if (frameFormatWord.HasValue)
+            {
+                WriteWord(stackPointer + 6, frameFormatWord.Value);
+            }
 
             var target = ReadLong(GetInterruptVectorAddress(vectorAddress));
             SetProgramCounterAndFlushPrefetch(target);
@@ -8831,10 +8978,10 @@ namespace Copper68k
             }
 
             var condition = (opcode >> 8) & 0x0F;
-            var displacement = opcode & 0xFF;
-            var branchBase = State.ProgramCounter;
-            var taken = condition < 2 || CheckCondition(condition);
-            AddPendingInternalCycles(taken ? 2 : 4);
+			var displacement = opcode & 0xFF;
+			var branchBase = State.ProgramCounter;
+			var taken = condition < 2 || CheckCondition(condition);
+			AddPendingInternalCycles(taken ? 2 : 4);
             _consumeWithoutPrefetch = taken;
             int offset;
             if (displacement == 0)
@@ -9363,6 +9510,16 @@ namespace Copper68k
 
                     var statusRegister = PullWord();
                     var programCounter = PullLong();
+                    if (UsesFormatWordExceptionFrames)
+                    {
+                        var format = PullWord();
+                        if (!IsSupportedRteFrameFormat(format))
+                        {
+                            RaiseException(14, instructionPc, 34);
+                            return true;
+                        }
+                    }
+
                     State.StatusRegister = statusRegister;
                     AddInstructionCycles(20);
                     ReturnFromExceptionTo(programCounter, State.ProgramCounter);
@@ -11820,10 +11977,10 @@ namespace Copper68k
             _skipRetirePrefetchTopUp = true;
         }
 
-        private void BranchToAndRefillTarget(
-            uint target,
-            uint stackedProgramCounter,
-            bool interruptibleTargetFetch)
+		private void BranchToAndRefillTarget(
+			uint target,
+			uint stackedProgramCounter,
+			bool interruptibleTargetFetch)
         {
             ValidateBranchTarget(target, stackedProgramCounter);
             SetProgramCounterAndFlushPrefetch(target);
@@ -11837,11 +11994,11 @@ namespace Copper68k
                 long.MinValue,
                 targetPublicationContext);
             _instructionInterruptSampleCycle = targetOpcodeReadyCycle;
-            var targetExtensionReadyCycle = TopUpPrefetchOne(
-                out _,
-                interruptibleTargetFetch
-                    ? M68kInstructionFetchPublicationPhase.InterruptibleBranchTarget
-                    : M68kInstructionFetchPublicationPhase.Required,
+			var targetExtensionReadyCycle = TopUpPrefetchOne(
+				out _,
+				interruptibleTargetFetch
+					? M68kInstructionFetchPublicationPhase.CancellableSuccessor
+					: M68kInstructionFetchPublicationPhase.Required,
                 long.MinValue,
                 targetPublicationContext with
                 {
@@ -11854,10 +12011,10 @@ namespace Copper68k
             _exceptionEntryNotBeforeCycle = Math.Max(
                 _exceptionEntryNotBeforeCycle,
                 targetExtensionReadyCycle);
-            _skipRetirePrefetchTopUp = true;
-        }
+			_skipRetirePrefetchTopUp = true;
+		}
 
-        private void CompleteExpiredDbccRefill(uint abandonedTarget, uint stackedProgramCounter)
+		private void CompleteExpiredDbccRefill(uint abandonedTarget, uint stackedProgramCounter)
         {
             ValidateBranchTarget(abandonedTarget, stackedProgramCounter);
             _ = ReadPrefetchWord(abandonedTarget, out _, out _);

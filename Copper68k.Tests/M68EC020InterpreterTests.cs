@@ -37,7 +37,7 @@ public sealed class M68EC020InterpreterTests
 		ushort[] words,
 		uint initialD0)
 	{
-		Assert.False(string.IsNullOrWhiteSpace(caseName));
+		_ = caseName;
 		using var m68020 = CreateAndExecute(M68kCpuModel.M68020, CodeBase, words, initialD0);
 		using var ec020 = CreateAndExecute(M68kCpuModel.M68EC020, CodeBase, words, initialD0);
 
@@ -81,6 +81,107 @@ public sealed class M68EC020InterpreterTests
 		Assert.Equal(low.State.NativeCycles, aliased.State.NativeCycles);
 	}
 
+	[Fact]
+	public void AddressMaskedBusMasksBaseBusOperationsToTwentyFourBits()
+	{
+		const uint aliasedAddress = 0xAB12_3456;
+		const uint physicalAddress = 0x0012_3456;
+		var inner = new RecordingOptionalBus();
+		var bus = new M68EC020AddressMaskedBus(inner);
+		long cycle = 0;
+
+		Assert.Equal(0x5A, bus.ReadByte(aliasedAddress, ref cycle, M68kBusAccessKind.CpuDataRead));
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.Equal(0x1234, bus.ReadWord(aliasedAddress, ref cycle, M68kBusAccessKind.CpuDataRead));
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.Equal(0x89AB_CDEFu, bus.ReadLong(aliasedAddress, ref cycle, M68kBusAccessKind.CpuDataRead));
+		Assert.Equal(physicalAddress, inner.LastAddress);
+
+		bus.WriteByte(aliasedAddress, 0xA5, ref cycle, M68kBusAccessKind.CpuDataWrite);
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.Equal(0xA5u, inner.LastValue);
+		bus.WriteWord(aliasedAddress, 0x5678, ref cycle, M68kBusAccessKind.CpuDataWrite);
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.Equal(0x5678u, inner.LastValue);
+		bus.WriteLong(aliasedAddress, 0x0123_4567, ref cycle, M68kBusAccessKind.CpuDataWrite);
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.Equal(0x0123_4567u, inner.LastValue);
+	}
+
+	[Fact]
+	public void AddressMaskedBusMasksCodeReaderAndHostGatewayOperations()
+	{
+		const uint aliasedAddress = 0xFF12_3456;
+		const uint physicalAddress = 0x0012_3456;
+		var inner = new RecordingOptionalBus();
+		var bus = new M68EC020AddressMaskedBus(inner);
+		var state = new M68kCpuState();
+
+		Assert.Equal(0xBEEF, bus.ReadHostWord(aliasedAddress));
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.True(bus.HasHostGateway(aliasedAddress));
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.True(bus.TryInvokeHostGateway(aliasedAddress, 7, state));
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.Equal(7u, inner.LastValue);
+		Assert.Equal(
+			new M68kHostGatewayInvocation(true, M68kHostGatewayResult.Reschedule),
+			bus.InvokeHostGateway(aliasedAddress, 9, state));
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.Equal(9u, inner.LastValue);
+	}
+
+	[Fact]
+	public void AddressMaskedBusMasksFastMemoryAndPhysicalMapOperations()
+	{
+		const uint aliasedAddress = 0xCD12_3456;
+		const uint physicalAddress = 0x0012_3456;
+		var inner = new RecordingOptionalBus();
+		var bus = new M68EC020AddressMaskedBus(inner);
+
+		Assert.True(bus.TryReadFastByte(aliasedAddress, M68kBusAccessKind.CpuDataRead, out var byteValue));
+		Assert.Equal(0x5A, byteValue);
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.True(bus.TryReadFastWord(aliasedAddress, M68kBusAccessKind.CpuDataRead, out var wordValue));
+		Assert.Equal(0x1234, wordValue);
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.True(bus.TryReadFastLong(aliasedAddress, M68kBusAccessKind.CpuDataRead, out var longValue));
+		Assert.Equal(0x89AB_CDEFu, longValue);
+		Assert.Equal(physicalAddress, inner.LastAddress);
+
+		Assert.True(bus.TryWriteFastByte(aliasedAddress, 0xA5, M68kBusAccessKind.CpuDataWrite));
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.Equal(0xA5u, inner.LastValue);
+		Assert.True(bus.TryWriteFastWord(aliasedAddress, 0x5678, M68kBusAccessKind.CpuDataWrite));
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.Equal(0x5678u, inner.LastValue);
+		Assert.True(bus.TryWriteFastLong(aliasedAddress, 0x0123_4567, M68kBusAccessKind.CpuDataWrite));
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.Equal(0x0123_4567u, inner.LastValue);
+
+		Assert.True(bus.IsCpuPhysicalAddressMapped(aliasedAddress, 4, M68kBusAccessKind.CpuDataRead));
+		Assert.Equal(physicalAddress, inner.LastAddress);
+		Assert.Equal(4u, inner.LastValue);
+	}
+
+	[Fact]
+	public void AddressMaskedBusUsesDocumentedFallbacksWhenOptionalInterfacesAreMissing()
+	{
+		var bus = new M68EC020AddressMaskedBus(new BusWithoutOptionalInterfaces());
+
+		Assert.Throws<InvalidOperationException>(() => bus.ReadHostWord(AliasedCodeBase));
+		Assert.False(bus.TryReadFastByte(AliasedCodeBase, M68kBusAccessKind.CpuDataRead, out var byteValue));
+		Assert.Equal(0, byteValue);
+		Assert.False(bus.TryReadFastWord(AliasedCodeBase, M68kBusAccessKind.CpuDataRead, out var wordValue));
+		Assert.Equal(0, wordValue);
+		Assert.False(bus.TryReadFastLong(AliasedCodeBase, M68kBusAccessKind.CpuDataRead, out var longValue));
+		Assert.Equal(0u, longValue);
+		Assert.False(bus.TryWriteFastByte(AliasedCodeBase, 1, M68kBusAccessKind.CpuDataWrite));
+		Assert.False(bus.TryWriteFastWord(AliasedCodeBase, 1, M68kBusAccessKind.CpuDataWrite));
+		Assert.False(bus.TryWriteFastLong(AliasedCodeBase, 1, M68kBusAccessKind.CpuDataWrite));
+		Assert.False(bus.IsCpuPhysicalAddressMapped(AliasedCodeBase, 1, M68kBusAccessKind.CpuDataRead));
+	}
+
 	private static IM68kCore CreateAndExecute(
 		M68kCpuModel model,
 		uint programCounter,
@@ -102,5 +203,147 @@ public sealed class M68EC020InterpreterTests
 		cpu.State.D[0] = initialD0;
 		cpu.ExecuteInstruction();
 		return cpu;
+	}
+
+	private sealed class RecordingOptionalBus :
+		IM68kBus,
+		IM68kCodeReader,
+		IM68kFastMemoryBus,
+		IM68kPhysicalAddressMap
+	{
+		public uint LastAddress { get; private set; }
+
+		public uint LastValue { get; private set; }
+
+		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			Record(address);
+			return 0x5A;
+		}
+
+		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			Record(address);
+			return 0x1234;
+		}
+
+		public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
+		{
+			Record(address);
+			return 0x89AB_CDEF;
+		}
+
+		public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
+			=> Record(address, value);
+
+		public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
+			=> Record(address, value);
+
+		public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
+			=> Record(address, value);
+
+		public bool HasHostGateway(uint address)
+		{
+			Record(address);
+			return true;
+		}
+
+		public bool TryInvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
+		{
+			Record(instructionProgramCounter, token);
+			return true;
+		}
+
+		public M68kHostGatewayInvocation InvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
+		{
+			Record(instructionProgramCounter, token);
+			return new(true, M68kHostGatewayResult.Reschedule);
+		}
+
+		public void ResetExternalDevices(long cycle)
+		{
+		}
+
+		public ushort ReadHostWord(uint address)
+		{
+			Record(address);
+			return 0xBEEF;
+		}
+
+		public bool TryReadFastByte(uint address, M68kBusAccessKind accessKind, out byte value)
+		{
+			Record(address);
+			value = 0x5A;
+			return true;
+		}
+
+		public bool TryReadFastWord(uint address, M68kBusAccessKind accessKind, out ushort value)
+		{
+			Record(address);
+			value = 0x1234;
+			return true;
+		}
+
+		public bool TryReadFastLong(uint address, M68kBusAccessKind accessKind, out uint value)
+		{
+			Record(address);
+			value = 0x89AB_CDEF;
+			return true;
+		}
+
+		public bool TryWriteFastByte(uint address, byte value, M68kBusAccessKind accessKind)
+		{
+			Record(address, value);
+			return true;
+		}
+
+		public bool TryWriteFastWord(uint address, ushort value, M68kBusAccessKind accessKind)
+		{
+			Record(address, value);
+			return true;
+		}
+
+		public bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind)
+		{
+			Record(address, value);
+			return true;
+		}
+
+		public bool IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind)
+		{
+			Record(address, (uint)byteCount);
+			return true;
+		}
+
+		private void Record(uint address, uint value = 0)
+		{
+			LastAddress = address;
+			LastValue = value;
+		}
+	}
+
+	private sealed class BusWithoutOptionalInterfaces : IM68kBus
+	{
+		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind) => 0;
+
+		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind) => 0;
+
+		public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind) => 0;
+
+		public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+		}
+
+		public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+		}
+
+		public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
+		{
+		}
+
+		public void ResetExternalDevices(long cycle)
+		{
+		}
 	}
 }

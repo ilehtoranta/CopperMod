@@ -4,9 +4,7 @@
  */
 
 using System.Reflection;
-using System.Text;
 using Copper68k;
-using Xunit.Abstractions;
 
 namespace Copper68k.Tests;
 
@@ -33,8 +31,8 @@ public enum M68kDispatchTier
 }
 
 /// <summary>
-/// Reports which dispatch tier every MC68000 opcode reaches, and pins the
-/// currently admitted kind set so widening it cannot happen silently.
+/// Pins the dispatch tier every MC68000 opcode reaches so widening the
+/// currently admitted kind set cannot happen silently.
 /// </summary>
 public sealed class M68kDispatchTierTests
 {
@@ -58,13 +56,6 @@ public sealed class M68kDispatchTierTests
 		CoreType
 			.GetMethod("IsFixedPlanRunEntryOpcode", BindingFlags.NonPublic | BindingFlags.Static)!
 			.CreateDelegate<Func<ushort, bool, bool>>();
-
-	private readonly ITestOutputHelper _output;
-
-	public M68kDispatchTierTests(ITestOutputHelper output)
-	{
-		_output = output;
-	}
 
 	/// <summary>
 	/// The kinds the cached fixed-plan-run graph and the fixed-plan batch accept
@@ -323,99 +314,6 @@ public sealed class M68kDispatchTierTests
 	}
 
 
-	[Fact]
-	public void ReportDispatchTierCoverage()
-	{
-		var counts = new long[Enum.GetValues<M68kDispatchTier>().Length];
-		for (var opcode = 0; opcode <= 0xFFFF; opcode++)
-		{
-			counts[(int)ClassifyTier((ushort)opcode)]++;
-		}
-
-		var report = new StringBuilder();
-		report.AppendLine("tier\tencodings\tshare");
-		foreach (var tier in Enum.GetValues<M68kDispatchTier>())
-		{
-			report.AppendLine(
-				$"{tier}\t{counts[(int)tier]}\t{counts[(int)tier] * 100.0 / 65536.0:F2}%");
-		}
-
-		report.AppendLine();
-		report.AppendLine("start\tend\ttier\tmnemonic");
-		foreach (var range in EnumerateTierRanges())
-		{
-			// Keep the table readable: only report ranges that are large enough
-			// to matter or that sit outside the scalar tier.
-			if (range.Tier == M68kDispatchTier.Scalar && range.Length < 256)
-			{
-				continue;
-			}
-
-			report.AppendLine(
-				$"0x{range.Start:X4}\t0x{range.End:X4}\t{range.Tier}\t{M68kInstructionClassifier.GetMnemonic(range.Start)}");
-		}
-
-		_output.WriteLine(report.ToString());
-		Assert.Equal(65536, counts.Sum());
-	}
-
-	/// <summary>
-	/// Ranks the opcodes used by the <c>Copper68k.Benchmarks</c> workloads by the
-	/// dispatch tier they reach, so widening work can be aimed at the forms that
-	/// actually break runs.
-	/// </summary>
-	[Fact]
-	public void ReportBenchmarkWorkloadRunBlockers()
-	{
-		var workloads = new (string Name, ushort[] Words)[]
-		{
-			("branch-self-loop", [0x60FE]),
-			("register-hot-loop", [0x7001, 0x7202, 0x7400, 0xD081, 0x5482, 0x4E71, 0x60F8]),
-			("memory-transform-loop", [0x207C, 0x74FF, 0x2018, 0xD081, 0x23C0, 0x51CA, 0x60E8]),
-			("cfg-bcc-register-loop", [0x703F, 0x5281, 0x5340, 0x66FA, 0x60F6]),
-			("cfg-dbra-load-loop", [0x74FF, 0x2018, 0x51CA, 0x60F6]),
-			("cfg-bcc-memory-loop", [0x703F, 0x2218, 0xD281, 0x5340, 0x66F8, 0x60F4]),
-			("directcpu-clr-loop", [0x70FF, 0x4200, 0x4600, 0x4240, 0x4640, 0x4280, 0x4680, 0x60F2]),
-			("directcpu-immediate-shift-loop", [0xE380, 0xE440, 0xE709, 0xE889, 0xEB5A, 0xEC1A, 0xEF93, 0xE053, 0x60EE]),
-			("directcpu-register-bit-loop", [0x0800, 0x0840, 0x0881, 0x08C1, 0x0500, 0x0740, 0x0981, 0x0BC1, 0x60E6]),
-			("directcpu-address-register-loop", [0x2040, 0x327C, 0x247C, 0xB1C0, 0xB2C1, 0x47E8, 0x49D3, 0x5288, 0x5388, 0x60E4]),
-			("directcpu-multiply-loop", [0x7203, 0xC2C0, 0x76FD, 0xC7C2, 0x7805, 0xC8FC, 0x7AFB, 0xCBFC, 0x60EA]),
-			("directcpu-divide-loop", [0x7264, 0x82C0, 0x769C, 0x87C2, 0x7864, 0x88FC, 0x7A9C, 0x8BFC, 0x60EA])
-		};
-
-		var blockers = new Dictionary<ushort, int>();
-		var report = new StringBuilder();
-		report.AppendLine("workload\truns-clean\tblocking-opcodes");
-		foreach (var (name, words) in workloads)
-		{
-			var blocking = words
-				.Where(word => ClassifyTier(word) is M68kDispatchTier.Scalar or M68kDispatchTier.PlannedOnly)
-				.Distinct()
-				.ToArray();
-			foreach (var word in blocking)
-			{
-				blockers[word] = blockers.GetValueOrDefault(word) + 1;
-			}
-
-			report.AppendLine(
-				$"{name}\t{(blocking.Length == 0 ? "yes" : "no")}\t" +
-				string.Join(
-					' ',
-					blocking.Select(word => $"0x{word:X4}({M68kInstructionClassifier.GetMnemonic(word)})")));
-		}
-
-		report.AppendLine();
-		report.AppendLine("opcode\tmnemonic\tblocked-workloads\ttier");
-		foreach (var (opcode, count) in blockers.OrderByDescending(entry => entry.Value).ThenBy(entry => entry.Key))
-		{
-			report.AppendLine(
-				$"0x{opcode:X4}\t{M68kInstructionClassifier.GetMnemonic(opcode)}\t{count}\t{ClassifyTier(opcode)}");
-		}
-
-		_output.WriteLine(report.ToString());
-		Assert.NotEmpty(workloads);
-	}
-
 	internal static M68kDispatchTier ClassifyTier(ushort opcode)
 	{
 		var kind = M68kOpcodePlanTable.Kinds[opcode];
@@ -437,26 +335,6 @@ public sealed class M68kDispatchTierTests
 		return kind == M68kOpcodePlanKind.Unsupported
 			? M68kDispatchTier.Scalar
 			: M68kDispatchTier.PlannedOnly;
-	}
-
-	private static IEnumerable<(ushort Start, ushort End, int Length, M68kDispatchTier Tier)> EnumerateTierRanges()
-	{
-		var start = 0;
-		var tier = ClassifyTier(0);
-		for (var opcode = 1; opcode <= 0xFFFF; opcode++)
-		{
-			var current = ClassifyTier((ushort)opcode);
-			if (current == tier)
-			{
-				continue;
-			}
-
-			yield return ((ushort)start, (ushort)(opcode - 1), opcode - start, tier);
-			start = opcode;
-			tier = current;
-		}
-
-		yield return ((ushort)start, 0xFFFF, 0x10000 - start, tier);
 	}
 
 	private static Func<ushort, M68kOpcodePlanKind, bool> CreateOpcodeKindPredicate(string name)

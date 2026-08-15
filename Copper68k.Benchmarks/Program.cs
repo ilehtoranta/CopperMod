@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Copper68k;
@@ -9,6 +10,12 @@ CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
 
 var options = BenchmarkOptions.Parse(args);
+if (options.DispatchReport)
+{
+    DispatchTierReport.Run(CreateWorkloads());
+    return;
+}
+
 if (options.Dispatch)
 {
     DispatchBenchmark.Run(options.Instructions, options.WarmupInstructions, options.Repeats);
@@ -703,6 +710,180 @@ static bool IsRelease()
 #endif
 }
 
+internal enum BenchmarkDispatchTier
+{
+    Scalar = 0,
+    PlannedOnly,
+    ShortConditionalBranch,
+    FastMemoryRun,
+    FixedPlanBatch
+}
+
+internal static class DispatchTierReport
+{
+    private static readonly Type CoreType = typeof(M68kInterpreter).BaseType!;
+
+    private static readonly Func<ushort, M68kOpcodePlanKind, bool> IsFixedPlanBatchOpcode =
+        CreateOpcodeKindPredicate("IsFixedPlanBatchOpcode");
+
+    private static readonly Func<ushort, M68kOpcodePlanKind, bool> IsShortConditionalBranch =
+        CreateOpcodeKindPredicate("IsShortConditionalBranch");
+
+    private static readonly Func<ushort, M68kOpcodePlanKind, bool> IsFastMemoryRunKind =
+        CreateOpcodeKindPredicate("IsFastMemoryRunKind");
+
+    public static void Run(IEnumerable<BenchmarkWorkload> workloads)
+    {
+        WriteTierCoverage();
+        Console.WriteLine();
+        WriteWorkloadBlockers(workloads);
+    }
+
+    private static void WriteTierCoverage()
+    {
+        var counts = new long[Enum.GetValues<BenchmarkDispatchTier>().Length];
+        for (var opcode = 0; opcode <= 0xFFFF; opcode++)
+        {
+            counts[(int)ClassifyTier((ushort)opcode)]++;
+        }
+
+        Console.WriteLine("dispatch-tier-coverage");
+        Console.WriteLine("tier\tencodings\tshare");
+        foreach (var tier in Enum.GetValues<BenchmarkDispatchTier>())
+        {
+            Console.WriteLine(
+                $"{tier}\t{counts[(int)tier]}\t{counts[(int)tier] * 100.0 / 65536.0:F2}%");
+        }
+
+        Console.WriteLine($"total\t{counts.Sum()}");
+        Console.WriteLine();
+        Console.WriteLine("start\tend\ttier\tmnemonic");
+        foreach (var range in EnumerateTierRanges())
+        {
+            if (range.Tier == BenchmarkDispatchTier.Scalar && range.Length < 256)
+            {
+                continue;
+            }
+
+            Console.WriteLine(
+                $"0x{range.Start:X4}\t0x{range.End:X4}\t{range.Tier}\t{M68kInstructionClassifier.GetMnemonic(range.Start)}");
+        }
+    }
+
+    private static void WriteWorkloadBlockers(IEnumerable<BenchmarkWorkload> workloads)
+    {
+        var blockers = new Dictionary<ushort, int>();
+        Console.WriteLine("benchmark-workload-run-blockers");
+        Console.WriteLine("workload\truns-clean\tblocking-opcodes");
+        foreach (var workload in workloads)
+        {
+            var blocking = EnumerateOpcodes(workload.Program)
+                .Where(opcode => ClassifyTier(opcode) is BenchmarkDispatchTier.Scalar or BenchmarkDispatchTier.PlannedOnly)
+                .Distinct()
+                .ToArray();
+            foreach (var opcode in blocking)
+            {
+                blockers[opcode] = blockers.GetValueOrDefault(opcode) + 1;
+            }
+
+            Console.WriteLine(
+                $"{workload.Name}\t{(blocking.Length == 0 ? "yes" : "no")}\t" +
+                string.Join(
+                    ' ',
+                    blocking.Select(opcode => $"0x{opcode:X4}({M68kInstructionClassifier.GetMnemonic(opcode)})")));
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("opcode\tmnemonic\tblocked-workloads\ttier");
+        foreach (var (opcode, count) in blockers.OrderByDescending(entry => entry.Value).ThenBy(entry => entry.Key))
+        {
+            Console.WriteLine(
+                $"0x{opcode:X4}\t{M68kInstructionClassifier.GetMnemonic(opcode)}\t{count}\t{ClassifyTier(opcode)}");
+        }
+    }
+
+    private static IEnumerable<ushort> EnumerateOpcodes(ushort[] program)
+    {
+        var reader = new BenchmarkProgramCodeReader(program);
+        var byteOffset = 0;
+        while (byteOffset < program.Length * 2)
+        {
+            var opcode = program[byteOffset / 2];
+            yield return opcode;
+            if (M68kDecoder.TryDecode(reader, (uint)byteOffset, out var instruction, out _) &&
+                instruction.Length > 0)
+            {
+                byteOffset += instruction.Length;
+            }
+            else
+            {
+                byteOffset += 2;
+            }
+        }
+    }
+
+    private static BenchmarkDispatchTier ClassifyTier(ushort opcode)
+    {
+        var kind = M68kOpcodePlanTable.Kinds[opcode];
+        if (IsFixedPlanBatchOpcode(opcode, kind))
+        {
+            return BenchmarkDispatchTier.FixedPlanBatch;
+        }
+
+        if (IsShortConditionalBranch(opcode, kind))
+        {
+            return BenchmarkDispatchTier.ShortConditionalBranch;
+        }
+
+        if (IsFastMemoryRunKind(opcode, kind))
+        {
+            return BenchmarkDispatchTier.FastMemoryRun;
+        }
+
+        return kind == M68kOpcodePlanKind.Unsupported
+            ? BenchmarkDispatchTier.Scalar
+            : BenchmarkDispatchTier.PlannedOnly;
+    }
+
+    private static IEnumerable<(ushort Start, ushort End, int Length, BenchmarkDispatchTier Tier)> EnumerateTierRanges()
+    {
+        var start = 0;
+        var tier = ClassifyTier(0);
+        for (var opcode = 1; opcode <= 0xFFFF; opcode++)
+        {
+            var current = ClassifyTier((ushort)opcode);
+            if (current == tier)
+            {
+                continue;
+            }
+
+            yield return ((ushort)start, (ushort)(opcode - 1), opcode - start, tier);
+            start = opcode;
+            tier = current;
+        }
+
+        yield return ((ushort)start, 0xFFFF, 0x10000 - start, tier);
+    }
+
+    private static Func<ushort, M68kOpcodePlanKind, bool> CreateOpcodeKindPredicate(string name)
+        => CoreType
+            .GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)!
+            .CreateDelegate<Func<ushort, M68kOpcodePlanKind, bool>>();
+
+    private sealed class BenchmarkProgramCodeReader(ushort[] program) : IM68kCodeReader
+    {
+        public ushort ReadHostWord(uint address)
+        {
+            if ((address & 1) != 0 || address / 2 >= program.Length)
+            {
+                throw M68kCodeReadException.Instance;
+            }
+
+            return program[address / 2];
+        }
+    }
+}
+
 internal sealed record BenchmarkOptions(
     int WarmupInstructions,
     int Instructions,
@@ -710,6 +891,7 @@ internal sealed record BenchmarkOptions(
     string? Backend,
     string? Workload,
     bool Dispatch,
+    bool DispatchReport,
     bool ExtF80,
     bool SingleStep)
 {
@@ -721,6 +903,7 @@ internal sealed record BenchmarkOptions(
         string? backend = null;
         string? workload = null;
         var dispatch = false;
+        var dispatchReport = false;
         var extF80 = false;
         var singleStep = false;
 
@@ -730,6 +913,9 @@ internal sealed record BenchmarkOptions(
             {
                 case "--dispatch":
                     dispatch = true;
+                    break;
+                case "--dispatch-report":
+                    dispatchReport = true;
                     break;
                 case "--extf80":
                     extF80 = true;
@@ -754,7 +940,7 @@ internal sealed record BenchmarkOptions(
                     break;
                 case "--help":
                 case "-h":
-                    Console.WriteLine("Usage: dotnet run -c Release --project Copper68k.Benchmarks -- [--dispatch|--extf80] [--single-step] [--warmup N] [--instructions N] [--repeats N] [--backend text] [--workload text]");
+                    Console.WriteLine("Usage: dotnet run -c Release --project Copper68k.Benchmarks -- [--dispatch|--dispatch-report|--extf80] [--single-step] [--warmup N] [--instructions N] [--repeats N] [--backend text] [--workload text]");
                     Environment.Exit(0);
                     break;
                 default:
@@ -762,7 +948,7 @@ internal sealed record BenchmarkOptions(
             }
         }
 
-        return new BenchmarkOptions(warmup, instructions, repeats, backend, workload, dispatch, extF80, singleStep);
+        return new BenchmarkOptions(warmup, instructions, repeats, backend, workload, dispatch, dispatchReport, extF80, singleStep);
     }
 
     private static int ParseInt(string[] args, ref int index)

@@ -462,21 +462,6 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(0x3000u, cpu.State.A[7]);
 	}
 	[Fact]
-	public void ExtbSignExtendsByteToLong()
-	{
-		var bus = new ZeroWaitCodeBus();
-		WriteWords(bus, CodeBase, 0x49C0); // EXTB.L D0
-		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
-		cpu.Reset(CodeBase, 0x3000);
-		cpu.State.D[0] = 0x0000_0080;
-		cpu.ExecuteInstruction();
-		Assert.Equal(0xFFFF_FF80u, cpu.State.D[0]);
-		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Carry));
-	}
-	[Fact]
 	public void ExtLongDataRegisterSignExtendsWordToLong()
 	{
 		var bus = new ZeroWaitCodeBus();

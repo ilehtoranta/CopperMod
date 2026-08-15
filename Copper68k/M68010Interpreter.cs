@@ -203,6 +203,14 @@ namespace Copper68k
         protected override uint GetInterruptVectorAddress(uint vectorAddress)
             => State.VectorBaseRegister + vectorAddress;
 
+        protected override ushort? GetInterruptFrameFormatWord(uint vectorAddress)
+            => (ushort)((int)vectorAddress & 0x0FFF);
+
+        protected override bool UsesFormatWordExceptionFrames => true;
+
+        protected override bool IsSupportedRteFrameFormat(ushort format)
+            => (format & 0xF000) is 0x0000 or 0x8000;
+
         protected override bool TryHandleModelSpecificExceptionFrame(
             int vector,
             uint stackedProgramCounter,
