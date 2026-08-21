@@ -570,6 +570,7 @@ namespace Copper68k
                 M68kInstructionTimingKey.OrLongDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.OrLongDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.NotByteAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.LsrWordAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.EorLongDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.EorByteDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.BchgByteImmediateAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
@@ -898,6 +899,12 @@ namespace Copper68k
                 if (operands == "RegisterData")
                 {
                     label = $"{mnemonic}.{GetSizeSuffix(size)} Dn,Dn";
+                    return true;
+                }
+
+                if (operands == "AddressDisplacement")
+                {
+                    label = $"{mnemonic}.{GetSizeSuffix(size)} (d16,An)";
                     return true;
                 }
 
@@ -1608,6 +1615,12 @@ namespace Copper68k
 
         private static int CalculateShiftRotateCycles(M68kTimingDescriptor descriptor)
         {
+            if (descriptor.LegacyKey == M68kInstructionTimingKey.LsrWordAddressDisplacement &&
+                descriptor.Destination.Form == M68kTimingOperandForm.AddressDisplacement)
+            {
+                return 8;
+            }
+
             if (descriptor.Source.Form is not (M68kTimingOperandForm.Immediate or M68kTimingOperandForm.DataRegister) ||
                 descriptor.Destination.Form != M68kTimingOperandForm.DataRegister)
             {
@@ -1949,6 +1962,7 @@ namespace Copper68k
         {
             return descriptor.Source.Form switch
             {
+                M68kTimingOperandForm.AddressIndirect => 2,
                 M68kTimingOperandForm.AddressDisplacement => 4,
                 M68kTimingOperandForm.AbsoluteWord => 4,
                 M68kTimingOperandForm.AbsoluteLong => 6,

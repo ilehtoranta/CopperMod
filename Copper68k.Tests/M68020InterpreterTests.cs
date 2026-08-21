@@ -9265,6 +9265,57 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(3, cpu.State.Cycles);
 	}
 	[Fact]
+	public void LsrLongRegisterDataRegisterUsesLowSixCountBitsAndSetsExtend()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0xE2A8); // LSR.L D1,D0
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.A1200Ec02014Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[0] = 0x8000_0080;
+		cpu.State.D[1] = 0x0000_0048; // low six bits select a count of eight
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0080_0000u, cpu.State.D[0]);
+		Assert.Equal(0x0000_0048u, cpu.State.D[1]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
+		Assert.Equal(6, cpu.State.NativeCycles);
+		Assert.Equal(3, cpu.State.Cycles);
+	}
+
+	[Fact]
+	public void LsrWordAddressDisplacementUsesMemoryFormOpcode()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0xE2E8, 0x0010); // LSR.W $10(A0)
+		bus.WriteWord(0x0000_4010, 0x8001);
+		var cpu = new M68020Interpreter(bus, M68020CpuProfile.A1200Ec02014Mhz);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.A[0] = 0x0000_4000;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
+			M68kCpuState.Zero |
+			M68kCpuState.Overflow;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal((ushort)0x4000, bus.ReadWord(0x0000_4010));
+		Assert.Equal(0x0000_4000u, cpu.State.A[0]);
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.False(cpu.State.GetFlag(M68kCpuState.Overflow));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+		Assert.Equal(CodeBase + 4u, cpu.State.ProgramCounter);
+	}
+	[Fact]
 	public void AsrWordImmediateDataRegisterShiftsLowWordWithSign()
 	{
 		var bus = new ZeroWaitCodeBus();

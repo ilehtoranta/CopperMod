@@ -733,7 +733,8 @@ namespace Copper68k
                     _jitBus,
                     _fastMemoryBus,
                     _timedMemoryBus,
-                    options.CpuModel == M68kJitCpuModel.M68040);
+                    options.CpuModel == M68kJitCpuModel.M68040,
+                    options.CpuModel == M68kJitCpuModel.M68000);
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
             _readPhysicalLongForM68040Mmu = ReadPhysicalLongForM68040Mmu;
             _cpuModel = options.CpuModel;
@@ -2774,23 +2775,39 @@ namespace Copper68k
             private readonly IM68kJitFastMemoryBus? _fastMemoryBus;
             private readonly IM68kJitTimedMemoryBus? _timedMemoryBus;
             private readonly bool _full32BitAddresses;
+            private readonly bool _enforceM68000DataAlignment;
 
             public M68kJitHostAdapter(
                 IM68kBus bus,
                 IM68kJitBus jitBus,
                 IM68kJitFastMemoryBus? fastMemoryBus,
                 IM68kJitTimedMemoryBus? timedMemoryBus,
-                bool full32BitAddresses)
+                bool full32BitAddresses,
+                bool enforceM68000DataAlignment)
             {
                 _bus = bus;
                 _jitBus = jitBus;
                 _fastMemoryBus = fastMemoryBus;
                 _timedMemoryBus = timedMemoryBus;
                 _full32BitAddresses = full32BitAddresses;
+                _enforceM68000DataAlignment = enforceM68000DataAlignment;
             }
 
             private uint NormalizeAddress(uint address)
                 => _full32BitAddresses ? address : address & 0x00FF_FFFFu;
+
+            private void ValidateM68000DataAlignment(uint address, M68kOperandSize size, bool write)
+            {
+                if (_enforceM68000DataAlignment &&
+                    size != M68kOperandSize.Byte &&
+                    (address & 1) != 0)
+                {
+                    throw new M68kEmulationException(
+                        size == M68kOperandSize.Word
+                            ? $"Odd MC68000 word {(write ? "write" : "read")} at 0x{address:X8}."
+                            : $"Odd MC68000 long {(write ? "write" : "read")} at 0x{address:X8}.");
+                }
+            }
 
             public ushort ReadHostWord(uint address)
                 => _jitBus.ReadJitCodeWord(NormalizeAddress(address));
@@ -2879,38 +2896,42 @@ namespace Copper68k
 
             public uint ReadJitSlotAwareMemory(ref long cycle, uint address, M68kOperandSize size)
             {
+                address = NormalizeAddress(address);
+                ValidateM68000DataAlignment(address, size, write: false);
                 if (_timedMemoryBus != null)
                 {
-                    return _timedMemoryBus.ReadJitTimedMemory(ref cycle, NormalizeAddress(address), size);
+                    return _timedMemoryBus.ReadJitTimedMemory(ref cycle, address, size);
                 }
 
                 return size switch
                 {
-                    M68kOperandSize.Byte => _bus.ReadByte(NormalizeAddress(address), ref cycle, M68kBusAccessKind.CpuDataRead),
-                    M68kOperandSize.Word => _bus.ReadWord(NormalizeAddress(address), ref cycle, M68kBusAccessKind.CpuDataRead),
-                    _ => _bus.ReadLong(NormalizeAddress(address), ref cycle, M68kBusAccessKind.CpuDataRead)
+                    M68kOperandSize.Byte => _bus.ReadByte(address, ref cycle, M68kBusAccessKind.CpuDataRead),
+                    M68kOperandSize.Word => _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuDataRead),
+                    _ => _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead)
                 };
             }
 
             public void WriteJitSlotAwareMemory(ref long cycle, uint address, uint value, M68kOperandSize size)
             {
+                address = NormalizeAddress(address);
+                ValidateM68000DataAlignment(address, size, write: true);
                 if (_timedMemoryBus != null)
                 {
-                    _timedMemoryBus.WriteJitTimedMemory(ref cycle, NormalizeAddress(address), value, size);
+                    _timedMemoryBus.WriteJitTimedMemory(ref cycle, address, value, size);
                     return;
                 }
 
                 if (size == M68kOperandSize.Byte)
                 {
-                    _bus.WriteByte(NormalizeAddress(address), (byte)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                    _bus.WriteByte(address, (byte)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
                 }
                 else if (size == M68kOperandSize.Word)
                 {
-                    _bus.WriteWord(NormalizeAddress(address), (ushort)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                    _bus.WriteWord(address, (ushort)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
                 }
                 else
                 {
-                    _bus.WriteLong(NormalizeAddress(address), value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                    _bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
                 }
             }
 

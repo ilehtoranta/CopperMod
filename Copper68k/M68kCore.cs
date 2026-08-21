@@ -546,7 +546,11 @@ namespace Copper68k
         Required = 0,
         RetirementQueue = 1,
         CancellableSuccessor = 2,
-        InterruptibleBranchTarget = 3
+        InterruptibleBranchTarget = 3,
+        CommittedBranchTargetTail = 4,
+        CommittedMemoryWritebackSuccessor = 5,
+        CommittedDisplacedDbccTargetHead = 6,
+        CommittedDisplacedDbccTargetTail = 7
     }
 
     internal sealed class M68kInstructionFetchInterruptedException : Exception
@@ -554,16 +558,22 @@ namespace Copper68k
         public M68kInstructionFetchInterruptedException(
             long boundaryCycle,
             long requestedCycle,
-            in M68kInstructionFetchPublicationContext publicationContext)
+            in M68kInstructionFetchPublicationContext publicationContext,
+            bool retainedCommittedTargetPair = false,
+            int pendingBranchControlCycles = 0)
         {
             BoundaryCycle = boundaryCycle;
             RequestedCycle = requestedCycle;
             PublicationContext = publicationContext;
+            RetainedCommittedTargetPair = retainedCommittedTargetPair;
+            PendingBranchControlCycles = pendingBranchControlCycles;
         }
 
         public long BoundaryCycle { get; }
         public long RequestedCycle { get; }
         public M68kInstructionFetchPublicationContext PublicationContext { get; }
+        public bool RetainedCommittedTargetPair { get; }
+        public int PendingBranchControlCycles { get; }
     }
 
     internal static class M68000BranchInterruptTransition
@@ -594,11 +604,8 @@ namespace Copper68k
             {
                 var elapsedEntryCycles =
                     interruptBoundaryCycle - entryFirstWordReadyCycle;
-                // A caught branch can drain both entry words while the second
-                // transfer remains part of the physical branch tail. Once the
-                // full five-clock window has elapsed, exception microcode
-                // overlaps that already-completed work instead of charging it
-                // again at entry.
+                // A fully drained entry queue has already paid its complete
+                // physical tail and overlaps exception entry.
                 if (elapsedEntryCycles >= DrainedEntryQueueOverlapCycles)
                 {
                     return -(int)Math.Min(elapsedEntryCycles, int.MaxValue);
@@ -609,6 +616,10 @@ namespace Copper68k
                 ? -RetainedTargetOverlapCycles
                 : 0;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int GetCommittedTargetPairExceptionEntryAdjustment()
+            => -8;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static M68000InterruptedBranchRetirement GetInterruptedRetirement(
@@ -2514,12 +2525,16 @@ namespace Copper68k
                 _branchInterruptInstructionEntryCycle =
                     interrupted.PublicationContext.InstructionEntryCycle;
                 _interruptEntryBranchTailAdjustmentCycles =
-                    M68000BranchInterruptTransition.GetExceptionEntryAdjustment(
-                        _prefetchCount,
-                        _prefetchCompletedCycle0,
-                        interrupted.BoundaryCycle,
-                        interrupted.PublicationContext.EntryPrefetchCount,
-                        interrupted.PublicationContext.EntryReadyCycle0);
+                    (interrupted.RetainedCommittedTargetPair
+                        ? M68000BranchInterruptTransition
+                            .GetCommittedTargetPairExceptionEntryAdjustment()
+                        : M68000BranchInterruptTransition.GetExceptionEntryAdjustment(
+                            _prefetchCount,
+                            _prefetchCompletedCycle0,
+                            interrupted.BoundaryCycle,
+                            interrupted.PublicationContext.EntryPrefetchCount,
+                            interrupted.PublicationContext.EntryReadyCycle0)) +
+                    interrupted.PendingBranchControlCycles;
                 _instructionInterruptSampleCycle = interrupted.BoundaryCycle;
                 // The taken-branch cycle count is a completion floor for the
                 // normal refill sequence.  If IPL recognition cancels the
@@ -6623,10 +6638,10 @@ namespace Copper68k
             WritePlannedEaValue(in destination, value);
             if (moveWritesMemory && destinationMode != 4 && !destination.IsRegister)
             {
-                PrefetchFallthroughAfterMoveSourceRead();
+                PrefetchFallthroughAfterMemoryWriteback();
                 if (writeBeforeSuccessorPrefetch)
                 {
-                    PrefetchFallthroughAfterMoveSourceRead();
+                    PrefetchFallthroughAfterMemoryWriteback();
                 }
             }
 
@@ -7797,10 +7812,10 @@ namespace Copper68k
             WritePlannedEaValue(in destination, value);
             if (moveWritesMemory && !destination.IsRegister)
             {
-                PrefetchFallthroughAfterMoveSourceRead();
+                PrefetchFallthroughAfterMemoryWriteback();
                 if (writeBeforeSuccessorPrefetch)
                 {
-                    PrefetchFallthroughAfterMoveSourceRead();
+                    PrefetchFallthroughAfterMemoryWriteback();
                 }
             }
 
@@ -8923,10 +8938,10 @@ namespace Copper68k
             dest.Write(value);
             if (moveWritesMemory && !dest.IsRegister)
             {
-                PrefetchFallthroughAfterMoveSourceRead();
+                PrefetchFallthroughAfterMemoryWriteback();
                 if (writeBeforeSuccessorPrefetch)
                 {
-                    PrefetchFallthroughAfterMoveSourceRead();
+                    PrefetchFallthroughAfterMemoryWriteback();
                 }
             }
 
@@ -11906,15 +11921,20 @@ namespace Copper68k
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
             var targetPublicationContext = CaptureInstructionFetchPublicationContext();
+            var displacedTarget = target + 4 != stackedProgramCounter;
             var targetOpcodeReadyCycle = TopUpPrefetchOne(
                 out _,
-                M68kInstructionFetchPublicationPhase.CancellableSuccessor,
+                displacedTarget
+                    ? M68kInstructionFetchPublicationPhase.CommittedDisplacedDbccTargetHead
+                    : M68kInstructionFetchPublicationPhase.Required,
                 long.MinValue,
                 targetPublicationContext);
             _instructionInterruptSampleCycle = targetOpcodeReadyCycle;
             var targetExtensionReadyCycle = TopUpPrefetchOne(
                 out _,
-                M68kInstructionFetchPublicationPhase.CancellableSuccessor,
+				displacedTarget
+					? M68kInstructionFetchPublicationPhase.CommittedDisplacedDbccTargetTail
+					: M68kInstructionFetchPublicationPhase.CommittedBranchTargetTail,
                 long.MinValue,
                 targetPublicationContext with
                 {
@@ -11923,8 +11943,8 @@ namespace Copper68k
                 });
 
             // The generated CE000 microsequence does not finish until this
-            // transfer does.  Its frozen completion therefore constrains both
-            // normal retirement and exception entry.  No separate duration is
+            // transfer does. Its frozen completion therefore constrains both
+            // normal retirement and exception entry. No separate duration is
             // derived from the incoming queue: any incoming wait was already
             // paid when the displacement word was consumed.
             _cpuRetireBusCycle = Math.Max(
@@ -12023,7 +12043,7 @@ namespace Copper68k
 
             // The expired CE000 DBcc path has already selected the fallthrough
             // opcode when it polls IPL, but its final fallthrough extension read
-            // is still an explicit, committed micro-operation.  Neither normal
+            // is still an explicit, committed micro-operation. Neither normal
             // retirement nor exception entry may pass that frozen completion.
             _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, readyCycle);
             _exceptionEntryNotBeforeCycle = Math.Max(
@@ -12465,11 +12485,32 @@ namespace Copper68k
                 _prefetchAddress = State.ProgramCounter;
                 TopUpPrefetchOne();
             }
+
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void PrefetchFallthroughAfterMemoryWriteback()
         {
+            if ((State.ProgramCounter & 1) != 0)
+            {
+                return;
+            }
+
+            if (_prefetchCount == 0)
+            {
+                _prefetchAddress = State.ProgramCounter;
+            }
+
+            if (_prefetchAddress == State.ProgramCounter)
+            {
+                var readyCycle = TopUpPrefetchOne(
+                    out _,
+                    M68kInstructionFetchPublicationPhase.CommittedMemoryWritebackSuccessor,
+                    long.MinValue,
+                    CaptureInstructionFetchPublicationContext());
+                _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, readyCycle);
+            }
+
             _skipRetirePrefetchTopUp = true;
         }
 

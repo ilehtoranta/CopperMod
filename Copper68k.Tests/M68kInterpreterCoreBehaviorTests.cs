@@ -279,6 +279,87 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			new uint[] { 0x1000, 0x1002, 0x1010, 0x1004, 0x1006 },
 			bus.InstructionFetchCycles.Select(fetch => fetch.Address));
 	}
+
+	[Fact]
+	public void ExpiredDisplacedDbraWithFreshTwoWordEntryQueueReadsTargetOnce()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x51, 0xC8, 0x00, 0x0E); // DBRA D0,$1010
+		Write(bus.Memory, 0x1004, 0x4E, 0x71, 0x4E, 0x71); // fallthrough
+		Write(bus.Memory, 0x1010, 0x7E, 0xAD);             // abandoned target
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+		cpu.State.D[0] = 0;
+		((IM68000PipelineStateTransfer)cpu).ImportM68000PipelineState(
+			new M68000PipelineState(
+				PrefetchAddress: 0x1000,
+				Word0: 0x51C8,
+				Word1: 0x000E,
+				ReadyCycle0: 16,
+				ReadyCycle1: 20,
+				DeferredBatchEligible0: false,
+				DeferredBatchEligible1: false,
+				PrefetchCount: 2,
+				ConsumeWithoutPrefetch: false,
+				SkipRetirePrefetchTopUp: false,
+				NextBusTransferCycle: 20,
+				LastBusReadyCycle: 20,
+				RetireBusCycle: 20,
+				PendingInternalCycles: 0));
+		var phaseStart = bus.InstructionFetchCycles.Count;
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(14, elapsed);
+		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		Assert.Equal(0xFFFFu, cpu.State.D[0]);
+		Assert.Equal(
+			new uint[] { 0x1010, 0x1004, 0x1006 },
+			bus.InstructionFetchCycles
+				.Skip(phaseStart)
+				.Select(fetch => fetch.Address));
+	}
+
+	[Fact]
+	public void ExpiredSelfLoopDbraWithFreshTwoWordEntryQueueReadsAbandonedTargetOnce()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x51, 0xC8, 0xFF, 0xFE); // DBRA D0,$1000
+		Write(bus.Memory, 0x1004, 0x4E, 0x71, 0x4E, 0x71); // fallthrough
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+		cpu.State.D[0] = 0;
+		((IM68000PipelineStateTransfer)cpu).ImportM68000PipelineState(
+			new M68000PipelineState(
+				PrefetchAddress: 0x1000,
+				Word0: 0x51C8,
+				Word1: 0xFFFE,
+				ReadyCycle0: 16,
+				ReadyCycle1: 20,
+				DeferredBatchEligible0: false,
+				DeferredBatchEligible1: false,
+				PrefetchCount: 2,
+				ConsumeWithoutPrefetch: false,
+				SkipRetirePrefetchTopUp: false,
+				NextBusTransferCycle: 20,
+				LastBusReadyCycle: 20,
+				RetireBusCycle: 20,
+				PendingInternalCycles: 0));
+		var phaseStart = bus.InstructionFetchCycles.Count;
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(14, elapsed);
+		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		Assert.Equal(0xFFFFu, cpu.State.D[0]);
+		Assert.Equal(
+			new uint[] { 0x1000, 0x1004, 0x1006 },
+			bus.InstructionFetchCycles
+				.Skip(phaseStart)
+				.Select(fetch => fetch.Address));
+	}
 	[Fact]
 	public void ExpiredDbraWaitsForCommittedFallthroughExtensionRead()
 	{
