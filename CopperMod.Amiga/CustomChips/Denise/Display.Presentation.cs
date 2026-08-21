@@ -42,6 +42,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             ConfigurePresentationDimensions(target.Length);
+            _copperPresentationTransitions?.Clear();
             _renderedCopperTimelineSegments?.Clear();
             _renderedCopperPixelTraces?.Clear();
             _boundPresentationTarget = target;

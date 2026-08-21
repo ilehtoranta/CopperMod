@@ -15,7 +15,8 @@ namespace CopperMod.Amiga.Bus
         Unsupported,
         Granted,
         ReferenceContinuation,
-        InterruptBoundary
+        InterruptBoundary,
+        CommittedBranchTargetAtInterruptBoundary
     }
 
     internal enum CpuWaitFixedImageProductionFallback : byte
@@ -34,6 +35,7 @@ namespace CopperMod.Amiga.Bus
     internal sealed partial class Scheduler
     {
         private const int M68000InterruptSetupCycles = 4;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool AdvanceCpuTimingSequence(
             in CpuTimingSequenceRequest request,
@@ -127,6 +129,7 @@ namespace CopperMod.Amiga.Bus
             long requestedCycle,
             bool isWrite,
             int cpuInterruptMask,
+            bool retainGrantAtInterruptPoll,
             out long grantedCycle,
             out long completedCycle)
             => AdvanceUntilCpuGrantCore(
@@ -139,7 +142,8 @@ namespace CopperMod.Amiga.Bus
                 isWrite,
                 out grantedCycle,
                 out completedCycle,
-                cpuInterruptMask);
+                cpuInterruptMask,
+                retainGrantAtInterruptPoll: retainGrantAtInterruptPoll);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal CpuWaitGrantAdvanceResult AdvanceUntilCpuLongWordPhaseGrant(
@@ -173,7 +177,8 @@ namespace CopperMod.Amiga.Bus
             out long grantedCycle,
             out long completedCycle,
             int cpuInterruptMask = -1,
-            bool allowAdjacentCopperPhase = false)
+            bool allowAdjacentCopperPhase = false,
+            bool retainGrantAtInterruptPoll = false)
         {
             grantedCycle = 0;
             completedCycle = 0;
@@ -286,6 +291,8 @@ namespace CopperMod.Amiga.Bus
             try
             {
                 var interruptible = cpuInterruptMask >= 0;
+                var committedBranchTargetAtInterruptBoundary = false;
+                var branchInterruptBoundaryCycle = 0L;
 
                 if (searchCycle > requestedCycle)
                 {
@@ -307,13 +314,21 @@ namespace CopperMod.Amiga.Bus
                             candidate,
                             out var interruptBoundaryCycle))
                     {
-                        // Reaching the IPL recognition phase cancels a request
-                        // that has not won a physical slot. The issue cycle does
-                        // not commit a transfer; a granted transfer has already
-                        // returned from this search and cannot reach this path.
-                        DrainSlotContendedAccess(interruptBoundaryCycle);
-                        completedCycle = interruptBoundaryCycle;
-                        return CpuWaitGrantAdvanceResult.InterruptBoundary;
+                        var interruptPollCycle = (interruptBoundaryCycle + 3) & ~3L;
+                        if (!retainGrantAtInterruptPoll || candidate != interruptPollCycle)
+                        {
+                            DrainSlotContendedAccess(interruptBoundaryCycle);
+                            completedCycle = interruptBoundaryCycle;
+                            return CpuWaitGrantAdvanceResult.InterruptBoundary;
+                        }
+
+                        // The branch-target read and the IPL poll share this
+                        // physical phase. Once this free slot is granted, the
+                        // transfer and its queued successor form a committed
+                        // tail; exception entry may overlap them but cannot
+                        // cancel either bus cycle.
+                        committedBranchTargetAtInterruptBoundary = true;
+                        branchInterruptBoundaryCycle = interruptBoundaryCycle;
                     }
 
                     if (_bus.Display.HasLiveDisplayWork())
@@ -366,6 +381,12 @@ namespace CopperMod.Amiga.Bus
                                 interruptible || allowAdjacentCopperPhase);
                     if (causalCandidate != candidate)
                     {
+                        if (committedBranchTargetAtInterruptBoundary)
+                        {
+                            completedCycle = branchInterruptBoundaryCycle;
+                            return CpuWaitGrantAdvanceResult.InterruptBoundary;
+                        }
+
                         _bus.CausalBusExecutor.ObservePendingCpuDmaCycle(
                             candidate);
                         candidate = AgnusChipSlotScheduler.AlignToSlot(
@@ -393,10 +414,16 @@ namespace CopperMod.Amiga.Bus
                     causalCandidate = _bus.AdvancePendingCpuGrantToCausalBusHorizon(
                         target,
                         candidate,
-                        allowAdjacentCopperPhase:
-                            interruptible || allowAdjacentCopperPhase);
+                            allowAdjacentCopperPhase:
+                                interruptible || allowAdjacentCopperPhase);
                     if (causalCandidate != candidate)
                     {
+                        if (committedBranchTargetAtInterruptBoundary)
+                        {
+                            completedCycle = branchInterruptBoundaryCycle;
+                            return CpuWaitGrantAdvanceResult.InterruptBoundary;
+                        }
+
                         candidate = AgnusChipSlotScheduler.AlignToSlot(causalCandidate);
                         continue;
                     }
@@ -418,7 +445,15 @@ namespace CopperMod.Amiga.Bus
                             _bus.ObserveLiveSlotKernelCpuGrant(candidate);
                         }
                         grantedCycle = candidate;
-                        return CpuWaitGrantAdvanceResult.Granted;
+                        return committedBranchTargetAtInterruptBoundary
+                            ? CpuWaitGrantAdvanceResult.CommittedBranchTargetAtInterruptBoundary
+                            : CpuWaitGrantAdvanceResult.Granted;
+                    }
+
+                    if (committedBranchTargetAtInterruptBoundary)
+                    {
+                        completedCycle = branchInterruptBoundaryCycle;
+                        return CpuWaitGrantAdvanceResult.InterruptBoundary;
                     }
 
                     // A Copper transfer occupies one memory cycle. The adjacent

@@ -407,6 +407,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                          _liveCopper.WaitSecond) &&
                      (!IsBitplaneDmaEnabled(_dmacon) ||
                       GetAgnusBitplaneFetchPlaneCount() == 0));
+                if (readyAtWakeCycle && !bfdReleasedByTermination)
+                {
+                    // A beam wake supplies the comparison result immediately,
+                    // but not the following internal restart control phase.
+                    // ReadyToRequest bypasses RestartArmed, so carry it here.
+                    resumeCycle += AgnusChipSlotScheduler.SlotCycles;
+                }
                 var beamSatisfiedAtBlitterTermination =
                     !bfdReleasedByTermination ||
                     IsCopperComparisonSatisfied(

@@ -1629,7 +1629,6 @@ namespace CopperMod.Amiga.Bus
                 channel: 0);
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGrantCpuDataSingleExactSlot(
             AmigaBusAccessKind kind,
             AmigaBusAccessTarget target,

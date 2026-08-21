@@ -11,6 +11,30 @@ namespace CopperMod.Amiga.Bus
 {
     internal sealed partial class Bus
     {
+        internal static int GetPendingInterruptedBranchControlCycles(
+            in M68kInstructionFetchPublicationContext publicationContext,
+            long interruptBoundaryCycle,
+            long lineCycles)
+        {
+            // This is CPU control progress, not a display offset. Derive its
+            // stable phase from the physical line timeline; absolute frame
+            // parity alternates on PAL short/long frames and is not CPU state.
+            if (publicationContext.EntryPrefetchCount != 2 ||
+                publicationContext.InstructionEntryCycle - interruptBoundaryCycle < 3 ||
+                lineCycles <= 0)
+            {
+                return 0;
+            }
+
+            var lineEntryCycle = publicationContext.InstructionEntryCycle % lineCycles;
+            if (lineEntryCycle < 0)
+            {
+                lineEntryCycle += lineCycles;
+            }
+
+            return (lineEntryCycle & 3) == 0 ? 4 : 0;
+        }
+
         internal CpuWaitGrantAdvanceResult AdvanceCpuInstructionFetchUntilInterruptForTest(
             uint address,
             long requestedCycle,
@@ -25,6 +49,7 @@ namespace CopperMod.Amiga.Bus
                 requestedCycle,
                 isWrite: false,
                 cpuInterruptMask,
+                retainGrantAtInterruptPoll: false,
                 out grantedCycle,
                 out completedCycle);
 
@@ -55,6 +80,7 @@ namespace CopperMod.Amiga.Bus
                 requestedCycle,
                 isWrite: false,
                 cpuInterruptMask,
+                retainGrantAtInterruptPoll: true,
                 out grantedCycle,
                 out var completedCycle);
 
@@ -62,7 +88,6 @@ namespace CopperMod.Amiga.Bus
             {
                 cycle = completedCycle;
             }
-
             return result;
         }
 

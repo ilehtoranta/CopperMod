@@ -363,6 +363,7 @@ namespace CopperMod.Amiga.Bus
         private long _customRegisterWriteCycle;
         private HardwareScheduleImpact _customRegisterWriteImpact;
         private bool _romOverlayEnabled = true;
+
         private long _nextVerticalBlankCycle;
         private long _nextHorizontalSyncIndex;
         private long _nextHorizontalSyncCycle;
@@ -392,6 +393,10 @@ namespace CopperMod.Amiga.Bus
                 new M68kInstructionFetchPublicationContext[MaxDeferredCpuDataAccesses];
         private ulong _deferredCpuDataTimingTokenClock;
         private ulong _lastDeferredCpuInstructionFetchTimingToken;
+        private bool _committedBranchInterruptTailPending;
+        private long _committedBranchInterruptRequestedCycle;
+        private M68kInstructionFetchPublicationContext
+            _committedBranchInterruptPublicationContext;
         private long _deferredCpuProjectedRetireDelay;
         private long _deferredCpuProjectedMaxRetireDelay;
         private long _deferredCpuProjectedMaxRetireVirtualCycle;
@@ -2009,7 +2014,6 @@ namespace CopperMod.Amiga.Bus
         bool IM68000BusCycleTiming.RequiresExactM68000PipelineFallback
             => _hardwareSpecializationEnabled;
 
-
         M68000BusAccessTiming IM68000BusCycleTiming.GetM68000BusAccessTiming(
             uint address,
             M68kOperandSize size,
@@ -2731,13 +2735,20 @@ namespace CopperMod.Amiga.Bus
                     out var interruptibleGrantedCycle);
                 if (result == CpuWaitGrantAdvanceResult.InterruptBoundary)
                 {
+                    var pendingBranchControlCycles =
+                        GetPendingInterruptedBranchControlCycles(
+                            in publicationContext,
+                            cycle,
+                            LineCycles);
                     throw new M68kInstructionFetchInterruptedException(
                         cycle,
                         interruptibleRequestedCycle,
-                        in publicationContext);
+                        in publicationContext,
+                        pendingBranchControlCycles: pendingBranchControlCycles);
                 }
 
-                if (result == CpuWaitGrantAdvanceResult.Granted)
+                if (result is CpuWaitGrantAdvanceResult.Granted or
+                    CpuWaitGrantAdvanceResult.CommittedBranchTargetAtInterruptBoundary)
                 {
                     CaptureExactCpuAccess(
                         AmigaBusAccessKind.CpuInstructionFetch,
@@ -2748,10 +2759,113 @@ namespace CopperMod.Amiga.Bus
                         isWrite: false,
                         interruptibleGrantedCycle,
                         cycle);
-                    return ReadCpuInstructionFetchChipWordAtGrantedSlot(
+                    var value = ReadCpuInstructionFetchChipWordAtGrantedSlot(
                         address,
                         interruptibleGrantedCycle);
+                    if (result ==
+                        CpuWaitGrantAdvanceResult.CommittedBranchTargetAtInterruptBoundary)
+                    {
+                        _committedBranchInterruptTailPending = true;
+                        _committedBranchInterruptRequestedCycle =
+                            interruptibleRequestedCycle;
+                        _committedBranchInterruptPublicationContext =
+                            publicationContext;
+                    }
+
+                    return value;
                 }
+            }
+            if (target == AmigaBusAccessTarget.ChipRam &&
+                publicationPhase == M68kInstructionFetchPublicationPhase.CancellableSuccessor &&
+                _committedBranchInterruptTailPending)
+            {
+                var successorRequestedCycle = cycle;
+                var result = AdvanceBranchSuccessorCpuInstructionFetch(
+                    target,
+                    address,
+                    ref cycle,
+                    out var successorGrantedCycle);
+                if (result == CpuWaitGrantAdvanceResult.Granted)
+                {
+                    CaptureExactCpuAccess(
+                        AmigaBusAccessKind.CpuInstructionFetch,
+                        AmigaBusAccessTarget.ChipRam,
+                        address,
+                        AmigaBusAccessSize.Word,
+                        successorRequestedCycle,
+                        isWrite: false,
+                        successorGrantedCycle,
+                        cycle);
+                    _ = ReadCpuInstructionFetchChipWordAtGrantedSlot(
+                        address,
+                        successorGrantedCycle);
+                    var interruptedRequestedCycle =
+                        _committedBranchInterruptRequestedCycle;
+                    var interruptedPublicationContext =
+                        _committedBranchInterruptPublicationContext;
+                    _committedBranchInterruptTailPending = false;
+                    throw new M68kInstructionFetchInterruptedException(
+                        cycle,
+                        interruptedRequestedCycle,
+                        in interruptedPublicationContext,
+                        retainedCommittedTargetPair: true);
+                }
+            }
+            if (target == AmigaBusAccessTarget.ChipRam &&
+                publicationPhase is
+                    M68kInstructionFetchPublicationPhase.CommittedDisplacedDbccTargetHead or
+                    M68kInstructionFetchPublicationPhase.CommittedDisplacedDbccTargetTail)
+            {
+                // Commitment freezes the completion of the slot that normal
+                // arbitration grants. It does not permit either word of the
+                // pair to relocate an already-scheduled refresh transfer.
+                CommitExactCpuDataTiming(
+                    target,
+                    address,
+                    AmigaBusAccessSize.Word,
+                    ref cycle,
+                    isWrite: false,
+                    AmigaBusAccessKind.CpuInstructionFetch,
+                    out _,
+                    out _);
+
+                return window.ReadWord(address);
+            }
+            if (target == AmigaBusAccessTarget.ChipRam &&
+                publicationPhase == M68kInstructionFetchPublicationPhase.CommittedBranchTargetTail)
+            {
+                // A committed fetch cannot be cancelled once granted, but it
+                // does not outrank a refresh slot that is already present on
+                // the physical Agnus timeline. Submit it through the ordinary
+                // exact arbiter and retain the resulting frozen completion.
+                CommitExactCpuDataTiming(
+                    target,
+                    address,
+                    AmigaBusAccessSize.Word,
+                    ref cycle,
+                    isWrite: false,
+                    AmigaBusAccessKind.CpuInstructionFetch,
+                    out _,
+                    out _);
+
+                return window.ReadWord(address);
+            }
+            if (target == AmigaBusAccessTarget.ChipRam &&
+                publicationPhase == M68kInstructionFetchPublicationPhase.CommittedMemoryWritebackSuccessor)
+            {
+                // Writeback makes this successor non-cancellable, but its
+                // physical transfer still waits behind existing DMA owners.
+                CommitExactCpuDataTiming(
+                    target,
+                    address,
+                    AmigaBusAccessSize.Word,
+                    ref cycle,
+                    isWrite: false,
+                    AmigaBusAccessKind.CpuInstructionFetch,
+                    out _,
+                    out _);
+
+                return window.ReadWord(address);
             }
             if (target == AmigaBusAccessTarget.ChipRam &&
                 publicationPhase == M68kInstructionFetchPublicationPhase.CancellableSuccessor &&
@@ -2777,7 +2891,7 @@ namespace CopperMod.Amiga.Bus
                         cycle);
                     return ReadCpuInstructionFetchChipWordAtGrantedSlot(
                         address,
-                        successorGrantedCycle);
+                    successorGrantedCycle);
                 }
             }
             if (target == AmigaBusAccessTarget.ChipRam &&
@@ -4125,6 +4239,63 @@ namespace CopperMod.Amiga.Bus
                 IsRealFastRamRange(address, byteCount) ||
                 _mappedMemory.TryGetMappedReadMemory(address, byteCount, out _, out _) ||
                 _rtgVram.IsAllocatedRange(address, byteCount);
+        }
+
+        /// <summary>
+        /// Reports whether a complete guest span can accept CPU data writes.
+        /// Read-only mapped ROM/image regions are addressable and therefore
+        /// included by <see cref="IsMappedMemoryRange"/>, but they cannot be
+        /// used for a guest stack frame such as the continuation LONG pushed
+        /// by a host-entered 68k subroutine.
+        /// </summary>
+        public bool IsWritableMemoryRange(uint address, int byteCount)
+        {
+            if (byteCount < 0)
+            {
+                return false;
+            }
+
+            if (byteCount == 0)
+            {
+                return true;
+            }
+
+            if ((uint)(byteCount - 1) > uint.MaxValue - address)
+            {
+                return false;
+            }
+
+            // Mapping order is visible bus state.  A read-only ROM/image
+            // overlay must mask an older writable chip/fast backing range;
+            // checking the physical range first would incorrectly approve a
+            // guest write that the CPU cannot perform.  Walk only the
+            // requested span so partially-overlaid fields are handled with
+            // the same per-byte precedence as mapped-memory writes.
+            for (var offset = 0; offset < byteCount; offset++)
+            {
+                var current = address + (uint)offset;
+                if (_mappedMemory.ContainsMappedAddress(current))
+                {
+                    if (!_mappedMemory.ContainsWritableMappedAddress(current))
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                if (IsChipRamRange(current, 1) ||
+                    IsExpansionRamRange(current, 1) ||
+                    IsRealFastRamRange(current, 1) ||
+                    _rtgVram.IsAllocatedRange(current, 1))
+                {
+                    continue;
+                }
+
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -6770,44 +6941,13 @@ namespace CopperMod.Amiga.Bus
         }
 
         internal uint ReadJitSlotAwareMemory(ref long cycle, uint address, M68kOperandSize size)
-        {
-            if (size == M68kOperandSize.Byte)
-            {
-                return ReadJitSlotAwareMemoryUnchecked(ref cycle, address, size);
-            }
-
-            if ((address & 1) != 0)
-            {
-                throw new AmigaEmulationException(
-                    size == M68kOperandSize.Word
-                        ? $"Odd MC68000 word read at 0x{address:X8}."
-                        : $"Odd MC68000 long read at 0x{address:X8}.");
-            }
-
-            return ReadJitSlotAwareMemoryUnchecked(ref cycle, address, size);
-        }
+            => ReadJitSlotAwareMemoryUnchecked(ref cycle, address, size);
 
         uint IM68kJitTimedMemoryBus.ReadJitTimedMemory(ref long cycle, uint physicalAddress, M68kOperandSize size)
             => ReadJitSlotAwareMemory(ref cycle, physicalAddress, size);
 
         internal void WriteJitSlotAwareMemory(ref long cycle, uint address, uint value, M68kOperandSize size)
-        {
-            if (size == M68kOperandSize.Byte)
-            {
-                WriteJitSlotAwareMemoryUnchecked(ref cycle, address, value, size);
-                return;
-            }
-
-            if ((address & 1) != 0)
-            {
-                throw new AmigaEmulationException(
-                    size == M68kOperandSize.Word
-                        ? $"Odd MC68000 word write at 0x{address:X8}."
-                        : $"Odd MC68000 long write at 0x{address:X8}.");
-            }
-
-            WriteJitSlotAwareMemoryUnchecked(ref cycle, address, value, size);
-        }
+            => WriteJitSlotAwareMemoryUnchecked(ref cycle, address, value, size);
 
         void IM68kJitTimedMemoryBus.WriteJitTimedMemory(
             ref long cycle,

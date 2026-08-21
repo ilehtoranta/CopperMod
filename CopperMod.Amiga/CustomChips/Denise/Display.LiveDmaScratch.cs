@@ -2047,6 +2047,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                              _copper.WaitSecond) &&
                          (!IsBitplaneDmaEnabled(_dmacon) ||
                           _display.GetAgnusBitplaneFetchPlaneCount(_bplcon0) == 0));
+                    if (readyAtWakeCycle && !bfdReleasedByTermination)
+                    {
+                        // Match live execution: ReadyToRequest skips the
+                        // RestartArmed transition, not its internal phase.
+                        resumeCycle += AgnusChipSlotScheduler.SlotCycles;
+                    }
                     var beamSatisfiedAtBlitterTermination =
                         !bfdReleasedByTermination ||
                         _display.IsCopperComparisonSatisfied(
