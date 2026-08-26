@@ -24,6 +24,7 @@ namespace CopperMod.Amiga
         private readonly IAmigaDiskMedia _media;
         private readonly IAmigaSectorDiskMedia? _sectorMedia;
         private readonly IWritableAmigaDiskMedia? _writableMedia;
+        private readonly IWritableAmigaSectorDiskMedia? _writableSectorMedia;
         private readonly bool _hasPreservedTrackData;
         private readonly bool _defaultWriteProtected;
         private readonly string _name;
@@ -39,6 +40,7 @@ namespace CopperMod.Amiga
             _media = media ?? throw new ArgumentNullException(nameof(media));
             _sectorMedia = media as IAmigaSectorDiskMedia;
             _writableMedia = media as IWritableAmigaDiskMedia;
+            _writableSectorMedia = media as IWritableAmigaSectorDiskMedia;
             _name = name;
             _hasPreservedTrackData = hasPreservedTrackData;
             _defaultWriteProtected = defaultWriteProtected;
@@ -136,6 +138,17 @@ namespace CopperMod.Amiga
         public ReadOnlySpan<byte> ReadBytes(int byteOffset, int byteCount)
         {
             return RequireSectorMedia().ReadBytes(byteOffset, byteCount).Span;
+        }
+
+        public bool TryWriteBytes(int byteOffset, ReadOnlySpan<byte> source)
+        {
+            var written = _writableSectorMedia?.TryWriteBytes(byteOffset, source) == true;
+            if (written)
+            {
+                _sectorData = null;
+            }
+
+            return written;
         }
 
         public CoreEncodedTrack ReadEncodedTrack(int cylinder, int head)

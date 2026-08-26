@@ -1104,8 +1104,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return GetPlayfield2PriorityPlacement(bplcon2);
         }
 
-        private static int GetSpriteColorIndex(int spriteIndex, int pixel)
+        private int GetSpriteColorIndex(int spriteIndex, int pixel)
         {
+            if (_chipset.DisplayChip == DisplayChipModel.AgaLisa)
+            {
+                var bank = (spriteIndex & 1) == 0
+                    ? (_bplcon4 >> 4) & 0x0F
+                    : _bplcon4 & 0x0F;
+                return (bank << 4) | pixel;
+            }
+
             return 16 + ((spriteIndex / 2) * 4) + pixel;
         }
 
@@ -1144,6 +1152,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private uint ConvertColorIndex(int colorIndex)
         {
+            if (_chipset.DisplayChip == DisplayChipModel.AgaLisa &&
+                (uint)colorIndex < (uint)_agaConvertedColors.Length)
+            {
+                return _agaConvertedColors[colorIndex];
+            }
+
             if ((uint)colorIndex < (uint)_convertedColors.Length)
             {
                 return _convertedColors[colorIndex];
@@ -1158,7 +1172,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void UpdateConvertedPalette()
         {
-            for (var colorIndex = 0; colorIndex < _colors.Length; colorIndex++)
+            var colorCount = _chipset.DisplayChip == DisplayChipModel.AgaLisa
+                ? _agaConvertedColors.Length
+                : 32;
+            for (var colorIndex = 0; colorIndex < colorCount; colorIndex++)
             {
                 UpdateConvertedColor(colorIndex);
             }
@@ -1166,12 +1183,30 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void UpdateConvertedColor(int colorIndex)
         {
-            var color = _colors[colorIndex];
+            var color = _chipset.DisplayChip == DisplayChipModel.AgaLisa
+                ? _agaColorHighNibbles[colorIndex]
+                : _colors[colorIndex];
+            if (_chipset.DisplayChip == DisplayChipModel.AgaLisa)
+            {
+                var low = _agaColorLowNibbles[colorIndex];
+                var red = (uint)((((color >> 8) & 0x0F) << 4) | ((low >> 8) & 0x0F));
+                var green = (uint)((((color >> 4) & 0x0F) << 4) | ((low >> 4) & 0x0F));
+                var blue = (uint)(((color & 0x0F) << 4) | (low & 0x0F));
+                _agaConvertedColors[colorIndex] = 0xFF00_0000u | (red << 16) | (green << 8) | blue;
+                return;
+            }
+
             _convertedColors[colorIndex] = ConvertColor(color);
+            _agaConvertedColors[colorIndex] = _convertedColors[colorIndex];
+            if (colorIndex >= 32)
+            {
+                return;
+            }
             var r = (uint)((((color >> 8) & 0x0F) * 17) / 2);
             var g = (uint)((((color >> 4) & 0x0F) * 17) / 2);
             var b = (uint)(((color & 0x0F) * 17) / 2);
             _convertedColors[32 + colorIndex] = 0xFF00_0000u | (r << 16) | (g << 8) | b;
+            _agaConvertedColors[32 + colorIndex] = _convertedColors[32 + colorIndex];
         }
 
         private bool IsRenderingHighResolutionWidth()

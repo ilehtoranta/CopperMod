@@ -23,15 +23,9 @@ public sealed class M68kSingleStepConformanceTests
 		_output = output;
 	}
 
-	[Fact]
+	[EnvironmentFact(RunVariable, "run the SingleStepTests/m68000 conformance corpus")]
 	public void OfficialSingleStepCorpusMatchesInterpreterWhenEnabled()
 	{
-		if (!IsEnabled())
-		{
-			_output.WriteLine($"Set {RunVariable}=1 to run the SingleStepTests/m68000 conformance corpus.");
-			return;
-		}
-
 		var corpusPath = ResolveCorpusPath();
 		if (corpusPath is null)
 		{
@@ -75,9 +69,6 @@ public sealed class M68kSingleStepConformanceTests
 
 		_output.WriteLine($"Executed {executed} SingleStepTests/m68000 case(s) with {backend} backend.");
 	}
-
-	private static bool IsEnabled()
-		=> IsTruthy(Environment.GetEnvironmentVariable(RunVariable));
 
 	private static bool IsTruthy(string? value)
 		=> value is not null &&

@@ -7,6 +7,19 @@ using System;
 
 namespace CopperMod.Amiga.CustomChips.Denise
 {
+    internal readonly record struct CpuBatchCopperLookahead(
+        uint Pc,
+        ushort First,
+        ushort Second,
+        long FirstRequestCycle,
+        long FirstGrantCycle,
+        long SecondRequestCycle,
+        long SecondGrantCycle,
+        long DataCycle,
+        long StopCycle,
+        bool Suppressed,
+        ulong WakeVersion);
+
     internal sealed partial class Display
     {
         private void AdvanceLiveDmaWithinFrame(long targetCycle)
@@ -258,6 +271,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         internal long? GetNextLiveCopperCpuBatchBarrierCycle(long currentCycle, long targetCycle)
         {
+            if (_liveCopperRequesterEnabled)
+            {
+                var requesterCycle = GetNextLiveCopperRequesterCycle();
+                return requesterCycle == long.MaxValue
+                    ? null
+                    : NormalizeCopperBatchBarrier(
+                        currentCycle,
+                        targetCycle,
+                        requesterCycle);
+            }
+
             currentCycle = Math.Max(0, currentCycle);
             targetCycle = Math.Max(currentCycle, targetCycle);
             if (targetCycle <= currentCycle ||
@@ -321,13 +345,34 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         return null;
                     }
 
+                    var restartCycle = GetCopperWaitRestartArmCycle(
+                        cachedWaitCycle,
+                        _liveCopper.WaitSecond,
+                        _liveCopper.WaitObservedBlitterBusy);
+                    if (restartCycle <= currentCycle)
+                    {
+                        if (!TryGetCopperWaitCycle(
+                            _liveCopper.WaitFirst,
+                            _liveCopper.WaitSecond,
+                            _liveFrameStartCycle,
+                            currentCycle + 1,
+                            targetCycle + 1,
+                            blitterFinished: true,
+                            out var nextWaitCycle))
+                        {
+                            return null;
+                        }
+
+                        restartCycle = GetCopperWaitRestartArmCycle(
+                            nextWaitCycle,
+                            _liveCopper.WaitSecond,
+                            _liveCopper.WaitObservedBlitterBusy);
+                    }
+
                     return NormalizeCopperBatchBarrier(
                         currentCycle,
                         targetCycle,
-                        GetCopperWaitRestartArmCycle(
-                            cachedWaitCycle,
-                            _liveCopper.WaitSecond,
-                            _liveCopper.WaitObservedBlitterBusy));
+                        restartCycle);
                 }
 
                 if (!TryGetCopperWaitCycle(
@@ -360,6 +405,192 @@ namespace CopperMod.Amiga.CustomChips.Denise
             // is latched, PendingMove/PendingSkip/Waiting can provide a longer boundary.
             var fetchCycle = Math.Max(_liveCopper.Cycle, _liveFrameStartCycle);
             return NormalizeCopperBatchBarrier(currentCycle, targetCycle, fetchCycle);
+        }
+
+        internal bool TryGetCpuBatchSafeCopperLookahead(
+            long currentCycle,
+            long targetCycle,
+            out CpuBatchCopperLookahead lookahead)
+        {
+            lookahead = default;
+            if (_liveCopperRequesterEnabled)
+            {
+                return false;
+            }
+
+            currentCycle = Math.Max(0, currentCycle);
+            targetCycle = Math.Max(currentCycle, targetCycle);
+            if (targetCycle <= currentCycle ||
+                !_liveDmaEnabled ||
+                !_bus.LiveAgnusDmaEnabled ||
+                !_liveFrameValid ||
+                !IsLiveCopperDmaEnabled() ||
+                _liveCopper.Stopped ||
+                _liveCopper.PendingMove ||
+                _liveCopper.PendingSkip ||
+                _liveCopper.Waiting ||
+                _liveCopper.RestartArmed ||
+                _liveCopper.ReadyToRequest)
+            {
+                return false;
+            }
+
+            uint pc;
+            ushort first;
+            long firstRequestCycle;
+            long firstGrantCycle;
+            long secondRequestCycle;
+            long secondGrantCycle;
+            if (_liveCopper.PendingInstructionSecondWord)
+            {
+                pc = _liveCopper.Pc;
+                first = _liveCopper.PendingInstructionFirst;
+                firstRequestCycle = _liveCopper.PendingInstructionFirstAccess.RequestedCycle;
+                firstGrantCycle = _liveCopper.PendingInstructionFirstAccess.GrantedCycle;
+                secondRequestCycle = _liveCopper.PendingInstructionSecondWordRequestedCycle;
+                secondGrantCycle = _liveCopper.PendingInstructionSecondWordCycle;
+            }
+            else
+            {
+                pc = _liveCopper.PendingStart ? _copperListPointer : _liveCopper.Pc;
+                if (pc == 0)
+                {
+                    return false;
+                }
+
+                firstRequestCycle = Math.Max(
+                    _liveCopper.PendingStart ? currentCycle : _liveCopper.Cycle,
+                    _liveFrameStartCycle);
+                firstGrantCycle =
+                    _bus.CausalBusExecutor.PredictCopperWordCycle(pc, firstRequestCycle);
+                first = _bus.ReadCurrentChipDmaWord(pc);
+                secondRequestCycle = Math.Max(
+                    firstGrantCycle + AgnusChipSlotScheduler.SlotCycles,
+                    firstRequestCycle +
+                    CopperHpToCpuCycles(CopperInstructionDataHpUnits));
+                secondGrantCycle = _bus.CausalBusExecutor.PredictCopperWordCycle(
+                    AddDmaPointerOffset(pc, 2),
+                    secondRequestCycle);
+            }
+
+            if (firstGrantCycle < currentCycle ||
+                secondGrantCycle < firstGrantCycle ||
+                secondGrantCycle >= targetCycle)
+            {
+                return false;
+            }
+
+            var secondAddress = AddDmaPointerOffset(pc, 2);
+            var second = _bus.ReadCurrentChipDmaWord(secondAddress);
+            if ((first & 1) != 0 || (first == 0xFFFF && second == 0xFFFE))
+            {
+                return false;
+            }
+
+            var register = (ushort)(first & 0x01FE);
+            var suppressed = _liveCopper.SuppressNextMove;
+            if (!suppressed &&
+                (IsCopperDangerStopRegister(register) ||
+                 register < 0x180 ||
+                 register >= 0x1C0 ||
+                 (register & 1) != 0))
+            {
+                return false;
+            }
+
+            var dataCycle = secondGrantCycle;
+            var stopCycle = Math.Max(
+                secondGrantCycle + AgnusChipSlotScheduler.SlotCycles,
+                firstRequestCycle + ((long)CopperMoveHpUnits * CopperHpCycles));
+            if (stopCycle > targetCycle)
+            {
+                return false;
+            }
+
+            lookahead = new CpuBatchCopperLookahead(
+                pc,
+                first,
+                second,
+                firstRequestCycle,
+                firstGrantCycle,
+                secondRequestCycle,
+                secondGrantCycle,
+                dataCycle,
+                stopCycle,
+                suppressed,
+                _liveWakeVersion);
+            return true;
+        }
+
+        internal bool IsCpuBatchSafeCopperLookaheadCurrent(
+            CpuBatchCopperLookahead lookahead)
+        {
+            if (lookahead.Pc == 0 ||
+                _bus.ReadCurrentChipDmaWord(lookahead.Pc) != lookahead.First ||
+                _bus.ReadCurrentChipDmaWord(AddDmaPointerOffset(lookahead.Pc, 2)) !=
+                    lookahead.Second)
+            {
+                return false;
+            }
+
+            if (_liveWakeVersion == lookahead.WakeVersion &&
+                ((_liveCopper.PendingInstructionSecondWord &&
+                  _liveCopper.Pc == lookahead.Pc) ||
+                 (_liveCopper.PendingMove &&
+                  _liveCopper.Pc == AddDmaPointerOffset(lookahead.Pc, 4) &&
+                  _liveCopper.PendingMoveRegister == (lookahead.First & 0x01FE) &&
+                  _liveCopper.PendingMoveValue == lookahead.Second &&
+                  _liveCopper.PendingMoveCycle == lookahead.DataCycle &&
+                  _liveCopper.PendingMoveStopCycle == lookahead.StopCycle) ||
+                 (!_liveCopper.PendingMove &&
+                  !_liveCopper.PendingSkip &&
+                  (_liveCopper.PendingStart
+                      ? _copperListPointer == lookahead.Pc
+                      : _liveCopper.Pc == lookahead.Pc))))
+            {
+                return true;
+            }
+
+            return _liveWakeVersion == lookahead.WakeVersion + 1 &&
+                !_liveCopper.PendingMove &&
+                !_liveCopper.PendingSkip &&
+                _liveCopper.Pc == AddDmaPointerOffset(lookahead.Pc, 4) &&
+                _liveCopper.Cycle == lookahead.StopCycle;
+        }
+
+        internal int GetLiveCopperCpuBatchBarrierStateForDiagnostics()
+        {
+            if (_liveCopper.PendingMove)
+            {
+                return 0;
+            }
+
+            if (_liveCopper.PendingSkip)
+            {
+                return 1;
+            }
+
+            if (_liveCopper.PendingStart)
+            {
+                return 2;
+            }
+
+            if (_liveCopper.RestartArmed)
+            {
+                return 3;
+            }
+
+            if (_liveCopper.ReadyToRequest)
+            {
+                return 4;
+            }
+
+            if (_liveCopper.Waiting)
+            {
+                return 5;
+            }
+
+            return 6;
         }
 
         private static long? NormalizeCopperBatchBarrier(long currentCycle, long targetCycle, long barrierCycle)

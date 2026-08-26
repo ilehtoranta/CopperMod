@@ -176,6 +176,9 @@ namespace CopperMod.Amiga.Bus
             => _hardwareScheduler.DrainTo(
                 targetCycle,
                 AmigaHardwareEventMask.PaulaRegister |
+                    (_agnusLivePaulaEnabled
+                        ? AmigaHardwareEventMask.PaulaDma
+                        : AmigaHardwareEventMask.None) |
                     AmigaHardwareEventMask.DiskEvents |
                     (advancePassiveDiskInput ? AmigaHardwareEventMask.DiskPassiveInput : AmigaHardwareEventMask.None) |
                     (advanceLiveAgnus ? AmigaHardwareEventMask.Agnus : AmigaHardwareEventMask.None) |
@@ -206,6 +209,20 @@ namespace CopperMod.Amiga.Bus
             _hardwareScheduler.DrainTo(targetCycle, mask);
         }
 
+        public long AdvanceStoppedCpuHardwareEventsTo(
+            long currentCycle,
+            long targetCycle,
+            int cpuInterruptMask)
+        {
+            currentCycle = Math.Max(0, currentCycle);
+            targetCycle = Math.Max(currentCycle, targetCycle);
+            var reachedCycle = _hardwareScheduler.DrainSlotContendedUntilCpuInterrupt(
+                targetCycle,
+                cpuInterruptMask);
+            AdvanceHardwareEventsTo(reachedCycle, cpuInterruptMask);
+            return reachedCycle;
+        }
+
         public AmigaHardwareSchedulerSnapshot CaptureHardwareSchedulerSnapshot()
             => _hardwareScheduler.CaptureSnapshot();
 
@@ -223,15 +240,16 @@ namespace CopperMod.Amiga.Bus
         public void SetHardwareSchedulerHostProfilingEnabled(bool enabled)
         {
             _hardwareScheduler.HostProfilingEnabled = enabled;
-            _deferredCpuWaitDiagnosticsEnabled = enabled || _deferredCpuBusBatchVerifyEnabled;
-            Display.SetCpuWaitFixedSlotImageDiagnosticsEnabled(
-                enabled || _deferredCpuBusBatchVerifyEnabled);
+            _deferredCpuWaitDiagnosticsEnabled = enabled;
+            Display.SetCpuWaitFixedSlotImageDiagnosticsEnabled(enabled);
+            Display.SetHostProfilingEnabled(enabled);
             Blitter.SetAdvanceProfilingEnabled(enabled);
         }
 
         public void ResetHardwareSchedulerHostProfile()
         {
             _hardwareScheduler.ResetHostProfile();
+            Display.ResetHostProfile();
             Blitter.ResetAdvanceProfileCounters();
         }
 
@@ -244,6 +262,10 @@ namespace CopperMod.Amiga.Bus
         internal bool TryGetCommittedAgnusSlotOwner(long cycle, out AgnusChipSlotOwner owner)
             => _hrmSlotEngine.TryGetCommittedSlotOwner(cycle, out owner);
 
+        internal bool IsCpuGrantAfterNiceBlitterWait(long cycle)
+            => _hrmSlotEngine.IsCpuGrantAfterNiceBlitterWait(cycle);
+
+        internal bool SlotScheduleAuditEnabled => _hrmSlotEngine.SlotScheduleAuditEnabled;
 
         internal AgnusSlotAuditSource PushSlotScheduleAuditSource(AgnusSlotAuditSource source)
         {
@@ -251,6 +273,11 @@ namespace CopperMod.Amiga.Bus
             _hrmSlotEngine.SlotScheduleAuditSource = source;
             return previous;
         }
+
+        internal bool TryGetCommittedAgnusSlotSnapshot(
+            long cycle,
+            out AgnusChipSlotSnapshot snapshot)
+            => _agnusBusExecutor.TryGetCommittedSlotSnapshot(cycle, out snapshot);
 
         internal void RestoreSlotScheduleAuditSource(AgnusSlotAuditSource source)
             => _hrmSlotEngine.SlotScheduleAuditSource = source;
@@ -360,6 +387,18 @@ namespace CopperMod.Amiga.Bus
             long grantedCycle,
             bool isWrite)
         {
+            if (AgnusSlotKernelSelected &&
+                target is (AmigaBusAccessTarget.ChipRam or
+                    AmigaBusAccessTarget.ExpansionRam or
+                    AmigaBusAccessTarget.RealTimeClock or
+                    AmigaBusAccessTarget.CustomRegisters))
+            {
+                // The live slot kernel already admitted every published
+                // requester through the granted slot. Re-entering the generic
+                // drain here would duplicate DMA and violate the G6 boundary.
+                return;
+            }
+
             _hardwareScheduler.DrainForCpuAccess(
                 target,
                 address,
@@ -410,10 +449,20 @@ namespace CopperMod.Amiga.Bus
         internal long LineCycles => _lineCycles;
 
         public long GetNextStoppedCpuWakeCandidateCycle(long currentCycle, long targetCycle)
-            => GetNextCpuBatchWakeCandidateCycle(currentCycle, targetCycle);
+        {
+            return _agnusBusExecutor.GetNextStoppedCpuInterruptHorizon(
+                currentCycle,
+                targetCycle,
+                cpuInterruptMask: 0).Cycle;
+        }
 
         public long GetNextStoppedCpuWakeCandidateCycle(long currentCycle, long targetCycle, int cpuInterruptMask)
-            => GetNextCpuBatchWakeCandidateCycle(currentCycle, targetCycle, cpuInterruptMask);
+        {
+            return _agnusBusExecutor.GetNextStoppedCpuInterruptHorizon(
+                currentCycle,
+                targetCycle,
+                cpuInterruptMask).Cycle;
+        }
 
         public long GetNextCpuBatchWakeCandidateCycle(long currentCycle, long targetCycle)
             => GetNextCpuBatchWakeCandidateCycle(currentCycle, targetCycle, out _);
@@ -446,36 +495,28 @@ namespace CopperMod.Amiga.Bus
             out M68kTraceBatchWakeSource wakeSource,
             out AmigaDiskController.SchedulerWakeReason diskWakeReason)
         {
-            var shadowEnabled = _agnusBusExecutor.CpuVisibilityShadowEnabled;
-            var legacyStart = shadowEnabled ? Stopwatch.GetTimestamp() : 0;
-            var cycle = _hardwareScheduler.GetNextCpuVisibleEventCycle(
+            if (_agnusBusExecutor.ProductionEnabled)
+            {
+                var horizon = AgnusSlotKernelSelected
+                    ? _agnusBusExecutor.GetNextLiveSlotKernelCpuVisibilityHorizon(
+                        currentCycle,
+                        targetCycle,
+                        cpuInterruptMask)
+                    : _agnusBusExecutor.GetNextCpuVisibilityHorizon(
+                        currentCycle,
+                        targetCycle,
+                        cpuInterruptMask);
+                wakeSource = AgnusBusExecutor.MapLegacyReason(horizon.Reason);
+                diskWakeReason = horizon.DiskReason;
+                return horizon.Cycle;
+            }
+
+            return _hardwareScheduler.GetNextCpuVisibleEventCycle(
                 currentCycle,
                 targetCycle,
                 cpuInterruptMask,
                 out wakeSource,
                 out diskWakeReason);
-            if (shadowEnabled)
-            {
-                var legacyTicks = Stopwatch.GetTimestamp() - legacyStart;
-                var executorStart = Stopwatch.GetTimestamp();
-                var horizon = _agnusBusExecutor.GetNextCpuVisibilityHorizon(
-                    currentCycle,
-                    targetCycle,
-                    cpuInterruptMask);
-                var executorTicks = Stopwatch.GetTimestamp() - executorStart;
-                _agnusBusExecutor.RecordCpuVisibilityShadow(
-                    currentCycle,
-                    targetCycle,
-                    cycle,
-                    wakeSource,
-                    diskWakeReason,
-                    in horizon);
-                _agnusBusExecutor.RecordCpuVisibilityQueryTicks(
-                    legacyTicks,
-                    executorTicks);
-            }
-
-            return cycle;
         }
 
         internal CpuVisibilityHorizon GetNextCpuVisibilityHorizon(

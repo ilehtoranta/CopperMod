@@ -50,6 +50,15 @@ its reusable components. Notable Build Week changes include:
   the correct data without sacrificing cycle accuracy. Copper WAIT restart phases
   are modeled as internal, non-reserving control phases on that same physical
   timeline, including DMA, refresh, and phase-polarity interactions.
+- **CPU-visible horizon batching without retrospective emulation.** The Accurate
+  MC68000 interpreter can execute ROM and Fast RAM instructions in batches up to
+  the next indexed CPU-visible deadline. CIA, Paula, disk, Copper, blitter,
+  raster, interrupt, and queued control deadlines live in the causal Agnus
+  executor; production wake queries read that agenda instead of rescanning every
+  device. Chip RAM accesses and custom-register effects still end or segment the
+  batch at their exact bus cycles, so batching never reconstructs past memory or
+  moves an event behind the executed bus horizon. Independent rollback switches
+  remain available while the final corpus matrix is stabilized.
 - **68EC020 CPU support with executable timing evidence.** `Copper68k` now exposes
   the 68EC020 as a distinct CPU model: it retains the MC68020 instruction set,
   32-bit registers, exception behavior, and timing profile while applying the
@@ -105,6 +114,8 @@ but for sustaining a long, measurement-driven systems-engineering loop.
 
 - MED / OctaMED: MMD0-MMD3 parsing and Amiga-style playback work is underway.
 - ProTracker MOD: 4-channel ProTracker playback with Amiga-style sample output.
+- AHX0/AHX1: original 68000 replay on the cycle-scheduled A500 PAL OCS model;
+  requires a locally supplied, hash-verified AHX 2.3d replay binary.
 - SID / RSID: native C# C64/SID emulation with cycle-counted register scheduling.
 - CopperMod: terminal UI player with NAudio output and optional output shaping.
 
@@ -145,6 +156,7 @@ Reusable libraries are published on NuGet:
 | [CopperMod.Abstractions](https://www.nuget.org/packages/CopperMod.Abstractions) | Shared module loading and rendering interfaces. |
 | [CopperMod.Med](https://www.nuget.org/packages/CopperMod.Med) | MED / OctaMED MMD module parser and renderer. |
 | [CopperMod.ProTracker](https://www.nuget.org/packages/CopperMod.ProTracker) | ProTracker MOD parser and renderer. |
+| CopperMod.Ahx | AHX0/AHX1 loader using the original locally supplied 68000 replay binary. |
 | [CopperMod.Sid](https://www.nuget.org/packages/CopperMod.Sid) | PSID / RSID parser and SID renderer. |
 | [Copper68k](https://www.nuget.org/packages/Copper68k) | Reusable Motorola 68000-family CPU emulation core. |
 | [CopperFloat](https://www.nuget.org/packages/CopperFloat) | Allocation-free deterministic extF80 arithmetic for .NET. |
@@ -157,6 +169,7 @@ Install the playback backends separately:
 ```powershell
 dotnet add package CopperMod.Med
 dotnet add package CopperMod.ProTracker
+dotnet add package CopperMod.Ahx
 dotnet add package CopperMod.Sid
 ```
 
@@ -194,6 +207,11 @@ dotnet run --project .\CopperMod -- "path\to\tune.sid"
 
 If no file is provided, CopperMod tries to open the default MED test tune when it
 is available in the workspace.
+
+AHX playback requires local reference-player setup; see
+[`docs/AHX-reference-player.md`](docs/AHX-reference-player.md). The replay
+binary and songs are not distributed by CopperMod. User-supplied native replay
+binaries use the shared [`Replayers`](Replayers/README.md) directory convention.
 
 ## CopperScreen
 
@@ -344,6 +362,23 @@ run the release script with `-TagOnly`, then create the GitHub release manually
 and upload the generated zip files plus `SHA256SUMS.txt`.
 
 ## NuGet Packages
+
+CopperFloat 1.0.0 is the stable release of the deterministic, allocation-free
+extended 80-bit floating-point library. Build, test, pack, and validate it with:
+
+```powershell
+.\scripts\nuget\pack-copperfloat.ps1 -Version 1.0.0
+```
+
+After reviewing the generated package, publish it and its symbols with:
+
+```powershell
+.\scripts\nuget\publish-copperfloat.ps1 `
+    -PackagePath .\artifacts\packages\CopperFloat.1.0.0.nupkg
+```
+
+The publisher requires `NUGET_API_KEY` or an explicit `-ApiKey`; use `-WhatIf`
+to inspect the push operations without publishing.
 
 Copper6510 2.0.0 is a breaking API release. Build, test, pack, and validate it
 with:

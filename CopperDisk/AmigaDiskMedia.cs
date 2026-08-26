@@ -157,6 +157,11 @@ public interface IWritableAmigaDiskMedia : IAmigaDiskMedia
 /// </remarks>
 public interface IWritableAmigaSectorDiskMedia : IAmigaSectorDiskMedia, IWritableAmigaDiskMedia
 {
+    /// <summary>
+    /// Writes logical sector-image bytes and invalidates every affected encoded
+    /// track cache. Returns <see langword="false"/> when the range is invalid.
+    /// </summary>
+    bool TryWriteBytes(int byteOffset, ReadOnlySpan<byte> source);
 }
 
 /// <summary>

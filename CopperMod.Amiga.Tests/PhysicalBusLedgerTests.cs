@@ -81,7 +81,137 @@ public sealed class PhysicalBusLedgerTests
 	}
 
 	[Fact]
-	public void CpuRequestAfterCommittedCopperTransferUsesNextPairedOpportunity()
+	public void MidFrameBplcon0EnableCommitsFirstLowresFetchBeforeCpuGrant()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		const int enableLine = 0x40;
+		var lineStart = (long)enableLine * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+		var fetchCycle = lineStart +
+			((0x38 + LowResPlane1FetchSlot) * AgnusChipSlotScheduler.SlotCycles);
+
+		bus.WriteWord(0x00DFF096, 0x8300);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF0E0, 0x0000);
+		bus.WriteWord(0x00DFF0E2, 0x1000);
+		bus.WriteWord(0x00DFF0E4, 0x0000);
+		bus.WriteWord(0x00DFF0E6, 0x2000);
+		bus.WriteWord(0x00DFF100, 0x0200);
+		bus.EnableLiveAgnusDma();
+		bus.AdvanceDmaTo(lineStart);
+
+		var enableCycle = lineStart + (2 * AgnusChipSlotScheduler.SlotCycles);
+		bus.WriteWord(
+			0x00DFF100,
+			0x2200,
+			ref enableCycle,
+			AmigaBusAccessKind.CpuDataWrite);
+
+		var cpuCycle = fetchCycle;
+		_ = bus.ReadWord(0x00003000, ref cpuCycle, AmigaBusAccessKind.CpuDataRead);
+
+		var bitplane = Assert.Single(bus.BusAccesses, item =>
+			item.Request.Requester == AmigaBusRequester.Bitplane &&
+			item.GrantedCycle == fetchCycle);
+		var cpu = Assert.Single(bus.BusAccesses, item =>
+			item.Request.Requester == AmigaBusRequester.Cpu &&
+			item.Request.Address == 0x00003000);
+		var ledger = PhysicalBusLedger.Capture(bus, fetchCycle, cpu.CompletedCycle);
+		var diagnostic = ledger.Format();
+
+		Assert.Equal(fetchCycle, bitplane.GrantedCycle);
+		Assert.Equal(AgnusChipSlotOwner.Bitplane, ledger.At(fetchCycle).Owner);
+		Assert.Equal(fetchCycle + AgnusChipSlotScheduler.SlotCycles, cpu.GrantedCycle);
+		Assert.Equal(AgnusChipSlotOwner.Cpu, ledger.At(cpu.GrantedCycle).Owner);
+		Assert.True(cpu.CompletedCycle == cpuCycle, diagnostic);
+	}
+
+	[Fact]
+	public void TwoPlaneLowresLineCommitsEveryFetchBeforeCpuArbitration()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var lineStart = OutputRowStartCycle(row);
+		var lineEnd = lineStart + AmigaConstants.A500PalCpuCyclesPerRasterLine -
+			AgnusChipSlotScheduler.SlotCycles;
+
+		bus.WriteWord(0x00DFF096, 0x8300);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF0E0, 0x0000);
+		bus.WriteWord(0x00DFF0E2, 0x1000);
+		bus.WriteWord(0x00DFF0E4, 0x0000);
+		bus.WriteWord(0x00DFF0E6, 0x2000);
+		bus.WriteWord(0x00DFF100, 0x2200);
+		bus.EnableLiveAgnusDma();
+		bus.AdvanceDmaTo(lineEnd);
+
+		var bitplane = bus.BusAccesses.Where(access =>
+			access.Request.Requester == AmigaBusRequester.Bitplane &&
+			access.GrantedCycle >= lineStart &&
+			access.GrantedCycle <= lineEnd).ToArray();
+		var ledger = PhysicalBusLedger.Capture(bus, lineStart, lineEnd);
+		var diagnostic = ledger.Format();
+
+		Assert.Equal(40, bitplane.Length);
+		Assert.Equal(40, ledger.Slots.Count(slot => slot.Owner == AgnusChipSlotOwner.Bitplane));
+		Assert.True(
+			bitplane.All(access => ledger.At(access.GrantedCycle).Owner == AgnusChipSlotOwner.Bitplane),
+			diagnostic);
+	}
+
+	[Fact]
+	public void CpuRequestAtLaterTwoPlaneFetchPublishesDmaBeforeGrant()
+	{
+		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
+		var row = AmigaConstants.PalLowResOverscanBorderY;
+		var lineStart = OutputRowStartCycle(row);
+		const int thirdGroupPlane2Slot = 0x38 + 3 + (5 * 4);
+		var fetchCycle = lineStart +
+			(thirdGroupPlane2Slot * AgnusChipSlotScheduler.SlotCycles);
+
+		bus.WriteWord(0x00DFF096, 0x8300);
+		bus.WriteWord(0x00DFF092, 0x0038);
+		bus.WriteWord(0x00DFF094, 0x00D0);
+		bus.WriteWord(0x00DFF0E0, 0x0000);
+		bus.WriteWord(0x00DFF0E2, 0x1000);
+		bus.WriteWord(0x00DFF0E4, 0x0000);
+		bus.WriteWord(0x00DFF0E6, 0x2000);
+		bus.WriteWord(0x00DFF100, 0x2200);
+		bus.EnableLiveAgnusDma();
+		bus.AdvanceDmaTo(lineStart);
+
+		var cpuCycle = fetchCycle;
+		bus.WriteByte(
+			0x00003000,
+			0x5A,
+			ref cpuCycle,
+			AmigaBusAccessKind.CpuDataWrite);
+
+		var bitplaneAccesses = bus.BusAccesses.Where(access =>
+			access.Request.Requester == AmigaBusRequester.Bitplane &&
+			access.GrantedCycle >= lineStart &&
+			access.GrantedCycle < lineStart + AmigaConstants.A500PalCpuCyclesPerRasterLine).ToArray();
+		Assert.True(
+			bitplaneAccesses.Any(access => access.GrantedCycle == fetchCycle),
+			$"expected h={thirdGroupPlane2Slot}; actual h=[{string.Join(",", bitplaneAccesses.Select(access => (access.GrantedCycle - lineStart) / AgnusChipSlotScheduler.SlotCycles))}]");
+		var bitplane = Assert.Single(bitplaneAccesses, access =>
+			access.Request.Requester == AmigaBusRequester.Bitplane &&
+			access.GrantedCycle == fetchCycle);
+		var cpu = Assert.Single(bus.BusAccesses, access =>
+			access.Request.Requester == AmigaBusRequester.Cpu &&
+			access.Request.Address == 0x00003000);
+		var ledger = PhysicalBusLedger.Capture(bus, fetchCycle, cpu.CompletedCycle);
+		var diagnostic = ledger.Format();
+
+		Assert.Equal(AgnusChipSlotOwner.Bitplane, ledger.At(fetchCycle).Owner);
+		Assert.Equal(fetchCycle, bitplane.GrantedCycle);
+		Assert.True(cpu.GrantedCycle > fetchCycle, diagnostic);
+		Assert.Equal(AgnusChipSlotOwner.Cpu, ledger.At(cpu.GrantedCycle).Owner);
+	}
+
+	[Fact]
+	public void CpuRequestAfterCommittedCopperTransferUsesAdjacentOpportunity()
 	{
 		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
 		const long copperCycle = 20;
@@ -97,7 +227,7 @@ public sealed class PhysicalBusLedgerTests
 		Assert.Equal(copperCycle, copper.GrantedCycle);
 		Assert.Equal(AgnusChipSlotOwner.Copper, ledger.At(copperCycle).Owner);
 		Assert.Equal(
-			copper.GrantedCycle + (2 * AgnusChipSlotScheduler.SlotCycles),
+			copper.GrantedCycle + AgnusChipSlotScheduler.SlotCycles,
 			cpu.GrantedCycle);
 		Assert.Equal(AgnusChipSlotOwner.Cpu, ledger.At(cpu.GrantedCycle).Owner);
 		Assert.True(cpu.CompletedCycle == cycle, diagnostic);

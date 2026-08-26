@@ -608,7 +608,8 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             int height,
             byte minterm,
             byte writeMask,
-            uint maskPlane = 0)
+            uint maskPlane = 0,
+            CyberGraphicsRtgBlitScratch? scratch = null)
         {
             if (!_bitmaps.TryGetValue(sourceBitMap, out var source) ||
                 !_bitmaps.TryGetValue(destinationBitMap, out var destination) ||
@@ -625,8 +626,25 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
                 return 0;
             }
 
-            var pixels = new uint[checked(width * height)];
-            var valid = new bool[pixels.Length];
+            var cellCount = checked(width * height);
+            uint[] pixels;
+            bool[] valid;
+            var scratchAcquired = false;
+            if (scratch is null)
+            {
+                pixels = new uint[cellCount];
+                valid = new bool[cellCount];
+            }
+            else if (!scratch.TryAcquire(cellCount, out pixels, out valid))
+            {
+                return 0;
+            }
+            else
+            {
+                scratchAcquired = true;
+            }
+            try
+            {
             for (var y = 0; y < height; y++)
             {
                 for (var x = 0; x < width; x++)
@@ -691,6 +709,12 @@ namespace CopperMod.Amiga.Video.Rtg.CyberGraphics
             }
 
             return written;
+            }
+            finally
+            {
+                if (scratchAcquired)
+                    scratch!.Release();
+            }
         }
 
         internal int BlitRtgToPlanar(

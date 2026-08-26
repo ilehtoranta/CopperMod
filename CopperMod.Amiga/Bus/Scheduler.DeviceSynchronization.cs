@@ -4,6 +4,7 @@
  */
 
 using System.Runtime.CompilerServices;
+using CopperMod.Amiga.CustomChips.Agnus;
 
 namespace CopperMod.Amiga.Bus
 {
@@ -12,6 +13,23 @@ namespace CopperMod.Amiga.Bus
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void SynchronizeBlitterThrough(long targetCycle)
         {
+            var canonicalSlot = AgnusChipSlotScheduler.AlignToSlot(targetCycle);
+            if (_bus.AgnusLiveBlitterEnabled &&
+                ((targetCycle != canonicalSlot &&
+                  _bus.Blitter.HasLiveAgnusSlotKernelAfterSlotTransitionThrough(
+                      targetCycle)) ||
+                 (!_bus.AgnusSlotKernelSelected &&
+                  targetCycle == canonicalSlot &&
+                  _bus.Blitter.HasLiveAgnusCpuGrantAfterSlotBarrierAt(
+                      targetCycle))))
+            {
+                // An after-slot transition belongs to the next physical
+                // arbitration boundary. Neither a scalar/intervening CPU-cycle
+                // sync nor a later same-slot sync may consume it early and
+                // republish its next word as an after-slot edge on that boundary.
+                return;
+            }
+
             if (_bus.Blitter.HasAdvanceWorkThrough(targetCycle))
             {
                 _bus.Blitter.ExecuteAdmittedWorkThrough(targetCycle);

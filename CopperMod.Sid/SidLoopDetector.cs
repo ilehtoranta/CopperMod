@@ -26,6 +26,10 @@ namespace CopperMod.Sid
             machine.Reset(subSongIndex);
             machine.Sid.ClearCapturedWrites();
 
+            // Detection analyses the raw signal envelope; bypass the audio anti-aliasing
+            // resampler so its group delay/smoothing cannot shift silence or loop timing.
+            machine.Sid.UseUnfilteredOutput = true;
+
             var cpuCyclesPerSecond = machine.Clock.CpuCyclesPerSecond;
             var maxSearchCycles = Math.Max(1, SidIntegerMath.TimeSpanToCycles(options.MaxSearchDuration, cpuCyclesPerSecond));
             var minimumStartCycles = SidIntegerMath.TimeSpanToCycles(options.MinimumStartTime, cpuCyclesPerSecond);
@@ -87,6 +91,10 @@ namespace CopperMod.Sid
             var machine = new C64Machine(module);
             machine.Reset(subSongIndex);
             machine.Sid.ClearCapturedWrites();
+
+            // Detection analyses the raw signal envelope; bypass the audio anti-aliasing
+            // resampler so its group delay/smoothing cannot shift silence or loop timing.
+            machine.Sid.UseUnfilteredOutput = true;
 
             var cpuCyclesPerSecond = machine.Clock.CpuCyclesPerSecond;
             var maxSearchCycles = Math.Max(1, SidIntegerMath.TimeSpanToCycles(options.MaxSearchDuration, cpuCyclesPerSecond));

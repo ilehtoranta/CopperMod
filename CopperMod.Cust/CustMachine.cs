@@ -25,6 +25,7 @@ namespace CopperMod.Cust
         private readonly Dictionary<uint, ExternalFileHandle> _fileHandles = new Dictionary<uint, ExternalFileHandle>();
         private readonly Dictionary<uint, byte[]> _allocations = new Dictionary<uint, byte[]>();
         private readonly int _listDataSegmentIndex;
+        private readonly byte[]? _separateListData;
         private readonly uint _hostGetListDataAddress = CustConstants.HostCallbackBaseAddress;
         private readonly uint _hostOkAddress = CustConstants.HostCallbackBaseAddress + 0x10;
         private readonly uint _hostSongEndAddress = CustConstants.HostCallbackBaseAddress + 0x20;
@@ -51,6 +52,8 @@ namespace CopperMod.Cust
         private int _fallbackPcmLength;
         private double _fallbackPcmPosition;
         private int _renderedQuanta;
+        private uint _listDataAddress;
+        private int _listDataLength;
 
         public CustMachine(HunkFile hunk, DeliTagTable tags)
             : this(hunk, tags, null, M68kCoreFactory.Default, M68kBackendKind.AccurateM68000)
@@ -79,12 +82,41 @@ namespace CopperMod.Cust
             IM68kBackendCoreFactory cpuFactory,
             M68kBackendKind cpuBackend,
             KickstartConfiguration kickstartConfiguration)
+            : this(hunk, tags, loadContext, cpuFactory, cpuBackend, kickstartConfiguration, ReadOnlySpan<byte>.Empty)
+        {
+        }
+
+        internal CustMachine(
+            HunkFile hunk,
+            DeliTagTable tags,
+            ModuleLoadContext? loadContext,
+            ReadOnlySpan<byte> separateListData)
+            : this(
+                hunk,
+                tags,
+                loadContext,
+                M68kCoreFactory.Default,
+                M68kBackendKind.AccurateM68000,
+                KickstartConfiguration.HostShim13,
+                separateListData)
+        {
+        }
+
+        internal CustMachine(
+            HunkFile hunk,
+            DeliTagTable tags,
+            ModuleLoadContext? loadContext,
+            IM68kBackendCoreFactory cpuFactory,
+            M68kBackendKind cpuBackend,
+            KickstartConfiguration kickstartConfiguration,
+            ReadOnlySpan<byte> separateListData)
         {
             _hunk = hunk ?? throw new ArgumentNullException(nameof(hunk));
             _rawTags = tags ?? throw new ArgumentNullException(nameof(tags));
             _loadContext = loadContext;
             _segmentBases = new uint[hunk.Segments.Count];
-            _listDataSegmentIndex = ResolveListDataSegmentIndex(hunk, tags);
+            _separateListData = separateListData.IsEmpty ? null : separateListData.ToArray();
+            _listDataSegmentIndex = _separateListData is null ? ResolveListDataSegmentIndex(hunk, tags) : -1;
             Machine = new Machine(
                 MachineOptions
                     .ForProfile(MachineProfile.A500PalCustPlayback)
@@ -100,6 +132,30 @@ namespace CopperMod.Cust
         public AmigaBus Bus { get; }
 
         public IM68kCore Cpu { get; }
+
+        internal uint ListDataAddress => _listDataAddress;
+
+        internal int ListDataLength => _listDataLength;
+
+        internal bool UsesA500PalCustPlaybackProfile => Machine.Profile == MachineProfile.A500PalCustPlayback;
+
+        internal bool UsesLiveAgnusDma => Machine.Options.LiveAgnusDma && Bus.LiveAgnusDmaEnabled;
+
+        internal byte[] ReadListData()
+            => Bus.ChipRam.AsSpan((int)_listDataAddress, _listDataLength).ToArray();
+
+        internal uint ReadHostBlockLong(int offset)
+            => Bus.ReadHostLong(CustConstants.HostBlockAddress + (uint)offset);
+
+        internal void WriteListDataByte(int offset, byte value)
+        {
+            if ((uint)offset >= (uint)_listDataLength)
+            {
+                throw new ArgumentOutOfRangeException(nameof(offset));
+            }
+
+            Bus.WriteHostByte(_listDataAddress + (uint)offset, value);
+        }
 
         public IReadOnlyList<ModuleDiagnostic> Diagnostics => _diagnostics;
 
@@ -278,6 +334,24 @@ namespace CopperMod.Cust
                 next += (uint)Align(_hunk.Segments[i].DeclaredSizeBytes + 0x100, 0x100);
             }
 
+            if (_separateListData is null)
+            {
+                var segment = _hunk.Segments[_listDataSegmentIndex];
+                _listDataAddress = _segmentBases[_listDataSegmentIndex];
+                _listDataLength = segment.DeclaredSizeBytes;
+            }
+            else
+            {
+                _listDataAddress = next;
+                _listDataLength = _separateListData.Length;
+                next += (uint)Align(_listDataLength + 0x100, 0x100);
+            }
+
+            if (next > Bus.ChipRam.Length)
+            {
+                throw new ModuleLoadException("The DeliTracker player and module data exceed the emulated chip RAM budget.");
+            }
+
             _nextExternalAllocationAddress = Math.Max(0x0010_0000u, (uint)Align(checked((int)next), 0x100));
         }
 
@@ -286,6 +360,11 @@ namespace CopperMod.Cust
             for (var i = 0; i < _hunk.Segments.Count; i++)
             {
                 Bus.CopyToChipRam(_segmentBases[i], _hunk.Segments[i].Data);
+            }
+
+            if (_separateListData is not null)
+            {
+                Bus.CopyToChipRam(_listDataAddress, _separateListData);
             }
         }
 
@@ -335,8 +414,14 @@ namespace CopperMod.Cust
             var result = new Dictionary<uint, uint>();
             var baseAddress = _segmentBases[_rawTags.SegmentIndex];
             var cursor = baseAddress + (uint)_rawTags.Offset;
-            for (var i = 0; i < 64; i++)
+            var visited = new HashSet<uint>();
+            for (var i = 0; i < 256; i++)
             {
+                if (!visited.Add(cursor))
+                {
+                    throw new ModuleLoadException("The DeliTracker tag list contains a cycle.");
+                }
+
                 var tag = Bus.ReadHostLong(cursor);
                 cursor += 4;
                 if (tag == CustConstants.TagDone)
@@ -346,6 +431,33 @@ namespace CopperMod.Cust
 
                 var value = Bus.ReadHostLong(cursor);
                 cursor += 4;
+                if (tag == CustConstants.TagIgnore)
+                {
+                    continue;
+                }
+
+                if (tag == CustConstants.TagSkip)
+                {
+                    cursor = checked(cursor + value * 8);
+                    continue;
+                }
+
+                if (tag == CustConstants.TagMore)
+                {
+                    if (value == 0)
+                    {
+                        break;
+                    }
+
+                    cursor = value;
+                    continue;
+                }
+
+                if (tag <= CustConstants.TagSkip)
+                {
+                    throw new ModuleLoadException($"The DeliTracker tag list contains unsupported control tag 0x{tag:X8}.");
+                }
+
                 result[tag] = value;
             }
 
@@ -375,10 +487,11 @@ namespace CopperMod.Cust
                 Bus,
                 new KickstartTrapTable(
                     _hostOkAddress,
-                    HostNullCallback,
-                    HostOk,
-                    HostOpenLibrary,
-                    HostAllocMem,
+                     HostNullCallback,
+                     HostOk,
+                     HostOpenLibrary,
+                     HostOk,
+                     HostAllocMem,
                     HostAllocAndStore,
                     HostFreeMem,
                     HostCauseInterrupt,
@@ -402,8 +515,8 @@ namespace CopperMod.Cust
             WriteHostLong(CustConstants.DtgDirArrayPtrOffset, AmigaKickstartHost.HostPathBufferAddress);
             WriteHostLong(CustConstants.DtgFileArrayPtrOffset, AmigaKickstartHost.HostPathBufferAddress);
             WriteHostLong(CustConstants.DtgPathArrayPtrOffset, AmigaKickstartHost.HostPathBufferAddress);
-            WriteHostLong(CustConstants.DtgCheckDataOffset, _segmentBases[_listDataSegmentIndex]);
-            WriteHostLong(CustConstants.DtgCheckSizeOffset, (uint)_hunk.Segments[_listDataSegmentIndex].DeclaredSizeBytes);
+            WriteHostLong(CustConstants.DtgCheckDataOffset, _listDataAddress);
+            WriteHostLong(CustConstants.DtgCheckSizeOffset, (uint)_listDataLength);
             WriteHostWord(CustConstants.DtgSoundNumberOffset, (ushort)(_firstSubSongNumber + _currentSubSongIndex));
             WriteHostWord(CustConstants.DtgSoundVolumeOffset, 64);
             WriteHostWord(CustConstants.DtgSoundLeftBalanceOffset, 64);
@@ -439,10 +552,8 @@ namespace CopperMod.Cust
                 return;
             }
 
-            var segment = _hunk.Segments[_listDataSegmentIndex];
-            var address = _segmentBases[_listDataSegmentIndex];
-            state.A[0] = address;
-            state.D[0] = (uint)segment.DeclaredSizeBytes;
+            state.A[0] = _listDataAddress;
+            state.D[0] = (uint)_listDataLength;
         }
 
         private void HostOk(M68kCpuState state)

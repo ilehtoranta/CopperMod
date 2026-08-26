@@ -21,12 +21,21 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 var bitplaneDmaWasEnabled = IsBitplaneDmaEnabled(_dmacon);
                 var liveCopperDmaWasEnabled = IsLiveCopperDmaEnabled();
+                var spriteDmaWasEnabled = IsSpriteDmaEnabled();
                 if (bitplaneDmaWasEnabled && !IsBitplaneDmaEnabledAfterSetClear(_dmacon, value))
                 {
                     AnchorActiveBitplanePointersToCurrentRow();
                 }
 
                 ApplySetClear(ref _dmacon, value);
+                if (_advancingLiveDma &&
+                    !spriteDmaWasEnabled &&
+                    IsSpriteDmaEnabled() &&
+                    cycle != long.MinValue)
+                {
+                    AdvanceLiveSpriteFetchCursorToCycle(cycle);
+                }
+
                 if (_advancingLiveDma && cycle != long.MinValue)
                 {
                     var row = GetOutputRowForCycle(_liveFrameStartCycle, cycle);
@@ -97,15 +106,27 @@ namespace CopperMod.Amiga.CustomChips.Denise
             case CustomRegister.Bplcon3:
                 if (_chipset.SupportsEcsDisplayRegisters)
                 {
-                    var impact = CustomRegisterScheduleClassifier.GetChangedImpact(
-                        _chipset,
-                        offset,
-                        _bplcon3,
-                        value);
-                    if (impact != HardwareScheduleImpact.None)
-                    {
-                        _bplcon3 = (ushort)(value & EcsBplcon3WritableMask);
-                    }
+                    _bplcon3 = (ushort)(value & (_chipset.DisplayChip == DisplayChipModel.AgaLisa
+                        ? AgaBplcon3WritableMask
+                        : EcsBplcon3WritableMask));
+                }
+                return;
+            case CustomRegister.Bplcon4:
+                if (_chipset.DisplayChip == DisplayChipModel.AgaLisa)
+                {
+                    _bplcon4 = value;
+                }
+                return;
+            case CustomRegister.Clxcon2:
+                if (_chipset.DisplayChip == DisplayChipModel.AgaLisa)
+                {
+                    _clxcon2 = (ushort)(value & 0x00FF);
+                }
+                return;
+            case CustomRegister.Fmode:
+                if (_chipset == AmigaChipset.AgaPal || _chipset == AmigaChipset.AgaNtsc)
+                {
+                    _fmode = (ushort)(value & 0xC00F);
                 }
                 return;
             case CustomRegister.Copcon:
@@ -203,7 +224,26 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if (offset >= 0x180 && offset < 0x1C0)
             {
                 var colorIndex = (offset - 0x180) / 2;
-                _colors[colorIndex] = (ushort)(value & 0x0FFF);
+                if (_chipset.DisplayChip == DisplayChipModel.AgaLisa)
+                {
+                    colorIndex += ((_bplcon3 >> 13) & 0x7) * 32;
+                    if ((_bplcon3 & 0x0200) != 0)
+                    {
+                        _agaColorLowNibbles[colorIndex] = (ushort)(value & 0x0FFF);
+                    }
+                    else
+                    {
+                        _agaColorHighNibbles[colorIndex] = (ushort)(value & 0x0FFF);
+                        if (colorIndex < _colors.Length)
+                        {
+                            _colors[colorIndex] = (ushort)(value & 0x0FFF);
+                        }
+                    }
+                }
+                else
+                {
+                    _colors[colorIndex] = (ushort)(value & 0x0FFF);
+                }
                 UpdateConvertedColor(colorIndex);
                 _livePaletteSnapshotDirty = true;
                 return;
@@ -214,6 +254,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var plane = (offset - 0x0E0) / 4;
                 if (plane < _bitplanePointers.Length)
                 {
+                    var previousPointer = _bitplanePointers[plane];
                     if ((offset & 2) == 0)
                     {
                         _bitplanePointers[plane] = WriteDmaPointerHigh(_bitplanePointers[plane], value);
@@ -223,7 +264,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         _bitplanePointers[plane] = WriteDmaPointerLow(_bitplanePointers[plane], value);
                     }
 
-                    _bitplaneBaseRows[plane] = GetCurrentBitplaneBaseRow();
+                    // Base rows describe which source row the composed DMA
+                    // pointer addresses. Rewriting an unchanged pointer half
+                    // must not restart that mapping.
+                    if (_bitplanePointers[plane] != previousPointer)
+                    {
+                        _bitplaneBaseRows[plane] = GetCurrentBitplaneBaseRow();
+                    }
                 }
 
                 return;
@@ -581,12 +628,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     if ((offset & 2) == 0)
                     {
                         _sprites[sprite].Pointer = WriteDmaPointerHigh(_sprites[sprite].Pointer, value);
-                        UpdateLiveSpriteDmaPointerFromRegisterWrite(sprite, GetCurrentSpriteDmaControlRow());
+                        UpdateLiveSpriteDmaPointerFromRegisterWrite(
+                            sprite,
+                            GetCurrentSpriteDmaControlRow(),
+                            cycle);
                     }
                     else
                     {
                         _sprites[sprite].Pointer = WriteDmaPointerLow(_sprites[sprite].Pointer, value);
-                        UpdateLiveSpriteDmaPointerFromRegisterWrite(sprite, GetCurrentSpriteDmaControlRow());
+                        UpdateLiveSpriteDmaPointerFromRegisterWrite(
+                            sprite,
+                            GetCurrentSpriteDmaControlRow(),
+                            cycle);
                     }
                 }
 

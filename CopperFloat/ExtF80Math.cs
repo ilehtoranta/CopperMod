@@ -17,6 +17,9 @@ public static class ExtF80Math
     private static readonly UInt128 ExtraIntegerBit = (UInt128)1 << 66;
     private static readonly UInt128 ExtraCarryBit = (UInt128)1 << 67;
 
+    /// <summary>The largest possible integer square root of a 128-bit value.</summary>
+    private static readonly UInt128 MaximumIntegerRoot = ulong.MaxValue;
+
     /// <summary>Converts a signed 32-bit integer exactly.</summary>
     public static ExtF80 FromInt32(int value) => FromInt64(value);
 
@@ -136,9 +139,7 @@ public static class ExtF80Math
 
     /// <summary>Adds two extended values.</summary>
     public static FloatingPointResult<ExtF80> Add(ExtF80 left, ExtF80 right, ExtF80Context context)
-        => ExtF80HostMath.TryBinary(left, right, context, ExtF80HostOperation.Add, out var result)
-            ? result
-            : AddReference(left, right, context);
+        => AddMagnitudes(left, right, subtractRight: false, context);
 
     internal static FloatingPointResult<ExtF80> AddReference(
         ExtF80 left,
@@ -148,9 +149,7 @@ public static class ExtF80Math
 
     /// <summary>Subtracts the right extended value from the left.</summary>
     public static FloatingPointResult<ExtF80> Subtract(ExtF80 left, ExtF80 right, ExtF80Context context)
-        => ExtF80HostMath.TryBinary(left, right, context, ExtF80HostOperation.Subtract, out var result)
-            ? result
-            : SubtractReference(left, right, context);
+        => AddMagnitudes(left, right, subtractRight: true, context);
 
     internal static FloatingPointResult<ExtF80> SubtractReference(
         ExtF80 left,
@@ -160,9 +159,7 @@ public static class ExtF80Math
 
     /// <summary>Multiplies two extended values.</summary>
     public static FloatingPointResult<ExtF80> Multiply(ExtF80 left, ExtF80 right, ExtF80Context context)
-        => ExtF80HostMath.TryBinary(left, right, context, ExtF80HostOperation.Multiply, out var result)
-            ? result
-            : MultiplyReference(left, right, context);
+        => MultiplyReference(left, right, context);
 
     internal static FloatingPointResult<ExtF80> MultiplyReference(
         ExtF80 left,
@@ -174,13 +171,13 @@ public static class ExtF80Math
             return MultiplyFinite(left, right, context);
         }
 
-        if (TryPropagateNaN(left, right, out var special))
+        var leftClass = left.Classification;
+        var rightClass = right.Classification;
+        if (TryPropagateNaN(left, right, leftClass, rightClass, out var special))
         {
             return special;
         }
 
-        var leftClass = left.Classification;
-        var rightClass = right.Classification;
         var sign = left.Sign ^ right.Sign;
         if ((leftClass == ExtF80Class.Infinity && rightClass == ExtF80Class.Zero) ||
             (rightClass == ExtF80Class.Infinity && leftClass == ExtF80Class.Zero))
@@ -218,9 +215,7 @@ public static class ExtF80Math
 
     /// <summary>Divides the left extended value by the right.</summary>
     public static FloatingPointResult<ExtF80> Divide(ExtF80 left, ExtF80 right, ExtF80Context context)
-        => ExtF80HostMath.TryBinary(left, right, context, ExtF80HostOperation.Divide, out var result)
-            ? result
-            : DivideReference(left, right, context);
+        => DivideReference(left, right, context);
 
     /// <summary>Executes the software reference division path.</summary>
     public static FloatingPointResult<ExtF80> DivideReference(
@@ -233,13 +228,13 @@ public static class ExtF80Math
             return DivideFinite(left, right, context);
         }
 
-        if (TryPropagateNaN(left, right, out var special))
+        var leftClass = left.Classification;
+        var rightClass = right.Classification;
+        if (TryPropagateNaN(left, right, leftClass, rightClass, out var special))
         {
             return special;
         }
 
-        var leftClass = left.Classification;
-        var rightClass = right.Classification;
         var sign = left.Sign ^ right.Sign;
         if ((leftClass == ExtF80Class.Zero && rightClass == ExtF80Class.Zero) ||
             (leftClass == ExtF80Class.Infinity && rightClass == ExtF80Class.Infinity))
@@ -307,12 +302,6 @@ public static class ExtF80Math
     {
         if (IsNormal(value) && !value.Sign)
         {
-            if (context.Precision is ExtF80Precision.Single or ExtF80Precision.Double &&
-                ExtF80HostMath.TrySquareRoot(value, context, out var accelerated))
-            {
-                return accelerated;
-            }
-
             return SquareRootFinite(value, context);
         }
 
@@ -501,7 +490,7 @@ public static class ExtF80Math
             context.RoundingMode,
             remainder,
             half,
-            (significand >> fractionalBits) != 0 && ((significand >> fractionalBits) & 1) != 0);
+            ((significand >> fractionalBits) & 1) != 0);
         var exponent = unpacked.Exponent;
         if (increment)
         {
@@ -614,13 +603,13 @@ public static class ExtF80Math
             return AddFinite(left, right, rightSign, context);
         }
 
-        if (TryPropagateNaN(left, right, out var special))
+        var leftClass = left.Classification;
+        var rightClass = right.Classification;
+        if (TryPropagateNaN(left, right, leftClass, rightClass, out var special))
         {
             return special;
         }
 
-        var leftClass = left.Classification;
-        var rightClass = right.Classification;
         if (leftClass == ExtF80Class.Infinity || rightClass == ExtF80Class.Infinity)
         {
             if (leftClass == ExtF80Class.Infinity && rightClass == ExtF80Class.Infinity && left.Sign != rightSign)
@@ -931,10 +920,18 @@ public static class ExtF80Math
         return false;
     }
 
-    private static bool TryPropagateNaN(ExtF80 left, ExtF80 right, out FloatingPointResult<ExtF80> result)
+    /// <summary>
+    /// Handles unsupported encodings and NaN propagation using classifications the
+    /// caller has already computed, so the multi-branch
+    /// <see cref="ExtF80.Classification"/> property is not walked twice per operand.
+    /// </summary>
+    private static bool TryPropagateNaN(
+        ExtF80 left,
+        ExtF80 right,
+        ExtF80Class leftClass,
+        ExtF80Class rightClass,
+        out FloatingPointResult<ExtF80> result)
     {
-        var leftClass = left.Classification;
-        var rightClass = right.Classification;
         if (leftClass == ExtF80Class.Unsupported || rightClass == ExtF80Class.Unsupported)
         {
             result = InvalidResult();
@@ -1020,16 +1017,48 @@ public static class ExtF80Math
         bool odd)
         => ShouldIncrement(sign, mode, (UInt128)remainder, half, odd);
 
+    /// <summary>Returns the exact integer square root of <paramref name="value"/>.</summary>
+    /// <remarks>
+    /// A host square root supplies the initial estimate because it is far cheaper than
+    /// converging from a bit-length guess, but the estimate is then corrected in both
+    /// directions with exact integer arithmetic. The corrections make the result a
+    /// function of <paramref name="value"/> alone, so neither the accuracy of the
+    /// estimate nor the host rounding mode can influence what is returned. Comparisons
+    /// keep the root clamped below 2^64 so that no intermediate product can overflow.
+    /// </remarks>
     private static UInt128 IntegerSquareRoot(UInt128 value)
     {
+        if (value == 0)
+        {
+            return 0;
+        }
+
+        // floor(sqrt(value)) <= 2^64 - 1 for every 128-bit value, so clamping the
+        // estimate to that bound can never discard the correct answer.
         var root = (UInt128)Math.Sqrt((double)value);
-        root = (root + (value / root)) >> 1;
+        root = Clamp(root);
+        root = Clamp((root + (value / root)) >> 1);
         while (root * root > value)
         {
             root--;
         }
 
+        while (root < MaximumIntegerRoot && (root + 1) * (root + 1) <= value)
+        {
+            root++;
+        }
+
         return root;
+
+        static UInt128 Clamp(UInt128 root)
+        {
+            if (root == 0)
+            {
+                return 1;
+            }
+
+            return root > MaximumIntegerRoot ? MaximumIntegerRoot : root;
+        }
     }
 
     private static UInt128 IntegerSquareRootReference(UInt128 value)

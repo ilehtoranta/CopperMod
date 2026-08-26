@@ -134,7 +134,7 @@ public sealed class HardwareSpecializationTests
     }
 
     [Fact]
-    public void BlitterSpecializationCountersRecordKernelUse()
+    public void BlitterKernelSpecializationCommitsWithoutQueuedWordPipeline()
     {
         var bus = new AmigaBus(enableHardwareSpecialization: true);
         BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0x1234);
@@ -153,16 +153,9 @@ public sealed class HardwareSpecializationTests
         Assert.True(snapshot.SpecializationCounters.KernelMisses >= 1);
         Assert.True(snapshot.SpecializationCounters.GeneratedKernels >= 1);
         Assert.Equal(0, snapshot.SpecializationCounters.ScalarFallbacks);
-        Assert.True(snapshot.SpecializationCounters.SlotQueueAttempts >= 1);
-        Assert.True(snapshot.SpecializationCounters.SlotQueueEnabledBlits >= 1);
-        Assert.True(snapshot.SpecializationCounters.SlotQueueWords >= 1);
-        Assert.True(snapshot.SpecializationCounters.SlotQueueCommittedOps >= 2);
+        Assert.Equal(0, snapshot.SpecializationCounters.SlotQueueWords);
+        Assert.Equal(0, snapshot.SpecializationCounters.SlotQueueCommittedOps);
         Assert.True(snapshot.SpecializationCounters.SpecializedReservations >= 2);
-        Assert.True(snapshot.SpecializationCounters.RowPipelineAttempts >= 1);
-        Assert.True(snapshot.SpecializationCounters.RowPipelineUsed >= 1);
-        Assert.True(snapshot.SpecializationCounters.RowPipelineWords >= 1);
-        Assert.True(snapshot.SpecializationCounters.RowPipelineCompletions >= 1);
-        Assert.True(snapshot.SpecializationCounters.AToDRowWords >= 1);
     }
 
     [Fact]
@@ -199,7 +192,7 @@ public sealed class HardwareSpecializationTests
     }
 
     [Fact]
-    public void DiskPreparedTrackAccelerationStaysEnabledWhenHardwareSpecializationIsDisabled()
+    public void DiskPreparedTrackAccelerationBuildsLazilyDuringCausalDma()
     {
         var bus = new AmigaBus(enableHardwareSpecialization: false);
         bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(CreateTrackSetWithWords(0x4489, 0x1234, 0x5678)));
@@ -210,7 +203,7 @@ public sealed class HardwareSpecializationTests
         SetDiskPointer(bus, 0x4000, readyCycle);
         WriteDsklenStartSequence(bus, words: 2, readyCycle);
 
-        bus.AdvanceDmaTo(bus.Disk.CaptureSnapshot().ActiveDmaCompletionCycle);
+        bus.AdvanceDmaTo(readyCycle + 100_000);
 
         Assert.True(GetDrive0PreparedTrack(bus).HasRollingWords);
         Assert.Equal(0, bus.Disk.CaptureSnapshot().SpecializationCounters.RollingWindowHits);

@@ -7,10 +7,12 @@ namespace CopperScreen.Tests;
 
 public sealed class CopperBenchTests
 {
+	private const string CopperStartProfile = "expanded-copperstart";
+
 	[Fact]
 	public void NoDiskStillRendersInsertDiskWhileToolbarStateExists()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateCopperStartEmulator();
 		var bench = new CopperBenchViewModel(emulator);
 
 		emulator.RenderNextFrame();
@@ -24,7 +26,7 @@ public sealed class CopperBenchTests
 	[Fact]
 	public void CopperBenchOverlayTogglesAndRefreshesFromViewModel()
 	{
-		var emulator = CopperScreenEmulator.CreateWithoutDisk();
+		var emulator = CreateCopperStartEmulator();
 		var bench = new CopperBenchViewModel(emulator);
 
 		bench.ToggleOverlay();
@@ -42,7 +44,7 @@ public sealed class CopperBenchTests
 	{
 		using var temp = new TemporaryDiskSet();
 		var diskPath = temp.WriteZip("CopperBench Test (Disk 1 of 2).zip", CreateWorkbenchDiskBytes());
-		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		var emulator = CreateCopperStartEmulator(diskPath);
 		var bench = new CopperBenchViewModel(emulator);
 
 		bench.ToggleOverlay();
@@ -56,7 +58,7 @@ public sealed class CopperBenchTests
 	{
 		using var temp = new TemporaryDiskSet();
 		var diskPath = temp.WriteZip("CopperBench Test (Disk 1 of 1).zip", CreateWorkbenchDiskBytes());
-		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		var emulator = CreateCopperStartEmulator(diskPath);
 		var bench = new CopperBenchViewModel(emulator);
 		bench.ShowOverlay();
 		bench.SelectIndex(bench.Entries.ToList().FindIndex(entry => entry.Name == "Project"));
@@ -74,7 +76,7 @@ public sealed class CopperBenchTests
 	{
 		using var temp = new TemporaryDiskSet();
 		var diskPath = temp.WriteZip("CopperBench Test (Disk 1 of 1).zip", CreateWorkbenchDiskBytes());
-		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		var emulator = CreateCopperStartEmulator(diskPath);
 		var bench = new CopperBenchViewModel(emulator);
 		bench.ToggleOverlay();
 		bench.SelectIndex(bench.Entries.ToList().FindIndex(entry => entry.Name == "Project"));
@@ -90,7 +92,7 @@ public sealed class CopperBenchTests
 	{
 		using var temp = new TemporaryDiskSet();
 		var diskPath = temp.WriteZip("CopperBench Boot (Disk 1 of 1).zip", CreateBootableWorkbenchDiskBytes());
-		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		var emulator = CreateCopperStartEmulator(diskPath);
 		var bench = new CopperBenchViewModel(emulator);
 
 		emulator.RenderNextFrame();
@@ -124,7 +126,7 @@ public sealed class CopperBenchTests
 			return;
 		}
 
-		var emulator = CopperScreenEmulator.Create(new[] { diskPath }, AppContext.BaseDirectory);
+		var emulator = CreateCopperStartEmulator(diskPath);
 		var bench = new CopperBenchViewModel(emulator);
 
 		bench.ShowOverlay();
@@ -141,7 +143,7 @@ public sealed class CopperBenchTests
 		using var temp = new TemporaryDiskSet();
 		var disk1 = temp.WriteZip("CopperBench Test (Disk 1 of 2).zip", CreateWorkbenchDiskBytes());
 		var disk2 = temp.WriteZip("CopperBench Test (Disk 2 of 2).zip", CreateWorkbenchDiskBytes());
-		var emulator = CopperScreenEmulator.Create(new[] { disk1 }, AppContext.BaseDirectory);
+		var emulator = CreateCopperStartEmulator(disk1);
 		var bench = new CopperBenchViewModel(emulator);
 
 		bench.TogglePause();
@@ -294,6 +296,13 @@ public sealed class CopperBenchTests
 
 		return null;
 	}
+
+	private static CopperScreenEmulator CreateCopperStartEmulator(string? diskPath = null)
+		=> CopperScreenEmulator.Create(
+			diskPath == null
+				? new[] { "--profile", CopperStartProfile }
+				: new[] { "--profile", CopperStartProfile, diskPath },
+			AppContext.BaseDirectory);
 
 	private sealed class TemporaryDiskSet : IDisposable
 	{

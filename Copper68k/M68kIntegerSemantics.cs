@@ -539,17 +539,30 @@ namespace Copper68k
                 return false;
             }
 
+            var displacement = unchecked((int)(sbyte)(extension & 0xFF));
+            address = unchecked((uint)(baseAddress + displacement +
+                CalculateM68020BriefIndexedIndexValue(
+                    extension,
+                    dataRegisters,
+                    addressRegisters)));
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static uint CalculateM68020BriefIndexedIndexValue(
+            ushort extension,
+            ReadOnlySpan<uint> dataRegisters,
+            ReadOnlySpan<uint> addressRegisters)
+        {
             var indexRegister = (extension >> 12) & 7;
             var usesAddressRegister = (extension & 0x8000) != 0;
             var usesLongIndex = (extension & 0x0800) != 0;
-            var scale = 1 << ((extension >> 9) & 0x3);
-            var displacement = unchecked((int)(sbyte)(extension & 0xFF));
             var rawIndex = usesAddressRegister ? addressRegisters[indexRegister] : dataRegisters[indexRegister];
             var index = usesLongIndex
                 ? unchecked((int)rawIndex)
                 : unchecked((int)(short)(rawIndex & 0xFFFF));
-            address = unchecked((uint)(baseAddress + displacement + (index * scale)));
-            return true;
+            var scale = 1 << ((extension >> 9) & 0x3);
+            return unchecked((uint)(index * scale));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

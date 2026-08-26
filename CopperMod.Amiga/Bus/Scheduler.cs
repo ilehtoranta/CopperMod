@@ -53,6 +53,9 @@ namespace CopperMod.Amiga.Bus
         private ulong _lastCleanGeneration;
         private bool _hasDrained;
         private bool _draining;
+        private bool _stoppedCpuSlotDrainActive;
+        private int _stoppedCpuSlotDrainInterruptMask;
+        private long _stoppedCpuSlotDrainReachedCycle;
 
         private long _drainCount;
         private long _busAccessDrainCount;
@@ -77,6 +80,7 @@ namespace CopperMod.Amiga.Bus
         private long _hostDiskTicks;
         private long _hostAgnusTicks;
         private long _hostBlitterTicks;
+        private long _hostCausalExecutorTicks;
         private bool _diskWakeFalseCacheValid;
         private AmigaHardwareEventMask _diskWakeFalseCacheKey;
         private long _diskWakeFalseThroughCycle;
@@ -99,23 +103,15 @@ namespace CopperMod.Amiga.Bus
         private long _copperQuiescentCopperScheduleAffectingCustomMoves;
         private long _copperQuiescentCopperBenignCustomMoves;
         private long _copperQuiescentSchedulerDrains;
-        private long _copperQuiescentShadowPredictions;
-        private long _copperQuiescentShadowMatches;
-        private long _copperQuiescentShadowUnsupported;
-        private long _copperQuiescentShadowMismatches;
-        private string _copperQuiescentFirstShadowMismatch = string.Empty;
         private long _copperQuiescentFastPathAttempts;
         private long _copperQuiescentFastPathUsed;
         private long _copperQuiescentFastPathRejectedUnsupported;
         private long _copperQuiescentFastPathRejectedInvalidated;
         private long _copperQuiescentFastPathRejectedDynamicDma;
         private long _copperQuiescentFastPathSkippedDrains;
-        private long _copperQuiescentFastPathVerificationMismatches;
-        private string _copperQuiescentFastPathFirstMismatch = string.Empty;
         private long _copperQuiescentFastPathInvalidatedUntilCycle = -1;
         private long _copperQuiescentWindowCacheStartCycle = -1;
         private long _copperQuiescentWindowCacheEndCycle = -1;
-        private bool _copperQuiescentFastPathDisabledByVerification;
 
         public Scheduler(AmigaBus bus)
         {
@@ -170,23 +166,15 @@ namespace CopperMod.Amiga.Bus
             _copperQuiescentCopperScheduleAffectingCustomMoves = 0;
             _copperQuiescentCopperBenignCustomMoves = 0;
             _copperQuiescentSchedulerDrains = 0;
-            _copperQuiescentShadowPredictions = 0;
-            _copperQuiescentShadowMatches = 0;
-            _copperQuiescentShadowUnsupported = 0;
-            _copperQuiescentShadowMismatches = 0;
-            _copperQuiescentFirstShadowMismatch = string.Empty;
             _copperQuiescentFastPathAttempts = 0;
             _copperQuiescentFastPathUsed = 0;
             _copperQuiescentFastPathRejectedUnsupported = 0;
             _copperQuiescentFastPathRejectedInvalidated = 0;
             _copperQuiescentFastPathRejectedDynamicDma = 0;
             _copperQuiescentFastPathSkippedDrains = 0;
-            _copperQuiescentFastPathVerificationMismatches = 0;
-            _copperQuiescentFastPathFirstMismatch = string.Empty;
             _copperQuiescentFastPathInvalidatedUntilCycle = -1;
             _copperQuiescentWindowCacheStartCycle = -1;
             _copperQuiescentWindowCacheEndCycle = -1;
-            _copperQuiescentFastPathDisabledByVerification = false;
             _slotContendedWakeAgenda = default;
             _interruptPollWakeAgenda = default;
             ResetHostProfile();
@@ -246,70 +234,6 @@ namespace CopperMod.Amiga.Bus
             }
 
             DrainTo(targetCycle, GetCpuAccessMask(target, address, isWrite));
-        }
-
-        internal void RecordCopperQuiescentCpuSlotPrediction(
-            AmigaBusAccessKind kind,
-            AmigaBusAccessTarget target,
-            uint address,
-            AmigaBusAccessSize size,
-            long requestedCycle,
-            long grantedCycle,
-            long completedCycle,
-            bool isWrite)
-        {
-            if (!_bus.CopperQuiescentShadowPredictionEnabled ||
-                !IsCpuChipBusTarget(target) ||
-                !TryGetCopperQuiescentWindow(requestedCycle, out var windowEndCycle))
-            {
-                return;
-            }
-
-            if (target == AmigaBusAccessTarget.CustomRegisters ||
-                size == AmigaBusAccessSize.Long ||
-                completedCycle >= windowEndCycle ||
-                _bus.Blitter.Busy ||
-                _bus.Paula.HasDmaWorkThrough(completedCycle) ||
-                _bus.Disk.ActiveDma)
-            {
-                _copperQuiescentShadowUnsupported++;
-                return;
-            }
-
-            if (!TryPredictStaticCpuSingleSlot(
-                requestedCycle,
-                grantedCycle,
-                completedCycle + 512,
-                out var predictedGrant))
-            {
-                _copperQuiescentShadowUnsupported++;
-                return;
-            }
-
-            _copperQuiescentShadowPredictions++;
-            var predictedCompletion = predictedGrant + AgnusChipSlotScheduler.SlotCycles;
-            if (predictedGrant == grantedCycle && predictedCompletion == completedCycle)
-            {
-                _copperQuiescentShadowMatches++;
-                return;
-            }
-
-            _copperQuiescentShadowMismatches++;
-            if (_copperQuiescentFirstShadowMismatch.Length == 0)
-            {
-                _copperQuiescentFirstShadowMismatch =
-                    $"{kind}/{target}/{size}/write={isWrite}/addr=0x{address:X6}/req={requestedCycle}/pred={predictedGrant}->{predictedCompletion}/actual={grantedCycle}->{completedCycle}";
-            }
-
-            if (_bus.CopperQuiescentFastPathVerifyEnabled)
-            {
-                _copperQuiescentFastPathVerificationMismatches++;
-                _copperQuiescentFastPathDisabledByVerification = true;
-                if (_copperQuiescentFastPathFirstMismatch.Length == 0)
-                {
-                    _copperQuiescentFastPathFirstMismatch = _copperQuiescentFirstShadowMismatch;
-                }
-            }
         }
 
         private bool RecordCopperQuiescentCpuDrain(
@@ -391,8 +315,7 @@ namespace CopperMod.Amiga.Bus
             AmigaBusAccessSize size,
             long windowEndCycle)
         {
-            if (!_bus.CopperQuiescentFastPathEnabled ||
-                _copperQuiescentFastPathDisabledByVerification)
+            if (!_bus.CopperQuiescentFastPathEnabled)
             {
                 return false;
             }
@@ -416,7 +339,7 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            if (_bus.Blitter.Busy ||
+            if (_bus.Blitter.BusPipelineActive ||
                 _bus.Disk.ActiveDma)
             {
                 _copperQuiescentFastPathRejectedDynamicDma++;
@@ -449,14 +372,9 @@ namespace CopperMod.Amiga.Bus
             out long predictedGrant)
         {
             predictedGrant = 0;
-            // This fast path predicts the nominal start of a new CPU transfer.
-            // Slot-by-slot retries for a request that has already lost arbitration
-            // are handled by the live pending-request loop.
+            // The unified executor materializes the CPU intent at this physical
+            // slot. It may win any unowned slot; after denial it remains pending.
             var candidate = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, requestedCycle));
-            if (!_bus.IsCpuAccessibleSlot(candidate))
-            {
-                candidate += AgnusChipSlotScheduler.SlotCycles;
-            }
 
             var limit = Math.Max(limitCycle, candidate);
             while (candidate <= limit)
@@ -468,7 +386,9 @@ namespace CopperMod.Amiga.Bus
                     return true;
                 }
 
-                candidate += 2 * AgnusChipSlotScheduler.SlotCycles;
+                // Once the CPU request loses its nominal slot it remains pending
+                // and may consume the immediately following physical slot.
+                candidate += AgnusChipSlotScheduler.SlotCycles;
             }
 
             return false;

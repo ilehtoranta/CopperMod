@@ -32,7 +32,15 @@ namespace Copper68k
         DataRegisterLongOrToRegister,
         DataRegisterLongEorToDestination,
         DataRegisterLongAndToRegister,
-        DataRegisterLongAddToRegister
+        DataRegisterLongAddToRegister,
+        RegisterShift,
+        RegisterAddSubExtend,
+
+        /// <summary>
+        /// CLR, NEG, NOT, or TST with a data-register-direct operand: one opcode
+        /// word, no extension, no bus access, and no register side effect.
+        /// </summary>
+        DataRegisterUnary
     }
 
     internal enum M68000MicrosequenceClass : byte
@@ -176,10 +184,8 @@ namespace Copper68k
             M68000CompiledMicrosequenceKind.MoveWordDisplacementToPredecrement or
             M68000CompiledMicrosequenceKind.MoveByteDisplacementToPredecrement;
 
-        public bool UsesPendingAwareMoveRetirement => Kind is
-            M68000CompiledMicrosequenceKind.MoveWordDisplacementToData or
-            M68000CompiledMicrosequenceKind.MoveByteDisplacementToData or
-            M68000CompiledMicrosequenceKind.MoveWordPostincrementToData or
+		public bool UsesPendingAwareMoveRetirement => Kind is
+			M68000CompiledMicrosequenceKind.MoveWordPostincrementToData or
             M68000CompiledMicrosequenceKind.MoveBytePostincrementToData;
 
         public int MoveFinalPrefetchCount => Kind is
@@ -425,11 +431,19 @@ namespace Copper68k
                 M68kOpcodePlanKind.DataRegisterLongOrToRegister or
                 M68kOpcodePlanKind.DataRegisterLongEorToDestination or
                 M68kOpcodePlanKind.DataRegisterLongAndToRegister or
-                M68kOpcodePlanKind.DataRegisterLongAddToRegister)
+                M68kOpcodePlanKind.DataRegisterLongAddToRegister or
+                M68kOpcodePlanKind.RegisterShift or
+                M68kOpcodePlanKind.RegisterAddSubExtend)
             {
                 return M68000MicrosequenceClass.SequentialFinalPrefetch;
             }
 
+            // DataRegisterUnary is deliberately absent. This class is consumed
+            // only by the MC68040 JIT's classic-MC68000 microsequence mapping,
+            // where SequentialFinalPrefetch implies a four-cycle sequential
+            // retirement. CLR/NEG/NOT.L on a data register retire in six, so
+            // admitting them here would mis-time compiled traces. The
+            // interpreter's plan and fixed-plan-run paths never read this field.
             return M68000MicrosequenceClass.Unsupported;
         }
 
@@ -463,6 +477,11 @@ namespace Copper68k
                 return M68kOpcodePlanKind.Dbcc;
             }
 
+            if (TryCreateDataRegisterUnaryKind(opcode, out var unaryKind))
+            {
+                return unaryKind;
+            }
+
             if (TryCreateQuickRegisterKind(opcode, out var quickKind))
             {
                 return quickKind;
@@ -486,6 +505,16 @@ namespace Copper68k
             if (TryCreateRegisterArithmeticKind(opcode, out var arithmeticKind))
             {
                 return arithmeticKind;
+            }
+
+            if (TryCreateRegisterShiftKind(opcode, out var shiftKind))
+            {
+                return shiftKind;
+            }
+
+            if (TryCreateRegisterAddSubExtendKind(opcode, out var addSubExtendKind))
+            {
+                return addSubExtendKind;
             }
 
             return M68kOpcodePlanKind.Unsupported;
@@ -539,6 +568,11 @@ namespace Copper68k
                 return quickPlan;
             }
 
+            if (TryCreateDataRegisterUnaryPackedPlan(opcode, out var unaryPlan))
+            {
+                return unaryPlan;
+            }
+
             if (TryCreateMovePackedPlan(opcode, out var movePlan))
             {
                 return movePlan;
@@ -559,7 +593,77 @@ namespace Copper68k
                 return arithmeticPlan;
             }
 
+            if (TryCreateRegisterShiftKind(opcode, out var shiftKind))
+            {
+                return new M68kPackedOpcodePlan(shiftKind);
+            }
+
+            if (TryCreateRegisterAddSubExtendKind(opcode, out var addSubExtendKind))
+            {
+                return new M68kPackedOpcodePlan(addSubExtendKind);
+            }
+
             return default;
+        }
+
+        /// <summary>
+        /// The line-4 unary operation group carried in
+        /// <see cref="M68kPackedOpcodePlan.Variant"/> for
+        /// <see cref="M68kOpcodePlanKind.DataRegisterUnary"/>.
+        /// </summary>
+        internal const byte DataRegisterUnaryClearVariant = 0x42;
+
+        /// <inheritdoc cref="DataRegisterUnaryClearVariant"/>
+        internal const byte DataRegisterUnaryNegateVariant = 0x44;
+
+        /// <inheritdoc cref="DataRegisterUnaryClearVariant"/>
+        internal const byte DataRegisterUnaryNotVariant = 0x46;
+
+        /// <inheritdoc cref="DataRegisterUnaryClearVariant"/>
+        internal const byte DataRegisterUnaryTestVariant = 0x4A;
+
+        /// <inheritdoc cref="DataRegisterUnaryClearVariant"/>
+        internal const byte DataRegisterUnaryNegateWithExtendVariant = 0x40;
+
+        /// <summary>
+        /// Recognizes NEGX, CLR, NEG, NOT, and TST with a data-register-direct
+        /// operand. These are one opcode word with no extension, no bus access,
+        /// and no register side effect beyond the destination.
+        /// </summary>
+        private static bool TryCreateDataRegisterUnaryKind(ushort opcode, out M68kOpcodePlanKind kind)
+        {
+            kind = M68kOpcodePlanKind.Unsupported;
+            if (((opcode >> 3) & 7) != 0 ||
+                ((opcode >> 6) & 3) == 3 ||
+                (opcode & 0xFF00) is not (0x4000 or 0x4200 or 0x4400 or 0x4600 or 0x4A00))
+            {
+                return false;
+            }
+
+            kind = M68kOpcodePlanKind.DataRegisterUnary;
+            return true;
+        }
+
+        private static bool TryCreateDataRegisterUnaryPackedPlan(ushort opcode, out M68kPackedOpcodePlan plan)
+        {
+            plan = default;
+            if (!TryCreateDataRegisterUnaryKind(opcode, out var kind))
+            {
+                return false;
+            }
+
+            var size = ((opcode >> 6) & 3) switch
+            {
+                0 => M68kOperandSize.Byte,
+                1 => M68kOperandSize.Word,
+                _ => M68kOperandSize.Long
+            };
+            plan = new M68kPackedOpcodePlan(
+                kind,
+                size,
+                register: (byte)(opcode & 7),
+                variant: (byte)(opcode >> 8));
+            return true;
         }
 
         private static bool TryCreateQuickRegisterKind(ushort opcode, out M68kOpcodePlanKind kind)
@@ -946,6 +1050,36 @@ namespace Copper68k
 
             kind = M68kOpcodePlanKind.Unsupported;
             return false;
+        }
+
+        private static bool TryCreateRegisterShiftKind(ushort opcode, out M68kOpcodePlanKind kind)
+        {
+            kind = M68kOpcodePlanKind.Unsupported;
+            if ((opcode & 0xF000) != 0xE000 ||
+                (opcode & 0x00C0) == 0x00C0 ||
+                ((opcode >> 6) & 3) == 3)
+            {
+                return false;
+            }
+
+            kind = M68kOpcodePlanKind.RegisterShift;
+            return true;
+        }
+
+        private static bool TryCreateRegisterAddSubExtendKind(ushort opcode, out M68kOpcodePlanKind kind)
+        {
+            kind = M68kOpcodePlanKind.Unsupported;
+            var line = opcode >> 12;
+            var opmode = (opcode >> 6) & 7;
+            if (line is not (0x9 or 0xD) ||
+                opmode is < 4 or > 6 ||
+                ((opcode >> 3) & 7) != 0)
+            {
+                return false;
+            }
+
+            kind = M68kOpcodePlanKind.RegisterAddSubExtend;
+            return true;
         }
 
         private static bool IsSupportedMoveSource(int mode, int register, M68kOperandSize size)

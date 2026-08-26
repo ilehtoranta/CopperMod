@@ -134,6 +134,10 @@ internal sealed class CopperScreenProfile
 		? Chipset.VideoStandard == VideoStandard.Ntsc
 			? MachineProfile.A500PlusEcsNtsc
 			: MachineProfile.A500PlusEcsPal
+		: Chipset.DmaChip == DmaChipModel.AgaAlice && Chipset.DisplayChip == DisplayChipModel.AgaLisa
+			? Chipset.VideoStandard == VideoStandard.Ntsc
+				? MachineProfile.A1200AgaNtsc
+				: MachineProfile.A1200AgaPal
 		: ExpansionRamSize == 0
 			? MachineProfile.A500Pal512KChipOnlyBoot
 			: MachineProfile.A500Pal512KBoot;
@@ -256,7 +260,8 @@ internal sealed class CopperScreenProfile
 		var machine = config.Machine ?? throw new InvalidOperationException("The profile is missing machine settings.");
 		var kickstart = config.Kickstart ?? throw new InvalidOperationException("The profile is missing kickstart settings.");
 		if (!string.Equals(machine.Model, "A500PAL", StringComparison.OrdinalIgnoreCase) &&
-			!string.Equals(machine.Model, "A500Plus", StringComparison.OrdinalIgnoreCase))
+			!string.Equals(machine.Model, "A500Plus", StringComparison.OrdinalIgnoreCase) &&
+			!string.Equals(machine.Model, "A1200", StringComparison.OrdinalIgnoreCase))
 		{
 			throw new InvalidOperationException($"Unsupported machine model '{machine.Model}'.");
 		}
@@ -503,9 +508,13 @@ internal sealed class CopperScreenProfile
 		}
 
 		var version = value.Trim();
-		return version.StartsWith("2", StringComparison.Ordinal)
-			? KickstartVersion.Kickstart20
-			: KickstartVersion.Kickstart13;
+		return version.StartsWith("3.0", StringComparison.Ordinal)
+			? KickstartVersion.Kickstart30
+			: version.StartsWith("3.1", StringComparison.Ordinal)
+			? KickstartVersion.Kickstart31
+			: version.StartsWith("2", StringComparison.Ordinal)
+				? KickstartVersion.Kickstart20
+				: KickstartVersion.Kickstart13;
 	}
 
 	private static DmaChipModel ParseDmaChipModel(string? value)
@@ -519,6 +528,7 @@ internal sealed class CopperScreenProfile
 		{
 			"ocs" => DmaChipModel.OcsAgnus,
 			"ecs" => DmaChipModel.EcsAgnus,
+			"aga" or "alice" => DmaChipModel.AgaAlice,
 			_ => throw new InvalidOperationException($"Unsupported Agnus model '{value}'.")
 		};
 	}
@@ -534,6 +544,7 @@ internal sealed class CopperScreenProfile
 		{
 			"ocs" => DisplayChipModel.OcsDenise,
 			"ecs" => DisplayChipModel.EcsDenise,
+			"aga" or "lisa" => DisplayChipModel.AgaLisa,
 			_ => throw new InvalidOperationException($"Unsupported Denise model '{value}'.")
 		};
 	}
@@ -569,7 +580,7 @@ internal sealed class CopperScreenProfile
 			"accuratem68030" or "m68030" or "68030" or "030" or "ocs6803014mhz" => M68kBackendKind.AccurateM68030,
 			"accuratem68040" or "m68040" or "68040" or "040" or "ocs6804025mhz" => M68kBackendKind.AccurateM68040,
 			"jit" or "jitm68000" => throw new InvalidOperationException(
-				"The Amiga MC68000 JIT is temporarily unavailable. Use 'accuratem68000'."),
+				"The Amiga MC68000 JIT is not yet benchmark-stable. Use 'accuratem68000'."),
 			"jitm68040" or "jit68040" or "m68040jit" or "040jit" => M68kBackendKind.JitM68040,
 			_ => throw new InvalidOperationException($"Unsupported CPU backend '{value}'.")
 		};

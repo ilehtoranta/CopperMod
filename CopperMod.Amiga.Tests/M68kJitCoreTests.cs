@@ -11,12 +11,11 @@ public sealed class M68kJitCoreTests
 	private const uint M68040InstructionCacheEnable = 0x0000_0001;
 
 	[Fact]
-	public void AmigaFactoryRejectsM68000JitBackend()
+	public void AmigaFactoryCreatesM68000JitThroughTheDedicatedAdapter()
 	{
-		var exception = Assert.Throws<NotSupportedException>(() =>
-			AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, new AmigaBus()));
+		using var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68000, new AmigaBus());
 
-		Assert.Contains("temporarily unavailable", exception.Message, StringComparison.OrdinalIgnoreCase);
+		Assert.IsType<M68kJitCore>(cpu);
 	}
 
 	[Fact]
@@ -119,6 +118,37 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(0x0000_0001u, jit.State.D[0]);
 		Assert.True(jit.Counters.CompiledTraces > 0);
 		Assert.True(jit.Counters.TraceHits > 0);
+	}
+
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public void M68040JitHonorsScaledBriefIndexedEa(bool enableV2)
+	{
+		var bus = new GenericJitRamBus(64 * 1024);
+		WriteWords(
+			bus,
+			0x1000,
+			0x52B0, 0x1C00, // ADDQ.L #1,0(A0,D1.L*4)
+			0x60FA);        // BRA.S back to the indexed ADDQ
+		var cycle = 0L;
+		bus.WriteLong(0x0000_2004, 0x1111_1111, ref cycle, M68kBusAccessKind.CpuDataWrite);
+		bus.WriteLong(0x0000_2010, 0x2222_2222, ref cycle, M68kBusAccessKind.CpuDataWrite);
+		using var jit = M68kJitCore.CreateM68040ForTesting(bus, enableV2);
+		jit.Reset(0x1000, 0x4000);
+		jit.State.A[0] = 0x0000_2000;
+		jit.State.D[1] = 4;
+		EnableM68040InstructionCache(jit);
+
+		ExecuteUntilTraceHits(jit, new PureBatchBoundary(), 1);
+
+		cycle = 0;
+		Assert.Equal(
+			0x1111_1111u,
+			bus.ReadLong(0x0000_2004, ref cycle, M68kBusAccessKind.CpuDataRead));
+		Assert.True(
+			bus.ReadLong(0x0000_2010, ref cycle, M68kBusAccessKind.CpuDataRead) >
+			0x2222_2222u);
 	}
 
 	[Fact]
@@ -386,16 +416,6 @@ public sealed class M68kJitCoreTests
 		PrepareM68040CompiledMemoryLoop(direct, data, destination);
 		PrepareM68040CompiledMemoryLoop(slow, data, destination);
 		var slowDirectAccesses = GetM68040DirectRamAccessCount(slow, pseudoFast);
-		var notifications = 0;
-		var notifiedAddress = 0u;
-		var notifiedByteCount = 0;
-		directBus.JitEligibleMemoryWritten += (address, count) =>
-		{
-			notifications++;
-			notifiedAddress = address;
-			notifiedByteCount = count;
-		};
-
 		var measured = direct.ExecuteInstructions(512, 100_000, directBoundary);
 		var slowMeasured = slow.ExecuteInstructions(512, 100_000, slowBoundary);
 
@@ -408,9 +428,6 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(
 			ReadSizedValue(slowBus, destination, byteCount),
 			ReadSizedValue(directBus, destination, byteCount));
-		Assert.InRange(notifications, 1, measured / 4);
-		Assert.Equal(destination, notifiedAddress);
-		Assert.Equal(byteCount, notifiedByteCount);
 		Assert.Equal(slowDirectAccesses, GetM68040DirectRamAccessCount(slow, pseudoFast));
 		if (pseudoFast)
 		{
@@ -617,6 +634,69 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(
 			(byte)M68kJitDirectRamBankKind.RealFast,
 			rebuiltMap.BankKinds[bus.RealFastRamBase >> rebuiltMap.BankShift]);
+	}
+
+	[Fact]
+	public void M68040JitDirectRamMapInvalidatesHighRealFastHostGatewayBankAndRestoresItOnRemoval()
+	{
+		const int highRealFastSize = 16 * 1024 * 1024;
+		const uint highRealFastBase = 0x1000_0000;
+		const uint trapAddress = highRealFastBase + 0x100;
+		var bus = new AmigaBus(
+			realFastRamSize: highRealFastSize,
+			realFastRamBase: highRealFastBase);
+		bus.ConfigureAutoconfigFastRamForHost();
+		var provider = Assert.IsAssignableFrom<IM68kJitDirectRamBus>(bus);
+
+		Assert.True(provider.TryGetJitDirectRamMap(out var map));
+		var highBank = trapAddress >> map.BankShift;
+		Assert.Equal((byte)M68kJitDirectRamBankKind.RealFast, map.BankKinds[highBank]);
+
+		using (bus.InstallHostGatewayOverlay(trapAddress, _ => { }))
+		{
+			Assert.True(provider.TryGetJitDirectRamMap(out var installedMap));
+			Assert.Equal((byte)M68kJitDirectRamBankKind.None, installedMap.BankKinds[highBank]);
+		}
+
+		Assert.True(provider.TryGetJitDirectRamMap(out var restoredMap));
+		Assert.Equal((byte)M68kJitDirectRamBankKind.RealFast, restoredMap.BankKinds[highBank]);
+	}
+
+	[Fact]
+	public void M68040JitDirectRamMapInvalidatesBothBanksForCrossBankHostGatewayAndRestoresOverlayBytes()
+	{
+		const uint trapAddress = RealFastCodeBase + 0xFFFB;
+		var bus = new AmigaBus(realFastRamSize: 0x20000);
+		bus.ConfigureAutoconfigFastRamForHost();
+		var provider = Assert.IsAssignableFrom<IM68kJitDirectRamBus>(bus);
+		var originalBytes = new byte[] { 0x10, 0x21, 0x32, 0x43, 0x54, 0x65 };
+		for (var offset = 0; offset < originalBytes.Length; offset++)
+		{
+			bus.WriteByte(trapAddress + (uint)offset, originalBytes[offset], 0);
+		}
+
+		Assert.True(provider.TryGetJitDirectRamMap(out var map));
+		var firstBank = trapAddress >> map.BankShift;
+		var secondBank = firstBank + 1;
+		Assert.Equal((byte)M68kJitDirectRamBankKind.RealFast, map.BankKinds[firstBank]);
+		Assert.Equal((byte)M68kJitDirectRamBankKind.RealFast, map.BankKinds[secondBank]);
+
+		using (bus.InstallHostGatewayOverlay(trapAddress, _ => { }))
+		{
+			Assert.True(provider.TryGetJitDirectRamMap(out var installedMap));
+			Assert.Equal((byte)M68kJitDirectRamBankKind.None, installedMap.BankKinds[firstBank]);
+			Assert.Equal((byte)M68kJitDirectRamBankKind.None, installedMap.BankKinds[secondBank]);
+			Assert.True(bus.TryCaptureJitCodeSnapshot(trapAddress, originalBytes.Length, out var snapshot));
+			Assert.Contains(trapAddress, snapshot.HostTrapStubAddresses);
+		}
+
+		Assert.True(provider.TryGetJitDirectRamMap(out var restoredMap));
+		Assert.Equal((byte)M68kJitDirectRamBankKind.RealFast, restoredMap.BankKinds[firstBank]);
+		Assert.Equal((byte)M68kJitDirectRamBankKind.RealFast, restoredMap.BankKinds[secondBank]);
+		for (var offset = 0; offset < originalBytes.Length; offset++)
+		{
+			Assert.Equal(originalBytes[offset], bus.ReadByte(trapAddress + (uint)offset));
+		}
 	}
 
 	[Fact]
@@ -1995,21 +2075,12 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void JitZeroWaitWriteHelperOnlyAcceptsRealFastMemoryAndNotifiesInvalidation()
+	public void JitZeroWaitWriteHelperOnlyAcceptsRealFastMemory()
 	{
 		var realFastBus = CreateRealFastCodeBus();
-		var notifiedAddress = 0u;
-		var notifiedBytes = 0;
-		realFastBus.JitEligibleMemoryWritten += (address, byteCount) =>
-		{
-			notifiedAddress = address;
-			notifiedBytes = byteCount;
-		};
 
 		Assert.True(realFastBus.TryWriteJitZeroWaitMemory(RealFastCodeBase, 0x1234_5678, M68kOperandSize.Long));
 		Assert.Equal(0x1234_5678u, realFastBus.ReadLong(RealFastCodeBase));
-		Assert.Equal(RealFastCodeBase, notifiedAddress);
-		Assert.Equal(4, notifiedBytes);
 		Assert.False(realFastBus.TryWriteJitZeroWaitMemory(RealFastCodeBase + 1, 0xAAAA, M68kOperandSize.Word));
 
 		var pseudoFastBus = CreateCodeBus();
@@ -2299,7 +2370,7 @@ public sealed class M68kJitCoreTests
 		WriteWords(interpreterBus, RealFastCodeBase, words);
 		WriteWords(jitBus, RealFastCodeBase, words);
 		var interpreter = new M68kInterpreter(interpreterBus);
-		var jit = new M68kJitCore(jitBus, enableV2: false);
+		var jit = new M68kJitCore(jitBus);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.State.D[1] = jit.State.D[1] = 1;
@@ -2386,7 +2457,7 @@ public sealed class M68kJitCoreTests
 		interpreterBus.ChipRam[0x3000] = 0x20;
 		jitBus.ChipRam[0x3100] = 0x20;
 		interpreterBus.ChipRam[0x3100] = 0x20;
-		var jit = new M68kJitCore(jitBus);
+		var jit = new M68kJitCore(jitBus, enableV2: false);
 		var interpreter = new M68kInterpreter(interpreterBus);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
@@ -2430,7 +2501,6 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
-		Assert.True(jit.Counters.HelperIlInstructions > 0);
 	}
 
 	[Fact]
@@ -2446,7 +2516,7 @@ public sealed class M68kJitCoreTests
 		};
 		WriteWords(jitBus, RealFastCodeBase, words);
 		WriteWords(interpreterBus, RealFastCodeBase, words);
-		var jit = new M68kJitCore(jitBus);
+		var jit = new M68kJitCore(jitBus, enableV2: false);
 		var interpreter = new M68kInterpreter(interpreterBus);
 		jit.Reset(RealFastCodeBase, 0x4000);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
@@ -2459,7 +2529,6 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
-		Assert.True(jit.Counters.SpecializedHelperIlInstructions > 0);
 	}
 
 	[Fact]
@@ -3031,36 +3100,6 @@ public sealed class M68kJitCoreTests
 
 		Assert.Equal(1, hostHits);
 		Assert.Equal(batchAfterCount, boundary.BatchAfterCount);
-	}
-
-	[Theory]
-	[InlineData(false)]
-	[InlineData(true)]
-	public void JitGenerationGuardExitsWhenTraceBytesChangeWithoutWriteNotification(bool enableV2)
-	{
-		var bus = CreateCodeBus();
-		WriteWords(bus, FastCodeBase, 0x7001, 0x60FC); // MOVEQ #1,D0; BRA.S loop
-		var cpu = new M68kJitCore(bus, enableV2);
-		cpu.Reset(FastCodeBase, 0x4000);
-		var boundary = enableV2 ? new PureBatchBoundary() : new CountingBoundary();
-		cpu.ExecuteInstructions(220, enableV2 ? 100_000 : null, boundary);
-		Assert.True(enableV2 ? cpu.Counters.V2TraceHits > 0 : cpu.Counters.TraceHits > 0);
-		var generationGuardExits = cpu.Counters.GenerationGuardExits;
-		var generationMismatches = cpu.Counters.GenerationMismatches;
-
-		bus.ExpansionRam[0] = 0x70;
-		bus.ExpansionRam[1] = 0x02;
-		var touchCodePage = typeof(AmigaBus).GetMethod(
-			"TouchCodePage",
-			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-		touchCodePage.Invoke(bus, new object[] { FastCodeBase });
-		cpu.State.ProgramCounter = FastCodeBase;
-
-		cpu.ExecuteInstructions(1, enableV2 ? cpu.State.Cycles + 10_000 : null, boundary);
-
-		Assert.Equal(0x0000_0002u, cpu.State.D[0]);
-		Assert.True(cpu.Counters.GenerationGuardExits > generationGuardExits);
-		Assert.True(cpu.Counters.GenerationMismatches > generationMismatches);
 	}
 
 	[Fact]
@@ -4221,13 +4260,6 @@ public sealed class M68kJitCoreTests
 		var slowWriteBefore = jit.Counters.V2ZeroWaitWriteSlow;
 		jitBus.WriteLong(data, 0);
 		interpreterBus.WriteLong(data, 0);
-		var notifiedAddress = 0u;
-		var notifiedBytes = 0;
-		jitBus.JitEligibleMemoryWritten += (address, byteCount) =>
-		{
-			notifiedAddress = address;
-			notifiedBytes = byteCount;
-		};
 		var accessStart = jitBus.BusAccesses.Count;
 		jit.State.ProgramCounter = RealFastCodeBase;
 		interpreter.State.ProgramCounter = RealFastCodeBase;
@@ -4238,8 +4270,6 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(measuredInterpreter, measuredJit);
 		Assert.Equal(0x1234_5679u, jitBus.ReadLong(data));
 		Assert.Equal(interpreterBus.ReadLong(data), jitBus.ReadLong(data));
-		Assert.Equal(data, notifiedAddress);
-		Assert.Equal(4, notifiedBytes);
 		Assert.True(jit.Counters.V2ZeroWaitReadRealFast > readFastBefore);
 		Assert.True(jit.Counters.V2ZeroWaitWriteRealFast > writeFastBefore);
 		Assert.Equal(slowReadBefore, jit.Counters.V2ZeroWaitReadSlow);

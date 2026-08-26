@@ -1,3 +1,4 @@
+using CopperMod.Ahx;
 using CopperMod.Cust;
 using CopperMod.ProTracker;
 using CopperMod.Sid;
@@ -6,6 +7,12 @@ namespace CopperMod.Tests;
 
 public sealed class FormatRegistrationTests
 {
+	[Fact]
+	public void CopperModRegistersAhxFormat()
+	{
+		Assert.Contains(ModuleAudioPlayer.SupportedFormats, format => format is AhxFormat);
+	}
+
 	[Fact]
 	public void CopperModRegistersProTrackerFormat()
 	{

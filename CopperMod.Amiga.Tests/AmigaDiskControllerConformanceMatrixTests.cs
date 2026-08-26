@@ -294,17 +294,73 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 	}
 
 	[Fact]
-	public void DsklenZeroLengthCancelsPendingDma()
+	public void ZeroLengthSecondDsklenStrobeCompletesImmediatelyAndRequestsDskblk()
+	{
+		var bus = CreateBusWithTrack(0x1234);
+		var cycle = PrepareDiskDma(bus);
+		SetDiskPointer(bus, DmaBase, cycle);
+
+		bus.WriteWord(0x00DFF024, 0x4000, cycle);
+		bus.WriteWord(0x00DFF024, 0x80FF, cycle);
+		bus.WriteWord(0x00DFF024, 0x8000, cycle);
+
+		var snapshot = bus.Disk.CaptureSnapshot();
+		Assert.False(snapshot.ActiveDma);
+		Assert.Equal(1, snapshot.TransferCount);
+		Assert.Equal(0, snapshot.LastTransferWords);
+		Assert.Equal(DmaBase, snapshot.DiskPointer);
+		Assert.Equal(0x8000, snapshot.Dsklen);
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqDiskBlock);
+		Assert.Equal(0, ReadChipWord(bus, DmaBase));
+		var trace = bus.Disk.CaptureDmaTrace();
+		Assert.Collection(
+			trace,
+			started =>
+			{
+				Assert.Equal(AmigaDiskDmaTraceKind.Started, started.Kind);
+				Assert.Equal(0, started.RequestedWords);
+			},
+			completed =>
+			{
+				Assert.Equal(AmigaDiskDmaTraceKind.Completed, completed.Kind);
+				Assert.Equal(0, completed.TransferredWords);
+			});
+		Assert.Equal(trace[0].Cycle, trace[1].Cycle);
+		Assert.Equal(trace[0].Cycle, trace[1].CompletionCycle);
+	}
+
+	[Fact]
+	public void ZeroLengthDsklenRequiresTwoDmaenStrobes()
+	{
+		var bus = CreateBusWithTrack(0x1234);
+		var cycle = PrepareDiskDma(bus);
+
+		bus.WriteWord(0x00DFF024, 0x8000, cycle);
+
+		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqDiskBlock);
+
+		bus.WriteWord(0x00DFF024, 0x8000, cycle);
+
+		Assert.Equal(1, bus.Disk.CaptureSnapshot().TransferCount);
+		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqDiskBlock);
+	}
+
+	[Fact]
+	public void DmaenClearDsklenWriteCancelsPendingArm()
 	{
 		var bus = CreateBusWithTrack(0x1234);
 		var cycle = PrepareDiskDma(bus);
 		SetDiskPointer(bus, DmaBase, cycle);
 
 		bus.WriteWord(0x00DFF024, 0x8001, cycle);
-		bus.WriteWord(0x00DFF024, 0x8000, cycle);
+		bus.WriteWord(0x00DFF024, 0x0000, cycle);
 		bus.WriteWord(0x00DFF024, 0x8001, cycle);
 
-		Assert.Equal(0, bus.Disk.CaptureSnapshot().TransferCount);
+		var snapshot = bus.Disk.CaptureSnapshot();
+		Assert.False(snapshot.ActiveDma);
+		Assert.Equal(0, snapshot.TransferCount);
+		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqDiskBlock);
 	}
 
 	[Theory]
@@ -1121,18 +1177,34 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		Assert.Equal(0x1234, ReadChipWord(bus, DmaBase));
 	}
 
-	[Fact]
-	public void ActiveWordSyncDmaTransfersCurrentWordBeforeBitSlippedSyncRealignsFollowingWord()
+	[Theory]
+	[InlineData("legacy")]
+	[InlineData("stage5")]
+	[InlineData("slot-kernel")]
+	public void ActiveWordSyncDmaTransfersCurrentWordBeforeBitSlippedSyncRealignsFollowingWord(
+		string mode)
 	{
+		var enableLiveRequesters = mode != "legacy";
+		var arbitrationMode = mode == "slot-kernel"
+			? AgnusBusArbitrationMode.SlotKernel
+			: AgnusBusArbitrationMode.Legacy;
 		var tracks = CreateEncodedTrackSet();
 		tracks[0] = CreateBitSlippedSyncTrack();
-		var bus = CreateDiskComponentBus();
+		var bus = CreateDiskComponentBus(
+			arbitrationMode: arbitrationMode,
+			enableLiveRequesters: enableLiveRequesters);
 		bus.Disk.Drive0.Insert(AmigaDiskImage.FromEncodedTracks(tracks));
 		bus.WriteWord(0x00DFF09E, 0x8400);
 		bus.Paula.AdvanceTo(0);
 
 		StartDiskDma(bus, DmaBase, words: 4);
 		CompleteDiskDma(bus);
+		if (enableLiveRequesters)
+		{
+			var liveCompletionHorizon = MotorReadyCycle() + (DiskIndexPulseCycles() * 2);
+			bus.AdvanceDmaTo(liveCompletionHorizon);
+			bus.Paula.AdvanceTo(liveCompletionHorizon);
+		}
 
 		Assert.Equal(0x1111, ReadChipWord(bus, DmaBase));
 		Assert.Equal(0x2222, ReadChipWord(bus, DmaBase + 2));
@@ -2226,11 +2298,20 @@ public sealed class AmigaDiskControllerConformanceMatrixTests
 		data[bitOffset >> 3] = (byte)(data[bitOffset >> 3] | (1 << (7 - (bitOffset & 7))));
 	}
 
-	private static AmigaBus CreateDiskComponentBus(int floppyDriveCount = 1)
+	private static AmigaBus CreateDiskComponentBus(
+		int floppyDriveCount = 1,
+		AgnusBusArbitrationMode arbitrationMode = AgnusBusArbitrationMode.Legacy,
+		bool enableLiveRequesters = false)
 	{
 		return new AmigaBus(
 			floppyDriveCount: floppyDriveCount,
-			enableLiveAgnusDma: false);
+			enableLiveAgnusDma: enableLiveRequesters,
+			enableAgnusLiveDisplayLedger: enableLiveRequesters,
+			enableAgnusLiveCopper: enableLiveRequesters,
+			enableAgnusLiveBlitter: enableLiveRequesters,
+			enableAgnusLivePaula: enableLiveRequesters,
+			enableAgnusLiveDisk: enableLiveRequesters,
+			agnusBusArbitration: arbitrationMode);
 	}
 
 	private sealed record DiskConformanceRow(string Group, string Name, DiskRowStatus Status, string Reason)

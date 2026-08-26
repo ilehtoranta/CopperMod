@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Copper68k;
@@ -9,6 +10,12 @@ CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
 
 var options = BenchmarkOptions.Parse(args);
+if (options.DispatchReport)
+{
+    DispatchTierReport.Run(CreateWorkloads());
+    return;
+}
+
 if (options.Dispatch)
 {
     DispatchBenchmark.Run(options.Instructions, options.WarmupInstructions, options.Repeats);
@@ -703,6 +710,180 @@ static bool IsRelease()
 #endif
 }
 
+internal enum BenchmarkDispatchTier
+{
+    Scalar = 0,
+    PlannedOnly,
+    ShortConditionalBranch,
+    FastMemoryRun,
+    FixedPlanBatch
+}
+
+internal static class DispatchTierReport
+{
+    private static readonly Type CoreType = typeof(M68kInterpreter).BaseType!;
+
+    private static readonly Func<ushort, M68kOpcodePlanKind, bool> IsFixedPlanBatchOpcode =
+        CreateOpcodeKindPredicate("IsFixedPlanBatchOpcode");
+
+    private static readonly Func<ushort, M68kOpcodePlanKind, bool> IsShortConditionalBranch =
+        CreateOpcodeKindPredicate("IsShortConditionalBranch");
+
+    private static readonly Func<ushort, M68kOpcodePlanKind, bool> IsFastMemoryRunKind =
+        CreateOpcodeKindPredicate("IsFastMemoryRunKind");
+
+    public static void Run(IEnumerable<BenchmarkWorkload> workloads)
+    {
+        WriteTierCoverage();
+        Console.WriteLine();
+        WriteWorkloadBlockers(workloads);
+    }
+
+    private static void WriteTierCoverage()
+    {
+        var counts = new long[Enum.GetValues<BenchmarkDispatchTier>().Length];
+        for (var opcode = 0; opcode <= 0xFFFF; opcode++)
+        {
+            counts[(int)ClassifyTier((ushort)opcode)]++;
+        }
+
+        Console.WriteLine("dispatch-tier-coverage");
+        Console.WriteLine("tier\tencodings\tshare");
+        foreach (var tier in Enum.GetValues<BenchmarkDispatchTier>())
+        {
+            Console.WriteLine(
+                $"{tier}\t{counts[(int)tier]}\t{counts[(int)tier] * 100.0 / 65536.0:F2}%");
+        }
+
+        Console.WriteLine($"total\t{counts.Sum()}");
+        Console.WriteLine();
+        Console.WriteLine("start\tend\ttier\tmnemonic");
+        foreach (var range in EnumerateTierRanges())
+        {
+            if (range.Tier == BenchmarkDispatchTier.Scalar && range.Length < 256)
+            {
+                continue;
+            }
+
+            Console.WriteLine(
+                $"0x{range.Start:X4}\t0x{range.End:X4}\t{range.Tier}\t{M68kInstructionClassifier.GetMnemonic(range.Start)}");
+        }
+    }
+
+    private static void WriteWorkloadBlockers(IEnumerable<BenchmarkWorkload> workloads)
+    {
+        var blockers = new Dictionary<ushort, int>();
+        Console.WriteLine("benchmark-workload-run-blockers");
+        Console.WriteLine("workload\truns-clean\tblocking-opcodes");
+        foreach (var workload in workloads)
+        {
+            var blocking = EnumerateOpcodes(workload.Program)
+                .Where(opcode => ClassifyTier(opcode) is BenchmarkDispatchTier.Scalar or BenchmarkDispatchTier.PlannedOnly)
+                .Distinct()
+                .ToArray();
+            foreach (var opcode in blocking)
+            {
+                blockers[opcode] = blockers.GetValueOrDefault(opcode) + 1;
+            }
+
+            Console.WriteLine(
+                $"{workload.Name}\t{(blocking.Length == 0 ? "yes" : "no")}\t" +
+                string.Join(
+                    ' ',
+                    blocking.Select(opcode => $"0x{opcode:X4}({M68kInstructionClassifier.GetMnemonic(opcode)})")));
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("opcode\tmnemonic\tblocked-workloads\ttier");
+        foreach (var (opcode, count) in blockers.OrderByDescending(entry => entry.Value).ThenBy(entry => entry.Key))
+        {
+            Console.WriteLine(
+                $"0x{opcode:X4}\t{M68kInstructionClassifier.GetMnemonic(opcode)}\t{count}\t{ClassifyTier(opcode)}");
+        }
+    }
+
+    private static IEnumerable<ushort> EnumerateOpcodes(ushort[] program)
+    {
+        var reader = new BenchmarkProgramCodeReader(program);
+        var byteOffset = 0;
+        while (byteOffset < program.Length * 2)
+        {
+            var opcode = program[byteOffset / 2];
+            yield return opcode;
+            if (M68kDecoder.TryDecode(reader, (uint)byteOffset, out var instruction, out _) &&
+                instruction.Length > 0)
+            {
+                byteOffset += instruction.Length;
+            }
+            else
+            {
+                byteOffset += 2;
+            }
+        }
+    }
+
+    private static BenchmarkDispatchTier ClassifyTier(ushort opcode)
+    {
+        var kind = M68kOpcodePlanTable.Kinds[opcode];
+        if (IsFixedPlanBatchOpcode(opcode, kind))
+        {
+            return BenchmarkDispatchTier.FixedPlanBatch;
+        }
+
+        if (IsShortConditionalBranch(opcode, kind))
+        {
+            return BenchmarkDispatchTier.ShortConditionalBranch;
+        }
+
+        if (IsFastMemoryRunKind(opcode, kind))
+        {
+            return BenchmarkDispatchTier.FastMemoryRun;
+        }
+
+        return kind == M68kOpcodePlanKind.Unsupported
+            ? BenchmarkDispatchTier.Scalar
+            : BenchmarkDispatchTier.PlannedOnly;
+    }
+
+    private static IEnumerable<(ushort Start, ushort End, int Length, BenchmarkDispatchTier Tier)> EnumerateTierRanges()
+    {
+        var start = 0;
+        var tier = ClassifyTier(0);
+        for (var opcode = 1; opcode <= 0xFFFF; opcode++)
+        {
+            var current = ClassifyTier((ushort)opcode);
+            if (current == tier)
+            {
+                continue;
+            }
+
+            yield return ((ushort)start, (ushort)(opcode - 1), opcode - start, tier);
+            start = opcode;
+            tier = current;
+        }
+
+        yield return ((ushort)start, 0xFFFF, 0x10000 - start, tier);
+    }
+
+    private static Func<ushort, M68kOpcodePlanKind, bool> CreateOpcodeKindPredicate(string name)
+        => CoreType
+            .GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)!
+            .CreateDelegate<Func<ushort, M68kOpcodePlanKind, bool>>();
+
+    private sealed class BenchmarkProgramCodeReader(ushort[] program) : IM68kCodeReader
+    {
+        public ushort ReadHostWord(uint address)
+        {
+            if ((address & 1) != 0 || address / 2 >= program.Length)
+            {
+                throw M68kCodeReadException.Instance;
+            }
+
+            return program[address / 2];
+        }
+    }
+}
+
 internal sealed record BenchmarkOptions(
     int WarmupInstructions,
     int Instructions,
@@ -710,6 +891,7 @@ internal sealed record BenchmarkOptions(
     string? Backend,
     string? Workload,
     bool Dispatch,
+    bool DispatchReport,
     bool ExtF80,
     bool SingleStep)
 {
@@ -721,6 +903,7 @@ internal sealed record BenchmarkOptions(
         string? backend = null;
         string? workload = null;
         var dispatch = false;
+        var dispatchReport = false;
         var extF80 = false;
         var singleStep = false;
 
@@ -730,6 +913,9 @@ internal sealed record BenchmarkOptions(
             {
                 case "--dispatch":
                     dispatch = true;
+                    break;
+                case "--dispatch-report":
+                    dispatchReport = true;
                     break;
                 case "--extf80":
                     extF80 = true;
@@ -754,7 +940,7 @@ internal sealed record BenchmarkOptions(
                     break;
                 case "--help":
                 case "-h":
-                    Console.WriteLine("Usage: dotnet run -c Release --project Copper68k.Benchmarks -- [--dispatch|--extf80] [--single-step] [--warmup N] [--instructions N] [--repeats N] [--backend text] [--workload text]");
+                    Console.WriteLine("Usage: dotnet run -c Release --project Copper68k.Benchmarks -- [--dispatch|--dispatch-report|--extf80] [--single-step] [--warmup N] [--instructions N] [--repeats N] [--backend text] [--workload text]");
                     Environment.Exit(0);
                     break;
                 default:
@@ -762,7 +948,7 @@ internal sealed record BenchmarkOptions(
             }
         }
 
-        return new BenchmarkOptions(warmup, instructions, repeats, backend, workload, dispatch, extF80, singleStep);
+        return new BenchmarkOptions(warmup, instructions, repeats, backend, workload, dispatch, dispatchReport, extF80, singleStep);
     }
 
     private static int ParseInt(string[] args, ref int index)
@@ -785,164 +971,282 @@ internal sealed record BenchmarkOptions(
 
 internal static class ExtF80KernelBenchmark
 {
-    private static readonly ExtF80Context Context = new(
-        ExtF80RoundingMode.ToNearestEven,
-        ExtF80Precision.Extended,
-        ExtF80TininessMode.BeforeRounding);
+    private const int CorpusMask = 4095;
+
+    private static readonly ExtF80Precision[] Precisions =
+    [
+        ExtF80Precision.Single,
+        ExtF80Precision.Double,
+        ExtF80Precision.Extended
+    ];
 
     public static void Run(int operations, int warmupOperations, int repeats)
     {
         Console.WriteLine($"CopperFloat extF80 kernel benchmark, warmup={warmupOperations}, measured={operations}, repeats={repeats}, Release={IsReleaseBuild()}");
-        Console.WriteLine("operation\trepeat\toperations\tms\tops/sec\tmops\tallocated bytes\tchecksum");
+        Console.WriteLine("operation\tprecision\tpath\trepeat\toperations\tms\tops/sec\tmops\tallocated bytes\tchecksum");
 
         foreach (var operation in Enum.GetValues<ExtF80KernelOperation>())
         {
-            _ = Execute(operation, warmupOperations);
-            for (var repeat = 1; repeat <= repeats; repeat++)
+            foreach (var precision in Precisions)
             {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                GC.Collect();
+                var corpus = ExtF80Corpus.Create(operation, precision);
+                var context = new ExtF80Context(
+                    ExtF80RoundingMode.ToNearestEven,
+                    precision,
+                    ExtF80TininessMode.BeforeRounding);
 
-                var beforeBytes = GC.GetAllocatedBytesForCurrentThread();
-                var start = Stopwatch.GetTimestamp();
-                var result = Execute(operation, operations);
-                var elapsed = Stopwatch.GetElapsedTime(start);
-                var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeBytes;
-                var operationsPerSecond = operations / elapsed.TotalSeconds;
-                Console.WriteLine(
-                    $"{operation.ToString().ToLowerInvariant()}\t{repeat}\t{operations}\t{elapsed.TotalMilliseconds:F3}\t{operationsPerSecond:F0}\t{operationsPerSecond / 1_000_000.0:F3}\t{allocated}\t0x{Checksum(result):X8}");
+                foreach (var path in Enum.GetValues<ExtF80KernelPath>())
+                {
+                    // Only square root has a genuinely distinct reference algorithm (a
+                    // pure-integer Newton oracle). The binary operations now delegate
+                    // straight to their reference implementations, so measuring both
+                    // paths would time identical code.
+                    if (path == ExtF80KernelPath.Reference &&
+                        operation != ExtF80KernelOperation.SquareRoot)
+                    {
+                        continue;
+                    }
+
+                    _ = Execute(operation, path, corpus, context, warmupOperations);
+                    for (var repeat = 1; repeat <= repeats; repeat++)
+                    {
+                        GC.Collect();
+                        GC.WaitForPendingFinalizers();
+                        GC.Collect();
+
+                        var beforeBytes = GC.GetAllocatedBytesForCurrentThread();
+                        var start = Stopwatch.GetTimestamp();
+                        var result = Execute(operation, path, corpus, context, operations);
+                        var elapsed = Stopwatch.GetElapsedTime(start);
+                        var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeBytes;
+                        var operationsPerSecond = operations / elapsed.TotalSeconds;
+                        Console.WriteLine(
+                            $"{operation.ToString().ToLowerInvariant()}\t{(int)precision}\t{path.ToString().ToLowerInvariant()}\t{repeat}\t{operations}\t{elapsed.TotalMilliseconds:F3}\t{operationsPerSecond:F0}\t{operationsPerSecond / 1_000_000.0:F3}\t{allocated}\t0x{Checksum(result):X8}");
+                    }
+                }
             }
         }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static ExtF80KernelResult Execute(ExtF80KernelOperation operation, int operations)
+    private static ExtF80KernelResult Execute(
+        ExtF80KernelOperation operation,
+        ExtF80KernelPath path,
+        ExtF80Corpus corpus,
+        ExtF80Context context,
+        int operations)
         => operation switch
         {
-            ExtF80KernelOperation.Add => ExecuteAdd(operations),
-            ExtF80KernelOperation.Subtract => ExecuteSubtract(operations),
-            ExtF80KernelOperation.Multiply => ExecuteMultiply(operations),
-            ExtF80KernelOperation.Divide => ExecuteDivide(operations),
-            ExtF80KernelOperation.SquareRoot => ExecuteSquareRoot(operations),
-            ExtF80KernelOperation.Round => ExecuteRound(operations),
-            _ => ExecuteForced(operation, operations)
+            ExtF80KernelOperation.Add => ExecuteAdd(path, corpus, context, operations),
+            ExtF80KernelOperation.Subtract => ExecuteSubtract(path, corpus, context, operations),
+            ExtF80KernelOperation.Multiply => ExecuteMultiply(path, corpus, context, operations),
+            ExtF80KernelOperation.Divide => ExecuteDivide(path, corpus, context, operations),
+            ExtF80KernelOperation.SquareRoot => ExecuteSquareRoot(path, corpus, context, operations),
+            ExtF80KernelOperation.SpecialValues => ExecuteAdd(path, corpus, context, operations),
+            _ => ExecuteRound(corpus, context, operations)
         };
 
-    private static ExtF80KernelResult ExecuteForced(ExtF80KernelOperation operation, int operations)
+
+    private static ExtF80KernelResult ExecuteAdd(
+        ExtF80KernelPath path,
+        ExtF80Corpus corpus,
+        ExtF80Context context,
+        int operations)
     {
-        var operationIndex = ((int)operation - (int)ExtF80KernelOperation.SingleDivide) / 2;
-        var reference = (((int)operation - (int)ExtF80KernelOperation.SingleDivide) & 1) != 0;
-        var precision = operationIndex == 0 ? ExtF80Precision.Single : ExtF80Precision.Double;
-        var context = new ExtF80Context(
-            ExtF80RoundingMode.ToNearestEven,
-            precision,
-            ExtF80TininessMode.BeforeRounding);
-        var left = ExtF80Math.FromInt32(1);
-        var right = ExtF80Math.FromInt32(3);
-        var result = new FloatingPointResult<ExtF80>(left, FloatingPointExceptionFlags.None);
-        for (var i = 0; i < operations; i++)
+        var left = corpus.Left;
+        var right = corpus.Right;
+        var value = ExtF80.PositiveZero;
+        var flags = FloatingPointExceptionFlags.None;
+        var accumulator = 0UL;
+        if (path == ExtF80KernelPath.Fast)
         {
-            result = reference
-                ? ExtF80Math.DivideReference(left, right, context)
-                : ExtF80Math.Divide(left, right, context);
+            for (var i = 0; i < operations; i++)
+            {
+                var result = ExtF80Math.Add(left[i & CorpusMask], right[i & CorpusMask], context);
+                value = result.Value;
+                flags |= result.Flags;
+                accumulator ^= value.Significand ^ value.SignExponent;
+            }
+        }
+        else
+        {
+            for (var i = 0; i < operations; i++)
+            {
+                var result = ExtF80Math.AddReference(left[i & CorpusMask], right[i & CorpusMask], context);
+                value = result.Value;
+                flags |= result.Flags;
+                accumulator ^= value.Significand ^ value.SignExponent;
+            }
         }
 
-        return new ExtF80KernelResult(result.Value, result.Flags);
+        return new ExtF80KernelResult(value, flags, accumulator);
     }
 
-    private static ExtF80KernelResult ExecuteAdd(int operations)
+    private static ExtF80KernelResult ExecuteSubtract(
+        ExtF80KernelPath path,
+        ExtF80Corpus corpus,
+        ExtF80Context context,
+        int operations)
     {
-        var one = ExtF80Math.FromInt32(1);
-        var value = one;
+        var left = corpus.Left;
+        var right = corpus.Right;
+        var value = ExtF80.PositiveZero;
         var flags = FloatingPointExceptionFlags.None;
-        for (var i = 0; i < operations; i++)
+        var accumulator = 0UL;
+        if (path == ExtF80KernelPath.Fast)
         {
-            var result = ExtF80Math.Add(value, one, Context);
-            value = result.Value;
-            flags = result.Flags;
+            for (var i = 0; i < operations; i++)
+            {
+                var result = ExtF80Math.Subtract(left[i & CorpusMask], right[i & CorpusMask], context);
+                value = result.Value;
+                flags |= result.Flags;
+                accumulator ^= value.Significand ^ value.SignExponent;
+            }
+        }
+        else
+        {
+            for (var i = 0; i < operations; i++)
+            {
+                var result = ExtF80Math.SubtractReference(left[i & CorpusMask], right[i & CorpusMask], context);
+                value = result.Value;
+                flags |= result.Flags;
+                accumulator ^= value.Significand ^ value.SignExponent;
+            }
         }
 
-        return new ExtF80KernelResult(value, flags);
+        return new ExtF80KernelResult(value, flags, accumulator);
     }
 
-    private static ExtF80KernelResult ExecuteSubtract(int operations)
+    private static ExtF80KernelResult ExecuteMultiply(
+        ExtF80KernelPath path,
+        ExtF80Corpus corpus,
+        ExtF80Context context,
+        int operations)
     {
-        var one = ExtF80Math.FromInt32(1);
-        var value = ExtF80Math.FromInt64(long.MaxValue);
+        var left = corpus.Left;
+        var right = corpus.Right;
+        var value = ExtF80.PositiveZero;
         var flags = FloatingPointExceptionFlags.None;
-        for (var i = 0; i < operations; i++)
+        var accumulator = 0UL;
+        if (path == ExtF80KernelPath.Fast)
         {
-            var result = ExtF80Math.Subtract(value, one, Context);
-            value = result.Value;
-            flags = result.Flags;
+            for (var i = 0; i < operations; i++)
+            {
+                var result = ExtF80Math.Multiply(left[i & CorpusMask], right[i & CorpusMask], context);
+                value = result.Value;
+                flags |= result.Flags;
+                accumulator ^= value.Significand ^ value.SignExponent;
+            }
+        }
+        else
+        {
+            for (var i = 0; i < operations; i++)
+            {
+                var result = ExtF80Math.MultiplyReference(left[i & CorpusMask], right[i & CorpusMask], context);
+                value = result.Value;
+                flags |= result.Flags;
+                accumulator ^= value.Significand ^ value.SignExponent;
+            }
         }
 
-        return new ExtF80KernelResult(value, flags);
+        return new ExtF80KernelResult(value, flags, accumulator);
     }
 
-    private static ExtF80KernelResult ExecuteMultiply(int operations)
+    private static ExtF80KernelResult ExecuteDivide(
+        ExtF80KernelPath path,
+        ExtF80Corpus corpus,
+        ExtF80Context context,
+        int operations)
     {
-        var factor = ExtF80.FromBits(0x3FFF, 0x8000_0001_0000_0000);
-        var value = ExtF80Math.FromInt32(1);
+        var left = corpus.Left;
+        var right = corpus.Right;
+        var value = ExtF80.PositiveZero;
         var flags = FloatingPointExceptionFlags.None;
-        for (var i = 0; i < operations; i++)
+        var accumulator = 0UL;
+        if (path == ExtF80KernelPath.Fast)
         {
-            var result = ExtF80Math.Multiply(value, factor, Context);
-            value = result.Value;
-            flags = result.Flags;
+            for (var i = 0; i < operations; i++)
+            {
+                var result = ExtF80Math.Divide(left[i & CorpusMask], right[i & CorpusMask], context);
+                value = result.Value;
+                flags |= result.Flags;
+                accumulator ^= value.Significand ^ value.SignExponent;
+            }
+        }
+        else
+        {
+            for (var i = 0; i < operations; i++)
+            {
+                var result = ExtF80Math.DivideReference(left[i & CorpusMask], right[i & CorpusMask], context);
+                value = result.Value;
+                flags |= result.Flags;
+                accumulator ^= value.Significand ^ value.SignExponent;
+            }
         }
 
-        return new ExtF80KernelResult(value, flags);
+        return new ExtF80KernelResult(value, flags, accumulator);
     }
 
-    private static ExtF80KernelResult ExecuteDivide(int operations)
+    private static ExtF80KernelResult ExecuteSquareRoot(
+        ExtF80KernelPath path,
+        ExtF80Corpus corpus,
+        ExtF80Context context,
+        int operations)
     {
-        var factor = ExtF80.FromBits(0x3FFF, 0x8000_0001_0000_0000);
-        var value = ExtF80Math.FromInt32(1);
+        var left = corpus.Left;
+        var value = ExtF80.PositiveZero;
         var flags = FloatingPointExceptionFlags.None;
-        for (var i = 0; i < operations; i++)
+        var accumulator = 0UL;
+        if (path == ExtF80KernelPath.Fast)
         {
-            var result = ExtF80Math.Divide(value, factor, Context);
-            value = result.Value;
-            flags = result.Flags;
+            for (var i = 0; i < operations; i++)
+            {
+                var result = ExtF80Math.SquareRoot(left[i & CorpusMask], context);
+                value = result.Value;
+                flags |= result.Flags;
+                accumulator ^= value.Significand ^ value.SignExponent;
+            }
+        }
+        else if (path == ExtF80KernelPath.Reference)
+        {
+            for (var i = 0; i < operations; i++)
+            {
+                var result = ExtF80Math.SquareRootReference(left[i & CorpusMask], context);
+                value = result.Value;
+                flags |= result.Flags;
+                accumulator ^= value.Significand ^ value.SignExponent;
+            }
         }
 
-        return new ExtF80KernelResult(value, flags);
+        return new ExtF80KernelResult(value, flags, accumulator);
     }
 
-    private static ExtF80KernelResult ExecuteSquareRoot(int operations)
+    private static ExtF80KernelResult ExecuteRound(
+        ExtF80Corpus corpus,
+        ExtF80Context context,
+        int operations)
     {
-        var value = ExtF80Math.FromInt32(2);
+        var left = corpus.Left;
+        var value = ExtF80.PositiveZero;
         var flags = FloatingPointExceptionFlags.None;
+        var accumulator = 0UL;
         for (var i = 0; i < operations; i++)
         {
-            var result = ExtF80Math.SquareRoot(value, Context);
+            var result = ExtF80Math.Round(left[i & CorpusMask], context);
             value = result.Value;
-            flags = result.Flags;
+            flags |= result.Flags;
+            accumulator ^= value.Significand ^ value.SignExponent;
         }
 
-        return new ExtF80KernelResult(value, flags);
-    }
-
-    private static ExtF80KernelResult ExecuteRound(int operations)
-    {
-        var value = ExtF80.FromBits(0x3FFF, 0x8000_0000_0000_0001);
-        var flags = FloatingPointExceptionFlags.None;
-        for (var i = 0; i < operations; i++)
-        {
-            var result = ExtF80Math.Round(value, Context);
-            value = result.Value;
-            flags = result.Flags;
-        }
-
-        return new ExtF80KernelResult(value, flags);
+        return new ExtF80KernelResult(value, flags, accumulator);
     }
 
     private static uint Checksum(ExtF80KernelResult result)
     {
         var checksum = ((uint)result.Value.SignExponent << 16) ^ (uint)result.Value.Significand;
         checksum = unchecked((checksum * 16777619u) ^ (uint)(result.Value.Significand >> 32));
+        checksum = unchecked((checksum * 16777619u) ^ (uint)result.Accumulator);
+        checksum = unchecked((checksum * 16777619u) ^ (uint)(result.Accumulator >> 32));
         return unchecked((checksum * 16777619u) ^ (uint)result.Flags);
     }
 
@@ -964,15 +1268,113 @@ internal enum ExtF80KernelOperation
     Divide,
     SquareRoot,
     Round,
-    SingleDivide,
-    SingleDivideReference,
-    DoubleDivide,
-    DoubleDivideReference
+    SpecialValues
+}
+
+internal enum ExtF80KernelPath
+{
+    Fast,
+    Reference
 }
 
 internal readonly record struct ExtF80KernelResult(
     ExtF80 Value,
-    FloatingPointExceptionFlags Flags);
+    FloatingPointExceptionFlags Flags,
+    ulong Accumulator);
+
+/// <summary>
+/// A seeded operand corpus for the extF80 kernels.
+/// </summary>
+/// <remarks>
+/// Operands are generated so that they round-trip exactly through the target narrow
+/// format, because that is the precondition of the host fast path. A corpus of full
+/// 64-bit significands would be rejected outright at Single/Double precision and would
+/// only measure rejection cost. This choice is deliberately favourable to the fast
+/// path, which makes the &gt;10% retention bar conservative in the fast path's favour.
+/// Exponents stay in a moderate band so results neither overflow nor go subnormal,
+/// since both conditions also cause rejection.
+/// </remarks>
+internal sealed class ExtF80Corpus
+{
+    private const int Size = 4096;
+
+    private ExtF80Corpus(ExtF80[] left, ExtF80[] right)
+    {
+        Left = left;
+        Right = right;
+    }
+
+    public ExtF80[] Left { get; }
+
+    public ExtF80[] Right { get; }
+
+    public static ExtF80Corpus Create(ExtF80KernelOperation operation, ExtF80Precision precision)
+    {
+        var random = new Random(0x68040 + ((int)operation * 31) + ((int)precision * 7));
+        var left = new ExtF80[Size];
+        var right = new ExtF80[Size];
+        var positiveOnly = operation == ExtF80KernelOperation.SquareRoot;
+        for (var index = 0; index < Size; index++)
+        {
+            if (operation == ExtF80KernelOperation.SpecialValues)
+            {
+                left[index] = CreateSpecial(random, precision);
+                right[index] = CreateSpecial(random, precision);
+                continue;
+            }
+
+            left[index] = Create(random, precision, positiveOnly);
+            right[index] = Create(random, precision, positiveOnly);
+        }
+
+        return new ExtF80Corpus(left, right);
+    }
+
+    /// <summary>
+    /// Produces zeros, infinities, and NaNs, which are the operands that take the
+    /// classification-driven special-value path rather than the all-normal fast path.
+    /// </summary>
+    private static ExtF80 CreateSpecial(Random random, ExtF80Precision precision)
+        => random.Next(6) switch
+        {
+            0 => ExtF80.PositiveZero,
+            1 => ExtF80.NegativeZero,
+            2 => ExtF80.PositiveInfinity,
+            3 => ExtF80.NegativeInfinity,
+            4 => ExtF80.QuietNaN,
+            _ => Create(random, precision, positiveOnly: false)
+        };
+
+    private static ExtF80 Create(Random random, ExtF80Precision precision, bool positiveOnly)
+    {
+        var sign = !positiveOnly && random.Next(2) == 1;
+        switch (precision)
+        {
+            case ExtF80Precision.Single:
+            {
+                var bits = (sign ? 0x8000_0000u : 0u) |
+                    ((uint)random.Next(110, 146) << 23) |
+                    (uint)random.Next(1 << 23);
+                return ExtF80Math.FromBinary32Bits(bits).Value;
+            }
+
+            case ExtF80Precision.Double:
+            {
+                var bits = (sign ? 0x8000_0000_0000_0000UL : 0UL) |
+                    ((ulong)random.Next(960, 1091) << 52) |
+                    (unchecked((ulong)random.NextInt64()) & 0x000F_FFFF_FFFF_FFFFUL);
+                return ExtF80Math.FromBinary64Bits(bits).Value;
+            }
+
+            default:
+            {
+                var exponent = (ushort)(random.Next(0x3F00, 0x4100) | (sign ? 0x8000 : 0));
+                var significand = unchecked((ulong)random.NextInt64()) | ExtF80.IntegerBit;
+                return ExtF80.FromBits(exponent, significand);
+            }
+        }
+    }
+}
 
 internal sealed record BenchmarkBackend(
     string Name,

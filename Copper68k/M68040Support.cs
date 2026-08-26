@@ -1998,6 +1998,16 @@ namespace Copper68k
             return _physicalBus.TryInvokeHostGateway(physicalPc, token, state);
         }
 
+        public M68kHostGatewayInvocation InvokeHostGateway(uint instructionProgramCounter, uint token, M68kCpuState state)
+        {
+            var physicalPc = Translate(
+                instructionProgramCounter,
+                M68kBusAccessKind.CpuInstructionFetch,
+                write: false,
+                byteCount: 2);
+            return _physicalBus.InvokeHostGateway(physicalPc, token, state);
+        }
+
         public void ResetExternalDevices(long cycle)
             => _physicalBus.ResetExternalDevices(cycle);
 
@@ -2456,7 +2466,9 @@ namespace Copper68k
         private const int VectorBusError = 2;
         private const int VectorLineF = 11;
         private readonly IM68kBus _physicalBus;
+        private readonly IM68kStablePhysicalAddressMap? _stablePhysicalAddressMap;
         private readonly M68kInterpreter _approximateIntegerFallback;
+        private uint _observedPhysicalAddressMapGeneration;
 
         public M68040Interpreter(IM68kBus bus)
             : this(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz)
@@ -2484,6 +2496,9 @@ namespace Copper68k
                 enableAdvancedFastPath: enableAdvancedFastPath)
         {
             _physicalBus = bus ?? throw new ArgumentNullException(nameof(bus));
+            _stablePhysicalAddressMap = bus as IM68kStablePhysicalAddressMap;
+            _observedPhysicalAddressMapGeneration =
+                _stablePhysicalAddressMap?.CpuPhysicalAddressMapGeneration ?? 0;
             if (profile.Model != M68kAcceleratorModel.M68040)
             {
                 throw new ArgumentException("The MC68040 interpreter requires an MC68040 CPU profile.", nameof(profile));
@@ -2493,11 +2508,13 @@ namespace Copper68k
                 _bus,
                 State,
                 _instructionFrequency,
-                enableOpcodePlan: false);
+                enableOpcodePlan: false,
+                useM68020BriefIndexedAddressing: true);
         }
 
         public override int ExecuteInstruction()
         {
+            InvalidateInstructionCacheForHostCodeVisibilityChange();
             var startCycles = State.Cycles;
             try
             {
@@ -2512,6 +2529,28 @@ namespace Copper68k
             {
                 throw new UnsupportedM68040InstructionException(ex.Opcode, ex.ProgramCounter, _profile.Name, ex);
             }
+        }
+
+        private void InvalidateInstructionCacheForHostCodeVisibilityChange()
+        {
+            var stableMap = _stablePhysicalAddressMap;
+            if (stableMap == null)
+            {
+                return;
+            }
+
+            var generation = stableMap.CpuPhysicalAddressMapGeneration;
+            if (generation == _observedPhysicalAddressMapGeneration)
+            {
+                return;
+            }
+
+            // Host gateways and CPU-visible address-map overlays are emulator
+            // structure, not guest writes.  They must not inherit the MC68040's
+            // normal cache-flush-only self-modifying-code rule: a cached synthetic
+            // FF00 token from a retired gateway is no longer executable code.
+            _observedPhysicalAddressMapGeneration = generation;
+            _timing.InstructionCache.Reset();
         }
 
         public override void Reset(uint programCounter, uint stackPointer)

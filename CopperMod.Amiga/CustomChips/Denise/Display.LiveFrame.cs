@@ -10,11 +10,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
 {
     internal sealed partial class Display
     {
+        private long _liveFrameStopCycle;
+
         internal void ResetLiveDma()
         {
             _liveFrameValid = false;
             _liveCycle = 0;
             _liveFrameStartCycle = 0;
+            _liveFrameStopCycle = 0;
             _liveCapturedThroughCycle = -1;
             _liveCausalDisplayStateThroughCycle = -1;
             _liveFinalizedPresentationThroughCycle = -1;
@@ -40,6 +43,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveFirstDisplayDmaCycle = -1;
             _liveLastDisplayDmaCycle = -1;
             _liveCopper = new CopperPresentationState(_copperListPointer, 0);
+            ResetLiveCopperRequester(resetDiagnostics: true);
             _displayTimeline.Reset(0);
             _liveWakeVersion++;
             InvalidateLiveDisplayEventCycle();
@@ -57,7 +61,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if (!_liveDmaEnabled || !HasLiveDisplayWork())
             {
                 AdvanceIdleLiveDmaTo(targetCycle);
-                RenderBoundPresentationLinesThrough(_liveCapturedThroughCycle, completing: false);
+                if (!_presentationIndependentDisplayLedgerEnabled)
+                {
+                    RenderBoundPresentationLinesIfReady(_liveCapturedThroughCycle);
+                }
                 return;
             }
 
@@ -98,9 +105,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void EndLiveDmaCapture(bool savedAdvancingLiveDma)
         {
             _advancingLiveDma = savedAdvancingLiveDma;
-            if (!savedAdvancingLiveDma)
+            if (!savedAdvancingLiveDma &&
+                !_presentationIndependentDisplayLedgerEnabled)
             {
-                RenderBoundPresentationLinesThrough(_liveCapturedThroughCycle, completing: false);
+                RenderBoundPresentationLinesIfReady(_liveCapturedThroughCycle);
             }
         }
 
@@ -108,7 +116,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
             => _bus.GetFrameStopCycle(frameStartCycle);
 
         private long GetLiveFrameStopCycle()
-            => GetFrameStopCycle(_liveFrameStartCycle);
+            => _liveFrameStopCycle;
+
+        internal void RefreshLiveFrameStopAfterTimingChange()
+        {
+            if (!_liveDmaEnabled || !_liveFrameValid)
+            {
+                return;
+            }
+
+            var frameStopCycle = GetFrameStopCycle(_liveFrameStartCycle);
+            if (frameStopCycle == _liveFrameStopCycle)
+            {
+                return;
+            }
+
+            _liveFrameStopCycle = frameStopCycle;
+            _liveWakeVersion++;
+            InvalidateLiveDisplayEventCycle();
+        }
 
         private long GetNextFrameStartCycle(long cycle)
             => _bus.GetNextFrameStartCycle(cycle);
@@ -131,11 +157,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (!_advancingLiveDma &&
                 _liveFrameValid &&
-                cycle <= _liveFinalizedPresentationThroughCycle)
+                cycle <= _liveFinalizedPresentationThroughCycle &&
+                !IsPresentationNeutralCopperPointerLatch(offset))
             {
+                var writeBeam = _bus.GetBeamPosition(cycle);
+                var presentationBeam = _bus.GetBeamPosition(_liveFinalizedPresentationThroughCycle);
                 throw new InvalidOperationException(
                     $"Cannot schedule display register 0x{offset:X3} at cycle {cycle} " +
-                    $"behind the finalized presentation horizon {_liveFinalizedPresentationThroughCycle}.");
+                    $"(beam {writeBeam.BeamLine}:{writeBeam.BeamHorizontal}) behind the finalized presentation " +
+                    $"horizon {_liveFinalizedPresentationThroughCycle} " +
+                    $"(beam {presentationBeam.BeamLine}:{presentationBeam.BeamHorizontal}); " +
+                    $"coverage={_liveCapturedThroughCycle}, causal={_liveCausalDisplayStateThroughCycle}, " +
+                    $"live={_liveCycle}, bus={_bus.ExecutedChipBusHorizon}, " +
+                    $"liveFrame={_liveFrameStartCycle}-{_liveFrameStopCycle}, " +
+                    $"presentationFrame={_boundPresentationFrameStartCycle}-{_boundPresentationFrameStopCycle}.");
             }
 
             if (!_advancingLiveDma &&
@@ -194,6 +229,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         internal void ScheduleWrite(long cycle, ushort offset, ushort value)
             => ScheduleWrite(new AgnusDisplayRegisterWrite(cycle, offset, value));
+
+        // COP1LC/COP2LC only store an address. They cannot change the displayed row
+        // until the corresponding COPJMP strobe reloads the Copper program counter.
+        private static bool IsPresentationNeutralCopperPointerLatch(ushort offset)
+            => offset is 0x080 or 0x082 or 0x084 or 0x086;
 
         private void MarkLiveCausalDisplayCommit(long cycle)
         {
@@ -274,6 +314,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveFirstDisplayDmaCycle = -1;
             _liveLastDisplayDmaCycle = -1;
             _liveCopper = CreateLiveCopperFrameStartState(frameStartCycle);
+            ResetLiveCopperRequester(resetDiagnostics: false);
 
             ResetLiveDisplayWindowStateTracking();
             InvalidateLiveDisplayEventCycle();
@@ -301,6 +342,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
+            _committedDisplayLedger?.Append(
+                AgnusCommittedDisplayEvent.RegisterWrite(
+                    cycle,
+                    offset,
+                    value,
+                    isCopper));
             var replayCycle = Math.Max(cycle, _liveFrameStartCycle);
             if (replayCycle > _liveFrameStartCycle && IsTimelineUnsafeFrameWrite(offset, isCopper))
             {
@@ -343,9 +390,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             _liveFrameValid = true;
             _liveFrameStartCycle = frameStartCycle;
+            _liveFrameStopCycle = GetFrameStopCycle(frameStartCycle);
             _liveCapturedThroughCycle = frameStartCycle;
             _liveCausalDisplayStateThroughCycle = frameStartCycle;
             _liveFinalizedPresentationThroughCycle = frameStartCycle - 1;
+            _committedDisplayLedger?.Reset(
+                frameStartCycle,
+                _liveFrameStopCycle);
+            _committedDisplayPresentationCursor = 0;
+            _presentationCallsDuringLiveCapture = 0;
             var savedAdvancingLiveDma = _advancingLiveDma;
             _advancingLiveDma = false;
             try

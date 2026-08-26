@@ -4,7 +4,7 @@ namespace CopperMod.Amiga.Tests;
 
 public sealed class AmigaSpriteConformanceMatrixTests
 {
-	private const int StandardX = AmigaConstants.PalLowResOverscanBorderX;
+	private const int StandardX = AmigaConstants.PalLowResOverscanBorderX - 1;
 	private const int StandardY = AmigaConstants.PalLowResOverscanBorderY;
 	private const uint SpriteListBase = 0x3000;
 	private const uint CopperListBase = 0x4000;

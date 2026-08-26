@@ -4,6 +4,7 @@
  */
 
 using System;
+using System.Diagnostics;
 
 namespace CopperMod.Amiga.CustomChips.Denise
 {
@@ -11,21 +12,43 @@ namespace CopperMod.Amiga.CustomChips.Denise
     {
         private void CaptureLiveLineState(int row, bool recordTimeline = true)
         {
+            if (!_hostProfilingEnabled)
+            {
+                CaptureLiveLineStateCore(row, recordTimeline);
+                return;
+            }
+
+            var start = Stopwatch.GetTimestamp();
+            CaptureLiveLineStateCore(row, recordTimeline);
+            _hostLineCaptureTicks += Stopwatch.GetTimestamp() - start;
+            _hostLineCaptureCalls++;
+        }
+
+        private void CaptureLiveLineStateCore(int row, bool recordTimeline)
+        {
             if ((uint)row >= (uint)LowResOutputHeight)
             {
                 return;
             }
 
-            // Finalize older output before this row can reuse its ring slot.
-            RenderBoundPresentationLinesThrough(
-                GetOutputRowStartCycle(_liveFrameStartCycle, row),
-                completing: false,
-                minimumRenderStop: Math.Max(0, row - RasterlineRingSize + 1));
-
+            // A valid entry that already owns fetched data cannot be reused by
+            // this call. Avoid running presentation finalization for the very
+            // common repeated lookup of the active line.
             if (IsLiveLineValid(row) &&
                 (HasCapturedLiveBitplaneWords(row) || HasStartedLiveBitplaneFetches(row, _liveCycle)))
             {
                 return;
+            }
+
+            if (!_presentationIndependentDisplayLedgerEnabled)
+            {
+                // The legacy three-line capture ring must finalize older output
+                // before this row can reuse its slot. G1L retains the complete
+                // frame and lets presentation consume it after arbitration.
+                RenderBoundPresentationLinesThrough(
+                    GetOutputRowStartCycle(_liveFrameStartCycle, row),
+                    completing: false,
+                    minimumRenderStop: Math.Max(0, row - RasterlineRingSize + 1));
             }
 
             AdvanceLiveDisplayWindowStateToLine(StandardVStart + row);
@@ -119,7 +142,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ClearLiveBitplaneWordMasks(row);
             Array.Clear(
                 _liveSpriteWordMasks,
-                GetRasterlineRingSlot(row) * LiveSpriteChannelCount,
+                GetLiveCaptureSlot(row) * LiveSpriteChannelCount,
                 LiveSpriteChannelCount);
             if (recordTimeline && !_displayTimeline.HasLine(row))
             {
@@ -173,7 +196,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _liveNextSpriteRow = row;
                 _liveNextSpriteIndex = 0;
                 _liveNextSpriteWord = 0;
-                InvalidateLiveWorkCycle();
+                AdvanceLiveSpriteFetchCursorToCycle(cycle);
             }
         }
 
@@ -221,7 +244,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             state.FetchWords = GetDataFetchWordCount();
             state.DataFetchStart = _dataFetchWindow.Start;
             state.FetchSlotStride = DisplayGeometryDecoder.GetDataFetchSlotStride(_dataFetchWindow);
-            state.PaletteSnapshotIndex = CaptureLivePaletteSnapshot(row);
+            // PaletteSnapshotIndex is the immutable presentation baseline
+            // captured at line start. Mid-line changes are timeline events;
+            // rebuilding future DMA must not replace that baseline.
 
             var oldPlaneHasRowMask = state.PlaneHasRowMask;
             state.PlaneHasRowMask = 0;
@@ -274,7 +299,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             InvalidateRowDmaPlan(row);
 
-            if (_liveNextFetchRow == row)
+            // Physical lookahead can move capture beyond this row before a
+            // causal write rebuilds its unexecuted suffix. Rewind from either
+            // the current or a future row so those transfers are sampled at
+            // their physical slots instead of being revisited behind horizon.
+            if (_liveNextFetchRow >= row)
             {
                 SetBitplaneCursorAfterCycle(ref _liveBitplaneFetchTimeline.Captured, state, cycle);
             }
@@ -727,7 +756,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var offset = GetRasterlineRingSlot(row) * LiveBitplanePlaneCount;
+            var offset = GetLiveCaptureSlot(row) * LiveBitplanePlaneCount;
             for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
             {
                 if (_liveBitplaneWordMasks[offset + plane] != 0)
@@ -751,7 +780,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var index = _livePaletteSnapshots.GetOrAddForRasterline(
                 row,
                 _colors,
-                _convertedColors);
+                _convertedColors.AsSpan(0, PaletteColorCount));
             _liveCurrentPaletteSnapshotIndex = index;
             _liveCurrentPaletteSnapshotRow = row;
             _livePaletteSnapshotDirty = false;
@@ -759,6 +788,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
         private void CaptureLiveBitplaneFetchBatch(long stopCycle)
+        {
+            if (!_hostProfilingEnabled)
+            {
+                CaptureLiveBitplaneFetchBatchCore(stopCycle);
+                return;
+            }
+
+            var start = Stopwatch.GetTimestamp();
+            CaptureLiveBitplaneFetchBatchCore(stopCycle);
+            _hostBitplaneCaptureTicks += Stopwatch.GetTimestamp() - start;
+            _hostBitplaneCaptureCalls++;
+        }
+
+        private void CaptureLiveBitplaneFetchBatchCore(long stopCycle)
         {
             while (_liveNextFetchRow < LowResOutputHeight)
             {
@@ -841,6 +884,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             stoppedBeforeStop = false;
             capturedAny = false;
+            if (_presentationIndependentDisplayLedgerEnabled)
+            {
+                // G1L deliberately commits one request and one grant at a
+                // time. The legacy row batch is a rollback-path optimization,
+                // not part of the live requester boundary.
+                return false;
+            }
+
             var row = _liveNextFetchRow;
             if ((uint)row >= (uint)LowResOutputHeight ||
                 !IsLiveLineValid(row))
@@ -910,16 +961,34 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (batchCount > 0)
             {
-                var firstEntry = _rowDmaBitplaneEntries[batchStart];
                 var grantedCount = 0;
                 var firstGrantedCycle = -1L;
                 var lastGrantedCycle = -1L;
-                var previousAuditSource = _bus.PushSlotScheduleAuditSource(
-                    AgnusSlotAuditSource.RowBitplanePresentation,
-                    row,
-                    firstEntry.Word,
-                    firstEntry.Slot);
-                try
+                if (_bus.SlotScheduleAuditEnabled)
+                {
+                    var firstEntry = _rowDmaBitplaneEntries[batchStart];
+                    var previousAuditSource = _bus.PushSlotScheduleAuditSource(
+                        AgnusSlotAuditSource.RowBitplanePresentation,
+                        row,
+                        firstEntry.Word,
+                        firstEntry.Slot);
+                    try
+                    {
+                        _bus.CausalBusExecutor.ExecuteBitplaneRowBatch(
+                            _rowDmaBitplaneEntries.AsSpan(batchStart, batchCount),
+                            state.LineStartCycle,
+                            _rowDmaBitplaneBatchValues.AsSpan(0, batchCount),
+                            _rowDmaBitplaneBatchGranted.AsSpan(0, batchCount),
+                            out grantedCount,
+                            out firstGrantedCycle,
+                            out lastGrantedCycle);
+                    }
+                    finally
+                    {
+                        _bus.RestoreSlotScheduleAuditSource(previousAuditSource);
+                    }
+                }
+                else
                 {
                     _bus.CausalBusExecutor.ExecuteBitplaneRowBatch(
                         _rowDmaBitplaneEntries.AsSpan(batchStart, batchCount),
@@ -929,10 +998,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         out grantedCount,
                         out firstGrantedCycle,
                         out lastGrantedCycle);
-                }
-                finally
-                {
-                    _bus.RestoreSlotScheduleAuditSource(previousAuditSource);
                 }
 
                 ConsumeRowDmaBitplaneBatch(
@@ -975,11 +1040,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             long firstGrantedCycle,
             long lastGrantedCycle)
         {
-            var ringSlot = GetRasterlineRingSlot(row);
-            var liveWordBase = ringSlot * LiveBitplaneWordsPerRow;
-            var liveMaskBase = ringSlot * LiveBitplanePlaneCount;
+            var liveSlot = GetLiveCaptureSlot(row);
+            var liveWordBase = liveSlot * LiveBitplaneWordsPerRow;
+            var liveMaskBase = liveSlot * LiveBitplanePlaneCount;
             var timelineLine = _displayTimeline.GetLine(row);
-            var recordTimeline = !_liveTimelineUnsafeForFrame &&
+            var recordTimeline = !_presentationIndependentDisplayLedgerEnabled &&
+                !_liveTimelineUnsafeForFrame &&
                 _displayTimeline.TryGetBitplaneFetchLine(row, out timelineLine);
             var allGranted = grantedCount == count;
             for (var offset = 0; offset < count; offset++)
@@ -992,6 +1058,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 var value = _rowDmaBitplaneBatchValues[offset];
+                var granted = allGranted || _rowDmaBitplaneBatchGranted[offset];
+                _committedDisplayLedger?.Append(
+                    AgnusCommittedDisplayEvent.BitplaneSample(
+                        entry.GetCycle(state.LineStartCycle),
+                        row,
+                        entry.Plane,
+                        capturedWord,
+                        entry.Address,
+                        entry.RowPresent,
+                        value,
+                        granted));
                 _liveBitplaneWords[liveWordBase + (entry.Plane * MaxBitplaneFetchWords) + capturedWord] = value;
                 _liveBitplaneWordMasks[liveMaskBase + entry.Plane] |= (UInt128)1 << capturedWord;
                 if (recordTimeline)
@@ -1000,7 +1077,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     var index = (entry.Plane * MaxBitplaneFetchWords) + capturedWord;
                     timelineLine.BitplaneWords[index] = value;
                     timelineLine.BitplaneFetchMasks[entry.Plane] |= bit;
-                    if (allGranted || _rowDmaBitplaneBatchGranted[offset])
+                    if (granted)
                     {
                         timelineLine.BitplaneDeniedMasks[entry.Plane] &= ~bit;
                     }
@@ -1394,11 +1471,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void CaptureLiveBitplaneFetch(int row, int plane, int word, long fetchCycle, LiveLineState state)
         {
             EnsureActiveRowBitplaneDmaPlanCurrent(row);
-            _bus.CausalBusExecutor.RecordFixedPlanShadow(
-                fetchCycle,
-                AgnusChipSlotOwner.Bitplane,
-                _dmacon,
-                _bplcon0);
             var capturedWord = word + state.BitplaneWordIndexOffsets[plane];
             if ((uint)capturedWord >= (uint)MaxBitplaneFetchWords)
             {
@@ -1413,7 +1485,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
             else
             {
-                latch = BitplaneDmaReadLatch.Denied(row, plane, capturedWord, fetchCycle);
+                latch = BitplaneDmaReadLatch.Denied(
+                    row,
+                    plane,
+                    capturedWord,
+                    address: 0,
+                    addressValid: false,
+                    fetchCycle);
             }
 
             _bitplaneDmaReadLatch = latch;
@@ -1424,11 +1502,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             var state = GetLiveLineState(row);
             EnsureActiveRowBitplaneDmaPlanCurrent(row);
-            _bus.CausalBusExecutor.RecordFixedPlanShadow(
-                entry.GetCycle(state.LineStartCycle),
-                AgnusChipSlotOwner.Bitplane,
-                _dmacon,
-                _bplcon0);
             var capturedWord = entry.Word + state.BitplaneWordIndexOffsets[entry.Plane];
             if ((uint)capturedWord >= (uint)MaxBitplaneFetchWords)
             {
@@ -1438,7 +1511,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var cycle = entry.GetCycle(state.LineStartCycle);
             _bitplaneDmaReadLatch = entry.RowPresent
                 ? LoadLiveBitplaneDmaLatch(row, entry.Plane, capturedWord, entry.Address, cycle)
-                : BitplaneDmaReadLatch.Denied(row, entry.Plane, capturedWord, cycle);
+                : BitplaneDmaReadLatch.Denied(
+                    row,
+                    entry.Plane,
+                    capturedWord,
+                    address: 0,
+                    addressValid: false,
+                    cycle);
             ConsumeLiveBitplaneDmaLatch(ref _bitplaneDmaReadLatch);
         }
 
@@ -1612,6 +1691,32 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             _liveNextSpriteIndex = 0;
             _liveNextSpriteRow++;
+            InvalidateLiveWorkCycle();
+        }
+
+        private void AdvanceLiveSpriteFetchCursorToCycle(long cycle)
+        {
+            var causalRow = Math.Clamp(
+                GetOutputRowForCycle(_liveFrameStartCycle, cycle),
+                0,
+                LowResOutputHeight);
+            if (_liveNextSpriteRow < causalRow)
+            {
+                _liveNextSpriteRow = causalRow;
+                _liveNextSpriteIndex = 0;
+                _liveNextSpriteWord = 0;
+            }
+
+            while (_liveNextSpriteRow < LowResOutputHeight &&
+                GetSpriteDmaFetchCycle(
+                    _liveFrameStartCycle,
+                    _liveNextSpriteRow,
+                    _liveNextSpriteIndex,
+                    _liveNextSpriteWord) < cycle)
+            {
+                AdvanceLiveSpriteFetchCursor();
+            }
+
             InvalidateLiveWorkCycle();
         }
 

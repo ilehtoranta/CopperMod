@@ -4,7 +4,7 @@ namespace CopperMod.Amiga.Tests;
 
 public sealed class AmigaBitplaneConformanceMatrixTests
 {
-    private const int StandardX = AmigaConstants.PalLowResOverscanBorderX;
+    private const int StandardX = AmigaConstants.PalLowResOverscanBorderX - 1;
     private const int StandardY = AmigaConstants.PalLowResOverscanBorderY;
     private const uint SpriteListBase = 0x3000;
     private const uint CopperListBase = 0x4000;
@@ -323,8 +323,8 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
         var frame = RenderLowResFrame(bus);
 
-        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 15, StandardY));
-        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 16, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 16, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 17, StandardY));
     }
 
     private static void DataFetchControlsLineStride()
@@ -1459,7 +1459,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     private static void LiveDmaTimelineTracksSameLineBitplanePointerWrites()
     {
         var presentationBus = CreateSameLineBitplanePointerWriteBus(enableLiveDma: false);
-        var liveBus = CreateSameLineBitplanePointerWriteBus(enableLiveDma: false);
+        var liveBus = CreateSameLineBitplanePointerWriteBus(enableLiveDma: true);
         var expected = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
         var actual = new uint[expected.Length];
         var x = StandardX + ((0x70 - 0x38) * 2);

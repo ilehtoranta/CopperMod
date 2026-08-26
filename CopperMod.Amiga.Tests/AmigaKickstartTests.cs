@@ -173,6 +173,23 @@ public sealed class AmigaKickstartTests
 		Assert.Equal(0x22u, ciaBState.D[0]);
 	}
 
+	[Fact]
+	public void HostShim13InstallsMiscResourceAllocationTraps()
+	{
+		var bus = new AmigaBus();
+		var calls = 0;
+		var host = new AmigaKickstartHost(KickstartConfiguration.HostShim13);
+		host.Install(bus, CreateTrapTable(ok: state =>
+		{
+			calls++;
+			state.D[0] = 0;
+		}));
+
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.MiscResourceBase, -6), new M68kCpuState()));
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.MiscResourceBase, -12), new M68kCpuState()));
+		Assert.Equal(2, calls);
+	}
+
 	private static KickstartTrapTable CreateTrapTable(
 		Action<M68kCpuState>? nullCallback = null,
 		Action<M68kCpuState>? ok = null,

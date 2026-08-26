@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CopperMod.Abstractions\CopperMod.Abstractions.csproj" />
+    <ProjectReference Include="..\CopperMod.Ahx\CopperMod.Ahx.csproj" />
     <ProjectReference Include="..\CopperMod.Cust\CopperMod.Cust.csproj" />
     <ProjectReference Include="..\CopperMod.Med\CopperMod.Med.csproj" />
     <ProjectReference Include="..\CopperMod.ProTracker\CopperMod.ProTracker.csproj" />

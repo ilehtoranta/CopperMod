@@ -163,6 +163,23 @@ public sealed class M68kInterpreterCoreBehaviorTests
 
 		Assert.True(recognition.HasRecognizedInterrupt(pinAssertCycle));
 	}
+
+	[Fact]
+	public void IplAssertedAtFourCycleSetupBoundaryWaitsForNextPoll()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x60, 0xFE); // BRA.S $1000
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
+
+		cpu.ExecuteInstruction();
+		var pollCycle = recognition.LastInterruptSampleCycle;
+
+		Assert.True(recognition.HasRecognizedInterrupt(pollCycle - 5));
+		Assert.False(recognition.HasRecognizedInterrupt(pollCycle - 4));
+	}
+
 	[Theory]
 	[InlineData(1, 2L, 12)]
 	[InlineData(2, 6L, 10)]
@@ -205,6 +222,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.True(after.PrefetchCount >= 1, "taken DBRA must leave its target opcode available");
 		Assert.Equal(0x1000u, after.PrefetchAddress);
 	}
+
 	[Fact]
 	public void TakenDbraCancelsOnlyCancellablePendingPrefetch()
 	{
@@ -260,6 +278,87 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(
 			new uint[] { 0x1000, 0x1002, 0x1010, 0x1004, 0x1006 },
 			bus.InstructionFetchCycles.Select(fetch => fetch.Address));
+	}
+
+	[Fact]
+	public void ExpiredDisplacedDbraWithFreshTwoWordEntryQueueReadsTargetOnce()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x51, 0xC8, 0x00, 0x0E); // DBRA D0,$1010
+		Write(bus.Memory, 0x1004, 0x4E, 0x71, 0x4E, 0x71); // fallthrough
+		Write(bus.Memory, 0x1010, 0x7E, 0xAD);             // abandoned target
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+		cpu.State.D[0] = 0;
+		((IM68000PipelineStateTransfer)cpu).ImportM68000PipelineState(
+			new M68000PipelineState(
+				PrefetchAddress: 0x1000,
+				Word0: 0x51C8,
+				Word1: 0x000E,
+				ReadyCycle0: 16,
+				ReadyCycle1: 20,
+				DeferredBatchEligible0: false,
+				DeferredBatchEligible1: false,
+				PrefetchCount: 2,
+				ConsumeWithoutPrefetch: false,
+				SkipRetirePrefetchTopUp: false,
+				NextBusTransferCycle: 20,
+				LastBusReadyCycle: 20,
+				RetireBusCycle: 20,
+				PendingInternalCycles: 0));
+		var phaseStart = bus.InstructionFetchCycles.Count;
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(14, elapsed);
+		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		Assert.Equal(0xFFFFu, cpu.State.D[0]);
+		Assert.Equal(
+			new uint[] { 0x1010, 0x1004, 0x1006 },
+			bus.InstructionFetchCycles
+				.Skip(phaseStart)
+				.Select(fetch => fetch.Address));
+	}
+
+	[Fact]
+	public void ExpiredSelfLoopDbraWithFreshTwoWordEntryQueueReadsAbandonedTargetOnce()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x51, 0xC8, 0xFF, 0xFE); // DBRA D0,$1000
+		Write(bus.Memory, 0x1004, 0x4E, 0x71, 0x4E, 0x71); // fallthrough
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x2000);
+		cpu.State.Cycles = 20;
+		cpu.State.D[0] = 0;
+		((IM68000PipelineStateTransfer)cpu).ImportM68000PipelineState(
+			new M68000PipelineState(
+				PrefetchAddress: 0x1000,
+				Word0: 0x51C8,
+				Word1: 0xFFFE,
+				ReadyCycle0: 16,
+				ReadyCycle1: 20,
+				DeferredBatchEligible0: false,
+				DeferredBatchEligible1: false,
+				PrefetchCount: 2,
+				ConsumeWithoutPrefetch: false,
+				SkipRetirePrefetchTopUp: false,
+				NextBusTransferCycle: 20,
+				LastBusReadyCycle: 20,
+				RetireBusCycle: 20,
+				PendingInternalCycles: 0));
+		var phaseStart = bus.InstructionFetchCycles.Count;
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(14, elapsed);
+		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		Assert.Equal(0xFFFFu, cpu.State.D[0]);
+		Assert.Equal(
+			new uint[] { 0x1000, 0x1004, 0x1006 },
+			bus.InstructionFetchCycles
+				.Skip(phaseStart)
+				.Select(fetch => fetch.Address));
 	}
 	[Fact]
 	public void ExpiredDbraWaitsForCommittedFallthroughExtensionRead()
@@ -979,8 +1078,42 @@ public sealed class M68kInterpreterCoreBehaviorTests
 				((IM68000InterruptRecognition)planned).LastInterruptSampleCycle);
 		}
 	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedShortBranchInterruptEntryMatchesScalarPhysicalLedger(int dispatchValue)
+	{
+		var scalarBus = new CycleCountingBus();
+		var plannedBus = new CycleCountingBus();
+		var program = Words(0x60FE); // BRA.S self
+		Write(scalarBus.Memory, 0x1000, program);
+		Write(plannedBus.Memory, 0x1000, program);
+		Write(scalarBus.Memory, 0x0064, Words(0x0000, 0x2000));
+		Write(plannedBus.Memory, 0x0064, Words(0x0000, 0x2000));
+		Write(scalarBus.Memory, 0x2000, Words(0x4E71, 0x4E71));
+		Write(plannedBus.Memory, 0x2000, Words(0x4E71, 0x4E71));
+		var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+		var planned = CreateCycleParityCpu(
+			plannedBus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		scalar.State.StatusRegister = M68kCpuState.Supervisor;
+		planned.State.StatusRegister = M68kCpuState.Supervisor;
+
+		scalar.ExecuteInstruction();
+		planned.ExecuteInstruction();
+		scalar.RequestInterrupt(1, 0x0064);
+		planned.RequestInterrupt(1, 0x0064);
+
+		AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+		Assert.Equal(
+			scalarBus.CpuBusPhases.Select(phase =>
+				(phase.Address, phase.RequestedCycle, phase.CompletedCycle, phase.AccessKind)),
+			plannedBus.CpuBusPhases.Select(phase =>
+				(phase.Address, phase.RequestedCycle, phase.CompletedCycle, phase.AccessKind)));
+	}
 	[Fact]
-	public void ShortBsrPushesReturnAddressHighWordBeforeLowWord()
+	public void ShortBsrPushesReturnAddressLowWordBeforeHighWord()
 	{
 		var bus = new CycleCountingBus();
 		Write(bus.Memory, 0x1000, Words(0x6104, 0x4E71, 0x4E71, 0x4E71));
@@ -992,7 +1125,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		var stackWrites = bus.CpuBusPhases
 			.Where(phase => phase.AccessKind == M68kBusAccessKind.CpuDataWrite)
 			.ToArray();
-		Assert.Equal(new uint[] { 0x2FFC, 0x2FFE }, stackWrites.Select(phase => phase.Address));
+		Assert.Equal(new uint[] { 0x2FFE, 0x2FFC }, stackWrites.Select(phase => phase.Address));
 		Assert.Equal(new byte[] { 0x00, 0x00, 0x10, 0x02 }, bus.Memory[0x2FFC..0x3000]);
 		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
 	}
@@ -1002,7 +1135,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan, false)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable, true)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan, true)]
-	public void ShortBranchPollsIplWhenCommittedTargetExtensionStarts(
+	public void ShortBranchPollsIplAfterTargetOpcodeBeforeCommittedExtensionCompletes(
 		bool enableOpcodePlan,
 		int dispatchValue,
 		bool executeBatch)
@@ -1031,18 +1164,68 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			cpu.ExecuteInstruction();
 		}
 
+		var targetOpcode = bus.CpuBusPhases.Last(phase =>
+			phase.InstructionProgramCounter == 0x1000 &&
+			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.Address == 0x1000);
 		var targetExtension = bus.CpuBusPhases.Last(phase =>
 			phase.InstructionProgramCounter == 0x1000 &&
 			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
 			phase.Address == 0x1002);
 		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
+		var pipeline = Assert.IsAssignableFrom<IM68000PipelineStateTransfer>(cpu)
+			.ExportM68000PipelineState();
 
+		Assert.Equal(targetOpcode.CompletedCycle, recognition.LastInterruptSampleCycle);
 		Assert.Equal(targetExtension.RequestedCycle, recognition.LastInterruptSampleCycle);
 		Assert.True(recognition.LastInterruptSampleCycle < targetExtension.CompletedCycle);
+		Assert.Equal(targetExtension.CompletedCycle, pipeline.ExceptionEntryNotBeforeCycle);
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void CachedShortBranchTransfersOpcodePollAndCommittedExtensionFloor(int dispatchValue)
+	{
+		var bus = new CycleCountingBus
+		{
+			FixedPlanRunEnabled = true,
+			FixedPlanWindowStart = 0x1000,
+			FixedPlanWindowEndExclusive = 0x1100
+		};
+		Write(bus.Memory, 0x1000, Words(
+			0x7001, // MOVEQ #1,D0
+			0x60FC)); // BRA.S MOVEQ
+		var cpu = CreateCycleParityCpu(
+			bus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue,
+			enableCpuBusPhaseTrace: false);
+		var boundary = new BusAccessBatchBoundary();
+
+		Assert.Equal(16, ((IM68kBatchCore)cpu).ExecuteInstructions(
+			16,
+			long.MaxValue,
+			boundary));
+
+		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
+		var pipeline = Assert.IsAssignableFrom<IM68000PipelineStateTransfer>(cpu)
+			.ExportM68000PipelineState();
+		var diagnostic =
+			$"pc=0x{cpu.State.ProgramCounter:X}, opcode=0x{cpu.State.LastOpcode:X4}, " +
+			$"cycles={cpu.State.Cycles}, sample={recognition.LastInterruptSampleCycle}, " +
+			$"ready={pipeline.ReadyCycle0},{pipeline.ReadyCycle1}, " +
+			$"batch={boundary.PureCpuBatchCalls}/{boundary.PureCpuBatchInstructions}";
+
+		Assert.True(boundary.PureCpuBatchCalls > 0);
+		Assert.True(
+			pipeline.ReadyCycle0 == recognition.LastInterruptSampleCycle,
+			diagnostic);
+		Assert.Equal(pipeline.ReadyCycle1, pipeline.ExceptionEntryNotBeforeCycle);
+		Assert.True(pipeline.ReadyCycle0 < pipeline.ReadyCycle1);
 	}
 
 	[Fact]
-	public void InterruptEntryDoesNotStartBeforeCommittedInterruptSampleCompletes()
+	public void TakenShortBranchCommitsTargetExtensionBeforeInterruptEntry()
 	{
 		var bus = new CycleCountingBus
 		{
@@ -1058,13 +1241,52 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		cpu.ExecuteInstruction();
 		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
 		var sampleCycle = recognition.LastInterruptSampleCycle;
+		var targetExtension = bus.CpuBusPhases.Last(phase =>
+			phase.InstructionProgramCounter == 0x1000 &&
+			phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch &&
+			phase.Address == 0x1002);
 
 		cpu.RequestInterrupt(3, (24u + 3u) * 4u);
 
 		var firstExceptionTransfer = bus.CpuBusPhases.First(phase =>
 			phase.AccessKind == M68kBusAccessKind.CpuDataWrite);
-		Assert.True(firstExceptionTransfer.RequestedCycle >= sampleCycle + 2);
+		Assert.True(sampleCycle < targetExtension.CompletedCycle);
+		Assert.True(firstExceptionTransfer.RequestedCycle >= targetExtension.CompletedCycle);
 	}
+
+	[Fact]
+	public void InterruptAbandonsTakenBranchSuccessorWhenTargetOpcodeIsStillFuture()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x006C, Words(0x0000, 0x2000));
+		Write(bus.Memory, 0x2000, Words(0x4E71, 0x4E71));
+		var cpu = CreateCycleParityCpu(bus, enableOpcodePlan: true, M68kOpcodePlanDispatch.PackedPlan);
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		cpu.State.Cycles = 6;
+		var transfer = Assert.IsAssignableFrom<IM68000PipelineStateTransfer>(cpu);
+		var state = transfer.ExportM68000PipelineState() with
+		{
+			PrefetchAddress = 0x1000,
+			Word0 = 0x60FE,
+			Word1 = 0x4E71,
+			ReadyCycle0 = 24,
+			ReadyCycle1 = 28,
+			PrefetchCount = 2,
+			NextBusTransferCycle = 28,
+			LastBusReadyCycle = 28,
+			RetireBusCycle = 28,
+			ExceptionEntryNotBeforeCycle = 24
+		};
+		transfer.ImportM68000PipelineState(in state);
+
+		cpu.RequestInterrupt(3, (24u + 3u) * 4u);
+
+		var firstExceptionTransfer = bus.CpuBusPhases.First(phase =>
+			phase.AccessKind == M68kBusAccessKind.CpuDataWrite);
+		Assert.Equal(30, firstExceptionTransfer.RequestedCycle);
+		Assert.Equal(68, cpu.State.Cycles);
+	}
+
 	[Theory]
 	[InlineData((int)M68kOpcodePlanDispatch.KindTable)]
 	[InlineData((int)M68kOpcodePlanDispatch.PackedPlan)]
@@ -1316,6 +1538,94 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	}
 	[Theory]
 	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void ShortConditionalBranchNotTakenRestoresIrcAfterOneWordEntry(
+		int dispatchValue)
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, Words(0x6702, 0x4E71, 0x4E71)); // BEQ.S not taken
+		var cpu = CreateCycleParityCpu(
+			bus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		cpu.State.StatusRegister &= unchecked((ushort)~M68kCpuState.Zero);
+		var pipeline = Assert.IsAssignableFrom<IM68000PipelineStateTransfer>(cpu);
+		var entry = pipeline.ExportM68000PipelineState() with
+		{
+			PrefetchAddress = 0x1000,
+			Word0 = 0x6702,
+			Word1 = 0,
+			ReadyCycle0 = 0,
+			ReadyCycle1 = 0,
+			PrefetchCount = 1,
+			NextBusTransferCycle = 2,
+			LastBusReadyCycle = 2,
+			RetireBusCycle = 0
+		};
+		pipeline.ImportM68000PipelineState(in entry);
+
+		var elapsed = cpu.ExecuteInstruction();
+		var after = pipeline.ExportM68000PipelineState();
+		var branchFetches = bus.CpuBusPhases
+			.Where(phase =>
+				phase.InstructionProgramCounter == 0x1000 &&
+				phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
+			.ToArray();
+
+		Assert.Equal(8, elapsed);
+		Assert.Equal(new uint[] { 0x1002, 0x1004 }, branchFetches.Select(phase => phase.Address));
+		Assert.Equal(2, after.PrefetchCount);
+		Assert.Equal(0x1002u, after.PrefetchAddress);
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void WordConditionalBranchNotTakenPreservesFallthroughQueueAndBusOrder(
+		int dispatchValue)
+	{
+		var bus = new CycleCountingBus();
+		Write(
+			bus.Memory,
+			0x1000,
+			Words(0x6700, 0x0002, 0x4E71, 0x4E71)); // BEQ.W not taken
+		var cpu = CreateCycleParityCpu(
+			bus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		cpu.State.StatusRegister &= unchecked((ushort)~M68kCpuState.Zero);
+		var pipeline = Assert.IsAssignableFrom<IM68000PipelineStateTransfer>(cpu);
+		var entry = pipeline.ExportM68000PipelineState() with
+		{
+			PrefetchAddress = 0x1000,
+			Word0 = 0x6700,
+			Word1 = 0x0002,
+			ReadyCycle0 = 0,
+			ReadyCycle1 = 0,
+			PrefetchCount = 2,
+			NextBusTransferCycle = 0,
+			LastBusReadyCycle = 0,
+			RetireBusCycle = 0
+		};
+		pipeline.ImportM68000PipelineState(in entry);
+
+		var elapsed = cpu.ExecuteInstruction();
+		var after = pipeline.ExportM68000PipelineState();
+		var branchFetches = bus.CpuBusPhases
+			.Where(phase =>
+				phase.InstructionProgramCounter == 0x1000 &&
+				phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
+			.ToArray();
+
+		Assert.Equal(12, elapsed);
+		Assert.Equal(new uint[] { 0x1004, 0x1006 }, branchFetches.Select(phase => phase.Address));
+		Assert.Equal(new long[] { 4, 6 }, branchFetches.Select(phase => phase.RequestedCycle));
+		Assert.Equal(2, after.PrefetchCount);
+		Assert.Equal(0x1004u, after.PrefetchAddress);
+		Assert.Equal(0x4E71, after.Word0);
+		Assert.Equal(0x4E71, after.Word1);
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
 	public void PlannedShortSelfBranchBatchMatchesScalarQueueAndBusOrder(int dispatchValue)
 	{
 		var scalarBus = new CycleCountingBus();
@@ -1493,12 +1803,18 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	[MemberData(nameof(OpcodePlanDispatchVariants))]
 	public void PlannedFixedPlanBatchExitsToScalarAtUnsupportedOpcode(int dispatchValue)
 	{
+		// NBCD is the sentinel for "the plan table does not cover this opcode":
+		// one word, register-direct, no memory access, and no BCD plan kind
+		// exists. Guarded so that widening plan coverage to NBCD fails here
+		// loudly instead of silently voiding the test.
+		const ushort unplannedOpcode = 0x4800; // NBCD D0
+		Assert.Equal(M68kOpcodePlanKind.Unsupported, M68kOpcodePlanTable.Kinds[unplannedOpcode]);
 		var program = Words(
 			0x7001, // MOVEQ #1,D0
 			0x7202, // MOVEQ #2,D1
 			0x7403, // MOVEQ #3,D2
 			0x7604, // MOVEQ #4,D3
-			0x4280, // CLR.L D0
+			unplannedOpcode,
 			0x4E71); // NOP
 		var scalarBus = new CycleCountingBus();
 		var plannedBus = new CycleCountingBus();
@@ -1517,10 +1833,162 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(5, ((IM68kBatchCore)planned).ExecuteInstructions(5, long.MaxValue, plannedBoundary));
 
 		AssertCycleParity(scalar, scalarBus, planned, plannedBus);
-		Assert.Equal(0x4280, planned.State.LastOpcode);
+		Assert.Equal(unplannedOpcode, planned.State.LastOpcode);
 		Assert.Equal(0, plannedBoundary.BusAccessBatchInstructions);
 		Assert.Equal(1, planned.CapturePlannedInterpreterCounters().ScalarFallbackInstructions);
 	}
+	[Theory]
+	// Long forms of CLR/NEG/NOT retire in six cycles: four for the opcode plus
+	// two internal. Every other currently supported long register form takes
+	// eight, so this is the one genuinely new timing shape in the group.
+	[InlineData((ushort)0x4280, 6)] // CLR.L D0
+	[InlineData((ushort)0x4487, 6)] // NEG.L D7
+	[InlineData((ushort)0x4682, 6)] // NOT.L D2
+	// TST never writes back, so even the long form is a plain four-cycle form.
+	[InlineData((ushort)0x4A80, 4)] // TST.L D0
+	[InlineData((ushort)0x4A40, 4)] // TST.W D0
+	[InlineData((ushort)0x4A00, 4)] // TST.B D0
+	// Byte and word forms are four cycles across the whole group.
+	[InlineData((ushort)0x4200, 4)] // CLR.B D0
+	[InlineData((ushort)0x4240, 4)] // CLR.W D0
+	[InlineData((ushort)0x4400, 4)] // NEG.B D0
+	[InlineData((ushort)0x4441, 4)] // NEG.W D1
+	[InlineData((ushort)0x4600, 4)] // NOT.B D0
+	[InlineData((ushort)0x4643, 4)] // NOT.W D3
+	public void DataRegisterUnaryRetiresInTheDocumentedCycleCount(ushort opcode, int expectedCycles)
+	{
+		foreach (var enableOpcodePlan in new[] { false, true })
+		{
+			foreach (var dispatch in new[] { M68kOpcodePlanDispatch.KindTable, M68kOpcodePlanDispatch.PackedPlan })
+			{
+				var bus = new CycleCountingBus();
+				Write(bus.Memory, 0x1000, Words(opcode, 0x4E71));
+				var cpu = CreateCycleParityCpu(bus, enableOpcodePlan, dispatch);
+				cpu.State.D[0] = 0x8123_4567;
+				cpu.State.D[1] = 0x0000_8000;
+				cpu.State.D[2] = 0xFFFF_FFFF;
+				cpu.State.D[3] = 0x0000_0001;
+				cpu.State.D[7] = 0x0000_0000;
+
+				var cycles = cpu.ExecuteInstruction();
+
+				Assert.Equal(expectedCycles, cycles);
+				Assert.Equal(expectedCycles, cpu.State.Cycles);
+				// One opcode word plus the sequential lookahead, both serial and
+				// both placed before the internal cycles are charged.
+				Assert.Equal(
+					new[] { (Address: 0x1000u, Cycle: 0L), (Address: 0x1002u, Cycle: 2L) },
+					bus.InstructionFetchCycles.Take(2).ToArray());
+			}
+		}
+	}
+
+	[Theory]
+	[InlineData((ushort)0x4280)] // CLR.L D0
+	[InlineData((ushort)0x4480)] // NEG.L D0
+	[InlineData((ushort)0x4680)] // NOT.L D0
+	[InlineData((ushort)0x4A80)] // TST.L D0
+	[InlineData((ushort)0x4200)] // CLR.B D0
+	[InlineData((ushort)0x4240)] // CLR.W D0
+	public void DataRegisterUnaryKeepsBusPhaseParityWithTheScalarDecoder(ushort opcode)
+	{
+		// Three placements that stress prefetch accounting differently: the
+		// instruction alone, the instruction as the second half of a queued
+		// prefetch pair, and the instruction immediately before a taken branch.
+		var programs = new[]
+		{
+			Words(opcode, 0x4E71, 0x4E71, 0x4E71),
+			Words(0x7001, opcode, 0x4E71, 0x4E71),
+			Words(0x7001, opcode, 0x60FC, 0x4E71)
+		};
+
+		foreach (var program in programs)
+		{
+			foreach (var dispatch in new[] { M68kOpcodePlanDispatch.KindTable, M68kOpcodePlanDispatch.PackedPlan })
+			{
+				var scalarBus = new CycleCountingBus();
+				var plannedBus = new CycleCountingBus();
+				Write(scalarBus.Memory, 0x1000, program);
+				Write(plannedBus.Memory, 0x1000, program);
+				var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+				var planned = CreateCycleParityCpu(plannedBus, enableOpcodePlan: true, dispatch);
+				scalar.State.D[0] = 0x8123_4567;
+				planned.State.D[0] = 0x8123_4567;
+
+				ExecuteSequentially(scalar, 6);
+				ExecuteSequentially(planned, 6);
+
+				AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+			}
+		}
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void DataRegisterUnaryLongFormRetiresSixCyclesInsideAnInstructionStream(int dispatchValue)
+	{
+		// CLR.L D0 sits between two four-cycle forms so the six-cycle retirement
+		// has to be visible as a cycle delta rather than only in a total.
+		var program = Words(
+			0x7001, // MOVEQ #1,D0    4
+			0x4280, // CLR.L D0       6
+			0x4A80, // TST.L D0       4
+			0x4680, // NOT.L D0       6
+			0x4E71); // NOP           4
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, program);
+		var cpu = CreateCycleParityCpu(bus, enableOpcodePlan: true, (M68kOpcodePlanDispatch)dispatchValue);
+
+		var deltas = new int[5];
+		for (var i = 0; i < deltas.Length; i++)
+		{
+			deltas[i] = cpu.ExecuteInstruction();
+		}
+
+		Assert.Equal(new[] { 4, 6, 4, 6, 4 }, deltas);
+		Assert.Equal(24, cpu.State.Cycles);
+		Assert.Equal(0xFFFF_FFFFu, cpu.State.D[0]);
+	}
+
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void PlannedFixedPlanBatchExecutesDataRegisterUnaryWithoutFallingBack(int dispatchValue)
+	{
+		// A stream that mixes an admitted kind (MOVEQ, which the cached run graph
+		// can start on) with the register unary forms must retire every
+		// instruction through a planned path and stay cycle-identical to the
+		// scalar decoder. Nothing here may reach the scalar fallback.
+		var program = Words(
+			0x7001, // MOVEQ #1,D0
+			0x4280, // CLR.L D0
+			0x4680, // NOT.L D0
+			0x4A80, // TST.L D0
+			0x4240, // CLR.W D0
+			0x4400, // NEG.B D0
+			0x60F2); // BRA.S MOVEQ
+		var scalarBus = new CycleCountingBus();
+		var plannedBus = new CycleCountingBus();
+		Write(scalarBus.Memory, 0x1000, program);
+		Write(plannedBus.Memory, 0x1000, program);
+		var scalar = CreateCycleParityCpu(scalarBus, enableOpcodePlan: false);
+		var planned = CreateCycleParityCpu(
+			plannedBus,
+			enableOpcodePlan: true,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		planned.PlannedInterpreterCountersEnabled = true;
+		planned.ResetPlannedInterpreterCounters();
+		var scalarBoundary = new BusAccessBatchBoundary();
+		var plannedBoundary = new BusAccessBatchBoundary();
+
+		Assert.Equal(28, ((IM68kBatchCore)scalar).ExecuteInstructions(28, long.MaxValue, scalarBoundary));
+		Assert.Equal(28, ((IM68kBatchCore)planned).ExecuteInstructions(28, long.MaxValue, plannedBoundary));
+
+		AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+		var counters = planned.CapturePlannedInterpreterCounters();
+		Assert.Equal(0, counters.ScalarFallbackInstructions);
+		Assert.Equal(28, counters.FastInstructions);
+	}
+
 	[Theory]
 	[MemberData(nameof(OpcodePlanDispatchVariants))]
 	public void PlannedFixedPlanBatchHonorsTargetCycleAndInstructionLimit(int dispatchValue)
@@ -4442,10 +4910,19 @@ public sealed class M68kInterpreterCoreBehaviorTests
 				_generation[0]);
 			return true;
 		}
-		public void CommitInstructionFetchWindowWord(in M68kInstructionFetchWindow window, uint address, ref long cycle)
+		public void CommitInstructionFetchWindowWord(
+			in M68kInstructionFetchWindow window,
+			uint address,
+			ref long cycle,
+			M68kInstructionFetchPublicationPhase publicationPhase = M68kInstructionFetchPublicationPhase.Required,
+			long retirementFloor = long.MinValue,
+			in M68kInstructionFetchPublicationContext publicationContext = default)
 		{
 			_ = window;
 			_ = address;
+			_ = publicationPhase;
+			_ = retirementFloor;
+			_ = publicationContext;
 			WindowCommits++;
 			cycle += 2;
 		}
@@ -4525,6 +5002,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		public int CompletedBatchInstructions { get; private set; }
 		public bool IsDeferredCpuBusBatchActive { get; private set; }
 		public bool IsInternalNoBusWindowEnabled => false;
+		public bool RequiresControlFlowBatchBoundary => false;
 		public bool TryGetInstructionFetchWindow(uint address, out M68kInstructionFetchWindow window)
 		{
 			window = new M68kInstructionFetchWindow(
@@ -4541,10 +5019,16 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		public void CommitInstructionFetchWindowWord(
 			in M68kInstructionFetchWindow window,
 			uint address,
-			ref long cycle)
+			ref long cycle,
+			M68kInstructionFetchPublicationPhase publicationPhase = M68kInstructionFetchPublicationPhase.Required,
+			long retirementFloor = long.MinValue,
+			in M68kInstructionFetchPublicationContext publicationContext = default)
 		{
 			_ = window;
 			_ = address;
+			_ = publicationPhase;
+			_ = retirementFloor;
+			_ = publicationContext;
 			cycle += 2;
 			if (_batchExecutionStarted)
 			{
@@ -4567,15 +5051,41 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			_ = window;
 			return true;
 		}
+		public ulong CaptureDeferredCpuInstructionFetchTimingToken() => 0;
+		public bool CanContinueDeferredCpuBusBatch(
+			long virtualRetireCycle,
+			long batchTargetCycle,
+			ulong timingDependencyToken,
+			out long projectedRetireCycle)
+		{
+			_ = batchTargetCycle;
+			_ = timingDependencyToken;
+			projectedRetireCycle = virtualRetireCycle;
+			return false;
+		}
+		public bool TryTrimDeferredCpuInstructionFetchSuffix(
+			ulong requiredThroughToken,
+			out M68kDeferredCpuTrimmedInstructionFetch trimmedFetch)
+		{
+			_ = requiredThroughToken;
+			trimmedFetch = default;
+			return false;
+		}
 		public bool TryBeginDeferredCpuBusBatch(
 			M68kCpuState state,
 			long currentCycle,
 			long? targetCycle,
+			bool allowChipInstructionFetchEpoch,
+			uint chipInstructionFetchPreflightAddress,
+			long chipInstructionFetchPreflightCycle,
 			out long batchTargetCycle,
 			out M68kTraceBatchWakeSource wakeSource)
 		{
 			_ = state;
 			_ = targetCycle;
+			_ = allowChipInstructionFetchEpoch;
+			_ = chipInstructionFetchPreflightAddress;
+			_ = chipInstructionFetchPreflightCycle;
 			batchTargetCycle = currentCycle + 100;
 			wakeSource = M68kTraceBatchWakeSource.Unknown;
 			IsDeferredCpuBusBatchActive = true;
@@ -4591,6 +5101,19 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		{
 			_ = skippedInstructionFlushCount;
 			CompletedBatchInstructions += instructionCount;
+		}
+		public M68kDeferredCpuBusCheckpoint SynchronizeDeferredCpuBusBatchTiming(
+			ref long cycle,
+			in M68kDeferredCpuBusCheckpointRequest request)
+		{
+			_ = request;
+			return new M68kDeferredCpuBusCheckpoint(
+				cycle,
+				cycle,
+				cycle,
+				-1,
+				-1,
+				0);
 		}
 		public void EndDeferredCpuBusBatch(
 			ref long cycle,

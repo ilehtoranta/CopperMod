@@ -200,5 +200,6 @@ namespace CopperMod.Amiga.Bus
                 _wakeAgendaInvalidations++;
             }
         }
+
     }
 }

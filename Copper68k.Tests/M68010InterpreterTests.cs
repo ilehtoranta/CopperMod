@@ -32,6 +32,136 @@ public sealed class M68010InterpreterTests
 		Assert.False(cpu.State.M68020StackModeEnabled);
 	}
 
+	[Theory]
+	[InlineData((ushort)0x000, 0xFFFF_FFFEu, 0x0000_0006u)]
+	[InlineData((ushort)0x001, 0xFFFF_FFFDu, 0x0000_0005u)]
+	[InlineData((ushort)0x801, 0x1234_5678u, 0x1234_5678u)]
+	public void MovecTransfersSupportedControlRegisters(
+		ushort controlRegister,
+		uint sourceValue,
+		uint expectedValue)
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(
+			bus,
+			CodeBase,
+			0x4E7B, controlRegister, // MOVEC D0,control
+			0x4E7A, (ushort)(0x1000 | controlRegister)); // MOVEC control,D1
+		var cpu = new M68010Interpreter(bus);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[0] = sourceValue;
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(expectedValue, cpu.State.D[1]);
+		Assert.Equal(CodeBase + 8u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
+	public void MovecVectorBaseToA7UpdatesActiveSupervisorStackPointer()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x4E7A, 0xF801); // MOVEC VBR,A7
+		var cpu = new M68010Interpreter(bus);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.VectorBaseRegister = 0x0000_4800;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0000_4800u, cpu.State.A[7]);
+		Assert.Equal(0x0000_4800u, cpu.State.SupervisorStackPointer);
+	}
+
+	[Fact]
+	public void MovecInUserModeRaisesPrivilegeViolationWithoutChangingControlRegister()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x4E7B, 0x0801); // MOVEC D0,VBR
+		bus.WriteLong(0x0400 + (8u * 4), 0x0000_2000);
+		var cpu = new M68010Interpreter(bus);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.VectorBaseRegister = 0x0400;
+		cpu.State.D[0] = 0x1234_5678;
+		cpu.State.ResetStackPointers(0x3000, 0x4000, supervisorMode: false);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x0400u, cpu.State.VectorBaseRegister);
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FF8u, cpu.State.A[7]);
+		Assert.Equal(0, bus.ReadWord(0x2FF8));
+		Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
+		Assert.Equal(8 * 4, bus.ReadWord(0x2FFE));
+	}
+
+	[Fact]
+	public void MovecUnsupportedControlRegisterRaisesIllegalWithoutChangingDestination()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x4E7A, 0x1808); // MOVEC PCR,D1
+		bus.WriteLong(0x0400 + (4u * 4), 0x0000_2000);
+		var cpu = new M68010Interpreter(bus);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.VectorBaseRegister = 0x0400;
+		cpu.State.D[1] = 0x1234_5678;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1234_5678u, cpu.State.D[1]);
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FF8u, cpu.State.A[7]);
+		Assert.Equal(M68kCpuState.ResetStatusRegister, bus.ReadWord(0x2FF8));
+		Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
+		Assert.Equal(4 * 4, bus.ReadWord(0x2FFE));
+	}
+
+	[Fact]
+	public void ExceptionUsesVectorBaseAndFormatZeroFrameAndRteRestoresState()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0xA000);
+		bus.WriteLong(0x0400 + (10u * 4), 0x0000_2000);
+		WriteWords(bus, 0x2000, 0x4E73); // RTE
+		var cpu = new M68010Interpreter(bus);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.VectorBaseRegister = 0x0400;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FF8u, cpu.State.A[7]);
+		Assert.Equal(M68kCpuState.ResetStatusRegister, bus.ReadWord(0x2FF8));
+		Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
+		Assert.Equal(10 * 4, bus.ReadWord(0x2FFE));
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(CodeBase, cpu.State.ProgramCounter);
+		Assert.Equal(0x3000u, cpu.State.A[7]);
+		Assert.Equal(M68kCpuState.ResetStatusRegister, cpu.State.StatusRegister);
+	}
+
+	[Fact]
+	public void InterruptUsesVectorBaseAndFormatZeroFrame()
+	{
+		var bus = new ZeroWaitCodeBus();
+		bus.WriteLong(0x0400 + (27u * 4), 0x0000_2400);
+		var cpu = new M68010Interpreter(bus);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.VectorBaseRegister = 0x0400;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
+
+		cpu.RequestInterrupt(3, 27u * 4);
+
+		Assert.Equal(0x2400u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FF8u, cpu.State.A[7]);
+		Assert.Equal(M68kCpuState.Supervisor, bus.ReadWord(0x2FF8));
+		Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
+		Assert.Equal(27 * 4, bus.ReadWord(0x2FFE));
+		Assert.Equal(3, (cpu.State.StatusRegister >> 8) & 7);
+	}
+
 	[Fact]
 	public void SharedInstructionsMatchM68000ExecutionModel()
 	{

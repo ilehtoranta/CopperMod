@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using CopperMod.Amiga;
+using CopperMod.Amiga.CopperStart.Devices.Clipboard;
 
 namespace CopperScreen;
 
@@ -184,6 +185,8 @@ internal sealed class CopperScreenRuntime : IDisposable
 	public CopperScreenPresentationGeometry PresentationGeometry => _emulator.PresentationGeometry;
 
 	public event Action? FramePublished;
+	public event Action<string>? HostClipboardTextChanged;
+	public event Action<ClipboardImage>? HostClipboardImageChanged;
 
 	public CopperScreenState CurrentState
 	{
@@ -381,6 +384,12 @@ internal sealed class CopperScreenRuntime : IDisposable
 
 	public void KeyUp(AmigaRawKey key)
 		=> Post(emulator => emulator.KeyUp(key));
+
+	public void SetHostClipboardText(string text)
+		=> Post(emulator => emulator.QueueHostClipboardText(text));
+
+	public void SetHostClipboardImage(ClipboardImage image)
+		=> Post(emulator => emulator.QueueHostClipboardImage(image));
 
 	public void MoveMousePort(int deltaX, int deltaY)
 		=> Post(emulator => emulator.MoveMousePort(deltaX, deltaY));
@@ -742,6 +751,10 @@ internal sealed class CopperScreenRuntime : IDisposable
 			try
 			{
 				_emulator.RenderNextFrame(presentationFramebuffer);
+				while (_emulator.TryTakeHostClipboardText(out var clipboardText))
+					HostClipboardTextChanged?.Invoke(clipboardText);
+				while (_emulator.TryTakeHostClipboardImage(out var clipboardImage) && clipboardImage is not null)
+					HostClipboardImageChanged?.Invoke(clipboardImage);
 				var audioStartTimestamp = Stopwatch.GetTimestamp();
 				audioFrames = _emulator.RenderAudio(_audioBuffer, AudioSampleRate, AudioChannels);
 				if (_audio != null && _floppyDriveAudio != null && audioFrames > 0)

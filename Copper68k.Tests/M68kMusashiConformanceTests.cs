@@ -105,7 +105,7 @@ public sealed class M68kMusashiConformanceTests
 		_output = output;
 	}
 
-	[Fact]
+	[EnvironmentFact(RunVariable, "run the Musashi mc68000 program corpus")]
 	public void MusashiM68000ProgramsPassInterpreterWhenEnabled()
 	{
 		RunMusashiCorpus(new MusashiCorpusConfig(
@@ -125,7 +125,7 @@ public sealed class M68kMusashiConformanceTests
 			"known incompatible"));
 	}
 
-	[Fact]
+	[EnvironmentFact(RunVariable40, "run the Musashi mc68040 program corpus")]
 	public void MusashiM68040ProgramsPassInterpreterWhenEnabled()
 	{
 		RunMusashiCorpus(new MusashiCorpusConfig(
@@ -145,7 +145,7 @@ public sealed class M68kMusashiConformanceTests
 			"known failing"));
 	}
 
-	[Fact]
+	[EnvironmentFact(RunVariableM68kRsExtra, "run the m68k-rs extra fixture corpus")]
 	public void M68kRsExtraFixturesPassInterpreterWhenEnabled()
 	{
 		RunM68kRsExtraCorpus();
@@ -153,12 +153,6 @@ public sealed class M68kMusashiConformanceTests
 
 	private void RunMusashiCorpus(MusashiCorpusConfig config)
 	{
-		if (!IsTruthy(Environment.GetEnvironmentVariable(config.RunVariable)))
-		{
-			_output.WriteLine($"Set {config.RunVariable}=1 to run the Musashi {config.Label} program corpus.");
-			return;
-		}
-
 		var corpusPath = ResolveCorpusPath(config.PathVariable, config.DefaultCorpusRelativePath, config.Label);
 		if (corpusPath is null)
 		{
@@ -231,12 +225,6 @@ public sealed class M68kMusashiConformanceTests
 
 	private void RunM68kRsExtraCorpus()
 	{
-		if (!IsTruthy(Environment.GetEnvironmentVariable(RunVariableM68kRsExtra)))
-		{
-			_output.WriteLine($"Set {RunVariableM68kRsExtra}=1 to run the m68k-rs extra fixture corpus.");
-			return;
-		}
-
 		var corpusPath = ResolveM68kRsExtraPath(PathVariableM68kRsExtra, DefaultCorpusRelativePathM68kRsExtra);
 		if (corpusPath is null)
 		{

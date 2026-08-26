@@ -5,16 +5,16 @@ arithmetic for .NET. Values retain their complete 80-bit encoding, including NaN
 payloads and noncanonical encodings, while arithmetic uses an explicit rounding
 context and returns IEEE exception flags with each result.
 
-The first public preview targets `net10.0`:
+The stable 1.0.0 release targets `net10.0`:
 
 ```sh
-dotnet add package CopperFloat --version 0.1.0-preview.1
+dotnet add package CopperFloat --version 1.0.0
 ```
 
-The architectural arithmetic and final rounding decisions use managed integer
-arithmetic. A few common binary32/binary64 operations may use hardware instructions
-only behind exactness checks; host rounding state never determines the result. The
-package has no runtime dependencies.
+All architectural arithmetic and every final rounding decision use managed integer
+arithmetic. Results are a function of the operands and the supplied rounding context
+alone, so process floating-point state never determines a result. The package has no
+runtime dependencies.
 
 ## Accuracy and scope
 

@@ -48,8 +48,8 @@ namespace CopperMod.Amiga.Diagnostics
             // Address-only writes alter the unexecuted suffix of an already
             // causal DMA plan, but do not themselves start or stop a channel.
             // Admission is enabled separately after focused timing tests.
-            if (offset is >= 0x0E0 and <= 0x0FE || // BPL1PT-BPL8PT
-                offset is >= 0x120 and <= 0x13E)   // SPR0PT-SPR7PT
+            if (IsDmaPointerRegister(offset) ||
+                CustomRegisterScheduleClassifier.IsColorRegister(offset))
             {
                 return CpuDeferredPeripheralAccess.JournalableWrite;
             }
@@ -58,6 +58,13 @@ namespace CopperMod.Amiga.Diagnostics
             // DMACON/INT*/ADKCON, DDF/DIW/BPLCON, Copper jumps, blitter/disk
             // starts, audio control/data, sprite control/data and palette state.
             return CpuDeferredPeripheralAccess.ImmediateBarrier;
+        }
+
+        public static bool IsDmaPointerRegister(ushort offset)
+        {
+            offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
+            return offset is >= 0x0E0 and <= 0x0FE || // BPL1PT-BPL8PT
+                offset is >= 0x120 and <= 0x13E;      // SPR0PT-SPR7PT
         }
 
         public static CpuDeferredPeripheralAccess ClassifyCia(bool isWrite, byte register)

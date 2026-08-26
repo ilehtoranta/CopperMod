@@ -1,9 +1,76 @@
 using CopperMod.Amiga;
+using Copper68k;
 
 namespace CopperMod.Amiga.Tests;
 
 public sealed class AmigaArchitectureTests
 {
+	[Fact]
+	public void AgnusSlotKernelRequestIsExplicitAndConnectsOnlyForTheSupportedProfile()
+	{
+		using var legacy = new Machine(
+			MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton));
+		using var kernel = new Machine(
+			MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+				.WithAgnusBusArbitration(AgnusBusArbitrationMode.SlotKernel));
+
+		Assert.Equal(AgnusBusArbitrationMode.Legacy, legacy.Options.AgnusBusArbitration);
+		Assert.Equal(AgnusBusArbitrationMode.Legacy, legacy.Bus.AgnusBusArbitration);
+		Assert.False(legacy.Bus.AgnusSlotKernelSelected);
+		Assert.Equal(AgnusBusArbitrationMode.SlotKernel, kernel.Options.AgnusBusArbitration);
+		Assert.True(Machine.IsAgnusSlotKernelConfigurationSupported(kernel.Options));
+		Assert.True(Machine.AgnusSlotKernelProductionConnected);
+		Assert.Equal(AgnusBusArbitrationMode.SlotKernel, kernel.Bus.AgnusBusArbitration);
+		Assert.True(kernel.Bus.AgnusSlotKernelSelected);
+		Assert.True(kernel.Bus.AgnusLiveDisplayLedgerEnabled);
+		Assert.True(kernel.Bus.AgnusLiveCopperEnabled);
+		Assert.True(kernel.Bus.AgnusLiveBlitterEnabled);
+		Assert.True(kernel.Bus.AgnusLivePaulaEnabled);
+		Assert.True(kernel.Bus.AgnusLiveDiskEnabled);
+	}
+
+	[Fact]
+	public void AgnusSlotKernelHasAnExplicitForcedLegacyRollback()
+	{
+		using var machine = new Machine(
+			MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+				.WithAgnusBusArbitration(AgnusBusArbitrationMode.SlotKernel)
+				.WithAgnusBusArbitration(AgnusBusArbitrationMode.ForcedLegacy));
+
+		Assert.Equal(AgnusBusArbitrationMode.ForcedLegacy, machine.Options.AgnusBusArbitration);
+		Assert.Equal(AgnusBusArbitrationMode.ForcedLegacy, machine.Bus.AgnusBusArbitration);
+		Assert.False(machine.Bus.AgnusSlotKernelSelected);
+	}
+
+	[Fact]
+	public void AgnusSlotKernelDoesNotSelectForUnsupportedProfiles()
+	{
+		var configurations = new[]
+		{
+			MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+				.WithChipset(AmigaChipset.OcsNtsc),
+			MachineOptions.ForProfile(MachineProfile.A500PlusEcsPal),
+			MachineOptions.ForProfile(MachineProfile.A500PlusEcsNtsc),
+			MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+				.WithCpu(AmigaM68kCoreFactory.Default, M68kBackendKind.AccurateM68020),
+			MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+				.WithLiveAgnusDma(false),
+			MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+				.WithLiveDisplayDma(false)
+		};
+
+		foreach (var options in configurations)
+		{
+			options.WithAgnusBusArbitration(AgnusBusArbitrationMode.SlotKernel);
+			Assert.False(Machine.IsAgnusSlotKernelConfigurationSupported(options));
+			using var machine = new Machine(options);
+
+			Assert.Equal(AgnusBusArbitrationMode.SlotKernel, machine.Options.AgnusBusArbitration);
+			Assert.Equal(AgnusBusArbitrationMode.Legacy, machine.Bus.AgnusBusArbitration);
+			Assert.False(machine.Bus.AgnusSlotKernelSelected);
+		}
+	}
+
 	[Fact]
 	public void DeferredCpuChipReadSegmentsAreConfiguredIndependently()
 	{
@@ -11,7 +78,111 @@ public sealed class AmigaArchitectureTests
 			.WithDeferredCpuChipReadSegments(true);
 
 		Assert.True(options.DeferredCpuChipReadSegmentsEnabled);
-		Assert.False(options.DeferredCpuBusBatchEnabled);
+		Assert.True(options.DeferredCpuBusBatchEnabled);
+	}
+
+	[Fact]
+	public void DeferredCpuCustomPointerWritesAreConfiguredIndependently()
+	{
+		var options = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuCustomPointerWrites(false);
+
+		Assert.False(options.DeferredCpuCustomPointerWritesEnabled);
+		Assert.True(options.DeferredCpuBusBatchEnabled);
+	}
+
+	[Fact]
+	public void DeferredCpuCustomCompositionWritesAreConfiguredIndependently()
+	{
+		var options = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuCustomCompositionWrites(false);
+
+		Assert.False(options.DeferredCpuCustomCompositionWritesEnabled);
+		Assert.True(options.DeferredCpuBusBatchEnabled);
+	}
+
+	[Fact]
+	public void DeferredCpuBusBatchIsEnabledByDefaultAndCanBeDisabled()
+	{
+		var defaults = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton);
+		var disabled = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuBusBatch(enabled: false);
+
+		Assert.True(defaults.DeferredCpuBusBatchEnabled);
+		Assert.True(defaults.DeferredCpuChipWriteJournalEnabled);
+		Assert.True(defaults.DeferredCpuChipReadSegmentsEnabled);
+		Assert.False(defaults.DeferredCpuChipInstructionFetchBatchEnabled);
+		Assert.True(defaults.DeferredCpuCustomPointerWritesEnabled);
+		Assert.True(defaults.DeferredCpuCustomCompositionWritesEnabled);
+		Assert.False(disabled.DeferredCpuBusBatchEnabled);
+	}
+
+	[Fact]
+	public void DeferredCpuChipInstructionFetchBatchIsConfiguredIndependently()
+	{
+		var disabledOptions = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithBusAccessLogging(false);
+		var options = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuChipInstructionFetchBatch(true)
+			.WithBusAccessLogging(false);
+		var disabledMachine = new Machine(disabledOptions);
+		var enabledMachine = new Machine(options);
+
+		Assert.True(options.DeferredCpuChipInstructionFetchBatchEnabled);
+		Assert.True(options.DeferredCpuBusBatchEnabled);
+		Assert.False(
+			((IM68kDeferredCpuInstructionTiming)disabledMachine.Bus)
+				.UsesExtendedChipVisibleAdmissionRetry);
+		Assert.True(
+			((IM68kDeferredCpuInstructionTiming)enabledMachine.Bus)
+				.UsesExtendedChipVisibleAdmissionRetry);
+	}
+
+	[Fact]
+	public void DeferredCpuChipInstructionFetchBatchIsLimitedToTheSupportedProductionProfile()
+	{
+		var supported = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuChipInstructionFetchBatch(true)
+			.WithBusAccessLogging(false);
+		var unsupported = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuChipInstructionFetchBatch(true)
+			.WithBusAccessLogging(false)
+			.WithChipset(AmigaChipset.OcsNtsc);
+
+		var supportedMachine = new Machine(supported);
+		var unsupportedMachine = new Machine(unsupported);
+
+		Assert.True(supportedMachine.Bus.DeferredCpuChipInstructionFetchBatchEnabled);
+		Assert.False(unsupportedMachine.Bus.DeferredCpuChipInstructionFetchBatchEnabled);
+	}
+
+	[Fact]
+	public void DeferredCpuChipInstructionFetchShadowIsIndependentlyProfileGated()
+	{
+		var supported = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuChipInstructionFetchShadow(true)
+			.WithBusAccessLogging(false);
+		var unsupported = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuChipInstructionFetchShadow(true)
+			.WithBusAccessLogging(false)
+			.WithChipset(AmigaChipset.OcsNtsc);
+
+		var supportedMachine = new Machine(supported);
+		var unsupportedMachine = new Machine(unsupported);
+
+		Assert.True(supportedMachine.Bus.DeferredCpuChipInstructionFetchShadowEnabled);
+		Assert.False(unsupportedMachine.Bus.DeferredCpuChipInstructionFetchShadowEnabled);
+	}
+
+	[Fact]
+	public void DeferredCpuChipWriteJournalIsConfiguredIndependently()
+	{
+		var options = MachineOptions.ForProfile(MachineProfile.A500PalFullEmulationSkeleton)
+			.WithDeferredCpuChipWriteJournal(false);
+
+		Assert.True(options.DeferredCpuBusBatchEnabled);
+		Assert.False(options.DeferredCpuChipWriteJournalEnabled);
+		Assert.True(options.DeferredCpuChipReadSegmentsEnabled);
 	}
 
 	[Fact]

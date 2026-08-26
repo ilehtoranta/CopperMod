@@ -25,7 +25,17 @@ namespace CopperMod.Amiga.Bus
 
             if (mask == SlotContendedMemoryAccessMask)
             {
-                DrainSlotContendedAccess(targetCycle);
+                if (HostProfilingEnabled)
+                {
+                    var start = Stopwatch.GetTimestamp();
+                    DrainSlotContendedAccess(targetCycle);
+                    _hostCausalExecutorTicks += Stopwatch.GetTimestamp() - start;
+                }
+                else
+                {
+                    DrainSlotContendedAccess(targetCycle);
+                }
+
                 return;
             }
 
@@ -58,12 +68,21 @@ namespace CopperMod.Amiga.Bus
 
             try
             {
-                var blitterWasBusyAtDrainStart = _bus.Blitter.Busy;
+                var blitterWasBusyAtDrainStart =
+                    _bus.Blitter.BusPipelineActive;
                 var forceCatchUp = (mask & AmigaHardwareEventMask.ForceCatchUp) != 0;
                 var cpuBoundary = (mask & AmigaHardwareEventMask.CpuBoundary) != 0;
+                // Disk DMA writes Chip RAM.  Its transfers must be interleaved
+                // with live display fetches, otherwise an eager whole-frame
+                // Agnus advance reads the old bitplane words before the disk
+                // write is made visible.
+                var diskDmaMayAffectDisplay =
+                    (mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
+                    _bus.Disk.HasSlotDmaWakeSourceThrough(targetCycle);
                 if ((mask & AmigaHardwareEventMask.Agnus) != 0 &&
                     !cpuBoundary &&
-                    !_bus.Blitter.Busy &&
+                    !_bus.Blitter.BusPipelineActive &&
+                    !diskDmaMayAffectDisplay &&
                     (forceCatchUp || _bus.Display.HasLiveDisplayWork()))
                 {
                     if (HostProfilingEnabled)
@@ -313,7 +332,8 @@ namespace CopperMod.Amiga.Bus
 
             try
             {
-                var blitterWasBusyAtDrainStart = _bus.Blitter.Busy;
+                var blitterWasBusyAtDrainStart =
+                    _bus.Blitter.BusPipelineActive;
                 if (TrySkipDrainWithWakeAgenda(targetCycle, SlotContendedMemoryAccessMask))
                 {
                     MarkClean(targetCycle, SlotContendedMemoryAccessMask);
@@ -324,6 +344,18 @@ namespace CopperMod.Amiga.Bus
                 if (_earliestDirtyCycle <= targetCycle)
                 {
                     cursor = Math.Min(cursor, _earliestDirtyCycle);
+                }
+
+                if (_bus.CausalBusExecutor.ProductionEnabled)
+                {
+                    // Scheduler source-specific drain markers may be ahead of
+                    // the causal slot executor (for example after an interrupt
+                    // poll that had no slot work). They are not proof that the
+                    // intervening physical bus timeline was executed. Always
+                    // resume production scanning from the executor's horizon.
+                    cursor = Math.Min(
+                        cursor,
+                        _bus.CausalBusExecutor.ExecutedThroughCycle);
                 }
 
                 while (true)
@@ -342,7 +374,8 @@ namespace CopperMod.Amiga.Bus
                         }
                     }
 
-                    if (_bus.CausalBusExecutor.ProductionEnabled)
+                    if (_bus.CausalBusExecutor.ProductionEnabled &&
+                        !_stoppedCpuSlotDrainActive)
                     {
                         var dynamicBatch = _bus.CausalBusExecutor.TryAdvanceSingleDynamicBatch(
                             cursor,
@@ -380,6 +413,14 @@ namespace CopperMod.Amiga.Bus
                     _bus.InvalidateRasterlineSchedule(nextCycle, SlotContendedMemoryAccessMask);
                     cursor = nextCycle == long.MaxValue ? targetCycle : nextCycle;
 
+                    if (_stoppedCpuSlotDrainActive &&
+                        HasUnmaskedPendingPaulaInterrupt(_stoppedCpuSlotDrainInterruptMask))
+                    {
+                        targetCycle = nextCycle;
+                        _stoppedCpuSlotDrainReachedCycle = nextCycle;
+                        break;
+                    }
+
                     // Same-cycle Paula/disk work must remain visible to the CPU access.
                     var sameCycleWorkRemains = HasSlotContendedSameCycleWork(cursor);
                     var madeSameCycleProgress = _generation != generationBeforeEvent;
@@ -400,6 +441,30 @@ namespace CopperMod.Amiga.Bus
             {
                 _draining = false;
             }
+        }
+
+        internal long DrainSlotContendedUntilCpuInterrupt(
+            long targetCycle,
+            int cpuInterruptMask)
+        {
+            _stoppedCpuSlotDrainActive = true;
+            _stoppedCpuSlotDrainInterruptMask = cpuInterruptMask;
+            _stoppedCpuSlotDrainReachedCycle = targetCycle;
+            try
+            {
+                DrainSlotContendedAccessCore(targetCycle);
+                return _stoppedCpuSlotDrainReachedCycle;
+            }
+            finally
+            {
+                _stoppedCpuSlotDrainActive = false;
+            }
+        }
+
+        private bool HasUnmaskedPendingPaulaInterrupt(int cpuInterruptMask)
+        {
+            var level = _bus.Paula.GetHighestPendingInterruptLevel();
+            return level > 0 && level > (cpuInterruptMask & 0x07);
         }
 
         private void AdvanceSlotContendedPaulaDmaTo(long targetCycle)
@@ -571,14 +636,6 @@ namespace CopperMod.Amiga.Bus
                 return executor.GetNextSlotContendedCycle(currentCycle, targetCycle);
             }
 
-            // Sample the shadow before any legacy getter can populate caches or
-            // materialize fixed-slot state. This detects hidden mutation in the
-            // old prediction path instead of accidentally teaching the new
-            // agenda from the reference query.
-            var executorCandidate = executor.ShadowEnabled
-                ? executor.GetNextSlotContendedCycle(currentCycle, targetCycle)
-                : long.MaxValue;
-
             var paulaCandidate = GetNextPaulaDmaEventCycle(currentCycle, targetCycle);
             var diskCandidate = GetNextSlotContendedDiskEventCycle(currentCycle, targetCycle);
             var agnusCandidate = _bus.GetNextAgnusEventCycle(currentCycle, targetCycle);
@@ -586,19 +643,6 @@ namespace CopperMod.Amiga.Bus
             var candidate = Math.Min(
                 Math.Min(paulaCandidate, diskCandidate),
                 Math.Min(agnusCandidate, blitterCandidate));
-
-            if (executor.ShadowEnabled)
-            {
-                executor.RecordShadowPrediction(
-                    currentCycle,
-                    targetCycle,
-                    candidate,
-                    executorCandidate,
-                    paulaCandidate,
-                    diskCandidate,
-                    agnusCandidate,
-                    blitterCandidate);
-            }
 
             return candidate;
         }

@@ -38,10 +38,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
         private const int MaxPendingWrites = 65536;
-        private const int StandardHStart = 0x81 - AmigaConstants.PalLowResOverscanBorderX;
-        // Left overscan exposes the bitplane shifter's comparator-$80 pixel.
-        // A standard-or-later DIW clips that pre-roll and begins at comparator
-        // $81. DDF retains this physical phase in both lowres and hires.
+        private const int StandardHStart = 0x82 - AmigaConstants.PalLowResOverscanBorderX;
+        // The raw capture includes comparator $81 immediately before the
+        // nominal border. A standard DIW therefore opens on that preceding
+        // sample; DDF retains the same physical phase in lowres and hires.
         private const int StandardBitplanePrerollOrigin = AmigaConstants.PalLowResOverscanBorderX - 1;
         private const int StandardVStart = 0x2C - AmigaConstants.PalLowResOverscanBorderY;
         private const ushort DefaultDiwStart = AgnusRegisterBank.DefaultDiwStart;
@@ -54,7 +54,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private const ushort DmaconCopperEnable = 0x0080;
         private const ushort DmaconSpriteEnable = 0x0020;
         private const ushort DmaconWritableMask = 0x07FF;
+        private const ushort DmaconDisplayTimelineMask =
+            DmaconMasterEnable |
+            DmaconBitplaneEnable |
+            DmaconSpriteEnable;
         private const ushort EcsBplcon3WritableMask = 0x0037;
+        private const ushort AgaBplcon3WritableMask = 0xFEF7;
         private const ushort EcsDiwHighWritableMask = 0x2F2F;
         private const ushort Bplcon0EcsEnable = 0x0001;
         private const ushort Bplcon0SuperHires = 0x0040;
@@ -77,16 +82,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private const int OcsDdfHardStopHorizontal = 0xD8;
         private const int CanonicalCopperHorizontalUnitsPerLine = 227;
         private const int CopperInstructionDataHpUnits = 2;
+        private const int CopperRefreshWrapPaletteStep = 10;
         private const int CopperMoveHpUnits = 4;
         private const int CopperSkipHpUnits = 6;
         // A satisfied WAIT is observed on the following Copper phase. The next
         // instruction's first DMA word is available one Copper memory cycle later.
         private const int CopperWaitWakeHpUnits = 5;
         private const int CopperBfdNoBusyWakeHpUnits = 3;
+        private const int CopperBfdReleasePresentationPixelOffset = 4;
+        private const int CopperWaitReadyPresentationPixelOffset = 4;
         private const int CopperWaitLineEndBlackoutHpUnits = 4;
         private const int CanonicalLineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
         private const int CanonicalCopperHpCycles = AmigaConstants.A500PalCpuCyclesPerColorClock;
         private const int PaletteColorCount = 64;
+        private const int AgaPaletteColorCount = 256;
         private const int MaxDeniseSamplesPerLowResSpan = 4;
         private const int RasterlineRingSize = AgnusRasterlineDmaPlanRing.LineCount;
         private const int MaxPaletteFrameSpans = MaxRasterlinePresentationEvents;
@@ -125,9 +134,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private readonly int _lowResWidth;
         private readonly int _lowResHeight;
         private readonly bool _liveDmaEnabled;
+        private readonly bool _presentationIndependentDisplayLedgerEnabled;
+        private readonly bool _liveCopperRequesterEnabled;
+        private readonly AgnusCommittedDisplayLedger? _committedDisplayLedger;
+        private readonly LiveBitplaneRequester? _liveBitplaneRequester;
+        private readonly LiveSpriteRequester? _liveSpriteRequester;
+        private readonly LiveCopperRequester? _liveCopperRequester;
         private readonly List<PendingCustomWrite> _pendingWrites = new List<PendingCustomWrite>(MaxPendingWrites);
         private readonly ushort[] _colors = new ushort[32];
+        private readonly ushort[] _agaColorHighNibbles = new ushort[AgaPaletteColorCount];
+        private readonly ushort[] _agaColorLowNibbles = new ushort[AgaPaletteColorCount];
+        // Legacy Denise code uses this table's 64-entry bound for EHB fallback.
         private readonly uint[] _convertedColors = new uint[PaletteColorCount];
+        private readonly uint[] _agaConvertedColors = new uint[AgaPaletteColorCount];
         private readonly uint[] _bitplanePointers = new uint[MaxBitplaneCapacity];
         private readonly int[] _bitplaneBaseRows = new int[MaxBitplaneCapacity];
         private readonly byte[] _playfieldPriorityMasks = new byte[MaxLowResWidth * MaxDeniseSamplesPerLowResSpan];
@@ -149,7 +168,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private readonly List<PaletteFrameSpan> _paletteFrameSpans = new List<PaletteFrameSpan>(MaxPaletteFrameSpans);
         private readonly int[] _paletteFrameSpanIndexByPixel;
         private readonly PaletteSnapshotPool _paletteFrameSnapshots = new PaletteSnapshotPool(rasterlineRing: true);
-        private readonly List<BitplaneDataSpan> _bitplaneDataSpans = new List<BitplaneDataSpan>(MaxBitplaneDataSpans);
+        private readonly List<BitplaneDataSpan> _bitplaneDataSpans;
         private readonly byte[] _timelineFastPathColorIndexes = new byte[MaxLowResWidth];
         private readonly byte[] _timelineFastPathPriorityMasks = new byte[MaxLowResWidth];
         private readonly SavedDisplayState _savedDisplayState = new SavedDisplayState();
@@ -164,6 +183,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private ushort _bplcon1;
         private ushort _bplcon2;
         private ushort _bplcon3;
+        private ushort _bplcon4;
+        private ushort _clxcon2;
+        private ushort _fmode;
         private ushort _diwHigh;
         private bool _diwHighValid;
         private ushort _agnusDiwHigh;
@@ -225,17 +247,29 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private long _boundPresentationFrameStartCycle;
         private long _boundPresentationFrameStopCycle;
         private int _nextBoundPresentationRow;
+        private int _presentationDuplicatedRowCount;
+        private long _presentationDuplicatedByteCount;
+        private bool _hostProfilingEnabled;
+        private long _hostLiveStateTicks;
+        private long _hostLineCaptureTicks;
+        private long _hostPresentationTicks;
+        private long _hostBitplaneCaptureTicks;
+        private long _hostLiveStateCalls;
+        private long _hostLineCaptureCalls;
+        private long _hostPresentationCalls;
+        private long _hostBitplaneCaptureCalls;
+        private long _hostLiveStateFastReturns;
         private bool _boundPresentationActive;
         private bool _boundPresentationCompleted;
-        private readonly LiveLineState[] _liveLineStates = new LiveLineState[RasterlineRingSize];
-        private readonly ushort[] _liveBitplaneWords = new ushort[RasterlineRingSize * LiveBitplaneWordsPerRow];
-        private readonly UInt128[] _liveBitplaneWordMasks = new UInt128[RasterlineRingSize * LiveBitplanePlaneCount];
+        private readonly LiveLineState[] _liveLineStates;
+        private readonly ushort[] _liveBitplaneWords;
+        private readonly UInt128[] _liveBitplaneWordMasks;
         // Bitplane requests are decided one CCK before ordinary RGA requests.
         // Keep post-hard-stop Copper collisions separate until the following
         // control transition decides whether Denise retains or clears the latch.
-        private readonly UInt128[] _liveBitplaneCopperCollisionMasks = new UInt128[RasterlineRingSize * LiveBitplanePlaneCount];
-        private readonly ushort[] _liveSpriteWords = new ushort[RasterlineRingSize * LiveSpriteWordsPerRow];
-        private readonly byte[] _liveSpriteWordMasks = new byte[RasterlineRingSize * LiveSpriteChannelCount];
+        private readonly UInt128[] _liveBitplaneCopperCollisionMasks;
+        private readonly ushort[] _liveSpriteWords;
+        private readonly byte[] _liveSpriteWordMasks;
         private readonly AgnusRasterlineDmaPlanRing _agnusRasterlinePlans;
         private readonly RowDmaPlan[] _rowDmaPlans;
         private readonly RowDmaBitplaneEntry[] _rowDmaBitplaneEntries;
@@ -247,7 +281,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private readonly bool[] _liveSpriteDmaExhausted = new bool[LiveSpriteChannelCount];
         private readonly LiveSpriteDmaState[] _liveSpriteDmaStates = new LiveSpriteDmaState[LiveSpriteChannelCount];
         private SpriteDmaReadLatch _spriteDmaReadLatch;
-        private PaletteSnapshotPool _livePaletteSnapshots = new PaletteSnapshotPool(rasterlineRing: true);
+        private readonly PaletteSnapshotPool _livePaletteSnapshots;
         private readonly int[] _liveRasterlinePlanRows = new int[RasterlineRingSize];
         private readonly LiveRasterlinePlanEvent[] _liveRasterlinePlanEvents = new LiveRasterlinePlanEvent[RasterlineRingSize * MaxLiveRasterlinePlanEvents];
         private readonly int[] _liveRasterlinePlanEventCounts = new int[RasterlineRingSize];
@@ -411,12 +445,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int _lastRowDmaScalarFallbackRows;
         private int _lastRowDmaPlanInvalidationRows;
         private int _lastRowDmaPlanMismatchRows;
+        private int _committedDisplayPresentationCursor;
+        private int _presentationCallsDuringLiveCapture;
 
         public Display(
             AmigaBus bus,
             AgnusRegisterBank agnusRegisters,
             AmigaChipset chipset,
-            bool liveDmaEnabled = true)
+            bool liveDmaEnabled = true,
+            bool enableCommittedDisplayLedger = false,
+            bool enableLiveCopperRequester = false)
         {
             _bus = bus ?? throw new ArgumentNullException(nameof(bus));
             _agnusRegisters = agnusRegisters ?? throw new ArgumentNullException(nameof(agnusRegisters));
@@ -431,8 +469,39 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _lowResWidth = Math.Min(MaxLowResWidth, _timing.PresentationLowResWidth);
             _lowResHeight = Math.Min(LowResOutputHeight, _timing.PresentationLowResHeight);
             _paletteFrameSpanIndexByPixel = new int[_lowResWidth];
-            _displayTimeline = new DisplayFrameTimeline(_lowResWidth);
             _liveDmaEnabled = liveDmaEnabled;
+            _presentationIndependentDisplayLedgerEnabled = enableCommittedDisplayLedger;
+            _liveCopperRequesterEnabled = enableLiveCopperRequester;
+            var retainedDisplayLineCount = enableCommittedDisplayLedger
+                ? LowResOutputHeight
+                : RasterlineRingSize;
+            _liveLineStates = new LiveLineState[retainedDisplayLineCount];
+            _liveBitplaneWords = new ushort[retainedDisplayLineCount * LiveBitplaneWordsPerRow];
+            _liveBitplaneWordMasks = new UInt128[retainedDisplayLineCount * LiveBitplanePlaneCount];
+            _liveBitplaneCopperCollisionMasks =
+                new UInt128[retainedDisplayLineCount * LiveBitplanePlaneCount];
+            _liveSpriteWords = new ushort[retainedDisplayLineCount * LiveSpriteWordsPerRow];
+            _liveSpriteWordMasks = new byte[retainedDisplayLineCount * LiveSpriteChannelCount];
+            _bitplaneDataSpans = new List<BitplaneDataSpan>(
+                retainedDisplayLineCount * MaxRasterlinePresentationEvents);
+            _livePaletteSnapshots = new PaletteSnapshotPool(
+                rasterlineRing: true,
+                retainFullFrame: enableCommittedDisplayLedger);
+            _displayTimeline = new DisplayFrameTimeline(
+                _lowResWidth,
+                retainFullFrame: enableCommittedDisplayLedger);
+            _committedDisplayLedger = enableCommittedDisplayLedger
+                ? new AgnusCommittedDisplayLedger()
+                : null;
+            _liveCopperRequester = enableLiveCopperRequester
+                ? new LiveCopperRequester(this)
+                : null;
+            _liveBitplaneRequester = enableCommittedDisplayLedger
+                ? new LiveBitplaneRequester()
+                : null;
+            _liveSpriteRequester = enableCommittedDisplayLedger
+                ? new LiveSpriteRequester()
+                : null;
             for (var i = 0; i < _sprites.Length; i++)
             {
                 _sprites[i] = new SpriteState();
@@ -473,6 +542,57 @@ namespace CopperMod.Amiga.CustomChips.Denise
         internal int LivePendingWriteEventCount => _livePendingWriteEventCount;
 
         internal int LiveFetchBatchWordCount => _liveFetchBatchWordCount;
+
+        internal int CommittedDisplayEventCount =>
+            _committedDisplayLedger?.Count ?? 0;
+
+        internal bool CommittedDisplayLedgerOverflowed =>
+            _committedDisplayLedger?.Overflowed ?? false;
+
+        internal int CommittedDisplayLedgerReservedBytes =>
+            _committedDisplayLedger?.ReservedBytes ?? 0;
+
+        internal bool PresentationIndependentDisplayLedgerEnabled =>
+            _presentationIndependentDisplayLedgerEnabled;
+
+        internal int CommittedDisplayPresentationCursor =>
+            _committedDisplayPresentationCursor;
+
+        internal int PresentationCallsDuringLiveCapture =>
+            _presentationCallsDuringLiveCapture;
+
+        internal ulong LiveDisplayCursorFingerprint
+        {
+            get
+            {
+                const ulong offset = 14695981039346656037UL;
+                const ulong prime = 1099511628211UL;
+                var hash = offset;
+                hash = unchecked((hash ^ (ulong)_liveCycle) * prime);
+                hash = unchecked((hash ^ (ulong)_liveCapturedThroughCycle) * prime);
+                hash = unchecked((hash ^ (uint)_liveNextLineStateRow) * prime);
+                hash = unchecked((hash ^ (uint)_liveNextFetchRow) * prime);
+                hash = unchecked((hash ^ (uint)_liveNextFetchWord) * prime);
+                hash = unchecked((hash ^ (uint)_liveNextFetchPlane) * prime);
+                hash = unchecked((hash ^ (uint)_liveNextFetchSlot) * prime);
+                hash = unchecked((hash ^ (uint)_liveNextSpriteRow) * prime);
+                hash = unchecked((hash ^ (uint)_liveNextSpriteIndex) * prime);
+                hash = unchecked((hash ^ (uint)_liveNextSpriteWord) * prime);
+                return hash;
+            }
+        }
+
+        internal ref readonly AgnusCommittedDisplayEvent GetCommittedDisplayEvent(
+            int index)
+        {
+            if (_committedDisplayLedger == null)
+            {
+                throw new InvalidOperationException(
+                    "The committed display ledger is disabled.");
+            }
+
+            return ref _committedDisplayLedger.GetEvent(index);
+        }
 
         internal IReadOnlyList<CustomRegisterWrite> CopperDisplayWrites
             => _copperDisplayWrites ?? (IReadOnlyList<CustomRegisterWrite>)Array.Empty<CustomRegisterWrite>();
@@ -516,6 +636,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         internal int PaletteFrameSnapshotCount => _paletteFrameSnapshots.Count;
 
+        internal uint GetCurrentConvertedColor(int colorIndex)
+            => _chipset.DisplayChip == DisplayChipModel.AgaLisa
+                ? _agaConvertedColors[colorIndex]
+                : ConvertColorIndex(colorIndex);
+
         internal int PaletteSnapshotReservedBytes
             => _paletteFrameSnapshots.ReservedBytes +
                 _livePaletteSnapshots.ReservedBytes;
@@ -549,7 +674,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 ReservedArrayBytes(_predictedRasterlinePlanEvents) +
                 _paletteFrameSnapshots.ReservedBytes +
                 _livePaletteSnapshots.ReservedBytes +
-                _displayTimeline.ReservedBytes;
+                _displayTimeline.ReservedBytes +
+                CommittedDisplayLedgerReservedBytes;
 
         private static int ReservedArrayBytes<T>(T[] values)
             => values.Length * Unsafe.SizeOf<T>();
@@ -584,6 +710,44 @@ namespace CopperMod.Amiga.CustomChips.Denise
         internal long LiveCausalDisplayStateThroughCycle => _liveCausalDisplayStateThroughCycle;
 
         internal long LiveFinalizedPresentationThroughCycle => _liveFinalizedPresentationThroughCycle;
+
+        internal int PresentationDuplicatedRowCount => _presentationDuplicatedRowCount;
+
+        internal long PresentationDuplicatedByteCount => _presentationDuplicatedByteCount;
+
+        internal long HostLiveStateTicks => _hostLiveStateTicks;
+
+        internal long HostLineCaptureTicks => _hostLineCaptureTicks;
+
+        internal long HostPresentationTicks => _hostPresentationTicks;
+
+        internal long HostBitplaneCaptureTicks => _hostBitplaneCaptureTicks;
+
+        internal long HostLiveStateCalls => _hostLiveStateCalls;
+
+        internal long HostLineCaptureCalls => _hostLineCaptureCalls;
+
+        internal long HostPresentationCalls => _hostPresentationCalls;
+
+        internal long HostBitplaneCaptureCalls => _hostBitplaneCaptureCalls;
+
+        internal long HostLiveStateFastReturns => _hostLiveStateFastReturns;
+
+        internal void SetHostProfilingEnabled(bool enabled)
+            => _hostProfilingEnabled = enabled;
+
+        internal void ResetHostProfile()
+        {
+            _hostLiveStateTicks = 0;
+            _hostLineCaptureTicks = 0;
+            _hostPresentationTicks = 0;
+            _hostBitplaneCaptureTicks = 0;
+            _hostLiveStateCalls = 0;
+            _hostLineCaptureCalls = 0;
+            _hostPresentationCalls = 0;
+            _hostBitplaneCaptureCalls = 0;
+            _hostLiveStateFastReturns = 0;
+        }
 
         internal long LiveCpuVisibleWorkCycleCacheHits => _liveCpuVisibleWorkCycleCacheHits;
 
@@ -732,6 +896,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _bplcon1 = 0;
             _bplcon2 = 0;
             _bplcon3 = 0;
+            _bplcon4 = _chipset.DisplayChip == DisplayChipModel.AgaLisa ? (ushort)0x0011 : (ushort)0;
+            _clxcon2 = 0;
+            _fmode = 0;
             _diwHigh = 0;
             _diwHighValid = false;
             _agnusDiwHigh = _agnusRegisters.DiwHigh;
@@ -753,8 +920,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _currentRenderRow = -1;
             ResetFrameCounters();
             Array.Clear(_colors);
+            Array.Clear(_agaColorHighNibbles);
+            Array.Clear(_agaColorLowNibbles);
+            Array.Clear(_agaConvertedColors);
             _colors[0] = 0x000;
             _colors[1] = 0xFFF;
+            _agaColorHighNibbles[1] = 0xFFF;
             UpdateConvertedPalette();
             foreach (var sprite in _sprites)
             {
@@ -825,6 +996,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private BitplaneDmaReadLatch LoadLiveBitplaneDmaLatch(int row, int plane, int word, uint address, long fetchCycle)
         {
+            if (_liveBitplaneRequester != null)
+            {
+                return LoadLiveBitplaneDmaLatchThroughContract(
+                    row,
+                    plane,
+                    word,
+                    address,
+                    fetchCycle);
+            }
+
             var previousAuditSource = _bus.PushSlotScheduleAuditSource(AgnusSlotAuditSource.LiveBitplaneFetch, row, word, plane);
             try
             {
@@ -835,10 +1016,24 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     out var value,
                     out var grantedCycle))
                 {
-                    return new BitplaneDmaReadLatch(row, plane, word, value, granted: true, grantedCycle);
+                    return new BitplaneDmaReadLatch(
+                        row,
+                        plane,
+                        word,
+                        address,
+                        addressValid: true,
+                        value,
+                        granted: true,
+                        grantedCycle);
                 }
 
-                return BitplaneDmaReadLatch.Denied(row, plane, word, grantedCycle);
+                return BitplaneDmaReadLatch.Denied(
+                    row,
+                    plane,
+                    word,
+                    address,
+                    addressValid: true,
+                    grantedCycle);
             }
             finally
             {
@@ -856,6 +1051,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var row = latch.Row;
             var plane = latch.Plane;
             var word = latch.Word;
+            _committedDisplayLedger?.Append(
+                AgnusCommittedDisplayEvent.BitplaneSample(
+                    latch.GrantedCycle,
+                    row,
+                    plane,
+                    word,
+                    latch.Address,
+                    latch.AddressValid,
+                    latch.Value,
+                    latch.Granted));
             _liveBitplaneWords[GetLiveBitplaneWordIndex(row, plane, word)] = latch.Value;
             _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)] |= (UInt128)1 << word;
             if (latch.Granted)
@@ -864,7 +1069,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 RecordLiveDisplayDmaCycle(latch.GrantedCycle);
             }
 
-            if (!_liveTimelineUnsafeForFrame)
+            if (!_liveTimelineUnsafeForFrame &&
+                !_presentationIndependentDisplayLedgerEnabled)
             {
                 _displayTimeline.RecordBitplaneFetch(row, plane, word, latch.Value, latch.Granted);
             }
@@ -901,7 +1107,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (!IsSpriteDmaSlotAvailable(spriteIndex, word))
             {
-                _spriteDmaReadLatch = SpriteDmaReadLatch.Denied(row, spriteIndex, word, GetSpriteDmaFetchCycle(row, spriteIndex, word));
+                _spriteDmaReadLatch = SpriteDmaReadLatch.Denied(
+                    row,
+                    spriteIndex,
+                    word,
+                    address,
+                    addressValid: true,
+                    GetSpriteDmaFetchCycle(row, spriteIndex, word));
                 return ConsumeSpriteDmaReadLatch(
                     ref _spriteDmaReadLatch,
                     recordDmaFetch: false,
@@ -930,6 +1142,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private SpriteDmaReadLatch LoadSpriteDmaReadLatch(int row, int spriteIndex, int word, uint address, long fetchCycle)
         {
+            if (_liveSpriteRequester != null)
+            {
+                return LoadSpriteDmaReadLatchThroughContract(
+                    row,
+                    spriteIndex,
+                    word,
+                    address,
+                    fetchCycle);
+            }
+
             if (_bus.CausalBusExecutor.TryExecuteSpriteWord(
                 spriteIndex,
                 address,
@@ -937,10 +1159,24 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 out var value,
                 out var grantedCycle))
             {
-                return new SpriteDmaReadLatch(row, spriteIndex, word, value, granted: true, grantedCycle);
+                return new SpriteDmaReadLatch(
+                    row,
+                    spriteIndex,
+                    word,
+                    address,
+                    addressValid: true,
+                    value,
+                    granted: true,
+                    grantedCycle);
             }
 
-            return SpriteDmaReadLatch.Denied(row, spriteIndex, word, grantedCycle);
+            return SpriteDmaReadLatch.Denied(
+                row,
+                spriteIndex,
+                word,
+                address,
+                addressValid: true,
+                grantedCycle);
         }
 
         private bool ConsumeSpriteDmaReadLatch(
@@ -949,6 +1185,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
             bool recordLiveCapture,
             out ushort value)
         {
+            if (recordLiveCapture && latch.HasValue)
+            {
+                _committedDisplayLedger?.Append(
+                    AgnusCommittedDisplayEvent.SpriteSample(
+                        latch.GrantedCycle,
+                        latch.Row,
+                        latch.SpriteIndex,
+                        latch.Word,
+                        latch.Address,
+                        latch.AddressValid,
+                        latch.Value,
+                        latch.Granted));
+            }
+
             if (!latch.HasValue || !latch.Granted)
             {
                 value = 0;
@@ -1204,13 +1454,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var state = _liveLineStates[GetRasterlineRingSlot(row)];
+            var state = _liveLineStates[GetLiveCaptureSlot(row)];
             return state.Row == row && state.Generation == _liveGeneration;
         }
 
         private LiveLineState GetLiveLineState(int row)
         {
-            var state = _liveLineStates[GetRasterlineRingSlot(row)];
+            var state = _liveLineStates[GetLiveCaptureSlot(row)];
             if (state.Row != row)
             {
                 state.Row = row;
@@ -1223,20 +1473,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private static int GetRasterlineRingSlot(int row)
             => Math.Abs(row % RasterlineRingSize);
 
-        private static int GetLiveBitplaneWordIndex(int row, int plane, int word)
+        private int GetLiveCaptureSlot(int row)
+            => _presentationIndependentDisplayLedgerEnabled
+                ? Math.Clamp(row, 0, LowResOutputHeight - 1)
+                : GetRasterlineRingSlot(row);
+
+        private int GetLiveBitplaneWordIndex(int row, int plane, int word)
         {
-            return (GetRasterlineRingSlot(row) * LiveBitplaneWordsPerRow) +
+            return (GetLiveCaptureSlot(row) * LiveBitplaneWordsPerRow) +
                 (plane * MaxBitplaneFetchWords) + word;
         }
 
-        private static int GetLiveBitplaneMaskIndex(int row, int plane)
+        private int GetLiveBitplaneMaskIndex(int row, int plane)
         {
-            return (GetRasterlineRingSlot(row) * LiveBitplanePlaneCount) + plane;
+            return (GetLiveCaptureSlot(row) * LiveBitplanePlaneCount) + plane;
         }
 
         private void ClearLiveBitplaneWordMasks(int row)
         {
-            var offset = GetRasterlineRingSlot(row) * LiveBitplanePlaneCount;
+            var offset = GetLiveCaptureSlot(row) * LiveBitplanePlaneCount;
             for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
             {
                 _liveBitplaneWordMasks[offset + plane] = 0;
@@ -1273,7 +1528,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
         }
 
-        private void UpdateLiveSpriteDmaPointerFromRegisterWrite(int spriteIndex, int controlRow)
+        private void UpdateLiveSpriteDmaPointerFromRegisterWrite(
+            int spriteIndex,
+            int controlRow,
+            long cycle)
         {
             if ((uint)spriteIndex >= (uint)_liveSpriteDmaStates.Length)
             {
@@ -1315,19 +1573,28 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _liveNextSpriteRow = Math.Min(_liveNextSpriteRow, state.ControlRow);
                 _liveNextSpriteIndex = 0;
                 _liveNextSpriteWord = 0;
-                InvalidateLiveWorkCycle();
+                if (cycle != long.MinValue)
+                {
+                    // Re-arming one channel must not make the global fixed-slot cursor
+                    // revisit sprite slots that physically preceded this register write.
+                    AdvanceLiveSpriteFetchCursorToCycle(cycle);
+                }
+                else
+                {
+                    InvalidateLiveWorkCycle();
+                }
             }
         }
 
-        private static int GetLiveSpriteWordIndex(int row, int spriteIndex, int word)
+        private int GetLiveSpriteWordIndex(int row, int spriteIndex, int word)
         {
-            return (GetRasterlineRingSlot(row) * LiveSpriteWordsPerRow) +
+            return (GetLiveCaptureSlot(row) * LiveSpriteWordsPerRow) +
                 (spriteIndex * LiveSpriteWordsPerChannel) + word;
         }
 
-        private static int GetLiveSpriteMaskIndex(int row, int spriteIndex)
+        private int GetLiveSpriteMaskIndex(int row, int spriteIndex)
         {
-            return (GetRasterlineRingSlot(row) * LiveSpriteChannelCount) + spriteIndex;
+            return (GetLiveCaptureSlot(row) * LiveSpriteChannelCount) + spriteIndex;
         }
 
         private long GetSpriteDmaFetchCycle(int row, int spriteIndex, int word)
@@ -1475,7 +1742,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             var address = AddDmaPointerOffset(state.Descriptor.DataAddress, ((row - state.Descriptor.YStart) * 4) + (word * 2));
             EnsureActiveRowSpriteDmaPlanCurrent(row);
-            _bus.CausalBusExecutor.RecordFixedPlanShadow(slotCycle, AgnusChipSlotOwner.Sprite, _dmacon);
             var captured = TryCaptureLiveSpriteDmaWord(
                 address,
                 row,
@@ -1526,7 +1792,6 @@ namespace CopperMod.Amiga.CustomChips.Denise
             long slotCycle)
         {
             EnsureActiveRowSpriteDmaPlanCurrent(row);
-            _bus.CausalBusExecutor.RecordFixedPlanShadow(slotCycle, AgnusChipSlotOwner.Sprite, _dmacon);
             if (word == 0)
             {
                 if (!TryCaptureLiveSpriteDmaWord(state.ControlAddress, row, spriteIndex, 0, out var pos))
@@ -1741,7 +2006,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var window = GetEffectiveDisplayWindow();
             var paletteSnapshotIndex = _paletteFrameSnapshots.GetOrAdd(
                 _colors,
-                _convertedColors,
+                _convertedColors.AsSpan(0, PaletteColorCount),
                 MaxPaletteFrameSpans);
             for (var row = rowStart; row < rowStop; row++)
             {
@@ -1830,7 +2095,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     // RecordTimelineDisplayWrite captures its state immediately.
                     RefreshLiveLineStateAfterDisplayStateChange(write.Cycle, write.Offset);
                     RecordLiveFrameWrite(write.Cycle, write.Offset, write.Value);
-                    RecordTimelineDisplayWrite(write.Cycle, write.Offset, isCopper: false);
+                    RecordTimelineDisplayWrite(
+                        write.Cycle,
+                        write.Offset,
+                        write.Value,
+                        isCopper: false);
                 }
 
                 if (_advancingLiveDma)
@@ -1905,7 +2174,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             CaptureLiveLineState(row);
         }
 
-        private void RecordTimelineDisplayWrite(long cycle, ushort offset, bool isCopper)
+        private void RecordTimelineDisplayWrite(
+            long cycle,
+            ushort offset,
+            ushort value,
+            bool isCopper)
         {
             if (!_advancingLiveDma ||
                 !_liveFrameValid ||
@@ -1922,6 +2195,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             if (!IsDisplayRegisterWrite(offset))
             {
+                return;
+            }
+
+            if ((offset & 0x01FE) == 0x096 &&
+                (value & DmaconDisplayTimelineMask) == 0)
+            {
+                // BLTPRI and the non-display DMA enables affect Agnus/Paula,
+                // but they cannot change a Denise pixel. In particular, the
+                // delayed BLTPRI sample is queued as a device write after the
+                // originating Copper MOVE. Recording it at the CPU display
+                // phase would insert a later palette snapshot at an earlier X.
                 return;
             }
 
@@ -1946,12 +2230,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var row = GetOutputRowForCycle(_liveFrameStartCycle, cycle);
-            if ((uint)row >= (uint)LowResOutputHeight ||
-                !IsLiveLineValid(row) ||
-                !_displayTimeline.HasLine(row))
+            if ((uint)row >= (uint)LowResOutputHeight)
             {
                 return;
             }
+            var recordCurrentLine =
+                IsLiveLineValid(row) && _displayTimeline.HasLine(row);
 
             var pixelDelay = 0;
             if (isCopper)
@@ -1964,28 +2248,54 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var x = GetOutputXForCycle(_liveFrameStartCycle, cycle, pixelDelay);
-            if (isCopper && _bus.BusAccessCaptureEnabled)
+            var isPaletteWrite =
+                isCopper &&
+                offset >= 0x180 &&
+                offset < 0x1C0;
+            var waitPreTailPixelOffset = isPaletteWrite
+                ? _liveCopper.PendingWaitPreTailPixelOffset
+                : 0;
+            var waitPresentationPixelOffset = isCopper
+                ? _liveCopper.PendingWaitPresentationPixelOffset
+                : 0;
+            if (waitPreTailPixelOffset != 0 ||
+                waitPresentationPixelOffset != 0)
+            {
+                x +=
+                    waitPreTailPixelOffset +
+                    waitPresentationPixelOffset;
+            }
+            if (_bus.BusAccessCaptureEnabled)
             {
                 var transitions = _copperPresentationTransitions ??=
                     new List<CopperPresentationTransitionTrace>(256);
                 if (transitions.Count < MaxCapturedCopperWaitTransitions)
                 {
+                    var lineState = GetLiveLineState(row);
                     transitions.Add(new CopperPresentationTransitionTrace(
                         cycle,
                         row,
                         x,
                         offset,
-                        _colors[offset >= 0x180 && offset < 0x1C0 ? (offset - 0x180) >> 1 : 0]));
+                        _colors[offset >= 0x180 && offset < 0x1C0 ? (offset - 0x180) >> 1 : 0],
+                        isCopper,
+                        recordCurrentLine,
+                        lineState.Bplcon0,
+                        lineState.Dmacon,
+                        lineState.PlaneCount));
                 }
             }
-            var snapshotIndex = CaptureTimelineStateSnapshot(row, GetLiveLineState(row));
-            _displayTimeline.RecordDisplayChange(
-                row,
-                x,
-                snapshotIndex,
-                IsTimelineUnsafeDisplayWrite(offset),
-                offset,
-                isCopper);
+            if (recordCurrentLine)
+            {
+                var snapshotIndex = CaptureTimelineStateSnapshot(row, GetLiveLineState(row));
+                _displayTimeline.RecordDisplayChange(
+                    row,
+                    x,
+                    snapshotIndex,
+                    IsTimelineUnsafeDisplayWrite(offset),
+                    offset,
+                    isCopper);
+            }
 
             // The 358-pixel presentation row begins at h=$38 and therefore
             // extends eight color clocks past the 227-clock physical raster
@@ -2000,6 +2310,44 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 out _,
                 out var horizontal);
             var wrappedX = ((horizontal + CopperHorizontalUnitsPerLine - DefaultDdfStart) * 2) + pixelDelay;
+            wrappedX +=
+                waitPreTailPixelOffset +
+                waitPresentationPixelOffset;
+            if (isCopper && !isPaletteWrite)
+            {
+                _liveCopper.PendingWaitPaletteTailX = -1;
+                _liveCopper.WaitTailPalettePixelOffset = 0;
+            }
+            if (isPaletteWrite &&
+                _liveCopper.PendingWaitPaletteTailX >= 0)
+            {
+                _liveCopper.PendingWaitTailPresentationX = -1;
+                if (wrappedX < 2 * LowResWidth)
+                {
+                    wrappedX = _liveCopper.PendingWaitPaletteTailX;
+                }
+
+                // Across line refresh, the next palette data phase advances five
+                // color clocks on the continuous presentation timeline.
+                _liveCopper.PendingWaitPaletteTailX += CopperRefreshWrapPaletteStep;
+                if (_liveCopper.PendingWaitPaletteTailX >= LowResWidth)
+                {
+                    _liveCopper.PendingWaitPaletteTailX = -1;
+                }
+            }
+            else if (isPaletteWrite &&
+                _liveCopper.PendingWaitTailPresentationX >= 0)
+            {
+                wrappedX = _liveCopper.PendingWaitTailPresentationX;
+                _liveCopper.PendingWaitTailPresentationX = -1;
+            }
+            else if (isCopper &&
+                _liveCopper.PresentNextMoveFromReusedWaitTail &&
+                wrappedX >= LowResWidth &&
+                wrappedX < 2 * LowResWidth)
+            {
+                wrappedX = (2 * LowResWidth) - wrappedX;
+            }
             var wrappedRow = row - 1;
             if ((uint)wrappedRow < (uint)LowResOutputHeight &&
                 (uint)wrappedX < (uint)LowResWidth &&
@@ -2008,7 +2356,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 var wrappedSnapshotIndex = CaptureTimelineStateSnapshot(
                     wrappedRow,
-                    GetLiveLineState(row));
+                    recordCurrentLine
+                        ? GetLiveLineState(row)
+                        : GetLiveLineState(wrappedRow));
                 _displayTimeline.RecordDisplayChange(
                     wrappedRow,
                     wrappedX,
@@ -2229,11 +2579,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
             saved.Bplcon1 = _bplcon1;
             saved.Bplcon2 = _bplcon2;
             saved.Bplcon3 = _bplcon3;
+            saved.Bplcon4 = _bplcon4;
+            saved.Clxcon2 = _clxcon2;
+            saved.Fmode = _fmode;
             saved.Dmacon = _dmacon;
             saved.Bpl1Mod = _bpl1mod;
             saved.Bpl2Mod = _bpl2mod;
             Array.Copy(_colors, saved.Colors, _colors.Length);
+            Array.Copy(_agaColorHighNibbles, saved.AgaColorHighNibbles, _agaColorHighNibbles.Length);
+            Array.Copy(_agaColorLowNibbles, saved.AgaColorLowNibbles, _agaColorLowNibbles.Length);
             Array.Copy(_convertedColors, saved.ConvertedColors, _convertedColors.Length);
+            Array.Copy(_agaConvertedColors, saved.AgaConvertedColors, _agaConvertedColors.Length);
             Array.Copy(_bitplanePointers, saved.BitplanePointers, _bitplanePointers.Length);
             Array.Copy(_bitplaneBaseRows, saved.BitplaneBaseRows, _bitplaneBaseRows.Length);
             Array.Copy(_bitplaneDataRegisters, saved.BitplaneDataRegisters, _bitplaneDataRegisters.Length);
@@ -2262,11 +2618,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
             destination.Bplcon1 = source.Bplcon1;
             destination.Bplcon2 = source.Bplcon2;
             destination.Bplcon3 = source.Bplcon3;
+            destination.Bplcon4 = source.Bplcon4;
+            destination.Clxcon2 = source.Clxcon2;
+            destination.Fmode = source.Fmode;
             destination.Dmacon = source.Dmacon;
             destination.Bpl1Mod = source.Bpl1Mod;
             destination.Bpl2Mod = source.Bpl2Mod;
             Array.Copy(source.Colors, destination.Colors, source.Colors.Length);
+            Array.Copy(source.AgaColorHighNibbles, destination.AgaColorHighNibbles, source.AgaColorHighNibbles.Length);
+            Array.Copy(source.AgaColorLowNibbles, destination.AgaColorLowNibbles, source.AgaColorLowNibbles.Length);
             Array.Copy(source.ConvertedColors, destination.ConvertedColors, source.ConvertedColors.Length);
+            Array.Copy(source.AgaConvertedColors, destination.AgaConvertedColors, source.AgaConvertedColors.Length);
             Array.Copy(source.BitplanePointers, destination.BitplanePointers, source.BitplanePointers.Length);
             Array.Copy(source.BitplaneBaseRows, destination.BitplaneBaseRows, source.BitplaneBaseRows.Length);
             Array.Copy(source.BitplaneDataRegisters, destination.BitplaneDataRegisters, source.BitplaneDataRegisters.Length);
@@ -2293,11 +2655,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _bplcon1 = saved.Bplcon1;
             _bplcon2 = saved.Bplcon2;
             _bplcon3 = saved.Bplcon3;
+            _bplcon4 = saved.Bplcon4;
+            _clxcon2 = saved.Clxcon2;
+            _fmode = saved.Fmode;
             _dmacon = saved.Dmacon;
             _bpl1mod = saved.Bpl1Mod;
             _bpl2mod = saved.Bpl2Mod;
             Array.Copy(saved.Colors, _colors, _colors.Length);
+            Array.Copy(saved.AgaColorHighNibbles, _agaColorHighNibbles, _agaColorHighNibbles.Length);
+            Array.Copy(saved.AgaColorLowNibbles, _agaColorLowNibbles, _agaColorLowNibbles.Length);
             Array.Copy(saved.ConvertedColors, _convertedColors, _convertedColors.Length);
+            Array.Copy(saved.AgaConvertedColors, _agaConvertedColors, _agaConvertedColors.Length);
             Array.Copy(saved.BitplanePointers, _bitplanePointers, _bitplanePointers.Length);
             Array.Copy(saved.BitplaneBaseRows, _bitplaneBaseRows, _bitplaneBaseRows.Length);
             Array.Copy(saved.BitplaneDataRegisters, _bitplaneDataRegisters, _bitplaneDataRegisters.Length);
@@ -2329,7 +2697,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _livePaletteSnapshots.CopyTo(
                     state.PaletteSnapshotIndex,
                     _colors,
-                    _convertedColors);
+                    _convertedColors.AsSpan(0, PaletteColorCount));
                 _lastAppliedLivePaletteSnapshotIndex = state.PaletteSnapshotIndex;
             }
 
@@ -2413,19 +2781,27 @@ namespace CopperMod.Amiga.CustomChips.Denise
             private ushort[] _encodedColors = Array.Empty<ushort>();
             private uint[] _convertedColors = Array.Empty<uint>();
             private readonly bool _rasterlineRing;
-            private readonly int[] _rasterlineRows = new int[RasterlineRingSize];
-            private readonly int[] _rasterlineCounts = new int[RasterlineRingSize];
+            private readonly int _rasterlineSlotCount;
+            private readonly int[] _rasterlineRows;
+            private readonly int[] _rasterlineCounts;
 
-            public PaletteSnapshotPool(bool rasterlineRing = false)
+            public PaletteSnapshotPool(
+                bool rasterlineRing = false,
+                bool retainFullFrame = false)
             {
                 _rasterlineRing = rasterlineRing;
+                _rasterlineSlotCount = rasterlineRing
+                    ? (retainFullFrame ? LowResOutputHeight : RasterlineRingSize)
+                    : 0;
+                _rasterlineRows = new int[_rasterlineSlotCount];
+                _rasterlineCounts = new int[_rasterlineSlotCount];
                 Array.Fill(_rasterlineRows, -1);
                 if (rasterlineRing)
                 {
                     _encodedColors = new ushort[
-                        RasterlineRingSize * MaxRasterlinePresentationEvents * EncodedColorCount];
+                        _rasterlineSlotCount * MaxRasterlinePresentationEvents * EncodedColorCount];
                     _convertedColors = new uint[
-                        RasterlineRingSize * MaxRasterlinePresentationEvents * PaletteColorCount];
+                        _rasterlineSlotCount * MaxRasterlinePresentationEvents * PaletteColorCount];
                 }
             }
 
@@ -2455,7 +2831,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         MaxRasterlinePresentationEvents);
                 }
 
-                var slot = GetRasterlineRingSlot(row);
+                var slot = GetRasterlineSlot(row);
                 if (_rasterlineRows[slot] != row)
                 {
                     _rasterlineRows[slot] = row;
@@ -2536,7 +2912,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 var index = _rasterlineRing
-                    ? Math.Clamp(requestedIndex, 0, (RasterlineRingSize * MaxRasterlinePresentationEvents) - 1)
+                    ? Math.Clamp(
+                        requestedIndex,
+                        0,
+                        (_rasterlineSlotCount * MaxRasterlinePresentationEvents) - 1)
                     : Math.Clamp(requestedIndex, 0, Count - 1);
                 GetEncodedColors(index).CopyTo(encodedColors);
                 GetConvertedColors(index).CopyTo(convertedColors);
@@ -2553,6 +2932,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private ReadOnlySpan<uint> GetConvertedColors(int snapshotIndex)
                 => _convertedColors.AsSpan(snapshotIndex * PaletteColorCount, PaletteColorCount);
+
+            private int GetRasterlineSlot(int row)
+                => _rasterlineSlotCount == LowResOutputHeight
+                    ? Math.Clamp(row, 0, LowResOutputHeight - 1)
+                    : GetRasterlineRingSlot(row);
 
             private void EnsureCapacity(int requiredSnapshotCount, int maximumSnapshotCount)
             {
@@ -2689,6 +3073,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 PendingInstructionFirst = 0;
                 PendingInstructionFirstAccess = default;
                 PendingInstructionSecondWordCycle = 0;
+                PendingInstructionSecondWordRequestedCycle = 0;
+                PendingInstructionSecondWordPreservePhysicalPhase = false;
                 PendingMove = false;
                 PendingMoveRegister = 0;
                 PendingMoveValue = 0;
@@ -2705,13 +3091,29 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 WaitRestartIncomingRgaBlocked = false;
                 WaitStartCarryPending = false;
                 WaitStartCarrySkipCount = 0;
+                WaitStartCarryAdjacent = false;
+                WaitInheritedAdjacentControlPhase = false;
+                WaitInheritedAdjacentFirst = 0;
+                WaitInheritedAdjacentSecond = 0;
                 ArmWaitStartTailAfterMove = false;
                 PendingWaitStartTail = false;
                 WaitRunFirst = 0;
                 WaitRunSecond = 0;
                 SatisfiedWaitRunCount = 0;
                 HasWaitRun = false;
+                WaitRunContinuesFromDifferentInstruction = false;
+                PreviousWaitRunFirst = 0;
+                WaitRunCrossedIntoLineTail = false;
+                PreviousWaitRunControlBlocked = false;
                 WaitRunControlBlocked = false;
+                PresentNextMoveFromReusedWaitTail = false;
+                RestoreWaitControlPhaseAfterMove = false;
+                PendingWaitTailPresentationX = -1;
+                PendingWaitPaletteTailX = -1;
+                WaitTailPalettePixelOffset = 0;
+                PendingWaitPreTailPixelOffset = 0;
+                PendingWaitPresentationPixelOffset = 0;
+                PreDdfPaletteWritesFollowPhysicalPhase = false;
             }
 
             public uint Pc;
@@ -2742,6 +3144,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public AmigaBusAccessResult PendingInstructionFirstAccess;
 
             public long PendingInstructionSecondWordCycle;
+
+            public long PendingInstructionSecondWordRequestedCycle;
+
+            public bool PendingInstructionSecondWordPreservePhysicalPhase;
 
             public bool PendingMove;
 
@@ -2775,6 +3181,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public byte WaitStartCarrySkipCount;
 
+            public bool WaitStartCarryAdjacent;
+
+            public bool WaitInheritedAdjacentControlPhase;
+
+            public ushort WaitInheritedAdjacentFirst;
+
+            public ushort WaitInheritedAdjacentSecond;
+
             public bool ArmWaitStartTailAfterMove;
 
             public bool PendingWaitStartTail;
@@ -2787,11 +3201,38 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public bool HasWaitRun;
 
+            public bool WaitRunContinuesFromDifferentInstruction;
+
+            public ushort PreviousWaitRunFirst;
+
+            public bool WaitRunCrossedIntoLineTail;
+
+            public bool PreviousWaitRunControlBlocked;
+
             public bool WaitRunControlBlocked;
+
+            public bool PresentNextMoveFromReusedWaitTail;
+
+            public bool RestoreWaitControlPhaseAfterMove;
+
+            public int PendingWaitTailPresentationX;
+
+            public int PendingWaitPaletteTailX;
+
+            public int WaitTailPalettePixelOffset;
+
+            public int PendingWaitPreTailPixelOffset;
+
+            public int PendingWaitPresentationPixelOffset;
+
+            public bool PreDdfPaletteWritesFollowPhysicalPhase;
 
             public void CompleteMove(long stopCycle)
             {
-                Cycle = stopCycle;
+                Cycle = RestoreWaitControlPhaseAfterMove
+                    ? stopCycle + (2L * AgnusChipSlotScheduler.SlotCycles)
+                    : stopCycle;
+                RestoreWaitControlPhaseAfterMove = false;
                 if (ArmWaitStartTailAfterMove)
                 {
                     PendingWaitStartTail = true;
@@ -2814,18 +3255,47 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public void Wait(ushort first, ushort second)
             {
-                if (HasWaitRun && WaitRunFirst == first && WaitRunSecond == second)
+                PresentNextMoveFromReusedWaitTail = false;
+                PendingWaitPreTailPixelOffset = 0;
+                PendingWaitPresentationPixelOffset = 0;
+                PendingWaitTailPresentationX = -1;
+                PendingWaitPaletteTailX = -1;
+                var targetHorizontal = first & 0x00FE;
+                WaitTailPalettePixelOffset = targetHorizontal >= 0x00DA
+                    ? targetHorizontal > 0x00E0
+                        ? 0
+                        : -((AgnusHrmOcsSlotTable.LastRefreshHorizontal -
+                             (targetHorizontal >= 0x00E0 ? 2 : 0)) * 2)
+                    : 0;
+                // A WAIT reached before h=$C0 continues on the same presentation
+                // row. The ordinary tail interval uses wrapped preload state.
+                // Targets beyond the final h=$E0 request resume after refresh and
+                // return to physical pre-DDF palette mapping.
+                PreDdfPaletteWritesFollowPhysicalPhase =
+                    targetHorizontal < 0x00C0 ||
+                    targetHorizontal > 0x00E0;
+                WaitRunContinuesFromDifferentInstruction =
+                    HasWaitRun && (WaitRunFirst != first || WaitRunSecond != second);
+                PreviousWaitRunFirst = WaitRunFirst;
+                if (WaitRunContinuesFromDifferentInstruction)
+                {
+                    WaitRunCrossedIntoLineTail =
+                        (WaitRunFirst & 0x00FE) < 0x00C0 &&
+                        (first & 0x00FE) >= 0x00C0;
+                }
+                PreviousWaitRunControlBlocked = WaitRunControlBlocked;
+                if (HasWaitRun && !WaitRunContinuesFromDifferentInstruction)
                 {
                     SatisfiedWaitRunCount++;
                 }
                 else
                 {
-                    WaitRunFirst = first;
-                    WaitRunSecond = second;
                     SatisfiedWaitRunCount = 0;
                     HasWaitRun = true;
                     WaitRunControlBlocked = false;
                 }
+                WaitRunFirst = first;
+                WaitRunSecond = second;
 
                 WaitRestartStage = CopperWaitRestartStage.WaitingForComparison;
                 WaitFirst = first;
@@ -2833,11 +3303,21 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 WaitObservedBlitterBusy = false;
             }
 
-            public void ArmWaitRestart(long cycle, bool incomingRgaBlocked)
+            public void ArmWaitRestart(
+                long cycle,
+                bool incomingRgaBlocked,
+                bool reuseRunControlPhase = false,
+                bool restoreControlPhaseAfterMove = false,
+                bool presentNextMoveFromReusedWaitTail = false,
+                bool readyAtWakeCycle = false)
             {
                 Cycle = cycle;
                 WaitRestartIncomingRgaBlocked = incomingRgaBlocked;
-                WaitRestartStage = CopperWaitRestartStage.RestartArmed;
+                PresentNextMoveFromReusedWaitTail = presentNextMoveFromReusedWaitTail;
+                RestoreWaitControlPhaseAfterMove = restoreControlPhaseAfterMove;
+                WaitRestartStage = reuseRunControlPhase || readyAtWakeCycle
+                    ? CopperWaitRestartStage.ReadyToRequest
+                    : CopperWaitRestartStage.RestartArmed;
             }
 
             public void AdvanceWaitRestartStage(long nextCycle)
@@ -2860,19 +3340,37 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 WaitRestartIncomingRgaBlocked = false;
                 WaitStartCarryPending = false;
                 WaitStartCarrySkipCount = 0;
+                WaitStartCarryAdjacent = false;
+                WaitInheritedAdjacentControlPhase = false;
+                WaitInheritedAdjacentFirst = 0;
+                WaitInheritedAdjacentSecond = 0;
                 ArmWaitStartTailAfterMove = false;
                 PendingWaitStartTail = false;
                 WaitRunFirst = 0;
                 WaitRunSecond = 0;
                 SatisfiedWaitRunCount = 0;
                 HasWaitRun = false;
+                WaitRunContinuesFromDifferentInstruction = false;
+                PreviousWaitRunFirst = 0;
+                WaitRunCrossedIntoLineTail = false;
+                PreviousWaitRunControlBlocked = false;
                 WaitRunControlBlocked = false;
+                PresentNextMoveFromReusedWaitTail = false;
+                RestoreWaitControlPhaseAfterMove = false;
+                PendingWaitTailPresentationX = -1;
+                PendingWaitPaletteTailX = -1;
+                WaitTailPalettePixelOffset = 0;
+                PendingWaitPreTailPixelOffset = 0;
+                PendingWaitPresentationPixelOffset = 0;
+                PreDdfPaletteWritesFollowPhysicalPhase = false;
                 PendingStart = false;
                 SuppressNextMove = false;
                 PendingInstructionSecondWord = false;
                 PendingInstructionFirst = 0;
                 PendingInstructionFirstAccess = default;
                 PendingInstructionSecondWordCycle = 0;
+                PendingInstructionSecondWordRequestedCycle = 0;
+                PendingInstructionSecondWordPreservePhysicalPhase = false;
                 PendingMove = false;
                 PendingMoveRegister = 0;
                 PendingMoveValue = 0;
@@ -3042,25 +3540,53 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private readonly struct BitplaneDmaReadLatch
         {
-            public BitplaneDmaReadLatch(int row, int plane, int word, ushort value, bool granted, long grantedCycle)
+            public BitplaneDmaReadLatch(
+                int row,
+                int plane,
+                int word,
+                uint address,
+                bool addressValid,
+                ushort value,
+                bool granted,
+                long grantedCycle)
             {
                 Row = row;
                 Plane = plane;
                 Word = word;
+                Address = address;
+                AddressValid = addressValid;
                 Value = value;
                 Granted = granted;
                 GrantedCycle = grantedCycle;
                 HasValue = true;
             }
 
-            public static BitplaneDmaReadLatch Denied(int row, int plane, int word, long grantedCycle)
-                => new BitplaneDmaReadLatch(row, plane, word, 0, granted: false, grantedCycle);
+            public static BitplaneDmaReadLatch Denied(
+                int row,
+                int plane,
+                int word,
+                uint address,
+                bool addressValid,
+                long grantedCycle)
+                => new BitplaneDmaReadLatch(
+                    row,
+                    plane,
+                    word,
+                    address,
+                    addressValid,
+                    value: 0,
+                    granted: false,
+                    grantedCycle);
 
             public int Row { get; }
 
             public int Plane { get; }
 
             public int Word { get; }
+
+            public uint Address { get; }
+
+            public bool AddressValid { get; }
 
             public ushort Value { get; }
 
@@ -3073,25 +3599,53 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private readonly struct SpriteDmaReadLatch
         {
-            public SpriteDmaReadLatch(int row, int spriteIndex, int word, ushort value, bool granted, long grantedCycle)
+            public SpriteDmaReadLatch(
+                int row,
+                int spriteIndex,
+                int word,
+                uint address,
+                bool addressValid,
+                ushort value,
+                bool granted,
+                long grantedCycle)
             {
                 Row = row;
                 SpriteIndex = spriteIndex;
                 Word = word;
+                Address = address;
+                AddressValid = addressValid;
                 Value = value;
                 Granted = granted;
                 GrantedCycle = grantedCycle;
                 HasValue = true;
             }
 
-            public static SpriteDmaReadLatch Denied(int row, int spriteIndex, int word, long grantedCycle)
-                => new SpriteDmaReadLatch(row, spriteIndex, word, 0, granted: false, grantedCycle);
+            public static SpriteDmaReadLatch Denied(
+                int row,
+                int spriteIndex,
+                int word,
+                uint address,
+                bool addressValid,
+                long grantedCycle)
+                => new SpriteDmaReadLatch(
+                    row,
+                    spriteIndex,
+                    word,
+                    address,
+                    addressValid,
+                    value: 0,
+                    granted: false,
+                    grantedCycle);
 
             public int Row { get; }
 
             public int SpriteIndex { get; }
 
             public int Word { get; }
+
+            public uint Address { get; }
+
+            public bool AddressValid { get; }
 
             public ushort Value { get; }
 
@@ -3158,19 +3712,33 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private sealed class DisplayFrameTimeline
         {
-            private readonly DisplayLineTimeline[] _lines = new DisplayLineTimeline[RasterlineRingSize];
+            private readonly DisplayLineTimeline[] _lines;
             private readonly int _lowResWidth;
-            private readonly DisplayTimelineState[] _states =
-                new DisplayTimelineState[RasterlineRingSize * MaxRasterlinePresentationEvents];
-            private readonly int[] _lineStateCounts = new int[RasterlineRingSize];
+            private readonly int _lineSlotCount;
+            private readonly int _maximumBitplaneDataSpans;
+            private readonly DisplayTimelineState[] _states;
+            private readonly int[] _lineStateCounts;
             private readonly List<SpriteFrameCommand> _spriteFrameCommands = new List<SpriteFrameCommand>(MaxSpriteFrameCommands * 8);
-            private readonly List<BitplaneDataSpan> _bitplaneDataSpans = new List<BitplaneDataSpan>(MaxBitplaneDataSpans);
+            private readonly List<BitplaneDataSpan> _bitplaneDataSpans;
             private long _frameStartCycle;
             private int _generation = 1;
 
-            public DisplayFrameTimeline(int lowResWidth)
+            public DisplayFrameTimeline(
+                int lowResWidth,
+                bool retainFullFrame = false)
             {
                 _lowResWidth = lowResWidth;
+                _lineSlotCount = retainFullFrame
+                    ? LowResOutputHeight
+                    : RasterlineRingSize;
+                _maximumBitplaneDataSpans =
+                    _lineSlotCount * MaxRasterlinePresentationEvents;
+                _lines = new DisplayLineTimeline[_lineSlotCount];
+                _states =
+                    new DisplayTimelineState[_lineSlotCount * MaxRasterlinePresentationEvents];
+                _lineStateCounts = new int[_lineSlotCount];
+                _bitplaneDataSpans =
+                    new List<BitplaneDataSpan>(_maximumBitplaneDataSpans);
                 for (var i = 0; i < _lines.Length; i++)
                 {
                     _lines[i] = new DisplayLineTimeline();
@@ -3383,12 +3951,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public void BeginLineStateSnapshots(int row)
             {
-                _lineStateCounts[GetRasterlineRingSlot(row)] = 0;
+                _lineStateCounts[GetLineSlot(row)] = 0;
             }
 
             public DisplayTimelineState AddStateSnapshot(int row)
             {
-                var slot = GetRasterlineRingSlot(row);
+                var slot = GetLineSlot(row);
                 var count = _lineStateCounts[slot];
                 if (count >= MaxRasterlinePresentationEvents)
                 {
@@ -3409,7 +3977,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public DisplayLineTimeline GetLine(int row)
             {
-                return _lines[GetRasterlineRingSlot(Math.Clamp(row, 0, LowResOutputHeight - 1))];
+                return _lines[GetLineSlot(Math.Clamp(row, 0, LowResOutputHeight - 1))];
             }
 
             public bool HasLine(int row)
@@ -3419,7 +3987,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return false;
                 }
 
-                var line = _lines[GetRasterlineRingSlot(row)];
+                var line = _lines[GetLineSlot(row)];
                 return line.Row == row &&
                     line.Generation == _generation &&
                     line.Valid;
@@ -3427,7 +3995,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public void RecordBitplaneDataSpan(BitplaneDataSpan span)
             {
-                if (_bitplaneDataSpans.Count >= MaxBitplaneDataSpans)
+                if (_bitplaneDataSpans.Count >= _maximumBitplaneDataSpans)
                 {
                     return;
                 }
@@ -3451,7 +4019,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return false;
                 }
 
-                line = _lines[GetRasterlineRingSlot(row)];
+                line = _lines[GetLineSlot(row)];
                 return line.Row == row && line.Generation == _generation && line.Valid;
             }
 
@@ -3462,7 +4030,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return;
                 }
 
-                var line = _lines[GetRasterlineRingSlot(row)];
+                var line = _lines[GetLineSlot(row)];
                 if (line.Generation == _generation)
                 {
                     var expiredRow = line.Row;
@@ -3506,7 +4074,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return;
                 }
 
-                var line = _lines[GetRasterlineRingSlot(row)];
+                var line = _lines[GetLineSlot(row)];
                 if (line.Row != row || line.Generation != _generation || !line.Valid || line.SegmentCount <= 0)
                 {
                     return;
@@ -3571,7 +4139,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return;
                 }
 
-                var line = _lines[GetRasterlineRingSlot(row)];
+                var line = _lines[GetLineSlot(row)];
                 if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return;
@@ -3600,7 +4168,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return TimelineFetchStatus.NotAttempted;
                 }
 
-                var line = _lines[GetRasterlineRingSlot(row)];
+                var line = _lines[GetLineSlot(row)];
                 if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return TimelineFetchStatus.NotAttempted;
@@ -3626,7 +4194,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return 0;
                 }
 
-                var line = _lines[GetRasterlineRingSlot(row)];
+                var line = _lines[GetLineSlot(row)];
                 if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return 0;
@@ -3699,7 +4267,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return;
                 }
 
-                var line = _lines[GetRasterlineRingSlot(row)];
+                var line = _lines[GetLineSlot(row)];
                 if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return;
@@ -3738,7 +4306,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return TimelineFetchStatus.NotAttempted;
                 }
 
-                var line = _lines[GetRasterlineRingSlot(row)];
+                var line = _lines[GetLineSlot(row)];
                 if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return TimelineFetchStatus.NotAttempted;
@@ -3764,7 +4332,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return 0;
                 }
 
-                var line = _lines[GetRasterlineRingSlot(row)];
+                var line = _lines[GetLineSlot(row)];
                 if (line.Row != row || line.Generation != _generation || !line.Valid)
                 {
                     return 0;
@@ -3777,6 +4345,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 PlanarChunkCacheMisses++;
             }
+
+            private int GetLineSlot(int row)
+                => _lineSlotCount == LowResOutputHeight
+                    ? Math.Clamp(row, 0, LowResOutputHeight - 1)
+                    : GetRasterlineRingSlot(row);
         }
 
         private sealed class DisplayLineTimeline
@@ -3962,8 +4535,14 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public ushort Dmacon;
             public short Bpl1Mod;
             public short Bpl2Mod;
+            public ushort Bplcon4;
+            public ushort Clxcon2;
+            public ushort Fmode;
             public readonly ushort[] Colors = new ushort[32];
-            public readonly uint[] ConvertedColors = new uint[64];
+            public readonly ushort[] AgaColorHighNibbles = new ushort[AgaPaletteColorCount];
+            public readonly ushort[] AgaColorLowNibbles = new ushort[AgaPaletteColorCount];
+            public readonly uint[] ConvertedColors = new uint[PaletteColorCount];
+            public readonly uint[] AgaConvertedColors = new uint[AgaPaletteColorCount];
             public readonly uint[] BitplanePointers = new uint[MaxBitplaneCapacity];
             public readonly int[] BitplaneBaseRows = new int[MaxBitplaneCapacity];
             public readonly ushort[] BitplaneDataRegisters = new ushort[MaxBitplaneCapacity];
@@ -4670,14 +5249,24 @@ namespace CopperMod.Amiga.CustomChips.Denise
         long RestartCycle,
         bool CarryPending,
         byte CarrySkipCount,
-        bool RestartIncomingRgaBlocked);
+        bool RestartIncomingRgaBlocked,
+        byte SatisfiedWaitRunCount,
+        bool WaitRunControlBlocked,
+        bool InheritedAdjacentControlPhaseCreated,
+        bool ReusedInheritedAdjacentControlPhase,
+        bool ReusedRunControlPhase);
 
     internal readonly record struct CopperPresentationTransitionTrace(
         long Cycle,
         int Row,
         int X,
         ushort Offset,
-        ushort Value);
+        ushort Value,
+        bool IsCopper,
+        bool HasStartedLine,
+        ushort Bplcon0,
+        ushort Dmacon,
+        int PlaneCount);
 
     internal readonly record struct CopperTimelineSegmentTrace(
         int XStart,

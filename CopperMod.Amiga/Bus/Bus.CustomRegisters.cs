@@ -10,6 +10,8 @@ namespace CopperMod.Amiga.Bus
 {
     internal sealed partial class Bus
     {
+        internal const int DmaconBltpriVisibilityDelaySlots = 2;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool PublishCustomRegisterState(ushort offset, ushort value, long cycle)
             => _customRegisterFile.PublishStoredValue(offset, value, cycle);
@@ -296,6 +298,11 @@ namespace CopperMod.Amiga.Bus
 
         private void CalculateBeamPosition(long targetCycle, out ushort vposr, out ushort vhposr)
         {
+            if (TryCalculateExternalResyncBeamPosition(targetCycle, out vposr, out vhposr))
+            {
+                return;
+            }
+
             var beam = _beamClock.GetPosition(targetCycle);
             var horizontal = EncodeVhposrHorizontal(beam.BeamHorizontal, targetCycle);
             var registerLine = beam.BeamLine;
@@ -303,12 +310,70 @@ namespace CopperMod.Amiga.Bus
             vhposr = (ushort)(((registerLine & 0x00FF) << 8) | horizontal);
         }
 
+        private void ApplyExternalResyncControl(ushort bplcon0, long cycle)
+        {
+            const ushort externalResync = 0x0002;
+            var enabled = (bplcon0 & externalResync) != 0;
+            if (enabled == _externalResyncEnabled)
+            {
+                return;
+            }
+
+            if (!enabled)
+            {
+                ResetExternalResyncState();
+                return;
+            }
+
+            var writeCycle = Math.Max(0, cycle);
+            var beam = _beamClock.GetPosition(writeCycle);
+            _externalResyncEnabled = true;
+            _externalResyncLine = beam.BeamLine;
+            _externalResyncLongFrame = beam.IsLongFrame;
+            _externalResyncLineStartCycle = _beamClock.GetLineStartCycle(writeCycle);
+        }
+
+        private bool TryCalculateExternalResyncBeamPosition(
+            long targetCycle,
+            out ushort vposr,
+            out ushort vhposr)
+        {
+            if (!_externalResyncEnabled)
+            {
+                vposr = 0;
+                vhposr = 0;
+                return false;
+            }
+
+            var lineCycles = _beamClock.GetLineCyclesAt(_externalResyncLineStartCycle);
+            var elapsed = Math.Max(0, targetCycle - _externalResyncLineStartCycle);
+            // With ERSY asserted and no external sync input, the current
+            // Agnus line counter finishes in its native phase, then waits at
+            // h=0 without advancing the vertical counter.
+            var horizontal = elapsed < lineCycles
+                ? Math.Max(0, (int)(elapsed / _rasterTiming.CpuCyclesPerColorClock) - 1)
+                : 0;
+            vposr = (ushort)(((_externalResyncLongFrame ? 1 : 0) << 15) |
+                ((_externalResyncLine >> 8) & 0x0001));
+            vhposr = (ushort)(((_externalResyncLine & 0x00FF) << 8) | horizontal);
+            return true;
+        }
+
+        private void ResetExternalResyncState()
+        {
+            _externalResyncEnabled = false;
+            _externalResyncLine = 0;
+            _externalResyncLongFrame = false;
+            _externalResyncLineStartCycle = 0;
+        }
+
         private int EncodeVhposrHorizontal(int beamHorizontal, long cycle)
         {
             var physicalHorizontal = Math.Clamp(beamHorizontal, 0, 0xE2);
-            // Internal RGA slot coordinates precede externally visible Agnus
-            // HPOS by three CCKs. VHPOSR then returns the position after the
-            // register access advances the horizontal counter once.
+            // CPU reads sample VHPOSR in the granted RGA phase. The externally
+            // visible horizontal counter is four color clocks ahead of that
+            // internal slot coordinate; transfer completion does not advance
+            // the sampled value.
             return (int)((physicalHorizontal + 4) % Math.Max(
                 1,
                 _beamClock.GetLineCyclesAt(cycle) / _rasterTiming.CpuCyclesPerColorClock));
@@ -328,48 +393,13 @@ namespace CopperMod.Amiga.Bus
             long requestedCycle)
         {
             const AmigaBusAccessTarget target = AmigaBusAccessTarget.CustomRegisters;
-            var grantRequestCycle = requestedCycle + AgnusChipSlotScheduler.SlotCycles;
-            var liveScratchAttempted = false;
-            var liveScratchSupported = false;
-            var liveScratch = default(OcsLiveDmaScratchResult);
-            if (ShouldRunDeferredCpuWaitSlotShadowAudit &&
-                _deferredCpuWaitSlotShadowLiveAttempts < DeferredCpuWaitSlotShadowLiveMaxSamples &&
-                LiveAgnusDmaEnabled &&
-                Display.HasLiveDisplayWork() &&
-                Display.GetNextLiveDisplayWakeCandidateCycle(grantRequestCycle, grantRequestCycle + LineCycles).HasValue &&
-                IsDeferredCpuWaitSlotShadowGrantSupported(target, AmigaBusAccessSize.Long, grantRequestCycle + LineCycles))
-            {
-                liveScratchAttempted = true;
-                var scratchSlots = _hrmSlotEngine.CreateShadowCopy();
-                _deferredCpuWaitSlotShadowLiveAttempts++;
-                liveScratchSupported = Display.TryRunCpuWaitLiveDmaScratch(
-                    scratchSlots,
-                    accessKind,
-                    target,
-                    address,
-                    AmigaBusAccessSize.Long,
-                    grantRequestCycle,
-                    isWrite: true,
-                    OcsLiveDmaScratchCpuWrite.Long(target, address, value),
-                    out liveScratch);
-                RecordDeferredCpuWaitSlotShadowLiveCoverage(AmigaBusAccessSize.Long, liveScratch);
-                if (!liveScratchSupported)
-                {
-                    RecordDeferredCpuWaitSlotShadowUnsupported(
-                        accessKind,
-                        target,
-                        address,
-                        AmigaBusAccessSize.Long,
-                        isWrite: true,
-                        requestedCycle,
-                        grantRequestCycle,
-                        CpuWaitSlotShadowReason.Display,
-                        liveScratch.ToDetailString());
-                }
-            }
-
+            // M68kCore's BeginCpuBusAccessCycle has already applied the 68000
+            // bus-cycle start delay. Adding another slot here inserts a bubble
+            // before every split custom-register longword (unlike word and
+            // ordinary longword accesses).
+            var grantRequestCycle = requestedCycle;
             _hardwareScheduler.DrainForCpuAccess(target, address, grantRequestCycle, isWrite: true, AmigaBusAccessSize.Long);
-            if (Blitter.Busy)
+            if (Blitter.BusPipelineActive && !AgnusLiveBlitterEnabled)
             {
                 grantRequestCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(grantRequestCycle);
             }
@@ -398,7 +428,7 @@ namespace CopperMod.Amiga.Bus
             WriteCpuCustomRegisterWord(address, (ushort)(value >> 16), firstWordCycle);
 
             var secondSearchCycle = firstCompletedCycle + AgnusChipSlotScheduler.SlotCycles;
-            if (Blitter.Busy)
+            if (Blitter.BusPipelineActive && !AgnusLiveBlitterEnabled)
             {
                 secondSearchCycle = _hardwareScheduler.ExecuteThroughBlitterCpuStall(secondSearchCycle);
             }
@@ -414,28 +444,6 @@ namespace CopperMod.Amiga.Bus
                 out var completedCycle);
             AdvanceDmaAfterCpuGrantIfNeeded(target, address, firstCompletedCycle, secondWordCycle, isWrite: true);
             WriteRawWord(address + 2, (ushort)value, secondWordCycle, default(CpuWritePolicy));
-
-            if (liveScratchAttempted && liveScratchSupported)
-            {
-                var referenceTimeline = _hrmSlotEngine.CaptureTimelineSignature(grantRequestCycle, completedCycle);
-                RecordDeferredCpuWaitSlotShadowAudit(
-                    accessKind,
-                    target,
-                    address,
-                    AmigaBusAccessSize.Long,
-                    isWrite: true,
-                    requestedCycle,
-                    grantRequestCycle,
-                    liveScratch.GrantedCycle,
-                    liveScratch.SecondWordCycle,
-                    liveScratch.CompletedCycle,
-                    firstWordCycle,
-                    secondWordCycle,
-                    completedCycle,
-                    liveScratch.Timeline,
-                    referenceTimeline,
-                    liveScratch.ToDetailString());
-            }
 
             RecordDeferredCpuWaitWindow(
                 accessKind,
@@ -467,15 +475,27 @@ namespace CopperMod.Amiga.Bus
                 accessKind,
                 requestedCycle,
                 searchCycle);
-            _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
-                accessKind,
-                target,
-                address,
-                searchCycle,
-                requestedCycle,
-                isWrite: true,
-                out grantedCycle,
-                out completedCycle);
+            if (!Blitter.BusPipelineActive ||
+                !TryGrantCpuDataLongWordPhaseChronologically(
+                    accessKind,
+                    target,
+                    address,
+                    searchCycle,
+                    requestedCycle,
+                    isWrite: true,
+                    out grantedCycle,
+                    out completedCycle))
+            {
+                _agnusBusExecutor.GrantCpuDataLongWordPhaseSlot(
+                    accessKind,
+                    target,
+                    address,
+                    searchCycle,
+                    requestedCycle,
+                    isWrite: true,
+                    out grantedCycle,
+                    out completedCycle);
+            }
         }
 
 
@@ -529,6 +549,30 @@ namespace CopperMod.Amiga.Bus
             offset = CustomRegisterScheduleClassifier.NormalizeOffset(offset);
             _customRegisterFile.RecordWrite(offset, value, width, lane, cycle, requester, cause);
             _customRegisterWrites.Add(new CustomRegisterWrite(cycle, offset, value));
+            if (_chipset.HasAgaComponent)
+            {
+                if (offset == (ushort)CustomRegister.Fmode && (value & 0xC00F) != 0)
+                {
+                    TraceUnsupportedAgaFeature(offset, value, cycle, "FMODE wide bitplane/sprite fetch");
+                }
+                else if (offset == (ushort)CustomRegister.Bplcon0 &&
+                    (value & 0x0800) != 0 && (value & 0x0010) != 0)
+                {
+                    TraceUnsupportedAgaFeature(offset, value, cycle, "HAM8 composition");
+                }
+                else if (offset == (ushort)CustomRegister.Bplcon3 && (value & 0x00C0) != 0)
+                {
+                    TraceUnsupportedAgaFeature(offset, value, cycle, "AGA sprite resolution");
+                }
+                else if (offset == (ushort)CustomRegister.Bplcon4 && (value & 0xFF00) != 0)
+                {
+                    TraceUnsupportedAgaFeature(offset, value, cycle, "AGA bitplane palette XOR mask");
+                }
+                else if (offset == (ushort)CustomRegister.Clxcon2 && value != 0)
+                {
+                    TraceUnsupportedAgaFeature(offset, value, cycle, "AGA extended collision control");
+                }
+            }
             if (requester != AmigaBusRequester.Host &&
                 cause != CustomRegisterWriteCause.UnreadableReadSideEffect)
             {
@@ -539,6 +583,10 @@ namespace CopperMod.Amiga.Bus
             }
 
             var write = new CustomRegisterWriteContext(requester, offset, value, cycle);
+            if (offset == 0x100)
+            {
+                ApplyExternalResyncControl(value, cycle);
+            }
             _agnusBusExecutor.ObserveDisplayControlWrite(requester, offset, value, cycle);
             BeginCustomRegisterWrite(in write);
             try
@@ -556,34 +604,76 @@ namespace CopperMod.Amiga.Bus
             ref readonly var entry = ref _customRegisterFile.Get(write.Offset);
             var targets = entry.WriteTargets;
             _customRegisterFile.ApplyRegisterFileWrite(write.Offset, write.Value, write.Cycle);
+
+            var deferBltpri =
+                write.Requester != AmigaBusRequester.Host &&
+                write.Offset == 0x096 &&
+                (write.Value & 0x0400) != 0;
+            var immediateValue = deferBltpri
+                ? (ushort)(write.Value & ~0x0400)
+                : write.Value;
+            var hasImmediateDeviceWrite =
+                !deferBltpri ||
+                (immediateValue & 0x7FFF) != 0;
+
             // Custom-register writes are broadcast on the shared chip fabric.
             // Ownership metadata is descriptive; each device filters offsets.
-            ApplyAgnusRegisterWrite(write.Offset, write.Value, write.Cycle);
-
-            if (write.Offset == 0x096)
+            if (hasImmediateDeviceWrite)
             {
-                // DMACON takes effect after every device has reached the write
-                // cycle. In particular, a DMA-gated blit must not resume from
-                // its stale trigger cycle when this write enables it.
+                ApplyAgnusRegisterWrite(write.Offset, immediateValue, write.Cycle);
+
+                if (write.Offset == 0x096)
+                {
+                    // Non-priority DMACON bits retain the existing write
+                    // boundary. In particular, a DMA-gated blit must not
+                    // resume from its stale trigger cycle when this write
+                    // enables it.
+                    _hardwareScheduler.SynchronizeBlitterThrough(write.Cycle);
+                    Blitter.AdvanceDmaGateHorizonTo(write.Cycle);
+                }
+
+                if ((targets & CustomRegisterWriteTarget.Paula) != 0)
+                {
+                    Paula.ScheduleWrite(write.Cycle, write.Offset, immediateValue);
+                    Paula.AdvanceTo(write.Cycle);
+                }
+
+                Display.ScheduleWrite(new AgnusDisplayRegisterWrite(
+                    GetDisplayWriteCycle(in write),
+                    write.Offset,
+                    immediateValue));
+
                 _hardwareScheduler.SynchronizeBlitterThrough(write.Cycle);
-                Blitter.AdvanceDmaGateHorizonTo(write.Cycle);
+                Blitter.WriteRegister(write.Offset, immediateValue, write.Cycle);
+
+                Disk.WriteRegister(write.Offset, immediateValue, write.Cycle);
             }
 
-            if ((targets & CustomRegisterWriteTarget.Paula) != 0)
+            if (deferBltpri)
             {
-                Paula.ScheduleWrite(write.Cycle, write.Offset, write.Value);
-                Paula.AdvanceTo(write.Cycle);
+                var effectCycle =
+                    write.Cycle +
+                    (DmaconBltpriVisibilityDelaySlots *
+                     AgnusChipSlotScheduler.SlotCycles);
+                var priorityValue = (ushort)(
+                    (write.Value & 0x8000) |
+                    0x0400);
+
+                // BLTPRI is sampled by Agnus two DMA cycles after the DMACON
+                // bus transfer. Queue that one bit on the existing Paula and
+                // display timelines so Copper can publish intervening slots
+                // before the priority boundary becomes visible.
+                if ((targets & CustomRegisterWriteTarget.Paula) != 0)
+                {
+                    Paula.ScheduleWrite(effectCycle, write.Offset, priorityValue);
+                }
+
+                Display.ScheduleWrite(new AgnusDisplayRegisterWrite(
+                    effectCycle,
+                    write.Offset,
+                    priorityValue));
+                _hardwareScheduler.NotifyWorkScheduled(effectCycle);
             }
-
-            Display.ScheduleWrite(new AgnusDisplayRegisterWrite(
-                GetDisplayWriteCycle(in write),
-                write.Offset,
-                write.Value));
-
-            _hardwareScheduler.SynchronizeBlitterThrough(write.Cycle);
-            Blitter.WriteRegister(write.Offset, write.Value, write.Cycle);
-
-            Disk.WriteRegister(write.Offset, write.Value, write.Cycle);
 
             if (entry.StorageMode == CustomRegisterStorageMode.DevicePublished &&
                 _agnusRegisters.TryRead(
@@ -632,6 +722,7 @@ namespace CopperMod.Amiga.Bus
             if (offset == AgnusRegisterBank.Vposw)
             {
                 _beamClock.ApplyVposw(value, writeCycle);
+                Display.RefreshLiveFrameStopAfterTimingChange();
                 _agnusBusExecutor.UpdateGeometry(_beamClock.GetPosition(writeCycle).FrameCycles);
                 _lineCycles = _beamClock.MaximumLineCycles;
                 RecalculateRasterEvents(writeCycle);

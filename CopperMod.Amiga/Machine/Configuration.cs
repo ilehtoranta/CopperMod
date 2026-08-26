@@ -155,6 +155,17 @@ namespace CopperMod.Amiga.Runtime
 		M68000PrefetchDiagnosticState? PrefetchBefore,
 		M68000PrefetchDiagnosticState? PrefetchAfter);
 
+    internal readonly record struct CiaInterruptDispatchTrace(
+        AmigaCiaId Cia,
+        byte EventBits,
+        byte PendingBits,
+        byte MaskBits,
+        ushort TimerBLatch,
+        byte TimerBControl,
+        long EventCycle,
+        long DispatchCycle,
+        bool ForwardedToPaula);
+
     internal sealed record InterruptBusPhaseTrace(
         int Level,
         long CpuVisibleCycle,
@@ -168,7 +179,16 @@ namespace CopperMod.Amiga.Runtime
         A500Pal512KChipOnlyBoot,
         A500Pal512KBoot,
         A500PlusEcsPal,
-        A500PlusEcsNtsc
+        A500PlusEcsNtsc,
+        A1200AgaPal,
+        A1200AgaNtsc
+    }
+
+    internal enum AgnusBusArbitrationMode
+    {
+        Legacy,
+        SlotKernel,
+        ForcedLegacy
     }
 
     internal sealed class MachineOptions
@@ -210,17 +230,30 @@ namespace CopperMod.Amiga.Runtime
 
         public bool CopperQuiescentFastPathEnabled { get; private set; }
 
-        public bool CopperQuiescentFastPathVerifyEnabled { get; private set; }
-
         public bool CopperQuiescentDiagnosticsEnabled { get; private set; }
 
-        public bool DeferredCpuBusBatchEnabled { get; private set; }
+        public bool DeferredCpuBusBatchEnabled { get; private set; } = true;
 
-        public bool DeferredCpuBusBatchVerifyEnabled { get; private set; }
+        public bool DeferredCpuChipWriteJournalEnabled { get; private set; } = true;
 
-        public bool DeferredCpuChipReadSegmentsEnabled { get; private set; }
+        public bool DeferredCpuChipReadSegmentsEnabled { get; private set; } = true;
+
+        // Kept independent from the general deferred CPU batch: Chip-RAM fetch
+        // values require an executor proof before the CPU may consume them.
+        public bool DeferredCpuChipInstructionFetchBatchEnabled { get; private set; }
+
+        public bool DeferredCpuChipInstructionFetchShadowEnabled { get; private set; }
+
+        public bool DeferredCpuCustomPointerWritesEnabled { get; private set; } = true;
+
+        public bool DeferredCpuCustomCompositionWritesEnabled { get; private set; } = true;
 
         public bool CpuWaitSlotReferencePathEnabled { get; private set; }
+
+        public AgnusBusArbitrationMode AgnusBusArbitration { get; private set; } =
+            AgnusBusArbitrationMode.Legacy;
+
+        public int AgnusLiveRequesterStageForTesting { get; private set; }
 
         public int AudioDmaMinimumPeriod { get; private set; } = AmigaConstants.A500PalMinimumAudioDmaPeriod;
 
@@ -268,6 +301,19 @@ namespace CopperMod.Amiga.Runtime
                 options.FloppyDriveCount = 2;
                 options.RealTimeClockEnabled = true;
                 options.KickstartConfiguration = KickstartConfiguration.HostShim20;
+            }
+            else if (profile is MachineProfile.A1200AgaPal or MachineProfile.A1200AgaNtsc)
+            {
+                options.Chipset = profile == MachineProfile.A1200AgaNtsc
+                    ? AmigaChipset.AgaNtsc
+                    : AmigaChipset.AgaPal;
+                options.ChipRamSize = 2 * 1024 * 1024;
+                options.ExpansionRamSize = 0;
+                options.RealFastRamSize = 0;
+                options.FloppyDriveCount = 1;
+                options.RealTimeClockEnabled = false;
+                options.CpuBackend = M68kBackendKind.AccurateM68EC020;
+                options.AgnusBusArbitration = AgnusBusArbitrationMode.Legacy;
             }
 
             return options;
@@ -322,10 +368,9 @@ namespace CopperMod.Amiga.Runtime
             return this;
         }
 
-        public MachineOptions WithCopperQuiescentFastPath(bool enabled, bool verify)
+        public MachineOptions WithCopperQuiescentFastPath(bool enabled)
         {
             CopperQuiescentFastPathEnabled = enabled;
-            CopperQuiescentFastPathVerifyEnabled = verify;
             return this;
         }
 
@@ -335,10 +380,15 @@ namespace CopperMod.Amiga.Runtime
             return this;
         }
 
-        public MachineOptions WithDeferredCpuBusBatch(bool enabled, bool verify)
+        public MachineOptions WithDeferredCpuBusBatch(bool enabled)
         {
             DeferredCpuBusBatchEnabled = enabled;
-            DeferredCpuBusBatchVerifyEnabled = verify;
+            return this;
+        }
+
+        public MachineOptions WithDeferredCpuChipWriteJournal(bool enabled)
+        {
+            DeferredCpuChipWriteJournalEnabled = enabled;
             return this;
         }
 
@@ -348,9 +398,53 @@ namespace CopperMod.Amiga.Runtime
             return this;
         }
 
+        public MachineOptions WithDeferredCpuChipInstructionFetchBatch(bool enabled)
+        {
+            DeferredCpuChipInstructionFetchBatchEnabled = enabled;
+            return this;
+        }
+
+        public MachineOptions WithDeferredCpuChipInstructionFetchShadow(bool enabled)
+        {
+            DeferredCpuChipInstructionFetchShadowEnabled = enabled;
+            return this;
+        }
+
+        public MachineOptions WithDeferredCpuCustomPointerWrites(bool enabled)
+        {
+            DeferredCpuCustomPointerWritesEnabled = enabled;
+            return this;
+        }
+
+        public MachineOptions WithDeferredCpuCustomCompositionWrites(bool enabled)
+        {
+            DeferredCpuCustomCompositionWritesEnabled = enabled;
+            return this;
+        }
+
         public MachineOptions WithCpuWaitSlotReferencePath(bool enabled)
         {
             CpuWaitSlotReferencePathEnabled = enabled;
+            return this;
+        }
+
+        public MachineOptions WithAgnusBusArbitration(AgnusBusArbitrationMode mode)
+        {
+            AgnusBusArbitration = mode;
+            return this;
+        }
+
+        public MachineOptions WithAgnusLiveRequesterStageForTesting(int stage)
+        {
+            if (stage is < 0 or > 5)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(stage),
+                    stage,
+                    "The test-only live Agnus requester stage must be between G0L and G5L.");
+            }
+
+            AgnusLiveRequesterStageForTesting = stage;
             return this;
         }
 
@@ -450,7 +544,10 @@ namespace CopperMod.Amiga.Runtime
 
     internal sealed class Machine : IDisposable
     {
+        internal const bool AgnusSlotKernelProductionConnected = true;
+
         private List<InterruptDispatchTrace>? _interruptDispatchTrace;
+        private List<CiaInterruptDispatchTrace>? _ciaInterruptDispatchTrace;
         private int _interruptDispatchTraceCapacity;
         private List<InterruptBusPhaseTrace>? _interruptBusPhaseTrace;
         private InterruptBusPhaseTrace? _activeInterruptBusPhaseTrace;
@@ -459,6 +556,13 @@ namespace CopperMod.Amiga.Runtime
         public Machine(MachineOptions options)
         {
             Options = options ?? throw new ArgumentNullException(nameof(options));
+            if (options.Profile is MachineProfile.A1200AgaPal or MachineProfile.A1200AgaNtsc &&
+                (options.KickstartConfiguration.Backend != KickstartBackendKind.RomImage ||
+                 options.KickstartConfiguration.Version != KickstartVersion.Kickstart30))
+            {
+                throw new InvalidOperationException(
+                    "A1200 profiles require a ROM-backed Kickstart 3.0 image; host shims and other Kickstart versions are not supported.");
+            }
             if (!ChipDmaAddressing.SupportsPhysicalSize(options.Chipset.DmaChip, options.ChipRamSize))
             {
                 throw new InvalidOperationException(
@@ -487,6 +591,48 @@ namespace CopperMod.Amiga.Runtime
                     "Linear RTG VRAM requires a full 32-bit MC68020, MC68030, or MC68040 backend.");
             }
 
+            var enableDeferredCpuChipInstructionFetchBatch =
+                options.DeferredCpuChipInstructionFetchBatchEnabled &&
+                options.CpuBackend == M68kBackendKind.AccurateM68000 &&
+                options.Chipset == AmigaChipset.OcsPal &&
+                options.LiveAgnusDma &&
+                !options.CaptureBusAccesses;
+            var enableDeferredCpuChipInstructionFetchShadow =
+                options.DeferredCpuChipInstructionFetchShadowEnabled &&
+                options.CpuBackend == M68kBackendKind.AccurateM68000 &&
+                options.Chipset == AmigaChipset.OcsPal &&
+                options.LiveAgnusDma &&
+                !options.CaptureBusAccesses;
+            var activeAgnusBusArbitration =
+                AgnusSlotKernelProductionConnected &&
+                options.AgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel &&
+                IsAgnusSlotKernelConfigurationSupported(options)
+                    ? AgnusBusArbitrationMode.SlotKernel
+                    : options.AgnusBusArbitration == AgnusBusArbitrationMode.ForcedLegacy
+                        ? AgnusBusArbitrationMode.ForcedLegacy
+                        : AgnusBusArbitrationMode.Legacy;
+            if (options.AgnusLiveRequesterStageForTesting != 0 &&
+                !IsAgnusSlotKernelConfigurationSupported(options))
+            {
+                throw new InvalidOperationException(
+                    "Test-only live Agnus requester stages require the A500 PAL OCS AccurateM68000 profile.");
+            }
+
+            var enableAgnusLiveDisplayLedger =
+                activeAgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel ||
+                options.AgnusLiveRequesterStageForTesting >= 1;
+            var enableAgnusLiveCopper =
+                activeAgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel ||
+                options.AgnusLiveRequesterStageForTesting >= 2;
+            var enableAgnusLiveBlitter =
+                activeAgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel ||
+                options.AgnusLiveRequesterStageForTesting >= 3;
+            var enableAgnusLivePaula =
+                activeAgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel ||
+                options.AgnusLiveRequesterStageForTesting >= 4;
+            var enableAgnusLiveDisk =
+                activeAgnusBusArbitration == AgnusBusArbitrationMode.SlotKernel ||
+                options.AgnusLiveRequesterStageForTesting >= 5;
             Bus = new AmigaBus(
                 options.ChipRamSize,
                 options.BusArbiter,
@@ -504,15 +650,28 @@ namespace CopperMod.Amiga.Runtime
                 null,
                 options.Hardfiles,
                 options.CopperQuiescentFastPathEnabled,
-                options.CopperQuiescentFastPathVerifyEnabled,
                 options.DeferredCpuBusBatchEnabled,
-                options.DeferredCpuBusBatchVerifyEnabled,
                 options.CopperQuiescentDiagnosticsEnabled,
                 options.CpuWaitSlotReferencePathEnabled,
                 options.RtgVramSize,
                 options.Chipset,
-                enableDeferredCpuChipReadSegments: options.DeferredCpuChipReadSegmentsEnabled);
+                enableDeferredCpuChipWriteJournal: options.DeferredCpuChipWriteJournalEnabled,
+                enableDeferredCpuChipReadSegments: options.DeferredCpuChipReadSegmentsEnabled,
+                enableDeferredCpuCustomPointerWrites: options.DeferredCpuCustomPointerWritesEnabled,
+                enableDeferredCpuCustomCompositionWrites: options.DeferredCpuCustomCompositionWritesEnabled,
+                enableDeferredCpuChipInstructionFetchBatch: enableDeferredCpuChipInstructionFetchBatch,
+                enableDeferredCpuChipInstructionFetchShadow: enableDeferredCpuChipInstructionFetchShadow,
+                agnusBusArbitration: activeAgnusBusArbitration,
+                enableAgnusLiveDisplayLedger: enableAgnusLiveDisplayLedger,
+                enableAgnusLiveCopper: enableAgnusLiveCopper,
+                enableAgnusLiveBlitter: enableAgnusLiveBlitter,
+                enableAgnusLivePaula: enableAgnusLivePaula,
+                enableAgnusLiveDisk: enableAgnusLiveDisk);
             Cpu = options.CpuFactory.Create(options.CpuBackend, Bus);
+            if (options.Chipset.HasAgaComponent)
+            {
+                Bus.ConfigureAgaUnsupportedFeatureTrace(() => Cpu.State.ProgramCounter);
+            }
             if (Bus.DiskDivergenceTraceEnabled)
             {
                 Bus.ConfigureDiskDivergenceTrace(
@@ -525,6 +684,15 @@ namespace CopperMod.Amiga.Runtime
             }
 
             Kickstart = new AmigaKickstartHost(options.KickstartConfiguration);
+        }
+
+        internal static bool IsAgnusSlotKernelConfigurationSupported(MachineOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return options.CpuBackend == M68kBackendKind.AccurateM68000 &&
+                options.Chipset == AmigaChipset.OcsPal &&
+                options.LiveAgnusDma &&
+                options.LiveDisplayDma;
         }
 
         public MachineOptions Options { get; }
@@ -540,6 +708,9 @@ namespace CopperMod.Amiga.Runtime
         internal IReadOnlyList<InterruptDispatchTrace> InterruptDispatchTrace
             => _interruptDispatchTrace ?? (IReadOnlyList<InterruptDispatchTrace>)Array.Empty<InterruptDispatchTrace>();
 
+        internal IReadOnlyList<CiaInterruptDispatchTrace> CiaInterruptDispatchTrace
+            => _ciaInterruptDispatchTrace ?? (IReadOnlyList<CiaInterruptDispatchTrace>)Array.Empty<CiaInterruptDispatchTrace>();
+
         internal IReadOnlyList<InterruptBusPhaseTrace> InterruptBusPhaseTrace
             => _interruptBusPhaseTrace ?? (IReadOnlyList<InterruptBusPhaseTrace>)Array.Empty<InterruptBusPhaseTrace>();
 
@@ -551,6 +722,7 @@ namespace CopperMod.Amiga.Runtime
             }
 
             _interruptDispatchTrace = new List<InterruptDispatchTrace>(capacity);
+            _ciaInterruptDispatchTrace = new List<CiaInterruptDispatchTrace>(capacity);
             _interruptDispatchTraceCapacity = capacity;
             _interruptBusPhaseWindowCycles = busPhaseWindowCycles;
             _interruptBusPhaseTrace = busPhaseWindowCycles > 0
@@ -595,7 +767,23 @@ namespace CopperMod.Amiga.Runtime
             {
                 var ciaEvent = ciaEvents[i];
                 var cia = Bus.GetCia(ciaEvent.Cia);
-                if ((cia.PendingInterrupts & cia.InterruptMask) == 0)
+                var forwarded = (cia.PendingInterrupts & cia.InterruptMask) != 0;
+                var ciaTrace = _ciaInterruptDispatchTrace;
+                if (ciaTrace != null && ciaTrace.Count < _interruptDispatchTraceCapacity)
+                {
+                    ciaTrace.Add(new CiaInterruptDispatchTrace(
+                        ciaEvent.Cia,
+                        ciaEvent.IcrBits,
+                        cia.PendingInterrupts,
+                        cia.InterruptMask,
+                        cia.TimerBLatch,
+                        cia.ReadRegister(0x0F),
+                        ciaEvent.Cycle,
+                        Cpu.State.Cycles,
+                        forwarded));
+                }
+
+                if (!forwarded)
                 {
                     continue;
                 }

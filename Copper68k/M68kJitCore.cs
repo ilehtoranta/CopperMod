@@ -150,6 +150,9 @@ namespace Copper68k
         private readonly IM68kJitFallbackFetchSynchronization? _fallbackFetchSynchronization;
         private readonly IM68000PipelineStateTransfer? _fallbackPipelineStateTransfer;
         private readonly IM68000BusCycleTiming? _m68000BusCycleTiming;
+        private readonly IM68kInstructionFetchWindowBus? _instructionFetchWindowBus;
+        private readonly IM68kDeferredCpuInstructionTiming? _deferredCpuInstructionTiming;
+        private M68kInstructionFetchWindow _instructionFetchWindow = M68kInstructionFetchWindow.Empty;
         private readonly Func<uint, uint> _readPhysicalLongForM68040Mmu;
         private readonly M68kJitCpuModel _cpuModel;
         private readonly bool _cacheFlushOnlyInvalidation;
@@ -578,6 +581,7 @@ namespace Copper68k
         private bool _m68000PipelineStateValid;
         private bool _compiledM68000PipelineActive;
         private M68000MicrosequenceDescriptor _compiledM68000Microsequence;
+        private M68kInstructionFetchPublicationContext _compiledM68000PublicationContext;
 
         public M68kJitCore(IM68kBus bus)
             : this(
@@ -729,7 +733,8 @@ namespace Copper68k
                     _jitBus,
                     _fastMemoryBus,
                     _timedMemoryBus,
-                    options.CpuModel == M68kJitCpuModel.M68040);
+                    options.CpuModel == M68kJitCpuModel.M68040,
+                    options.CpuModel == M68kJitCpuModel.M68000);
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
             _readPhysicalLongForM68040Mmu = ReadPhysicalLongForM68040Mmu;
             _cpuModel = options.CpuModel;
@@ -757,6 +762,12 @@ namespace Copper68k
             _m68000BusCycleTiming = _cpuModel == M68kJitCpuModel.M68000
                 ? bus as IM68000BusCycleTiming
                 : null;
+            _instructionFetchWindowBus = _cpuModel == M68kJitCpuModel.M68000
+                ? bus as IM68kInstructionFetchWindowBus
+                : null;
+            _deferredCpuInstructionTiming = _cpuModel == M68kJitCpuModel.M68000
+                ? bus as IM68kDeferredCpuInstructionTiming
+                : null;
             _requiresExactM68000PipelineFallback =
                 _cpuModel == M68kJitCpuModel.M68000 &&
                 bus is IM68000BusCycleTiming { RequiresExactM68000PipelineFallback: true };
@@ -781,7 +792,7 @@ namespace Copper68k
             M68kJitCpuModel cpuModel)
             => cpuModel == M68kJitCpuModel.M68040
                 ? new M68040Interpreter(bus, M68020CpuProfile.Ocs68040JitMaxSpeed, state, instructionFrequency)
-                : new M68kInterpreter(bus, state, instructionFrequency, enableInstructionFetchWindow: false);
+                : new M68kInterpreter(bus, state, instructionFrequency, enableInstructionFetchWindow: true);
 
         public M68kCpuState State { get; }
 
@@ -1080,6 +1091,15 @@ namespace Copper68k
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
             _fallback.BeginSubroutine(address, stackPointer, returnAddress);
+            CaptureFallbackM68000PipelineState();
+            ResetExecutionStateBookkeeping();
+            ClearRuntimeState();
+        }
+
+        public void SwitchTaskContext(M68kCpuState next)
+        {
+            ArgumentNullException.ThrowIfNull(next);
+            _fallback.SwitchTaskContext(next);
             CaptureFallbackM68000PipelineState();
             ResetExecutionStateBookkeeping();
             ClearRuntimeState();
@@ -2755,23 +2775,39 @@ namespace Copper68k
             private readonly IM68kJitFastMemoryBus? _fastMemoryBus;
             private readonly IM68kJitTimedMemoryBus? _timedMemoryBus;
             private readonly bool _full32BitAddresses;
+            private readonly bool _enforceM68000DataAlignment;
 
             public M68kJitHostAdapter(
                 IM68kBus bus,
                 IM68kJitBus jitBus,
                 IM68kJitFastMemoryBus? fastMemoryBus,
                 IM68kJitTimedMemoryBus? timedMemoryBus,
-                bool full32BitAddresses)
+                bool full32BitAddresses,
+                bool enforceM68000DataAlignment)
             {
                 _bus = bus;
                 _jitBus = jitBus;
                 _fastMemoryBus = fastMemoryBus;
                 _timedMemoryBus = timedMemoryBus;
                 _full32BitAddresses = full32BitAddresses;
+                _enforceM68000DataAlignment = enforceM68000DataAlignment;
             }
 
             private uint NormalizeAddress(uint address)
                 => _full32BitAddresses ? address : address & 0x00FF_FFFFu;
+
+            private void ValidateM68000DataAlignment(uint address, M68kOperandSize size, bool write)
+            {
+                if (_enforceM68000DataAlignment &&
+                    size != M68kOperandSize.Byte &&
+                    (address & 1) != 0)
+                {
+                    throw new M68kEmulationException(
+                        size == M68kOperandSize.Word
+                            ? $"Odd MC68000 word {(write ? "write" : "read")} at 0x{address:X8}."
+                            : $"Odd MC68000 long {(write ? "write" : "read")} at 0x{address:X8}.");
+                }
+            }
 
             public ushort ReadHostWord(uint address)
                 => _jitBus.ReadJitCodeWord(NormalizeAddress(address));
@@ -2860,38 +2896,42 @@ namespace Copper68k
 
             public uint ReadJitSlotAwareMemory(ref long cycle, uint address, M68kOperandSize size)
             {
+                address = NormalizeAddress(address);
+                ValidateM68000DataAlignment(address, size, write: false);
                 if (_timedMemoryBus != null)
                 {
-                    return _timedMemoryBus.ReadJitTimedMemory(ref cycle, NormalizeAddress(address), size);
+                    return _timedMemoryBus.ReadJitTimedMemory(ref cycle, address, size);
                 }
 
                 return size switch
                 {
-                    M68kOperandSize.Byte => _bus.ReadByte(NormalizeAddress(address), ref cycle, M68kBusAccessKind.CpuDataRead),
-                    M68kOperandSize.Word => _bus.ReadWord(NormalizeAddress(address), ref cycle, M68kBusAccessKind.CpuDataRead),
-                    _ => _bus.ReadLong(NormalizeAddress(address), ref cycle, M68kBusAccessKind.CpuDataRead)
+                    M68kOperandSize.Byte => _bus.ReadByte(address, ref cycle, M68kBusAccessKind.CpuDataRead),
+                    M68kOperandSize.Word => _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuDataRead),
+                    _ => _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuDataRead)
                 };
             }
 
             public void WriteJitSlotAwareMemory(ref long cycle, uint address, uint value, M68kOperandSize size)
             {
+                address = NormalizeAddress(address);
+                ValidateM68000DataAlignment(address, size, write: true);
                 if (_timedMemoryBus != null)
                 {
-                    _timedMemoryBus.WriteJitTimedMemory(ref cycle, NormalizeAddress(address), value, size);
+                    _timedMemoryBus.WriteJitTimedMemory(ref cycle, address, value, size);
                     return;
                 }
 
                 if (size == M68kOperandSize.Byte)
                 {
-                    _bus.WriteByte(NormalizeAddress(address), (byte)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                    _bus.WriteByte(address, (byte)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
                 }
                 else if (size == M68kOperandSize.Word)
                 {
-                    _bus.WriteWord(NormalizeAddress(address), (ushort)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                    _bus.WriteWord(address, (ushort)value, ref cycle, M68kBusAccessKind.CpuDataWrite);
                 }
                 else
                 {
-                    _bus.WriteLong(NormalizeAddress(address), value, ref cycle, M68kBusAccessKind.CpuDataWrite);
+                    _bus.WriteLong(address, value, ref cycle, M68kBusAccessKind.CpuDataWrite);
                 }
             }
 
@@ -5899,6 +5939,7 @@ namespace Copper68k
                     dirtyDataRegisters,
                     dirtyAddressRegisters,
                     m68040TranslationChecksEnabled,
+                    !useM68000MemoryHelpers,
                     useM68000MemoryHelpers,
                     minimalCycleTiming)
                 : CompileV2BusAccessBatch(
@@ -5958,6 +5999,7 @@ namespace Copper68k
             int dirtyDataRegisters,
             int dirtyAddressRegisters,
             bool m68040TranslationChecksEnabled,
+            bool useM68020BriefIndexedAddressing,
             bool deferM68000CycleFloor,
             bool minimalCycleTiming)
         {
@@ -5985,6 +6027,7 @@ namespace Copper68k
                 loadAddressRegisters,
                 dirtyDataRegisters,
                 dirtyAddressRegisters);
+            context.SetM68020BriefIndexedAddressing(useM68020BriefIndexedAddressing);
             context.SetM68040TranslationChecks(m68040TranslationChecksEnabled);
             context.SetDeferredM68000CycleFloor(deferM68000CycleFloor);
             context.SetFpuExceptionRegisterWriteback(dirtyDataRegisters, dirtyAddressRegisters);
@@ -6109,6 +6152,7 @@ namespace Copper68k
                 loadAddressRegisters,
                 dirtyDataRegisters,
                 dirtyAddressRegisters);
+            context.SetM68020BriefIndexedAddressing(!useM68000MemoryHelpers);
             context.SetM68040TranslationChecks(m68040TranslationChecksEnabled);
             context.SetM68000MemoryHelpers(useM68000MemoryHelpers);
             context.SetM68040DirectRamEnabled(m68040DirectRamEnabled);
@@ -6427,11 +6471,18 @@ namespace Copper68k
                 var address = il.DeclareLocal(typeof(uint));
                 EmitV2ResolveMemoryWriteAddress(il, context, instruction.Destination, instruction.Size);
                 il.Emit(OpCodes.Stloc, address);
-                EmitV2StoreMemoryValue(il, context, address, value, instruction.Size);
+                EmitV2StoreMemoryValue(
+                    il,
+                    context,
+                    address,
+                    value,
+                    instruction.Size,
+                    m68000PreWriteCycles: Math.Max(0, instruction.Length * 2 - 2));
             }
 
             context.EmitSetPendingLogic(value, instruction.Size);
             context.EmitAddCycles(EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
+            context.EmitCompleteM68000SlowWriteRetirement();
         }
 
         private static bool TryEmitV2RegisterToSimpleMemoryMove(
@@ -6475,9 +6526,16 @@ namespace Copper68k
                 context.EmitStoreAddressRegister(instruction.Destination.Register, updated);
             }
 
-            EmitV2StoreMemoryValue(il, context, address, value, instruction.Size);
+            EmitV2StoreMemoryValue(
+                il,
+                context,
+                address,
+                value,
+                instruction.Size,
+                m68000PreWriteCycles: Math.Max(0, instruction.Length * 2 - 2));
             context.EmitSetPendingLogic(value, instruction.Size);
             context.EmitAddCycles(EstimateMoveCycles(instruction.Source, instruction.Destination, instruction.Size));
+            context.EmitCompleteM68000SlowWriteRetirement();
             return true;
         }
 
@@ -8109,7 +8167,8 @@ namespace Copper68k
             V2EmitContext context,
             LocalBuilder address,
             LocalBuilder value,
-            M68kOperandSize size)
+            M68kOperandSize size,
+            int m68000PreWriteCycles = 0)
         {
             var slowWrite = il.DefineLabel();
             var done = il.DefineLabel();
@@ -8227,6 +8286,11 @@ namespace Copper68k
                 context.EmitIncrementZeroWaitSlowWrite();
             }
 
+            if (context.M68000MemoryHelpers && m68000PreWriteCycles != 0)
+            {
+                context.EmitAddCycles(m68000PreWriteCycles);
+            }
+
             context.EmitStoreInstructionContext();
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldloca_S, context.Cycles);
@@ -8240,6 +8304,10 @@ namespace Copper68k
             {
                 il.Emit(OpCodes.Ldc_I4, (int)size);
                 il.Emit(OpCodes.Call, WriteMemoryValueForV2BatchSlowRefMethod);
+            }
+            if (context.M68000MemoryHelpers)
+            {
+                context.EmitMarkM68000SlowWrite();
             }
             il.MarkLabel(done);
         }
@@ -8663,6 +8731,16 @@ namespace Copper68k
             {
                 il.Emit(OpCodes.Conv_I2);
                 il.Emit(OpCodes.Conv_U4);
+            }
+
+            if (context.UseM68020BriefIndexedAddressing)
+            {
+                var scale = 1 << ((extension >> 9) & 3);
+                if (scale != 1)
+                {
+                    EmitLoadUIntConstant(il, (uint)scale);
+                    il.Emit(OpCodes.Mul);
+                }
             }
         }
 
@@ -9871,6 +9949,21 @@ namespace Copper68k
             if (_cpuModel == M68kJitCpuModel.M68000 && _m68000PipelineStateValid)
             {
                 var microsequence = new M68000MicrosequenceDescriptor(microsequenceKind);
+                var originalPipeline = _m68000PipelineState;
+                var entryPipeline = originalPipeline with
+                {
+                    PublicationGroup = _m68000PipelineState.PublicationGroup + 1
+                };
+                _m68000PipelineState = entryPipeline;
+                _compiledM68000PublicationContext = new M68kInstructionFetchPublicationContext(
+                    entryPipeline.PublicationGroup,
+                    entryPipeline.NextBusTransferCycle,
+                    entryPipeline.PrefetchCount,
+                    entryPipeline.ReadyCycle0,
+                    entryPipeline.ReadyCycle1,
+                    entryPipeline.TimingToken0,
+                    entryPipeline.TimingToken1,
+                    _compiledInstructionPreviousCycle);
                 if (!microsequence.CanCompileExactly ||
                     !TryConsumeCompiledM68000Instruction(
                         programCounter,
@@ -9878,6 +9971,7 @@ namespace Copper68k
                         microsequence.ExtensionWordsToConsume == 0 ? 0 : extensionCount,
                         expectedExtension0))
                 {
+                    _m68000PipelineState = originalPipeline;
                     return false;
                 }
 
@@ -9941,6 +10035,22 @@ namespace Copper68k
             TopUpCompiledM68000PrefetchAtRetirement(
                 _compiledInstructionPreviousCycle,
                 State.Cycles);
+
+            // Retirement owns every instruction fetch that was committed by
+            // the compiled microsequence. Nominal opcode timing can end before
+            // that transfer completes, especially when a queued fetch starts
+            // at the end of the internal execution window. The fallback core
+            // observes the same physical completion before exposing the next
+            // instruction boundary, so compiled execution must do so too.
+            State.Cycles = Math.Max(
+                State.Cycles,
+                _m68000PipelineState.RetireBusCycle);
+            _m68000PipelineState = _m68000PipelineState with
+            {
+                RetireBusCycle = Math.Max(
+                    _m68000PipelineState.RetireBusCycle,
+                    State.Cycles)
+            };
             _compiledM68000PipelineActive = false;
             _compiledM68000Microsequence = default;
         }
@@ -9951,6 +10061,9 @@ namespace Copper68k
                 _compiledM68000Microsequence.Kind == M68000CompiledMicrosequenceKind.TakenShortBranch)
             {
                 var target = State.ProgramCounter;
+                var branchRetireCycle = Math.Max(
+                    _m68000PipelineState.RetireBusCycle,
+                    _compiledInstructionPreviousCycle + 10);
                 var pipeline = _m68000PipelineState with
                 {
                     PrefetchAddress = target,
@@ -9958,6 +10071,12 @@ namespace Copper68k
                     HasPendingPrefetch = false,
                     PendingPrefetchAddress = 0,
                     PendingPrefetchEarliestCycle = 0,
+                    PendingPublicationPhase = M68kInstructionFetchPublicationPhase.Required,
+                    PendingRetirementFloor = long.MinValue,
+                    PendingPublicationContext = default,
+                    PendingVirtualRequestedCycle = 0,
+                    TimingToken0 = 0,
+                    TimingToken1 = 0,
                     DeferredBatchEligible0 = false,
                     DeferredBatchEligible1 = false
                 };
@@ -9965,11 +10084,27 @@ namespace Copper68k
                 // SYNC(2), read target opcode, prefetch target + 2.
                 pipeline = TopUpCompiledM68000PrefetchOne(
                     pipeline,
-                    _compiledInstructionPreviousCycle + 2);
+                    _compiledInstructionPreviousCycle + 2,
+                    M68kInstructionFetchPublicationPhase.InterruptibleBranchTarget,
+                    publicationContext: _compiledM68000PublicationContext);
                 pipeline = TopUpCompiledM68000PrefetchOne(
                     pipeline,
-                    _compiledInstructionPreviousCycle + 2);
+                    _compiledInstructionPreviousCycle + 2,
+                    M68kInstructionFetchPublicationPhase.InterruptibleBranchTarget,
+                    publicationContext: _compiledM68000PublicationContext with
+                    {
+                        PredecessorToken = pipeline.TimingToken0,
+                        RequiresIrcGap = pipeline.TimingToken0 != 0
+                    });
+                pipeline = pipeline with
+                {
+                    RetireBusCycle = Math.Max(pipeline.RetireBusCycle, branchRetireCycle),
+                    ExceptionEntryNotBeforeCycle = Math.Max(
+                        pipeline.ExceptionEntryNotBeforeCycle,
+                        Math.Max(pipeline.RetireBusCycle, branchRetireCycle))
+                };
                 _m68000PipelineState = pipeline;
+				State.Cycles = Math.Max(State.Cycles, pipeline.RetireBusCycle);
 
                 _compiledM68000PipelineActive = false;
                 _compiledM68000Microsequence = default;
@@ -10126,14 +10261,18 @@ namespace Copper68k
                     PrefetchAddress = unchecked(address + 2),
                     Word0 = pipeline.Word1,
                     ReadyCycle0 = pipeline.ReadyCycle1,
+                    TimingToken0 = pipeline.TimingToken1,
                     DeferredBatchEligible0 = pipeline.DeferredBatchEligible1,
                     PrefetchCount = 1,
+                    TimingToken1 = 0,
                     DeferredBatchEligible1 = false
                 }
                 : pipeline with
                 {
                     PrefetchAddress = unchecked(address + 2),
                     PrefetchCount = 0,
+                    TimingToken0 = 0,
+                    TimingToken1 = 0,
                     DeferredBatchEligible0 = false,
                     DeferredBatchEligible1 = false
                 };
@@ -10142,7 +10281,11 @@ namespace Copper68k
 
         private M68000PipelineState TopUpCompiledM68000PrefetchOne(
             M68000PipelineState pipeline,
-            long instructionStartCycle)
+            long instructionStartCycle,
+            M68kInstructionFetchPublicationPhase publicationPhase =
+                M68kInstructionFetchPublicationPhase.Required,
+            long retirementFloor = long.MinValue,
+            M68kInstructionFetchPublicationContext publicationContext = default)
         {
             if (pipeline.PrefetchCount >= 2)
             {
@@ -10151,13 +10294,45 @@ namespace Copper68k
 
             var slot = pipeline.PrefetchCount;
             var address = unchecked(pipeline.PrefetchAddress + (uint)(slot * 2));
+            if (pipeline.HasPendingPrefetch)
+            {
+                publicationPhase = pipeline.PendingPublicationPhase;
+                retirementFloor = pipeline.PendingRetirementFloor;
+                publicationContext = pipeline.PendingPublicationContext;
+            }
+            var busCycleStart =
+                instructionStartCycle + (_m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0);
             var cycle = pipeline.HasPendingPrefetch
-                ? Math.Max(pipeline.NextBusTransferCycle, pipeline.PendingPrefetchEarliestCycle)
-                : Math.Max(
-                    pipeline.NextBusTransferCycle,
-                    instructionStartCycle + (_m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0));
+                ? Math.Max(
+                    Math.Max(pipeline.NextBusTransferCycle, pipeline.PendingPrefetchEarliestCycle),
+                    busCycleStart)
+                : Math.Max(pipeline.NextBusTransferCycle, busCycleStart);
             var requestedCycle = cycle;
-            var value = _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+            var deferredBatchEligible = false;
+            ushort value;
+            if (_instructionFetchWindowBus != null &&
+                (_instructionFetchWindow.ContainsWord(address) ||
+                    (_instructionFetchWindowBus.TryGetInstructionFetchWindow(
+                        address,
+                        out _instructionFetchWindow) &&
+                     _instructionFetchWindow.ContainsWord(address))))
+            {
+                value = _instructionFetchWindowBus.ReadInstructionFetchWindowWord(
+                    in _instructionFetchWindow,
+                    address,
+                    ref cycle,
+                    publicationPhase,
+                    retirementFloor,
+                    in publicationContext);
+                deferredBatchEligible =
+                    _deferredCpuInstructionTiming?
+                        .IsDeferredCpuBusBatchEligibleInstructionFetchWindow(
+                            in _instructionFetchWindow) == true;
+            }
+            else
+            {
+                value = _bus.ReadWord(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+            }
             var timing = _m68000BusCycleTiming?.GetM68000BusAccessTiming(
                 address,
                 M68kOperandSize.Word,
@@ -10174,11 +10349,29 @@ namespace Copper68k
                 HasPendingPrefetch = false,
                 PendingPrefetchAddress = 0,
                 PendingPrefetchEarliestCycle = 0,
+                PendingPublicationPhase = M68kInstructionFetchPublicationPhase.Required,
+                PendingRetirementFloor = long.MinValue,
+                PendingPublicationContext = default,
+                PendingVirtualRequestedCycle = 0,
                 PrefetchCount = slot + 1
             };
+            var timingToken = _deferredCpuInstructionTiming?
+                .CaptureDeferredCpuInstructionFetchTimingToken() ?? 0;
             return slot == 0
-                ? pipeline with { Word0 = value, ReadyCycle0 = timing.ReadyCycle, DeferredBatchEligible0 = false }
-                : pipeline with { Word1 = value, ReadyCycle1 = timing.ReadyCycle, DeferredBatchEligible1 = false };
+                ? pipeline with
+                {
+                    Word0 = value,
+                    ReadyCycle0 = timing.ReadyCycle,
+                    TimingToken0 = timingToken,
+                    DeferredBatchEligible0 = deferredBatchEligible
+                }
+                : pipeline with
+                {
+                    Word1 = value,
+                    ReadyCycle1 = timing.ReadyCycle,
+                    TimingToken1 = timingToken,
+                    DeferredBatchEligible1 = deferredBatchEligible
+                };
         }
 
         private void TopUpCompiledM68000PrefetchAtRetirement(long instructionStartCycle, long instructionFloor)
@@ -10216,13 +10409,23 @@ namespace Copper68k
                             HasPendingPrefetch = true,
                             PendingPrefetchAddress = unchecked(
                                 pipeline.PrefetchAddress + (uint)(pipeline.PrefetchCount * 2)),
-                            PendingPrefetchEarliestCycle = earliestCycle
+                            PendingPrefetchEarliestCycle = earliestCycle,
+                            PendingPublicationPhase =
+                                M68kInstructionFetchPublicationPhase.CancellableSuccessor,
+                            PendingRetirementFloor = instructionFloor,
+                            PendingPublicationContext = _compiledM68000PublicationContext,
+                            PendingVirtualRequestedCycle = earliestCycle
                         };
                     }
                     break;
                 }
 
-                pipeline = TopUpCompiledM68000PrefetchOne(pipeline, instructionStartCycle);
+                pipeline = TopUpCompiledM68000PrefetchOne(
+                    pipeline,
+                    instructionStartCycle,
+                    M68kInstructionFetchPublicationPhase.RetirementQueue,
+                    instructionFloor,
+                    _compiledM68000PublicationContext);
             }
 
             _m68000PipelineState = pipeline;
@@ -12776,7 +12979,9 @@ namespace Copper68k
         }
 
         private uint ResolveIndex(ushort extension)
-            => M68kIntegerSemantics.CalculateM68000BriefIndexValue(extension, State.D, State.A);
+            => _cpuModel == M68kJitCpuModel.M68040
+                ? M68kIntegerSemantics.CalculateM68020BriefIndexedIndexValue(extension, State.D, State.A)
+                : M68kIntegerSemantics.CalculateM68000BriefIndexValue(extension, State.D, State.A);
 
         private uint ReadMemoryValue(uint address, M68kOperandSize size)
         {
@@ -13278,11 +13483,6 @@ namespace Copper68k
                 return;
             }
 
-            if (TryWriteM68040MaxSpeedColorRegister(address, value, size, cycles))
-            {
-                return;
-            }
-
             if (_minimalCycleTiming &&
                 _amigaBus != null &&
                 _amigaBus.TryWriteJitZeroWaitMemory(address, value, size))
@@ -13715,7 +13915,13 @@ namespace Copper68k
         private void PushLong(uint value)
         {
             State.SetActiveStackPointer(State.A[7] - 4);
-            WriteLong(State.A[7], value);
+            WriteLongDescending(State.A[7], value);
+        }
+
+        private void WriteLongDescending(uint address, uint value)
+        {
+            WriteWord(address + 2, (ushort)value);
+            WriteWord(address, (ushort)(value >> 16));
         }
 
         private ushort PullWord()
@@ -15266,6 +15472,7 @@ namespace Copper68k
                 Executed = il.DeclareLocal(typeof(int));
                 InstructionStartCycles = il.DeclareLocal(typeof(long));
                 InstructionCycleFloor = il.DeclareLocal(typeof(long));
+                M68000SlowWrite = il.DeclareLocal(typeof(bool));
                 LastOpcode = il.DeclareLocal(typeof(int));
                 LastInstructionProgramCounter = il.DeclareLocal(typeof(uint));
                 PreviousLastOpcode = il.DeclareLocal(typeof(int));
@@ -15317,6 +15524,8 @@ namespace Copper68k
 
             public LocalBuilder InstructionCycleFloor { get; }
 
+            public LocalBuilder M68000SlowWrite { get; }
+
             public LocalBuilder LastOpcode { get; }
 
             public LocalBuilder LastInstructionProgramCounter { get; }
@@ -15356,6 +15565,8 @@ namespace Copper68k
             public bool M68040TranslationChecksEnabled { get; private set; }
 
             public bool M68040DirectRamEnabled { get; private set; }
+
+            public bool UseM68020BriefIndexedAddressing { get; private set; }
 
             public bool M68000MemoryHelpers { get; private set; }
 
@@ -15401,6 +15612,11 @@ namespace Copper68k
             public void SetM68040DirectRamEnabled(bool enabled)
             {
                 M68040DirectRamEnabled = enabled;
+            }
+
+            public void SetM68020BriefIndexedAddressing(bool enabled)
+            {
+                UseM68020BriefIndexedAddressing = enabled;
             }
 
             public void SetM68000MemoryHelpers(bool enabled)
@@ -15552,6 +15768,7 @@ namespace Copper68k
                 _il.Emit(OpCodes.Ldc_I4_1);
                 _il.Emit(OpCodes.Add);
                 _il.Emit(OpCodes.Stloc, Executed);
+                EmitStoreBool(M68000SlowWrite, false);
             }
 
             public void EmitSaveFastReadFailureBookkeeping()
@@ -15966,6 +16183,23 @@ namespace Copper68k
                 _il.Emit(OpCodes.Ldloc, InstructionCycleFloor);
                 _il.Emit(OpCodes.Bge, done);
                 _il.Emit(OpCodes.Ldloc, InstructionCycleFloor);
+                _il.Emit(OpCodes.Stloc, Cycles);
+                _il.MarkLabel(done);
+            }
+
+            public void EmitMarkM68000SlowWrite()
+            {
+                EmitStoreBool(M68000SlowWrite, true);
+            }
+
+            public void EmitCompleteM68000SlowWriteRetirement()
+            {
+                var done = _il.DefineLabel();
+                _il.Emit(OpCodes.Ldloc, M68000SlowWrite);
+                _il.Emit(OpCodes.Brfalse, done);
+                _il.Emit(OpCodes.Ldloc, Cycles);
+                _il.Emit(OpCodes.Ldc_I8, 4L);
+                _il.Emit(OpCodes.Add);
                 _il.Emit(OpCodes.Stloc, Cycles);
                 _il.MarkLabel(done);
             }

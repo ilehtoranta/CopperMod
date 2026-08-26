@@ -32,15 +32,9 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 		_output = output;
 	}
 
-	[Fact]
+	[EnvironmentFact(RunVariable, "run the WinUAE cputest/gencpu MC68000 corpus")]
 	public void WinUaeM68000CpuTesterPassesInterpreterWhenEnabled()
 	{
-		if (!IsTruthy(Environment.GetEnvironmentVariable(RunVariable)))
-		{
-			_output.WriteLine($"Set {RunVariable}=1 to run the WinUAE cputest/gencpu MC68000 corpus.");
-			return;
-		}
-
 		var corpusPath = ResolveCorpusPath(PathVariable, "68000");
 		if (corpusPath is null)
 		{
@@ -80,15 +74,9 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 		_output.WriteLine($"Executed WinUAE cputest/gencpu MC68000 '{opcode}' corpus with the interpreter backend.");
 	}
 
-	[Fact]
+	[EnvironmentFact(RunM68040FpuVariable, "run the WinUAE MC68040 FPU corpus")]
 	public void WinUaeM68040FpuCpuTesterPassesInterpreterWhenEnabled()
 	{
-		if (!IsTruthy(Environment.GetEnvironmentVariable(RunM68040FpuVariable)))
-		{
-			_output.WriteLine($"Set {RunM68040FpuVariable}=1 to run the WinUAE MC68040 FPU corpus.");
-			return;
-		}
-
 		var corpusPath = ResolveCorpusPath(M68040FpuPathVariable, "68040");
 		if (corpusPath is null)
 		{

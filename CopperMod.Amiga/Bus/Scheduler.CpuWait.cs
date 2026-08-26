@@ -4,6 +4,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
@@ -13,7 +14,9 @@ namespace CopperMod.Amiga.Bus
     {
         Unsupported,
         Granted,
-        ReferenceContinuation
+        ReferenceContinuation,
+        InterruptBoundary,
+        CommittedBranchTargetAtInterruptBoundary
     }
 
     internal enum CpuWaitFixedImageProductionFallback : byte
@@ -31,6 +34,22 @@ namespace CopperMod.Amiga.Bus
 
     internal sealed partial class Scheduler
     {
+        private const int M68000InterruptSetupCycles = 4;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool AdvanceCpuTimingSequence(
+            in CpuTimingSequenceRequest request,
+            out CpuTimingSequenceResult result)
+        {
+            if (!_bus.CausalBusExecutor.TryExecuteCpuTimingSequence(request, out result))
+            {
+                return false;
+            }
+
+            MarkClean(result.CleanThroughCycle, SlotContendedMemoryAccessMask);
+            return true;
+        }
+
         internal void RecordDeferredCpuWaitBlitterOverlap(bool supported, bool nasty)
         {
             _deferredCpuWaitBlitterOverlapAttempts++;
@@ -51,6 +70,20 @@ namespace CopperMod.Amiga.Bus
 
         internal void SetCpuWaitSlotContendedCleanThroughForTest(long cycle)
             => _slotContendedCleanThroughCycle = cycle;
+
+        internal void SetCpuWaitPreviouslyDrainedThroughForTest(long cycle)
+        {
+            cycle = Math.Max(0, cycle);
+            _hasDrained = true;
+            _lastDrainCycle = cycle;
+            _paulaDmaDrainCycle = cycle;
+            _diskEventDrainCycle = cycle;
+            _agnusDrainCycle = cycle;
+            _blitterDrainCycle = cycle;
+            _earliestDirtyCycle = long.MaxValue;
+            _lastCleanGeneration = _generation;
+            _slotContendedCleanThroughCycle = cycle;
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal long ExecuteThroughBlitterCpuStall(long requestedCycle)
@@ -74,42 +107,257 @@ namespace CopperMod.Amiga.Bus
             long requestedCycle,
             bool isWrite,
             out long grantedCycle,
+            out long completedCycle,
+            bool allowAdjacentCopperPhase = false)
+            => AdvanceUntilCpuGrantCore(
+                kind,
+                target,
+                address,
+                size,
+                requestedCycle,
+                requestedCycle,
+                isWrite,
+                out grantedCycle,
+                out completedCycle,
+                allowAdjacentCopperPhase: allowAdjacentCopperPhase);
+
+        internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrantOrInterrupt(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long requestedCycle,
+            bool isWrite,
+            int cpuInterruptMask,
+            bool retainGrantAtInterruptPoll,
+            out long grantedCycle,
             out long completedCycle)
+            => AdvanceUntilCpuGrantCore(
+                kind,
+                target,
+                address,
+                size,
+                requestedCycle,
+                requestedCycle,
+                isWrite,
+                out grantedCycle,
+                out completedCycle,
+                cpuInterruptMask,
+                retainGrantAtInterruptPoll: retainGrantAtInterruptPoll);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal CpuWaitGrantAdvanceResult AdvanceUntilCpuLongWordPhaseGrant(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            long searchCycle,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle,
+            out long completedCycle)
+            => AdvanceUntilCpuGrantCore(
+                kind,
+                target,
+                address,
+                AmigaBusAccessSize.Word,
+                searchCycle,
+                requestedCycle,
+                isWrite,
+                out grantedCycle,
+                out completedCycle);
+
+        private CpuWaitGrantAdvanceResult AdvanceUntilCpuGrantCore(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long searchCycle,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle,
+            out long completedCycle,
+            int cpuInterruptMask = -1,
+            bool allowAdjacentCopperPhase = false,
+            bool retainGrantAtInterruptPoll = false)
         {
             grantedCycle = 0;
             completedCycle = 0;
-            if (_draining ||
-                size == AmigaBusAccessSize.Long ||
-                target is not (AmigaBusAccessTarget.ChipRam or
+			if (_draining ||
+				size == AmigaBusAccessSize.Long ||
+				target is not (AmigaBusAccessTarget.ChipRam or
                     AmigaBusAccessTarget.ExpansionRam or
                     AmigaBusAccessTarget.RealTimeClock or
-                    AmigaBusAccessTarget.CustomRegisters))
+					AmigaBusAccessTarget.CustomRegisters))
             {
                 return CpuWaitGrantAdvanceResult.Unsupported;
             }
 
             requestedCycle = Math.Max(0, requestedCycle);
+            searchCycle = Math.Max(requestedCycle, searchCycle);
+            var entryExecutorHorizon =
+                _bus.CausalBusExecutor.ExecutedThroughCycle;
 
-            // Hardware before the CPU request cannot observe the pending request.
-            if (requestedCycle > 0)
+            var firstCandidateCycle = searchCycle;
+            if (_bus.Blitter.CpuStallActive &&
+                !_bus.AgnusLiveBlitterEnabled)
             {
-                DrainSlotContendedAccess(requestedCycle - 1);
+                firstCandidateCycle =
+                    ExecuteThroughBlitterCpuStall(requestedCycle);
             }
 
-            var firstCandidateCycle = requestedCycle;
-            var blitterStallReleased = _bus.Blitter.CpuStallActive;
-            if (blitterStallReleased)
+            // An expansion/RTC/custom-register access can enter this shared
+            // slot path after another requester has already advanced Agnus
+            // past the CPU's nominal request cycle. Never drain, publish, or
+            // arbitrate a retroactive slot; start after the executed horizon.
+            // Equality remains legal because the horizon can identify the
+            // current unresolved memory cycle rather than a consumed slot.
+            if (_bus.AgnusLiveBlitterEnabled &&
+                firstCandidateCycle < entryExecutorHorizon)
             {
-                firstCandidateCycle = ExecuteThroughBlitterCpuStall(requestedCycle);
+                firstCandidateCycle = entryExecutorHorizon + 1;
+            }
+
+            // Hardware before the CPU request cannot observe the pending request.
+            if (firstCandidateCycle > 0)
+            {
+                if (_bus.AgnusLiveBlitterEnabled && _bus.Blitter.BusPipelineActive)
+                {
+                    var blitterCycle = _bus.Blitter.GetRawBusEligibilityCycle();
+                    if (blitterCycle < firstCandidateCycle)
+                    {
+                        // A preceding drain can mark its full target clean even
+                        // when committing one blitter micro-op publishes another
+                        // word inside that target. Reassert the raw deadline at
+                        // the CPU boundary so older blitter work is settled before
+                        // the CPU request becomes visible.
+                        NotifyWorkScheduled(blitterCycle);
+                    }
+                }
+
+                _bus.CausalBusExecutor.BeginCpuPreGrantDrain();
+                try
+                {
+                    if (_bus.AgnusLiveBlitterEnabled &&
+                        !_bus.AgnusSlotKernelSelected)
+                    {
+                        // The generic drain may visit a control edge and then
+                        // mark through the following free memory slot before a
+                        // newly published live word is re-queried. Walk only
+                        // the requester slots older than this CPU request so
+                        // they arbitrate chronologically while the CPU remains
+                        // invisible.
+                        for (var step = 0; step < 16; step++)
+                        {
+                            if (!_bus.Blitter.BusPipelineActive)
+                            {
+                                break;
+                            }
+
+                            var rawBlitterCycle =
+                                _bus.Blitter.GetRawBusEligibilityCycle();
+                            var blitterSlot =
+                                _bus.Blitter.NormalizeRawBusEligibilityCycle(
+                                    rawBlitterCycle,
+                                    _bus.CausalBusExecutor.ExecutedThroughCycle);
+                            if (blitterSlot >=
+                                firstCandidateCycle -
+                                AgnusChipSlotScheduler.SlotCycles)
+                            {
+                                break;
+                            }
+
+                            if (blitterSlot > 0)
+                            {
+                                DrainSlotContendedAccess(blitterSlot - 1);
+                            }
+
+                            _bus.AdvanceDueLiveFixedRequestersTo(blitterSlot);
+                            _bus.PrepareCpuWaitLiveDisplaySlots(blitterSlot);
+                            _bus.Display.AdvanceLiveAgnusSlotKernelTo(blitterSlot);
+                            _bus.Blitter.AdvanceLiveAgnusCpuPreGrantTo(blitterSlot);
+                        }
+                    }
+
+                    DrainSlotContendedAccess(firstCandidateCycle - 1);
+                }
+                finally
+                {
+                    _bus.CausalBusExecutor.EndCpuPreGrantDrain();
+                }
             }
 
             _busAccessDrainCount++;
             _bus.BeginPendingCpuSlotRequest(kind, target, address, size, requestedCycle, isWrite);
             try
             {
+                var interruptible = cpuInterruptMask >= 0;
+                var committedBranchTargetAtInterruptBoundary = false;
+                var branchInterruptBoundaryCycle = 0L;
+
+                if (searchCycle > requestedCycle)
+                {
+                    // A 68000 longword keeps the CPU bus request pending across
+                    // the mandatory inter-phase memory cycle. That already
+                    // committed slot contributes to the three-cycle nice
+                    // blitter quota before the second word can arbitrate.
+                    _bus.CausalBusExecutor.ObservePendingCpuDmaCycle(
+                        AgnusChipSlotScheduler.AlignToSlot(searchCycle) -
+                        AgnusChipSlotScheduler.SlotCycles);
+                }
+
                 var candidate = AgnusChipSlotScheduler.AlignToSlot(firstCandidateCycle);
                 while (true)
                 {
+                    if (interruptible &&
+                        TryGetCpuRecognitionEligibleInterruptCycle(
+                            cpuInterruptMask,
+                            candidate,
+                            out var interruptBoundaryCycle))
+                    {
+                        var interruptPollCycle = (interruptBoundaryCycle + 3) & ~3L;
+                        if (!retainGrantAtInterruptPoll || candidate != interruptPollCycle)
+                        {
+                            DrainSlotContendedAccess(interruptBoundaryCycle);
+                            completedCycle = interruptBoundaryCycle;
+                            return CpuWaitGrantAdvanceResult.InterruptBoundary;
+                        }
+
+                        // The branch-target read and the IPL poll share this
+                        // physical phase. Once this free slot is granted, the
+                        // transfer and its queued successor form a committed
+                        // tail; exception entry may overlap them but cannot
+                        // cancel either bus cycle.
+                        committedBranchTargetAtInterruptBoundary = true;
+                        branchInterruptBoundaryCycle = interruptBoundaryCycle;
+                    }
+
+                    if (_bus.Display.HasLiveDisplayWork())
+                    {
+                        // Every CPU target using this exact causal grant path
+                        // must see the unexecuted fixed-display/Copper suffix
+                        // before HRM considers the candidate slot. Chip-RAM
+                        // writes are not special: committing one first and
+                        // allowing Copper or bitplane DMA to replace it later
+                        // changes the physical bus chronology. This reserves
+                        // ownership only; memory is sampled by chronological
+                        // execution below.
+                        var resumeCpuPublication =
+                            _bus.CausalBusExecutor
+                                .SuspendPendingCpuPublicationForFixedPreparation();
+                        try
+                        {
+                            _bus.PrepareCpuWaitLiveDisplaySlots(candidate);
+                        }
+                        finally
+                        {
+                            if (resumeCpuPublication)
+                            {
+                                _bus.CausalBusExecutor
+                                    .ResumePendingCpuPublicationAfterFixedPreparation();
+                            }
+                        }
+                    }
+
                     // A candidate CPU slot is only usable after every older
                     // device event has executed.  Driving Denise to the
                     // candidate first can sample a later display word before
@@ -125,6 +373,61 @@ namespace CopperMod.Amiga.Bus
                         DrainSlotContendedAccess(candidate);
                     }
 
+                    var causalCandidate =
+                        _bus.AdvancePendingCpuGrantToCausalBusHorizon(
+                            target,
+                            candidate,
+                            allowAdjacentCopperPhase:
+                                interruptible || allowAdjacentCopperPhase);
+                    if (causalCandidate != candidate)
+                    {
+                        if (committedBranchTargetAtInterruptBoundary)
+                        {
+                            completedCycle = branchInterruptBoundaryCycle;
+                            return CpuWaitGrantAdvanceResult.InterruptBoundary;
+                        }
+
+                        _bus.CausalBusExecutor.ObservePendingCpuDmaCycle(
+                            candidate);
+                        candidate = AgnusChipSlotScheduler.AlignToSlot(
+                            causalCandidate);
+                        continue;
+                    }
+
+                    if (_bus.AgnusLiveBlitterEnabled)
+                    {
+                        _bus.CausalBusExecutor
+                            .ExecuteEligibleAtPendingCpuBoundary(candidate);
+                    }
+
+                    // The HRM nice-blitter rule counts every memory cycle for
+                    // which the pending CPU request remains unsatisfied, not
+                    // only blitter-owned cycles. Record the committed owner
+                    // before its completion horizon moves the retry forward.
+                    _bus.CausalBusExecutor.ObservePendingCpuDmaCycle(candidate);
+
+                    // A competing requester may have committed the candidate
+                    // while the CPU intent remained pending.  Its completion
+                    // advances the data-bus horizon beyond that candidate, so
+                    // retry from the first causally usable CPU cycle instead of
+                    // attempting to grant the already-executed slot again.
+                    causalCandidate = _bus.AdvancePendingCpuGrantToCausalBusHorizon(
+                        target,
+                        candidate,
+                            allowAdjacentCopperPhase:
+                                interruptible || allowAdjacentCopperPhase);
+                    if (causalCandidate != candidate)
+                    {
+                        if (committedBranchTargetAtInterruptBoundary)
+                        {
+                            completedCycle = branchInterruptBoundaryCycle;
+                            return CpuWaitGrantAdvanceResult.InterruptBoundary;
+                        }
+
+                        candidate = AgnusChipSlotScheduler.AlignToSlot(causalCandidate);
+                        continue;
+                    }
+
                     _bus.SynchronizeHrmBlitterPriority();
                     if (_bus.TryGrantPendingCpuSingleSlot(
                         kind,
@@ -136,18 +439,26 @@ namespace CopperMod.Amiga.Bus
                         isWrite,
                         out completedCycle))
                     {
+                        if (_bus.AgnusLiveBlitterEnabled &&
+                            !_bus.AgnusSlotKernelSelected)
+                        {
+                            _bus.ObserveLiveSlotKernelCpuGrant(candidate);
+                        }
                         grantedCycle = candidate;
-                        return CpuWaitGrantAdvanceResult.Granted;
+                        return committedBranchTargetAtInterruptBoundary
+                            ? CpuWaitGrantAdvanceResult.CommittedBranchTargetAtInterruptBoundary
+                            : CpuWaitGrantAdvanceResult.Granted;
                     }
 
-                    // A Copper-owned half of the HRM pair consumes the adjacent
-                    // CPU opportunity as well. The reference allocator skips the
-                    // whole pair; the chronological retry loop must do the same
-                    // after materializing the Copper slot.
-                    candidate += _bus.TryGetCommittedAgnusSlotOwner(candidate, out var deniedOwner) &&
-                        deniedOwner == AgnusChipSlotOwner.Copper
-                            ? 2 * AgnusChipSlotScheduler.SlotCycles
-                            : AgnusChipSlotScheduler.SlotCycles;
+                    if (committedBranchTargetAtInterruptBoundary)
+                    {
+                        completedCycle = branchInterruptBoundaryCycle;
+                        return CpuWaitGrantAdvanceResult.InterruptBoundary;
+                    }
+
+                    // A Copper transfer occupies one memory cycle. The adjacent
+                    // cycle remains a legal CPU opportunity.
+                    candidate += AgnusChipSlotScheduler.SlotCycles;
                 }
             }
             finally
@@ -156,6 +467,35 @@ namespace CopperMod.Amiga.Bus
             }
         }
 
+        private bool TryGetCpuRecognitionEligibleInterruptCycle(
+            int cpuInterruptMask,
+            long candidateCycle,
+            out long recognitionCycle)
+        {
+            recognitionCycle = 0;
+            var level = _bus.Paula.GetHighestCpuVisibleInterruptLevel(candidateCycle);
+            if (level <= 0 || level <= (cpuInterruptMask & 0x07))
+            {
+                return false;
+            }
+
+            var releaseCycle =
+                _bus.Paula.GetCpuInterruptReleaseCycleForLevel(level, candidateCycle);
+            if (!releaseCycle.HasValue)
+            {
+                return false;
+            }
+
+            // A transition exactly four CPU clocks before the poll is staged
+            // until the next poll. Polls occur on the MC68000's four-clock
+            // control phase, so assertion + setup + one clock must advance to
+            // that physical phase before it can cancel an unstarted fetch.
+            var earliestRecognitionCycle =
+                releaseCycle.Value + M68000InterruptSetupCycles + 1;
+            var eligiblePollCycle = (earliestRecognitionCycle + 3) & ~3L;
+            recognitionCycle = earliestRecognitionCycle;
+            return eligiblePollCycle <= candidateCycle;
+        }
 
         internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrantUsingFixedSlotImage(
             AmigaBusAccessKind kind,
@@ -165,15 +505,11 @@ namespace CopperMod.Amiga.Bus
             long requestedCycle,
             bool isWrite,
             out long grantedCycle,
-            out long completedCycle,
-            out CpuWaitFixedSlotTimelineSignature timeline,
-            out bool verifyTimeline)
+            out long completedCycle)
         {
             _bus.RecordProductionCpuWaitFixedSlotImageAttempt();
             grantedCycle = 0;
             completedCycle = 0;
-            timeline = default;
-            verifyTimeline = false;
             if (_draining ||
                 _bus.DeferredCpuWaitFixedImageProductionDisabled ||
                 size == AmigaBusAccessSize.Long ||
@@ -198,30 +534,17 @@ namespace CopperMod.Amiga.Bus
                 return CpuWaitGrantAdvanceResult.ReferenceContinuation;
             }
 
-            verifyTimeline = _bus.ShouldVerifyProductionCpuWaitFixedSlotImage;
             CpuWaitFixedSlotImageUnsupported unsupported;
-            var supported = verifyTimeline
-                ? _bus.TryPredictCpuWaitFixedSlotGrant(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    requestedCycle,
-                    isWrite,
-                    out grantedCycle,
-                    out completedCycle,
-                    out unsupported,
-                    out timeline)
-                : _bus.TryPredictCpuWaitFixedSlotGrant(
-                    kind,
-                    target,
-                    address,
-                    size,
-                    requestedCycle,
-                    isWrite,
-                    out grantedCycle,
-                    out completedCycle,
-                    out unsupported);
+            var supported = _bus.TryPredictCpuWaitFixedSlotGrant(
+                kind,
+                target,
+                address,
+                size,
+                requestedCycle,
+                isWrite,
+                out grantedCycle,
+                out completedCycle,
+                out unsupported);
             if (!supported)
             {
                 _bus.RecordProductionCpuWaitFixedSlotImageFallback(unsupported switch

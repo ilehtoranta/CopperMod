@@ -191,19 +191,58 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var slot = (int)((slotCycle - lineStart) / AgnusChipSlotScheduler.SlotCycles);
             owner = (CpuWaitFixedSlotOwner)_cpuWaitFixedSlotOwners[
                 (beamLine * CpuWaitFixedSlotsPerLine) + slot];
-            _bus.CausalBusExecutor.RecordFixedPlanShadow(
-                slotCycle,
-                owner switch
-                {
-                    CpuWaitFixedSlotOwner.Refresh => AgnusChipSlotOwner.Refresh,
-                    CpuWaitFixedSlotOwner.BitplaneRead => AgnusChipSlotOwner.Bitplane,
-                    CpuWaitFixedSlotOwner.SpriteRead => AgnusChipSlotOwner.Sprite,
-                    _ => AgnusChipSlotOwner.Free
-                });
             if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
             {
                 _cpuWaitFixedSlotImagePredictedSlots++;
             }
+            return true;
+        }
+
+        // Unlike the scalar CPU-wait lookup above, this query validates only
+        // the prefix through the candidate slot.  It is for executor-owned
+        // speculative proof: callers must still stop at the next Copper or
+        // pending-write barrier, and must revalidate before commitment.
+        internal bool TryGetCpuChipFetchFixedSlotOwner(
+            long slotCycle,
+            out CpuWaitFixedSlotOwner owner,
+            out CpuWaitFixedSlotImageUnsupported unsupported)
+        {
+            if (!_timing.IsCanonicalPal)
+            {
+                owner = CpuWaitFixedSlotOwner.Free;
+                unsupported = CpuWaitFixedSlotImageUnsupported.Frame;
+                return false;
+            }
+
+            slotCycle = AgnusChipSlotScheduler.AlignToSlot(Math.Max(0, slotCycle));
+            if (_bus.IsMandatoryRefreshSlot(slotCycle))
+            {
+                owner = CpuWaitFixedSlotOwner.Refresh;
+                unsupported = CpuWaitFixedSlotImageUnsupported.None;
+                return true;
+            }
+
+            if (!TryGetCpuWaitFixedSlotLine(slotCycle, out var beamLine, out var lineStart, out var row))
+            {
+                owner = CpuWaitFixedSlotOwner.Free;
+                unsupported = CpuWaitFixedSlotImageUnsupported.Frame;
+                return false;
+            }
+
+            if (!TryEnsureCpuWaitFixedSlotImage(
+                    beamLine,
+                    lineStart,
+                    row,
+                    slotCycle,
+                    out unsupported))
+            {
+                owner = CpuWaitFixedSlotOwner.Free;
+                return false;
+            }
+
+            var slot = (int)((slotCycle - lineStart) / AgnusChipSlotScheduler.SlotCycles);
+            owner = (CpuWaitFixedSlotOwner)_cpuWaitFixedSlotOwners[
+                (beamLine * CpuWaitFixedSlotsPerLine) + slot];
             return true;
         }
 
@@ -351,6 +390,34 @@ namespace CopperMod.Amiga.CustomChips.Denise
             lineStart = _liveFrameStartCycle + ((long)beamLine * LineCycles);
             row = beamLine - StandardVStart;
             return (uint)row < LowResOutputHeight;
+        }
+
+        internal bool CanPredictCpuWaitBlankingSlotAsFree(long slotCycle, long barrierHorizon)
+        {
+            if (!_timing.IsCanonicalPal ||
+                !_liveDmaEnabled ||
+                !_liveFrameValid ||
+                slotCycle < _liveFrameStartCycle ||
+                slotCycle >= GetLiveFrameStopCycle() ||
+                GetNextLiveCopperBarrierCycle() <= barrierHorizon ||
+                GetNextLivePendingWriteCycle() <= barrierHorizon)
+            {
+                return false;
+            }
+
+            var frameCycle = slotCycle - _liveFrameStartCycle;
+            var beamLine = (int)(frameCycle / LineCycles);
+            var row = beamLine - StandardVStart;
+            if ((uint)beamLine >= AmigaConstants.A500PalRasterLines ||
+                (uint)row < LowResOutputHeight)
+            {
+                return false;
+            }
+
+            var masterEnabled = (_dmacon & DmaconMasterEnable) != 0;
+            var displayChannelEnabled =
+                (_dmacon & (DmaconBitplaneEnable | DmaconSpriteEnable)) != 0;
+            return !masterEnabled || !displayChannelEnabled;
         }
 
         private bool TryEnsureCpuWaitFixedSlotImage(

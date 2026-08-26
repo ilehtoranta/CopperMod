@@ -319,27 +319,46 @@ internal static class CustomRegisterMetadata
             var offset = (ushort)(0x0E0 + (plane * 4));
             AddDmaPointer(result, declared, offset, $"BPL{plane + 1}PTH", $"BPL{plane + 1}PTL", CustomRegisterOwner.Agnus);
         }
+        for (var plane = 6; plane < 8; plane++)
+        {
+            var offset = (ushort)(0x0E0 + (plane * 4));
+            Add(result, offset, $"BPL{plane + 1}PTH", CustomRegisterOwner.Agnus,
+                CustomRegisterAvailability.AgaAlice, CustomRegisterAccess.WriteOnly, 0, 0, 0,
+                CustomRegisterReadback.OpenBus, declared, agaWritableMask: 0x001F);
+            Add(result, (ushort)(offset + 2), $"BPL{plane + 1}PTL", CustomRegisterOwner.Agnus,
+                CustomRegisterAvailability.AgaAlice, CustomRegisterAccess.WriteOnly, 0, 0, 0,
+                CustomRegisterReadback.OpenBus, declared, agaWritableMask: 0xFFFE);
+        }
 
         Add(result, 0x100, "BPLCON0", CustomRegisterOwner.Agnus | CustomRegisterOwner.Denise,
             CustomRegisterAvailability.Common, CustomRegisterAccess.WriteOnly, 0, 0xFF0F, 0xFF4F,
-            CustomRegisterReadback.OpenBus, declared);
+            CustomRegisterReadback.OpenBus, declared, agaWritableMask: 0xFF5F);
         AddWrite(result, declared, 0x102, "BPLCON1", CustomRegisterOwner.Denise, 0x00FF);
         Add(result, 0x104, "BPLCON2", CustomRegisterOwner.Denise, CustomRegisterAvailability.Common,
             CustomRegisterAccess.WriteOnly, 0, 0x007F, 0x007F, CustomRegisterReadback.OpenBus);
         Declare(declared, 0x104);
         Add(result, 0x106, "BPLCON3", CustomRegisterOwner.Denise, CustomRegisterAvailability.EcsDisplayOrLater,
-            CustomRegisterAccess.WriteOnly, 0, 0, 0x0037, CustomRegisterReadback.OpenBus, declared);
+            CustomRegisterAccess.WriteOnly, 0, 0, 0x0037, CustomRegisterReadback.OpenBus, declared,
+            agaWritableMask: 0xFEF7);
         AddWrite(result, declared, 0x108, "BPL1MOD", CustomRegisterOwner.Agnus, 0xFFFF);
         AddWrite(result, declared, 0x10A, "BPL2MOD", CustomRegisterOwner.Agnus, 0xFFFF);
-        AddAbsent(result, declared, 0x10C, "BPLCON4");
-        AddAbsent(result, declared, 0x10E, "CLXCON2");
+        Add(result, 0x10C, "BPLCON4", CustomRegisterOwner.Denise,
+            CustomRegisterAvailability.AgaLisa, CustomRegisterAccess.WriteOnly, 0, 0, 0,
+            CustomRegisterReadback.OpenBus, declared, agaResetValue: 0x0011, agaWritableMask: 0xFFFF);
+        Add(result, 0x10E, "CLXCON2", CustomRegisterOwner.Denise,
+            CustomRegisterAvailability.AgaLisa, CustomRegisterAccess.WriteOnly, 0, 0, 0,
+            CustomRegisterReadback.OpenBus, declared, agaWritableMask: 0x00FF);
 
         for (var plane = 0; plane < 6; plane++)
         {
             AddWrite(result, declared, (ushort)(0x110 + (plane * 2)), $"BPL{plane + 1}DAT", CustomRegisterOwner.Denise, 0xFFFF);
         }
-        AddAbsent(result, declared, 0x11C, "BPL7DAT");
-        AddAbsent(result, declared, 0x11E, "BPL8DAT");
+        Add(result, 0x11C, "BPL7DAT", CustomRegisterOwner.Denise,
+            CustomRegisterAvailability.AgaLisa, CustomRegisterAccess.WriteOnly, 0, 0, 0,
+            CustomRegisterReadback.OpenBus, declared, agaWritableMask: 0xFFFF);
+        Add(result, 0x11E, "BPL8DAT", CustomRegisterOwner.Denise,
+            CustomRegisterAvailability.AgaLisa, CustomRegisterAccess.WriteOnly, 0, 0, 0,
+            CustomRegisterReadback.OpenBus, declared, agaWritableMask: 0xFFFF);
 
         for (var sprite = 0; sprite < 8; sprite++)
         {
@@ -388,8 +407,9 @@ internal static class CustomRegisterMetadata
         AddAbsent(result, declared, 0x1E8, "SPRHPT");
         AddAbsent(result, declared, 0x1EA, "BPLHPT");
 
-        Add(result, 0x1FC, "FMODE", CustomRegisterOwner.None, CustomRegisterAvailability.Absent,
-            CustomRegisterAccess.WriteOnly, 0, 0, 0, CustomRegisterReadback.OpenBus, declared);
+        Add(result, 0x1FC, "FMODE", CustomRegisterOwner.Agnus | CustomRegisterOwner.Denise,
+            CustomRegisterAvailability.AgaAliceAndLisa, CustomRegisterAccess.WriteOnly, 0, 0, 0,
+            CustomRegisterReadback.OpenBus, declared, agaWritableMask: 0xC00F);
         return result;
     }
 

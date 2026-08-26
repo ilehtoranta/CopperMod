@@ -16,6 +16,7 @@ internal sealed class ExecLibraryServices
     private const int ExecLibListOffset = 0x17A;
     private const int LibraryVersionOffset = 0x14;
     private const int LibraryOpenCountOffset = 0x20;
+    private const int IoDeviceOffset = 0x14;
 
     private readonly AmigaBus _bus;
     private readonly Func<uint> _getExecBase;
@@ -72,6 +73,39 @@ internal sealed class ExecLibraryServices
 
     public void AddDevice(M68kCpuState state)
         => _addNode(_getExecBase() + ExecDeviceListOffset, state.A[1], true, state);
+
+    public void RemDevice(M68kCpuState state) => _removeNode(state.A[1], state);
+
+    public void OpenDevice(M68kCpuState state, uint continuationAddress)
+    {
+        var device = _findName(_getExecBase() + ExecDeviceListOffset, state.A[0]);
+        if (device == 0 || !_bus.IsMappedMemoryRange(device, 6))
+        {
+            state.D[0] = 0xFFFF_FFFF;
+            return;
+        }
+
+        _startGuestSubroutine(state, device - 6, continuationAddress);
+    }
+
+    public void CloseDevice(M68kCpuState state, uint continuationAddress)
+    {
+        var request = state.A[1];
+        if (request == 0 || !_bus.IsMappedMemoryRange(request + IoDeviceOffset, 4))
+        {
+            state.D[0] = 0;
+            return;
+        }
+
+        var device = _bus.ReadLong(request + IoDeviceOffset);
+        if (device < 12 || !_bus.IsMappedMemoryRange(device, 12))
+        {
+            state.D[0] = 0;
+            return;
+        }
+
+        _startGuestSubroutine(state, device - 12, continuationAddress);
+    }
 
     public void AddResource(M68kCpuState state)
         => _addNode(_getExecBase() + ExecResourceListOffset, state.A[1], true, state);

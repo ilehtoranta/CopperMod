@@ -6,7 +6,7 @@ namespace CopperMod.Amiga.Tests;
 
 public sealed class AmigaDiskDisplayTests
 {
-    private const int StandardX = AmigaConstants.PalLowResOverscanBorderX;
+    private const int StandardX = AmigaConstants.PalLowResOverscanBorderX - 1;
     private const int StandardY = AmigaConstants.PalLowResOverscanBorderY;
 
     [Theory]
@@ -426,6 +426,49 @@ public sealed class AmigaDiskDisplayTests
     }
 
     [Fact]
+    public void StartedLineRefreshRewindsCaptureCursorFromFutureRow()
+    {
+        var bus = new AmigaBus(enableLiveAgnusDma: true);
+        var frameCycle = AmigaConstants.A500PalCpuCyclesPerFrame;
+        var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        var row = StandardY;
+        var lineStart = CycleForOutputRow(row, lineCycles);
+        var refreshCycle = CycleForOutputRowHorizontal(row, 0x38, lineCycles) - 2;
+        bus.WriteWord(0x00DFF092, 0x0038);
+        bus.WriteWord(0x00DFF094, 0x00D0);
+        bus.WriteWord(0x00DFF0E0, 0x0000);
+        bus.WriteWord(0x00DFF0E2, 0x1000);
+        bus.WriteWord(0x00DFF100, 0x9000);
+        bus.WriteWord(0x00DFF096, 0x8300);
+        bus.Display.BeginPresentationFrame(
+            new PresentationFrameTarget(new uint[bus.Display.Width * bus.Display.Height]),
+            0,
+            frameCycle);
+
+        try
+        {
+            bus.AdvanceDmaTo(lineStart);
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var cursor = typeof(Display).GetProperty("_liveNextFetchRow", flags) ??
+                throw new InvalidOperationException("Live capture cursor property was not found.");
+            var refresh = typeof(Display).GetMethod("RefreshStartedLiveLineDmaState", flags) ??
+                throw new InvalidOperationException("Started-line refresh method was not found.");
+
+            // Physical lookahead may have moved capture to a later row before
+            // a causal mode write rebuilds the current row's unexecuted suffix.
+            cursor.SetValue(bus.Display, row + 1);
+            refresh.Invoke(bus.Display, [row, refreshCycle]);
+
+            Assert.Equal(row, cursor.GetValue(bus.Display));
+        }
+        finally
+        {
+            bus.Display.AbortPresentationFrame();
+        }
+    }
+
+    [Fact]
     public void DisplayContinuesBitplaneFetchesPastAdjacentPlanePointers()
     {
         var bus = new AmigaBus();
@@ -564,8 +607,8 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 15, StandardY));
-        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 16, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 16, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 17, StandardY));
     }
 
     [Fact]
@@ -586,8 +629,8 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFF000000u, Pixel(frame, StandardX - 16, StandardY));
-        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX - 1, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX - 15, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, StandardY));
     }
 
     [Fact]
@@ -609,7 +652,7 @@ public sealed class AmigaDiskDisplayTests
         bus.Display.RenderFrame(frame);
 
         var firstLine = StandardY * 2;
-        var expectedFirstPixel = ((StandardX - 1) + ((0x38 - 0x3C) * 2)) * 2;
+        var expectedFirstPixel = (StandardX + ((0x38 - 0x3C) * 2)) * 2;
         Assert.Equal(0xFF000000u, HighResPixel(frame, bus.Display.Width, expectedFirstPixel - 1, firstLine));
         Assert.Equal(0xFFFF0000u, HighResPixel(frame, bus.Display.Width, expectedFirstPixel, firstLine));
     }
@@ -981,7 +1024,7 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 15, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX + 16, StandardY));
     }
 
     [Fact]
@@ -1300,6 +1343,8 @@ public sealed class AmigaDiskDisplayTests
         {
             bus.WriteWord(0x00DFF100, 0x1000, row0Cycle);
             bus.WriteWord(0x00DFF100, 0x0000, row1Cycle);
+            Assert.True(bus.Display.TryGetCapturedBitplaneWord(StandardY, 0, 0, out var captured));
+            Assert.Equal(0x8000, captured);
             bus.Display.CompletePresentationFrame(frameCycles);
         }
         catch
@@ -1373,6 +1418,47 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(0xFF000000u, Pixel(frame, StandardX, enableRow - 1));
         Assert.Equal(0xFFFF0000u, Pixel(frame, StandardX, enableRow));
+    }
+
+    [Fact]
+    public void UnchangedBitplanePointerHalfDoesNotRestartSourceRowMapping()
+    {
+        var bus = new AmigaBus();
+        var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        var writeCycle = CycleForOutputRow(StandardY + 10, lineCycles);
+        bus.WriteWord(0x00DFF092, 0x0038, 0);
+        bus.WriteWord(0x00DFF094, 0x0038, 0);
+        bus.WriteWord(0x00DFF0E0, 0x0000, 0);
+        bus.WriteWord(0x00DFF0E2, 0x1000, 0);
+        bus.WriteWord(0x00DFF0E4, 0x0000, 0);
+        bus.WriteWord(0x00DFF0E6, 0x2000, 0);
+        bus.WriteWord(0x00DFF0E8, 0x0000, 0);
+        bus.WriteWord(0x00DFF0EA, 0x3000, 0);
+        bus.WriteWord(0x00DFF100, 0x3000, 0);
+        bus.WriteWord(0x00DFF096, 0x8300, 0);
+
+        bus.AdvanceDmaTo(writeCycle - 1);
+        var before = bus.Display.CaptureSnapshot();
+
+        bus.WriteWord(0x00DFF0E0, 0x0000, writeCycle);
+        bus.AdvanceDmaTo(writeCycle);
+        var after = bus.Display.CaptureSnapshot();
+
+        Assert.Equal(before.BitplanePointers[0], after.BitplanePointers[0]);
+        Assert.Equal(before.BitplaneBaseRows[0], after.BitplaneBaseRows[0]);
+        Assert.Equal(after.BitplaneBaseRows[1], after.BitplaneBaseRows[0]);
+        Assert.Equal(after.BitplaneBaseRows[2], after.BitplaneBaseRows[0]);
+
+        bus.WriteWord(0x00DFF100, 0xB000, writeCycle + 8);
+        bus.AdvanceDmaTo(writeCycle + 8);
+        var afterHighResSwitch = bus.Display.CaptureSnapshot();
+
+        Assert.Equal(
+            afterHighResSwitch.BitplaneBaseRows[1],
+            afterHighResSwitch.BitplaneBaseRows[0]);
+        Assert.Equal(
+            afterHighResSwitch.BitplaneBaseRows[2],
+            afterHighResSwitch.BitplaneBaseRows[0]);
     }
 
     [Fact]
@@ -1663,8 +1749,8 @@ public sealed class AmigaDiskDisplayTests
             throw;
         }
 
-        Assert.Equal(0xFFFF0000u, Pixel(liveFrame, StandardX + 1, StandardY));
-        Assert.Equal(0xFF00FF00u, Pixel(liveFrame, StandardX + 2, StandardY));
+        Assert.Equal(0xFFFF0000u, Pixel(liveFrame, StandardX + 2, StandardY));
+        Assert.Equal(0xFF00FF00u, Pixel(liveFrame, StandardX + 3, StandardY));
         Assert.Equal(0xFF00FF00u, Pixel(liveFrame, StandardX + 15, StandardY));
         var snapshot = liveBus.Display.CaptureSnapshot();
         Assert.Equal(0x00F0, snapshot.Colors[1]);
@@ -2412,7 +2498,7 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFF0000FFu, Pixel(frame, StandardX + 63, StandardY + 65));
+        Assert.Equal(0xFF0000FFu, Pixel(frame, StandardX + 64, StandardY + 65));
     }
 
     [Fact]
@@ -2428,8 +2514,8 @@ public sealed class AmigaDiskDisplayTests
 
         bus.Display.RenderFrame(frame);
 
-        Assert.Equal(0xFF000000u, Pixel(frame, StandardX - 1, StandardY));
-        Assert.Equal(0xFF000000u, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFF0000FFu, Pixel(frame, StandardX, StandardY));
+        Assert.Equal(0xFF000000u, Pixel(frame, StandardX + 1, StandardY));
     }
 
     [Fact]
@@ -3289,47 +3375,50 @@ public sealed class AmigaDiskDisplayTests
         Assert.Equal(0x1234, BigEndian.ReadUInt16(bus.ChipRam, 0x4000, "ungated destination"));
     }
 
-    [Fact]
-    public void BlitterNastyModeStallsCpuChipAndPseudoFastAccessButNotRealFastRam()
+    [Theory]
+    [InlineData(0x00001000u, (int)AmigaBusAccessTarget.ChipRam)]
+    [InlineData(AmigaConstants.A500BootPseudoFastRamBase, (int)AmigaBusAccessTarget.ExpansionRam)]
+    public void BlitterNastyModeOwnsRequestedSlotBeforeContendedCpuAccess(
+        uint address,
+        int expectedTarget)
     {
-        var nastyBus = new AmigaBus(
-            expansionRamSize: 0x10000,
-            realFastRamSize: 0x10000);
-        nastyBus.ConfigureAutoconfigFastRamForHost();
-        BigEndian.WriteUInt16(nastyBus.ChipRam, 0x3000, 0x1234);
-        ConfigureFourWordCopyBlit(nastyBus);
-        nastyBus.WriteWord(0x00DFF096, 0x8640);
-        nastyBus.AdvanceDmaTo(0);
-        nastyBus.WriteWord(0x00DFF058, 0x0044);
+        var bus = CreateLiveNastyFourWordCopyBlit(expansionRamSize: 0x10000);
+        var blitterCycle = bus.Blitter.GetRawBusEligibilityCycle();
+        var cpuCycle = blitterCycle;
 
-        var expansionCycle = 0L;
-        _ = nastyBus.ReadWord(AmigaConstants.A500BootPseudoFastRamBase, ref expansionCycle, AmigaBusAccessKind.CpuDataRead);
-        Assert.True(expansionCycle > 0);
-        Assert.True(nastyBus.Blitter.CaptureSnapshot().Busy);
+        _ = bus.ReadWord(address, ref cpuCycle, AmigaBusAccessKind.CpuDataRead);
 
-        var realFastCycle = 0L;
-        _ = nastyBus.ReadWord(AmigaConstants.A500RealFastRamBase, ref realFastCycle, AmigaBusAccessKind.CpuDataRead);
-        Assert.Equal(0, realFastCycle);
-        Assert.True(nastyBus.Blitter.CaptureSnapshot().Busy);
+        var firstBlitter = bus.BusAccesses.First(access =>
+            access.Request.Requester == AmigaBusRequester.Blitter);
+        var cpu = Assert.Single(bus.BusAccesses, access =>
+            access.Request.Requester == AmigaBusRequester.Cpu &&
+            access.Request.Kind == AmigaBusAccessKind.CpuDataRead);
+        Assert.Equal(blitterCycle, firstBlitter.GrantedCycle);
+        Assert.Equal((AmigaBusAccessTarget)expectedTarget, cpu.Request.Target);
+        Assert.True(cpu.GrantedCycle > firstBlitter.GrantedCycle);
+        Assert.True(bus.Blitter.CaptureSnapshot().Busy);
+    }
 
-        var chipCycle = 0L;
-        _ = nastyBus.ReadWord(0x00001000, ref chipCycle, AmigaBusAccessKind.CpuDataRead);
-        Assert.True(chipCycle > 0);
-        var nastySnapshotAfterChipRead = nastyBus.Blitter.CaptureSnapshot();
-        Assert.False(nastySnapshotAfterChipRead.Busy);
-        Assert.True(chipCycle >= nastySnapshotAfterChipRead.CurrentCycle);
+    [Fact]
+    public void BlitterNastyModeDoesNotStallRealFastRamAccess()
+    {
+        const long startCycle = 596;
+        var bus = CreateLiveNastyFourWordCopyBlit(realFastRamSize: 0x10000);
+        var realFastCycle = startCycle + AgnusChipSlotScheduler.SlotCycles;
+        var requestedCycle = realFastCycle;
 
-        var normalBus = new AmigaBus();
-        BigEndian.WriteUInt16(normalBus.ChipRam, 0x3000, 0x1234);
-        ConfigureFourWordCopyBlit(normalBus);
-        EnableBlitterDma(normalBus);
-        normalBus.WriteWord(0x00DFF058, 0x0044);
+        _ = bus.ReadWord(
+            AmigaConstants.A500RealFastRamBase,
+            ref realFastCycle,
+            AmigaBusAccessKind.CpuDataRead);
 
-        var normalCycle = 0L;
-        _ = normalBus.ReadWord(0x00001000, ref normalCycle, AmigaBusAccessKind.CpuDataRead);
-        Assert.True(normalCycle > 0, $"normalCycle={normalCycle}");
-        Assert.True(normalCycle <= normalBus.Blitter.GetPredictedCompletionCycle() + (2 * AgnusChipSlotScheduler.SlotCycles), $"normalCycle={normalCycle}");
-        Assert.False(normalBus.Blitter.CaptureSnapshot().Busy);
+        Assert.Equal(requestedCycle, realFastCycle);
+        var cpu = Assert.Single(bus.BusAccesses, access =>
+            access.Request.Requester == AmigaBusRequester.Cpu &&
+            access.Request.Kind == AmigaBusAccessKind.CpuDataRead);
+        Assert.Equal(AmigaBusAccessTarget.RealFastRam, cpu.Request.Target);
+        Assert.Equal(requestedCycle, cpu.GrantedCycle);
+        Assert.True(bus.Blitter.CaptureSnapshot().Busy);
     }
 
     [Fact]
@@ -4344,6 +4433,29 @@ public sealed class AmigaDiskDisplayTests
         bus.WriteWord(0x00DFF052, 0x3000);
         bus.WriteWord(0x00DFF054, 0x0000);
         bus.WriteWord(0x00DFF056, 0x4000);
+    }
+
+    private static AmigaBus CreateLiveNastyFourWordCopyBlit(
+        int expansionRamSize = 0,
+        int realFastRamSize = 0,
+        long startCycle = 596)
+    {
+        var bus = new AmigaBus(
+            expansionRamSize: expansionRamSize,
+            realFastRamSize: realFastRamSize,
+            captureBusAccesses: true,
+            enableLiveAgnusDma: true,
+            enableLiveDisplayDma: true,
+            enableAgnusLiveDisplayLedger: true,
+            enableAgnusLiveCopper: true,
+            enableAgnusLiveBlitter: true);
+        bus.ConfigureAutoconfigFastRamForHost();
+        BigEndian.WriteUInt16(bus.ChipRam, 0x3000, 0x1234);
+        ConfigureFourWordCopyBlit(bus);
+        bus.WriteWord(0x00DFF096, 0x8640);
+        bus.AdvanceDmaTo(100);
+        bus.WriteWord(0x00DFF058, 0x0044, startCycle);
+        return bus;
     }
 
     private static void ConfigureLineBlit(

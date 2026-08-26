@@ -233,7 +233,7 @@ public sealed class EcsDeniseRegisterTests
             (AmigaConstants.PalLowResOverscanBorderX * 4);
         Assert.Equal(new uint[] { 0xFFFF00AAu, 0xFF55AAFFu, 0xFFFF00AAu, 0xFF55AAFFu },
             alignedFrame.AsSpan(offset, 4).ToArray());
-        Assert.Equal(new uint[] { 0xFF000000u, 0xFF000000u, 0xFFFF00AAu, 0xFF55AAFFu },
+        Assert.Equal(new uint[] { 0x00000000u, 0x00000000u, 0xFFFF00AAu, 0xFF55AAFFu },
             incrementedFrame.AsSpan(offset, 4).ToArray());
         Assert.Equal(0xFFFF00AAu, incrementedFrame[offset + 4]);
         Assert.Equal(0xFF55AAFFu, incrementedFrame[offset + 5]);

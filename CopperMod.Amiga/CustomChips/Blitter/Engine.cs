@@ -809,7 +809,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 : $"bltscratch=unsupported:{UnsupportedReason}";
     }
 
-    internal sealed class Blitter
+    internal sealed partial class Blitter
     {
         private const ushort DmaMasterEnable = 0x0200;
         private const ushort DmaBlitterEnable = 0x0040;
@@ -831,7 +831,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private const ushort BltSizeVertical = 0x05C;
         private const ushort BltSizeHorizontal = 0x05E;
         private const int LegacyMaximumWidthWords = 64;
-        private const int BOnlyFinalPipelineDrainSlots = 8;
+        private const int BOnlyFinalPipelineDrainSlots = 1;
         private const int LegacyMaximumHeight = 1024;
         private const int EcsMaximumWidthWords = 2048;
         private const int EcsMaximumHeight = 32768;
@@ -916,6 +916,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private int _lineBPatternStride;
         private long _lastDmaCycle;
         private long _lastCompletionCycle;
+        private long _lastTerminationCycle;
         private readonly List<long> _completionCycles = new List<long>();
         private int _completedMicroOps;
         private bool _completionPending;
@@ -1012,7 +1013,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             get
             {
                 var status = _zeroFlag ? DmaconBlitterZero : (ushort)0;
-                if (_busy)
+                if (Busy)
                 {
                     status |= DmaconBlitterBusy;
                 }
@@ -1096,6 +1097,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _lineBPatternStride = 0;
             _lastDmaCycle = 0;
             _lastCompletionCycle = 0;
+            _lastTerminationCycle = 0;
             _completionCycles.Clear();
             _completedMicroOps = 0;
             _completionPending = false;
@@ -1112,6 +1114,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _destinationDLatch = default;
             ClearAreaMicroOpState();
             ClearLineMicroOpState();
+            ResetLiveBlitterRequester(resetDiagnostics: true);
             _areaSlotQueueEnabled = false;
             _areaSlotQueueOpCount = 0;
             _areaSlotQueueKind = BlitterSlotQueueKind.None;
@@ -1137,7 +1140,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         public AmigaBlitterSnapshot CaptureSnapshot()
         {
             return new AmigaBlitterSnapshot(
-                _busy,
+                Busy,
                 _zeroFlag,
                 _bltcon0,
                 _bltcon1,
@@ -1238,7 +1241,10 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 _rowPipelineFallbacks);
         }
 
-        public bool Busy => _busy;
+        public bool Busy =>
+            _busy && !_liveAreaFinalDCompletionPublished;
+
+        internal bool BusPipelineActive => _busy;
 
         internal ulong WakeVersion => _wakeVersion;
 
@@ -1309,6 +1315,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 }
 
                 ApplyRegisterWrite(offset, value);
+                if (offset == 0x096)
+                {
+                    _bus.PublishLiveBlitterPriority();
+                }
+
                 if (offset == 0x040 && _busy && (value & 0x0100) == 0)
                 {
                     _useD = false;
@@ -1318,7 +1329,16 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                         // is active.  The causal executor keeps the DMA sequence
                         // explicitly, so remove any D operation that has not yet
                         // reached its bus slot.
-                        BuildAreaMicroOpSequence();
+                        // A live OCS D cycle writes the output latched by the
+                        // preceding word. Preserve that already-created bus
+                        // intent, but remove D from all later words. If no
+                        // output is pending, the current/future D phase can be
+                        // removed immediately.
+                        if (!_liveAreaPendingDValid)
+                        {
+                            BuildAreaMicroOpSequence();
+                            ResetLiveAreaDPipeline();
+                        }
                     }
                 }
 
@@ -1431,6 +1451,12 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             {
                 if (RequiresDmaForCurrentBlit() && IsBlitterDmaEnabled())
                 {
+                    if (_bus.AgnusLiveBlitterEnabled)
+                    {
+                        StepLiveBlitterRequester(targetCycle);
+                        return;
+                    }
+
                     ExecuteCausalDmaThrough(targetCycle);
                     return;
                 }
@@ -1591,9 +1617,19 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             if (RequiresDmaForCurrentBlit() && IsBlitterDmaEnabled())
             {
                 var dueCycle = GetNextCausalDmaTransitionCycle();
-                var causalCursor = Math.Max(currentCycle, _bus.ExecutedChipBusHorizon);
-                var candidate = AgnusChipSlotScheduler.AlignToSlot(
-                    Math.Max(dueCycle, causalCursor + 1));
+                var candidate = _bus.AgnusLiveBlitterEnabled
+                    ? AgnusChipSlotScheduler.AlignToSlot(
+                        Math.Max(
+                            dueCycle,
+                            Math.Max(
+                                currentCycle + 1,
+                                _bus.ExecutedChipBusHorizon)))
+                    : AgnusChipSlotScheduler.AlignToSlot(
+                        Math.Max(
+                            dueCycle,
+                            Math.Max(
+                                currentCycle,
+                                _bus.ExecutedChipBusHorizon) + 1));
                 return candidate <= targetCycle ? candidate : null;
             }
 
@@ -1645,8 +1681,21 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
             if (RequiresDmaForCurrentBlit() && IsBlitterDmaEnabled())
             {
-                var causalCursor = Math.Max(currentCycle, _bus.ExecutedChipBusHorizon);
-                return AgnusChipSlotScheduler.AlignToSlot(Math.Max(rawCycle, causalCursor + 1));
+                if (_bus.AgnusLiveBlitterEnabled)
+                {
+                    return AgnusChipSlotScheduler.AlignToSlot(
+                        Math.Max(
+                            rawCycle,
+                            Math.Max(
+                                currentCycle + 1,
+                                _bus.ExecutedChipBusHorizon)));
+                }
+
+                var causalCursor = Math.Max(
+                    currentCycle,
+                    _bus.ExecutedChipBusHorizon);
+                return AgnusChipSlotScheduler.AlignToSlot(
+                    Math.Max(rawCycle, causalCursor + 1));
             }
 
             return rawCycle <= currentCycle ? currentCycle + 1 : rawCycle;
@@ -1682,6 +1731,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private long GetNextCausalDmaTransitionCycle()
         {
+            if (_bus.AgnusLiveBlitterEnabled)
+            {
+                return GetNextLiveBlitterRequesterCycle();
+            }
+
             if (_completionPending)
             {
                 return _currentCycle;
@@ -1799,7 +1853,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 ? _areaMicroOpInternalCompletionCycle
                 : Math.Max(stepEnd, _areaMicroOpNextReadCycle);
             return _areaMicroOpFinalWord && _useD
-                ? internalCompletionCycle
+                ? UsesLiveAreaDPipeline()
+                    ? nextCycle
+                    : internalCompletionCycle
                 : nextCycle;
         }
 
@@ -2120,6 +2176,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _lineMode = (_bltcon1 & Bltcon1LineMode) != 0;
             _zeroFlag = true;
             _busy = true;
+            _liveAreaFinalDCompletionPublished = false;
+            _liveBOnlyFinalInterruptPublished = false;
+            _bus.PublishLiveBlitterPriority();
             _completionPending = false;
             _lastDmaCycle = 0;
             _lastCompletionCycle = 0;
@@ -2129,7 +2188,20 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _areaSlotQueueKind = BlitterSlotQueueKind.None;
             ClearAreaMicroOpState();
             ClearLineMicroOpState();
-            _currentCycle = _bus.NextChipSlotCycle(Math.Max(_currentCycle, cycle) + ChipSlotCycles);
+            // After the BLTSIZE transfer, OCS performs its intervening idle
+            // phase followed by STRT1 and STRT2. None allocates the memory
+            // bus to the blitter, so a pending CPU request may use them even
+            // with BLTPRI set. The first real transfer is four memory cycles
+            // after the BLTSIZE grant.
+            _currentCycle = _bus.NextChipSlotCycle(
+                Math.Max(_currentCycle, cycle) +
+                (4 * ChipSlotCycles));
+            ResetLiveAreaDPipeline();
+            if (_bus.AgnusLiveBlitterEnabled)
+            {
+                _ = RequireLiveBlitterRequester();
+            }
+
             _bus.NotifyHardwareWorkScheduled(_currentCycle);
             _previousA = 0;
             if (_useB)
@@ -2144,6 +2216,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     ? _kernelCache.GetOrCreate(CreateLineKernelKey())
                     : default;
                 RecordBlitterPattern();
+                PrimeLiveBlitterMicroOpUnit();
                 return;
             }
 
@@ -2186,6 +2259,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             BuildAreaMicroOpSequence();
             TryBuildAreaSlotQueue();
             RecordBlitterPattern();
+            PrimeLiveBlitterMicroOpUnit();
         }
 
         private void BuildAreaMicroOpSequence()
@@ -2431,8 +2505,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetAreaWordCycles();
             stepEnd += GetAreaFillIdlePhaseDelay(stepStart, stepEnd);
-            var nextReadCycle = stepStart;
             var nextCycle = stepEnd;
+            var nextReadCycle = BeginAreaReadSequence(stepStart, ref stepEnd, ref nextCycle);
             var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
             var mask = 0xFFFF;
             if (_wordX == 0)
@@ -2479,6 +2553,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 nextCycle += stall;
                 nextReadCycle = access.CompletedCycle;
                 nextCycle = Math.Max(nextCycle, access.CompletedCycle);
+                PublishBOnlyFinalInterrupt(
+                    isFinalWord,
+                    access.CompletedCycle);
             }
 
             var rawC = _activeDataC;
@@ -2966,8 +3043,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     _areaMicroOpStepStart,
                     _areaMicroOpStepEnd);
             }
-            _areaMicroOpNextReadCycle = _areaMicroOpStepStart;
             _areaMicroOpNextCycle = _areaMicroOpStepEnd;
+            _areaMicroOpNextReadCycle = BeginAreaReadSequence(
+                _areaMicroOpStepStart,
+                ref _areaMicroOpStepEnd,
+                ref _areaMicroOpNextCycle);
             _areaMicroOpInternalCompletionCycle = _areaMicroOpStepEnd;
             _areaMicroOpRawA = _activeDataA;
             _areaMicroOpRawB = _activeDataB;
@@ -2987,7 +3067,10 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private long GetAreaMicroOpRequestCycle(BlitterSlotQueueOp op)
             => op == BlitterSlotQueueOp.WriteD
-                ? Math.Max(_areaMicroOpNextReadCycle, _areaMicroOpStepEnd - ChipSlotCycles)
+                ? UsesLiveAreaDPipeline() &&
+                  (_useA || _useB || _useC)
+                    ? _areaMicroOpNextReadCycle
+                    : Math.Max(_areaMicroOpNextReadCycle, _areaMicroOpStepEnd - ChipSlotCycles)
                 : _areaMicroOpNextReadCycle;
 
         private bool ExecuteAreaMicroOp(BlitterSlotQueueOp op, long requestCycle)
@@ -3021,6 +3104,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     AccountAreaMicroOpReadWait(requestCycle, access.CompletedCycle);
                     _areaMicroOpNextReadCycle = access.CompletedCycle;
                     _areaMicroOpNextCycle = Math.Max(_areaMicroOpNextCycle, access.CompletedCycle);
+                    PublishBOnlyFinalInterrupt(
+                        _areaMicroOpFinalWord,
+                        access.CompletedCycle);
                     return true;
                 }
 
@@ -3103,9 +3189,12 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 EnsureAreaMicroOpOutputReady();
             }
 
-            _currentCycle = _areaMicroOpFinalWord && _useD
-                ? _areaMicroOpInternalCompletionCycle
-                : _areaMicroOpNextCycle;
+            _currentCycle =
+                _areaMicroOpFinalWord &&
+                _useD &&
+                !_liveAreaFinalDCompletionPublished
+                    ? _areaMicroOpInternalCompletionCycle
+                    : _areaMicroOpNextCycle;
             ClearAreaMicroOpState();
             EndDmaRollbackSnapshot();
             AdvanceAreaPosition(targetCycle);
@@ -3443,8 +3532,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             BeginDmaRollbackSnapshot();
             var stepStart = _currentCycle;
             var stepEnd = stepStart + GetAreaWordCycles();
-            var nextReadCycle = stepStart;
             var nextCycle = stepEnd;
+            var nextReadCycle = BeginAreaReadSequence(stepStart, ref stepEnd, ref nextCycle);
             var isFinalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
             var mask = GetCurrentAreaWordMask();
             var rawA = _activeDataA;
@@ -3588,6 +3677,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private bool IsBlitterSequencerPausedSlot(long slotCycle)
         {
+            if (_bus.IsCpuGrantAfterNiceBlitterWait(slotCycle))
+            {
+                return true;
+            }
+
             if (_bus.IsMandatoryRefreshSlot(slotCycle))
             {
                 return true;
@@ -3778,7 +3872,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 _workSourceC = AddModulo(_workSourceC, _activeSourceCModulo, _descending);
             }
 
-            if (_useD)
+            if (_useD && !UsesLiveAreaDPipeline())
             {
                 _workDestinationD = AddModulo(_workDestinationD, _activeDestinationDModulo, _descending);
             }
@@ -3987,6 +4081,20 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 _destinationD = _workSourceC;
             }
 
+            if (_liveAreaFinalDCompletionPublished)
+            {
+                _lastTerminationCycle =
+                    _lastDmaCycle + ChipSlotCycles == _currentCycle
+                        ? _lastDmaCycle
+                        : _currentCycle;
+                _completionPending = false;
+                _busy = false;
+                _liveAreaFinalDCompletionPublished = false;
+                ApplyDeferredRegisterWrites();
+                RestartDeferredBlitIfPending();
+                return;
+            }
+
             if (deferInterrupt)
             {
                 _completionPending = true;
@@ -4006,14 +4114,32 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         private void FinishCompletedBlit()
         {
+            // Live DMA commits a word at GrantedCycle and advances the engine
+            // at CompletedCycle. Copper BFD wakeup is driven by the BLTDONE
+            // slot itself, so retain that physical termination slot instead
+            // of exposing the following completion boundary.
+            _lastTerminationCycle =
+                _lastDmaCycle + ChipSlotCycles == _currentCycle
+                    ? _lastDmaCycle
+                    : _currentCycle;
             _lastCompletionCycle = _currentCycle;
             if (_bus.BusAccessCaptureEnabled)
             {
                 _completionCycles.Add(_currentCycle);
             }
             _busy = false;
-            _bus.RequestHardwareInterrupt(AmigaConstants.IntreqBlitter, _currentCycle);
+            _liveAreaFinalDCompletionPublished = false;
+            if (!_liveBOnlyFinalInterruptPublished)
+            {
+                _bus.RequestHardwareInterrupt(AmigaConstants.IntreqBlitter, _currentCycle);
+            }
+            _liveBOnlyFinalInterruptPublished = false;
             ApplyDeferredRegisterWrites();
+            RestartDeferredBlitIfPending();
+        }
+
+        private void RestartDeferredBlitIfPending()
+        {
             if (!_deferredRestartPending)
             {
                 return;
@@ -4030,7 +4156,55 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private bool IsBOnlyAreaBlit()
             => !_lineMode && !_useA && _useB && !_useC && !_useD;
 
+		internal bool BOnlyAreaBlitActive => IsBOnlyAreaBlit();
+
+        private void PublishBOnlyFinalInterrupt(
+            bool isFinalWord,
+            long trailingControlPhaseCycle)
+        {
+            if (!isFinalWord ||
+                !IsBOnlyAreaBlit() ||
+                _liveBOnlyFinalInterruptPublished)
+            {
+                return;
+            }
+
+            // B-only area words use the physical idle,B,idle sequence. The
+            // final B transfer completes at the trailing control boundary,
+            // which publishes BLTDONE/INTREQ without reserving another slot.
+            // BBUSY remains asserted until the sequencer retires that phase.
+            _bus.RequestHardwareInterrupt(
+                AmigaConstants.IntreqBlitter,
+                trailingControlPhaseCycle);
+            _liveBOnlyFinalInterruptPublished = true;
+        }
+
+        private long BeginAreaReadSequence(
+            long stepStart,
+            ref long stepEnd,
+            ref long nextCycle)
+        {
+            if (!IsBOnlyAreaBlit())
+            {
+                return stepStart;
+            }
+
+            // The B-only cycle diagram is idle,B,idle. Its leading sequencer
+            // phase advances only on a physically available bus cycle.
+            var phaseCycle = stepStart;
+            while (IsBlitterSequencerPausedSlot(phaseCycle))
+            {
+                phaseCycle += ChipSlotCycles;
+                stepEnd += ChipSlotCycles;
+                nextCycle += ChipSlotCycles;
+            }
+
+            return phaseCycle + ChipSlotCycles;
+        }
+
         internal long LastCompletionCycle => _lastCompletionCycle;
+
+        internal long LastTerminationCycle => _lastTerminationCycle;
 
         internal IReadOnlyList<long> CompletionCycles => _completionCycles;
 
@@ -4797,8 +4971,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 _opIndex = 0;
                 _stepStart = CurrentCycle;
                 _stepEnd = _stepStart + _owner.GetAreaWordCycles();
-                _nextReadCycle = _stepStart;
                 _nextCycle = _stepEnd;
+                _nextReadCycle = _owner.BeginAreaReadSequence(
+                    _stepStart,
+                    ref _stepEnd,
+                    ref _nextCycle);
                 _internalCompletionCycle = _stepEnd;
                 _outputReady = false;
                 _finalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;

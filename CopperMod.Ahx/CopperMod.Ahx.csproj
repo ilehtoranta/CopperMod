@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Copper68k\Copper68k.csproj" />
+    <ProjectReference Include="..\CopperMod.Abstractions\CopperMod.Abstractions.csproj" />
+    <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
+    <ProjectReference Include="..\CopperMod.Replayers\CopperMod.Replayers.csproj" />
+  </ItemGroup>
+</Project>

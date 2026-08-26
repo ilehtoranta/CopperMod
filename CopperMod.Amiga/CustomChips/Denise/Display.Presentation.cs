@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -13,6 +14,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 {
     internal sealed partial class Display
     {
+        private bool _unsafeCpuChipFetchPresentationTraceEnabled;
+
         public void BeginPresentationFrame(
             PresentationFrameTarget target,
             long frameStartCycle,
@@ -39,12 +42,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             ConfigurePresentationDimensions(target.Length);
+            _copperPresentationTransitions?.Clear();
             _renderedCopperTimelineSegments?.Clear();
             _renderedCopperPixelTraces?.Clear();
             _boundPresentationTarget = target;
             _boundPresentationFrameStartCycle = frameStartCycle;
             _boundPresentationFrameStopCycle = Math.Min(frameStopCycle, GetFrameStopCycle(frameStartCycle));
             _nextBoundPresentationRow = 0;
+            _presentationDuplicatedRowCount = 0;
+            _presentationDuplicatedByteCount = 0;
+            _unsafeCpuChipFetchPresentationTraceEnabled =
+                Environment.GetEnvironmentVariable(
+                    "COPPER_CHIP_FETCH_UNSAFE_PRESENTATION_TRACE") == "1";
             _boundPresentationActive = true;
             _boundPresentationCompleted = false;
             _renderFrameStartCycle = frameStartCycle;
@@ -60,7 +69,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             // line-local command stream from those latches without reading memory.
             CaptureInitialManualSpriteFrameCommands();
             ClearPresentationField(target.AsSpan());
-            RenderBoundPresentationLinesThrough(_liveCapturedThroughCycle, completing: false);
+            if (!_presentationIndependentDisplayLedgerEnabled)
+            {
+                RenderBoundPresentationLinesThrough(_liveCapturedThroughCycle, completing: false);
+            }
         }
 
         private void ClearPresentationField(Span<uint> target)
@@ -106,6 +118,67 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _enforceDmaForFrame = false;
                 _lastAppliedLivePaletteSnapshotIndex = -1;
             }
+        }
+
+        internal long ClampCpuChipFetchBatchToPresentationSafeEnd(
+            long currentCycle,
+            long targetCycle)
+        {
+            targetCycle = Math.Max(currentCycle, targetCycle);
+            if (_presentationIndependentDisplayLedgerEnabled)
+            {
+                return targetCycle;
+            }
+
+            if (!_boundPresentationActive ||
+                _boundPresentationCompleted ||
+                currentCycle < _boundPresentationFrameStartCycle ||
+                currentCycle >= _boundPresentationFrameStopCycle)
+            {
+                return targetCycle;
+            }
+
+            if (_unsafeCpuChipFetchPresentationTraceEnabled)
+            {
+                // Diagnostic-only reproduction of the pre-clamp behavior.
+                // Production admission must retain the presentation safety gate.
+                return targetCycle;
+            }
+
+            var visibleStart = GetOutputRowStartCycle(
+                _boundPresentationFrameStartCycle,
+                0);
+            var visibleEnd = GetOutputRowStartCycle(
+                _boundPresentationFrameStartCycle,
+                LowResOutputHeight);
+            if (currentCycle < visibleStart)
+            {
+                return Math.Min(targetCycle, visibleStart);
+            }
+
+            return currentCycle < visibleEnd
+                ? currentCycle
+                : targetCycle;
+        }
+
+        internal bool IsInsideBoundPresentationVisibleRows(long currentCycle)
+        {
+            if (!_boundPresentationActive ||
+                _boundPresentationCompleted ||
+                currentCycle < _boundPresentationFrameStartCycle ||
+                currentCycle >= _boundPresentationFrameStopCycle)
+            {
+                return false;
+            }
+
+            var visibleStart = GetOutputRowStartCycle(
+                _boundPresentationFrameStartCycle,
+                0);
+            var visibleEnd = GetOutputRowStartCycle(
+                _boundPresentationFrameStartCycle,
+                LowResOutputHeight);
+            return currentCycle >= visibleStart &&
+                currentCycle < visibleEnd;
         }
 
         public void AbortPresentationFrame()
@@ -156,10 +229,65 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int GetInterlaceField(long frameStartCycle)
             => _bus.GetBeamPosition(frameStartCycle).FrameNumber & 1;
 
+        private void RenderBoundPresentationLinesIfReady(long capturedThroughCycle)
+        {
+            if (!_boundPresentationActive ||
+                _boundPresentationCompleted ||
+                !_boundPresentationTarget.IsBound ||
+                _presentationIndependentDisplayLedgerEnabled ||
+                capturedThroughCycle < _boundPresentationFrameStartCycle)
+            {
+                return;
+            }
+
+            // Non-completing presentation deliberately retains two live rows:
+            // row N is safe only after the capture reaches the start of N+2.
+            // Admit the renderer only at that causal boundary instead of
+            // polling it after every outer live-DMA advance.
+            var readyCycle = GetOutputRowStartCycle(
+                _boundPresentationFrameStartCycle,
+                _nextBoundPresentationRow + 2);
+            if (capturedThroughCycle < readyCycle)
+            {
+                return;
+            }
+
+            RenderBoundPresentationLinesThrough(capturedThroughCycle, completing: false);
+        }
+
         private void RenderBoundPresentationLinesThrough(
             long capturedThroughCycle,
             bool completing,
             int minimumRenderStop = 0)
+        {
+            if (_presentationIndependentDisplayLedgerEnabled &&
+                _advancingLiveDma)
+            {
+                _presentationCallsDuringLiveCapture++;
+            }
+
+            if (!_hostProfilingEnabled)
+            {
+                RenderBoundPresentationLinesThroughCore(
+                    capturedThroughCycle,
+                    completing,
+                    minimumRenderStop);
+                return;
+            }
+
+            var start = Stopwatch.GetTimestamp();
+            RenderBoundPresentationLinesThroughCore(
+                capturedThroughCycle,
+                completing,
+                minimumRenderStop);
+            _hostPresentationTicks += Stopwatch.GetTimestamp() - start;
+            _hostPresentationCalls++;
+        }
+
+        private void RenderBoundPresentationLinesThroughCore(
+            long capturedThroughCycle,
+            bool completing,
+            int minimumRenderStop)
         {
             if (!_boundPresentationActive ||
                 _boundPresentationCompleted ||
@@ -192,6 +320,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
+            ConsumeCommittedDisplayLedgerThrough(capturedThroughCycle);
             var saved = SaveDisplayState();
             var savedCurrentRenderRow = _currentRenderRow;
             var savedTrackDisplayWindowState = _trackDisplayWindowState;
@@ -250,6 +379,48 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _renderingLiveCapture = false;
                 _enforceDmaForFrame = false;
                 _lastAppliedLivePaletteSnapshotIndex = -1;
+            }
+        }
+
+        private void ConsumeCommittedDisplayLedgerThrough(long capturedThroughCycle)
+        {
+            if (_committedDisplayLedger == null)
+            {
+                return;
+            }
+
+            while (_committedDisplayPresentationCursor < _committedDisplayLedger.Count)
+            {
+                ref readonly var entry =
+                    ref _committedDisplayLedger.GetEvent(_committedDisplayPresentationCursor);
+                if (entry.Cycle > capturedThroughCycle)
+                {
+                    break;
+                }
+
+                if (!_liveTimelineUnsafeForFrame)
+                {
+                    if (entry.Kind == AgnusCommittedDisplayEventKind.BitplaneSample)
+                    {
+                        _displayTimeline.RecordBitplaneFetch(
+                            entry.Row,
+                            entry.Channel,
+                            entry.Word,
+                            entry.Value,
+                            entry.Granted);
+                    }
+                    else if (entry.Kind == AgnusCommittedDisplayEventKind.SpriteSample)
+                    {
+                        _displayTimeline.RecordSpriteDataFetch(
+                            entry.Row,
+                            entry.Channel,
+                            entry.Word,
+                            entry.Value,
+                            entry.Granted);
+                    }
+                }
+
+                _committedDisplayPresentationCursor++;
             }
         }
 
@@ -492,6 +663,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 var state = timeline.GetState(segment.StateIndex);
+                CaptureLivePaletteFrameSpan(row, segment.XStart, segment.XStop, state);
                 FillTimelineLowResolutionSegment(
                     target,
                     row,
@@ -622,7 +794,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _livePaletteSnapshots.CopyTo(
                     state.PaletteSnapshotIndex,
                     _colors,
-                    _convertedColors);
+                    _convertedColors.AsSpan(0, PaletteColorCount));
                 _lastAppliedLivePaletteSnapshotIndex = state.PaletteSnapshotIndex;
             }
 
@@ -1001,6 +1173,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var outputY = row * 2;
             bgra.Slice((outputY * _renderWidth) + pixelStart, pixelCount)
                 .CopyTo(bgra.Slice(((outputY + 1) * _renderWidth) + pixelStart, pixelCount));
+            _presentationDuplicatedRowCount++;
+            _presentationDuplicatedByteCount += pixelCount * sizeof(uint);
         }
 
         private void FillTimelineLowResolutionSegment(
@@ -1291,7 +1465,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     RecordBitplanePixel(colorIndex, priorityMask, x, row);
                 }
 
-                WriteLowResolutionOutputPixel(bgra, x, row, _convertedColors[colorIndex]);
+                WriteLowResolutionOutputPixel(bgra, x, row, ConvertColorIndex(colorIndex));
             }
 
             return true;
@@ -1604,7 +1778,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private long GetCopperBlitterReadyCycle(ushort waitSecond, long currentCycle)
         {
-            if ((waitSecond & 0x8000) != 0 || !_bus.Blitter.Busy)
+            if ((waitSecond & 0x8000) != 0 ||
+                !_bus.Blitter.BusPipelineActive)
             {
                 return currentCycle;
             }
@@ -1848,8 +2023,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             long cycle,
             bool blitterFinished)
         {
-            var line = GetBeamLineForCycle(frameStartCycle, cycle);
-            var horizontal = GetCopperHorizontalForCycle(frameStartCycle, cycle);
+            GetCopperBeamPositionForCycle(
+                frameStartCycle,
+                cycle,
+                out var line,
+                out var horizontal);
             return IsCopperComparisonSatisfied(first, second, line - StandardVStart, horizontal, blitterFinished);
         }
 
@@ -1870,6 +2048,21 @@ namespace CopperMod.Amiga.CustomChips.Denise
             bool observedBlitterBusy)
             => waitCycle + CopperHpToCpuCycles(GetCopperWaitWakeHpUnits(waitSecond, observedBlitterBusy)) -
                 (2L * AgnusChipSlotScheduler.SlotCycles);
+
+        private static long GetCopperBfdReleaseFetchCycle(
+            long blitterTerminationCycle)
+            // BLTDONE arms the next Copper fetch two DMA cycles later. Physical
+            // Copper phase alignment remains the requester's responsibility.
+            => blitterTerminationCycle +
+                (2L * AgnusChipSlotScheduler.SlotCycles);
+
+        private static bool IsCopperVerticalComparatorWrapWait(ushort waitFirst, ushort waitSecond)
+            // With all vertical comparator bits enabled, the $FFxx transition
+            // reaches the 8-bit comparator wrap while its comparison phase is
+            // still live. The restart can consume that phase; it does not need
+            // another bus-reserving slot.
+            => (waitFirst & 0xFF00) == 0xFF00 &&
+               (waitSecond & 0x7F00) == 0x7F00;
 
 
         private long GetLineStartCycle(long frameStartCycle, int line)
@@ -1928,6 +2121,29 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private int GetCopperOutputX(int horizontal, int pixelDelay)
         {
+            if (pixelDelay > 0 &&
+                horizontal < 0xC0 &&
+                GetAgnusBitplaneFetchPlaneCount() == 4 &&
+                _liveCopper.WaitTailPalettePixelOffset != 0)
+            {
+                return Math.Clamp(
+                    GetCopperOutputXForPresentation(horizontal, pixelDelay, LowResWidth) +
+                    _liveCopper.WaitTailPalettePixelOffset,
+                    0,
+                    LowResWidth);
+            }
+
+            if (pixelDelay > 0 &&
+                horizontal < DefaultDdfStart &&
+                GetAgnusBitplaneFetchPlaneCount() == 4 &&
+                _liveCopper.PreDdfPaletteWritesFollowPhysicalPhase)
+            {
+                return Math.Clamp(
+                    ((horizontal - DefaultDdfStart) * 2) + pixelDelay,
+                    0,
+                    LowResWidth);
+            }
+
             return GetCopperOutputXForPresentation(horizontal, pixelDelay, LowResWidth);
         }
 
@@ -1944,7 +2160,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool IsCopperBlitterFinishedForWait(ushort second)
         {
-            return (second & 0x8000) != 0 || !_bus.Blitter.Busy;
+            // Copper BFD waits for BLTDONE/running to clear, not merely for
+            // the externally visible BBUSY edge. A pipelined final D write can
+            // remain after BBUSY clears.
+            return (second & 0x8000) != 0 ||
+                !_bus.Blitter.BusPipelineActive;
         }
 
         private static bool IsCopperComparisonSatisfied(

@@ -76,7 +76,7 @@ public sealed class CopperScreenRuntimeTests
 	public void AudioRefillKeepsTargetQueueDepth()
 	{
 		using var audio = new FakeAudioOutput();
-		using var runtime = CopperScreenRuntime.CreateForTests(CopperScreenEmulator.CreateWithoutDisk(), audio);
+		using var runtime = CopperScreenRuntime.CreateForTests(CreateIdleEmulator(), audio);
 		var lastSeen = 0L;
 		runtime.Start();
 
@@ -426,7 +426,7 @@ public sealed class CopperScreenRuntimeTests
 	public void HealthyAudioContinuesWhenTargetVideoQueueDepthIsReached()
 	{
 		using var audio = new FakeAudioOutput(initialQueued: 2);
-		using var runtime = CopperScreenRuntime.CreateForTests(CopperScreenEmulator.CreateWithoutDisk(), audio);
+		using var runtime = CopperScreenRuntime.CreateForTests(CreateIdleEmulator(), audio);
 		Assert.Equal(1, runtime.CurrentState.PresentationQueueDepth);
 
 		runtime.Start();
@@ -439,7 +439,7 @@ public sealed class CopperScreenRuntimeTests
 	public void CriticalAudioCatchUpCollapsesStaleVideoQueueAfterRefill()
 	{
 		using var audio = new FakeAudioOutput(initialQueued: 0);
-		using var runtime = CopperScreenRuntime.CreateForTests(CopperScreenEmulator.CreateWithoutDisk(), audio);
+		using var runtime = CopperScreenRuntime.CreateForTests(CreateIdleEmulator(), audio);
 
 		runtime.Start();
 
@@ -455,6 +455,11 @@ public sealed class CopperScreenRuntimeTests
 		Assert.NotNull(field);
 		return Assert.IsType<T>(field.GetValue(runtime));
 	}
+
+	private static CopperScreenEmulator CreateIdleEmulator()
+		=> CopperScreenEmulator.Create(
+			new[] { "--profile", "expanded-copperstart" },
+			AppContext.BaseDirectory);
 
 	private static T GetPrivateField<T>(CopperScreenEmulator emulator, string fieldName)
 	{

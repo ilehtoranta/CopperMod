@@ -183,7 +183,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                                 bgra,
                                 x,
                                 y,
-                                _convertedColors[colorIndex],
+                                ConvertColorIndex(colorIndex),
                                 renderHighWidth,
                                 renderHighHeight,
                                 renderInterlace,
@@ -964,7 +964,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             => GetResolutionFetchSlotStride(GetAgnusFetchResolution(bplcon0));
 
         private int GetRequestedBitplaneCount()
-            => GetRequestedBitplaneCount(_bplcon0);
+            => GetRequestedBitplaneCount(_bplcon0) |
+                (_chipset.DisplayChip == DisplayChipModel.AgaLisa ? ((_bplcon0 & 0x0010) >> 1) : 0);
 
         private static int GetRequestedBitplaneCount(ushort bplcon0)
             => (bplcon0 >> 12) & 0x7;
@@ -989,6 +990,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if (requested <= 0)
             {
                 return 0;
+            }
+
+            if (agnusModel == DmaChipModel.AgaAlice && deniseModel == DisplayChipModel.AgaLisa)
+            {
+                requested |= (bplcon0 & 0x0010) >> 1;
+                return Math.Min(requested, MaxBitplaneCapacity);
             }
 
             if (!agnusModel.SupportsEcsRegisters() && resolution == DeniseResolution.SuperHighRes)
@@ -1026,6 +1033,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ushort bplcon0)
         {
             var requested = GetRequestedBitplaneCount(bplcon0);
+            if (deniseModel == DisplayChipModel.AgaLisa)
+            {
+                requested |= (bplcon0 & 0x0010) >> 1;
+                return Math.Min(requested, MaxBitplaneCapacity);
+            }
             if (!deniseModel.SupportsEcsRegisters() && resolution == DeniseResolution.SuperHighRes)
             {
                 resolution = DeniseResolution.LowRes;

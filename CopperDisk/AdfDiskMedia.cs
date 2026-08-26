@@ -57,6 +57,31 @@ internal sealed class AdfDiskMedia : IWritableAmigaSectorDiskMedia
         return true;
     }
 
+    public bool TryWriteBytes(int byteOffset, ReadOnlySpan<byte> source)
+    {
+        if (byteOffset < 0 || byteOffset > DataBytes.Length || source.Length > DataBytes.Length - byteOffset)
+        {
+            return false;
+        }
+
+        if (source.IsEmpty)
+        {
+            return true;
+        }
+
+        source.CopyTo(DataBytes.AsSpan(byteOffset, source.Length));
+        var bytesPerTrack = AmigaDiskGeometry.SectorsPerTrack * AmigaDiskGeometry.SectorSize;
+        var firstTrack = byteOffset / bytesPerTrack;
+        var lastTrack = (byteOffset + source.Length - 1) / bytesPerTrack;
+        for (var track = firstTrack; track <= lastTrack; track++)
+        {
+            _encodedTracks[track] = null!;
+        }
+
+        IsDirty = true;
+        return true;
+    }
+
     public ReadOnlyMemory<byte> ReadSector(int cylinder, int head, int sector)
     {
         return ReadSector(GetLogicalSector(cylinder, head, sector));

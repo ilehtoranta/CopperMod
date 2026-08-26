@@ -562,6 +562,49 @@ namespace CopperMod.Amiga.Memory
             return false;
         }
 
+        public bool ContainsWritableMappedAddress(uint address)
+        {
+            for (var i = _regions.Count - 1; i >= 0; i--)
+            {
+                if (!_regions[i].Contains(address))
+                {
+                    continue;
+                }
+
+                // The newest mapped region is the visible overlay.  A
+                // read-only ROM/image overlay must mask any older writable
+                // region at the same guest address; otherwise a scheduler
+                // stack preflight could approve a write that the guest bus
+                // must reject.
+                if (_regions[i].ReadOnly)
+                {
+                    return false;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        public bool ContainsWritableMappedAddressInRange(uint address, int byteCount)
+        {
+            if (byteCount <= 0 || (uint)(byteCount - 1) > uint.MaxValue - address)
+            {
+                return byteCount == 0;
+            }
+
+            for (var offset = 0; offset < byteCount; offset++)
+            {
+                if (!ContainsWritableMappedAddress(address + (uint)offset))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         public bool TryReadMappedByte(uint address, out byte value)
         {
             for (var i = _regions.Count - 1; i >= 0; i--)
@@ -580,10 +623,24 @@ namespace CopperMod.Amiga.Memory
         {
             for (var i = _regions.Count - 1; i >= 0; i--)
             {
+                if (!_regions[i].Contains(address))
+                {
+                    continue;
+                }
+
+                // Mapping order is overlay order.  Do not fall through a
+                // visible read-only image into an older writable mapping.
+                if (_regions[i].ReadOnly)
+                {
+                    return false;
+                }
+
                 if (_regions[i].TryWriteByte(address, value))
                 {
                     return true;
                 }
+
+                return false;
             }
 
             return false;

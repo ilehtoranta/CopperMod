@@ -21,7 +21,7 @@ namespace CopperMod.Amiga
                     return TryPatchBltBitMap(state);
                 case -60: // Text
                     if (!CyberGraphics.IsRtgRastPort(state.A[1])) return false;
-                    HostGraphicsText(state);
+                    _graphicsServices.Text(state);
                     state.D[0] = 0;
                     return true;
                 case -192: // LoadRGB4
@@ -37,17 +37,17 @@ namespace CopperMod.Amiga
                     return false;
                 case -234: // SetRast
                     if (!CyberGraphics.IsRtgRastPort(state.A[1])) return false;
-                    HostGraphicsSetRast(state);
+                    _graphicsServices.SetRast(state);
                     state.D[0] = 0;
                     return true;
                 case -240: // Move
                     if (!CyberGraphics.IsRtgRastPort(state.A[1])) return false;
-                    HostGraphicsMove(state);
+                    _graphicsServices.Move(state);
                     state.D[0] = 0;
                     return true;
                 case -246: // Draw
                     if (!CyberGraphics.IsRtgRastPort(state.A[1])) return false;
-                    HostGraphicsDraw(state);
+                    _graphicsServices.Draw(state);
                     state.D[0] = 0;
                     return true;
                 case -288: // SetRGB4
@@ -55,7 +55,7 @@ namespace CopperMod.Amiga
                     return false;
                 case -306: // RectFill
                     if (!CyberGraphics.IsRtgRastPort(state.A[1])) return false;
-                    HostGraphicsRectFill(state);
+                    _graphicsServices.RectFill(state);
                     state.D[0] = 0;
                     return true;
                 case -552: // ClipBlit
@@ -94,7 +94,7 @@ namespace CopperMod.Amiga
                         screenPixelFormat = screenMode.PixelFormat;
                     }
 
-                    state.D[0] = HostGraphicsAllocBitMap(state, screenPixelFormat);
+                    state.D[0] = AllocateBitMap(state, screenPixelFormat);
                     if (screenPixelFormat.HasValue)
                     {
                         RecordPendingRtgScreenBitMap(state.D[0]);
@@ -102,7 +102,7 @@ namespace CopperMod.Amiga
                     return true;
                 case -924: // FreeBitMap
                     if (!CyberGraphics.IsRtgBitMap(state.A[0])) return false;
-                    HostGraphicsFreeBitMap(state.A[0]);
+                    FreeBitMap(state.A[0]);
                     state.D[0] = 0;
                     return true;
                 case -942: // ChangeVPBitMap
@@ -114,7 +114,7 @@ namespace CopperMod.Amiga
                     return false;
                 case -960: // GetBitMapAttr
                     if (!CyberGraphics.IsRtgBitMap(state.A[0])) return false;
-                    state.D[0] = HostGraphicsGetBitMapAttr(state.A[0], state.D[1]);
+                    state.D[0] = GetBitMapAttr(state.A[0], state.D[1]);
                     return true;
                 case -996: // SetRGB32CM
                     if (!TrySetRtgRgb32(state, colorMapArgument: true)) return false;
