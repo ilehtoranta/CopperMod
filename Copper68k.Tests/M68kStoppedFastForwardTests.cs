@@ -82,11 +82,17 @@ public sealed class M68kStoppedFastForwardTests
 		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
 		var pinAssertCycle = cpu.State.Cycles + 10;
 
-		Assert.False(recognition.HasRecognizedInterrupt(pinAssertCycle));
+		Assert.False(recognition.HasRecognizedInterrupt(
+			pinLevel: 4,
+			pinChangeCycle: pinAssertCycle,
+			interruptMask: 0));
 
 		cpu.State.Stopped = true;
 
-		Assert.True(recognition.HasRecognizedInterrupt(pinAssertCycle));
+		Assert.True(recognition.HasRecognizedInterrupt(
+			pinLevel: 4,
+			pinChangeCycle: pinAssertCycle,
+			interruptMask: 0));
 	}
 
 	private class FastForwardBoundary : IM68kStoppedCpuFastForwardBoundary

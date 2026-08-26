@@ -617,6 +617,7 @@ namespace Copper68k
                 M68kInstructionTimingKey.AddqByteAddressIndirect => "ADDQ.B #<data>,(An)",
                 M68kInstructionTimingKey.AddqWordAddressDisplacement => "ADDQ.W #<data>,(d16,An)",
                 M68kInstructionTimingKey.AddqLongAddressDisplacement => "ADDQ.L #<data>,(d16,An)",
+                M68kInstructionTimingKey.AddqLongAbsoluteLong => "ADDQ.L #<data>,(xxx).L",
                 M68kInstructionTimingKey.SubqLongAddress => "SUBQ.L #<data>,An",
                 M68kInstructionTimingKey.SubqLongAddressIndirect => "SUBQ.L #<data>,(An)",
                 M68kInstructionTimingKey.SubqLongAddressDisplacement => "SUBQ.L #<data>,(d16,An)",
@@ -1378,6 +1379,11 @@ namespace Copper68k
                 return 10;
             }
 
+            if (descriptor.LegacyKey == M68kInstructionTimingKey.AddqLongAbsoluteLong)
+            {
+                return 12;
+            }
+
             var size = RequireSize(descriptor);
             var source = descriptor.Source.Form;
             var destination = descriptor.Destination.Form;
@@ -1714,6 +1720,7 @@ namespace Copper68k
                 M68kTimingOperandForm.Predecrement => 7,
                 M68kTimingOperandForm.AddressDisplacement => size == M68kOperandSize.Long ? 7 : 6,
                 M68kTimingOperandForm.BriefIndexed => 8,
+                M68kTimingOperandForm.AbsoluteLong => size == M68kOperandSize.Long ? 8 : 7,
                 _ => throw Unsupported(descriptor)
             };
         }
@@ -1754,6 +1761,7 @@ namespace Copper68k
                 M68kTimingOperandForm.AddressIndirect => size == M68kOperandSize.Long ? 10 : 6,
                 M68kTimingOperandForm.PostIncrement => size == M68kOperandSize.Long ? 10 : 6,
                 M68kTimingOperandForm.AddressDisplacement => size == M68kOperandSize.Long ? 13 : 9,
+                M68kTimingOperandForm.AbsoluteLong => size == M68kOperandSize.Long ? 15 : 11,
                 _ => throw Unsupported(descriptor)
             };
         }

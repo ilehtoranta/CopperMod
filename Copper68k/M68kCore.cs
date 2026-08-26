@@ -579,7 +579,7 @@ namespace Copper68k
     internal static class M68000BranchInterruptTransition
     {
         private const int RetainedTargetOverlapCycles = 4;
-        private const int DrainedEntryQueueOverlapCycles = 5;
+        private const int DrainedEntryQueueCommittedTailThresholdCycles = 5;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool HasRetainedCompletedTargetWord(
@@ -604,11 +604,16 @@ namespace Copper68k
             {
                 var elapsedEntryCycles =
                     interruptBoundaryCycle - entryFirstWordReadyCycle;
-                // A fully drained entry queue has already paid its complete
-                // physical tail and overlaps exception entry.
-                if (elapsedEntryCycles >= DrainedEntryQueueOverlapCycles)
+                // A fully drained entry queue has already committed its
+                // complete physical tail. Exception entry cannot reclaim
+                // those started transfer cycles.
+                if (elapsedEntryCycles >=
+                    DrainedEntryQueueCommittedTailThresholdCycles)
                 {
-                    return -(int)Math.Min(elapsedEntryCycles, int.MaxValue);
+                    var boundedElapsedCycles = Math.Min(
+                        elapsedEntryCycles,
+                        (int.MaxValue + 1L) / 2);
+                    return (int)((boundedElapsedCycles * 2) - 1);
                 }
             }
 
@@ -656,7 +661,10 @@ namespace Copper68k
         ulong PredecessorToken = 0,
         bool RequiresIrcGap = false,
         bool CapturedDuringDeferredBatch = false,
-        ushort StatusRegister = 0);
+        ushort StatusRegister = 0,
+        M68000IplPipelineState IplPipelineState = default,
+        long LastInterruptSampleCycle = long.MinValue,
+        int PendingInternalCycles = 0);
 
     internal interface IM68kInstructionFetchWindowBus
     {
@@ -833,7 +841,115 @@ namespace Copper68k
     {
         long LastInterruptSampleCycle { get; }
 
-        bool HasRecognizedInterrupt(long pinAssertCycle);
+        bool HasRecognizedInterrupt(
+            int pinLevel,
+            long pinChangeCycle,
+            int interruptMask);
+    }
+
+    internal readonly record struct M68000IplPipelineState(
+        int PinLevel,
+        long PinChangeCycle,
+        int PreviousPinLevel,
+        long PreviousPinChangeCycle,
+        int LatchedLevel,
+        int SecondaryLevel,
+        long EvaluatedSampleCycle,
+        int EvaluatedSampleLevel)
+    {
+        private const int CurrentPinSetupCycles = 4;
+        private const int PreviousPinSetupCycles = 2;
+
+        public static M68000IplPipelineState Reset => new(
+            PinLevel: 0,
+            PinChangeCycle: long.MinValue,
+            PreviousPinLevel: 0,
+            PreviousPinChangeCycle: long.MinValue,
+            LatchedLevel: 0,
+            SecondaryLevel: 0,
+            EvaluatedSampleCycle: long.MinValue,
+            EvaluatedSampleLevel: 0);
+
+        public M68000IplPipelineState SampleNext(
+            int pinLevel,
+            long pinChangeCycle,
+            long sampleCycle,
+            out int sampledLevel)
+        {
+            pinLevel &= 7;
+            var state = this;
+            if (pinLevel != state.PinLevel)
+            {
+                state = state with
+                {
+                    PreviousPinLevel = state.PinLevel,
+                    PreviousPinChangeCycle = state.PinChangeCycle,
+                    PinLevel = pinLevel,
+                    PinChangeCycle = pinChangeCycle
+                };
+            }
+            else if (state.PinChangeCycle == long.MinValue && pinChangeCycle != long.MinValue)
+            {
+                state = state with { PinChangeCycle = pinChangeCycle };
+            }
+
+            if (sampleCycle == state.EvaluatedSampleCycle)
+            {
+                sampledLevel = state.EvaluatedSampleLevel;
+                return state;
+            }
+
+            var latchedLevel = state.LatchedLevel;
+            var secondaryLevel = 0;
+            if (IsStableBefore(
+                state.PinChangeCycle,
+                sampleCycle,
+                CurrentPinSetupCycles,
+                strictBoundary: true))
+            {
+                latchedLevel = state.PinLevel;
+            }
+            else if (IsStableBefore(
+                state.PreviousPinChangeCycle,
+                sampleCycle,
+                PreviousPinSetupCycles,
+                strictBoundary: false))
+            {
+                latchedLevel = state.PreviousPinLevel;
+            }
+            else
+            {
+                secondaryLevel = state.PinLevel;
+            }
+
+            sampledLevel = latchedLevel;
+            return state with
+            {
+                // The secondary latch is promoted after the instruction-boundary
+                // interrupt decision and becomes the primary input to the next
+                // boundary. Zero is the inactive IPL value and needs no promotion.
+                LatchedLevel = secondaryLevel != 0 ? secondaryLevel : latchedLevel,
+                SecondaryLevel = 0,
+                EvaluatedSampleCycle = sampleCycle,
+                EvaluatedSampleLevel = sampledLevel
+            };
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsStableBefore(
+            long changeCycle,
+            long sampleCycle,
+            int setupCycles,
+            bool strictBoundary)
+        {
+            if (changeCycle == long.MinValue)
+            {
+                return true;
+            }
+
+            var elapsed = sampleCycle - changeCycle;
+            return strictBoundary ? elapsed > setupCycles : elapsed >= setupCycles;
+        }
     }
 
     internal readonly record struct M68000PrefetchDiagnosticState(
@@ -868,7 +984,15 @@ namespace Copper68k
         int BranchInterruptEntryPrefetchCount = 0,
         long BranchInterruptEntryBusCycle = 0,
         long BranchInterruptEntryReadyCycle0 = 0,
-        long BranchInterruptInstructionEntryCycle = 0);
+        long BranchInterruptInstructionEntryCycle = 0,
+        M68000IplPipelineState IplPipelineState = default,
+        long LastInterruptSampleCycle = long.MinValue,
+        ulong BranchInterruptEntryTimingToken0 = 0,
+        ulong BranchInterruptEntryTimingToken1 = 0,
+        ulong BranchInterruptPredecessorToken = 0,
+        bool BranchInterruptRequiresIrcGap = false,
+        bool BranchInterruptCapturedDuringDeferredBatch = false,
+        int BranchInterruptPendingInternalCycles = 0);
 
     internal interface IM68kBatchCore : IM68kCore
     {
@@ -909,7 +1033,9 @@ namespace Copper68k
         long PendingVirtualRequestedCycle = 0,
         long PublicationGroup = 0,
         bool NextInstructionFollowsExpiredDbcc = false,
-        int InterruptEntryBranchTailAdjustmentCycles = 0);
+        int InterruptEntryBranchTailAdjustmentCycles = 0,
+        M68000IplPipelineState IplPipelineState = default,
+        long LastInterruptSampleCycle = long.MinValue);
 
     internal interface IM68000PipelineStateTransfer
     {
@@ -2045,10 +2171,6 @@ namespace Copper68k
         }
 
         private const int AddressErrorExceptionCycles = 50;
-        // 68000 IPL input must be stable for four CPU clocks before the late
-        // instruction poll. A transition on the setup boundary is staged and
-        // becomes serviceable after the following instruction.
-        private const int M68000InterruptSetupCycles = 4;
         private const int M68000DbccExceptionTailAfterCommittedFetchCycles = 6;
         private const int FixedPlanRunCacheSlotCount = 256;
         private const int FixedPlanRunMaximumInstructions = 32;
@@ -2086,6 +2208,8 @@ namespace Copper68k
         private ulong _instructionEntryTimingToken1;
         private long _instructionInterruptSampleCycle;
         private long _lastInterruptSampleCycle;
+        private M68000IplPipelineState _iplPipelineState =
+            M68000IplPipelineState.Reset;
         private int _nextCpuDataAccessDelayCycles;
         private bool _deferredCpuBusBatchExecutionActive;
         private bool _deferredCpuBusBatchNormalizedFirstEmptyEntry;
@@ -2110,6 +2234,12 @@ namespace Copper68k
         private long _branchInterruptEntryBusCycle;
         private long _branchInterruptEntryReadyCycle0;
         private long _branchInterruptInstructionEntryCycle;
+        private ulong _branchInterruptEntryTimingToken0;
+        private ulong _branchInterruptEntryTimingToken1;
+        private ulong _branchInterruptPredecessorToken;
+        private bool _branchInterruptRequiresIrcGap;
+        private bool _branchInterruptCapturedDuringDeferredBatch;
+        private int _branchInterruptPendingInternalCycles;
         private long _plannedQuickRegisterInstructions;
         private long _plannedMoveInstructions;
         private long _plannedImmediateInstructions;
@@ -2453,7 +2583,15 @@ namespace Copper68k
                 _branchInterruptEntryPrefetchCount,
                 _branchInterruptEntryBusCycle,
                 _branchInterruptEntryReadyCycle0,
-                _branchInterruptInstructionEntryCycle);
+                _branchInterruptInstructionEntryCycle,
+                _iplPipelineState,
+                _lastInterruptSampleCycle,
+                _branchInterruptEntryTimingToken0,
+                _branchInterruptEntryTimingToken1,
+                _branchInterruptPredecessorToken,
+                _branchInterruptRequiresIrcGap,
+                _branchInterruptCapturedDuringDeferredBatch,
+                _branchInterruptPendingInternalCycles);
 
         int IM68kBatchCore.ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
             => ExecuteInstructions(maxInstructions, targetCycle, boundary);
@@ -2524,6 +2662,18 @@ namespace Copper68k
                     interrupted.PublicationContext.EntryReadyCycle0;
                 _branchInterruptInstructionEntryCycle =
                     interrupted.PublicationContext.InstructionEntryCycle;
+                _branchInterruptEntryTimingToken0 =
+                    interrupted.PublicationContext.EntryTimingToken0;
+                _branchInterruptEntryTimingToken1 =
+                    interrupted.PublicationContext.EntryTimingToken1;
+                _branchInterruptPredecessorToken =
+                    interrupted.PublicationContext.PredecessorToken;
+                _branchInterruptRequiresIrcGap =
+                    interrupted.PublicationContext.RequiresIrcGap;
+                _branchInterruptCapturedDuringDeferredBatch =
+                    interrupted.PublicationContext.CapturedDuringDeferredBatch;
+                _branchInterruptPendingInternalCycles =
+                    interrupted.PublicationContext.PendingInternalCycles;
                 _interruptEntryBranchTailAdjustmentCycles =
                     (interrupted.RetainedCommittedTargetPair
                         ? M68000BranchInterruptTransition
@@ -8537,6 +8687,7 @@ namespace Copper68k
             State.RecordException(-1, 0, 0);
             _instructionInterruptSampleCycle = long.MinValue;
             _lastInterruptSampleCycle = long.MinValue;
+            _iplPipelineState = M68000IplPipelineState.Reset;
         }
 
         public void SwitchTaskContext(M68kCpuState next)
@@ -8549,12 +8700,28 @@ namespace Copper68k
 
         long IM68000InterruptRecognition.LastInterruptSampleCycle => _lastInterruptSampleCycle;
 
-        bool IM68000InterruptRecognition.HasRecognizedInterrupt(long pinAssertCycle)
-            => State.Stopped ||
-                (_lastInterruptSampleCycle != long.MinValue &&
-                    // A transition exactly on the four-clock setup boundary is
-                    // staged until the following instruction's interrupt poll.
-                    pinAssertCycle < _lastInterruptSampleCycle - M68000InterruptSetupCycles);
+        bool IM68000InterruptRecognition.HasRecognizedInterrupt(
+            int pinLevel,
+            long pinChangeCycle,
+            int interruptMask)
+        {
+            if (State.Stopped)
+            {
+                return pinLevel > (interruptMask & 7);
+            }
+
+            if (_lastInterruptSampleCycle == long.MinValue)
+            {
+                return false;
+            }
+
+            _iplPipelineState = _iplPipelineState.SampleNext(
+                pinLevel,
+                pinChangeCycle,
+                _lastInterruptSampleCycle,
+                out var sampledLevel);
+            return sampledLevel > (interruptMask & 7);
+        }
 
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
@@ -8675,7 +8842,9 @@ namespace Copper68k
                 _pendingPrefetchVirtualRequestedCycle,
                 _instructionFetchPublicationGroup,
                 _nextInstructionFollowsExpiredDbcc,
-                _interruptEntryBranchTailAdjustmentCycles);
+                _interruptEntryBranchTailAdjustmentCycles,
+                _iplPipelineState,
+                _lastInterruptSampleCycle);
 
         void IM68000PipelineStateTransfer.ImportM68000PipelineState(in M68000PipelineState state)
         {
@@ -8710,6 +8879,10 @@ namespace Copper68k
                 state.NextInstructionFollowsExpiredDbcc;
             _interruptEntryBranchTailAdjustmentCycles =
                 state.InterruptEntryBranchTailAdjustmentCycles;
+            _iplPipelineState = state.IplPipelineState == default
+                ? M68000IplPipelineState.Reset
+                : state.IplPipelineState;
+            _lastInterruptSampleCycle = state.LastInterruptSampleCycle;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -12005,7 +12178,10 @@ namespace Copper68k
             ValidateBranchTarget(target, stackedProgramCounter);
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
-            var targetPublicationContext = CaptureInstructionFetchPublicationContext();
+            var targetPublicationContext = CaptureInstructionFetchPublicationContext() with
+            {
+                PendingInternalCycles = _pendingInternalCycles
+            };
             var targetOpcodeReadyCycle = TopUpPrefetchOne(
                 out _,
                 interruptibleTargetFetch
@@ -12332,7 +12508,9 @@ namespace Copper68k
                 _instructionEntryTimingToken1,
                 _instructionCycleStart,
                 CapturedDuringDeferredBatch: _deferredCpuBusBatchExecutionActive,
-                StatusRegister: State.StatusRegister);
+                StatusRegister: State.StatusRegister,
+                IplPipelineState: _iplPipelineState,
+                LastInterruptSampleCycle: _lastInterruptSampleCycle);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void TopUpPrefetchAtRetirement()

@@ -1124,9 +1124,29 @@ namespace Copper68k
                 ? recognition.LastInterruptSampleCycle
                 : long.MaxValue;
 
-        bool IM68000InterruptRecognition.HasRecognizedInterrupt(long pinAssertCycle)
-            => _fallback is not IM68000InterruptRecognition recognition ||
-                recognition.HasRecognizedInterrupt(pinAssertCycle);
+        bool IM68000InterruptRecognition.HasRecognizedInterrupt(
+            int pinLevel,
+            long pinChangeCycle,
+            int interruptMask)
+        {
+            if (_fallback is not IM68000InterruptRecognition recognition)
+            {
+                return true;
+            }
+
+            if (_fallbackPipelineStateTransfer != null && _m68000PipelineStateValid)
+            {
+                _fallbackPipelineStateTransfer.ImportM68000PipelineState(
+                    in _m68000PipelineState);
+            }
+
+            var recognized = recognition.HasRecognizedInterrupt(
+                pinLevel,
+                pinChangeCycle,
+                interruptMask);
+            CaptureFallbackM68000PipelineState();
+            return recognized;
+        }
 
         private int TryExecuteTrace(
             int maxInstructions,
@@ -2355,7 +2375,9 @@ namespace Copper68k
                 _m68000PipelineState.SkipRetirePrefetchTopUp,
                 _m68000PipelineState.HasPendingPrefetch,
                 _m68000PipelineState.PendingPrefetchAddress,
-                _m68000PipelineState.PendingPrefetchEarliestCycle);
+                _m68000PipelineState.PendingPrefetchEarliestCycle,
+                IplPipelineState: _m68000PipelineState.IplPipelineState,
+                LastInterruptSampleCycle: _m68000PipelineState.LastInterruptSampleCycle);
 
         private void RecordFallbackAttribution(
             uint pc,
@@ -9963,7 +9985,10 @@ namespace Copper68k
                     entryPipeline.ReadyCycle1,
                     entryPipeline.TimingToken0,
                     entryPipeline.TimingToken1,
-                    _compiledInstructionPreviousCycle);
+                    _compiledInstructionPreviousCycle,
+                    IplPipelineState: entryPipeline.IplPipelineState,
+                    LastInterruptSampleCycle:
+                        entryPipeline.LastInterruptSampleCycle);
                 if (!microsequence.CanCompileExactly ||
                     !TryConsumeCompiledM68000Instruction(
                         programCounter,

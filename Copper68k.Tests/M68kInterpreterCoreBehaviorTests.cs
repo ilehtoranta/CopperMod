@@ -161,7 +161,10 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		var firstPoll = recognition.LastInterruptSampleCycle;
 		var pinAssertCycle = firstPoll - 8;
 
-		Assert.True(recognition.HasRecognizedInterrupt(pinAssertCycle));
+		Assert.True(recognition.HasRecognizedInterrupt(
+			pinLevel: 1,
+			pinChangeCycle: pinAssertCycle,
+			interruptMask: 0));
 	}
 
 	[Fact]
@@ -176,8 +179,18 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		cpu.ExecuteInstruction();
 		var pollCycle = recognition.LastInterruptSampleCycle;
 
-		Assert.True(recognition.HasRecognizedInterrupt(pollCycle - 5));
-		Assert.False(recognition.HasRecognizedInterrupt(pollCycle - 4));
+		Assert.True(recognition.HasRecognizedInterrupt(
+			pinLevel: 1,
+			pinChangeCycle: pollCycle - 5,
+			interruptMask: 0));
+
+		cpu.Reset(0x1000, 0x3000);
+		cpu.ExecuteInstruction();
+		pollCycle = recognition.LastInterruptSampleCycle;
+		Assert.False(recognition.HasRecognizedInterrupt(
+			pinLevel: 1,
+			pinChangeCycle: pollCycle - 4,
+			interruptMask: 0));
 	}
 
 	[Theory]
