@@ -187,7 +187,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var requestCycle = Math.Max(_liveCopper.Cycle, _liveFrameStartCycle);
-            return _bus.CausalBusExecutor.PredictCopperWordCycle(_liveCopper.Pc, requestCycle);
+            return _bus.CausalBusExecutor.PredictCopperWordCycle(
+                _liveCopper.Pc,
+                requestCycle,
+                _liveCopper.PreserveFirstWordPhysicalPhase);
         }
 
         private long GetCachedLiveCopperWaitCycle()
@@ -392,6 +395,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var comparisonStartCycle = bfdReleasedByTermination
                     ? waitCycle
                     : _liveCopper.Cycle;
+                if (_liveCopper.SatisfiedWaitRunCount == 0)
+                {
+                    _liveCopper.WaitRunBeganWithBlockingComparison =
+                        waitCycle > comparisonStartCycle;
+                }
                 var resumeCycle = bfdReleasedByTermination
                     ? GetCopperBfdReleaseFetchCycle(waitCycle)
                     : GetCopperWaitRestartArmCycle(
@@ -422,14 +430,21 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         _liveFrameStartCycle,
                         _bus.Blitter.LastTerminationCycle,
                         blitterFinished: true);
-                if (bfdReleasedByTermination && beamSatisfiedAtBlitterTermination)
+                if (bfdReleasedByTermination &&
+                    beamSatisfiedAtBlitterTermination &&
+                    GetCopperHorizontalForCycle(
+                        _liveFrameStartCycle,
+                        _bus.Blitter.LastTerminationCycle) >= DefaultDdfStart)
                 {
-                    // The control phase is internal; carry it into presentation
-                    // without changing the physical fetch or grant cycles.
+                    // Before the presentation origin, the control phase is
+                    // absorbed into the next line's baseline. Once the visible
+                    // pipeline is active it remains observable on the MOVE.
                     _liveCopper.PendingWaitPresentationPixelOffset =
                         CopperBfdReleasePresentationPixelOffset;
                 }
-                else if (readyAtWakeCycle && beamSatisfiedAtBlitterTermination)
+                else if (!bfdReleasedByTermination &&
+                    readyAtWakeCycle &&
+                    beamSatisfiedAtBlitterTermination)
                 {
                     _liveCopper.PendingWaitPresentationPixelOffset =
                         CopperWaitReadyPresentationPixelOffset;
@@ -451,9 +466,27 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     resumeCycle -= AgnusChipSlotScheduler.SlotCycles;
                 }
+                if (!bfdReleasedByTermination &&
+                    (_liveCopper.WaitFirst & 0x00FE) <= 2)
+                {
+                    // Retain the incoming physical phase for the first fetch
+                    // after this WAIT. The fetch still competes for the bus.
+                    _liveCopper.PreserveFirstWordPhysicalPhase = true;
+                }
+                var fourPlaneWait = GetAgnusBitplaneFetchPlaneCount() == 4;
                 var fourPlanePreTailWait =
-                    GetAgnusBitplaneFetchPlaneCount() == 4 &&
+                    fourPlaneWait &&
                     (_liveCopper.WaitFirst & 0x00FE) < 0x00C0;
+                var fourPlaneTailRunPhaseReusable =
+                    IsFourPlaneWaitTailRunPhaseReusable(_liveCopper.WaitFirst);
+                if (fourPlaneTailRunPhaseReusable &&
+                    waitCycle > comparisonStartCycle &&
+                    _liveCopper.WaitRunContinuesFromDifferentInstruction &&
+                    _liveCopper.WaitRunCrossedIntoLineTail)
+                {
+                    _liveCopper.WaitRunCrossedIntoLineTailAfterBlockingComparison = true;
+                    resumeCycle -= 4L * AgnusChipSlotScheduler.SlotCycles;
+                }
                 if (fourPlanePreTailWait &&
                     waitCycle > comparisonStartCycle &&
                     IsBitplaneRgaIncomingPhase(waitCycle))
@@ -462,7 +495,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         (_liveCopper.WaitFirst & 0x0002) * 2;
                 }
                 var fourPlaneWaitRunContinuation =
-                    fourPlanePreTailWait &&
+                    (fourPlanePreTailWait || fourPlaneTailRunPhaseReusable) &&
                     waitCycle <= comparisonStartCycle &&
                     (_liveCopper.SatisfiedWaitRunCount > 0 ||
                      _liveCopper.WaitRunContinuesFromDifferentInstruction);
@@ -589,6 +622,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     presentNextMoveFromReusedWaitTail &&
                     _liveCopper.WaitRunCrossedIntoLineTail &&
                     (_liveCopper.WaitFirst & 0x00FE) == 0x00C4;
+                if (reuseRunControlPhase &&
+                    _liveCopper.WaitRunCrossedIntoLineTailAfterBlockingComparison &&
+                    !projectCrossedLineTailRun)
+                {
+                    _liveCopper.PendingWaitPresentationPixelOffset =
+                        CopperWaitReadyPresentationPixelOffset;
+                }
                 var waitTailPresentationX =
                     projectCrossedLineTailRun
                         ? Math.Max(
@@ -643,7 +683,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
                 var firstRequestCycle = Math.Max(_liveCopper.Cycle, _liveFrameStartCycle);
-                var fetchCycle = _bus.CausalBusExecutor.PredictCopperWordCycle(_liveCopper.Pc, firstRequestCycle);
+                var preserveFirstWordPhysicalPhase =
+                    _liveCopper.PreserveFirstWordPhysicalPhase;
+                var fetchCycle = _bus.CausalBusExecutor.PredictCopperWordCycle(
+                    _liveCopper.Pc,
+                    firstRequestCycle,
+                    preserveFirstWordPhysicalPhase);
                 if (fetchCycle > targetCycle)
                 {
                     return;
@@ -654,7 +699,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         _liveCopper.Pc,
                         firstRequestCycle,
                         fetchCycle,
-                        preservePhysicalPhaseAcrossLine: false,
+                        preserveFirstWordPhysicalPhase,
                         out var first,
                         out var firstAccess))
                 {
@@ -662,6 +707,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     InvalidateLiveDisplayEventCycle();
                     return;
                 }
+
+                _liveCopper.PreserveFirstWordPhysicalPhase = false;
 
                 var secondAddress = AddDmaPointerOffset(_liveCopper.Pc, 2);
                 var secondWordEarliestCycle = _liveCopper.ConsumeWaitStartTail(
@@ -763,7 +810,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 if (dataCycle <= targetCycle)
                 {
-                    ApplyLiveCopperMove(register, instruction.Second, dataCycle, instruction.MoveStopCycle, suppressMove);
+                    ApplyLiveCopperMove(
+                        register,
+                        instruction.Second,
+                        dataCycle,
+                        instruction.MoveStopCycle,
+                        suppressMove);
                 }
 
                 _liveCopper.CompleteMove(instruction.MoveStopCycle);
@@ -1089,6 +1141,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private bool IsCopperWaitRestartAfterDataFetchStop(long cycle)
             => _bus.GetBeamPosition(cycle).BeamHorizontal > GetDataFetchStopValue();
 
+        private bool IsFourPlaneWaitTailRunPhaseReusable(ushort waitFirst)
+            // The four-plane RGA cadence exposes alternate WAIT control phases.
+            // Only the even tail polarity can retain the preceding run phase.
+            => GetAgnusBitplaneFetchPlaneCount() == 4 &&
+               (waitFirst & 0x0004) == 0;
+
         private int GetCopperWaitTailPresentationX(ushort waitFirst)
         {
             const int firstTrailingPresentationHorizontal = 0xC0;
@@ -1166,7 +1224,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var stopCycle = _liveCopper.PendingMoveStopCycle;
             var suppressMove = _liveCopper.PendingMoveSuppress;
             _liveCopper.PendingMove = false;
-            ApplyLiveCopperMove(register, value, dataCycle, stopCycle, suppressMove);
+            ApplyLiveCopperMove(
+                register,
+                value,
+                dataCycle,
+                stopCycle,
+                suppressMove);
             if (!_liveCopper.Stopped)
             {
                 _liveCopper.CompleteMove(stopCycle);

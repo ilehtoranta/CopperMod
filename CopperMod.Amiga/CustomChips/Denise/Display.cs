@@ -2258,12 +2258,64 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var waitPresentationPixelOffset = isCopper
                 ? _liveCopper.PendingWaitPresentationPixelOffset
                 : 0;
+            var fivePlaneWaitMovePixelOffset =
+                isPaletteWrite &&
+                GetAgnusBitplaneFetchPlaneCount() == 5 &&
+                _liveCopper.HasWaitRun &&
+                (_liveCopper.WaitFirst & 0x00FE) >= DefaultDdfStart &&
+                GetCopperHorizontalForCycle(_liveFrameStartCycle, cycle) >= DefaultDdfStart
+                    // Five-plane fixed DMA keeps the physical Copper transfer,
+                    // while Denise observes the WAIT/RGA phase that launched
+                    // the MOVE. Repeated satisfied WAITs reuse that phase on
+                    // all but the outgoing RGA polarity.
+                    ? GetFivePlaneWaitMovePresentationPixelOffset(
+                        _liveCopper.WaitFirst,
+                        _liveCopper.SatisfiedWaitRunCount,
+                        _liveCopper.WaitRunBeganWithBlockingComparison,
+                        cycle,
+                        _liveCopper.PendingInstructionSecondWordRequestedCycle)
+                    : 0;
+            var bitplaneRgaDecisionPixelOffset =
+                isPaletteWrite &&
+                GetAgnusBitplaneFetchPlaneCount() == 5 &&
+                (_liveCopper.WaitFirst & 0x00FE) < DefaultDdfStart &&
+                IsBitplaneRgaDecisionPhase(cycle)
+                    ? CopperWaitReadyPresentationPixelOffset
+                    : 0;
+            var bitplaneFetchStartPixelOffset =
+                isPaletteWrite &&
+                GetAgnusBitplaneFetchPlaneCount() == 5 &&
+                (GetCopperHorizontalForCycle(_liveFrameStartCycle, cycle) == _dataFetchWindow.Start ||
+                 (IsFivePlaneWaitIncomingRgaPresentationPhase() &&
+                  GetCopperHorizontalForCycle(_liveFrameStartCycle, cycle) == _dataFetchWindow.Start + 2))
+                    ? CopperWaitReadyPresentationPixelOffset
+                    : 0;
             if (waitPreTailPixelOffset != 0 ||
-                waitPresentationPixelOffset != 0)
+                waitPresentationPixelOffset != 0 ||
+                fivePlaneWaitMovePixelOffset != 0 ||
+                bitplaneRgaDecisionPixelOffset != 0 ||
+                bitplaneFetchStartPixelOffset != 0)
             {
                 x +=
                     waitPreTailPixelOffset +
-                    waitPresentationPixelOffset;
+                    waitPresentationPixelOffset +
+                    fivePlaneWaitMovePixelOffset +
+                    bitplaneRgaDecisionPixelOffset +
+                    bitplaneFetchStartPixelOffset;
+            }
+            if (isCopper &&
+                GetAgnusBitplaneFetchPlaneCount() == 5 &&
+                GetCopperHorizontalForCycle(_liveFrameStartCycle, cycle) >= DefaultDdfStart)
+            {
+                // A restart before the presentation origin carries its phase
+                // through clamped border writes. Consume it on the first MOVE
+                // in the active horizontal interval; the captured value still
+                // applies to this write's current- and wrapped-line records.
+                _liveCopper.PendingWaitPresentationPixelOffset = 0;
+                if (isPaletteWrite)
+                {
+                    _liveCopper.PendingWaitPreTailPixelOffset = 0;
+                }
             }
             if (_bus.BusAccessCaptureEnabled)
             {
@@ -2282,7 +2334,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         recordCurrentLine,
                         lineState.Bplcon0,
                         lineState.Dmacon,
-                        lineState.PlaneCount));
+                        lineState.PlaneCount,
+                        lineState.PlaneHasRowMask,
+                        lineState.BitplaneBaseRows[0],
+                        lineState.BitplaneBaseRows[1],
+                        lineState.BitplaneBaseRows[2],
+                        lineState.BitplaneBaseRows[3],
+                        lineState.BitplaneBaseRows[4],
+                        _liveCopper.WaitFirst,
+                        _liveCopper.SatisfiedWaitRunCount,
+                        _liveCopper.WaitRunBeganWithBlockingComparison,
+                        _liveCopper.WaitRunControlBlocked,
+                        _liveCopper.PendingInstructionSecondWordRequestedCycle,
+                        waitPresentationPixelOffset,
+                        fivePlaneWaitMovePixelOffset));
                 }
             }
             if (recordCurrentLine)
@@ -2312,7 +2377,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var wrappedX = ((horizontal + CopperHorizontalUnitsPerLine - DefaultDdfStart) * 2) + pixelDelay;
             wrappedX +=
                 waitPreTailPixelOffset +
-                waitPresentationPixelOffset;
+                waitPresentationPixelOffset +
+                fivePlaneWaitMovePixelOffset +
+                bitplaneRgaDecisionPixelOffset +
+                bitplaneFetchStartPixelOffset;
             if (isCopper && !isPaletteWrite)
             {
                 _liveCopper.PendingWaitPaletteTailX = -1;
@@ -3075,6 +3143,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 PendingInstructionSecondWordCycle = 0;
                 PendingInstructionSecondWordRequestedCycle = 0;
                 PendingInstructionSecondWordPreservePhysicalPhase = false;
+                PreserveFirstWordPhysicalPhase = false;
                 PendingMove = false;
                 PendingMoveRegister = 0;
                 PendingMoveValue = 0;
@@ -3102,8 +3171,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 SatisfiedWaitRunCount = 0;
                 HasWaitRun = false;
                 WaitRunContinuesFromDifferentInstruction = false;
+                WaitRunBeganWithBlockingComparison = false;
                 PreviousWaitRunFirst = 0;
                 WaitRunCrossedIntoLineTail = false;
+                WaitRunCrossedIntoLineTailAfterBlockingComparison = false;
                 PreviousWaitRunControlBlocked = false;
                 WaitRunControlBlocked = false;
                 PresentNextMoveFromReusedWaitTail = false;
@@ -3148,6 +3219,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public long PendingInstructionSecondWordRequestedCycle;
 
             public bool PendingInstructionSecondWordPreservePhysicalPhase;
+
+            public bool PreserveFirstWordPhysicalPhase;
 
             public bool PendingMove;
 
@@ -3203,9 +3276,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public bool WaitRunContinuesFromDifferentInstruction;
 
+            public bool WaitRunBeganWithBlockingComparison;
+
             public ushort PreviousWaitRunFirst;
 
             public bool WaitRunCrossedIntoLineTail;
+
+            public bool WaitRunCrossedIntoLineTailAfterBlockingComparison;
 
             public bool PreviousWaitRunControlBlocked;
 
@@ -3282,6 +3359,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     WaitRunCrossedIntoLineTail =
                         (WaitRunFirst & 0x00FE) < 0x00C0 &&
                         (first & 0x00FE) >= 0x00C0;
+                    WaitRunCrossedIntoLineTailAfterBlockingComparison = false;
                 }
                 PreviousWaitRunControlBlocked = WaitRunControlBlocked;
                 if (HasWaitRun && !WaitRunContinuesFromDifferentInstruction)
@@ -3351,8 +3429,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 SatisfiedWaitRunCount = 0;
                 HasWaitRun = false;
                 WaitRunContinuesFromDifferentInstruction = false;
+                WaitRunBeganWithBlockingComparison = false;
                 PreviousWaitRunFirst = 0;
                 WaitRunCrossedIntoLineTail = false;
+                WaitRunCrossedIntoLineTailAfterBlockingComparison = false;
                 PreviousWaitRunControlBlocked = false;
                 WaitRunControlBlocked = false;
                 PresentNextMoveFromReusedWaitTail = false;
@@ -3371,6 +3451,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 PendingInstructionSecondWordCycle = 0;
                 PendingInstructionSecondWordRequestedCycle = 0;
                 PendingInstructionSecondWordPreservePhysicalPhase = false;
+                PreserveFirstWordPhysicalPhase = false;
                 PendingMove = false;
                 PendingMoveRegister = 0;
                 PendingMoveValue = 0;
@@ -5266,7 +5347,20 @@ namespace CopperMod.Amiga.CustomChips.Denise
         bool HasStartedLine,
         ushort Bplcon0,
         ushort Dmacon,
-        int PlaneCount);
+        int PlaneCount,
+        byte PlaneHasRowMask,
+        int BitplaneBaseRow0,
+        int BitplaneBaseRow1,
+        int BitplaneBaseRow2,
+        int BitplaneBaseRow3,
+        int BitplaneBaseRow4,
+        ushort WaitFirst,
+        byte SatisfiedWaitRunCount,
+        bool WaitRunBeganWithBlockingComparison,
+        bool WaitRunControlBlocked,
+        long SecondWordRequestedCycle,
+        int WaitPresentationPixelOffset,
+        int FivePlaneWaitMovePixelOffset);
 
     internal readonly record struct CopperTimelineSegmentTrace(
         int XStart,

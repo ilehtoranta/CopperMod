@@ -1840,7 +1840,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var mask = GetCopperComparisonMask(second);
-            var target = (ushort)(first & 0xFFFE);
+            var target = GetCopperComparisonTarget(first, mask);
             if (mask == 0xFFFE)
             {
                 return TryGetFullMaskCopperWaitCycle(
@@ -2134,6 +2134,22 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             if (pixelDelay > 0 &&
+                horizontal >= DefaultDdfStart - 8 &&
+                horizontal < DefaultDdfStart &&
+                GetAgnusBitplaneFetchPlaneCount() == 5 &&
+                (_liveCopper.WaitFirst & 0x00FE) < DefaultDdfStart)
+            {
+                if ((_liveCopper.WaitFirst & 0x00FE) <= 2)
+                {
+                    return 0;
+                }
+
+                return horizontal >= DefaultDdfStart - 2
+                    ? Math.Clamp(pixelDelay, 0, LowResWidth)
+                    : 0;
+            }
+
+            if (pixelDelay > 0 &&
                 horizontal < DefaultDdfStart &&
                 GetAgnusBitplaneFetchPlaneCount() == 4 &&
                 _liveCopper.PreDdfPaletteWritesFollowPhysicalPhase)
@@ -2145,6 +2161,63 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             return GetCopperOutputXForPresentation(horizontal, pixelDelay, LowResWidth);
+        }
+
+        private bool IsFivePlaneWaitIncomingRgaPresentationPhase()
+        {
+            var targetHorizontal = _liveCopper.WaitFirst & 0x00FE;
+            return GetAgnusBitplaneFetchPlaneCount() == 5 &&
+                targetHorizontal > 2 &&
+                (targetHorizontal & 0x0002) == 0;
+        }
+
+        private int GetFivePlaneWaitMovePresentationPixelOffset(
+            ushort waitFirst,
+            byte satisfiedWaitRunCount,
+            bool waitRunBeganWithBlockingComparison,
+            long grantedCycle,
+            long requestedCycle)
+        {
+            var physicallyContendedOffset =
+                requestedCycle > 0 &&
+                grantedCycle - requestedCycle > CopperHpCycles
+                    ? -CopperWaitReadyPresentationPixelOffset
+                    : 0;
+            if (!waitRunBeganWithBlockingComparison)
+            {
+                return physicallyContendedOffset;
+            }
+
+            var rgaPhase = waitFirst & 0x0006;
+            int controlPhaseOffset;
+            if (satisfiedWaitRunCount == 0)
+            {
+                controlPhaseOffset = (rgaPhase & 0x0004) != 0
+                    ? -CopperWaitReadyPresentationPixelOffset
+                    : 0;
+            }
+            else if ((waitFirst & 0x0080) != 0)
+            {
+                // Once the horizontal comparator's high bit is set, later
+                // WAITs establish a new visible phase. Any displacement then
+                // comes from the MOVE data grant itself.
+                controlPhaseOffset = 0;
+            }
+            else
+            {
+                controlPhaseOffset = rgaPhase switch
+                {
+                    0x0000 or 0x0002 when satisfiedWaitRunCount >= 2
+                        => -CopperWaitReadyPresentationPixelOffset,
+                    0x0004 when satisfiedWaitRunCount >= 2
+                        => -2 * CopperWaitReadyPresentationPixelOffset,
+                    0x0004 or 0x0006
+                        => -CopperWaitReadyPresentationPixelOffset,
+                    _ => 0
+                };
+            }
+
+            return Math.Min(physicallyContendedOffset, controlPhaseOffset);
         }
 
         internal static int GetCopperOutputXForPresentation(int horizontal, int pixelDelay, int outputWidth)
@@ -2167,7 +2240,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 !_bus.Blitter.BusPipelineActive;
         }
 
-        private static bool IsCopperComparisonSatisfied(
+        private bool IsCopperComparisonSatisfied(
             ushort first,
             ushort second,
             int row,
@@ -2181,8 +2254,26 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             var mask = GetCopperComparisonMask(second);
             var beam = GetCopperBeamWord(row, horizontal);
-            var target = (ushort)(first & 0xFFFE);
+            var target = GetCopperComparisonTarget(first, mask);
             return (beam & mask) >= (target & mask);
+        }
+
+        private ushort GetCopperComparisonTarget(ushort first, ushort mask)
+        {
+            var target = (ushort)(first & 0xFFFE);
+            var targetHorizontal = target & 0x00FE;
+            if (mask == 0xFFFE &&
+                GetAgnusBitplaneFetchPlaneCount() == 5 &&
+                targetHorizontal < DefaultDdfStart)
+            {
+                // At the five-plane line-start transition, the WAIT comparator
+                // observes the incoming RGA phase one HP step ahead. Keep that
+                // phase local to the pre-DDF transition; ordinary WAIT timing
+                // continues to use the physical beam coordinate.
+                target = (ushort)((target & 0xFF00) | Math.Max(0, targetHorizontal - 2));
+            }
+
+            return target;
         }
 
         private static ushort GetCopperComparisonMask(ushort second)

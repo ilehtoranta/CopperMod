@@ -91,7 +91,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 var wakeVersionBeforeAdvance = _liveWakeVersion;
-                AdvanceLiveDisplayStateTo(nextCycle, includeCopper);
+                var fixedDisplaySlotDue =
+                    nextBitplaneFetchCycle == nextCycle ||
+                    nextSpriteFetchCycle == nextCycle;
+                // Fixed display DMA owns the physical slot before Copper is
+                // allowed to arbitrate for it.  Register events at the same
+                // cycle must still become visible, so advance those events but
+                // leave Copper stopped at the incoming fixed-slot boundary.
+                // The following iteration retries Copper after the fixed
+                // requester has committed (or been denied by a stronger fixed
+                // owner).
+                if (includeCopper && fixedDisplaySlotDue)
+                {
+                    AdvanceLiveDisplayStateTo(nextCycle - 1, includeCopper: true);
+                    AdvanceLiveDisplayStateTo(nextCycle, includeCopper: false);
+                }
+                else
+                {
+                    AdvanceLiveDisplayStateTo(nextCycle, includeCopper);
+                }
                 if (_liveWakeVersion != wakeVersionBeforeAdvance)
                 {
                     // A Copper MOVE can rebase prepared bitplane/sprite work
@@ -136,6 +154,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     var batchStopCycle = GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle, includeCopper);
                     batchStopCycle = Math.Min(batchStopCycle, nextBitplaneFetchCycle);
+                    batchStopCycle = Math.Max(batchStopCycle, nextCycle);
                     RecordLiveRasterlinePlanEvent(
                         LiveRasterlinePlanEventKind.SpriteFetchBatch,
                         nextCycle,
@@ -150,6 +169,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 var bitplaneBatchStopCycle = GetLiveDmaBatchStopCycle(targetCycle, nextLineStateCycle, includeCopper);
                 bitplaneBatchStopCycle = Math.Min(bitplaneBatchStopCycle, nextSpriteFetchCycle);
+                bitplaneBatchStopCycle = Math.Max(bitplaneBatchStopCycle, nextCycle);
                 RecordLiveRasterlinePlanEvent(
                     LiveRasterlinePlanEventKind.BitplaneFetchBatch,
                     nextCycle,

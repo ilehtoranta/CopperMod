@@ -2191,11 +2191,12 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             // After the BLTSIZE transfer, OCS performs its intervening idle
             // phase followed by STRT1 and STRT2. None allocates the memory
             // bus to the blitter, so a pending CPU request may use them even
-            // with BLTPRI set. The first real transfer is four memory cycles
-            // after the BLTSIZE grant.
+            // with BLTPRI set. A B-only area's idle,B,idle word sequencer
+            // retains its leading control phase before the first B request.
+            var startupControlPhases = IsBOnlyAreaBlit() ? 5 : 4;
             _currentCycle = _bus.NextChipSlotCycle(
                 Math.Max(_currentCycle, cycle) +
-                (4 * ChipSlotCycles));
+                (startupControlPhases * ChipSlotCycles));
             ResetLiveAreaDPipeline();
             if (_bus.AgnusLiveBlitterEnabled)
             {

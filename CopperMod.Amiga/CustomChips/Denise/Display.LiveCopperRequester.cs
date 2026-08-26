@@ -79,7 +79,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         return false;
                     }
 
-                    if (request.Channel == 2)
+                    if (request.Channel is 2 or 3)
                     {
                         return ((slotCycle /
                                  AgnusChipSlotScheduler.SlotCycles) & 1) ==
@@ -166,7 +166,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 				return false;
 			}
 
-			if (request.Channel == 0)
+			if (request.Channel is 0 or 3)
 			{
 				return false;
 			}
@@ -271,7 +271,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if (requester.TryPeekPendingRequest(out var publishedRequest))
             {
                 var current =
-                    publishedRequest.Channel == 0
+                    publishedRequest.Channel is 0 or 3
                         ? !_liveCopper.PendingInstructionSecondWord &&
                           !_liveCopper.Stopped &&
                           IsLiveCopperDmaEnabled() &&
@@ -387,7 +387,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _liveCopper.Pc,
                 requestedCycle,
                 GetLiveCopperRequesterEligibilityCycle(requestedCycle),
-                phase: 0);
+                phase: _liveCopper.PreserveFirstWordPhysicalPhase ? 3 : 0);
             _liveCopperRequesterPublishedNextRequests++;
         }
 
@@ -411,8 +411,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             var access = CreateLiveCopperAccess(grant);
             RecordLiveCopperBitplaneRgaCollision(grant.SlotCycle);
-            if (phase == 0)
+            if (phase is 0 or 3)
             {
+                _liveCopper.PreserveFirstWordPhysicalPhase = false;
                 var first = grant.SampledValue;
                 var secondRequestedCycle = _liveCopper.ConsumeWaitStartTail(
                     first,
@@ -582,6 +583,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var comparisonStartCycle = _liveCopper.WaitObservedBlitterBusy
                 ? waitCycle
                 : _liveCopper.Cycle;
+            if (_liveCopper.SatisfiedWaitRunCount == 0)
+            {
+                _liveCopper.WaitRunBeganWithBlockingComparison =
+                    waitCycle > comparisonStartCycle;
+            }
             var resumeCycle = bfdReleasedByTermination
                 ? GetCopperBfdReleaseFetchCycle(waitCycle)
                 : GetCopperWaitRestartArmCycle(
@@ -611,15 +617,21 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     _liveFrameStartCycle,
                     _bus.Blitter.LastTerminationCycle,
                     blitterFinished: true);
-            if (bfdReleasedByTermination && beamSatisfiedAtBlitterTermination)
+            if (bfdReleasedByTermination &&
+                beamSatisfiedAtBlitterTermination &&
+                GetCopperHorizontalForCycle(
+                    _liveFrameStartCycle,
+                    _bus.Blitter.LastTerminationCycle) >= DefaultDdfStart)
             {
-                // BLTDONE releases the Copper fetch pipeline two color clocks
-                // before the following MOVE reaches Denise. Keep that internal
-                // phase attached to the MOVE without reserving another bus slot.
+                // A pre-origin release establishes the line baseline. Only a
+                // release in the active presentation interval exposes this
+                // internal control phase on the following MOVE.
                 _liveCopper.PendingWaitPresentationPixelOffset =
                     CopperBfdReleasePresentationPixelOffset;
             }
-            else if (readyAtWakeCycle && beamSatisfiedAtBlitterTermination)
+            else if (!bfdReleasedByTermination &&
+                readyAtWakeCycle &&
+                beamSatisfiedAtBlitterTermination)
             {
                 _liveCopper.PendingWaitPresentationPixelOffset =
                     CopperWaitReadyPresentationPixelOffset;
@@ -649,10 +661,30 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 resumeCycle -= AgnusChipSlotScheduler.SlotCycles;
             }
+            if (!bfdReleasedByTermination &&
+                (_liveCopper.WaitFirst & 0x00FE) <= 2)
+            {
+                // The first fetch emerging from a line-start WAIT is already
+                // carried by the incoming Copper pipeline phase. It remains a
+                // normal arbitrated transfer, but is not re-phased as a new
+                // steady-state opcode request.
+                _liveCopper.PreserveFirstWordPhysicalPhase = true;
+            }
 
+            var fourPlaneWait = GetAgnusBitplaneFetchPlaneCount() == 4;
             var fourPlanePreTailWait =
-                GetAgnusBitplaneFetchPlaneCount() == 4 &&
+                fourPlaneWait &&
                 (_liveCopper.WaitFirst & 0x00FE) < 0x00C0;
+            var fourPlaneTailRunPhaseReusable =
+                IsFourPlaneWaitTailRunPhaseReusable(_liveCopper.WaitFirst);
+            if (fourPlaneTailRunPhaseReusable &&
+                waitCycle > comparisonStartCycle &&
+                _liveCopper.WaitRunContinuesFromDifferentInstruction &&
+                _liveCopper.WaitRunCrossedIntoLineTail)
+            {
+                _liveCopper.WaitRunCrossedIntoLineTailAfterBlockingComparison = true;
+                resumeCycle -= 4L * AgnusChipSlotScheduler.SlotCycles;
+            }
             if (fourPlanePreTailWait &&
                 waitCycle > comparisonStartCycle &&
                 IsBitplaneRgaIncomingPhase(waitCycle))
@@ -662,7 +694,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var fourPlaneWaitRunContinuation =
-                fourPlanePreTailWait &&
+                (fourPlanePreTailWait || fourPlaneTailRunPhaseReusable) &&
                 waitCycle <= comparisonStartCycle &&
                 (_liveCopper.SatisfiedWaitRunCount > 0 ||
                  _liveCopper.WaitRunContinuesFromDifferentInstruction);
@@ -807,6 +839,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 presentNextMoveFromReusedWaitTail &&
                 _liveCopper.WaitRunCrossedIntoLineTail &&
                 (_liveCopper.WaitFirst & 0x00FE) == 0x00C4;
+            if (reuseRunControlPhase &&
+                _liveCopper.WaitRunCrossedIntoLineTailAfterBlockingComparison &&
+                !projectCrossedLineTailRun)
+            {
+                _liveCopper.PendingWaitPresentationPixelOffset =
+                    CopperWaitReadyPresentationPixelOffset;
+            }
             var waitTailPresentationX =
                 projectCrossedLineTailRun
                     ? Math.Max(
@@ -1159,7 +1198,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     denied.RequestedCycle,
                     retryCycle,
                     _phase);
-                if (_phase == 0)
+                if (_phase is 0 or 3)
                 {
                     _display._liveCopper.Cycle = retryCycle;
                 }
@@ -1180,7 +1219,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     pending.RequestedCycle,
                     earliestEligibleCycle,
                     _phase);
-                if (_phase == 0)
+                if (_phase is 0 or 3)
                 {
                     _display._liveCopper.Cycle = earliestEligibleCycle;
                 }

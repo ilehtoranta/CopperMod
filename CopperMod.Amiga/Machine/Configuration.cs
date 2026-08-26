@@ -794,32 +794,28 @@ namespace CopperMod.Amiga.Runtime
                 Bus.RequestHardwareInterrupt(intreqBit, ciaEvent.Cycle);
             }
 
-            var level = Bus.Paula.GetHighestCpuVisibleInterruptLevel(Cpu.State.Cycles);
-            if (level <= 0)
-            {
-                return false;
-            }
-
             var interruptMask = (Cpu.State.StatusRegister >> 8) & 0x07;
-            if (level <= interruptMask)
-            {
-                return false;
-            }
-
 			var interruptRecognition = Cpu as IM68000InterruptRecognition;
 			var acceptanceCycle = interruptRecognition?.LastInterruptSampleCycle is long sampleCycle &&
 				sampleCycle != long.MinValue
-				? Math.Max(Cpu.State.Cycles, sampleCycle + 2)
+					? Math.Max(Cpu.State.Cycles, sampleCycle + 2)
+					: Cpu.State.Cycles;
+			var level = Bus.Paula.GetHighestCpuVisibleInterruptLevel(Cpu.State.Cycles);
+			var cpuVisibleCycle = level > 0
+				? Bus.Paula.GetCpuInterruptReleaseCycleForLevel(level, acceptanceCycle) ?? acceptanceCycle
 				: Cpu.State.Cycles;
-            var interruptedProgramCounter = Cpu.State.ProgramCounter;
-            var savedStatusRegister = Cpu.State.StatusRegister;
-			var activeInterruptBits = Bus.Paula.ActiveInterruptBits;
-			var cpuVisibleCycle = Bus.Paula.GetCpuInterruptReleaseCycleForLevel(level, acceptanceCycle) ?? acceptanceCycle;
-			if (interruptRecognition != null &&
-				!interruptRecognition.HasRecognizedInterrupt(cpuVisibleCycle))
+			var recognized = interruptRecognition?.HasRecognizedInterrupt(
+				level,
+				cpuVisibleCycle,
+				interruptMask) ?? true;
+			if (level <= 0 || level <= interruptMask || !recognized)
 			{
 				return false;
 			}
+
+            var interruptedProgramCounter = Cpu.State.ProgramCounter;
+            var savedStatusRegister = Cpu.State.StatusRegister;
+			var activeInterruptBits = Bus.Paula.ActiveInterruptBits;
 			var prefetchDiagnostics = Cpu as IM68000PrefetchDiagnostics;
 			var prefetchBefore = prefetchDiagnostics?.CapturePrefetchDiagnosticState();
 			if (_interruptBusPhaseTrace != null &&
