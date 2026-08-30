@@ -12,7 +12,7 @@ internal sealed class CopperStartUtilityContext
         Func<int, uint, uint> allocate,
         Action<uint, int> free,
         Action<Copper68k.M68kCpuState, uint, uint>? startGuestSubroutine = null,
-        Action<uint, Copper68k.M68kCpuState>? replyMessage = null)
+        Action<uint>? replyMessage = null)
     {
         Bus = bus ?? throw new ArgumentNullException(nameof(bus));
         Memory = memory ?? throw new ArgumentNullException(nameof(memory));
@@ -28,5 +28,5 @@ internal sealed class CopperStartUtilityContext
     public Action<uint, int> Free { get; }
     /// <summary>Enters guest code only through the outer emulator-loop continuation path.</summary>
     public Action<Copper68k.M68kCpuState, uint, uint>? StartGuestSubroutine { get; }
-    public Action<uint, Copper68k.M68kCpuState>? ReplyMessage { get; }
+    public Action<uint>? ReplyMessage { get; }
 }

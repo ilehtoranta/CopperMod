@@ -1,6 +1,7 @@
 using System;
 
 namespace CopperMod.Amiga.CopperStart.Runtime;
+using PortableRuntime = global::CopperStart.Runtime;
 
 /// <summary>
 /// Composes the caller's device schedule with CopperStart's synthetic vblank
@@ -39,8 +40,9 @@ internal sealed class ExecutionBoundarySchedule : IAmigaExecutionBoundarySchedul
     public long GetNextBoundaryCycle(long currentCycle, long targetCycle)
     {
         var scheduledCycle = _scheduledAdvance?.GetNextBoundaryCycle(currentCycle, targetCycle) ?? targetCycle;
-        var hostDeviceCycle = _nextHostDeviceBoundary(currentCycle, Math.Min(targetCycle, scheduledCycle));
-        return _nextSyntheticBoundary(currentCycle, Math.Min(targetCycle, hostDeviceCycle));
+		var hostDeviceCycle = _nextHostDeviceBoundary(currentCycle, Math.Min(targetCycle, scheduledCycle));
+		var syntheticCycle = _nextSyntheticBoundary(currentCycle, Math.Min(targetCycle, hostDeviceCycle));
+		return PortableRuntime.ExecutionBoundaryCore.SelectBoundary(currentCycle, targetCycle, scheduledCycle, hostDeviceCycle, syntheticCycle);
     }
 
     public void AdvanceThrough(long previousCycle, long currentCycle)

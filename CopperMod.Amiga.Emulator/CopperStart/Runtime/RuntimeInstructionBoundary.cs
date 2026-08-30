@@ -1,6 +1,7 @@
 using System;
 using Copper68k;
 using CopperMod.Amiga.Bus;
+using PortableRuntime = global::CopperStart.Runtime;
 
 namespace CopperMod.Amiga.CopperStart.Runtime;
 
@@ -9,11 +10,14 @@ internal sealed class RuntimeInstructionBoundaryContext
 {
     public RuntimeInstructionBoundaryContext(AmigaBus bus, M68kCpuState cpu, Action dispatchInterrupt,
         Func<long, long, long> nextSyntheticBoundary, Action<long, long> advanceSynthetic,
-        Action processHostDevices, Func<long, long, long> nextHostDeviceBoundary)
-    { Bus = bus; Cpu = cpu; DispatchInterrupt = dispatchInterrupt; NextSyntheticBoundary = nextSyntheticBoundary; AdvanceSynthetic = advanceSynthetic; ProcessHostDevices = processHostDevices; NextHostDeviceBoundary = nextHostDeviceBoundary; }
+        Action processHostDevices, Func<bool> dispatchTasks,
+        Func<bool> canExecuteCurrentTask, Func<long, long, long> nextHostDeviceBoundary)
+    { Bus = bus; Cpu = cpu; DispatchInterrupt = dispatchInterrupt; NextSyntheticBoundary = nextSyntheticBoundary; AdvanceSynthetic = advanceSynthetic; ProcessHostDevices = processHostDevices; DispatchTasks = dispatchTasks; CanExecuteCurrentTask = canExecuteCurrentTask; NextHostDeviceBoundary = nextHostDeviceBoundary; }
     public AmigaBus Bus { get; } public M68kCpuState Cpu { get; } public Action DispatchInterrupt { get; }
     public Func<long, long, long> NextSyntheticBoundary { get; } public Action<long, long> AdvanceSynthetic { get; }
     public Action ProcessHostDevices { get; }
+    public Func<bool> DispatchTasks { get; }
+    public Func<bool> CanExecuteCurrentTask { get; }
     public Func<long, long, long> NextHostDeviceBoundary { get; }
 }
 
@@ -28,18 +32,25 @@ internal sealed class RuntimeInstructionBoundary :
     { _context = context ?? throw new ArgumentNullException(nameof(context)); _schedule = new ExecutionBoundarySchedule(context.NextSyntheticBoundary, context.AdvanceSynthetic, context.NextHostDeviceBoundary); }
     public void Reset(Action<long, long>? beforeDeviceAdvance, IAmigaExecutionBoundarySchedule? boundarySchedule) => _schedule.Reset(beforeDeviceAdvance, boundarySchedule);
     public M68kTraceBatchWakeSource LastTraceBatchWakeSource { get; private set; }
-    public bool TryPrepareDeferredCpuBusBatch(M68kCpuState state) => !_schedule.HasOpaqueLegacyAdvance;
+    public bool TryPrepareDeferredCpuBusBatch(M68kCpuState state)
+        => !_schedule.HasOpaqueLegacyAdvance && BeforeInstruction();
     public long ClampDeferredCpuBusBatchTarget(M68kCpuState state, long targetCycle) => _schedule.GetNextBoundaryCycle(state.Cycles, targetCycle);
     public void AfterDeferredCpuBusBatch(long previousCycle, long currentCycle, int instructionCount) => AfterInstructionBatch(previousCycle, currentCycle, instructionCount);
-    public bool BeforeInstruction() { _context.ProcessHostDevices(); return true; }
+    public bool BeforeInstruction()
+    {
+        _context.ProcessHostDevices();
+        if (_context.DispatchTasks()) return true;
+        return _context.CanExecuteCurrentTask();
+    }
     public void AfterInstruction(long previousCycle, long currentCycle) => AfterInstructionBatch(previousCycle, currentCycle, 1);
     public bool TryBeginPureCpuTraceBatch(M68kCpuState state, long targetCycle, out long batchTargetCycle)
     {
-        batchTargetCycle = targetCycle; if (targetCycle <= state.Cycles) return false;
+        batchTargetCycle = targetCycle;
+        if (targetCycle <= state.Cycles || !BeforeInstruction()) return false;
         var mask = (state.StatusRegister >> 8) & 7;
         batchTargetCycle = _context.Bus.GetNextCpuBatchWakeCandidateCycle(state.Cycles, targetCycle, mask, out var wake);
         LastTraceBatchWakeSource = wake; batchTargetCycle = ClampDeferredCpuBusBatchTarget(state, batchTargetCycle);
-        batchTargetCycle = Math.Clamp(batchTargetCycle, state.Cycles + 1, targetCycle); return batchTargetCycle > state.Cycles;
+		batchTargetCycle = PortableRuntime.ExecutionBoundaryCore.ClampProgress(state.Cycles, targetCycle, batchTargetCycle); return batchTargetCycle > state.Cycles;
     }
     public void AfterPureCpuTraceBatch(long previousCycle, long currentCycle, int instructionCount) => AfterInstructionBatch(previousCycle, currentCycle, instructionCount);
     public bool TryBeginBusAccessTraceBatch(M68kCpuState state, long targetCycle, out long batchTargetCycle)
@@ -49,12 +60,14 @@ internal sealed class RuntimeInstructionBoundary :
     { if (instructionCount <= 0) return; _schedule.AdvanceThrough(previousCycle, currentCycle); var mask = (_context.Cpu.StatusRegister >> 8) & 7; _context.Bus.AdvanceHardwareEventsTo(currentCycle, mask); _context.DispatchInterrupt(); }
     public bool TryFastForwardStoppedInstruction(M68kCpuState state, long targetCycle, out long advancedCycles)
     {
-        advancedCycles = 0; var previous = state.Cycles; if (targetCycle <= previous) return false;
+        advancedCycles = 0;
+        var previous = state.Cycles;
+        if (targetCycle <= previous || !BeforeInstruction()) return false;
         targetCycle = _schedule.GetNextBoundaryCycle(previous, targetCycle);
         var mask = (state.StatusRegister >> 8) & 7; var wake = _context.Bus.GetNextStoppedCpuWakeCandidateCycle(previous, targetCycle, mask);
-        wake = Math.Clamp(wake, previous + 1, targetCycle);
+		wake = PortableRuntime.ExecutionBoundaryCore.ClampProgress(previous, targetCycle, wake);
         wake = _context.Bus.AdvanceStoppedCpuHardwareEventsTo(previous, wake, mask);
-        wake = Math.Clamp(wake, previous + 1, targetCycle);
+		wake = PortableRuntime.ExecutionBoundaryCore.ClampProgress(previous, targetCycle, wake);
         advancedCycles = wake - previous;
         state.Cycles = wake;
         _schedule.AdvanceThrough(previous, wake);
