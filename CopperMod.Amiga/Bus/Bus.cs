@@ -570,10 +570,12 @@ namespace CopperMod.Amiga.Bus
         private uint _nextHostTrapId = 1;
         private readonly AmigaChipset _chipset;
 
+		internal event Action<uint, int>? JitEligibleMemoryWritten;
+
         event Action<uint, int>? IM68kJitBus.JitCodeRangeWritten
         {
-            add { }
-            remove { }
+			add => JitEligibleMemoryWritten += value;
+			remove => JitEligibleMemoryWritten -= value;
         }
 
         public Bus(
@@ -1739,6 +1741,7 @@ namespace CopperMod.Amiga.Bus
             MarkHostTrapStubPages(address);
             InvalidateInstructionFetchWindows();
             RebuildCpuBusBanksForHostGateway(address);
+			JitEligibleMemoryWritten?.Invoke(address, HostGatewayInstructionLength);
             return token;
         }
 
@@ -1772,6 +1775,7 @@ namespace CopperMod.Amiga.Bus
             MarkHostTrapStubPages(address);
             InvalidateInstructionFetchWindows();
             RebuildCpuBusBanksForHostGateway(address);
+			JitEligibleMemoryWritten?.Invoke(address, HostGatewayInstructionLength);
         }
 
         /// <summary>
@@ -1846,6 +1850,7 @@ namespace CopperMod.Amiga.Bus
 
             InvalidateInstructionFetchWindows();
             RebuildCpuBusBanksForHostGateway(address);
+			JitEligibleMemoryWritten?.Invoke(address, HostGatewayInstructionLength);
         }
 
         private uint AllocateHostGatewayToken()
@@ -2869,9 +2874,15 @@ namespace CopperMod.Amiga.Bus
             }
             if (target == AmigaBusAccessTarget.ChipRam &&
                 publicationPhase == M68kInstructionFetchPublicationPhase.CancellableSuccessor &&
-                Paula.GetHighestCpuVisibleInterruptLevel(cycle) >
-                    ((publicationContext.StatusRegister >> 8) & 0x07))
+                (publicationContext.PendingInternalCycles > 0 ||
+                    Paula.GetHighestCpuVisibleInterruptLevel(cycle) >
+                        ((publicationContext.StatusRegister >> 8) & 0x07)))
             {
+                // A taken Bcc publishes its successor from the live branch
+                // transition. Preserve a DMA word that has already started,
+                // but do not let scheduler look-ahead turn later Copper words
+                // into an indivisible reservation. The successor remains
+                // cancellable until this ordinary arbitration grants it.
                 var successorRequestedCycle = cycle;
                 var result = AdvanceBranchSuccessorCpuInstructionFetch(
                     target,
@@ -3255,11 +3266,9 @@ namespace CopperMod.Amiga.Bus
 
             if (ciaRegister is >= 0x04 and <= 0x07)
             {
-                // CIA timer counters are continuously driven by E-clock. The
-                // scheduler normally publishes timer state at underflows, but
-                // a counter read is an earlier observable boundary and must
-                // materialize the intermediate decrements through its bus
-                // sample cycle.
+                // CIA timer counters are driven by E-clock. A counter read is
+                // a CPU-visible grant boundary, so materialize decrements
+                // through the sampled bus cycle before returning the value.
                 AdvanceCiaTimersTo(sampleCycle);
             }
 
@@ -3903,6 +3912,7 @@ namespace CopperMod.Amiga.Bus
         internal void WriteHostByte(uint address, byte value)
         {
             WriteRawByte(address, value, GetHostWriteCycle(), default(HostWritePolicy));
+            NotifyHostCodeRangeWritten(address, sizeof(byte));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -4123,9 +4133,9 @@ namespace CopperMod.Amiga.Bus
             if (kind == HostAcceleratorMemoryKind.RtgVram)
             {
                 _rtgVram.CompleteDirectWrite(address, byteCount);
-                return;
             }
 
+            NotifyHostCodeRangeWritten(address, byteCount);
         }
 
         private sealed class HostAcceleratorAccessScope : IDisposable
@@ -4146,12 +4156,23 @@ namespace CopperMod.Amiga.Bus
         internal void WriteHostWord(uint address, ushort value)
         {
             WriteRawWord(address, value, GetHostWriteCycle(), default(HostWritePolicy));
+            NotifyHostCodeRangeWritten(address, sizeof(ushort));
         }
 
         internal void WriteHostLong(uint address, uint value)
         {
             var cycle = GetHostWriteCycle();
             WriteRawLong(address, value, cycle, cycle, default(HostWritePolicy));
+            NotifyHostCodeRangeWritten(address, sizeof(uint));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void NotifyHostCodeRangeWritten(uint address, int byteCount)
+        {
+            if (byteCount > 0)
+            {
+                JitEligibleMemoryWritten?.Invoke(address, byteCount);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -7272,6 +7293,7 @@ namespace CopperMod.Amiga.Bus
 
             if (ciaRegister is >= 0x04 and <= 0x07)
             {
+                // Keep JIT reads in lockstep with interpreter CIA timing.
                 AdvanceCiaTimersTo(grantedCycle);
             }
 

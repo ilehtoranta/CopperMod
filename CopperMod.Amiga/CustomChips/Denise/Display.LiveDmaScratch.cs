@@ -2077,8 +2077,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
                     else if (!bfdReleasedByTermination &&
                         readyAtWakeCycle &&
-                        beamSatisfiedAtBlitterTermination)
+                        beamSatisfiedAtBlitterTermination &&
+                        (_copper.WaitFirst & 0x00FE) is >= 0x0020 and < 0x00E0)
                     {
+                        // Keep scratch execution aligned with live Copper:
+                        // only an ordinary mid-line beam wake exposes the
+                        // internal restart phase in presentation.
                         _copper.PendingWaitPresentationPixelOffset =
                             CopperWaitReadyPresentationPixelOffset;
                     }
@@ -2279,6 +2283,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         reuseExhaustedAdjacentCarryPhase &&
                         !restartAfterDataFetchStop &&
                         !presentNextMoveFromReusedWaitTail;
+                    _copper.RecordWaitControlTransition(
+                        comparisonStartCycle,
+                        waitCycle,
+                        resumeCycle);
                     if (resumeCycle > targetCycle)
                     {
                         _copper.ArmWaitRestart(
@@ -2291,6 +2299,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         _copper.PendingWaitTailPresentationX = waitTailPresentationX;
                         _copper.PendingWaitPaletteTailX =
                             _display.GetCopperWaitPaletteTailX(_copper.WaitFirst);
+                        _copper.PendingWaitPaletteWrapX =
+                            _display.GetCopperWaitPaletteWrapX(_copper.WaitFirst);
+                        _copper.PendingWaitPaletteWrapSawCurrentLine = false;
                         return true;
                     }
 
@@ -2304,6 +2315,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     _copper.PendingWaitTailPresentationX = waitTailPresentationX;
                     _copper.PendingWaitPaletteTailX =
                         _display.GetCopperWaitPaletteTailX(_copper.WaitFirst);
+                    _copper.PendingWaitPaletteWrapX =
+                        _display.GetCopperWaitPaletteWrapX(_copper.WaitFirst);
+                    _copper.PendingWaitPaletteWrapSawCurrentLine = false;
                     return true;
                 }
 
@@ -2443,6 +2457,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private bool ApplyScratchCopperMove(ushort register, ushort value, long cycle)
             {
+                if (register < 0x0180 || register >= 0x01C0)
+                {
+                    _copper.PendingWaitPaletteWrapX = -1;
+                    _copper.PendingWaitPaletteWrapSawCurrentLine = false;
+                }
+
                 if (register == 0x096)
                 {
                     PreserveStartedBitplaneRow(cycle);

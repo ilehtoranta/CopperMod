@@ -6,6 +6,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -14,6 +16,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
 {
     internal sealed partial class Display
     {
+        private static int _debugPresentationTraceCount;
+        private static readonly bool DebugPresentationEnabled =
+            Environment.GetEnvironmentVariable("COPPER_DEBUG_PRESENTATION") == "1";
+        private static readonly bool DebugPresentationPixelEnabled =
+            Environment.GetEnvironmentVariable("COPPER_DEBUG_PRESENTATION_PIXEL") == "1";
+        private static readonly bool DebugGeometryEnabled =
+            Environment.GetEnvironmentVariable("COPPER_DEBUG_GEOM") == "1";
+        private static readonly bool UnsafeCpuChipFetchPresentationTraceEnabled =
+            Environment.GetEnvironmentVariable("COPPER_CHIP_FETCH_UNSAFE_PRESENTATION_TRACE") == "1";
         private bool _unsafeCpuChipFetchPresentationTraceEnabled;
 
         public void BeginPresentationFrame(
@@ -52,8 +63,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _presentationDuplicatedRowCount = 0;
             _presentationDuplicatedByteCount = 0;
             _unsafeCpuChipFetchPresentationTraceEnabled =
-                Environment.GetEnvironmentVariable(
-                    "COPPER_CHIP_FETCH_UNSAFE_PRESENTATION_TRACE") == "1";
+                UnsafeCpuChipFetchPresentationTraceEnabled;
             _boundPresentationActive = true;
             _boundPresentationCompleted = false;
             _renderFrameStartCycle = frameStartCycle;
@@ -448,10 +458,40 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
+            if (DebugPresentationPixelEnabled &&
+                row is 22 or 30 or 38 or 86 or 94 or 102 or 110 or 118 or 126 or 158 or 166 or 174 or 182 or 190)
+            {
+                try
+                {
+                    var offset = ((row * 2) * _renderWidth) + 676;
+                    File.AppendAllText(
+                        "TestResults/presentation-pixel-debug.txt",
+                        $"playfield row={row} x676={target[offset]:X8} x674={target[offset - 2]:X8} x684={target[offset + 8]:X8}\n");
+                }
+                catch
+                {
+                }
+            }
+
             CaptureRenderedCopperPixelTrace(target, row, stage: 0);
 
             DuplicatePreparedPresentationRow(target, row, duplicateXStart, duplicateXStop);
             RenderTimelineSpritesRow(target, _displayTimeline, row);
+
+            if (DebugPresentationPixelEnabled &&
+                row is 22 or 30 or 38 or 86 or 94 or 102 or 110 or 118 or 126 or 158 or 166 or 174 or 182 or 190)
+            {
+                try
+                {
+                    var offset = ((row * 2) * _renderWidth) + 676;
+                    File.AppendAllText(
+                        "TestResults/presentation-pixel-debug.txt",
+                        $"sprites row={row} x676={target[offset]:X8} x674={target[offset - 2]:X8} x684={target[offset + 8]:X8}\n");
+                }
+                catch
+                {
+                }
+            }
             CaptureRenderedCopperPixelTrace(target, row, stage: 1);
             CaptureRenderedCopperPixelTrace(target, row, stage: 2, secondOutputRow: true);
             return true;
@@ -564,10 +604,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         out duplicateXStop))
                 {
                     _lastTimelineFastPathRowCount++;
+                    DebugPresentationPixelPath(row, "lowres-fast");
                     return true;
                 }
 
                 _lastTimelineFastPathMissCount++;
+                DebugPresentationPixelPath(row, "lowres-miss");
                 var renderedSegment = false;
                 for (var segmentIndex = 0; segmentIndex < line.SegmentCount; segmentIndex++)
                 {
@@ -587,7 +629,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     if (!TryRenderTimelineCachedBitplanes(target, row, segment, state, _displayTimeline))
                     {
                         _lastTimelineMissingBitplaneFallbackCount++;
+                        DebugPresentationPixelPath(row, "cached-miss");
                         RenderBitplanes(target, row, row + 1, segment.XStart, segment.XStop);
+                    }
+                    else
+                    {
+                        DebugPresentationPixelPath(row, "cached-ok");
                     }
 
                     renderedSegment = true;
@@ -619,6 +666,23 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             FillRows(target, row, row + 1);
             return true;
+        }
+
+        private void DebugPresentationPixelPath(int row, string path)
+        {
+            if (!DebugPresentationPixelEnabled ||
+                row is not (22 or 30 or 38 or 86 or 94 or 102 or 110 or 118 or 126 or 158 or 166 or 174 or 182 or 190))
+            {
+                return;
+            }
+
+            try
+            {
+                File.AppendAllText("TestResults/presentation-pixel-debug.txt", $"path row={row} {path}\n");
+            }
+            catch
+            {
+            }
         }
 
         private bool TryRenderTimelineBorderLineFastPath(
@@ -663,6 +727,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
 
                 var state = timeline.GetState(segment.StateIndex);
+                // Border-only lines still carry the per-segment Denise vertical
+                // window state.  Apply it before composing the segment so a
+                // closed display window remains blank even when the fast path
+                // bypasses the general stateful renderer.
+                ApplyTimelineStateForRendering(
+                    state,
+                    copyBitplaneState: false,
+                    copyPaletteState: false);
+                _displayWindowVerticallyOpen = state.DisplayWindowVerticallyOpen;
+                _displayWindowStateLine = StandardVStart + row + 1;
+                _currentRenderRow = row;
                 CaptureLivePaletteFrameSpan(row, segment.XStart, segment.XStop, state);
                 FillTimelineLowResolutionSegment(
                     target,
@@ -853,6 +928,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return true;
             }
 
+            if (DebugPresentationEnabled &&
+                row is 22 or 30 or 38 or 46 or 54 or 62 or 86 or 94 or 102 or 110 or 118 or 126 or 158 or 166 or 174 or 182 or 190 &&
+                _debugPresentationTraceCount < 200)
+            {
+                TracePresentationSegments(row, line, timeline);
+            }
+
             var indexState = firstState;
             // The prepared path reads all bitplane indexing state directly from
             // indexState. Copying the four eight-plane arrays for every palette
@@ -919,6 +1001,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         segment.XStart,
                         segment.XStop,
                         state.PaletteSnapshotIndex);
+                }
+                if (DebugPresentationPixelEnabled &&
+                    row is 22 or 30 or 38 or 86 or 94 or 102 or 110 or 118 or 126 or 158 or 166 or 174 or 182 or 190)
+                {
+                    try
+                    {
+                        File.AppendAllText(
+                            "TestResults/presentation-pixel-debug.txt",
+                            $"rowwrite row={row} seg={segment.XStart}-{segment.XStop} data={dataFirstX}-{dataLastX} pal={state.PaletteSnapshotIndex} src337={_timelineFastPathColorIndexes[337]:X2} src338={_timelineFastPathColorIndexes[338]:X2} c337={_livePaletteSnapshots.GetConvertedColor(state.PaletteSnapshotIndex, _timelineFastPathColorIndexes[337]):X8} c338={_livePaletteSnapshots.GetConvertedColor(state.PaletteSnapshotIndex, _timelineFastPathColorIndexes[338]):X8}\n");
+                    }
+                    catch
+                    {
+                    }
                 }
                 WritePreparedTimelineLowResFastBitplanes(
                     bgra,
@@ -1081,6 +1176,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var dataOriginX = originX + normalPlayfieldScroll;
             var firstX = Math.Max(clipLeft, dataOriginX);
             var lastX = Math.Min(clipRight, dataOriginX + fetchPixels);
+            if (DebugGeometryEnabled &&
+                row is 22 or 30 or 38)
+            {
+                try
+                {
+                    File.AppendAllText(
+                        "TestResults/bitplane-geom-debug.txt",
+                        $"prep row={row} seg={xStart}-{xStop} bpl=0x{state.Bplcon0:X4} planes={planeCount}/{state.PlaneCount} fetch={fetchWords} res={state.Resolution} win={windowXStart}-{windowXStop}/{windowYStart}-{windowYStop} origin={originX} fetchpx={fetchPixels} clip={clipLeft}-{clipRight} data={firstX}-{lastX}\n");
+                }
+                catch
+                {
+                }
+            }
             if (lastX <= firstX)
             {
                 return true;
@@ -1228,6 +1336,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int paletteSnapshotIndex)
         {
             var source = _timelineFastPathColorIndexes;
+            if (DebugPresentationPixelEnabled &&
+                xStart <= 338 && xStop >= 342)
+            {
+                TracePreparedLowResolutionColorRun(
+                    source,
+                    xStart,
+                    xStop,
+                    scale,
+                    paletteSnapshotIndex);
+            }
             var destinationIndex = 0;
             var x = xStart;
             if (Vector256.IsHardwareAccelerated && scale == 1)
@@ -1266,6 +1384,47 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var pixel = _livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[x]);
                 output.Slice(destinationIndex, scale).Fill(pixel);
                 destinationIndex += scale;
+            }
+        }
+
+        private void TracePresentationSegments(
+            int row,
+            DisplayLineTimeline line,
+            DisplayFrameTimeline timeline)
+        {
+            var trace = $"row={row} segments=" + string.Join(",", Enumerable.Range(0, line.SegmentCount).Select(index =>
+            {
+                var segment = line.Segments[index];
+                var state = timeline.GetState(segment.StateIndex);
+                return $"{segment.XStart}-{segment.XStop}:diw={state.DeniseDisplayWindow.HorizontalStart:X3}-{state.DeniseDisplayWindow.HorizontalStop:X3}:bpl={state.Bplcon0:X4}:pal={state.PaletteSnapshotIndex}";
+            })) + "\n";
+            try
+            {
+                File.AppendAllText("TestResults/presentation-debug.txt", trace);
+                _debugPresentationTraceCount++;
+            }
+            catch
+            {
+            }
+        }
+
+        private void TracePreparedLowResolutionColorRun(
+            byte[] source,
+            int xStart,
+            int xStop,
+            int scale,
+            int paletteSnapshotIndex)
+        {
+            try
+            {
+                File.AppendAllText(
+                    "TestResults/presentation-pixel-debug.txt",
+                    $"write x={xStart}-{xStop} scale={scale} pal={paletteSnapshotIndex} src330-342=" +
+                    string.Join(",", Enumerable.Range(330, 13).Select(index => source[index].ToString("X2"))) +
+                    $" colors={_livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[337]):X8},{_livePaletteSnapshots.GetConvertedColor(paletteSnapshotIndex, source[338]):X8}\n");
+            }
+            catch
+            {
             }
         }
 
@@ -1316,6 +1475,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var clipRight = Math.Min(Math.Min(LowResWidth, windowXStop), segment.XStop);
             var rowStart = Math.Max(0, windowYStart);
             var rowStop = Math.Min(ActiveLowResOutputHeight, windowYStop);
+            if (DebugGeometryEnabled &&
+                row is 22 or 30 or 38)
+            {
+                try
+                {
+                    File.AppendAllText(
+                        "TestResults/bitplane-geom-debug.txt",
+                        $"row={row} seg={segment.XStart}-{segment.XStop} bpl=0x{state.Bplcon0:X4} planes={planeCount}/{state.PlaneCount} fetch={fetchWords} res={state.Resolution} win={windowXStart}-{windowXStop}/{windowYStart}-{windowYStop} origin={originX} draw={drawPixels} clip={clipLeft}-{clipRight} last={Math.Min(clipRight, originX + drawPixels + (highResolution ? 8 : 16))}\n");
+                }
+                catch
+                {
+                }
+            }
             if (row < rowStart || row >= rowStop || clipRight <= clipLeft)
             {
                 return true;
@@ -1676,6 +1848,25 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             timeline.RecordPlanarChunkDecode();
             chunk = DecodePlanarChunk(words, planeHasRowMask, planeCount, dualPlayfield);
+            if (DebugGeometryEnabled &&
+                row == 22 && word >= 17)
+            {
+                try
+                {
+                    File.AppendAllText(
+                        "TestResults/bitplane-geom-debug.txt",
+                        $"word row={row} word={word} words=" +
+                        string.Join(",", new[]
+                        {
+                            words[0].ToString("X4"), words[1].ToString("X4"),
+                            words[2].ToString("X4"), words[3].ToString("X4"),
+                            words[4].ToString("X4"), words[5].ToString("X4")
+                        }.AsSpan(0, planeCount).ToArray()) + "\n");
+                }
+                catch
+                {
+                }
+            }
             return true;
         }
 
@@ -2123,7 +2314,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             if (pixelDelay > 0 &&
                 horizontal < 0xC0 &&
-                GetAgnusBitplaneFetchPlaneCount() == 4 &&
+                GetAgnusBitplaneFetchPlaneCount() is 4 or 5 &&
                 _liveCopper.WaitTailPalettePixelOffset != 0)
             {
                 return Math.Clamp(
@@ -2175,6 +2366,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ushort waitFirst,
             byte satisfiedWaitRunCount,
             bool waitRunBeganWithBlockingComparison,
+            long comparisonStartCycle,
+            long restartCycle,
             long grantedCycle,
             long requestedCycle)
         {
@@ -2185,7 +2378,65 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     : 0;
             if (!waitRunBeganWithBlockingComparison)
             {
-                return physicallyContendedOffset;
+                GetCopperBeamPositionForCycle(
+                    _liveFrameStartCycle,
+                    comparisonStartCycle,
+                    out var comparisonLine,
+                    out var comparisonHorizontal);
+                var targetLine = waitFirst >> 8;
+                var targetHorizontal = waitFirst & 0x00FE;
+                var comparisonLateness = comparisonHorizontal - targetHorizontal;
+                if ((comparisonLine & 0xFF) == targetLine &&
+                    comparisonLateness is >= 0 and <= 1)
+                {
+                    // The comparator became true on the immediately preceding
+                    // phase. The physical MOVE grant already contains the
+                    // complete visible displacement.
+                    return 0;
+                }
+
+                var restartHorizontal = GetCopperHorizontalForCycle(
+                    _liveFrameStartCycle,
+                    restartCycle);
+                var presentationPhaseStart = _dataFetchWindow.Start + 64;
+                var presentationPhaseStop = _dataFetchWindow.Stop - 32;
+                if (restartHorizontal < presentationPhaseStart ||
+                    restartHorizontal >= presentationPhaseStop)
+                {
+                    return physicallyContendedOffset;
+                }
+
+                var restartDecision = IsBitplaneRgaDecisionPhase(restartCycle);
+                var restartIncoming = IsBitplaneRgaIncomingPhase(restartCycle);
+                var restartOutput = IsBitplaneRgaOutputPhase(restartCycle);
+                var restartPhaseOffset = 0;
+                if (!(restartDecision && restartIncoming && restartOutput))
+                {
+                    if (restartIncoming && (restartDecision || restartOutput))
+                    {
+                        restartPhaseOffset =
+                            -2 * CopperWaitReadyPresentationPixelOffset;
+                    }
+                    else if (restartIncoming)
+                    {
+                        restartPhaseOffset =
+                            -CopperWaitReadyPresentationPixelOffset;
+                    }
+                    else if (restartDecision && restartOutput)
+                    {
+                        var fetchOffset = restartHorizontal - _dataFetchWindow.Start;
+                        var fetchWord = fetchOffset / 8;
+                        var fetchSlot = fetchOffset & 0x0007;
+                        restartPhaseOffset = fetchSlot switch
+                        {
+                            3 => -2 * CopperWaitReadyPresentationPixelOffset,
+                            7 when (fetchWord & 1) != 0
+                                => -CopperWaitReadyPresentationPixelOffset,
+                            _ => 0
+                        };
+                    }
+                }
+                return physicallyContendedOffset + restartPhaseOffset;
             }
 
             var rgaPhase = waitFirst & 0x0006;
@@ -2199,8 +2450,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             else if ((waitFirst & 0x0080) != 0)
             {
                 // Once the horizontal comparator's high bit is set, later
-                // WAITs establish a new visible phase. Any displacement then
-                // comes from the MOVE data grant itself.
+                // blocking WAITs establish a new visible phase. Any
+                // displacement then comes from the MOVE data grant itself.
                 controlPhaseOffset = 0;
             }
             else

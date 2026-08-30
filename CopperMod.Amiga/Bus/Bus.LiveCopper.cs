@@ -34,7 +34,8 @@ namespace CopperMod.Amiga.Bus
                 liveRequest.RequestedCycle,
                 isWrite: false);
             var slotCycle = liveRequest.EarliestEligibleCycle;
-            var preservePhysicalPhaseAcrossLine = liveRequest.Channel == 2;
+            var preservePhysicalPhaseAcrossLine =
+                liveRequest.Channel is 2 or 3;
             var granted = _hrmSlotEngine.TryReserveCopperDmaWordExactSlot(
                 address,
                 liveRequest.RequestedCycle,

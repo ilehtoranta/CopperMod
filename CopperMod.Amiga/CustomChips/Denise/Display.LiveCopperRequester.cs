@@ -631,8 +631,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
             else if (!bfdReleasedByTermination &&
                 readyAtWakeCycle &&
-                beamSatisfiedAtBlitterTermination)
+                beamSatisfiedAtBlitterTermination &&
+                (_liveCopper.WaitFirst & 0x00FE) is >= 0x0020 and < 0x00E0)
             {
+                // Mid-line beam wake exposes the internal Copper restart
+                // phase in Denise's presentation stream. Early and
+                // end-of-line waits retain their physical completion phase.
                 _liveCopper.PendingWaitPresentationPixelOffset =
                     CopperWaitReadyPresentationPixelOffset;
             }
@@ -861,6 +865,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 reuseExhaustedAdjacentCarryPhase &&
                 !restartAfterDataFetchStop &&
                 !presentNextMoveFromReusedWaitTail;
+            _liveCopper.RecordWaitControlTransition(
+                comparisonStartCycle,
+                waitCycle,
+                resumeCycle);
             CaptureCopperWaitTransition(
                 comparisonStartCycle,
                 resumeCycle,
@@ -880,6 +888,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 waitTailPresentationX;
             _liveCopper.PendingWaitPaletteTailX =
                 GetCopperWaitPaletteTailX(_liveCopper.WaitFirst);
+            _liveCopper.PendingWaitPaletteWrapX =
+                GetCopperWaitPaletteWrapX(_liveCopper.WaitFirst);
+            _liveCopper.PendingWaitPaletteWrapSawCurrentLine = false;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1011,6 +1022,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     value,
                     dataCycle,
                     applyHardwareSideEffects: true);
+                if (register < 0x0180 || register >= 0x01C0)
+                {
+                    // Keep requester and live execution on the same
+                    // late-WAIT palette-tail lifetime: any intervening
+                    // control MOVE consumes the pending phase.
+                    _liveCopper.PendingWaitPaletteTailX = -1;
+                    _liveCopper.PendingWaitPaletteWrapX = -1;
+                    _liveCopper.PendingWaitPaletteWrapSawCurrentLine = false;
+                }
                 if (affectsDisplay)
                 {
                     CaptureCopperDisplayWrite(dataCycle, register, value);

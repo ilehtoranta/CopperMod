@@ -444,8 +444,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
                 else if (!bfdReleasedByTermination &&
                     readyAtWakeCycle &&
-                    beamSatisfiedAtBlitterTermination)
+                    beamSatisfiedAtBlitterTermination &&
+                    (_liveCopper.WaitFirst & 0x00FE) is >= 0x0020 and < 0x00E0)
                 {
+                    // Mid-line beam wake exposes the internal Copper restart
+                    // phase in Denise's presentation stream. Early and
+                    // end-of-line waits retain their physical completion phase.
                     _liveCopper.PendingWaitPresentationPixelOffset =
                         CopperWaitReadyPresentationPixelOffset;
                 }
@@ -644,6 +648,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     reuseExhaustedAdjacentCarryPhase &&
                     !restartAfterDataFetchStop &&
                     !presentNextMoveFromReusedWaitTail;
+                _liveCopper.RecordWaitControlTransition(
+                    comparisonStartCycle,
+                    waitCycle,
+                    resumeCycle);
                 CaptureCopperWaitTransition(
                     comparisonStartCycle,
                     resumeCycle,
@@ -664,6 +672,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     _liveCopper.PendingWaitTailPresentationX = waitTailPresentationX;
                     _liveCopper.PendingWaitPaletteTailX =
                         GetCopperWaitPaletteTailX(_liveCopper.WaitFirst);
+                    _liveCopper.PendingWaitPaletteWrapX =
+                        GetCopperWaitPaletteWrapX(_liveCopper.WaitFirst);
+                    _liveCopper.PendingWaitPaletteWrapSawCurrentLine = false;
                     InvalidateLiveCopperWaitCycle();
                     return;
                 }
@@ -678,6 +689,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _liveCopper.PendingWaitTailPresentationX = waitTailPresentationX;
                 _liveCopper.PendingWaitPaletteTailX =
                     GetCopperWaitPaletteTailX(_liveCopper.WaitFirst);
+                _liveCopper.PendingWaitPaletteWrapX =
+                    GetCopperWaitPaletteWrapX(_liveCopper.WaitFirst);
+                _liveCopper.PendingWaitPaletteWrapSawCurrentLine = false;
                 InvalidateLiveCopperWaitCycle();
                 return;
             }
@@ -1165,11 +1179,46 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private int GetCopperWaitPaletteTailX(ushort waitFirst)
         {
+            // The comparison masks the low bit, so a WAIT encoded as $D9
+            // becomes the physical h=$D8 tail phase. Treat that phase as
+            // palette-tail eligible; excluding it leaves the final four-plane
+            // write one slot early on the current line.
+            const int firstPaletteWrapHorizontal = 0xD8;
+            const int finalCopperRequestHorizontal = 0xE0;
+            var targetHorizontal = waitFirst & 0x00FE;
+            var planeCount = GetAgnusBitplaneFetchPlaneCount();
+            if (targetHorizontal < firstPaletteWrapHorizontal ||
+                planeCount is < 4 or > 6 ||
+                (planeCount >= 5 && targetHorizontal != firstPaletteWrapHorizontal))
+            {
+                return -1;
+            }
+
+            // With five or six active bitplanes the tail RGA phase remains
+            // visible for one additional low-resolution pixel pair after the
+            // final Copper request. Four-plane output has the earlier phase
+            // represented by the -4 term below.
+            var planeTailAdjustment = planeCount >= 5 ? 0 : -4;
+            return Math.Clamp(
+                LowResWidth + planeTailAdjustment -
+                ((finalCopperRequestHorizontal - targetHorizontal) * 2) +
+                (targetHorizontal >= 0xDE ? 2 : 0),
+                0,
+                LowResWidth);
+        }
+
+        private int GetCopperWaitPaletteWrapX(ushort waitFirst)
+        {
+            // Five-plane late waits retain the outgoing Denise phase when the
+            // next palette data word is granted after refresh. This coordinate
+            // belongs only to the predecessor-row stitch; the current-row
+            // write still uses its physical transfer position.
             const int firstPaletteWrapHorizontal = 0xDA;
             const int finalCopperRequestHorizontal = 0xE0;
             var targetHorizontal = waitFirst & 0x00FE;
-            if (targetHorizontal < firstPaletteWrapHorizontal ||
-                GetAgnusBitplaneFetchPlaneCount() != 4)
+            if (GetAgnusBitplaneFetchPlaneCount() != 5 ||
+                targetHorizontal < firstPaletteWrapHorizontal ||
+                targetHorizontal > finalCopperRequestHorizontal)
             {
                 return -1;
             }
@@ -1266,6 +1315,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 CommitLateBitplaneRgaCollisionsOnDisable(register, value, dataCycle);
                 ApplyCopperMove(register, value, dataCycle, applyHardwareSideEffects: true);
+                if (register < 0x0180 || register >= 0x01C0)
+                {
+                    // The late-WAIT palette tail belongs to the first palette
+                    // MOVE after the comparison. A control MOVE (DDF, BPLCON,
+                    // pointer, or modulo) consumes that pending phase before a
+                    // later palette write can observe it.
+                    _liveCopper.PendingWaitPaletteTailX = -1;
+                    _liveCopper.PendingWaitPaletteWrapX = -1;
+                    _liveCopper.PendingWaitPaletteWrapSawCurrentLine = false;
+                }
                 if (affectsDisplay)
                 {
                     CaptureCopperDisplayWrite(dataCycle, register, value);

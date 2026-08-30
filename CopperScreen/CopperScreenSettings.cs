@@ -526,6 +526,8 @@ internal static class CopperScreenProfileStore
 		public string? Version { get; set; } = "1.3";
 
 		public string? Path { get; set; }
+
+		public string? MemoryAllocator { get; set; }
 	}
 
 	private sealed class MediaFile

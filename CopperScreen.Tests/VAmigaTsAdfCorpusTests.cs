@@ -14,11 +14,17 @@ public sealed class VAmigaTsAdfCorpusTests
 	private const string CompareRawEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_COMPARE_RAW";
 	private const string DumpRawEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_DUMP_RAW";
 	private const string HardwareSpecializationEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_HARDWARE_SPECIALIZATION";
+	private const string AgnusArbitrationEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_AGNUS_ARBITRATION";
+	private const string DisableDeferredCpuBatchEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_DISABLE_DEFERRED_CPU_BATCH";
+	private const string DisableDeferredCpuCompositionEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_DISABLE_DEFERRED_CPU_COMPOSITION";
+	private const string OpcodePlanDispatchEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_OPCODE_PLAN_DISPATCH";
+	private const string ForceGcBetweenCasesEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_FORCE_GC_BETWEEN_CASES";
 	private const string StopOnFirstFailureEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_STOP_ON_FIRST_FAILURE";
 	private const string TraceWritesEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_TRACE_WRITES";
 	private const string TracePresentationEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_TRACE_PRESENTATION";
 	private const string SkipRawOffsetScanEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_SKIP_RAW_OFFSET_SCAN";
 	private const string TraceCycleBoundariesOnlyEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_TRACE_CYCLE_BOUNDARIES_ONLY";
+	private const string AgnusLiveRequesterStageEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_AGNUS_LIVE_STAGE";
 	private const string CaseTimeoutSecondsEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_CASE_TIMEOUT_SECONDS";
 	private const string ProgressPathEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_PROGRESS_PATH";
 	private const string ResultsPathEnvironmentVariable = "COPPER_AMIGA_VAMIGATS_RESULTS_PATH";
@@ -284,6 +290,17 @@ public sealed class VAmigaTsAdfCorpusTests
 	}
 
 	[Fact]
+	public void CorpusEmulatorOptionsConfigureDf0Writable()
+	{
+		var options = CreateEmulatorOptions(
+			"vamigats-fixture.adf",
+			hardwareSpecialization: false,
+			kickstartRomPath: null);
+
+		Assert.False(options.DriveWriteProtected[0]);
+	}
+
+	[Fact]
 	public void SelectedVAmigaTsAdfImagesRunWithoutFatalBootStatusWhenCorpusIsAvailable()
 	{
 		var root = ResolveVAmigaTsRoot();
@@ -301,10 +318,11 @@ public sealed class VAmigaTsAdfCorpusTests
 		var compareRaw = IsEnabled(Environment.GetEnvironmentVariable(CompareRawEnvironmentVariable));
 		var dumpRaw = IsEnabled(Environment.GetEnvironmentVariable(DumpRawEnvironmentVariable));
 		var hardwareSpecialization = IsEnabled(Environment.GetEnvironmentVariable(HardwareSpecializationEnvironmentVariable));
+		var kickstartRomPath = ResolveKickstartRomPath();
 		var stopOnFirstFailure = IsEnabled(Environment.GetEnvironmentVariable(StopOnFirstFailureEnvironmentVariable));
 		var traceWrites = IsEnabled(Environment.GetEnvironmentVariable(TraceWritesEnvironmentVariable));
 		var tracePresentation = IsEnabled(Environment.GetEnvironmentVariable(TracePresentationEnvironmentVariable));
-		var kickstartRomPath = ResolveKickstartRomPath();
+		var agnusLiveRequesterStage = ResolveAgnusLiveRequesterStage();
 		var caseTimeout = ResolveCaseTimeout();
 		var progressPath = ResolveOptionalOutputPath(ProgressPathEnvironmentVariable);
 		var resultsPath = ResolveOptionalOutputPath(ResultsPathEnvironmentVariable);
@@ -324,6 +342,7 @@ public sealed class VAmigaTsAdfCorpusTests
 				hardwareSpecialization,
 				traceWrites,
 				tracePresentation,
+				agnusLiveRequesterStage,
 				kickstartRomPath,
 				caseTimeout,
 				frame => WriteProgress(
@@ -340,6 +359,12 @@ public sealed class VAmigaTsAdfCorpusTests
 				progressPath,
 				$"END {caseNumber}/{cases.Count} {outcome} {relativePath} frames={result.Frames} elapsed={stopwatch.Elapsed:c}");
 			AppendResult(resultsPath, caseNumber, cases.Count, result, stopwatch.Elapsed);
+			if (IsEnabled(Environment.GetEnvironmentVariable(ForceGcBetweenCasesEnvironmentVariable)))
+			{
+				GC.Collect();
+				GC.WaitForPendingFinalizers();
+				GC.Collect();
+			}
 
 			if (result.Failure != null)
 			{
@@ -364,11 +389,22 @@ public sealed class VAmigaTsAdfCorpusTests
 		bool hardwareSpecialization,
 		bool traceWrites,
 		bool tracePresentation,
+		int agnusLiveRequesterStage,
 		string? kickstartRomPath,
 		TimeSpan caseTimeout,
 		Action<int>? heartbeat)
 	{
 		var caseStopwatch = Stopwatch.StartNew();
+		var previousOpcodePlanDispatch = M68kCoreFactory.M68000OpcodePlanDispatch;
+		M68kCoreFactory.M68000OpcodePlanDispatch = ResolveOpcodePlanDispatch(previousOpcodePlanDispatch);
+		Queue<M68kInstructionRetirementTrace>? vprobeInstructionRetirements = null;
+		var waitbltGuestExecutionObserved = false;
+		var waitbltUnmappedRetirementObserved = false;
+		M68kInstructionRetirementTrace? waitbltFirstMainLoopRetirement = null;
+		var waitbltStartupTail = new Queue<M68kInstructionRetirementTrace>(64);
+		M68kInstructionRetirementTrace[]? waitbltStartupRetirements = null;
+		string? waitbltStartupBusLedger = null;
+		var waitbltFirstMainLoopRetirements = new List<M68kInstructionRetirementTrace>(8);
 		var adfPath = Path.Combine(root, NormalizeRelativePath(relativePath));
 		if (!File.Exists(adfPath))
 		{
@@ -377,19 +413,49 @@ public sealed class VAmigaTsAdfCorpusTests
 
 		try
 		{
-			var args = CreateEmulatorArgs(adfPath, hardwareSpecialization, kickstartRomPath);
-			using var emulator = CopperScreenEmulator.Create(
-				args,
-				AppContext.BaseDirectory);
+			var startupOptions = CreateEmulatorOptions(
+				adfPath,
+				hardwareSpecialization,
+				kickstartRomPath);
+			if (kickstartRomPath != null)
+			{
+				Assert.True(startupOptions.Profile.UsesKickstartRom);
+				Assert.Equal(Path.GetFullPath(kickstartRomPath), startupOptions.KickstartRomPath);
+				Assert.Null(startupOptions.Error);
+			}
+			using var emulator = agnusLiveRequesterStage != 0
+				? CopperScreenEmulator.CreateForAgnusLiveRequesterStageTests(
+					startupOptions,
+					agnusLiveRequesterStage)
+				: CopperScreenEmulator.Create(startupOptions);
+			if (agnusLiveRequesterStage != 0)
+			{
+				var liveBus = GetMachine(emulator).Bus;
+				Assert.Equal(
+					agnusLiveRequesterStage >= 1,
+					liveBus.AgnusLiveDisplayLedgerEnabled);
+				Assert.Equal(
+					agnusLiveRequesterStage >= 2,
+					liveBus.AgnusLiveCopperEnabled);
+				Assert.Equal(
+					agnusLiveRequesterStage >= 3,
+					liveBus.AgnusLiveBlitterEnabled);
+				Assert.Equal(
+					agnusLiveRequesterStage >= 5,
+					liveBus.AgnusLiveDiskEnabled);
+			}
 			Cycle01vDelayedFetchSlotTrace? cycle01vSlotTrace = null;
 			Cycle01vBootProgressTrace? cycle01vBootTrace = null;
 			var isProbe10 = NormalizeCasePath(relativePath).Equals(
 				"Agnus/Registers/VPOS/probe10/probe10.adf",
 				StringComparison.OrdinalIgnoreCase);
-			var isVprobe2 = NormalizeCasePath(relativePath).Equals(
-				"Agnus/Registers/VPOS/vprobe2/vprobe2.adf",
-				StringComparison.OrdinalIgnoreCase);
 			var normalizedCasePath = NormalizeCasePath(relativePath);
+			var isVprobe = normalizedCasePath.Equals(
+					"Agnus/Registers/VPOS/vprobe2/vprobe2.adf",
+					StringComparison.OrdinalIgnoreCase) ||
+				normalizedCasePath.Equals(
+					"Agnus/Registers/VPOS/vprobe3/vprobe3.adf",
+					StringComparison.OrdinalIgnoreCase);
 			var isWaitblt = normalizedCasePath.StartsWith(
 				"Agnus/Copper/Wait/waitblt",
 				StringComparison.OrdinalIgnoreCase);
@@ -420,11 +486,24 @@ public sealed class VAmigaTsAdfCorpusTests
 			{
 				GetMachine(emulator).Bus.CaptureCustomRegisterReadTrace(0x006, 2, 1048576);
 			}
-			else if (traceWrites && isVprobe2)
+			else if (traceWrites && isVprobe)
 			{
 				var machine = GetMachine(emulator);
+				vprobeInstructionRetirements = new Queue<M68kInstructionRetirementTrace>(32768);
+				machine.Bus.SetCpuInstructionRetirementObserver(trace =>
+				{
+					vprobeInstructionRetirements.Enqueue(trace);
+					if (vprobeInstructionRetirements.Count > 32768)
+					{
+						vprobeInstructionRetirements.Dequeue();
+					}
+				});
 				machine.Bus.CaptureCpuChipRamWriteTrace(0x00070000, 0x10000, 16384);
-				machine.Bus.CaptureCustomRegisterReadTrace(0x004, 2, 1048576);
+				// The probe's vertical handoff reads VHPOSR and then performs
+				// a read-modify-write on VPOSR. Capture the pair so the causal
+				// exit boundary is visible in the same gated diagnostic.
+				machine.Bus.CaptureCustomRegisterReadTrace(0x004, 4, 4096);
+				machine.CaptureInterruptDispatchTrace(2048, busPhaseWindowCycles: 128);
 			}
 			else if (traceWrites && isVhpos2)
 			{
@@ -443,9 +522,73 @@ public sealed class VAmigaTsAdfCorpusTests
 				cycle01vBootTrace.Capture(frame: 0);
 				machine.Bus.SetSlotScheduleAuditSink(cycle01vSlotTrace.Capture);
 			}
+			else if (traceWrites &&
+				normalizedCasePath.StartsWith(
+					"Agnus/Blitter/",
+					StringComparison.OrdinalIgnoreCase))
+			{
+				GetMachine(emulator).CaptureInterruptDispatchTrace(
+					2048,
+					busPhaseWindowCycles: 160);
+			}
 			else if (traceWrites && isWaitblt)
 			{
-				GetMachine(emulator).CaptureInterruptDispatchTrace(2048, busPhaseWindowCycles: 160);
+				var machine = GetMachine(emulator);
+				vprobeInstructionRetirements = new Queue<M68kInstructionRetirementTrace>(32768);
+				machine.Bus.SetCpuInstructionRetirementObserver(trace =>
+				{
+					if (waitbltUnmappedRetirementObserved)
+					{
+						return;
+					}
+
+					vprobeInstructionRetirements.Enqueue(trace);
+					if (vprobeInstructionRetirements.Count > 32768)
+					{
+						vprobeInstructionRetirements.Dequeue();
+					}
+
+					var pc = trace.ProgramCounter & 0x00FF_FFFF;
+					if (pc == 0x070218 && !waitbltFirstMainLoopRetirement.HasValue)
+					{
+						waitbltFirstMainLoopRetirement = trace;
+						waitbltStartupRetirements = waitbltStartupTail.Append(trace).ToArray();
+						waitbltStartupBusLedger = FormatBusAccesses(
+							machine.Bus.BusAccesses.Where(access =>
+								access.GrantedCycle >= trace.StartCycle - 48 &&
+								access.GrantedCycle <= trace.RetireCycle + 4));
+					}
+					if (pc == 0x070218 && waitbltFirstMainLoopRetirements.Count < 8)
+					{
+						waitbltFirstMainLoopRetirements.Add(trace);
+					}
+					if (waitbltStartupRetirements == null)
+					{
+						waitbltStartupTail.Enqueue(trace);
+						if (waitbltStartupTail.Count > 64)
+						{
+							waitbltStartupTail.Dequeue();
+						}
+					}
+					waitbltGuestExecutionObserved |=
+						pc >= 0x00F8_0000 ||
+						(trace.StartCycle >= 20_000_000 &&
+							pc is >= 0x070000 and < 0x080000);
+					waitbltUnmappedRetirementObserved =
+						waitbltGuestExecutionObserved &&
+						(pc == 0 ||
+							(pc >= AmigaConstants.A500BootChipRamSize && pc < 0x00F8_0000));
+				});
+				machine.CaptureInterruptDispatchTrace(2048, busPhaseWindowCycles: 160);
+			}
+			else if (traceWrites &&
+				normalizedCasePath.StartsWith(
+					"Paula/Drive/",
+					StringComparison.OrdinalIgnoreCase))
+			{
+				GetMachine(emulator).CaptureInterruptDispatchTrace(
+					4096,
+					busPhaseWindowCycles: 160);
 			}
 
 			var bestNonBlack = 0;
@@ -469,6 +612,9 @@ public sealed class VAmigaTsAdfCorpusTests
 			var probe10InterruptLedger = traceWrites && isProbe10 && compareRaw
 				? new Dictionary<int, string>()
 				: null;
+			var waitbltPresentationFrameLedger = tracePresentation && isWaitblt && compareRaw
+				? new Dictionary<int, string>()
+				: null;
 
 			for (; framesRendered < targetFrames; framesRendered++)
 			{
@@ -483,7 +629,7 @@ public sealed class VAmigaTsAdfCorpusTests
 						caseTimeout);
 				}
 
-				emulator.RenderNextFrame();
+			emulator.RenderNextFrame();
 				var currentFrame = framesRendered + 1;
 				if (currentFrame == 1 || currentFrame % ProgressFrameInterval == 0)
 				{
@@ -509,6 +655,27 @@ public sealed class VAmigaTsAdfCorpusTests
 					Math.Abs(currentFrame - rawComparisonFrame) <= RawFrameProbeRadius)
 				{
 					rawFrameProbes[currentFrame] = emulator.Framebuffer.ToArray();
+					if (waitbltPresentationFrameLedger != null)
+					{
+						var machine = GetMachine(emulator);
+						var display = machine.Bus.Display;
+						var irq = machine.InterruptDispatchTrace.LastOrDefault(dispatch => dispatch.Level == 3);
+						var colorPhase = machine.Bus.CpuBusPhases.LastOrDefault(phase =>
+							(phase.CpuPhase.Address & 0x00FF_FFFE) == 0x00DFF180);
+						var prefetch = irq.PrefetchBefore;
+						waitbltPresentationFrameLedger[currentFrame] = string.Join(
+							"; ",
+							display.RenderedCopperTimelineSegments
+								.Where(segment => segment.Row is 22 or 192 or 214 or 234 or 248)
+								.Select(segment =>
+									$"row={segment.Row} {segment.XStart}-{segment.XStop} " +
+									$"color0=0x{segment.Color0:X3}")) +
+							$" irq={irq.CpuVisibleCycle},{irq.CpuSampleCycle},{irq.AcceptanceCycle},{irq.EntryCompletedCycle}" +
+							$" color={colorPhase.BusAccess?.GrantedCycle ?? -1}" +
+							(prefetch.HasValue
+								? $" pf=q{prefetch.Value.PrefetchCount}/tail{prefetch.Value.InterruptEntryBranchTailAdjustmentCycles}"
+								: string.Empty);
+					}
 					if (rawFrameCaptureTraces != null)
 					{
 						var machine = GetMachine(emulator);
@@ -562,6 +729,73 @@ public sealed class VAmigaTsAdfCorpusTests
 					? [$"TRACE {relativePath}: cycle ADF boundaries {FormatCycleAdfIterationBoundarySummary(GetMachine(emulator), GetMachine(emulator).Bus.CustomRegisterReads.ToArray())}"]
 					: TraceCustomRegisterWrites(relativePath, GetMachine(emulator))
 				: [];
+			if (vprobeInstructionRetirements != null && !traceCycleBoundariesOnly)
+			{
+				diagnostics = diagnostics.Append(
+					FormatVprobeInstructionRetirements(
+						relativePath,
+						GetMachine(emulator),
+						vprobeInstructionRetirements))
+					.ToArray();
+				if (waitbltFirstMainLoopRetirement.HasValue)
+				{
+					var firstLoop = waitbltFirstMainLoopRetirement.Value;
+					diagnostics = diagnostics.Append(
+						$"TRACE {relativePath}: first BRA loop " +
+						$"start={FormatBeam(firstLoop.StartCycle)} " +
+						$"retire={FormatBeam(firstLoop.RetireCycle)} " +
+						$"delta={firstLoop.RetireCycle - firstLoop.StartCycle}")
+						.ToArray();
+					diagnostics = diagnostics.Append(
+						$"TRACE {relativePath}: startup to BRA " +
+						string.Join(' ', (waitbltStartupRetirements ?? []).Select(trace =>
+							$"{trace.ProgramCounter & 0x00FF_FFFF:X6}/" +
+							$"{trace.Opcode:X4}@{FormatBeam(trace.StartCycle)}->" +
+							$"{FormatBeam(trace.RetireCycle)}/" +
+							$"{trace.RetireCycle - trace.StartCycle}")))
+						.ToArray();
+					diagnostics = diagnostics.Append(
+						$"TRACE {relativePath}: startup BRA bus [{waitbltStartupBusLedger}]")
+						.ToArray();
+					diagnostics = diagnostics.Append(
+						$"TRACE {relativePath}: first BRA retirements " +
+						string.Join(' ', waitbltFirstMainLoopRetirements.Select(trace =>
+							$"{FormatBeam(trace.StartCycle)}->" +
+							$"{FormatBeam(trace.RetireCycle)}/" +
+							$"{trace.RetireCycle - trace.StartCycle}")))
+						.ToArray();
+					foreach (var beamLine in new[] { 48, 240, 304 })
+					{
+						var lineBraRetirements = vprobeInstructionRetirements
+							.Where(trace =>
+								(trace.ProgramCounter & 0x00FF_FFFF) == 0x070218 &&
+								GetPalBeamLine(trace.StartCycle) == beamLine)
+							.Take(32);
+						diagnostics = diagnostics.Append(
+							$"TRACE {relativePath}: steady v{beamLine} BRA retirements " +
+							string.Join(' ', lineBraRetirements.Select(trace =>
+								$"{FormatBeam(trace.StartCycle)}->" +
+								$"{FormatBeam(trace.RetireCycle)}/" +
+								$"{trace.RetireCycle - trace.StartCycle}")))
+							.ToArray();
+						var lineBraPhases = GetMachine(emulator).Bus.CpuBusPhases
+							.Where(phase =>
+								(phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF) == 0x070218 &&
+								GetPalBeamLine(phase.CpuPhase.RequestedCycle) == beamLine)
+							.Take(40);
+						diagnostics = diagnostics.Append(
+							$"TRACE {relativePath}: steady v{beamLine} BRA bus " +
+							FormatCpuBusPhases(lineBraPhases))
+							.ToArray();
+					}
+				}
+			}
+			if (traceWrites && (isVprobe || isCycle01v) && !traceCycleBoundariesOnly)
+			{
+				diagnostics = diagnostics.Append(
+					FormatExpiredDbraTransitions(relativePath, GetMachine(emulator)))
+					.ToArray();
+			}
 			if (cycle01vSlotTrace != null && !traceCycleBoundariesOnly)
 			{
 				diagnostics = diagnostics.Append(
@@ -601,6 +835,14 @@ public sealed class VAmigaTsAdfCorpusTests
 						.OrderBy(pair => pair.Key)
 						.Select(pair => $"TRACE probe10 interruptLedger frame={pair.Key}: {pair.Value}")
 						.ToArray()).ToArray();
+			}
+			if (waitbltPresentationFrameLedger != null)
+			{
+				diagnostics = diagnostics.Concat(
+					waitbltPresentationFrameLedger
+						.OrderBy(pair => pair.Key)
+					.Select(pair => $"TRACE waitblt presentation frame={pair.Key}: {pair.Value}"))
+					.ToArray();
 			}
 			var frameCount = Math.Min(framesRendered + 1, targetFrames);
 
@@ -676,6 +918,20 @@ public sealed class VAmigaTsAdfCorpusTests
 		}
 		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or AmigaEmulationException)
 		{
+			var diagnostics = vprobeInstructionRetirements == null
+				? Array.Empty<string>()
+				:
+				[
+					"TRACE final retirements " +
+					string.Join(
+						' ',
+						vprobeInstructionRetirements
+							.TakeLast(32768)
+							.Select(trace =>
+								$"{trace.ProgramCounter & 0x00FF_FFFF:X6}/" +
+								$"{trace.Opcode:X4}@" +
+								$"{trace.StartCycle}->{trace.RetireCycle}"))
+				];
 			return VAmigaTsCaseResult.Fail(
 				relativePath,
 				0,
@@ -683,8 +939,23 @@ public sealed class VAmigaTsAdfCorpusTests
 				0,
 				0,
 				$"{relativePath} threw {ex}",
-				[]);
+				diagnostics);
 		}
+		finally
+		{
+			M68kCoreFactory.M68000OpcodePlanDispatch = previousOpcodePlanDispatch;
+		}
+	}
+
+	private static M68kOpcodePlanDispatch ResolveOpcodePlanDispatch(M68kOpcodePlanDispatch fallback)
+	{
+		return Environment.GetEnvironmentVariable(OpcodePlanDispatchEnvironmentVariable)?.Trim().ToLowerInvariant() switch
+		{
+			"scalar" => M68kOpcodePlanDispatch.Scalar,
+			"kind" or "kindtable" => M68kOpcodePlanDispatch.KindTable,
+			"packed" or "packedplan" => M68kOpcodePlanDispatch.PackedPlan,
+			_ => fallback
+		};
 	}
 
 	private static VAmigaTsCaseResult CreateCaseTimeoutResult(
@@ -754,6 +1025,21 @@ public sealed class VAmigaTsAdfCorpusTests
 			int.TryParse(configured, out var frames) && frames > 0,
 			$"{MaxFramesEnvironmentVariable} must be a positive integer.");
 		return frames;
+	}
+
+	private static int ResolveAgnusLiveRequesterStage()
+	{
+		var configured = Environment.GetEnvironmentVariable(
+			AgnusLiveRequesterStageEnvironmentVariable);
+		if (string.IsNullOrWhiteSpace(configured))
+		{
+			return 0;
+		}
+
+		Assert.True(
+			int.TryParse(configured, out var stage) && stage is >= 0 and <= 5,
+			$"{AgnusLiveRequesterStageEnvironmentVariable} must be an integer from 0 through 5.");
+		return stage;
 	}
 
 	private static TimeSpan ResolveCaseTimeout()
@@ -880,8 +1166,41 @@ public sealed class VAmigaTsAdfCorpusTests
 			args.Add("--hardware-specialization");
 		}
 
+		switch (Environment.GetEnvironmentVariable(AgnusArbitrationEnvironmentVariable)?.Trim().ToLowerInvariant())
+		{
+			case "legacy":
+			case "forced-legacy":
+				args.Add("--agnus-legacy");
+				break;
+			case "slot-kernel":
+				args.Add("--agnus-slot-kernel");
+				break;
+		}
+
+		if (IsEnabled(Environment.GetEnvironmentVariable(DisableDeferredCpuBatchEnvironmentVariable)))
+		{
+			args.Add("--no-cpu-deferred-bus-batch");
+		}
+
+		if (IsEnabled(Environment.GetEnvironmentVariable(DisableDeferredCpuCompositionEnvironmentVariable)))
+		{
+			args.Add("--no-cpu-deferred-custom-composition-writes");
+		}
+
 		args.Add(adfPath);
 		return args.ToArray();
+	}
+
+	private static CopperScreenStartupOptions CreateEmulatorOptions(
+		string adfPath,
+		bool hardwareSpecialization,
+		string? kickstartRomPath)
+	{
+		var options = CopperScreenStartupOptions.Parse(
+			CreateEmulatorArgs(adfPath, hardwareSpecialization, kickstartRomPath),
+			AppContext.BaseDirectory);
+		options.DriveWriteProtected[0] = false;
+		return options;
 	}
 
 	private static int? ResolveRetroshScreenshotFrameCount(string adfPath)
@@ -1741,11 +2060,20 @@ public sealed class VAmigaTsAdfCorpusTests
 				$"{phase.CpuPhase.AccessKind}/a{phase.CpuPhase.Address & 0x00FF_FFFF:X6}/" +
 				$"{FormatBeam(phase.CpuPhase.RequestedCycle)}+{phase.BusAccess!.Value.WaitCycles}")
 			.ToArray();
+		var handlerPhases = phases.Where(phase =>
+			phase.CpuPhase.RequestedCycle >= dispatch.EntryCompletedCycle &&
+			phase.CpuPhase.RequestedCycle < resumed.CpuPhase.RequestedCycle);
+		var preIrqPhases = phases.Where(phase =>
+			phase.CpuPhase.RequestedCycle >= probe.CpuPhase.RequestedCycle &&
+			phase.CpuPhase.RequestedCycle <= dispatch.AcceptanceCycle).TakeLast(16);
+		var preIrqBus = machine.Bus.BusAccesses.Where(access =>
+			access.GrantedCycle >= dispatch.CpuVisibleCycle &&
+			access.GrantedCycle <= dispatch.AcceptanceCycle + 4);
 		return
 			$"probe={FormatCycleBoundary(probe, probeRead?.SampleCycle)}/a=0x{probe.CpuPhase.Address & 0x00FF_FFFF:X6}/v={(probeRead.HasValue ? $"0x{probeRead.Value.Value:X4}" : "missing")}; " +
 			$"irq=visible+{dispatch.CpuVisibleCycle - origin}/sample+{dispatch.CpuSampleCycle - origin}/accept+{dispatch.AcceptanceCycle - origin}/entry+{dispatch.EntryCompletedCycle - origin}/" +
 			$"{FormatBeam(dispatch.CpuVisibleCycle)}->{FormatBeam(dispatch.CpuSampleCycle)}->{FormatBeam(dispatch.AcceptanceCycle)}->{FormatBeam(dispatch.EntryCompletedCycle)}; " +
-			$"rte={FormatCycleBoundary(rte, null)}; resumed={FormatCycleBoundary(resumed, null)}/+{resumed.CpuPhase.RequestedCycle - origin}; waits=[{string.Join(',', handlerWaits)}]; " +
+			$"rte={FormatCycleBoundary(rte, null)}; resumed={FormatCycleBoundary(resumed, null)}/+{resumed.CpuPhase.RequestedCycle - origin}; waits=[{string.Join(',', handlerWaits)}]; preirq=[{FormatCpuBusPhases(preIrqPhases)}]; irqbus=[{FormatBusAccesses(preIrqBus)}]; handler=[{FormatCpuBusPhases(handlerPhases)}]; " +
 			$"finalDbra={FormatCycleBoundary(finalDbra, null)}/+{finalDbra.CpuPhase.RequestedCycle - origin}; " +
 			$"stripe={FormatCycleBoundary(stripePhase.GetValueOrDefault(), stripe.Cycle)}/+{stripe.Cycle - origin}";
 
@@ -1938,7 +2266,41 @@ public sealed class VAmigaTsAdfCorpusTests
 			var d3 = unchecked((ushort)(0x24DB - index));
 			return $"v{line}=i{index}/d3{d3:X4}/{FormatBeam(postRteInstructionStarts[index])}";
 		}));
-		var dbraLineSlots = string.Join("; ", new[] { 100, 150, 200, 210, 211, 212 }.Select(line =>
+		var postRteLineEdges = string.Join("; ", new[] { 3, 4, 100, 150, 200 }.Select(line =>
+		{
+			var lineStart = frameStartCycle + line * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+			var edgeStart = lineStart - 10 * AmigaConstants.A500PalCpuCyclesPerColorClock;
+			var edgeStop = lineStart + 15 * AmigaConstants.A500PalCpuCyclesPerColorClock;
+			var entries = postRteInstructionStarts
+				.Select((cycle, index) => (Cycle: cycle, Index: index))
+				.Where(entry => entry.Cycle >= edgeStart && entry.Cycle <= edgeStop)
+				.Select(entry =>
+				{
+					var d3 = unchecked((ushort)(0x24DB - entry.Index));
+					return $"d3{d3:X4}@{FormatBeam(entry.Cycle)}";
+				});
+			return $"v{line}=[{string.Join(',', entries)}]";
+		}));
+		var postRteLineWaits = string.Join("; ", new[] { 3, 4, 100, 150, 200 }.Select(line =>
+		{
+			var lineStart = frameStartCycle + line * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+			var lineStop = lineStart + AmigaConstants.A500PalCpuCyclesPerRasterLine;
+			var waits = postRteInstructionStarts
+				.Select((cycle, index) => (Cycle: cycle, Index: index))
+				.Where(entry =>
+					entry.Index > 0 &&
+					entry.Cycle >= lineStart &&
+					entry.Cycle < lineStop &&
+					entry.Cycle - postRteInstructionStarts[entry.Index - 1] > 10)
+				.Select(entry =>
+				{
+					var d3 = unchecked((ushort)(0x24DB - entry.Index));
+					var delta = entry.Cycle - postRteInstructionStarts[entry.Index - 1];
+					return $"d3{d3:X4}@{FormatBeam(entry.Cycle)}/d{delta}";
+				});
+			return $"v{line}=[{string.Join(',', waits)}]";
+		}));
+		var dbraLineSlots = string.Join("; ", new[] { 3, 4, 100, 150, 200, 210, 211, 212 }.Select(line =>
 		{
 			var lineStart = frameStartCycle + line * AmigaConstants.A500PalCpuCyclesPerRasterLine;
 			var lineStop = lineStart + 50 * AmigaConstants.A500PalCpuCyclesPerColorClock;
@@ -2063,6 +2425,8 @@ public sealed class VAmigaTsAdfCorpusTests
 			.OrderBy(phase => phase.CpuPhase.RequestedCycle)
 			.ToArray();
 		return
+			$"postRteLineEdges=[{postRteLineEdges}],postRteLineWaits=[{postRteLineWaits}]," +
+			$"dbraLineSlots=[{dbraLineSlots}]," +
 			$"probe={FormatCycleBoundary(probe, probeRead?.SampleCycle)},value={probeValue},opcode={probeOpcode}, " +
 			$"irqAcknowledge={FormatCycleBoundary(irqAcknowledge, null)}," +
 			$"irqEntryDelay={irqEntry.CpuPhase.RequestedCycle - irqAcknowledge.CpuPhase.RequestedCycle}, " +
@@ -2082,7 +2446,6 @@ public sealed class VAmigaTsAdfCorpusTests
 			$"postRteEdges=[{postRteEdgeState}]," +
 			$"preIrqEdges=[{preIrqEdgeState}]," +
 			$"postRteCheckpoints=[{postRteCheckpoints}]," +
-			$"dbraLineSlots=[{dbraLineSlots}]," +
 			$"futureDbra=[{futureDbra}]," +
 			$"earlyPost=[{FormatCpuBusPhases(earlyPostPhases)}]," +
 			$"stripeLead=[{FormatCpuBusPhases(stripeLeadPhases)}]," +
@@ -2228,6 +2591,12 @@ public sealed class VAmigaTsAdfCorpusTests
 				.ToArray()
 			: [];
 		var intreqWrites = writes.Where(write => write.Address == 0x09C).ToArray();
+		var archivedFrameIntreqWrites = archivedFrameStartCycle >= 0
+			? intreqWrites
+				.Where(write => write.Cycle >= archivedFrameStartCycle &&
+					write.Cycle < archivedFrameStopCycle)
+				.ToArray()
+			: [];
 		var nearbyIntreqWrites = archivedFrameStartCycle >= AmigaConstants.A500PalCpuCyclesPerFrame
 			? intreqWrites.Where(write =>
 				write.Cycle >= archivedFrameStartCycle - AmigaConstants.A500PalCpuCyclesPerFrame &&
@@ -2283,6 +2652,323 @@ public sealed class VAmigaTsAdfCorpusTests
 				.ToArray()
 			: [];
 		var normalizedCasePath = NormalizeCasePath(relativePath);
+		if (normalizedCasePath.StartsWith(
+			"Paula/Drive/",
+			StringComparison.OrdinalIgnoreCase))
+		{
+			var disk = machine.Bus.Disk.CaptureSnapshot();
+			var dmaTrace = machine.Bus.Disk.CaptureDmaTrace();
+			var frameInterrupts = machine.InterruptDispatchTrace
+				.Where(dispatch =>
+					dispatch.AcceptanceCycle >= archivedFrameStartCycle &&
+					dispatch.AcceptanceCycle < archivedFrameStopCycle)
+				.ToArray();
+			return
+			[
+				$"TRACE {relativePath}: cpu d0=0x{machine.Cpu.State.D[0]:X8}, " +
+				$"d1=0x{machine.Cpu.State.D[1]:X8}, d2=0x{machine.Cpu.State.D[2]:X8}, " +
+				$"pc=0x{machine.Cpu.State.ProgramCounter & 0x00FF_FFFF:X6}",
+				$"TRACE {relativePath}: disk ptr=0x{disk.DiskPointer:X8}, " +
+				$"dsklen=0x{disk.Dsklen:X4}, dskbytr=0x{disk.Dskbytr:X4}, " +
+				$"dskdatr=0x{disk.Dskdatr:X4}, selected={disk.SelectedDrive}, " +
+				$"cyl={disk.Cylinder}, head={disk.Head}, motor={disk.MotorOn}, " +
+				$"transfers={disk.TransferCount}",
+				$"TRACE {relativePath}: DMA " + string.Join(
+					"; ",
+					dmaTrace.TakeLast(32).Select(entry =>
+						$"{entry.Kind}@{FormatBeam(entry.Cycle)} " +
+						$"len=0x{entry.Dsklen:X4} req={entry.RequestedWords} " +
+						$"done={entry.TransferredWords} complete={FormatBeam(entry.CompletionCycle)} " +
+						$"blocked={entry.BlockedReason}")),
+				$"TRACE {relativePath}: interrupts {FormatInterruptDispatches(frameInterrupts)}",
+				$"TRACE {relativePath}: frame COLOR00 " + string.Join(
+					"; ",
+					archivedFrameColorWrites.Select(write =>
+						$"{FormatBeam(write.Cycle)}=0x{write.Value:X4}")),
+				$"TRACE {relativePath}: frame INTREQ " + string.Join(
+					"; ",
+					archivedFrameIntreqWrites.Select(write =>
+						$"{FormatBeam(write.Cycle)}=0x{write.Value:X4}"))
+			];
+		}
+
+		if (normalizedCasePath.StartsWith(
+				"Agnus/Blitter/",
+				StringComparison.OrdinalIgnoreCase))
+		{
+			var frameStarts = bltsizeWrites
+				.Where(write => write.Cycle >= archivedFrameStartCycle &&
+					write.Cycle < archivedFrameStopCycle)
+				.ToArray();
+			var frameCompletions = machine.Bus.Blitter.CompletionCycles
+				.Where(cycle => cycle >= archivedFrameStartCycle &&
+					cycle < archivedFrameStopCycle)
+				.ToArray();
+			var frameBusyReads = dmaconReads
+				.Where(access => access.GrantedCycle >= archivedFrameStartCycle &&
+					access.GrantedCycle < archivedFrameStopCycle)
+				.ToArray();
+			var frameBlitterPriorityWrites = dmaconWrites
+				.Where(write => write.Cycle >= archivedFrameStartCycle &&
+					write.Cycle < archivedFrameStopCycle &&
+					(write.Value & 0x0400) != 0)
+				.ToArray();
+			var firstBlitterPriorityClear = frameBlitterPriorityWrites
+				.FirstOrDefault(write =>
+					frameStarts.Length != 0 &&
+					write.Cycle > frameStarts[0].Cycle &&
+					(write.Value & 0x8000) == 0);
+			var firstCpuStripe = archivedFrameColorWrites
+				.FirstOrDefault(write =>
+					firstBlitterPriorityClear.Cycle != 0 &&
+					write.Cycle > firstBlitterPriorityClear.Cycle &&
+					write.Value == 0x044F);
+			var firstPrepareBlitStart = archivedFrameColorWrites
+				.FirstOrDefault(write =>
+					write.Value == 0x0F00 &&
+					archivedFrameIntreqWrites.Any(interrupt =>
+						interrupt.Cycle < write.Cycle &&
+						(interrupt.Value & 0x8004) == 0x8004));
+			var firstPrepareBlitEnd = archivedFrameColorWrites
+				.FirstOrDefault(write =>
+					firstPrepareBlitStart.Cycle != 0 &&
+					write.Cycle > firstPrepareBlitStart.Cycle &&
+					write.Value == 0x0666);
+			var bltpriReleaseCpuPhases =
+				firstBlitterPriorityClear.Cycle != 0 &&
+				firstCpuStripe.Cycle != 0
+					? machine.Bus.CpuBusPhases
+						.Where(phase =>
+							phase.CpuPhase.RequestedCycle >=
+								firstBlitterPriorityClear.Cycle - 4 &&
+							phase.CpuPhase.RequestedCycle <=
+								firstCpuStripe.Cycle + 4)
+						.ToArray()
+					: [];
+			var frameBlitterProgramCpuPhases = machine.Bus.CpuBusPhases
+				.Where(phase =>
+				{
+					var pc = phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF;
+					return phase.CpuPhase.RequestedCycle >= archivedFrameStartCycle &&
+						phase.CpuPhase.RequestedCycle < archivedFrameStopCycle &&
+						pc is >= 0x0703D0 and <= 0x070460;
+				})
+				.ToArray();
+			var framePrepareBlitCpuPhases = machine.Bus.CpuBusPhases
+				.Where(phase =>
+				{
+					var pc = phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF;
+					return phase.CpuPhase.RequestedCycle >= archivedFrameStartCycle &&
+						phase.CpuPhase.RequestedCycle < archivedFrameStopCycle &&
+						pc is >= 0x070364 and <= 0x0703BC;
+				})
+				.ToArray();
+			var frameBlitterProgramLongWaitCpuPhases =
+				frameBlitterProgramCpuPhases
+					.Where(phase =>
+						phase.CpuPhase.CompletedCycle -
+							phase.CpuPhase.RequestedCycle >
+						(4 * AgnusChipSlotScheduler.SlotCycles))
+					.ToArray();
+			var frameInterruptDispatches = machine.InterruptDispatchTrace
+				.Where(dispatch =>
+					dispatch.AcceptanceCycle >= archivedFrameStartCycle &&
+					dispatch.AcceptanceCycle < archivedFrameStopCycle)
+				.ToArray();
+			var frameInterruptBusWindows = frameInterruptDispatches
+				.Select(dispatch =>
+					machine.InterruptBusPhaseTrace.FirstOrDefault(window =>
+						window.Level == dispatch.Level &&
+						window.AcceptanceCycle == dispatch.AcceptanceCycle))
+				.Where(window => window != null)
+				.Select(window =>
+					$"L{window!.Level}@{FormatBeam(window.AcceptanceCycle)} " +
+					$"[{FormatCpuBusPhases(window.Phases)}]")
+				.ToArray();
+			var firstInterruptCpuWindow = frameInterruptDispatches.Length == 0
+				? []
+				: machine.Bus.CpuBusPhases
+					.Where(phase =>
+						phase.CpuPhase.RequestedCycle >=
+							frameInterruptDispatches[0].CpuVisibleCycle - 48 &&
+						phase.CpuPhase.RequestedCycle <=
+							frameInterruptDispatches[0].AcceptanceCycle)
+					.ToArray();
+			var frameCopperColors = machine.Bus.Display.CopperDisplayWrites
+				.Where(write =>
+					write.Address == 0x180 &&
+					write.Cycle >= archivedFrameStartCycle &&
+					write.Cycle < archivedFrameStopCycle)
+				.ToArray();
+			var frameBlitWindowStats = frameStarts
+				.Select(start =>
+				{
+					var completion = frameCompletions
+						.FirstOrDefault(cycle => cycle >= start.Cycle);
+					if (completion <= 0)
+					{
+						completion = archivedFrameStopCycle;
+					}
+					var accesses = machine.Bus.BusAccesses
+						.Where(access =>
+							access.GrantedCycle >= start.Cycle &&
+							access.GrantedCycle <= completion)
+						.ToArray();
+					var blitterAccesses = accesses
+						.Where(access =>
+							access.Request.Requester ==
+								AmigaBusRequester.Blitter)
+						.ToArray();
+					var cpuAccesses = accesses
+						.Where(access =>
+							access.Request.Requester ==
+								AmigaBusRequester.Cpu)
+						.ToArray();
+					var occupiedCycles = accesses
+						.Select(access => access.GrantedCycle)
+						.ToHashSet();
+					var collidingSlots = accesses
+						.GroupBy(access => access.GrantedCycle)
+						.Where(group => group.Count() > 1)
+						.ToArray();
+					var collisionHistogram = collidingSlots
+						.GroupBy(group => GetPalBeamHorizontal(group.Key))
+						.OrderBy(group => group.Key)
+						.Select(group => $"{group.Key:D3}={group.Count()}");
+					var collisionOwners = collidingSlots
+						.GroupBy(group => string.Join(
+							'+',
+							group
+								.Select(access => access.Request.Requester)
+								.OrderBy(owner => owner)))
+						.OrderBy(group => group.Key)
+						.Select(group => $"{group.Key}={group.Count()}");
+					var physicalSlotCount = checked((int)(
+						(completion - start.Cycle) /
+							AgnusChipSlotScheduler.SlotCycles) + 1);
+					var gapCycles = Enumerable
+						.Range(0, physicalSlotCount)
+						.Select(index =>
+							start.Cycle +
+							(index * AgnusChipSlotScheduler.SlotCycles))
+						.Where(cycle => !occupiedCycles.Contains(cycle))
+						.ToArray();
+					var gapHistogram = gapCycles
+						.GroupBy(GetPalBeamHorizontal)
+						.OrderBy(group => group.Key)
+						.Select(group => $"{group.Key:D3}={group.Count()}");
+					var copperPairGuardCycles = gapCycles
+						.Where(cycle => accesses.Any(access =>
+							access.GrantedCycle ==
+								cycle - AgnusChipSlotScheduler.SlotCycles &&
+							access.Request.Requester ==
+								AmigaBusRequester.Copper))
+						.ToHashSet();
+					var unclassifiedGapCycles = gapCycles
+						.Where(cycle =>
+							!machine.Bus.IsMandatoryRefreshSlot(cycle) &&
+							!copperPairGuardCycles.Contains(cycle))
+						.Select(FormatBeam);
+					return
+						$"{FormatBeam(start.Cycle)}..{FormatBeam(completion)}:" +
+						$"span={completion - start.Cycle}," +
+						$"blitter={blitterAccesses.Length}," +
+						$"cpu={cpuAccesses.Length}," +
+						$"cpuFetch={cpuAccesses.Count(access => access.Request.Kind == AmigaBusAccessKind.CpuInstructionFetch)}," +
+						$"cpuCustom={cpuAccesses.Count(access => access.Request.Target == AmigaBusAccessTarget.CustomRegisters)}," +
+						$"cpuRows=[{string.Join(',', cpuAccesses
+							.GroupBy(access => GetPalBeamLine(access.GrantedCycle))
+							.OrderBy(group => group.Key)
+							.Select(group => $"{group.Key:D3}={group.Count()}"))}]," +
+						$"collisions={collidingSlots.Length}:[{string.Join(',', collisionHistogram)}]/[{string.Join(',', collisionOwners)}]," +
+						$"gaps=[{string.Join(',', gapHistogram)}]," +
+						$"copperPairGuards=[{string.Join(',', copperPairGuardCycles.Select(FormatBeam))}]," +
+						$"unclassifiedGaps=[{string.Join(',', unclassifiedGapCycles)}]," +
+						$"owners=[{string.Join(',', accesses
+							.GroupBy(access => access.Request.Requester)
+							.OrderBy(group => group.Key)
+							.Select(group => $"{group.Key}={group.Count()}"))}]";
+				})
+				.ToArray();
+			var liveDiagnostics = machine.Bus.AgnusLiveBlitterDiagnostics;
+			var liveCopperDiagnostics = machine.Bus.AgnusLiveCopperDiagnostics;
+			var earlyWindowStart = archivedFrameStartCycle + (30 * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+			var earlyWindowStop = archivedFrameStartCycle + (35 * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+			var earlyBeamReads = customRegisterReads
+				.Where(read =>
+					(read.Address & 0x01FE) == 0x006 &&
+					read.RequestedCycle >= earlyWindowStart &&
+					read.RequestedCycle < earlyWindowStop)
+				.ToArray();
+			var earlyCpuPhases = machine.Bus.CpuBusPhases
+				.Where(phase =>
+					phase.CpuPhase.RequestedCycle >= earlyWindowStart &&
+					phase.CpuPhase.RequestedCycle < earlyWindowStop)
+				.ToArray();
+			return
+			[
+				$"TRACE {relativePath}: BLTSIZE {string.Join("; ", frameStarts.Select(write => $"{FormatBeam(write.Cycle)}=0x{write.Value:X4}"))}",
+				$"TRACE {relativePath}: completion {string.Join("; ", frameCompletions.Select(FormatBeam))}",
+				$"TRACE {relativePath}: completion bus {string.Join(" | ", frameCompletions.Select(completion =>
+					$"{FormatBeam(completion)}=[{FormatBusAccesses(machine.Bus.BusAccesses.Where(access =>
+						access.GrantedCycle >= completion - 12 &&
+						access.GrantedCycle <= completion + 12))}]"))}",
+				$"TRACE {relativePath}: blit windows {string.Join("; ", frameBlitWindowStats)}",
+				$"TRACE {relativePath}: BLTPRI {string.Join("; ", frameBlitterPriorityWrites.Select(write => $"{FormatBeam(write.Cycle)}={((write.Value & 0x8000) != 0 ? "SET" : "CLEAR")}(0x{write.Value:X4})"))}",
+				$"TRACE {relativePath}: INTREQ {string.Join("; ", archivedFrameIntreqWrites.Select(write => $"{FormatBeam(write.Cycle)}=0x{write.Value:X4}"))}",
+				$"TRACE {relativePath}: DMACONR reads {FormatBusAccesses(frameBusyReads)}",
+				$"TRACE {relativePath}: DMACONR values {FormatCustomRegisterReads(customRegisterReads.Where(read =>
+					(read.Address & 0x01FE) == 0x002 &&
+					read.RequestedCycle >= archivedFrameStartCycle &&
+					read.RequestedCycle < archivedFrameStopCycle))}",
+				$"TRACE {relativePath}: early VHPOSR reads {FormatCustomRegisterReads(earlyBeamReads)}",
+				$"TRACE {relativePath}: early CPU phases {FormatCpuBusPhases(earlyCpuPhases)}",
+				$"TRACE {relativePath}: COLOR00 count={archivedFrameColorWrites.Length}, " +
+					$"all={string.Join("; ", archivedFrameColorWrites.Select(write => $"{FormatBeam(write.Cycle)}=0x{write.Value:X4}"))}",
+				$"TRACE {relativePath}: COLOR00 CPU phases first={FormatCpuBusPhases(archivedFrameColor00CpuPhases.Take(24))}",
+				$"TRACE {relativePath}: BLTPRI release CPU phases {FormatCpuBusPhases(bltpriReleaseCpuPhases)}",
+				$"TRACE {relativePath}: BLTPRI release bus {FormatBusAccesses(machine.Bus.BusAccesses.Where(access => firstBlitterPriorityClear.Cycle != 0 && firstCpuStripe.Cycle != 0 && access.GrantedCycle >= firstBlitterPriorityClear.Cycle - 12 && access.GrantedCycle <= firstCpuStripe.Cycle + 4))}",
+				$"TRACE {relativePath}: first BLTSIZE bus {FormatBusAccesses(machine.Bus.BusAccesses.Where(access => frameStarts.Length != 0 && access.GrantedCycle >= frameStarts[0].Cycle - 16 && access.GrantedCycle <= frameStarts[0].Cycle + 32))}",
+				$"TRACE {relativePath}: prepareblit CPU phases first={FormatCpuBusPhases(framePrepareBlitCpuPhases.Take(64))}",
+				$"TRACE {relativePath}: prepareblit bus first={FormatBusAccesses(machine.Bus.BusAccesses.Where(access => firstPrepareBlitStart.Cycle != 0 && firstPrepareBlitEnd.Cycle != 0 && access.GrantedCycle >= firstPrepareBlitStart.Cycle && access.GrantedCycle <= firstPrepareBlitEnd.Cycle))}",
+				$"TRACE {relativePath}: blitter-program long-wait CPU phases first={FormatCpuBusPhases(frameBlitterProgramLongWaitCpuPhases.Take(32))}",
+				$"TRACE {relativePath}: blitter-program long-wait CPU phases last={FormatCpuBusPhases(frameBlitterProgramLongWaitCpuPhases.TakeLast(32))}",
+				$"TRACE {relativePath}: interrupt dispatches {FormatInterruptDispatches(frameInterruptDispatches)}",
+				$"TRACE {relativePath}: first interrupt CPU window {FormatCpuBusPhases(firstInterruptCpuWindow)}",
+				$"TRACE {relativePath}: interrupt bus windows {string.Join(" | ", frameInterruptBusWindows)}",
+				$"TRACE {relativePath}: first INTREQ chip bus {FormatBusAccesses(machine.Bus.BusAccesses.Where(access => archivedFrameIntreqWrites.Length != 0 && access.GrantedCycle >= archivedFrameIntreqWrites[0].Cycle - 20 && access.GrantedCycle <= archivedFrameIntreqWrites[0].Cycle + 8))}",
+				$"TRACE {relativePath}: Copper COLOR00 {string.Join("; ", frameCopperColors.Select(write => $"{FormatBeam(write.Cycle)}=0x{write.Value:X4}"))}",
+				$"TRACE {relativePath}: Copper WAIT control {string.Join("; ", machine.Bus.Display.CopperWaitTransitions.Where(trace => trace.SatisfiedCycle >= archivedFrameStartCycle && trace.SatisfiedCycle < archivedFrameStopCycle).Select(trace => $"pc=0x{trace.Pc:X6} wait=0x{trace.WaitFirst:X4}/0x{trace.WaitSecond:X4} cmp={FormatBeam(trace.ComparisonCycle)} sat={FormatBeam(trace.SatisfiedCycle)} restart={FormatBeam(trace.RestartCycle)} carry={trace.CarryPending}/{trace.CarrySkipCount} blocked={trace.RestartIncomingRgaBlocked}"))}",
+				$"TRACE {relativePath}: boundary presentation {string.Join("; ", machine.Bus.Display.CopperPresentationTransitions
+					.Where(trace => trace.Row is 22 or 53 or 86 or 123 or 124 or 166 or 192 or 215)
+					.Select(trace =>
+						$"{(trace.IsCopper ? "copper" : "cpu")}@{FormatBeam(trace.Cycle)} " +
+						$"row={trace.Row} x={trace.X} reg=0x{trace.Offset:X3} value=0x{trace.Value:X4} " +
+						$"started={trace.HasStartedLine} bplcon0=0x{trace.Bplcon0:X4} " +
+						$"dmacon=0x{trace.Dmacon:X4} planes={trace.PlaneCount}"))}",
+				$"TRACE {relativePath}: early boundary presentation {string.Join("; ", machine.Bus.Display.CopperPresentationTransitions
+					.Where(trace => trace.Row is 6 or 7)
+					.Select(trace =>
+						$"{(trace.IsCopper ? "copper" : "cpu")}@{FormatBeam(trace.Cycle)} " +
+						$"row={trace.Row} x={trace.X} reg=0x{trace.Offset:X3} value=0x{trace.Value:X4} " +
+						$"started={trace.HasStartedLine} bplcon0=0x{trace.Bplcon0:X4} " +
+						$"dmacon=0x{trace.Dmacon:X4} planes={trace.PlaneCount}"))}",
+				$"TRACE {relativePath}: early rendered timeline {string.Join("; ", machine.Bus.Display.RenderedCopperTimelineSegments
+					.Where(segment => segment.Row is >= 5 and <= 9)
+					.Select(segment => $"row={segment.Row} {segment.XStart}-{segment.XStop} palette={segment.PaletteSnapshotIndex} color0=0x{segment.Color0:X3}"))}",
+				$"TRACE {relativePath}: mid rendered timeline {string.Join("; ", machine.Bus.Display.RenderedCopperTimelineSegments
+					.Where(segment => segment.Row is >= 12 and <= 17)
+					.Select(segment => $"row={segment.Row} {segment.XStart}-{segment.XStop} palette={segment.PaletteSnapshotIndex} color0=0x{segment.Color0:X3}"))}",
+				$"TRACE {relativePath}: selected rendered rows " + string.Join("; ", new[] { 38, 39, 40, 41, 42, 43, 44, 45 }.Select(row =>
+					$"row={row}[{string.Join(',', machine.Bus.Display.CaptureCopperTimelineSegments(row).Select(segment => string.Concat(segment.XStart, "-", segment.XStop, ":p", segment.PaletteSnapshotIndex, "/c", segment.Color0.ToString("X3"))))}]")),
+				$"TRACE {relativePath}: selected presentation rows " + string.Join("; ", machine.Bus.Display.CopperPresentationTransitions
+					.Where(trace => trace.Row is >= 38 and <= 45)
+					.Select(trace => $"{(trace.IsCopper ? "copper" : "cpu")}@{FormatBeam(trace.Cycle)} row={trace.Row} x={trace.X} reg=0x{trace.Offset:X3} value=0x{trace.Value:X4}")),
+				$"TRACE {relativePath}: live requests={liveDiagnostics.PublishedRequests}, grants={liveDiagnostics.GrantedRequests}, denials={liveDiagnostics.DeniedRequests}, areaWords={liveDiagnostics.AreaWords}, linePixels={liveDiagnostics.LinePixels}, completions={liveDiagnostics.Completions}, interrupts={liveDiagnostics.Interrupts}, forbidden={liveDiagnostics.ForbiddenCalls}",
+				$"TRACE {relativePath}: live Copper requests={liveCopperDiagnostics.PublishedRequests}, grants={liveCopperDiagnostics.GrantedRequests}, denials={liveCopperDiagnostics.DeniedRequests}, causalDeferrals={liveCopperDiagnostics.CausalDeferrals}, deferredCycles={liveCopperDiagnostics.CausalDeferredCycles}, maxLag={liveCopperDiagnostics.MaxCausalLagCycles}, firstDeferral={FormatBeam(liveCopperDiagnostics.FirstCausalDeferralCycle)}, forbidden={liveCopperDiagnostics.ForbiddenCalls}"
+			];
+		}
+
 		if (normalizedCasePath.StartsWith("Agnus/Copper/Wait/waitblt", StringComparison.OrdinalIgnoreCase))
 		{
 			var frameBlitter = machine.Bus.BusAccesses
@@ -2306,6 +2992,18 @@ public sealed class VAmigaTsAdfCorpusTests
 				.ToArray();
 			var frameIntreqWrites = intreqWrites
 				.Where(write => write.Cycle >= archivedFrameStartCycle && write.Cycle < archivedFrameStopCycle)
+				.ToArray();
+			var frameDisplayControlWrites = writes
+				.Where(write => write.Cycle >= archivedFrameStartCycle &&
+					write.Cycle < archivedFrameStopCycle &&
+					write.Address is 0x08E or 0x090 or 0x092 or 0x094 or 0x096 or
+						0x100 or 0x102 or 0x108 or 0x10A)
+				.ToArray();
+			var firstVisibleBitplaneFetches = machine.Bus.BusAccesses
+				.Where(access => access.Request.Requester == AmigaBusRequester.Bitplane &&
+					access.GrantedCycle >= archivedFrameStartCycle &&
+					access.GrantedCycle < archivedFrameStopCycle)
+				.Take(24)
 				.ToArray();
 			var cpuBltsizePhases = machine.Bus.CpuBusPhases
 				.Where(phase => phase.CpuPhase.IsWrite &&
@@ -2346,6 +3044,13 @@ public sealed class VAmigaTsAdfCorpusTests
 					.GroupBy(access => access.Request.Requester)
 					.OrderBy(group => group.Key)
 					.Select(group => $"{group.Key}={group.Count()}");
+				var copperAccesses = machine.Bus.BusAccesses
+					.Where(access => access.Request.Requester == AmigaBusRequester.Copper &&
+						access.GrantedCycle >= start.Cycle &&
+						access.GrantedCycle <= (accesses.Length == 0 ? stop : accesses[^1].CompletedCycle))
+					.ToArray();
+				var copperWindow = copperAccesses.Select(copper =>
+					$"C:{FormatBeam(copper.Request.RequestedCycle)}>{FormatBeam(copper.GrantedCycle)} B:[{FormatBusAccesses(accesses.Where(access => Math.Abs(access.GrantedCycle - copper.GrantedCycle) <= 16))}]");
 				var completion = index < frameCompletions.Length ? frameCompletions[index] : stop;
 				var drainOwners = accesses.Length == 0
 					? Array.Empty<string>()
@@ -2358,7 +3063,7 @@ public sealed class VAmigaTsAdfCorpusTests
 						.ToArray();
 				return accesses.Length == 0
 					? $"{FormatBeam(start.Cycle)}:none"
-					: $"{FormatBeam(start.Cycle)}:count={accesses.Length},last={FormatBeam(accesses[^1].GrantedCycle)}..{FormatBeam(accesses[^1].CompletedCycle)},completion={FormatBeam(completion)},drain=[{string.Join(",", drainOwners)}],competing=[{string.Join(",", competingOwners)}]";
+					: $"{FormatBeam(start.Cycle)}:count={accesses.Length},last={FormatBeam(accesses[^1].GrantedCycle)}..{FormatBeam(accesses[^1].CompletedCycle)},completion={FormatBeam(completion)},drain=[{string.Join(",", drainOwners)}],competing=[{string.Join(",", competingOwners)}],windows=[{string.Join(";", copperWindow)}]";
 			}).ToArray();
 			var bOnlyCadence = frameStarts.Select((start, index) =>
 			{
@@ -2372,32 +3077,98 @@ public sealed class VAmigaTsAdfCorpusTests
 					.GroupBy(gap => gap)
 					.OrderBy(group => group.Key)
 					.Select(group => $"{group.Key}={group.Count()}");
-				var lineEdges = accesses
-					.GroupBy(access => machine.Bus.GetBeamPosition(access.GrantedCycle).BeamLine)
-					.Select(group =>
-					{
-						var first = machine.Bus.GetBeamPosition(group.First().GrantedCycle);
-						var last = machine.Bus.GetBeamPosition(group.Last().GrantedCycle);
-						return $"v{first.BeamLine:D3}:{first.BeamHorizontal:D3}-{last.BeamHorizontal:D3}";
-					});
-				return $"{FormatBeam(start.Cycle)} gaps=[{string.Join(',', gapHistogram)}] lines=[{string.Join(',', lineEdges)}]";
+				return $"{FormatBeam(start.Cycle)} gaps=[{string.Join(',', gapHistogram)}]";
 			}).ToArray();
+			var niceCpuGrantLedgers = frameStarts.Select((start, index) =>
+			{
+				var completion = index < frameCompletions.Length
+					? frameCompletions[index]
+					: archivedFrameStopCycle;
+				var grants = Enumerable.Range(
+					0,
+					(int)Math.Max(0, (completion - start.Cycle) / AgnusChipSlotScheduler.SlotCycles + 1))
+					.Select(slot => start.Cycle + slot * AgnusChipSlotScheduler.SlotCycles)
+					.Where(machine.Bus.IsCpuGrantAfterNiceBlitterWait)
+					.ToArray();
+				return grants.Length == 0
+					? $"{FormatBeam(start.Cycle)}:none"
+					: $"{FormatBeam(start.Cycle)}:count={grants.Length},first={FormatBeam(grants[0])},last={FormatBeam(grants[^1])}";
+			}).ToArray();
+			var niceCpuGrantCycles = frameStarts.SelectMany((start, index) =>
+			{
+				var completion = index < frameCompletions.Length
+					? frameCompletions[index]
+					: archivedFrameStopCycle;
+				return Enumerable.Range(
+						0,
+						(int)Math.Max(0, (completion - start.Cycle) / AgnusChipSlotScheduler.SlotCycles + 1))
+					.Select(slot => start.Cycle + slot * AgnusChipSlotScheduler.SlotCycles)
+					.Where(machine.Bus.IsCpuGrantAfterNiceBlitterWait);
+			}).ToArray();
+			var niceCpuGrantWindowCycles = frameStarts.SelectMany((start, index) =>
+			{
+				var completion = index < frameCompletions.Length
+					? frameCompletions[index]
+					: archivedFrameStopCycle;
+				var grants = niceCpuGrantCycles
+					.Where(cycle => cycle >= start.Cycle && cycle <= completion)
+					.ToArray();
+				return grants.Take(1).Concat(grants.TakeLast(1));
+			}).Distinct();
+			var niceCpuGrantWindows = niceCpuGrantWindowCycles
+				.Select(grant =>
+					$"{FormatBeam(grant)}=[{FormatBusAccesses(machine.Bus.BusAccesses.Where(access =>
+						access.GrantedCycle >= grant - 12 &&
+						access.GrantedCycle <= grant + 12))}]")
+				.ToArray();
+			var liveBlitter = machine.Bus.AgnusLiveBlitterDiagnostics;
 			return
 			[
 				$"TRACE {relativePath}: first IRQ chip bus {FormatBusAccesses(machine.Bus.BusAccesses.Where(access => frameIntreqWrites.Length != 0 && access.GrantedCycle >= frameIntreqWrites[0].Cycle - 12 && access.GrantedCycle <= frameIntreqWrites[0].Cycle + 16))}",
+				$"TRACE {relativePath}: first IRQ prelude bus {FormatBusAccesses(machine.Bus.BusAccesses.Where(access => frameIntreqWrites.Length != 0 && access.GrantedCycle >= frameIntreqWrites[0].Cycle - 52 && access.GrantedCycle <= frameIntreqWrites[0].Cycle + 8))}",
+				$"TRACE {relativePath}: steady branch all bus " + FormatBusAccesses(machine.Bus.BusAccesses.Where(access =>
+					GetPalBeamLine(access.GrantedCycle) is 48 or 240 &&
+					GetPalBeamHorizontal(access.GrantedCycle) >= 28 &&
+					GetPalBeamHorizontal(access.GrantedCycle) <= 44)),
+				$"TRACE {relativePath}: first IRQ extended bus {FormatBusAccesses(machine.Bus.BusAccesses.Where(access => frameIntreqWrites.Length != 0 && access.GrantedCycle >= frameIntreqWrites[0].Cycle - 20 && access.GrantedCycle <= frameIntreqWrites[0].Cycle + 120))}",
 				$"TRACE {relativePath}: frame COLOR00 writes {string.Join("; ", archivedFrameColorWrites.Select(write => $"{FormatBeam(write.Cycle)}=0x{write.Value:X4}"))}",
 				$"TRACE {relativePath}: frame COLOR00 CPU phases {FormatCpuBusPhases(archivedFrameColor00CpuPhases)}",
 				$"TRACE {relativePath}: blitter starts {string.Join("; ", frameStarts.Select(write => $"{FormatBeam(write.Cycle)}=0x{write.Value:X4}"))}",
 				$"TRACE {relativePath}: blitter ledgers {string.Join("; ", blitLedgers)}",
 				$"TRACE {relativePath}: B-only cadence {string.Join("; ", bOnlyCadence)}",
+				$"TRACE {relativePath}: nice CPU grants {string.Join("; ", niceCpuGrantLedgers)}",
+				$"TRACE {relativePath}: nice CPU grant windows {string.Join("; ", niceCpuGrantWindows)}",
 				$"TRACE {relativePath}: blitter completions {string.Join("; ", frameCompletions.Select(FormatBeam))}",
 				$"TRACE {relativePath}: blitter DMA count={frameBlitter.Length}, first={FormatBusAccesses(frameBlitter.Take(8))}, last={FormatBusAccesses(frameBlitter.TakeLast(8))}",
+				$"TRACE {relativePath}: live blitter requests={liveBlitter.PublishedRequests}, grants={liveBlitter.GrantedRequests}, denials={liveBlitter.DeniedRequests}, lastDenied={FormatBeam(liveBlitter.LastDeniedCycle)}/{liveBlitter.LastDeniedOwner}",
 				$"TRACE {relativePath}: blitter INTREQ {string.Join("; ", frameBlitterInterrupts.Select(write => $"{FormatBeam(write.Cycle)}=0x{write.Value:X4}"))}",
 				$"TRACE {relativePath}: frame INTREQ {string.Join("; ", frameIntreqWrites.Select(write => $"{FormatBeam(write.Cycle)}=0x{write.Value:X4}"))}",
+				$"TRACE {relativePath}: frame display control {string.Join("; ", frameDisplayControlWrites.Select(write => $"{FormatBeam(write.Cycle)} reg=0x{write.Address:X3} value=0x{write.Value:X4}"))}",
+				$"TRACE {relativePath}: first bitplane DMA {FormatBusAccesses(firstVisibleBitplaneFetches)}",
+				$"TRACE {relativePath}: Copper WAIT control {string.Join("; ", machine.Bus.Display.CopperWaitTransitions.Where(trace => trace.SatisfiedCycle >= archivedFrameStartCycle && trace.SatisfiedCycle < archivedFrameStopCycle).Select(trace => $"pc=0x{trace.Pc:X6} wait=0x{trace.WaitFirst:X4}/0x{trace.WaitSecond:X4} cmp={FormatBeam(trace.ComparisonCycle)} sat={FormatBeam(trace.SatisfiedCycle)} restart={FormatBeam(trace.RestartCycle)} carry={trace.CarryPending}/{trace.CarrySkipCount} blocked={trace.RestartIncomingRgaBlocked}"))}",
 				$"TRACE {relativePath}: interrupt dispatches {FormatInterruptDispatches(frameInterruptDispatches)}",
 				$"TRACE {relativePath}: interrupt bus windows {string.Join(" | ", irqDispatchWindows)}",
 				$"TRACE {relativePath}: IRQ handler windows {string.Join(" | ", irqHandlerWindows)}",
-				$"TRACE {relativePath}: Copper COLOR00 {string.Join("; ", frameColors.Select(write => $"{FormatBeam(write.Cycle)}=0x{write.Value:X3}"))}"
+				$"TRACE {relativePath}: Copper COLOR00 {string.Join("; ", frameColors.Select(write => $"{FormatBeam(write.Cycle)}=0x{write.Value:X3}"))}",
+				$"TRACE {relativePath}: boundary presentation {string.Join("; ", machine.Bus.Display.CopperPresentationTransitions
+					.Where(trace => trace.Row is 22 or 192 or 214 or 248)
+					.TakeLast(12)
+					.Select(trace =>
+						$"{(trace.IsCopper ? "copper" : "cpu")}@{FormatBeam(trace.Cycle)} " +
+						$"row={trace.Row} x={trace.X} reg=0x{trace.Offset:X3} value=0x{trace.Value:X4} " +
+						$"started={trace.HasStartedLine} bplcon0=0x{trace.Bplcon0:X4} " +
+						$"dmacon=0x{trace.Dmacon:X4} planes={trace.PlaneCount}"))}",
+				$"TRACE {relativePath}: early boundary presentation {string.Join("; ", machine.Bus.Display.CopperPresentationTransitions
+					.Where(trace => trace.Row is 6 or 7)
+					.Select(trace =>
+						$"{(trace.IsCopper ? "copper" : "cpu")}@{FormatBeam(trace.Cycle)} " +
+						$"row={trace.Row} x={trace.X} reg=0x{trace.Offset:X3} value=0x{trace.Value:X4} " +
+						$"started={trace.HasStartedLine} bplcon0=0x{trace.Bplcon0:X4} " +
+						$"dmacon=0x{trace.Dmacon:X4} planes={trace.PlaneCount}"))}",
+				$"TRACE {relativePath}: rendered boundary segments {string.Join("; ", machine.Bus.Display.RenderedCopperTimelineSegments
+					.Where(segment => segment.Row is 214 or 234 or 248)
+					.Select(segment => $"row={segment.Row} {segment.XStart}-{segment.XStop} palette={segment.PaletteSnapshotIndex} color0=0x{segment.Color0:X3}"))}",
+				$"TRACE {relativePath}: archivedTimelineRows {TraceArchivedTimelineRows(machine.Bus.Display, 22, 23, 24, 25, 29, 30, 34, 38, 214, 215, 234, 248)}"
 			];
 		}
 		if (normalizedCasePath.StartsWith("Agnus/DDF/DDF/", StringComparison.OrdinalIgnoreCase) &&
@@ -2442,17 +3213,486 @@ public sealed class VAmigaTsAdfCorpusTests
 			];
 		}
 		if (NormalizeCasePath(relativePath).Equals(
-			"Agnus/Registers/VPOS/vprobe2/vprobe2.adf",
-			StringComparison.OrdinalIgnoreCase))
+				"Agnus/Registers/VPOS/vprobe2/vprobe2.adf",
+				StringComparison.OrdinalIgnoreCase) ||
+			NormalizeCasePath(relativePath).Equals(
+				"Agnus/Registers/VPOS/vprobe3/vprobe3.adf",
+				StringComparison.OrdinalIgnoreCase))
 		{
+			var sync1ContentionWindow = machine.Bus.BusAccesses
+				.Where(access => access.GrantedCycle >= archivedFrameStartCycle &&
+					access.GrantedCycle < archivedFrameStopCycle)
+				.Where(access =>
+				{
+					var frameCycle = access.GrantedCycle - archivedFrameStartCycle;
+					var line = frameCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine;
+					var horizontal = (frameCycle % AmigaConstants.A500PalCpuCyclesPerRasterLine) / 2;
+					return line == 32 && horizontal is >= 128 and <= 210;
+				})
+				.ToArray();
+			var allIrq2HandlerPhases = machine.Bus.CpuBusPhases
+				.Where(phase =>
+					phase.CpuPhase.RequestedCycle >= archivedFrameStartCycle &&
+					phase.CpuPhase.RequestedCycle < archivedFrameStopCycle &&
+					(phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF) is >= 0x0703D6 and < 0x0704C0)
+				.OrderBy(phase => phase.CpuPhase.RequestedCycle)
+				.ToArray();
+			var irq2HandlerPhases = allIrq2HandlerPhases
+				.Take(128)
+				.Concat(allIrq2HandlerPhases.Skip(Math.Max(128, allIrq2HandlerPhases.Length - 256)))
+				.ToArray();
+			var glyphDbraPhases = machine.Bus.CpuBusPhases
+				.Where(phase =>
+					phase.CpuPhase.RequestedCycle >= archivedFrameStartCycle &&
+					phase.CpuPhase.RequestedCycle < archivedFrameStopCycle &&
+					(phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF) is >= 0x0701EC and <= 0x07020C)
+				.Take(3000)
+				.ToArray();
+			var referenceHistoryWindow = machine.Bus.CpuBusPhases
+				.Where(phase =>
+				phase.CpuPhase.RequestedCycle >= archivedFrameStartCycle &&
+				phase.CpuPhase.RequestedCycle < archivedFrameStopCycle)
+				.Where(phase =>
+				{
+					var frameCycle = phase.CpuPhase.InstructionStartCycle - archivedFrameStartCycle;
+					var line = frameCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine;
+					var horizontal = (frameCycle % AmigaConstants.A500PalCpuCyclesPerRasterLine) / 2;
+					return (line == 48 && horizontal >= 96) ||
+						(line == 49 && horizontal <= 210);
+				})
+				.GroupBy(phase => (
+					phase.CpuPhase.InstructionStartCycle,
+					phase.CpuPhase.InstructionProgramCounter))
+				.Select(group => group.First().CpuPhase)
+				.OrderBy(phase => phase.InstructionStartCycle)
+				.TakeLast(64)
+				.Select(phase =>
+				{
+					var frameCycle = phase.InstructionStartCycle - archivedFrameStartCycle;
+					return
+						$"{(phase.InstructionProgramCounter & 0x00FF_FFFF):X6}" +
+						$"@{frameCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine:D3}:" +
+						$"{(frameCycle % AmigaConstants.A500PalCpuCyclesPerRasterLine) / 2:D3}";
+				})
+				.ToArray();
+			var rendererEntryHistory = machine.Bus.CpuBusPhases
+				.Where(phase =>
+					phase.CpuPhase.RequestedCycle >= archivedFrameStartCycle &&
+					phase.CpuPhase.RequestedCycle < archivedFrameStopCycle)
+				.Where(phase =>
+				{
+					var frameCycle = phase.CpuPhase.InstructionStartCycle - archivedFrameStartCycle;
+					var line = frameCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine;
+					return line is >= 46 and <= 49;
+				})
+				.GroupBy(phase => (
+					phase.CpuPhase.InstructionStartCycle,
+					phase.CpuPhase.InstructionProgramCounter))
+				.Select(group => group.First().CpuPhase)
+				.OrderBy(phase => phase.InstructionStartCycle)
+				.Select(phase =>
+				{
+					var frameCycle = phase.InstructionStartCycle - archivedFrameStartCycle;
+					return
+						$"{(phase.InstructionProgramCounter & 0x00FF_FFFF):X6}" +
+						$"@{frameCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine:D3}:" +
+						$"{(frameCycle % AmigaConstants.A500PalCpuCyclesPerRasterLine) / 2:D3}";
+				})
+				.ToArray();
+			var outerLoopEntries = machine.Bus.CpuBusPhases
+				.Where(phase =>
+					phase.CpuPhase.RequestedCycle >= archivedFrameStartCycle &&
+					phase.CpuPhase.RequestedCycle < archivedFrameStopCycle &&
+					(phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF) is
+						0x070470 or 0x070472 or 0x070444)
+				.GroupBy(phase => (
+					phase.CpuPhase.InstructionStartCycle,
+					phase.CpuPhase.InstructionProgramCounter))
+				.Select(group => group.First().CpuPhase)
+				.OrderBy(phase => phase.InstructionStartCycle)
+				.Take(48)
+				.Select(phase =>
+				{
+					var frameCycle = phase.InstructionStartCycle - archivedFrameStartCycle;
+					return
+						$"{phase.InstructionProgramCounter & 0x00FF_FFFF:X6}" +
+						$"@{frameCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine:D3}:" +
+						$"{(frameCycle % AmigaConstants.A500PalCpuCyclesPerRasterLine) / 2:D3}" +
+						$"/q{phase.InstructionEntryPrefetchCount}" +
+						$"/bus{phase.InstructionEntryBusCycle - phase.InstructionStartCycle}";
+				})
+				.ToArray();
+			var rendererWaitExitPhases = machine.Bus.CpuBusPhases
+				.Where(phase =>
+					phase.CpuPhase.RequestedCycle >= archivedFrameStartCycle &&
+					phase.CpuPhase.RequestedCycle < archivedFrameStopCycle &&
+					(phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF) is
+						0x0705A2 or 0x0705A4 or 0x0705AA or 0x0705AE or
+						0x0705B2 or 0x0705B6 or 0x0705BC or 0x07042E)
+				.Where(phase =>
+				{
+					var frameCycle = phase.CpuPhase.InstructionStartCycle - archivedFrameStartCycle;
+					return frameCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine == 48;
+				})
+				.ToArray();
+			var rendererWaitExitBus = machine.Bus.BusAccesses
+				.Where(access =>
+					access.GrantedCycle >= archivedFrameStartCycle &&
+					access.GrantedCycle < archivedFrameStopCycle)
+				.Where(access =>
+				{
+					var frameCycle = access.GrantedCycle - archivedFrameStartCycle;
+					var line = frameCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine;
+					var horizontal = (frameCycle % AmigaConstants.A500PalCpuCyclesPerRasterLine) / 2;
+					return line == 48 && horizontal is >= 58 and <= 96;
+				})
+				.ToArray();
+			var rendererWaitExitEntries = rendererWaitExitPhases
+				.GroupBy(phase => (
+					phase.CpuPhase.InstructionStartCycle,
+					phase.CpuPhase.InstructionProgramCounter))
+				.Select(group => group.First().CpuPhase)
+				.Select(phase =>
+					$"{phase.InstructionProgramCounter & 0x00FF_FFFF:X6}" +
+					$"/q{phase.InstructionEntryPrefetchCount}" +
+					$"/bus={phase.InstructionEntryBusCycle - phase.InstructionStartCycle}" +
+					$"/r0={phase.InstructionEntryReadyCycle0 - phase.InstructionStartCycle}" +
+					$"/r1={phase.InstructionEntryReadyCycle1 - phase.InstructionStartCycle}")
+				.ToArray();
+			var outerLoopPhases = machine.Bus.CpuBusPhases
+				.Where(phase =>
+					phase.CpuPhase.RequestedCycle >= archivedFrameStartCycle &&
+					phase.CpuPhase.RequestedCycle < archivedFrameStopCycle &&
+					(phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF) is
+						0x070444 or 0x070468 or 0x07046C or 0x070470 or 0x070472 or
+						0x070212 or 0x070220 or 0x070234 or 0x07023E or 0x070248)
+				.ToArray();
+			var glyphBranchPhases = machine.Bus.CpuBusPhases
+				.Where(phase =>
+					phase.CpuPhase.RequestedCycle >= archivedFrameStartCycle &&
+					phase.CpuPhase.RequestedCycle < archivedFrameStopCycle &&
+					(phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF) is
+						0x070218 or 0x07021C or 0x07022E)
+				.Take(512)
+				.ToArray();
+			var glyphBranchEntries = glyphBranchPhases
+				.GroupBy(phase => (
+					phase.CpuPhase.InstructionStartCycle,
+					phase.CpuPhase.InstructionProgramCounter))
+				.Select(group =>
+				{
+					var first = group.First().CpuPhase;
+					return
+						$"pc={first.InstructionProgramCounter & 0x00FF_FFFF:X6}/" +
+						$"start={first.InstructionStartCycle}/" +
+						$"entryBus={first.InstructionEntryBusCycle - first.InstructionStartCycle}/" +
+						$"q={first.InstructionEntryPrefetchCount}/" +
+						$"r0={first.InstructionEntryReadyCycle0 - first.InstructionStartCycle}/" +
+						$"r1={first.InstructionEntryReadyCycle1 - first.InstructionStartCycle}";
+				})
+				.Take(128)
+				.ToArray();
+			var oneWordBranchEntryCycles = glyphBranchPhases
+				.GroupBy(phase => (
+					phase.CpuPhase.InstructionStartCycle,
+					phase.CpuPhase.InstructionProgramCounter))
+				.Select(group => group.First().CpuPhase)
+				.Where(phase => phase.InstructionEntryPrefetchCount == 1)
+				.Select(phase => phase.InstructionStartCycle)
+				.Take(8)
+				.ToArray();
+			var oneWordBranchHandoffs = oneWordBranchEntryCycles
+				.SelectMany(start => machine.Bus.CpuBusPhases
+					.Where(phase =>
+						phase.CpuPhase.RequestedCycle >= start - 32 &&
+						phase.CpuPhase.RequestedCycle < start + 32))
+				.OrderBy(phase => phase.CpuPhase.RequestedCycle)
+				.ToArray();
+			var matchingReferenceGlyphCycles = machine.Bus.CpuBusPhases
+				.Where(phase =>
+					(phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF) == 0x070216 &&
+					(phase.CpuPhase.Address & 0x00FF_FFFF) == 0x0705C9)
+				.Select(phase => phase.CpuPhase.InstructionStartCycle)
+				.Take(4)
+				.ToArray();
+			var matchingReferenceGlyphHandoffs = matchingReferenceGlyphCycles
+				.SelectMany(start => machine.Bus.CpuBusPhases
+					.Where(phase =>
+						phase.CpuPhase.RequestedCycle >= start - 32 &&
+						phase.CpuPhase.RequestedCycle < start + 32))
+				.OrderBy(phase => phase.CpuPhase.RequestedCycle)
+				.ToArray();
+			var glyphContentionBus = machine.Bus.BusAccesses
+				.Where(access =>
+				access.GrantedCycle >= archivedFrameStartCycle &&
+				access.GrantedCycle < archivedFrameStopCycle)
+				.Where(access =>
+				(access.GrantedCycle - archivedFrameStartCycle) /
+					AmigaConstants.A500PalCpuCyclesPerRasterLine is >= 49 and <= 50 or >= 83 and <= 85)
+				.ToArray();
+			var level1CopperBus = machine.Bus.BusAccesses
+				.Where(access =>
+					access.GrantedCycle >= archivedFrameStartCycle &&
+					access.GrantedCycle < archivedFrameStopCycle)
+				.Where(access =>
+				{
+					var frameCycle = access.GrantedCycle - archivedFrameStartCycle;
+					var line = frameCycle / AmigaConstants.A500PalCpuCyclesPerRasterLine;
+					var horizontal = (frameCycle % AmigaConstants.A500PalCpuCyclesPerRasterLine) / 2;
+					return line == 255 && horizontal is >= 120 and <= 145;
+				})
+				.ToArray();
+			var steadyColorWrites = archivedFrameColorWrites
+				.Where(write => write.Value <= 0x000F)
+				.OrderBy(write => write.Cycle)
+				.ToArray();
+			var firstStripeStartIndex = Array.FindIndex(steadyColorWrites, write => write.Value == 0x000F);
+			var firstStripeRefreshOverlaps = firstStripeStartIndex >= 0 &&
+				firstStripeStartIndex + 1 < steadyColorWrites.Length
+				? machine.Bus.BusAccesses
+					.Where(access =>
+						access.Request.Requester == AmigaBusRequester.Cpu &&
+						access.GrantedCycle >= steadyColorWrites[firstStripeStartIndex].Cycle &&
+						access.GrantedCycle < steadyColorWrites[firstStripeStartIndex + 1].Cycle &&
+						AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(access.GrantedCycle))
+					.ToArray()
+				: [];
+			var firstStripeCpuPhases = firstStripeStartIndex >= 0 &&
+				firstStripeStartIndex + 1 < steadyColorWrites.Length
+				? machine.Bus.CpuBusPhases
+					.Where(phase =>
+						phase.CpuPhase.RequestedCycle >= steadyColorWrites[firstStripeStartIndex].Cycle &&
+						phase.CpuPhase.RequestedCycle < steadyColorWrites[firstStripeStartIndex + 1].Cycle)
+					.ToArray()
+				: [];
+			var firstStripeDeniedRefreshSlots = firstStripeCpuPhases
+				.Where(phase => phase.BusAccess is { WaitCycles: > 0 })
+				.SelectMany(phase =>
+				{
+					var access = phase.BusAccess!.Value;
+					return Enumerable.Range(
+							0,
+							checked((int)((access.GrantedCycle - access.RequestedCycle) / 2)))
+						.Select(index => access.RequestedCycle + (index * 2))
+						.Where(AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot)
+						.Select(cycle => new
+						{
+							Cycle = cycle,
+							Pc = phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF,
+							Address = phase.CpuPhase.Address & 0x00FF_FFFF,
+							Requested = access.RequestedCycle,
+							Granted = access.GrantedCycle
+						});
+				})
+				.ToArray();
+			var firstStripeDelayedPhases = firstStripeCpuPhases
+				.Where(phase => phase.BusAccess is { WaitCycles: > 0 })
+				.ToArray();
+			var steadyIterationStart = steadyColorWrites.Length >= 8
+				? steadyColorWrites[^8].Cycle
+				: -1;
+			var steadyIterationStop = steadyColorWrites.Length >= 7
+				? steadyColorWrites[^7].Cycle
+				: -1;
+			var steadyIterationCpuPhases = steadyIterationStart >= 0
+				? machine.Bus.CpuBusPhases
+					.Where(phase =>
+						phase.CpuPhase.RequestedCycle >= steadyIterationStart &&
+						phase.CpuPhase.RequestedCycle < steadyIterationStop)
+					.ToArray()
+				: [];
+			var steadyIterationBus = steadyIterationStart >= 0
+				? machine.Bus.BusAccesses
+					.Where(access =>
+						access.GrantedCycle >= steadyIterationStart &&
+						access.GrantedCycle < steadyIterationStop)
+					.ToArray()
+				: [];
+			var steadyInstructionStarts = steadyIterationCpuPhases
+				.GroupBy(phase => (
+					phase.CpuPhase.InstructionStartCycle,
+					phase.CpuPhase.InstructionProgramCounter))
+				.Select(group => group.First())
+				.OrderBy(phase => phase.CpuPhase.InstructionStartCycle)
+				.ToArray();
+			var steadyInstructionLedger = steadyInstructionStarts
+				.Take(Math.Max(0, steadyInstructionStarts.Length - 1))
+				.Select((phase, index) => new
+				{
+					Pc = phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF,
+					Cycles = steadyInstructionStarts[index + 1].CpuPhase.InstructionStartCycle -
+						phase.CpuPhase.InstructionStartCycle
+				})
+				.GroupBy(entry => entry.Pc)
+				.Select(group => new
+				{
+					Pc = group.Key,
+					Count = group.Count(),
+					Cycles = group.Sum(entry => entry.Cycles)
+				})
+				.OrderByDescending(entry => entry.Cycles)
+				.ToArray();
+			var steadyBitplaneCycles = steadyIterationBus
+				.Where(access => access.Request.Requester == AmigaBusRequester.Bitplane)
+				.Select(access => access.GrantedCycle)
+				.ToHashSet();
+			var steadyCpuCycles = steadyIterationCpuPhases
+				.Where(phase =>
+					phase.BusAccess is { } access &&
+					access.Request.Target is AmigaBusAccessTarget.ChipRam or
+						AmigaBusAccessTarget.CustomRegisters)
+				.Select(phase => phase.BusAccess!.Value.GrantedCycle)
+				.ToHashSet();
+			var steadyCpuBitplaneOverlapCycles = steadyCpuCycles
+				.Where(steadyBitplaneCycles.Contains)
+				.Order()
+				.ToArray();
+			var steadyDeniedRefreshSlots = 0;
+			var steadyDeniedBitplaneSlots = 0;
+			var steadyDeniedOtherSlots = 0;
+			var steadyWaitsByInstruction = new Dictionary<uint, (int Phases, long WaitCycles)>();
+			var steadyDbraWaitsByAddress = new Dictionary<uint, (int Phases, long WaitCycles)>();
+			foreach (var phase in steadyIterationCpuPhases)
+			{
+				if (phase.BusAccess is not { } access)
+				{
+					continue;
+				}
+
+				if (access.WaitCycles > 0)
+				{
+					var pc = phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF;
+					steadyWaitsByInstruction.TryGetValue(pc, out var waits);
+					steadyWaitsByInstruction[pc] = (waits.Phases + 1, waits.WaitCycles + access.WaitCycles);
+					if (pc == 0x070208)
+					{
+						var address = phase.CpuPhase.Address & 0x00FF_FFFF;
+						steadyDbraWaitsByAddress.TryGetValue(address, out var addressWaits);
+						steadyDbraWaitsByAddress[address] =
+							(addressWaits.Phases + 1, addressWaits.WaitCycles + access.WaitCycles);
+					}
+				}
+
+				for (var cycle = access.RequestedCycle; cycle < access.GrantedCycle; cycle += 2)
+				{
+					if (AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(cycle))
+					{
+						steadyDeniedRefreshSlots++;
+					}
+					else if (steadyBitplaneCycles.Contains(cycle))
+					{
+						steadyDeniedBitplaneSlots++;
+					}
+					else
+					{
+						steadyDeniedOtherSlots++;
+					}
+				}
+			}
+			var outputIterationWaits = steadyColorWrites
+				.Zip(steadyColorWrites.Skip(1), (start, stop) =>
+				{
+					var phases = machine.Bus.CpuBusPhases
+						.Where(phase =>
+							phase.CpuPhase.RequestedCycle >= start.Cycle &&
+							phase.CpuPhase.RequestedCycle < stop.Cycle)
+						.ToArray();
+					return
+						$"{start.Value:X3}->{stop.Value:X3}:" +
+						$"dt={stop.Cycle - start.Cycle}/" +
+						$"wait={phases.Sum(phase => phase.BusAccess?.WaitCycles ?? 0)}/" +
+						$"denied={phases.Count(phase => phase.BusAccess?.WaitCycles > 0)}";
+				})
+				.ToArray();
+			var syncStart = archivedFrameColorWrites.FirstOrDefault(write => write.Value == 0x0F0F);
+			var syncStop = archivedFrameColorWrites.FirstOrDefault(write =>
+				write.Value == 0x0606 && write.Cycle > syncStart.Cycle);
+			var syncVhposrReads = machine.Bus.CustomRegisterReadTrace
+				.Where(read =>
+					read.Address == 0x006 &&
+					read.SampleCycle >= syncStart.Cycle &&
+					read.SampleCycle <= syncStop.Cycle)
+				.ToArray();
+			var syncSecondStop = archivedFrameColorWrites.FirstOrDefault(write =>
+				write.Value == 0x0A0A && write.Cycle > syncStop.Cycle);
+			var syncSecondVhposrReads = machine.Bus.CustomRegisterReadTrace
+				.Where(read =>
+					read.Address == 0x006 &&
+					read.SampleCycle >= syncStop.Cycle &&
+					read.SampleCycle <= syncSecondStop.Cycle)
+				.ToArray();
 			return
 			[
+				$"TRACE {relativePath}: interrupt dispatches first={FormatInterruptDispatches(machine.InterruptDispatchTrace.Take(12))}; " +
+					$"last={FormatInterruptDispatches(machine.InterruptDispatchTrace.Skip(Math.Max(0, machine.InterruptDispatchTrace.Count - 12)))}",
 				$"TRACE {relativePath}: cpuCycles={machine.Cpu.State.Cycles}, " +
 				$"pc=0x{machine.Cpu.State.ProgramCounter & 0x00FF_FFFF:X6}, " +
 				$"lastPc=0x{machine.Cpu.State.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, " +
 				$"sr=0x{machine.Cpu.State.StatusRegister:X4}, code={FormatCodeWords(machine, machine.Cpu.State.LastInstructionProgramCounter, 8)}, " +
 				$"intena=0x{machine.Bus.Paula.Intena:X4}, intreq=0x{machine.Bus.Paula.Intreq:X4}, " +
 				$"dmacon=0x{machine.Bus.Paula.Dmacon:X4}",
+				$"TRACE {relativePath}: timing loop code {FormatCodeWords(machine, 0x070420, 80)}",
+				$"TRACE {relativePath}: timing loop helpers {FormatCodeWords(machine, 0x070200, 80)}",
+				$"TRACE {relativePath}: character helper code {FormatCodeWords(machine, 0x070180, 72)}",
+				$"TRACE {relativePath}: renderer wait exit code {FormatCodeWords(machine, 0x0704D0, 124)}",
+				$"TRACE {relativePath}: glyph DBRA phases {FormatCpuBusPhases(glyphDbraPhases)}",
+				$"TRACE {relativePath}: reference history window {string.Join(' ', referenceHistoryWindow)}",
+				$"TRACE {relativePath}: renderer entry history {string.Join(' ', rendererEntryHistory)}",
+				$"TRACE {relativePath}: outer loop entries {string.Join(' ', outerLoopEntries)}",
+				$"TRACE {relativePath}: first stripe CPU/refresh overlaps {FormatBusAccesses(firstStripeRefreshOverlaps)}",
+				$"TRACE {relativePath}: first stripe denied refresh " +
+					$"count={firstStripeDeniedRefreshSlots.Length} " +
+					$"{string.Join(';', firstStripeDeniedRefreshSlots.Select(slot =>
+						$"{FormatBeam(slot.Cycle)}:" +
+						$"pc={slot.Pc:X6}/addr={slot.Address:X6}/" +
+						$"req={slot.Requested}/grant={slot.Granted}"))}",
+				$"TRACE {relativePath}: first stripe delayed phases {FormatCpuBusPhases(firstStripeDelayedPhases)}",
+				$"TRACE {relativePath}: renderer wait exit phases {FormatCpuBusPhases(rendererWaitExitPhases)}",
+				$"TRACE {relativePath}: renderer wait exit entries {string.Join("; ", rendererWaitExitEntries)}",
+				$"TRACE {relativePath}: renderer wait exit bus {FormatBusAccesses(rendererWaitExitBus)}",
+				$"TRACE {relativePath}: glyph Bcc phases {FormatCpuBusPhases(glyphBranchPhases)}",
+				$"TRACE {relativePath}: glyph Bcc entries {string.Join("; ", glyphBranchEntries)}",
+				$"TRACE {relativePath}: one-word Bcc handoffs {FormatCpuBusPhases(oneWordBranchHandoffs)}",
+				$"TRACE {relativePath}: matching glyph handoffs {FormatCpuBusPhases(matchingReferenceGlyphHandoffs)}",
+				$"TRACE {relativePath}: outer loop boundary phases {FormatCpuBusPhases(outerLoopPhases)}",
+				$"TRACE {relativePath}: glyph contention bus {FormatBusAccesses(glyphContentionBus)}",
+				$"TRACE {relativePath}: level1 branch window {FormatCpuBusPhases(GetCpuPhasesInBeamWindow(machine.Bus.CpuBusPhases, archivedFrameStartCycle, 255, 120, 256, 0))}",
+				$"TRACE {relativePath}: level1 copper bus {FormatBusAccesses(level1CopperBus)}",
+				$"TRACE {relativePath}: presentation transitions {string.Join("; ", machine.Bus.Display.CopperPresentationTransitions
+					.Where(trace => trace.Offset is >= 0x180 and < 0x1C0)
+					.Select(trace =>
+						$"{(trace.IsCopper ? "copper" : "cpu")}@{FormatBeam(trace.Cycle)} " +
+						$"row={trace.Row} x={trace.X} value=0x{trace.Value:X3} " +
+						$"started={trace.HasStartedLine} bplcon0=0x{trace.Bplcon0:X4} " +
+						$"dmacon=0x{trace.Dmacon:X4} planes={trace.PlaneCount}"))}",
+				$"TRACE {relativePath}: steady iteration {steadyIterationStart}->{steadyIterationStop} " +
+					$"delta={steadyIterationStop - steadyIterationStart} phases={FormatCpuBusPhases(steadyIterationCpuPhases)}",
+				$"TRACE {relativePath}: steady iteration requester counts " +
+					$"{string.Join(',', steadyIterationBus
+						.GroupBy(access => access.Request.Requester)
+						.OrderBy(group => group.Key)
+						.Select(group => $"{group.Key}={group.Count()}"))}",
+				$"TRACE {relativePath}: steady instruction ledger " +
+					$"{string.Join(',', steadyInstructionLedger.Select(entry =>
+						$"{entry.Pc:X6}={entry.Count}/{entry.Cycles}"))}",
+				$"TRACE {relativePath}: steady denied owners " +
+					$"refresh={steadyDeniedRefreshSlots},bitplane={steadyDeniedBitplaneSlots},other={steadyDeniedOtherSlots}, " +
+					$"cpuBitplaneOverlap={steadyCpuBitplaneOverlapCycles.Length}" +
+					$"{(steadyCpuBitplaneOverlapCycles.Length == 0 ? string.Empty : $"@{string.Join(',', steadyCpuBitplaneOverlapCycles.Take(32).Select(FormatBeam))}")}",
+				$"TRACE {relativePath}: steady waits by instruction " +
+					$"{string.Join(',', steadyWaitsByInstruction
+						.OrderByDescending(entry => entry.Value.WaitCycles)
+						.Select(entry => $"{entry.Key:X6}={entry.Value.Phases}/{entry.Value.WaitCycles}"))}",
+				$"TRACE {relativePath}: steady DBRA waits by address " +
+					$"{string.Join(',', steadyDbraWaitsByAddress
+						.OrderByDescending(entry => entry.Value.WaitCycles)
+						.Select(entry => $"{entry.Key:X6}={entry.Value.Phases}/{entry.Value.WaitCycles}"))}",
+				$"TRACE {relativePath}: steady iteration bus {FormatBusAccesses(steadyIterationBus)}",
+				$"TRACE {relativePath}: output iteration waits {string.Join(';', outputIterationWaits)}",
+				$"TRACE {relativePath}: rendered color-band timeline " +
+					$"{string.Join("; ", machine.Bus.Display.RenderedCopperTimelineSegments
+						.Where(segment => segment.Row is >= 22 and <= 172 && (segment.Row - 22) % 10 == 0)
+						.Select(segment => $"row={segment.Row} {segment.XStart}-{segment.XStop} color0=0x{segment.Color0:X3}"))}",
 				$"TRACE {relativePath}: timeline active={display.LastActiveTimelineFrameCount}, archived={display.LastArchivedTimelineFrameCount}, " +
 				$"fallback={display.LastTimelineFallbackCount}, missingBitplaneFallback={display.LastTimelineMissingBitplaneFallbackCount}, " +
 				$"fastRows={display.LastTimelineFastPathRowCount}, fastMiss={display.LastTimelineFastPathMissCount}, " +
@@ -2466,15 +3706,28 @@ public sealed class VAmigaTsAdfCorpusTests
 				$"normalBounds={FormatBounds(display.LastNormalPlayfieldMinX, display.LastNormalPlayfieldMinY, display.LastNormalPlayfieldMaxX, display.LastNormalPlayfieldMaxY)}, " +
 				$"bplDma={display.LastBitplaneDmaFetches}, colors={FormatIndexedCounts(display.BitplaneColorCounts)}",
 				$"TRACE {relativePath}: color00 frame count={archivedFrameColorWrites.Length}, " +
-				$"first={FormatWrites(archivedFrameColorWrites.Take(24))}, " +
-				$"last={FormatWrites(archivedFrameColorWrites.Skip(Math.Max(0, archivedFrameColorWrites.Length - 24)))}",
-				$"TRACE {relativePath}: intreq first={FormatWrites(intreqWrites.Take(16))}",
-				$"TRACE {relativePath}: vprobe2 value candidates {FormatVprobe2ValueCandidates(machine.Bus.ChipRam)}",
-				$"TRACE {relativePath}: vprobe2 lea values candidates {FormatProbe10LeaA2Targets(machine.Bus.ChipRam)}",
-				$"TRACE {relativePath}: vprobe2 measured write bursts {FormatProbe10MeasuredWriteBursts(machine.Bus.CpuBusPhases, machine.Bus.ChipRam)}",
-				$"TRACE {relativePath}: vprobe2 value write phases {FormatProbe10ValueWritePhases(machine.Bus.CpuBusPhases, machine.Bus.ChipRam)}",
-				$"TRACE {relativePath}: vprobe2 watched value writes {FormatProbe10WatchedValueWrites(machine.Bus.CpuChipRamWriteTrace, machine.Bus.ChipRam)}",
-				$"TRACE {relativePath}: vprobe2 watched vposr reads {FormatProbe10WatchedVhposrReads(machine.Bus.CustomRegisterReadTrace, machine.Bus.CpuChipRamWriteTrace, machine.Bus.ChipRam, 0x004)}",
+					$"first={FormatWrites(archivedFrameColorWrites.Take(24))}, " +
+					$"last={FormatWrites(archivedFrameColorWrites.Skip(Math.Max(0, archivedFrameColorWrites.Length - 24)))}",
+				$"TRACE {relativePath}: color00 cpu phases frameFirst={FormatCpuBusPhases(archivedFrameColor00CpuPhases.Take(48))}, " +
+					$"frameLast={FormatCpuBusPhases(archivedFrameColor00CpuPhases.Skip(Math.Max(0, archivedFrameColor00CpuPhases.Length - 48)))}",
+				$"TRACE {relativePath}: intreq frame={FormatWrites(archivedFrameIntreqWrites)}",
+				$"TRACE {relativePath}: irq2 handler phases={FormatCpuBusPhases(irq2HandlerPhases)}",
+				$"TRACE {relativePath}: irq2 sync transition phases={FormatCpuBusPhases(GetCpuPhasesInBeamWindow(machine.Bus.CpuBusPhases, archivedFrameStartCycle, 31, 96, 33, 32))}",
+				$"TRACE {relativePath}: sync1 VHPOSR values={FormatCustomRegisterReads(syncVhposrReads)}",
+				$"TRACE {relativePath}: sync2 VHPOSR values={FormatCustomRegisterReads(syncSecondVhposrReads)}",
+				$"TRACE {relativePath}: sync1 first-loop physical ledger " +
+					$"{FormatCpuBusPhases(GetCpuPhasesInBeamWindow(machine.Bus.CpuBusPhases, archivedFrameStartCycle, 32, 44, 32, 128))}",
+				$"TRACE {relativePath}: sync1 first-loop exit ledger " +
+					$"{FormatCpuBusPhases(GetCpuPhasesInBeamWindow(machine.Bus.CpuBusPhases, archivedFrameStartCycle, 32, 208, 33, 24))}",
+				$"TRACE {relativePath}: sync2 line-wrap ledger " +
+					$"{FormatCpuBusPhases(GetCpuPhasesInBeamWindow(machine.Bus.CpuBusPhases, archivedFrameStartCycle, 33, 208, 34, 32))}",
+				$"TRACE {relativePath}: sync1 contention={FormatBusAccesses(sync1ContentionWindow)}",
+				$"TRACE {relativePath}: vprobe value candidates {FormatVprobe2ValueCandidates(machine.Bus.ChipRam)}",
+				$"TRACE {relativePath}: vprobe lea values candidates {FormatProbe10LeaA2Targets(machine.Bus.ChipRam)}",
+				$"TRACE {relativePath}: vprobe measured write bursts {FormatProbe10MeasuredWriteBursts(machine.Bus.CpuBusPhases, machine.Bus.ChipRam)}",
+				$"TRACE {relativePath}: vprobe value write phases {FormatProbe10ValueWritePhases(machine.Bus.CpuBusPhases, machine.Bus.ChipRam)}",
+				$"TRACE {relativePath}: vprobe watched value writes {FormatProbe10WatchedValueWrites(machine.Bus.CpuChipRamWriteTrace, machine.Bus.ChipRam)}",
+				$"TRACE {relativePath}: vprobe watched vposr reads {FormatProbe10WatchedVhposrReads(machine.Bus.CustomRegisterReadTrace, machine.Bus.CpuChipRamWriteTrace, machine.Bus.ChipRam, 0x004)}",
 				$"TRACE {relativePath}: vposr read bursts {FormatVhposrReadBursts(customRegisterReads, 0x004)}",
 				$"TRACE {relativePath}: vposr reads count={vposrReads.Length}, " +
 				$"first={FormatBusAccesses(vposrReads.Take(16))}, " +
@@ -2482,6 +3735,8 @@ public sealed class VAmigaTsAdfCorpusTests
 				$"TRACE {relativePath}: vposr cpu phases first={FormatCpuBusPhases(vposrCpuPhases.Take(16))}, " +
 				$"last={FormatCpuBusPhases(vposrCpuPhases.Skip(Math.Max(0, vposrCpuPhases.Length - 16)))}",
 				$"TRACE {relativePath}: level1 pending gap phases {FormatCpuBusPhases(GetCpuPhasesInBeamWindow(machine.Bus.CpuBusPhases, archivedFrameStartCycle, 247, 160, 258, 24).Take(96))}",
+				$"TRACE {relativePath}: beam cpu phases frameFirst={FormatCpuBusPhases(archivedFrameBeamCpuPhases.Take(64))}, " +
+					$"frameLast={FormatCpuBusPhases(archivedFrameBeamCpuPhases.Skip(Math.Max(0, archivedFrameBeamCpuPhases.Length - 64)))}",
 				$"TRACE {relativePath}: beam reads by pc {FormatBeamReadsByProgramCounter(beamCpuPhases, customRegisterReads)}",
 				$"TRACE {relativePath}: archivedTimelineRows {TraceArchivedTimelineRows(machine.Bus.Display, 0, 6, 7, 8, 9, 10, 52, 56, 62, 70, 182, 194, 209, 221, 230, 231, 232)}"
 			];
@@ -2686,6 +3941,13 @@ public sealed class VAmigaTsAdfCorpusTests
 
 		return
 		[
+			$"TRACE {relativePath}: stripe-to-sync starts {FormatStripeToSyncStarts(machine.Bus.CpuBusPhases, archivedFrameStartCycle)}",
+			$"TRACE {relativePath}: stripe handoff phases {FormatCpuBusPhases(archivedStripeHandoffPhases)}",
+			$"TRACE {relativePath}: late transition phases {FormatLateTransitionPhases(archivedFrameSyncLoopCpuPhases, customRegisterReads, archivedFrameStartCycle)}",
+			$"TRACE {relativePath}: archived synccpu1 vhpos reads {FormatSyncCpuStageSummary(archivedSyncCpu1VhposReads, customRegisterReads)}",
+			$"TRACE {relativePath}: archived synccpu1 physical {FormatCpuBusPhaseReads(archivedSyncCpu1VhposReads, customRegisterReads)}",
+			$"TRACE {relativePath}: archived synccpu exits " +
+			$"sync1={FormatSyncCpuExitTransitions(archivedSyncCpu1VhposReads, customRegisterReads, syncColorWrites, 0x000F)}",
 			$"TRACE {relativePath}: cpuCycles={machine.Cpu.State.Cycles}, " +
 			$"pc=0x{machine.Cpu.State.ProgramCounter & 0x00FF_FFFF:X6}, " +
 			$"lastPc=0x{machine.Cpu.State.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, " +
@@ -2730,13 +3992,14 @@ public sealed class VAmigaTsAdfCorpusTests
 			$"TRACE {relativePath}: color00 presentation rows214-216 {FormatColor00PresentationWindow(archivedFrameColorWrites, archivedFrameColor00CpuPhases, archivedFrameStartCycle, 214, 216)}",
 			$"TRACE {relativePath}: color00 first={FormatWrites(colorWrites.Take(16))}",
 			$"TRACE {relativePath}: color00 last={FormatWrites(colorWrites.Skip(Math.Max(0, colorWrites.Length - 16)))}",
+			$"TRACE {relativePath}: bitplane pointer writes {FormatWrites(writes.Where(write => write.Address is >= 0x0E0 and <= 0x0F6).TakeLast(10))}",
 			$"TRACE {relativePath}: copper bus v098/v100 {FormatBusAccesses(machine.Bus.BusAccesses.Where(access => access.Request.Kind == AmigaBusAccessKind.Copper && GetPalBeamLine(access.GrantedCycle) is 98 or 100))}",
 			$"TRACE {relativePath}: copper bus remaining wait rows {FormatBusAccesses(machine.Bus.BusAccesses.Where(access => access.Request.Kind == AmigaBusAccessKind.Copper && GetPalBeamLine(access.GrantedCycle) is 170 or 172 or 244 or 246))}",
 			$"TRACE {relativePath}: all bus v098h056-090 {FormatBusAccesses(machine.Bus.BusAccesses.Where(access => GetPalBeamLine(access.GrantedCycle) == 98 && GetPalBeamHorizontal(access.GrantedCycle) is >= 56 and <= 90))}",
 			$"TRACE {relativePath}: all bus remaining wait windows {FormatBusAccesses(machine.Bus.BusAccesses.Where(access => GetPalBeamLine(access.GrantedCycle) is 100 or 170 or 172 or 244 or 246 && GetPalBeamHorizontal(access.GrantedCycle) is >= 56 and <= 110))}",
 			$"TRACE {relativePath}: copper words 070190 {FormatCodeWords(machine, 0x070190, 72)}",
-			$"TRACE {relativePath}: copper WAIT control {string.Join("; ", machine.Bus.Display.CopperWaitTransitions.Select(trace => $"pc=0x{trace.Pc:X6} wait=0x{trace.WaitFirst:X4} cmp={FormatBeam(trace.ComparisonCycle)} sat={FormatBeam(trace.SatisfiedCycle)} restart={FormatBeam(trace.RestartCycle)} carry={trace.CarryPending}/{trace.CarrySkipCount} blocked={trace.RestartIncomingRgaBlocked}"))}",
-			$"TRACE {relativePath}: copper presentation transitions {string.Join("; ", machine.Bus.Display.CopperPresentationTransitions.Select(trace => $"{FormatBeam(trace.Cycle)} row={trace.Row} x={trace.X} reg=0x{trace.Offset:X3} value=0x{trace.Value:X4}"))}",
+			$"TRACE {relativePath}: copper WAIT control {string.Join("; ", machine.Bus.Display.CopperWaitTransitions.Where(trace => trace.SatisfiedCycle >= archivedFrameStartCycle && trace.SatisfiedCycle < archivedFrameStopCycle).Select(trace => $"pc=0x{trace.Pc:X6} wait=0x{trace.WaitFirst:X4} cmp={FormatBeam(trace.ComparisonCycle)} sat={FormatBeam(trace.SatisfiedCycle)} restart={FormatBeam(trace.RestartCycle)} carry={trace.CarryPending}/{trace.CarrySkipCount} blocked={trace.RestartIncomingRgaBlocked}"))}",
+			$"TRACE {relativePath}: copper presentation transitions{Environment.NewLine}{string.Join(Environment.NewLine, machine.Bus.Display.CopperPresentationTransitions.Where(trace => trace.Row is 72 or 73 or 74 or 75 or 144 or 145 or 146 or 147 or 148 or 218 or 219 or 220 or 221).Select(trace => $"{FormatBeam(trace.Cycle)} row={trace.Row} x={trace.X} reg=0x{trace.Offset:X3} value=0x{trace.Value:X4} planes={trace.PlaneCount}/0x{trace.PlaneHasRowMask:X2} bases={trace.BitplaneBaseRow0},{trace.BitplaneBaseRow1},{trace.BitplaneBaseRow2},{trace.BitplaneBaseRow3},{trace.BitplaneBaseRow4} wait=0x{trace.WaitFirst:X4} run={trace.SatisfiedWaitRunCount} beganBlocked={trace.WaitRunBeganWithBlockingComparison} blocked={trace.WaitRunControlBlocked} compare={FormatBeam(trace.WaitComparisonStartCycle)} satisfied={FormatBeam(trace.WaitSatisfiedCycle)} restart={FormatBeam(trace.WaitRestartCycle)} rga={trace.WaitRestartRgaDecision}/{trace.WaitRestartRgaIncoming}/{trace.WaitRestartRgaOutput} request={FormatBeam(trace.SecondWordRequestedCycle)} offsets={trace.WaitPresentationPixelOffset}/{trace.FivePlaneWaitMovePixelOffset}"))}",
 			$"TRACE {relativePath}: v098 DDF-tail bitplanes {string.Join("; ", machine.Bus.BusAccesses.Where(access => access.Request.Kind == AmigaBusAccessKind.Bitplane && GetPalBeamLine(access.GrantedCycle) == 98 && GetPalBeamHorizontal(access.GrantedCycle) is >= 145 and <= 170).Select(access => $"{FormatBeam(access.GrantedCycle)} addr=0x{access.Request.Address:X6} word=0x{BigEndian.ReadUInt16(machine.Bus.ChipRam, (int)access.Request.Address, "bitplane trace"):X4}"))}",
 			$"TRACE {relativePath}: rendered timeline rows72-74 {string.Join("; ", machine.Bus.Display.RenderedCopperTimelineSegments.Where(segment => segment.Row is >= 72 and <= 74).Select(segment => $"row={segment.Row} {segment.XStart}-{segment.XStop} palette={segment.PaletteSnapshotIndex} color0=0x{segment.Color0:X3}"))}",
 			$"TRACE {relativePath}: rendered pixel tails {string.Join("; ", machine.Bus.Display.RenderedCopperPixelTraces.Select(trace => $"row={trace.Row} stage={trace.Stage} x217-222={trace.X217:X8},{trace.X218:X8},{trace.X219:X8},{trace.X220:X8},{trace.X221:X8},{trace.X222:X8}"))}",
@@ -3182,7 +4445,10 @@ public sealed class VAmigaTsAdfCorpusTests
 	{
 		var timelineField = display.GetType().GetField(
 			"_archivedDisplayTimeline",
-			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic) ??
+			display.GetType().GetField(
+				"_displayTimeline",
+				System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
 		if (timelineField?.GetValue(display) is not object timeline)
 		{
 			return "unavailable (causal rasterline presentation has no archived frame timeline)";
@@ -3193,14 +4459,34 @@ public sealed class VAmigaTsAdfCorpusTests
 				.GetField("_states", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
 				.GetValue(timeline));
 		var generation = GetPrivateField<int>(timeline, "_generation");
-		var paletteColors = GetPrivateField<ushort[]>(display, "_archivedPaletteSnapshotColors");
-		var paletteCount = GetPrivateField<int>(display, "_archivedPaletteSnapshotCount");
+		var palettePoolField = display.GetType().GetField(
+			"_archivedPaletteSnapshotColors",
+			System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+		var paletteColors = palettePoolField?.GetValue(display) as ushort[];
+		var paletteCount = 0;
+		if (paletteColors == null)
+		{
+			var livePalettePool = GetPrivateFieldValue(display, "_livePaletteSnapshots");
+			Assert.NotNull(livePalettePool);
+			paletteColors = GetPrivateField<ushort[]>(livePalettePool, "_encodedColors");
+			paletteCount = GetMemberValue<int>(livePalettePool, "Count");
+		}
+		else
+		{
+			paletteCount = GetPrivateField<int>(display, "_archivedPaletteSnapshotCount");
+		}
 		return string.Join(" | ", rows.Select(row =>
 		{
-			var line = lines.GetValue(row);
+			var lineIndex = lines.Length == 0 ? -1 :
+				lines.Length > row ? row : row % lines.Length;
+			var line = lineIndex >= 0 ? lines.GetValue(lineIndex) : null;
 			if (line == null)
 			{
 				return $"row{row}:missing";
+			}
+			if (TryGetMemberInt(line, "Row") is int storedRow && storedRow != row)
+			{
+				return $"row{row}:slot={lineIndex}/stored={storedRow}";
 			}
 
 			var lineGeneration = GetMemberValue<int>(line, "Generation");
@@ -3226,11 +4512,13 @@ public sealed class VAmigaTsAdfCorpusTests
 					: (ushort)0;
 				var bplcon0 = GetMemberValue<ushort>(state, "Bplcon0");
 				var dmacon = GetMemberValue<ushort>(state, "Dmacon");
+				var verticalOpen = GetMemberValue<bool>(state, "DisplayWindowVerticallyOpen");
+				var deniseVerticalOpen = TryGetBoolMember(state, "DeniseDisplayWindowVerticallyOpen") ?? verticalOpen;
 				var lineStart = GetMemberValue<long>(state, "LineStartCycle");
 				var pointers = GetMemberValue<uint[]>(state, "BitplanePointers");
 				var baseRows = GetMemberValue<int[]>(state, "BitplaneBaseRows");
 				var rowAddresses = GetMemberValue<uint[]>(state, "BitplaneRowAddresses");
-				return $"{xStart}-{xStop}:s{stateIndex}/p{paletteIndex}/c0=0x{color00:X3}/bpl=0x{bplcon0:X4}/dma=0x{dmacon:X4}/" +
+				return $"{xStart}-{xStop}:s{stateIndex}/p{paletteIndex}/c0=0x{color00:X3}/bpl=0x{bplcon0:X4}/dma=0x{dmacon:X4}/win={verticalOpen}/{deniseVerticalOpen}/" +
 					$"bp0=0x{pointers[0]:X6}/br0={baseRows[0]}/ra0=0x{rowAddresses[0]:X6}/ls={FormatBeam(lineStart)}";
 			}));
 			var fetchText = string.Join(",", fetchMasks.Select((mask, plane) =>
@@ -3271,6 +4559,38 @@ public sealed class VAmigaTsAdfCorpusTests
 
 	private static T GetMemberValue<T>(object instance, string memberName)
 		=> Assert.IsType<T>(GetMemberRawValue(instance, memberName));
+
+	private static bool? TryGetBoolMember(object instance, string memberName)
+	{
+		var flags = System.Reflection.BindingFlags.Instance |
+			System.Reflection.BindingFlags.Public |
+			System.Reflection.BindingFlags.NonPublic;
+		var type = instance.GetType();
+		var field = type.GetField(memberName, flags);
+		if (field != null)
+		{
+			return field.GetValue(instance) is bool value ? value : null;
+		}
+
+		var property = type.GetProperty(memberName, flags);
+		return property?.GetValue(instance) is bool propertyValue ? propertyValue : null;
+	}
+
+	private static int? TryGetMemberInt(object instance, string memberName)
+	{
+		var flags = System.Reflection.BindingFlags.Instance |
+			System.Reflection.BindingFlags.Public |
+			System.Reflection.BindingFlags.NonPublic;
+		var type = instance.GetType();
+		var field = type.GetField(memberName, flags);
+		if (field != null)
+		{
+			return field.GetValue(instance) is int value ? value : null;
+		}
+
+		var property = type.GetProperty(memberName, flags);
+		return property?.GetValue(instance) is int propertyValue ? propertyValue : null;
+	}
 
 	private static object? GetMemberRawValue(object instance, string memberName)
 	{
@@ -3577,6 +4897,206 @@ public sealed class VAmigaTsAdfCorpusTests
 			.Select(candidate =>
 				$"0x{candidate.Offset:X5}/score={candidate.Score} [" +
 				$"{string.Join(",", candidate.Values.Select(value => $"0x{value:X4}"))}]"));
+	}
+
+	private static string FormatVprobeInstructionRetirements(
+		string relativePath,
+		Machine machine,
+		IEnumerable<M68kInstructionRetirementTrace> captured)
+	{
+		var steadyWrites = machine.Bus.CustomRegisterWrites
+			.Where(write => write.Address == 0x180 && write.Value <= 0x000F)
+			.OrderBy(write => write.Cycle)
+			.ToArray();
+		if (steadyWrites.Length < 8)
+		{
+			return $"TRACE {relativePath}: complete instruction ledger unavailable";
+		}
+
+		var startCycle = steadyWrites[^8].Cycle;
+		var stopCycle = steadyWrites[^7].Cycle;
+		var retirements = captured
+			.Where(trace => trace.StartCycle >= startCycle && trace.StartCycle < stopCycle)
+			.OrderBy(trace => trace.StartCycle)
+			.ToArray();
+		var elapsed = retirements.Sum(trace => trace.RetireCycle - trace.StartCycle);
+		var gaps = retirements
+			.Zip(retirements.Skip(1), (current, next) =>
+				Math.Max(0, next.StartCycle - current.RetireCycle))
+			.Sum();
+		var entries = retirements
+			.GroupBy(trace => (Pc: trace.ProgramCounter & 0x00FF_FFFF, trace.Opcode))
+			.Select(group => new
+			{
+				group.Key.Pc,
+				group.Key.Opcode,
+				Count = group.Count(),
+				Cycles = group.Sum(trace => trace.RetireCycle - trace.StartCycle)
+			})
+			.OrderByDescending(entry => entry.Cycles)
+			.ThenBy(entry => entry.Pc)
+			.Select(entry =>
+				$"{entry.Pc:X6}/{entry.Opcode:X4}={entry.Count}/{entry.Cycles}");
+		var lastSequenceStart = Array.FindLastIndex(
+			steadyWrites,
+			write => write.Value == 0x000F);
+		var sequenceWrites = lastSequenceStart >= 0
+			? steadyWrites.Skip(lastSequenceStart).ToArray()
+			: [];
+		var perIteration = sequenceWrites
+			.Zip(sequenceWrites.Skip(1), (start, stop) =>
+			{
+				var window = captured
+					.Where(trace => trace.StartCycle >= start.Cycle && trace.StartCycle < stop.Cycle)
+					.ToArray();
+				var grouped = window
+					.GroupBy(trace => trace.ProgramCounter & 0x00FF_FFFF)
+					.Select(group => new
+					{
+						Pc = group.Key,
+						Count = group.Count(),
+						Cycles = group.Sum(trace => trace.RetireCycle - trace.StartCycle)
+					})
+					.OrderByDescending(entry => entry.Cycles)
+					.Take(8)
+					.Select(entry => $"{entry.Pc:X6}={entry.Count}/{entry.Cycles}");
+				var control = window
+					.Where(trace =>
+						(trace.Opcode & 0xF000) == 0x6000 ||
+						(trace.Opcode & 0xF0F8) == 0x50C8)
+					.GroupBy(trace => (
+						Pc: trace.ProgramCounter & 0x00FF_FFFF,
+						trace.Opcode,
+						Cycles: trace.RetireCycle - trace.StartCycle))
+					.OrderBy(entry => entry.Key.Pc)
+					.ThenBy(entry => entry.Key.Cycles)
+					.Select(entry =>
+						$"{entry.Key.Pc:X6}/{entry.Key.Opcode:X4}/" +
+						$"{entry.Key.Cycles}x{entry.Count()}");
+				return
+					$"{start.Value:X3}->{stop.Value:X3}/dt={stop.Cycle - start.Cycle}/" +
+					$"n={window.Length}[" + string.Join(',', grouped) + "]" +
+					$"/ctl[" + string.Join(',', control) + "]";
+			});
+		var firstIterationStartIndex = Array.FindLastIndex(steadyWrites, write => write.Value == 0x000F);
+		var firstIterationRetirements = firstIterationStartIndex >= 0 &&
+			firstIterationStartIndex + 1 < steadyWrites.Length
+				? captured
+					.Where(trace =>
+						trace.StartCycle >= steadyWrites[firstIterationStartIndex].Cycle &&
+						trace.StartCycle < steadyWrites[firstIterationStartIndex + 1].Cycle)
+					.OrderBy(trace => trace.StartCycle)
+					.Take(120)
+					.Select(trace =>
+						$"{FormatBeam(trace.StartCycle)}:" +
+						$"{trace.ProgramCounter & 0x00FF_FFFF:X6}/" +
+						$"{trace.Opcode:X4}/{trace.RetireCycle - trace.StartCycle}")
+				: [];
+		var firstIterationMovemTransitions = firstIterationStartIndex >= 0 &&
+			firstIterationStartIndex + 1 < steadyWrites.Length
+				? captured
+					.Where(trace =>
+						trace.StartCycle >= steadyWrites[firstIterationStartIndex].Cycle &&
+						trace.StartCycle < steadyWrites[firstIterationStartIndex + 1].Cycle &&
+						(trace.ProgramCounter & 0x00FF_FFFF) == 0x0701EC)
+					.OrderBy(trace => trace.StartCycle)
+					.Select(trace =>
+					{
+						var phases = machine.Bus.CpuBusPhases
+							.Where(phase =>
+								phase.CpuPhase.InstructionStartCycle == trace.StartCycle &&
+								(phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF) == 0x0701EC)
+							.OrderBy(phase => phase.CpuPhase.RequestedCycle)
+							.ToArray();
+						var entry = phases.FirstOrDefault().CpuPhase;
+						return
+							$"{FormatBeam(trace.StartCycle)}/dt={trace.RetireCycle - trace.StartCycle}/" +
+							$"q={entry.InstructionEntryPrefetchCount}/" +
+							$"entryBus={entry.InstructionEntryBusCycle - trace.StartCycle}/" +
+							$"r0={entry.InstructionEntryReadyCycle0 - trace.StartCycle}/" +
+							$"r1={entry.InstructionEntryReadyCycle1 - trace.StartCycle}/" +
+							$"bus=[" + string.Join(',', phases.Select(phase =>
+								$"{phase.CpuPhase.Address & 0x00FF_FFFF:X6}:" +
+								$"{phase.CpuPhase.RequestedCycle - trace.StartCycle}->" +
+								$"{phase.CpuPhase.CompletedCycle - trace.StartCycle}")) + "]";
+					})
+				: [];
+		var firstIterationBsrTransitions = firstIterationStartIndex >= 0 &&
+			firstIterationStartIndex + 1 < steadyWrites.Length
+				? captured
+					.Where(trace =>
+						trace.StartCycle >= steadyWrites[firstIterationStartIndex].Cycle &&
+						trace.StartCycle < steadyWrites[firstIterationStartIndex + 1].Cycle &&
+						(trace.Opcode & 0xFF00) == 0x6100)
+					.OrderBy(trace => trace.StartCycle)
+					.Select(trace =>
+					{
+						var phases = machine.Bus.CpuBusPhases
+							.Where(phase =>
+								phase.CpuPhase.InstructionStartCycle == trace.StartCycle &&
+								(phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF) ==
+									(trace.ProgramCounter & 0x00FF_FFFF))
+							.OrderBy(phase => phase.CpuPhase.RequestedCycle)
+							.ToArray();
+						var entry = phases.FirstOrDefault().CpuPhase;
+						return
+							$"{FormatBeam(trace.StartCycle)}/pc={trace.ProgramCounter & 0x00FF_FFFF:X6}/" +
+							$"dt={trace.RetireCycle - trace.StartCycle}/" +
+							$"q={entry.InstructionEntryPrefetchCount}/" +
+							$"entryBus={entry.InstructionEntryBusCycle - trace.StartCycle}/" +
+							$"r0={entry.InstructionEntryReadyCycle0 - trace.StartCycle}/" +
+							$"r1={entry.InstructionEntryReadyCycle1 - trace.StartCycle}/" +
+							$"bus=[" + string.Join(',', phases.Select(phase =>
+								$"{phase.CpuPhase.Address & 0x00FF_FFFF:X6}:" +
+								$"{phase.CpuPhase.RequestedCycle - trace.StartCycle}->" +
+								$"{phase.CpuPhase.CompletedCycle - trace.StartCycle}")) + "]";
+					})
+				: [];
+		return
+			$"TRACE {relativePath}: complete instruction ledger " +
+			$"window={startCycle}->{stopCycle}/delta={stopCycle - startCycle}/" +
+			$"count={retirements.Length}/elapsed={elapsed}/gaps={gaps} " +
+			string.Join(',', entries) +
+			$"; per iteration {string.Join(';', perIteration)}" +
+			$"; first sequence {string.Join(',', firstIterationRetirements)}" +
+			$"; first MOVEM transitions {string.Join(';', firstIterationMovemTransitions)}" +
+			$"; first BSR transitions {string.Join(';', firstIterationBsrTransitions)}";
+	}
+
+	private static string FormatExpiredDbraTransitions(string relativePath, Machine machine)
+	{
+		var transitions = machine.Bus.CpuBusPhases
+			.GroupBy(phase => (
+				phase.CpuPhase.InstructionStartCycle,
+				Pc: phase.CpuPhase.InstructionProgramCounter & 0x00FF_FFFF))
+			.Where(group =>
+			{
+				var pc = group.Key.Pc;
+				return pc + 1 < machine.Bus.ChipRam.Length &&
+					(ReadChipRamWord(machine.Bus.ChipRam, pc) & 0xFFF8) == 0x51C8 &&
+					group.Any(phase =>
+						(phase.CpuPhase.Address & 0x00FF_FFFF) == ((pc + 4) & 0x00FF_FFFF));
+			})
+			.OrderBy(group => group.Key.InstructionStartCycle)
+			.TakeLast(24)
+			.Select(group =>
+			{
+				var first = group.First().CpuPhase;
+				var phases = group
+					.Select(phase =>
+						$"{phase.CpuPhase.Address & 0x00FF_FFFF:X6}:" +
+						$"{phase.CpuPhase.RequestedCycle - first.InstructionStartCycle}->" +
+						$"{phase.CpuPhase.CompletedCycle - first.InstructionStartCycle}")
+					.ToArray();
+				return
+					$"pc={group.Key.Pc:X6}/start={group.Key.InstructionStartCycle}/" +
+					$"entryBus={first.InstructionEntryBusCycle - first.InstructionStartCycle}/" +
+					$"q={first.InstructionEntryPrefetchCount}/" +
+					$"r0={first.InstructionEntryReadyCycle0 - first.InstructionStartCycle}/" +
+					$"r1={first.InstructionEntryReadyCycle1 - first.InstructionStartCycle}/" +
+					$"phases=[{string.Join(',', phases)}]";
+			});
+		return $"TRACE {relativePath}: expired DBRA transitions {string.Join("; ", transitions)}";
 	}
 
 	private static string FormatProbe10LeaA2Targets(byte[] chipRam)
@@ -3958,6 +5478,8 @@ public sealed class VAmigaTsAdfCorpusTests
 				: "slot=none";
 			return $"pc=0x{cpu.InstructionProgramCounter & 0x00FF_FFFF:X6} " +
 				$"{(cpu.IsWrite ? "W" : "R")} 0x{cpu.Address & 0x00FF_FFFE:X6}/{cpu.Size}/{cpu.AccessKind} " +
+				$"ins={FormatBeam(cpu.InstructionStartCycle)}/entry={FormatBeam(cpu.InstructionEntryBusCycle)}/" +
+				$"q{cpu.InstructionEntryPrefetchCount}@{cpu.InstructionEntryReadyCycle0},{cpu.InstructionEntryReadyCycle1} " +
 				$"cpu={FormatBeam(cpu.RequestedCycle)}..{FormatBeam(cpu.CompletedCycle)} bus={bus} second={FormatBeam(phase.SecondWordCycle)} {slot}";
 		}));
 
@@ -4256,6 +5778,26 @@ public sealed class VAmigaTsAdfCorpusTests
 			$"w{value.Word0:X4},{value.Word1:X4}/" +
 			$"r{value.ReadyCycle0 - originCycle},{value.ReadyCycle1 - originCycle}/" +
 			$"b{value.BusCycle - originCycle}/ret{value.RetireBusCycle - originCycle}/" +
+			$"fence{value.ExceptionEntryNotBeforeCycle - originCycle}/" +
+			$"tail{value.InterruptEntryBranchTailAdjustmentCycles}/" +
+			$"branch={value.BranchInterruptBoundaryCycle - originCycle}," +
+			$"{value.BranchInterruptRequestedCycle - originCycle}," +
+			$"{value.BranchInterruptRetireCycle - originCycle}/" +
+			$"entryq{value.BranchInterruptEntryPrefetchCount}@" +
+			$"{value.BranchInterruptEntryBusCycle - originCycle}," +
+			$"{value.BranchInterruptEntryReadyCycle0 - originCycle}," +
+			$"{value.BranchInterruptInstructionEntryCycle - originCycle}/" +
+			$"entrytok={value.BranchInterruptEntryTimingToken0}," +
+			$"{value.BranchInterruptEntryTimingToken1}/" +
+			$"pred={value.BranchInterruptPredecessorToken}/" +
+			$"ircgap={value.BranchInterruptRequiresIrcGap}/" +
+			$"deferred={value.BranchInterruptCapturedDuringDeferredBatch}/" +
+			$"control={value.BranchInterruptPendingInternalCycles}/" +
+			$"ipl={value.IplPipelineState.PinLevel}@{value.IplPipelineState.PinChangeCycle - originCycle}," +
+			$"prev{value.IplPipelineState.PreviousPinLevel}@{value.IplPipelineState.PreviousPinChangeCycle - originCycle}," +
+			$"lat{value.IplPipelineState.LatchedLevel},sec{value.IplPipelineState.SecondaryLevel}," +
+			$"eval{value.IplPipelineState.EvaluatedSampleLevel}@{value.IplPipelineState.EvaluatedSampleCycle - originCycle}/" +
+			$"lastsample{value.LastInterruptSampleCycle - originCycle}/" +
 			$"pending={(value.HasPendingPrefetch ? $"0x{value.PendingPrefetchAddress & 0x00FF_FFFF:X6}@{value.PendingPrefetchEarliestCycle - originCycle}" : "none")}";
 	}
 

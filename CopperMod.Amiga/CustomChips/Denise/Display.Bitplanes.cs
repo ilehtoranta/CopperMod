@@ -610,7 +610,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 priorityMask |= Playfield2PriorityMask;
             }
 
-            var playfield2Color = playfield2 == 0 ? 0 : playfield2 + 8;
+            var playfield2Color = playfield2 == 0
+                ? 0
+                : playfield2 + GetPlayfield2ColorOffset();
             var playfield1Color = GetPlayfield1Priority() >= 5 && playfield1 != 0 ? 0 : playfield1;
             playfield2Color = GetPlayfield2Priority() >= 5 && playfield2 != 0 ? 0 : playfield2Color;
             if ((_bplcon2 & 0x0040) != 0)
@@ -731,7 +733,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 priorityMask |= Playfield2PriorityMask;
             }
 
-            var playfield2Color = playfield2 == 0 ? 0 : playfield2 + 8;
+            var playfield2Color = playfield2 == 0
+                ? 0
+                : playfield2 + GetPlayfield2ColorOffset();
             var playfield1Color = GetPlayfield1Priority() >= 5 && playfield1 != 0 ? 0 : playfield1;
             playfield2Color = GetPlayfield2Priority() >= 5 && playfield2 != 0 ? 0 : playfield2Color;
             if ((_bplcon2 & 0x0040) != 0)
@@ -752,10 +756,28 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return (_bplcon2 >> 3) & 0x0007;
         }
 
+        private int GetPlayfield2ColorOffset()
+            => GetPlayfield2ColorOffset(_chipset.DisplayChip, _bplcon3);
+
+        internal static int GetPlayfield2ColorOffset(DisplayChipModel displayChip, ushort bplcon3)
+        {
+            if (displayChip != DisplayChipModel.AgaLisa)
+                return 8;
+
+            // BPLCON3 PF2OF2..0 supplies the single affected colour-address
+            // bit. %011 is the reset-compatible COLOR08 offset; %100 gives
+            // the COLOR16 offset needed by a four-plane playfield two.
+            var selectedBit = (bplcon3 >> 10) & 0x7;
+            return selectedBit == 0 ? 0 : 1 << selectedBit;
+        }
+
         private int GetDataFetchStartX(DisplayWindow window)
+            => GetDataFetchStartX(window, _bplcon0);
+
+        private int GetDataFetchStartX(DisplayWindow window, ushort bplcon0)
         {
             var ddfStart = GetDataFetchStartValue();
-            var resolution = GetDeniseResolution(_bplcon0);
+            var resolution = GetDeniseResolution(bplcon0);
             var highResolution = resolution == DeniseResolution.HighRes;
             var superHighResolution = resolution == DeniseResolution.SuperHighRes;
             var defaultStart = highResolution || superHighResolution

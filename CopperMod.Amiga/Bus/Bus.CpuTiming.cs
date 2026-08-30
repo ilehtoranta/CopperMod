@@ -11,17 +11,22 @@ namespace CopperMod.Amiga.Bus
 {
     internal sealed partial class Bus
     {
+        private const int UnconditionalBranchEarlyLineControlCycles = 32;
+
         internal static int GetPendingInterruptedBranchControlCycles(
             in M68kInstructionFetchPublicationContext publicationContext,
             long interruptBoundaryCycle,
             long lineCycles)
         {
-            // This is CPU control progress, not a display offset. Derive its
-            // stable phase from the physical line timeline; absolute frame
-            // parity alternates on PAL short/long frames and is not CPU state.
             if (publicationContext.EntryPrefetchCount != 2 ||
-                publicationContext.InstructionEntryCycle - interruptBoundaryCycle < 3 ||
+                publicationContext.PendingInternalCycles <= 0 ||
                 lineCycles <= 0)
+            {
+                return 0;
+            }
+
+            var entryLead = publicationContext.InstructionEntryCycle - interruptBoundaryCycle;
+            if (entryLead <= 0)
             {
                 return 0;
             }
@@ -32,7 +37,23 @@ namespace CopperMod.Amiga.Bus
                 lineEntryCycle += lineCycles;
             }
 
-            return (lineEntryCycle & 3) == 0 ? 4 : 0;
+            if (entryLead < 3)
+            {
+                return -publicationContext.PendingInternalCycles;
+            }
+
+            return publicationContext.BranchTransitionKind ==
+                    M68kBranchInterruptTransitionKind.Unconditional &&
+                entryLead == 3 &&
+                lineEntryCycle < UnconditionalBranchEarlyLineControlCycles
+                ? 0
+                : entryLead == 3 && (lineEntryCycle & 3) == 0
+                    ? (lineEntryCycle & 4) == 0
+                        ? -publicationContext.PendingInternalCycles * 3
+                        : publicationContext.PendingInternalCycles * 2
+                    : (lineEntryCycle & 3) == 0
+                        ? publicationContext.PendingInternalCycles * 2
+                        : -publicationContext.PendingInternalCycles;
         }
 
         internal CpuWaitGrantAdvanceResult AdvanceCpuInstructionFetchUntilInterruptForTest(

@@ -666,6 +666,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         StopManualSpriteFrameCommands(sprite, cycle);
                         _sprites[sprite].Ctl = value;
                         _sprites[sprite].ManualArmed = false;
+                        ApplyLiveSpriteControlWrite(sprite, value, cycle);
                         break;
                     case 4:
                         StopManualSpriteFrameCommands(sprite, cycle);

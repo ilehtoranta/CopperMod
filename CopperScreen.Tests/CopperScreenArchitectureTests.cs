@@ -100,6 +100,75 @@ public sealed class CopperScreenArchitectureTests
 		Assert.Equal(AmigaChipset.OcsPal, profile.CreateMachineOptions().Chipset);
 	}
 
+	[Theory]
+	[InlineData(null, global::CopperStart.Exec.ExecMemoryAllocatorKind.Tlsf)]
+	[InlineData("Tlsf", global::CopperStart.Exec.ExecMemoryAllocatorKind.Tlsf)]
+	[InlineData("Classic", global::CopperStart.Exec.ExecMemoryAllocatorKind.Classic)]
+	public void CopperStartProfileSelectsConfiguredMemoryAllocator(
+		string? allocator,
+		global::CopperStart.Exec.ExecMemoryAllocatorKind expected)
+	{
+		var directory = Path.Combine(Path.GetTempPath(), "copperscreen-memory-allocator-" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(directory);
+		try
+		{
+			var allocatorProperty = allocator == null
+				? string.Empty
+				: $",\n    \"memoryAllocator\": \"{allocator}\"";
+			var profilePath = WriteMemoryAllocatorProfile(directory, "CopperStart", allocatorProperty);
+
+			Assert.True(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out var profile, out var error), error);
+			Assert.Equal(expected, profile.MemoryAllocator);
+		}
+		finally
+		{
+			Directory.Delete(directory, recursive: true);
+		}
+	}
+
+	[Theory]
+	[InlineData("Kickstart13Rom")]
+	[InlineData("KickstartRom")]
+	[InlineData("DiagRom")]
+	public void ExternalRomProfileRejectsMemoryAllocatorSelection(string source)
+	{
+		var directory = Path.Combine(Path.GetTempPath(), "copperscreen-external-memory-allocator-" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(directory);
+		try
+		{
+			var profilePath = WriteMemoryAllocatorProfile(directory, source, ",\n    \"memoryAllocator\": \"Classic\"");
+
+			Assert.False(CopperScreenProfile.TryLoad(profilePath, AppContext.BaseDirectory, out _, out var error));
+			Assert.Contains("valid only for CopperStart", error, StringComparison.Ordinal);
+		}
+		finally
+		{
+			Directory.Delete(directory, recursive: true);
+		}
+	}
+
+	private static string WriteMemoryAllocatorProfile(string directory, string source, string allocatorProperty)
+	{
+		var profilePath = Path.Combine(directory, "memory-allocator.json");
+		File.WriteAllText(
+			profilePath,
+			$$"""
+			{
+			  "id": "memory-allocator",
+			  "displayName": "Memory allocator",
+			  "machine": {
+			    "model": "A500PAL",
+			    "chipRamKb": 512
+			  },
+			  "kickstart": {
+			    "source": "{{source}}",
+			    "version": "1.3"{{allocatorProperty}}
+			  }
+			}
+			""");
+		return profilePath;
+	}
+
 	[Fact]
 	public void ProfileAutoStartStartupSequenceDefaultsToTrueUnlessExplicitlyDisabled()
 	{

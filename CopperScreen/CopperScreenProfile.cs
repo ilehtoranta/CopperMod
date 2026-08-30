@@ -6,6 +6,7 @@
 using System.Globalization;
 using System.Text.Json;
 using CopperMod.Amiga;
+using ExecMemoryAllocatorKind = CopperStart.Exec.ExecMemoryAllocatorKind;
 
 namespace CopperScreen;
 
@@ -47,6 +48,7 @@ internal sealed class CopperScreenProfile
 		CopperScreenKickstartSource kickstartSource,
 		KickstartVersion kickstartVersion,
 		string? kickstartRomPath,
+		ExecMemoryAllocatorKind memoryAllocator,
 		IReadOnlyList<CopperScreenMediaDriveSettings> mediaDrives,
 		IReadOnlyList<CopperScreenHardfileSettings> hardDrives,
 		CopperScreenInputOptions input,
@@ -71,6 +73,7 @@ internal sealed class CopperScreenProfile
 		KickstartSource = kickstartSource;
 		KickstartVersion = kickstartVersion;
 		KickstartRomPath = kickstartRomPath;
+		MemoryAllocator = memoryAllocator;
 		MediaDrives = mediaDrives;
 		HardDrives = hardDrives;
 		Input = input;
@@ -112,6 +115,8 @@ internal sealed class CopperScreenProfile
 	public KickstartVersion KickstartVersion { get; }
 
 	public string? KickstartRomPath { get; }
+
+	public ExecMemoryAllocatorKind MemoryAllocator { get; }
 
 	public IReadOnlyList<CopperScreenMediaDriveSettings> MediaDrives { get; }
 
@@ -295,6 +300,7 @@ internal sealed class CopperScreenProfile
 
 		var kickstartSource = ParseKickstartSource(kickstart.Source);
 		var kickstartVersion = ParseKickstartVersion(kickstart.Version);
+		var memoryAllocator = ParseMemoryAllocator(kickstart.MemoryAllocator, kickstartSource);
 		var description = string.IsNullOrWhiteSpace(config.Description)
 			? displayName
 			: config.Description.Trim();
@@ -317,6 +323,7 @@ internal sealed class CopperScreenProfile
 			kickstartSource,
 			kickstartVersion,
 			string.IsNullOrWhiteSpace(kickstart.Path) ? null : kickstart.Path.Trim(),
+			memoryAllocator,
 			mediaDrives,
 			hardDrives,
 			input,
@@ -373,6 +380,7 @@ internal sealed class CopperScreenProfile
 			kickstartSource,
 			kickstartVersion,
 			string.IsNullOrWhiteSpace(kickstartRomPath) ? null : kickstartRomPath.Trim(),
+			ExecMemoryAllocatorKind.Tlsf,
 			mediaDrives,
 			hardDrives,
 			input,
@@ -515,6 +523,24 @@ internal sealed class CopperScreenProfile
 			: version.StartsWith("2", StringComparison.Ordinal)
 				? KickstartVersion.Kickstart20
 				: KickstartVersion.Kickstart13;
+	}
+
+	private static ExecMemoryAllocatorKind ParseMemoryAllocator(string? value, CopperScreenKickstartSource source)
+	{
+		if (source != CopperScreenKickstartSource.CopperStart)
+		{
+			if (!string.IsNullOrWhiteSpace(value))
+				throw new InvalidOperationException("kickstart.memoryAllocator is valid only for CopperStart profiles.");
+			return ExecMemoryAllocatorKind.Tlsf;
+		}
+		if (string.IsNullOrWhiteSpace(value))
+			return ExecMemoryAllocatorKind.Tlsf;
+		return value.Trim().ToLowerInvariant() switch
+		{
+			"tlsf" => ExecMemoryAllocatorKind.Tlsf,
+			"classic" => ExecMemoryAllocatorKind.Classic,
+			_ => throw new InvalidOperationException($"Unsupported CopperStart memory allocator '{value}'.")
+		};
 	}
 
 	private static DmaChipModel ParseDmaChipModel(string? value)
@@ -881,6 +907,7 @@ internal sealed class CopperScreenProfile
 			CopperScreenKickstartSource.CopperStart,
 			KickstartVersion.Kickstart13,
 			null,
+			ExecMemoryAllocatorKind.Tlsf,
 			Array.Empty<CopperScreenMediaDriveSettings>(),
 			Array.Empty<CopperScreenHardfileSettings>(),
 			CopperScreenInputOptions.Default,
@@ -976,6 +1003,8 @@ internal sealed class CopperScreenProfile
 		public string? Version { get; set; }
 
 		public string? Path { get; set; }
+
+		public string? MemoryAllocator { get; set; }
 	}
 
 	private sealed class MediaFile

@@ -33,18 +33,25 @@ public sealed class CopperScreenAllocationTests
 			emulator.RenderNextFrame();
 			_ = emulator.RenderAudio(audio, SampleRate, Channels);
 		}
-
 		GC.Collect();
 		GC.WaitForPendingFinalizers();
 		GC.Collect();
 		var before = GC.GetAllocatedBytesForCurrentThread();
 		long renderAllocated = 0;
 		long audioAllocated = 0;
+		var firstAllocatingFrame = -1;
+		long firstFrameAllocated = 0;
 		for (var frame = 0; frame < MeasuredFrames; frame++)
 		{
 			var beforeRender = GC.GetAllocatedBytesForCurrentThread();
 			emulator.RenderNextFrame();
-			renderAllocated += GC.GetAllocatedBytesForCurrentThread() - beforeRender;
+			var frameAllocated = GC.GetAllocatedBytesForCurrentThread() - beforeRender;
+			renderAllocated += frameAllocated;
+			if (frameAllocated != 0 && firstAllocatingFrame < 0)
+			{
+				firstAllocatingFrame = frame;
+				firstFrameAllocated = frameAllocated;
+			}
 			var beforeAudio = GC.GetAllocatedBytesForCurrentThread();
 			_ = emulator.RenderAudio(audio, SampleRate, Channels);
 			audioAllocated += GC.GetAllocatedBytesForCurrentThread() - beforeAudio;
@@ -54,7 +61,8 @@ public sealed class CopperScreenAllocationTests
 		Assert.True(
 			allocated == 0,
 			$"{name} allocated {allocated} bytes during measured frame/audio rendering " +
-			$"(frames={renderAllocated}, audio={audioAllocated}, status='{emulator.StatusText}').");
+			$"(frames={renderAllocated}, audio={audioAllocated}, firstFrame={firstAllocatingFrame}, " +
+			$"firstFrameBytes={firstFrameAllocated}, status='{emulator.StatusText}').");
 	}
 
 	private static CopperScreenEmulator? CreateEmulator(string? fileName)

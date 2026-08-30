@@ -143,7 +143,7 @@ namespace CopperMod.Amiga.Bus
                 request.Owner != requester.Owner ||
                 request.Kind != AmigaBusAccessKind.Copper ||
                 request.Transfer != AgnusLiveWordTransfer.Read ||
-                request.Channel is < 0 or > 2)
+                request.Channel is < 0 or > 3)
             {
                 return Reject(
                     "The live Copper word intent has invalid owner, kind, transfer, or phase.",
@@ -172,7 +172,7 @@ namespace CopperMod.Amiga.Bus
             requester.CommitGrantedSlot(grant);
             _grantedRequests++;
             _sampledWords++;
-            if (request.Channel == 0)
+            if (request.Channel is 0 or 3)
             {
                 _grantedFirstWords++;
             }

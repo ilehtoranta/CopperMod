@@ -4209,9 +4209,6 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         internal IReadOnlyList<long> CompletionCycles => _completionCycles;
 
-
-
-
         private bool IsActiveRowPipeline()
             => _areaSlotQueueEnabled &&
                 (_areaSlotQueueKind == BlitterSlotQueueKind.WriteD ||

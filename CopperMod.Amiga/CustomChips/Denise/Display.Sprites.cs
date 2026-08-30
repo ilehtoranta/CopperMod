@@ -23,12 +23,39 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 for (var oddIndex = 0; oddIndex < oddSprites.Count; oddIndex++)
                 {
                     var oddSprite = oddSprites[oddIndex];
-                    var evenIndex = FindAttachedEvenSprite(evenSprites, _evenSpriteAttached, oddSprite);
+                    if (IsAttachedSpriteControlOnly(oddSprite) &&
+                        HasLaterSpriteControlTransition(oddSprites, oddIndex, row))
+                    {
+                        // A zero-height DMA terminator is only a persistent
+                        // attached partner when no newer control transition
+                        // supersedes it on this row.
+                        _oddSpriteAttached[oddIndex] = true;
+                        continue;
+                    }
+
+                    var evenIndex = FindAttachedEvenSprite(evenSprites, _evenSpriteAttached, oddSprite, row);
                     if (evenIndex < 0)
                     {
-                        if (oddSprite.Descriptor.Attached)
+                        if (oddSprite.Descriptor.Attached && oddSprite.Descriptor.IsDma)
                         {
                             _oddSpriteAttached[oddIndex] = true;
+                            // An attached odd channel remains a visible sprite
+                            // even when its preceding even channel has no
+                            // active image (the usual case when the even
+                            // pointer targets a zero terminator). Denise
+                            // composes the missing even bits as zero; do not
+                            // drop the odd channel merely because pairing is
+                            // unavailable for this row.
+                            if (IsSpriteFrameCommandActiveAtRow(oddSprite, row) &&
+                                !oddSprite.SuppressOutput)
+                            {
+                                RenderTimelineAttachedOddSpriteRow(
+                                    bgra,
+                                    spriteIndex,
+                                    oddSprite,
+                                    timeline,
+                                    row);
+                            }
                         }
 
                         continue;
@@ -173,14 +200,23 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private static int FindAttachedEvenSprite(
             IReadOnlyList<SpriteFrameCommand> evenSprites,
             bool[] evenAttached,
-            SpriteFrameCommand oddSprite)
+            SpriteFrameCommand oddSprite,
+            int row)
         {
+            var controlOnlyOdd = IsAttachedSpriteControlOnly(oddSprite);
+            if (!controlOnlyOdd && !IsSpriteFrameCommandActiveAtRow(oddSprite, row))
+            {
+                return -1;
+            }
+
             var bestIndex = -1;
             var bestDistance = int.MaxValue;
             for (var i = 0; i < evenSprites.Count; i++)
             {
                 if (evenAttached[i] ||
+                    !IsSpriteFrameCommandActiveAtRow(evenSprites[i], row) ||
                     !IsAttachedSpritePair(evenSprites[i], oddSprite) ||
+                    !controlOnlyOdd &&
                     !SpritesOverlapVertically(evenSprites[i].Descriptor, oddSprite.Descriptor))
                 {
                     continue;
@@ -195,6 +231,57 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             return bestIndex;
+        }
+
+        private static bool IsAttachedSpriteControlOnly(SpriteFrameCommand command)
+        {
+            return command.Descriptor.Attached &&
+                command.Descriptor.YStop <= command.Descriptor.YStart;
+        }
+
+        private bool HasSpriteFrameControlWrite(int spriteIndex, int row)
+        {
+            for (var i = _spriteFrameCommands.Count - 1; i >= 0; i--)
+            {
+                var command = _spriteFrameCommands[i];
+                if (command.SpriteIndex == spriteIndex &&
+                    command.IsControlWrite &&
+                    command.Row == row)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool HasLaterSpriteControlTransition(
+            IReadOnlyList<SpriteFrameCommand> commands,
+            int commandIndex,
+            int row)
+        {
+            for (var i = commandIndex + 1; i < commands.Count; i++)
+            {
+                var command = commands[i];
+                if (command.Row > row)
+                {
+                    continue;
+                }
+
+                if (command.IsControlWrite)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsSpriteFrameCommandActiveAtRow(SpriteFrameCommand command, int row)
+        {
+            return !command.SuppressOutput &&
+                row >= Math.Max(command.Row, command.Descriptor.YStart) &&
+                row < command.Descriptor.YStop;
         }
 
         private static bool SpritesOverlapVertically(SpriteDescriptor left, SpriteDescriptor right)
@@ -308,10 +395,151 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _spriteFrameCommands[i] = new SpriteFrameCommand(
                     command.SpriteIndex,
                     command.Row,
-                    command.Descriptor.WithYStop(yStop));
+                    command.Descriptor.WithYStop(yStop),
+                    command.SuppressOutput,
+                    command.IsControlWrite,
+                    command.SuppressAttachedOddPixels);
             }
 
             StopTimelineManualSpriteFrameCommands(spriteIndex, row);
+        }
+
+        private void ApplyLiveSpriteControlWrite(int spriteIndex, ushort ctl, long cycle)
+        {
+            if (!_advancingLiveDma ||
+                !_liveFrameValid ||
+                cycle == long.MinValue ||
+                !_displayTimeline.IsValidForFrame(_liveFrameStartCycle) ||
+                (uint)spriteIndex >= (uint)_sprites.Length)
+            {
+                return;
+            }
+
+            var row = GetOutputRowForCycle(_liveFrameStartCycle, cycle);
+            if ((uint)row >= (uint)LowResOutputHeight)
+            {
+                return;
+            }
+
+            var commandIndex = -1;
+            for (var i = _spriteFrameCommands.Count - 1; i >= 0; i--)
+            {
+                var command = _spriteFrameCommands[i];
+                var descriptor = command.Descriptor;
+                if (command.SpriteIndex == spriteIndex &&
+                    descriptor.IsDma &&
+                    command.Row <= row &&
+                    descriptor.YStart <= row &&
+                    row < descriptor.YStop)
+                {
+                    commandIndex = i;
+                    break;
+                }
+            }
+
+            if (commandIndex < 0)
+            {
+                return;
+            }
+
+            var current = _spriteFrameCommands[commandIndex];
+            var writeHorizontal = GetCopperHorizontalForCycle(_liveFrameStartCycle, cycle);
+            var spriteFetchHorizontal = AgnusHrmOcsSlotTable.FirstSpriteHorizontal +
+                (spriteIndex * 4);
+            var effectiveRow = row;
+            var afterHorizontalStart =
+                GetOutputXForCycle(_liveFrameStartCycle, cycle) >= current.Descriptor.X;
+            // The control pipeline closes at the first non-sprite slot after
+            // the line's sixteen sprite words.  Writes in that burst still
+            // leave the line's already armed data visible; later writes
+            // cancel a not-yet-started line before replacing it on the next
+            // row.  This is expressed in physical HPOS rather than output
+            // pixels so it remains independent of presentation geometry.
+            var inSpriteControlBurst =
+                writeHorizontal < (AgnusHrmOcsSlotTable.FirstSpriteHorizontal +
+                    (AgnusHrmOcsSlotTable.SpriteSlotsPerLine * 2) + 0x10);
+            // A control write after this channel's data slot cannot affect
+            // the already-fetched line until the next row.  A write before
+            // the slot is visible to that row's fetch and can arm the new
+            // descriptor immediately.
+            var replacementStartRow = writeHorizontal < spriteFetchHorizontal
+                ? row
+                : Math.Min(LowResOutputHeight, row + 1);
+            if (afterHorizontalStart || inSpriteControlBurst)
+            {
+                effectiveRow = Math.Min(LowResOutputHeight, row + 1);
+            }
+            if (effectiveRow >= current.Descriptor.YStop)
+            {
+                return;
+            }
+
+            var currentLineAttachmentTransition =
+                (spriteIndex & 1) != 0 &&
+                inSpriteControlBurst &&
+                replacementStartRow > row;
+            var targetAttached = (ctl & 0x0080) != 0;
+            var pairedEvenWasRewrittenThisLine =
+                currentLineAttachmentTransition &&
+                (spriteIndex & 1) != 0 &&
+                HasSpriteFrameControlWrite(spriteIndex - 1, replacementStartRow);
+            // A paired even rewrite keeps the odd channel's already fetched
+            // word visible for this line.  The odd control itself still takes
+            // effect on the following line, where the replacement command is
+            // active.
+            var allowCurrentLineOddData =
+                currentLineAttachmentTransition &&
+                !targetAttached &&
+                current.Descriptor.Attached &&
+                pairedEvenWasRewrittenThisLine;
+            var currentLineDescriptor = current.Descriptor
+                .WithYStop(effectiveRow)
+                .WithAttached(targetAttached);
+
+            var currentCommandStopRow = currentLineAttachmentTransition ? row : effectiveRow;
+            var updatedCurrent = new SpriteFrameCommand(
+                current.SpriteIndex,
+                current.Row,
+                current.Descriptor.WithYStop(currentCommandStopRow),
+                current.SuppressOutput,
+                current.IsControlWrite,
+                current.SuppressAttachedOddPixels);
+            _spriteFrameCommands[commandIndex] = updatedCurrent;
+            _displayTimeline.TruncateDmaSpriteFrameCommands(spriteIndex, currentCommandStopRow);
+            if (currentLineAttachmentTransition)
+            {
+                var currentLine = new SpriteFrameCommand(
+                    current.SpriteIndex,
+                    row,
+                    currentLineDescriptor,
+                    suppressOutput: !targetAttached && !allowCurrentLineOddData,
+                    isControlWrite: true,
+                    suppressAttachedOddPixels: targetAttached);
+                _spriteFrameCommands.Add(currentLine);
+                _displayTimeline.AddSpriteFrameCommand(currentLine);
+            }
+
+            var replacementDescriptor = CreateSpriteDescriptor(
+                _sprites[spriteIndex].Pos,
+                ctl,
+                current.Descriptor.DataAddress,
+                isDma: true,
+                current.Descriptor.ManualDataA,
+                current.Descriptor.ManualDataB);
+            replacementDescriptor = replacementDescriptor.WithYStart(
+                Math.Max(replacementDescriptor.YStart, replacementStartRow));
+            if (replacementDescriptor.YStop <= replacementDescriptor.YStart)
+            {
+                return;
+            }
+
+            var replacement = new SpriteFrameCommand(
+                spriteIndex,
+                replacementStartRow,
+                replacementDescriptor,
+                isControlWrite: true);
+            _spriteFrameCommands.Add(replacement);
+            RecordTimelineSpriteFrameCommand(replacement);
         }
 
         private void AddSpriteFrameCommand(int spriteIndex, SpriteDescriptor descriptor, long cycle = long.MinValue)
@@ -601,6 +829,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int row)
         {
             var sprite = command.Descriptor;
+            if (command.SuppressOutput)
+            {
+                return;
+            }
+
             if (row < Math.Max(sprite.YStart, command.Row) || row >= sprite.YStop)
             {
                 return;
@@ -628,10 +861,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             var evenSprite = evenCommand.Descriptor;
             var oddSprite = oddCommand.Descriptor;
+            var oddControlOnly = IsAttachedSpriteControlOnly(oddCommand);
             if (row < Math.Min(evenSprite.YStart, oddSprite.YStart) ||
                 row >= Math.Max(evenSprite.YStop, oddSprite.YStop) ||
-                !TryReadTimelineSpriteLine(evenCommand, row, timeline, out var evenDataA, out var evenDataB) ||
-                !TryReadTimelineSpriteLine(oddCommand, row, timeline, out var oddDataA, out var oddDataB))
+                !TryReadTimelineSpriteLine(evenCommand, row, timeline, out var evenDataA, out var evenDataB))
+            {
+                return;
+            }
+
+            ushort oddDataA = 0;
+            ushort oddDataB = 0;
+            if (!oddControlOnly &&
+                !TryReadTimelineSpriteLine(oddCommand, row, timeline, out oddDataA, out oddDataB))
             {
                 return;
             }
@@ -641,11 +882,43 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 spriteIndex,
                 evenSprite.X,
                 oddSprite.X,
+                suppressOddPixels: oddCommand.SuppressAttachedOddPixels,
                 row,
                 evenDataA,
                 evenDataB,
                 oddDataA,
                 oddDataB);
+        }
+
+        private void RenderTimelineAttachedOddSpriteRow(
+            Span<uint> bgra,
+            int spriteIndex,
+            SpriteFrameCommand oddCommand,
+            DisplayFrameTimeline timeline,
+            int row)
+        {
+            var oddSprite = oddCommand.Descriptor;
+            if (oddCommand.SuppressAttachedOddPixels)
+            {
+                return;
+            }
+
+            if (!TryReadTimelineSpriteLine(oddCommand, row, timeline, out var dataA, out var dataB))
+            {
+                return;
+            }
+
+            RenderAttachedSpriteLine(
+                bgra,
+                spriteIndex,
+                oddSprite.X,
+                oddSprite.X,
+                suppressOddPixels: false,
+                row,
+                0,
+                0,
+                dataA,
+                dataB);
         }
 
         private static bool TryReadTimelineSpriteLine(
@@ -907,6 +1180,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int spriteIndex,
             int evenX,
             int oddX,
+            bool suppressOddPixels,
             int y,
             ushort evenDataA,
             ushort evenDataB,
@@ -923,7 +1197,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
             for (var px = xStart; px < xStop; px++)
             {
                 var evenPixel = GetSpritePixelAt(evenDataA, evenDataB, px - evenX);
-                var oddPixel = GetSpritePixelAt(oddDataA, oddDataB, px - oddX);
+                var oddPixel = suppressOddPixels
+                    ? 0
+                    : GetSpritePixelAt(oddDataA, oddDataB, px - oddX);
                 var pixel = (oddPixel << 2) | evenPixel;
                 if (pixel == 0)
                 {
@@ -940,7 +1216,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     continue;
                 }
 
-                WriteSpritePixel(bgra, px, y, ConvertSpriteColorIndex(16 + pixel, px, y));
+                var converted = ConvertSpriteColorIndex(16 + pixel, px, y);
+                WriteSpritePixel(bgra, px, y, converted);
             }
         }
 
@@ -1030,12 +1307,28 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool IsSpritePastDeniseOutputEnable(int x, int y)
         {
-            if (GetRequestedBitplaneCount() <= 0)
+            var spanIndex = GetPaletteFrameSpanIndex(x, y);
+            var bplcon0 = _bplcon0;
+            if (spanIndex >= 0)
             {
-                return true;
+                ref readonly var span = ref GetPaletteFrameSpan(spanIndex);
+                bplcon0 = span.Bplcon0;
             }
 
-            var dataFetchStartX = GetDataFetchStartX(GetSpriteDisplayWindow(x, y));
+            var requested = GetRequestedBitplaneCount(bplcon0) |
+                (_chipset.DisplayChip == DisplayChipModel.AgaLisa ? ((bplcon0 & 0x0010) >> 1) : 0);
+            if (requested <= 0)
+            {
+                // With an explicit raster presentation state, COLOR keeps the
+                // playfield output gate active even when no bitplane is
+                // selected.  Denise therefore suppresses sprite pixels until
+                // a later state enables a plane.  A state without COLOR is a
+                // border-only/manual-rendering case and leaves sprites visible.
+                var allowed = (bplcon0 & 0x0200) == 0;
+                return allowed;
+            }
+
+            var dataFetchStartX = GetDataFetchStartX(GetSpriteDisplayWindow(x, y), bplcon0);
             if (x >= dataFetchStartX)
             {
                 return true;

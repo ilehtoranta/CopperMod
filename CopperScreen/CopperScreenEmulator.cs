@@ -99,7 +99,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 		_machine = new Machine(machineOptions);
 		_timingCpuClockHz = _machine.Bus.RasterTiming.CpuClockHz;
 		_timingFrameCycles = _machine.Bus.RasterTiming.GetFrameCycles(_machine.Bus.RasterTiming.LongFrameLines);
-		_boot = new AmigaBootController(_machine);
+		_boot = new AmigaBootController(_machine, memoryAllocator: _profile.MemoryAllocator);
 		var enableHostWorkbenchStartup = !_profile.UsesKickstartRom && _profile.AutoStartWorkbenchStartupSequence;
 		_boot.AutoStartWorkbenchDefaultTool = enableHostWorkbenchStartup;
 		_boot.AutoRunStartupSequence = enableHostWorkbenchStartup;
@@ -160,7 +160,6 @@ internal sealed class CopperScreenEmulator : IDisposable
 	public bool IsDiskSwapPending => _pendingDiskImage != null;
 
 	internal OcsDisplaySnapshot DisplaySnapshot => _machine.Bus.Display.CaptureSnapshot();
-
 	internal double VideoVBlankHz => _machine.Bus.RasterTiming.VBlankHz;
 
 	public bool AudioFilterEnabled => _machine.Bus.AudioFilterEnabled;
@@ -1319,6 +1318,7 @@ internal sealed class CopperScreenEmulator : IDisposable
 			}
 			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidOperationException)
 			{
+				_bootAttempted = false;
 				_frameAudio.AsSpan().Clear();
 				InvalidateInterlacePresentationHistory();
 				StatusText = ex.Message;
