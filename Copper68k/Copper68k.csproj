@@ -9,8 +9,8 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <PackageVersion>1.3.0</PackageVersion>
-    <PackageReleaseNotes>Adds an integer-arithmetic extF80 implementation through CopperFloat and substantially improves MC68040 FPU precision, FPCR/FPSR behavior, exceptions, effective-address handling, conditionals, FPIAR, and state frames. Retains the MC68010 and interpreter/JIT performance work introduced in 1.2.0.</PackageReleaseNotes>
+    <PackageVersion>1.4.0</PackageVersion>
+    <PackageReleaseNotes>Improves MC68020, MC68030, and MC68040 instruction coverage and timing, including effective-address forms, prefetch, memory writeback, branch/DBcc, and interrupt-boundary behavior. Adds MC68010 format-zero exception frames, MC68030 translation-control MOVEC support, A1200/68EC020 timing integration, and more accurate MC68000 and JIT fast paths, alignment handling, and stack writes.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

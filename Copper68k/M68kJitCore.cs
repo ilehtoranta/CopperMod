@@ -212,7 +212,7 @@ namespace Copper68k
         private bool _subscribedToWriteInvalidation;
         private int _directPseudoFastAccessCount;
         private ulong _directPseudoFastLongAccessBits;
-        private long _directPseudoFastReplayCycle;
+        private readonly long[] _directPseudoFastRequestedCycles = new long[64];
         private bool _directRamWritePending;
         private uint _directRamWriteStart;
         private uint _directRamWriteEnd;
@@ -1187,16 +1187,23 @@ namespace Copper68k
                 return 0;
             }
 
-            var v2BatchExecuted = TryExecuteV2TraceBatch(
-                trace,
-                maxInstructions,
-                targetCycle,
-                boundary,
-                allowV2TraceHandoff);
+            var preserveM68000Pipeline =
+                _cpuModel == M68kJitCpuModel.M68000 &&
+                _m68000PipelineStateValid &&
+                trace.M68000V2PipelineSensitive;
+            // PEA and register bit/non-zero divide loops have instruction-internal timing that
+            // the V2 state export cannot yet reconstruct. Keep their live M68000 prefetch state
+            // in the pipeline-aware delegate until V2 can export that state explicitly.
+            var v2BatchExecuted = preserveM68000Pipeline
+                ? null
+                : TryExecuteV2TraceBatch(
+                    trace,
+                    maxInstructions,
+                    targetCycle,
+                    boundary,
+                    allowV2TraceHandoff);
             if (v2BatchExecuted.HasValue)
             {
-                // A V2 batch advances PC without maintaining the fallback core's prefetched
-                // pipeline. Force the next fallback handoff to import at the post-batch PC.
                 if (v2BatchExecuted.Value > 0 && _cpuModel == M68kJitCpuModel.M68000)
                 {
                     _m68000PipelineStateValid = false;
@@ -2330,9 +2337,9 @@ namespace Copper68k
             boundary.AfterInstruction(previousCycle, State.Cycles);
             _counters.FallbackInstructions++;
             RecordFallbackAttribution(root, opcodeAvailable, opcode);
-            if (opcodeAvailable && _cpuModel == M68kJitCpuModel.M68040 && IsM68040FpuOpcode(opcode))
+            if (opcodeAvailable && _cpuModel == M68kJitCpuModel.M68040)
             {
-                _counters.M68040FpuFallbackInstructions++;
+                RecordM68040FpuFallback(opcode);
             }
 
             if (opcodeAvailable && ShouldFlushM68040JitAfterFallback(root, opcode))
@@ -2442,6 +2449,31 @@ namespace Copper68k
 
         private static bool IsM68040FpuOpcode(ushort opcode)
             => (opcode & 0xFF00) == 0xF200 || (opcode & 0xFFC0) is 0xF300 or 0xF340;
+
+        private void RecordM68040FpuFallback(ushort opcode)
+        {
+            if (!IsM68040FpuOpcode(opcode))
+            {
+                return;
+            }
+
+            _counters.M68040FpuFallbackInstructions++;
+            if ((opcode & 0xFFC0) is not (0xF280 or 0xF2C0 or 0xF240))
+            {
+                return;
+            }
+
+            var mode = (opcode >> 3) & 7;
+            var register = opcode & 7;
+            if ((opcode & 0xFFC0) == 0xF240 && mode == 7 && register is >= 2 and <= 4)
+            {
+                _counters.M68040FpuTrapSlowPathExits++;
+            }
+            else
+            {
+                _counters.M68040FpuBsunSlowPathExits++;
+            }
+        }
 
         private bool HandleM68040CompiledMmuFault(M68040MmuFault fault, IM68kInstructionBoundary boundary)
         {
@@ -3269,6 +3301,10 @@ namespace Copper68k
                 plan.V2Trace.InstructionCount,
                 plan.V2Trace.HasInternalLoop,
                 plan.V2Trace.PureCpuBatchEligible,
+                plan.V2Trace.HasInternalLoop &&
+                    RequiresPipelineAwareM68000Delegate(
+                        plan.V2Trace.Instructions,
+                        plan.V2Trace.PureCpuBatchEligible),
                 plan.M68040TranslationChecksEnabled,
                 plan.M68040MmuGeneration);
         }
@@ -4545,7 +4581,11 @@ namespace Copper68k
                 promoted.Tier,
                 promoted.InstructionCount,
                 promoted.HasInternalLoop,
-                promoted.PureCpuBatchEligible);
+                promoted.PureCpuBatchEligible,
+                promoted.HasInternalLoop &&
+                    RequiresPipelineAwareM68000Delegate(
+                        promoted.Instructions,
+                        promoted.PureCpuBatchEligible));
             AddTrace(updated);
             _v2TraceHits[trace.Root] = hits;
             _v2TraceBranchExits[trace.Root] = 0;
@@ -5586,6 +5626,46 @@ namespace Copper68k
                 M68kJitOperation.Muls or
                 M68kJitOperation.Divu or
                 M68kJitOperation.Divs;
+
+        private static bool RequiresPipelineAwareM68000Delegate(
+            M68kDecodedInstruction[]? instructions,
+            bool pureCpuBatchEligible)
+        {
+            if (instructions == null)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < instructions.Length; i++)
+            {
+                var instruction = instructions[i];
+                if (instruction.Operation == M68kJitOperation.Pea)
+                {
+                    return true;
+                }
+
+                if (!pureCpuBatchEligible)
+                {
+                    continue;
+                }
+
+                if (instruction.Operation is
+                    M68kJitOperation.BitImmediate or
+                    M68kJitOperation.BitDynamic)
+                {
+                    return true;
+                }
+
+                if ((instruction.Operation is M68kJitOperation.Divu or M68kJitOperation.Divs) &&
+                    !(instruction.Source.Kind == M68kJitEaKind.Immediate &&
+                        (instruction.Source.Immediate & 0xFFFFu) == 0))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         private static void MarkV2DirtyRegisterMasks(
             M68kDecodedInstruction instruction,
@@ -10474,6 +10554,15 @@ namespace Copper68k
                 return;
             }
 
+            // Executable overlays replace bytes outside the emulated CPU bus. Any
+            // imported M68000 queue may still contain the superseded opcode even
+            // after its compiled trace is removed, so require a fresh fetch handoff.
+            if (_cpuModel == M68kJitCpuModel.M68000)
+            {
+                _m68000PipelineStateValid = false;
+                _fallbackFetchSynchronized = false;
+            }
+
             address = Normalize(address);
             RemoveV2HandoffBlockCacheEntriesForWrittenRange(address, byteCount);
             if (_traces.Count == 0)
@@ -11811,28 +11900,14 @@ namespace Copper68k
 
             State.ProgramCounter = Normalize(instructionPc);
             _compiledInstructionCycleFloorActive = false;
-            var opcode = State.LastOpcode;
+            var opcodeAvailable = TryReadInstructionWord(instructionPc, out var opcode);
             _fallback.ExecuteInstruction();
-            if (IsM68040FpuOpcode(opcode))
+            if (opcodeAvailable)
             {
-                _counters.M68040FpuFallbackInstructions++;
-                if ((opcode & 0xFFC0) is 0xF280 or 0xF2C0 ||
-                    (opcode & 0xFFC0) == 0xF240)
-                {
-                    var mode = (opcode >> 3) & 7;
-                    var register = opcode & 7;
-                    if ((opcode & 0xFFC0) == 0xF240 && mode == 7 && register is >= 2 and <= 4)
-                    {
-                        _counters.M68040FpuTrapSlowPathExits++;
-                    }
-                    else
-                    {
-                        _counters.M68040FpuBsunSlowPathExits++;
-                    }
-                }
+                RecordM68040FpuFallback(opcode);
             }
 
-            if (ShouldFlushM68040JitAfterFallback(instructionPc, opcode))
+            if (opcodeAvailable && ShouldFlushM68040JitAfterFallback(instructionPc, opcode))
             {
                 _counters.Invalidations++;
                 ClearRuntimeState();
@@ -13205,10 +13280,10 @@ namespace Copper68k
             var count = _directPseudoFastAccessCount;
             if (count == 0)
             {
-                _directPseudoFastReplayCycle = cycles;
                 _directPseudoFastLongAccessBits = 0;
             }
 
+            _directPseudoFastRequestedCycles[count] = cycles;
             if (size == M68kOperandSize.Long)
             {
                 _directPseudoFastLongAccessBits |= 1UL << count;
@@ -13269,19 +13344,21 @@ namespace Copper68k
                 return;
             }
 
-            var replayCycle = _directPseudoFastReplayCycle;
-            _directRamBus.ReplayJitPseudoFastAccesses(
-                ref replayCycle,
-                count,
-                _directPseudoFastLongAccessBits);
-            if (cycles < replayCycle)
+            var accumulatedDelay = 0L;
+            for (var index = 0; index < count; index++)
             {
-                cycles = replayCycle;
+                var requestCycle = _directPseudoFastRequestedCycles[index] + accumulatedDelay;
+                var nominalRequestCycle = requestCycle;
+                _directRamBus.ReplayJitPseudoFastAccesses(
+                    ref requestCycle,
+                    accessCount: 1,
+                    longAccessBits: (_directPseudoFastLongAccessBits >> index) & 1UL);
+                accumulatedDelay += requestCycle - nominalRequestCycle;
             }
 
+            cycles += accumulatedDelay;
             _directPseudoFastAccessCount = 0;
             _directPseudoFastLongAccessBits = 0;
-            _directPseudoFastReplayCycle = cycles;
             _counters.M68040DirectPseudoFastTimingFlushes++;
         }
 
@@ -13696,10 +13773,12 @@ namespace Copper68k
             uint value,
             M68kOperandSize size,
             long cycle)
-            => _cpuModel == M68kJitCpuModel.M68040 &&
+        {
+            return _cpuModel == M68kJitCpuModel.M68040 &&
                 _minimalCycleTiming &&
                 _amigaBus != null &&
                 _amigaBus.TryWriteJitMaxSpeedColorRegister(physicalAddress, value, size, cycle);
+        }
 
         private bool TryReadM68040MaxSpeedZeroWaitMemory(uint physicalAddress, M68kOperandSize size, out uint value)
         {
@@ -14583,7 +14662,6 @@ namespace Copper68k
             _compiledM68040FpuExceptionPending = false;
             _directPseudoFastAccessCount = 0;
             _directPseudoFastLongAccessBits = 0;
-            _directPseudoFastReplayCycle = State.Cycles;
             _directRamWritePending = false;
             _directRamWriteStart = 0;
             _directRamWriteEnd = 0;
@@ -14988,7 +15066,11 @@ namespace Copper68k
                 promotion.Compiled.Tier,
                 promotion.Compiled.InstructionCount,
                 promotion.Compiled.HasInternalLoop,
-                promotion.Compiled.PureCpuBatchEligible);
+                promotion.Compiled.PureCpuBatchEligible,
+                promotion.Compiled.HasInternalLoop &&
+                    RequiresPipelineAwareM68000Delegate(
+                        promotion.Compiled.Instructions,
+                        promotion.Compiled.PureCpuBatchEligible));
             AddTrace(updated);
             _counters.AsyncCompletedInstalled++;
             _v2TraceBranchExits[plan.Root] = 0;
@@ -17384,6 +17466,7 @@ namespace Copper68k
                 int v2InstructionCount,
                 bool v2HasInternalLoop,
                 bool v2PureCpuBatchEligible,
+                bool m68000V2PipelineSensitive,
                 bool m68040TranslationChecksEnabled,
                 uint m68040MmuGeneration)
             {
@@ -17402,6 +17485,7 @@ namespace Copper68k
                 V2InstructionCount = v2InstructionCount;
                 V2HasInternalLoop = v2HasInternalLoop;
                 V2PureCpuBatchEligible = v2PureCpuBatchEligible;
+                M68000V2PipelineSensitive = m68000V2PipelineSensitive;
                 M68040TranslationChecksEnabled = m68040TranslationChecksEnabled;
                 M68040MmuGeneration = m68040MmuGeneration;
             }
@@ -17436,6 +17520,8 @@ namespace Copper68k
 
             public bool V2PureCpuBatchEligible { get; }
 
+            public bool M68000V2PipelineSensitive { get; }
+
             public bool M68040TranslationChecksEnabled { get; }
 
             public uint M68040MmuGeneration { get; }
@@ -17457,6 +17543,7 @@ namespace Copper68k
                     V2InstructionCount,
                     V2HasInternalLoop,
                     V2PureCpuBatchEligible,
+                    M68000V2PipelineSensitive,
                     M68040TranslationChecksEnabled,
                     M68040MmuGeneration);
 
@@ -17470,7 +17557,8 @@ namespace Copper68k
                 V2TraceTier tier,
                 int instructionCount,
                 bool hasInternalLoop,
-                bool pureCpuBatchEligible)
+                bool pureCpuBatchEligible,
+                bool m68000V2PipelineSensitive)
                 => new TraceEntry(
                     Root,
                     codeStart,
@@ -17487,6 +17575,7 @@ namespace Copper68k
                     instructionCount,
                     hasInternalLoop,
                     pureCpuBatchEligible,
+                    m68000V2PipelineSensitive,
                     M68040TranslationChecksEnabled,
                     M68040MmuGeneration);
         }

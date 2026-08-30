@@ -604,9 +604,8 @@ namespace Copper68k
             {
                 var elapsedEntryCycles =
                     interruptBoundaryCycle - entryFirstWordReadyCycle;
-                // A fully drained entry queue has already committed its
-                // complete physical tail. Exception entry cannot reclaim
-                // those started transfer cycles.
+                // A fully drained entry queue has already paid its complete
+                // physical tail and overlaps exception entry.
                 if (elapsedEntryCycles >=
                     DrainedEntryQueueCommittedTailThresholdCycles)
                 {
@@ -649,6 +648,14 @@ namespace Copper68k
         long InternalRetireCycle,
         long PhysicalTailCycle);
 
+    internal enum M68kBranchInterruptTransitionKind : byte
+    {
+        None,
+        Conditional,
+        Unconditional,
+        Dbcc
+    }
+
     internal readonly record struct M68kInstructionFetchPublicationContext(
         long Group,
         long EntryBusCycle,
@@ -664,7 +671,8 @@ namespace Copper68k
         ushort StatusRegister = 0,
         M68000IplPipelineState IplPipelineState = default,
         long LastInterruptSampleCycle = long.MinValue,
-        int PendingInternalCycles = 0);
+        int PendingInternalCycles = 0,
+        M68kBranchInterruptTransitionKind BranchTransitionKind = M68kBranchInterruptTransitionKind.None);
 
     internal interface IM68kInstructionFetchWindowBus
     {
@@ -6469,7 +6477,10 @@ namespace Copper68k
                 BranchToAndRefillTarget(
                     target,
                     branchBase,
-                    interruptibleTargetFetch: condition != 1);
+                    interruptibleTargetFetch: condition != 1,
+                    branchTransitionKind: condition == 0
+                        ? M68kBranchInterruptTransitionKind.Unconditional
+                        : M68kBranchInterruptTransitionKind.Conditional);
                 return;
             }
 
@@ -6503,7 +6514,11 @@ namespace Copper68k
             }
 
             AddInstructionCycles(10);
-            BranchToAndRefillTarget(target, branchBase, interruptibleTargetFetch: true);
+            BranchToAndRefillTarget(
+                target,
+                branchBase,
+                interruptibleTargetFetch: true,
+                branchTransitionKind: M68kBranchInterruptTransitionKind.Unconditional);
         }
 
         private void ExecutePlannedDbcc(ushort opcode)
@@ -7697,7 +7712,10 @@ namespace Copper68k
                 BranchToAndRefillTarget(
                     target,
                     branchBase,
-                    interruptibleTargetFetch: plan.Condition != 1);
+                    interruptibleTargetFetch: plan.Condition != 1,
+                    branchTransitionKind: plan.Condition == 0
+                        ? M68kBranchInterruptTransitionKind.Unconditional
+                        : M68kBranchInterruptTransitionKind.Conditional);
                 return;
             }
 
@@ -8812,7 +8830,6 @@ namespace Copper68k
 
         void IM68kJitFallbackFetchSynchronization.SynchronizeInstructionFetch()
             => ResetPrefetchPipeline();
-
         M68000PipelineState IM68000PipelineStateTransfer.ExportM68000PipelineState()
             => new M68000PipelineState(
                 _prefetchAddress,
@@ -9211,7 +9228,11 @@ namespace Copper68k
                     }
 
                     AddInstructionCycles(displacement == 0 ? 10 : 10);
-                    BranchToAndRefillTarget(target, branchBase, interruptibleTargetFetch: true);
+                    BranchToAndRefillTarget(
+                        target,
+                        branchBase,
+                        interruptibleTargetFetch: true,
+                        branchTransitionKind: M68kBranchInterruptTransitionKind.Conditional);
                 }
                 else
                 {
@@ -9237,7 +9258,11 @@ namespace Copper68k
                     }
 
                     AddInstructionCycles(displacement == 0 ? 10 : 10);
-                    BranchToAndRefillTarget(target, branchBase, interruptibleTargetFetch: true);
+                    BranchToAndRefillTarget(
+                        target,
+                        branchBase,
+                        interruptibleTargetFetch: true,
+                        branchTransitionKind: M68kBranchInterruptTransitionKind.Conditional);
                 }
                 else
                 {
@@ -9263,7 +9288,11 @@ namespace Copper68k
                     }
 
                     AddInstructionCycles(displacement == 0 ? 10 : 10);
-                    BranchToAndRefillTarget(target, branchBase, interruptibleTargetFetch: true);
+                    BranchToAndRefillTarget(
+                        target,
+                        branchBase,
+                        interruptibleTargetFetch: true,
+                        branchTransitionKind: M68kBranchInterruptTransitionKind.Conditional);
                 }
                 else
                 {
@@ -9290,7 +9319,10 @@ namespace Copper68k
                 BranchToAndRefillTarget(
                     target,
                     branchBase,
-                    interruptibleTargetFetch: true);
+                    interruptibleTargetFetch: true,
+                    branchTransitionKind: condition == 0
+                        ? M68kBranchInterruptTransitionKind.Unconditional
+                        : M68kBranchInterruptTransitionKind.Conditional);
             }
             else
             {
@@ -12173,14 +12205,17 @@ namespace Copper68k
 		private void BranchToAndRefillTarget(
 			uint target,
 			uint stackedProgramCounter,
-			bool interruptibleTargetFetch)
-        {
-            ValidateBranchTarget(target, stackedProgramCounter);
+			bool interruptibleTargetFetch,
+			M68kBranchInterruptTransitionKind branchTransitionKind =
+				M68kBranchInterruptTransitionKind.Conditional)
+		{
+			ValidateBranchTarget(target, stackedProgramCounter);
             SetProgramCounterAndFlushPrefetch(target);
             _prefetchAddress = target;
             var targetPublicationContext = CaptureInstructionFetchPublicationContext() with
             {
-                PendingInternalCycles = _pendingInternalCycles
+                PendingInternalCycles = _pendingInternalCycles,
+                BranchTransitionKind = branchTransitionKind
             };
             var targetOpcodeReadyCycle = TopUpPrefetchOne(
                 out _,
