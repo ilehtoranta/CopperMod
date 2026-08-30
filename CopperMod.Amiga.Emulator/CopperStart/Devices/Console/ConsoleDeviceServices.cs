@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using Amiga;
 using Copper68k;
 using CopperMod.Amiga.Bus;
 using CopperMod.Amiga.CopperStart.Devices.Input;
 using CopperMod.Amiga.CopperStart.Devices.Clipboard;
 using CopperMod.Amiga.CopperStart.Exec;
+using PortableDevices = CopperStart.Devices;
 
 namespace CopperMod.Amiga.CopperStart.Devices.Console;
 
@@ -17,15 +19,12 @@ namespace CopperMod.Amiga.CopperStart.Devices.Console;
 /// </summary>
 internal sealed class ConsoleDeviceServices : IDisposable
 {
-    private const int DeviceListOffset = 0x15E, LibraryListOffset = 0x17A, NodeNameOffset = 0x0A, LibraryOpenCountOffset = 0x20;
-    private const int IoDeviceOffset = 0x14, IoUnitOffset = 0x18, IoCommandOffset = 0x1C, IoFlagsOffset = 0x1E, IoErrorOffset = 0x1F, IoActualOffset = 0x20, IoLengthOffset = 0x24, IoDataOffset = 0x28;
     private const int WindowWidthOffset = 0x08, WindowHeightOffset = 0x0A, WindowFlagsOffset = 0x18, WindowBorderLeftOffset = 0x1A, WindowBorderTopOffset = 0x1C, WindowBorderRightOffset = 0x1E, WindowBorderBottomOffset = 0x20;
     private const int WindowRPortOffset = 0x32, RastPortFgPenOffset = 0x19, RastPortBgPenOffset = 0x1A, RastPortDrawModeOffset = 0x1C, RastPortCpXOffset = 0x24, RastPortCpYOffset = 0x26, RastPortTextHeightOffset = 0x3A, RastPortTextWidthOffset = 0x3C, RastPortTextBaselineOffset = 0x3E;
     private const int IntuitionActiveWindowOffset = 0x34;
     private const ushort CmdReset = 1, CmdRead = 2, CmdWrite = 3, CmdUpdate = 4, CmdClear = 5, CmdStop = 6, CmdStart = 7, CmdFlush = 8, CdAskKeyMap = 9, CdSetKeyMap = 10, CdAskDefaultKeyMap = 11, CdSetDefaultKeyMap = 12;
-    private const byte IoQuick = 1, IoErrOpenFail = 0xFF, IoErrAborted = 0xFE, IoErrNoCommand = 0xFD, IoErrBadAddress = 0xFB, IeClassRawKey = 1, IeClassRawMouse = 2, IeCodeNoButton = 0xFF, IeCodeLeftButton = 0x68, IeCodeUpPrefix = 0x80;
-    private const uint MemfPublicClear = 0x0001_0001;
-    private const int KeyMapBytes = 32;
+    private const byte IoQuick = 1, IoErrOpenFail = 0xFF, IoErrAborted = 0xFE, IoErrBadAddress = 0xFB, IeClassRawKey = 1, IeClassRawMouse = 2, IeCodeNoButton = 0xFF, IeCodeLeftButton = 0x68, IeCodeUpPrefix = 0x80;
+	private const uint PublicClear = (uint)(global::Amiga.Exec.MemoryFlags.Public | global::Amiga.Exec.MemoryFlags.Clear);
     private const int DefaultColumns = 80, DefaultRows = 25;
     private const int ConuLibrary = -1, ConuStandard = 0, ConuCharMap = 1, ConuSnipMap = 3;
     private const uint ConFlagNoDrawOnNewSize = 1;
@@ -51,7 +50,6 @@ internal sealed class ConsoleDeviceServices : IDisposable
     private readonly Action<M68kCpuState, uint, uint> _startGuestSubroutine;
     private readonly List<(uint Address, uint Token)> _gateways = new();
     private readonly Dictionary<uint, ConsoleUnit> _units = new();
-    private readonly List<PendingRead> _pendingReads = new();
     private readonly List<uint> _windowUnitsInOpenOrder = new();
     private readonly Queue<QueuedInput> _rawInput = new();
     private readonly Queue<PendingWrite> _pendingWrites = new();
@@ -66,7 +64,8 @@ internal sealed class ConsoleDeviceServices : IDisposable
     private uint _defaultKeyMap;
     private uint _activeWindowUnit;
     private uint _execBase;
-    private readonly record struct PendingRead(uint Request, uint Unit);
+	private APTR _portableState;
+	private M68kCpuState? _cpuState;
     private readonly record struct QueuedInput(InputDeviceServices.ObservedInputEvent Event, uint Unit);
     private readonly record struct PendingWrite(uint Request, uint Unit);
     private readonly record struct PendingKeyMapCall(uint Unit, uint InputGeneration, InputDeviceServices.ObservedInputEvent Input);
@@ -79,8 +78,8 @@ internal sealed class ConsoleDeviceServices : IDisposable
 
     private sealed class ConsoleUnit
     {
-        public ConsoleUnit(uint request, int number, uint window, uint rastPort, uint scratch) { Request = request; Number = number; Window = window; RastPort = rastPort; Scratch = scratch; }
-        public uint Request { get; } public int Number { get; } public uint Window { get; } public uint RastPort { get; } public uint Scratch { get; }
+		public ConsoleUnit(uint request, int number, uint window, uint rastPort, uint scratch, uint portableState = 0) { Request = request; Number = number; Window = window; RastPort = rastPort; Scratch = scratch; PortableState = portableState; }
+		public uint Request { get; } public int Number { get; } public uint Window { get; } public uint RastPort { get; } public uint Scratch { get; } public uint PortableState { get; }
         public uint KeyMap { get; set; }
         public uint ClipboardRequest { get; set; } public uint ClipboardBuffer { get; set; }
         public Queue<byte> Input { get; } = new(); public uint InputGeneration { get; set; } public List<byte> History { get; } = new();
@@ -154,7 +153,7 @@ internal sealed class ConsoleDeviceServices : IDisposable
     public bool OpenCompatibilitySession(uint session)
     {
         if (_units.ContainsKey(session)) return true;
-        var scratch = _memory.Allocate(256, MemfPublicClear);
+		var scratch = _memory.Allocate(256, PublicClear);
         if (scratch == 0) return false;
         _units.Add(session, new ConsoleUnit(session, -1, 0, 0, scratch) { KeyMap = _defaultKeyMap });
         return true;
@@ -162,7 +161,6 @@ internal sealed class ConsoleDeviceServices : IDisposable
 
     public void CloseCompatibilitySession(uint session)
     {
-        CancelReads(session, 0);
         if (_units.Remove(session, out var unit)) FreeUnitMemory(unit);
     }
 
@@ -183,9 +181,13 @@ internal sealed class ConsoleDeviceServices : IDisposable
         return actual;
     }
 
+	public bool HasCompatibilityInput(uint session) =>
+		_units.TryGetValue(session, out var unit) && unit.Input.Count != 0;
+
     /// <summary>Completes input queued by the input handler at an instruction boundary.</summary>
     public void ProcessPending(M68kCpuState state)
     {
+		_cpuState = state;
         StartNextKeyMapCall(state);
         foreach (var unit in _units.Values)
         {
@@ -204,9 +206,11 @@ internal sealed class ConsoleDeviceServices : IDisposable
 
     public bool TryInstall(uint execBase)
     {
-        if (IsInstalled || execBase == 0 || !_bus.IsMappedMemoryRange(execBase + DeviceListOffset, 14)) return IsInstalled;
-        var device = FindDevice(execBase + DeviceListOffset, "console.device");
+		if (IsInstalled || execBase == 0 || !_bus.IsMappedMemoryRange(execBase + ExecLayout.ExecBase.DeviceList, (int)global::Amiga.List.Size)) return IsInstalled;
+		var device = FindDevice(execBase + ExecLayout.ExecBase.DeviceList, "console.device");
         if (device < 48 || !_bus.IsMappedMemoryRange(device - 48, 48)) return false;
+		var portableState = _memory.Allocate((int)PortableDevices.ConsoleDeviceCore.StateSize, PublicClear); if (portableState == 0) return false;
+		_portableState = APTR.FromPointer(portableState); var portablePlatform = new AmigaBusConsolePlatform(_bus, 0, _reply); if (!PortableDevices.ConsoleDeviceCore.Initialize(ref portablePlatform, _portableState)) { _memory.Free(portableState, (int)PortableDevices.ConsoleDeviceCore.StateSize); _portableState = APTR.Null; return false; }
         DeviceBase = device; _execBase = execBase;
         Register(-6, Open); Register(-12, Close); Register(-18, Expunge); Register(-24, ExtFunc); Register(-30, BeginIo); Register(-36, AbortIo);
         Register(-42, CdInputHandler); Register(-48, RawKeyConvert);
@@ -232,20 +236,26 @@ internal sealed class ConsoleDeviceServices : IDisposable
     {
         for (var index = _gateways.Count - 1; index >= 0; index--) _bus.RemoveHostGateway(_gateways[index].Address, _gateways[index].Token);
         foreach (var unit in _units.Values) FreeUnitMemory(unit);
-        _gateways.Clear(); _units.Clear(); _windowUnitsInOpenOrder.Clear(); _pendingReads.Clear(); _pendingWrites.Clear(); _rawInput.Clear(); _pendingKeyMapCall = null; _pendingRawKeyConvert = null; _pendingRender = null; _pendingClear = null; _pendingBell = null; _pendingSoftStyle = null; _resetSoftStyleAfterText = false; _softStyleRastPort = 0; _activeWindowUnit = 0; DeviceBase = 0; _execBase = 0;
+		if (_portableState.IsNotNull) _memory.Free(_portableState.Raw, (int)PortableDevices.ConsoleDeviceCore.StateSize);
+		_gateways.Clear(); _units.Clear(); _windowUnitsInOpenOrder.Clear(); _pendingWrites.Clear(); _rawInput.Clear(); _pendingKeyMapCall = null; _pendingRawKeyConvert = null; _pendingRender = null; _pendingClear = null; _pendingBell = null; _pendingSoftStyle = null; _resetSoftStyleAfterText = false; _softStyleRastPort = 0; _activeWindowUnit = 0; _portableState = APTR.Null; _cpuState = null; DeviceBase = 0; _execBase = 0;
     }
 
     private void Open(M68kCpuState state)
     {
+		_cpuState = state;
         var request = state.A[1]; var number = unchecked((int)state.D[0]);
-        var window = request != 0 && _bus.IsMappedMemoryRange(request + IoDataOffset, 4) ? _bus.ReadLong(request + IoDataOffset) : 0;
+		var window = request != 0 && _bus.IsMappedMemoryRange(request + ExecLayout.IOStdReq.Data, 4) ? _bus.ReadLong(request + ExecLayout.IOStdReq.Data) : 0;
         var libraryOnly = number == ConuLibrary;
         var rastPort = window != 0 && _bus.IsMappedMemoryRange(window + WindowRPortOffset, 4) ? _bus.ReadLong(window + WindowRPortOffset) : 0;
-        var scratch = _memory.Allocate(256, MemfPublicClear);
+		var scratch = _memory.Allocate(256, PublicClear);
+		var portableUnit = _memory.Allocate((int)PortableDevices.ConsoleDeviceCore.UnitStateSize, PublicClear);
         var needsCharacterMap = number is ConuCharMap or ConuSnipMap;
         var simpleRefresh = window != 0 && _bus.IsMappedMemoryRange(window + WindowFlagsOffset, 4) && (_bus.ReadLong(window + WindowFlagsOffset) & WflgSimpleRefresh) != 0;
-        if (request == 0 || scratch == 0 || _units.ContainsKey(request) || number is not (ConuLibrary or ConuStandard or ConuCharMap or ConuSnipMap) || (!libraryOnly && (window == 0 || rastPort == 0)) || (needsCharacterMap && !simpleRefresh)) { if (scratch != 0) _memory.Free(scratch, 256); Complete(request, IoErrOpenFail, 0, state.Cycles, false); state.D[0] = IoErrOpenFail; return; }
-        var unit = new ConsoleUnit(request, number, window, rastPort, scratch)
+		if (request == 0 || scratch == 0 || portableUnit == 0 || _units.ContainsKey(request) || number is not (ConuLibrary or ConuStandard or ConuCharMap or ConuSnipMap) || (!libraryOnly && (window == 0 || rastPort == 0)) || (needsCharacterMap && !simpleRefresh)) { if (scratch != 0) _memory.Free(scratch, 256); if (portableUnit != 0) _memory.Free(portableUnit, (int)PortableDevices.ConsoleDeviceCore.UnitStateSize); Complete(request, IoErrOpenFail, 0, state.Cycles, false); state.D[0] = IoErrOpenFail; return; }
+		var portablePlatform = new AmigaBusConsolePlatform(_bus, state.Cycles, _reply);
+		var openResult = PortableDevices.ConsoleDeviceCore.Open(ref portablePlatform, _portableState, APTR.FromPointer(DeviceBase), APTR.FromPointer(request), APTR.FromPointer(portableUnit), number, state.D[1], APTR.FromPointer(window), APTR.FromPointer(rastPort), APTR.FromPointer(_defaultKeyMap));
+		if (openResult != 0) { _memory.Free(scratch, 256); _memory.Free(portableUnit, (int)PortableDevices.ConsoleDeviceCore.UnitStateSize); state.D[0] = openResult; return; }
+		var unit = new ConsoleUnit(request, number, window, rastPort, scratch, portableUnit)
         {
             KeyMap = _defaultKeyMap,
             NoDrawOnNewSize = (number is ConuCharMap or ConuSnipMap) && (state.D[1] & ConFlagNoDrawOnNewSize) != 0
@@ -254,11 +264,6 @@ internal sealed class ConsoleDeviceServices : IDisposable
         UpdateGeometry(unit);
         _units[request] = unit;
         if (!libraryOnly) { _windowUnitsInOpenOrder.Add(request); _activeWindowUnit = request; }
-        _bus.WriteLong(request + IoDeviceOffset, DeviceBase, state.Cycles);
-        // CONU_LIBRARY exposes the device base for its two library vectors;
-        // unlike a windowed unit it does not publish a Console Unit pointer.
-        _bus.WriteLong(request + IoUnitOffset, libraryOnly ? 0u : request, state.Cycles);
-        var count = _bus.ReadWord(DeviceBase + LibraryOpenCountOffset); _bus.WriteWord(DeviceBase + LibraryOpenCountOffset, unchecked((ushort)(count + 1)), state.Cycles);
         Complete(request, 0, 0, state.Cycles, false); state.D[0] = 0;
     }
 
@@ -267,74 +272,61 @@ internal sealed class ConsoleDeviceServices : IDisposable
         var request = state.A[1];
         if (TryGetUnit(request, out var unit))
         {
-            CancelReads(unit.Request, state.Cycles);
-            CancelRender(unit.Request, state.Cycles);
-            CancelClear(unit.Request, state.Cycles);
-            CancelQueuedWrites(unit.Request, state.Cycles);
+			CancelRender(unit.Request, state.Cycles, completeRequest: false);
+			CancelClear(unit.Request, state.Cycles, completeRequest: false);
+			RemoveQueuedPresentationWrites(unit.Request);
+			var portablePlatform = new AmigaBusConsolePlatform(_bus, state.Cycles, _reply); PortableDevices.ConsoleDeviceCore.Close(ref portablePlatform, _portableState, APTR.FromPointer(DeviceBase), APTR.FromPointer(request));
             _units.Remove(unit.Request);
             _windowUnitsInOpenOrder.Remove(unit.Request);
             if (_activeWindowUnit == unit.Request) _activeWindowUnit = _windowUnitsInOpenOrder.LastOrDefault();
             FreeUnitMemory(unit);
         }
-        var count = _bus.ReadWord(DeviceBase + LibraryOpenCountOffset); if (count != 0) _bus.WriteWord(DeviceBase + LibraryOpenCountOffset, unchecked((ushort)(count - 1)), state.Cycles); state.D[0] = 0;
+		state.D[0] = 0;
     }
     private static void Expunge(M68kCpuState state) => state.D[0] = 0;
     private static void ExtFunc(M68kCpuState state) => state.D[0] = 0;
 
     private void BeginIo(M68kCpuState state)
     {
-        var request = state.A[1]; if (!TryGetUnit(request, out var unit) || _bus.ReadLong(request + IoDeviceOffset) != DeviceBase) return;
-        switch (_bus.ReadWord(request + IoCommandOffset))
-        {
-            case CmdReset: ResetUnit(request, unit, state); break;
-            case CmdRead: StartRead(request, unit, state.Cycles); break;
-            case CmdWrite: Write(request, unit, state); break;
-            case CmdUpdate: StartRedraw(request, unit, state); break;
-            case CmdStop:
-                unit.Stopped = true;
-                Complete(request, 0, 0, state.Cycles, true);
-                break;
-            case CmdStart:
-                unit.Stopped = false;
-                Complete(request, 0, 0, state.Cycles, true);
-                StartNextQueuedWrite(state);
-                break;
-            // CMD_CLEAR is an input-side operation: discard queued console
-            // reports that could satisfy a CMD_READ.  Form feed and CSI J are
-            // the terminal-language operations that erase the window; CMD_RESET
-            // is the device operation that resets a unit and redraws it.
-            case CmdClear:
-                ClearInput(unit);
-                Complete(request, 0, 0, state.Cycles, true);
-                break;
-            case CmdFlush:
-                CancelReads(unit.Request, state.Cycles);
-                CancelRender(unit.Request, state.Cycles);
-                CancelClear(unit.Request, state.Cycles);
-                CancelQueuedWrites(unit.Request, state.Cycles);
-                Complete(request, 0, 0, state.Cycles, true);
-                break;
-            case CdAskKeyMap: CopyKeyMap(request, unit.KeyMap, state.Cycles); break;
-            case CdSetKeyMap: SetKeyMap(request, unit, state.Cycles, false); break;
-            case CdAskDefaultKeyMap: CopyKeyMap(request, _defaultKeyMap, state.Cycles); break;
-            case CdSetDefaultKeyMap: SetKeyMap(request, unit, state.Cycles, true); break;
-            default: Complete(request, IoErrNoCommand, 0, state.Cycles, true); break;
-        }
+		_cpuState = state;
+		var request = state.A[1];
+		if (!TryGetUnit(request, out var unit) || _bus.ReadLong(request + ExecLayout.IORequest.Device) != DeviceBase) { state.D[0] = uint.MaxValue; return; }
+		var command = _bus.ReadWord(request + ExecLayout.IORequest.Command);
+		if (command is CmdReset or CmdFlush)
+		{
+			CancelRender(unit.Request, state.Cycles, completeRequest: false);
+			CancelClear(unit.Request, state.Cycles, completeRequest: false);
+			RemoveQueuedPresentationWrites(unit.Request);
+		}
+		if (command is CmdReset or CmdClear) ClearInput(unit);
+		var platform = new AmigaBusConsolePlatform(_bus, state.Cycles, _reply, this, state);
+		state.D[0] = 0;
+		var result = PortableDevices.ConsoleDeviceCore.BeginIo(ref platform, _portableState,
+			APTR.FromPointer(DeviceBase), APTR.FromPointer(request));
+		if (result != 0) state.D[0] = result;
+		if (result == 0 && command == CdSetKeyMap) unit.KeyMap = _bus.ReadLong(request + ExecLayout.IOStdReq.Data);
+		if (result == 0 && command == CdSetDefaultKeyMap) _defaultKeyMap = _bus.ReadLong(request + ExecLayout.IOStdReq.Data);
+		if (command == CmdStop) unit.Stopped = true;
+		if (command == CmdStart) unit.Stopped = false;
+		CompleteUnitReads(unit, state.Cycles);
     }
 
-    private void ResetUnit(uint request, ConsoleUnit unit, M68kCpuState state)
-    {
-        // Reset is a device-level cancellation boundary.  A second I/O
-        // request may reset a unit while an earlier write owns a native
-        // graphics continuation; do not replace that continuation's pending
-        // clear record or let the old write complete after reset.
-        CancelReads(unit.Request, state.Cycles);
-        CancelRender(unit.Request, state.Cycles);
-        CancelClear(unit.Request, state.Cycles);
-        CancelQueuedWrites(unit.Request, state.Cycles);
-        ClearUnit(unit);
-        StartVisualClear(request, unit, state);
-    }
+	internal bool StartPortableWrite(APTR unitState, APTR request, APTR data, uint length, M68kCpuState state)
+	{
+		var unit = _units.Values.FirstOrDefault(candidate => candidate.PortableState == unitState.Raw);
+		if (unit is null) return false;
+		Write(request.Raw, unit, state, portableCore: true);
+		return false;
+	}
+
+	internal bool StartPortableClear(APTR unitState, APTR request, bool redraw, M68kCpuState state)
+	{
+		var unit = _units.Values.FirstOrDefault(candidate => candidate.PortableState == unitState.Raw);
+		if (unit is null) return false;
+		if (redraw) StartRedraw(request.Raw, unit, state);
+		else { ClearUnit(unit); StartVisualClear(request.Raw, unit, state); }
+		return false;
+	}
 
     private void StartVisualClear(uint request, ConsoleUnit unit, M68kCpuState state, bool redrawAfterClear = false)
     {
@@ -363,38 +355,28 @@ internal sealed class ConsoleDeviceServices : IDisposable
         else { Complete(clear.Request, 0, 0, state.Cycles, true); StartNextQueuedWrite(state); }
     }
 
-    private void CancelClear(uint unitAddress, long cycle)
+    private void CancelClear(uint unitAddress, long cycle, bool completeRequest = true)
     {
         if (_pendingClear is not { } pending || pending.Unit != unitAddress) return;
         _pendingClear = null;
-        Complete(pending.Request, IoErrAborted, 0, cycle, true);
+        if (completeRequest) Complete(pending.Request, IoErrAborted, 0, cycle, true);
     }
 
-    private bool CancelQueuedWrite(uint request, long cycle)
-    {
-        if (_pendingWrites.Count == 0) return false;
-        var retained = new Queue<PendingWrite>();
-        var cancelled = false;
-        while (_pendingWrites.TryDequeue(out var pending))
-        {
-            if (pending.Request == request) { Complete(request, IoErrAborted, 0, cycle, true); cancelled = true; }
-            else retained.Enqueue(pending);
-        }
-        while (retained.TryDequeue(out var pending)) _pendingWrites.Enqueue(pending);
-        return cancelled;
-    }
+	private void RemoveQueuedPresentationWrites(uint unitAddress)
+	{
+		if (_pendingWrites.Count == 0) return;
+		var retained = new Queue<PendingWrite>();
+		while (_pendingWrites.TryDequeue(out var pending)) if (pending.Unit != unitAddress) retained.Enqueue(pending);
+		while (retained.TryDequeue(out var pending)) _pendingWrites.Enqueue(pending);
+	}
 
-    private void CancelQueuedWrites(uint unit, long cycle)
-    {
-        if (_pendingWrites.Count == 0) return;
-        var retained = new Queue<PendingWrite>();
-        while (_pendingWrites.TryDequeue(out var pending))
-        {
-            if (pending.Unit == unit) Complete(pending.Request, IoErrAborted, 0, cycle, true);
-            else retained.Enqueue(pending);
-        }
-        while (retained.TryDequeue(out var pending)) _pendingWrites.Enqueue(pending);
-    }
+	private void RemoveQueuedPresentationWrite(uint request)
+	{
+		if (_pendingWrites.Count == 0) return;
+		var retained = new Queue<PendingWrite>();
+		while (_pendingWrites.TryDequeue(out var pending)) if (pending.Request != request) retained.Enqueue(pending);
+		while (retained.TryDequeue(out var pending)) _pendingWrites.Enqueue(pending);
+	}
 
     private void StartNextQueuedWrite(M68kCpuState state)
     {
@@ -405,7 +387,7 @@ internal sealed class ConsoleDeviceServices : IDisposable
             if (_units.TryGetValue(pending.Unit, out var unit))
             {
                 if (unit.Stopped) { _pendingWrites.Enqueue(pending); continue; }
-                Write(pending.Request, unit, state);
+                Write(pending.Request, unit, state, portableCore: true);
                 return;
             }
             Complete(pending.Request, IoErrAborted, 0, state.Cycles, true);
@@ -477,39 +459,37 @@ internal sealed class ConsoleDeviceServices : IDisposable
 
     private void AbortIo(M68kCpuState state)
     {
+		_cpuState = state;
         var request = state.A[1];
-        for (var index = 0; index < _pendingReads.Count; index++) if (_pendingReads[index].Request == request) { _pendingReads.RemoveAt(index); Complete(request, IoErrAborted, 0, state.Cycles, true); state.D[0] = 0; return; }
-        if (CancelQueuedWrite(request, state.Cycles)) { state.D[0] = 0; return; }
-        if (_pendingRender is { } pending && pending.Request == request) { CancelRender(pending.Unit, state.Cycles); state.D[0] = 0; return; }
-        if (_pendingClear is { } clear && clear.Request == request) { CancelClear(clear.Unit, state.Cycles); state.D[0] = 0; return; }
-        state.D[0] = uint.MaxValue;
+		if (TryGetUnit(request, out var unit))
+		{
+			RemoveQueuedPresentationWrite(request);
+			if (_pendingRender is { } pending && pending.Request == request) CancelRender(unit.Request, state.Cycles, completeRequest: false);
+			if (_pendingClear is { } clear && clear.Request == request) CancelClear(unit.Request, state.Cycles, completeRequest: false);
+		}
+		var platform = new AmigaBusConsolePlatform(_bus, state.Cycles, _reply, this, state);
+		state.D[0] = PortableDevices.ConsoleDeviceCore.AbortIo(ref platform, _portableState, APTR.FromPointer(request));
     }
 
     private bool TryGetUnit(uint request, out ConsoleUnit unit)
     {
         unit = null!;
-        if (request == 0 || !_bus.IsMappedMemoryRange(request + IoUnitOffset, 4)) return false;
-        var unitAddress = _bus.ReadLong(request + IoUnitOffset);
+		if (request == 0 || !_bus.IsMappedMemoryRange(request + ExecLayout.IORequest.Unit, 4)) return false;
+		var unitAddress = _bus.ReadLong(request + ExecLayout.IORequest.Unit);
         if (unitAddress != 0) return _units.TryGetValue(unitAddress, out unit!);
         return _units.TryGetValue(request, out unit!) && unit.Number == ConuLibrary;
     }
 
-    private void StartRead(uint request, ConsoleUnit unit, long cycle)
+    private void Write(uint request, ConsoleUnit unit, M68kCpuState state, bool portableCore = false)
     {
-        if (unit.Input.Count != 0) CompleteRead(request, unit, cycle);
-        else { _bus.WriteByte(request + IoFlagsOffset, (byte)(_bus.ReadByte(request + IoFlagsOffset) & ~IoQuick), cycle); _pendingReads.Add(new PendingRead(request, unit.Request)); }
-    }
-
-    private void Write(uint request, ConsoleUnit unit, M68kCpuState state)
-    {
-        if (unit.Stopped || _pendingRender is not null || _pendingClear is not null)
+        if ((!portableCore && unit.Stopped) || _pendingRender is not null || _pendingClear is not null)
         {
             _pendingWrites.Enqueue(new PendingWrite(request, unit.Request));
             MarkAsynchronous(request, state.Cycles);
             return;
         }
-        var source = _bus.ReadLong(request + IoDataOffset);
-        if (!TryGetWriteLength(source, _bus.ReadLong(request + IoLengthOffset), out var length)) { Complete(request, IoErrBadAddress, 0, state.Cycles, true); return; }
+		var source = _bus.ReadLong(request + ExecLayout.IOStdReq.Data);
+		if (!TryGetWriteLength(source, _bus.ReadLong(request + ExecLayout.IOStdReq.Length), out var length)) { Complete(request, IoErrBadAddress, 0, state.Cycles, true); return; }
         var run = new List<byte>();
         for (uint index = 0; index < length; index++) ParseOutput(unit, _bus.ReadByte(source + index), run, state);
         FlushRun(unit, run, state);
@@ -1232,7 +1212,7 @@ internal sealed class ConsoleDeviceServices : IDisposable
         StartNextRender(state);
     }
 
-    private void CancelRender(uint unitAddress, long cycle)
+    private void CancelRender(uint unitAddress, long cycle, bool completeRequest = true)
     {
         if (_units.TryGetValue(unitAddress, out var unit)) { unit.PendingRenders.Clear(); unit.PendingBells = 0; }
         if (_pendingRender is not { } pending || pending.Unit != unitAddress) return;
@@ -1242,7 +1222,7 @@ internal sealed class ConsoleDeviceServices : IDisposable
         // are one I/O request, so flushing it must reply exactly once.
         if (_pendingClear is { } clear && clear.Unit == unitAddress && clear.Request == pending.Request)
             _pendingClear = null;
-        Complete(pending.Request, IoErrAborted, 0, cycle, true);
+        if (completeRequest) Complete(pending.Request, IoErrAborted, 0, cycle, true);
     }
 
     private void ObserveInputEvent(InputDeviceServices.ObservedInputEvent input) => _ = ObserveInput(input);
@@ -1409,7 +1389,7 @@ internal sealed class ConsoleDeviceServices : IDisposable
     private bool PasteClipboard(ConsoleUnit unit, M68kCpuState state)
     {
         if (!TryOpenClipboard(unit, state) || !InvokeClipboardIo(unit, CmdRead, unit.ClipboardBuffer, ClipboardBufferBytes, 0, 0, state, out _)) return false;
-        var length = _bus.ReadLong(unit.ClipboardRequest + IoActualOffset);
+		var length = _bus.ReadLong(unit.ClipboardRequest + ExecLayout.IOStdReq.Actual);
         if (length > ClipboardBufferBytes) return false;
         var bytes = new byte[(int)length];
         for (var index = 0u; index < length; index++) bytes[index] = _bus.ReadByte(unit.ClipboardBuffer + index);
@@ -1439,14 +1419,14 @@ internal sealed class ConsoleDeviceServices : IDisposable
     private bool TryOpenClipboard(ConsoleUnit unit, M68kCpuState state)
     {
         if (unit.ClipboardRequest != 0) return true;
-        var device = FindDevice(_execBase + DeviceListOffset, "clipboard.device");
+		var device = FindDevice(_execBase + ExecLayout.ExecBase.DeviceList, "clipboard.device");
         if (device < 36 || !_bus.IsCpuPhysicalAddressMapped(device - 36, 6, AmigaBusAccessKind.CpuInstructionFetch)) return false;
-        var request = _memory.Allocate(ClipboardRequestBytes, MemfPublicClear);
-        var buffer = _memory.Allocate(ClipboardBufferBytes, MemfPublicClear);
+		var request = _memory.Allocate(ClipboardRequestBytes, PublicClear);
+		var buffer = _memory.Allocate(ClipboardBufferBytes, PublicClear);
         if (request == 0 || buffer == 0) { if (request != 0) _memory.Free(request, ClipboardRequestBytes); if (buffer != 0) _memory.Free(buffer, ClipboardBufferBytes); return false; }
         _bus.ClearMemory(request, ClipboardRequestBytes); _bus.ClearMemory(buffer, ClipboardBufferBytes);
         var call = new M68kCpuState { Cycles = state.Cycles }; call.A[1] = request; call.D[0] = 0;
-        if (!_bus.TryInvokeHostGatewayAt(device - 6, call) || call.D[0] != 0 || _bus.ReadLong(request + IoDeviceOffset) != device)
+		if (!_bus.TryInvokeHostGatewayAt(device - 6, call) || call.D[0] != 0 || _bus.ReadLong(request + ExecLayout.IORequest.Device) != device)
         { _memory.Free(request, ClipboardRequestBytes); _memory.Free(buffer, ClipboardBufferBytes); return false; }
         unit.ClipboardRequest = request; unit.ClipboardBuffer = buffer; return true;
     }
@@ -1454,22 +1434,23 @@ internal sealed class ConsoleDeviceServices : IDisposable
     private bool InvokeClipboardIo(ConsoleUnit unit, ushort command, uint data, uint length, uint offset, uint clipId, M68kCpuState state, out uint resultingId)
     {
         resultingId = 0;
-        var device = _bus.ReadLong(unit.ClipboardRequest + IoDeviceOffset);
+		var device = _bus.ReadLong(unit.ClipboardRequest + ExecLayout.IORequest.Device);
         if (device < 30 || !_bus.IsCpuPhysicalAddressMapped(device - 30, 6, AmigaBusAccessKind.CpuInstructionFetch)) return false;
-        _bus.WriteWord(unit.ClipboardRequest + IoCommandOffset, command, state.Cycles);
-        _bus.WriteByte(unit.ClipboardRequest + IoFlagsOffset, IoQuick, state.Cycles);
-        _bus.WriteLong(unit.ClipboardRequest + IoDataOffset, data, state.Cycles);
-        _bus.WriteLong(unit.ClipboardRequest + IoLengthOffset, length, state.Cycles);
+		_bus.WriteWord(unit.ClipboardRequest + ExecLayout.IORequest.Command, command, state.Cycles);
+		_bus.WriteByte(unit.ClipboardRequest + ExecLayout.IORequest.Flags, IoQuick, state.Cycles);
+		_bus.WriteLong(unit.ClipboardRequest + ExecLayout.IOStdReq.Data, data, state.Cycles);
+		_bus.WriteLong(unit.ClipboardRequest + ExecLayout.IOStdReq.Length, length, state.Cycles);
         _bus.WriteLong(unit.ClipboardRequest + 0x2C, offset, state.Cycles);
         _bus.WriteLong(unit.ClipboardRequest + 0x30, clipId, state.Cycles);
         var call = new M68kCpuState { Cycles = state.Cycles }; call.A[1] = unit.ClipboardRequest;
-        if (!_bus.TryInvokeHostGatewayAt(device - 30, call) || _bus.ReadByte(unit.ClipboardRequest + IoErrorOffset) != 0) return false;
+		if (!_bus.TryInvokeHostGatewayAt(device - 30, call) || _bus.ReadByte(unit.ClipboardRequest + ExecLayout.IORequest.Error) != 0) return false;
         resultingId = _bus.ReadLong(unit.ClipboardRequest + 0x30); return true;
     }
 
     private void FreeUnitMemory(ConsoleUnit unit)
     {
         if (unit.Scratch != 0) _memory.Free(unit.Scratch, 256);
+		if (unit.PortableState != 0) _memory.Free(unit.PortableState, (int)PortableDevices.ConsoleDeviceCore.UnitStateSize);
         if (unit.ClipboardRequest != 0) _memory.Free(unit.ClipboardRequest, ClipboardRequestBytes);
         if (unit.ClipboardBuffer != 0) _memory.Free(unit.ClipboardBuffer, ClipboardBufferBytes);
     }
@@ -1587,42 +1568,74 @@ internal sealed class ConsoleDeviceServices : IDisposable
     }
     private static byte Translate(byte raw, ushort qualifier) { var value = raw switch { 0x00 => (byte)'`', >= 0x01 and <= 0x0A => (byte)("1234567890"[raw - 1]), 0x10 => (byte)'q', 0x11 => (byte)'w', 0x12 => (byte)'e', 0x13 => (byte)'r', 0x14 => (byte)'t', 0x15 => (byte)'y', 0x16 => (byte)'u', 0x17 => (byte)'i', 0x18 => (byte)'o', 0x19 => (byte)'p', 0x20 => (byte)'a', 0x21 => (byte)'s', 0x22 => (byte)'d', 0x23 => (byte)'f', 0x24 => (byte)'g', 0x25 => (byte)'h', 0x26 => (byte)'j', 0x27 => (byte)'k', 0x28 => (byte)'l', 0x31 => (byte)'z', 0x32 => (byte)'x', 0x33 => (byte)'c', 0x34 => (byte)'v', 0x35 => (byte)'b', 0x36 => (byte)'n', 0x37 => (byte)'m', 0x40 => (byte)' ', 0x44 => (byte)'\r', _ => (byte)0 }; return (qualifier & 3) != 0 && value is >= (byte)'a' and <= (byte)'z' ? (byte)(value - 32) : value; }
 
-    private void CopyKeyMap(uint request, uint keyMap, long cycle)
-    {
-        var destination = _bus.ReadLong(request + IoDataOffset); var length = _bus.ReadLong(request + IoLengthOffset);
-        if (destination == 0 || length < KeyMapBytes || !_bus.IsMappedMemoryRange(destination, KeyMapBytes)) { Complete(request, IoErrBadAddress, 0, cycle, true); return; }
-        for (var offset = 0; offset < KeyMapBytes; offset++) _bus.WriteByte(destination + (uint)offset, keyMap != 0 && _bus.IsMappedMemoryRange(keyMap + (uint)offset, 1) ? _bus.ReadByte(keyMap + (uint)offset) : (byte)0, cycle);
-        Complete(request, 0, KeyMapBytes, cycle, true);
-    }
-
-    private void SetKeyMap(uint request, ConsoleUnit unit, long cycle, bool @default)
-    {
-        var keyMap = _bus.ReadLong(request + IoDataOffset); var length = _bus.ReadLong(request + IoLengthOffset);
-        if (keyMap == 0 || length < KeyMapBytes || !_bus.IsMappedMemoryRange(keyMap, KeyMapBytes)) { Complete(request, IoErrBadAddress, 0, cycle, true); return; }
-        if (@default) _defaultKeyMap = keyMap; else unit.KeyMap = keyMap;
-        Complete(request, 0, KeyMapBytes, cycle, true);
-    }
-
-    private void CompleteUnitReads(ConsoleUnit unit, long cycle) { for (var index = 0; index < _pendingReads.Count && unit.Input.Count != 0;) { var pending = _pendingReads[index]; if (pending.Unit != unit.Request) { index++; continue; } _pendingReads.RemoveAt(index); CompleteRead(pending.Request, unit, cycle); } }
-    private void CompleteRead(uint request, ConsoleUnit unit, long cycle) { var data = _bus.ReadLong(request + IoDataOffset); var length = _bus.ReadLong(request + IoLengthOffset); if (data == 0 || length == 0 || !_bus.IsMappedMemoryRange(data, 1)) { Complete(request, IoErrBadAddress, 0, cycle, true); return; } var actual = 0u; while (actual < length && unit.Input.Count != 0 && _bus.IsMappedMemoryRange(data + actual, 1)) { _bus.WriteByte(data + actual++, unit.Input.Dequeue(), cycle); } Complete(request, 0, actual, cycle, true); }
-    private void CancelReads(uint unit, long cycle) { for (var index = _pendingReads.Count - 1; index >= 0; index--) if (_pendingReads[index].Unit == unit) { var request = _pendingReads[index].Request; _pendingReads.RemoveAt(index); Complete(request, IoErrAborted, 0, cycle, true); } }
-    private void MarkAsynchronous(uint request, long cycle) { if (_bus.IsMappedMemoryRange(request + IoFlagsOffset, 1)) _bus.WriteByte(request + IoFlagsOffset, (byte)(_bus.ReadByte(request + IoFlagsOffset) & ~IoQuick), cycle); }
+	private void CompleteUnitReads(ConsoleUnit unit, long cycle)
+	{
+		if (unit.PortableState == 0 || unit.Input.Count == 0) return;
+		var platform = new AmigaBusConsolePlatform(_bus, cycle, _reply);
+		while (unit.Input.Count != 0)
+		{
+			var staged = Math.Min(unit.Input.Count, 256); var offset = 0;
+			foreach (var value in unit.Input) { if (offset == staged) break; _bus.WriteByte(unit.Scratch + (uint)offset++, value, cycle); }
+			var accepted = PortableDevices.ConsoleDeviceCore.EnqueueInput(ref platform, APTR.FromPointer(unit.PortableState), APTR.FromPointer(unit.Scratch), (uint)staged);
+			for (var index = 0u; index < accepted; index++) unit.Input.Dequeue();
+			if (accepted < staged) break;
+		}
+	}
+	private void MarkAsynchronous(uint request, long cycle) { if (_bus.IsMappedMemoryRange(request + ExecLayout.IORequest.Flags, 1)) _bus.WriteByte(request + ExecLayout.IORequest.Flags, (byte)(_bus.ReadByte(request + ExecLayout.IORequest.Flags) & ~IoQuick), cycle); }
     private void Complete(uint request, byte error, uint actual, long cycle, bool reply)
     {
-        if (request == 0 || !_bus.IsMappedMemoryRange(request + IoErrorOffset, 9)) return;
-        if (error == 0 && _bus.ReadWord(request + IoCommandOffset) == CmdWrite)
+		if (request == 0 || !_bus.IsMappedMemoryRange(request + ExecLayout.IORequest.Error, 9)) return;
+		if (TryGetUnit(request, out var portableUnit) && portableUnit.PortableState != 0)
+		{
+			var platform = _cpuState is null
+				? new AmigaBusConsolePlatform(_bus, cycle, _reply)
+				: new AmigaBusConsolePlatform(_bus, cycle, _reply, this, _cpuState);
+			var unitState = APTR.FromPointer(portableUnit.PortableState); var requestAddress = APTR.FromPointer(request);
+			var portableError = (IoError)unchecked((sbyte)error);
+			if (PortableDevices.ConsoleDeviceCore.IsActiveWrite(ref platform, unitState, requestAddress))
+			{
+				PortableDevices.ConsoleDeviceCore.ContinueWrite(ref platform, unitState, portableError, actual);
+				return;
+			}
+			if (PortableDevices.ConsoleDeviceCore.IsActiveControl(ref platform, unitState, requestAddress))
+			{
+				PortableDevices.ConsoleDeviceCore.ContinueControl(ref platform, unitState, requestAddress, portableError);
+				return;
+			}
+		}
+		if (error == 0 && _bus.ReadWord(request + ExecLayout.IORequest.Command) == CmdWrite)
         {
-            var source = _bus.ReadLong(request + IoDataOffset);
-            _bus.WriteLong(request + IoDataOffset, source + actual, cycle);
-            _bus.WriteLong(request + IoLengthOffset, 0, cycle);
+			var source = _bus.ReadLong(request + ExecLayout.IOStdReq.Data);
+			_bus.WriteLong(request + ExecLayout.IOStdReq.Data, source + actual, cycle);
+			_bus.WriteLong(request + ExecLayout.IOStdReq.Length, 0, cycle);
         }
-        _bus.WriteByte(request + IoErrorOffset, error, cycle);
-        _bus.WriteLong(request + IoActualOffset, error == 0 ? actual : 0, cycle);
-        if (reply && (_bus.ReadByte(request + IoFlagsOffset) & IoQuick) == 0) _reply(request);
+		_bus.WriteByte(request + ExecLayout.IORequest.Error, error, cycle);
+		_bus.WriteLong(request + ExecLayout.IOStdReq.Actual, error == 0 ? actual : 0, cycle);
+		if (reply && (_bus.ReadByte(request + ExecLayout.IORequest.Flags) & IoQuick) == 0) _reply(request);
     }
     private void Register(int lvo, Action<M68kCpuState> callback) { var address = unchecked((uint)((int)DeviceBase + lvo)); RegisterAddress(address, callback); }
     private void RegisterAddress(uint address, Action<M68kCpuState> callback) => _gateways.Add((address, _bus.RegisterHostGateway(address, callback)));
-    private uint FindDevice(uint list, string name) { for (var node = _bus.ReadLong(list); node != 0 && node != list + 4 && _bus.IsMappedMemoryRange(node, NodeNameOffset + 4); node = _bus.ReadLong(node)) if (string.Equals(ReadName(_bus.ReadLong(node + NodeNameOffset)), name, StringComparison.OrdinalIgnoreCase)) return node; return 0; }
-    private uint FindLibrary(uint execBase, string name) => execBase == 0 || !_bus.IsMappedMemoryRange(execBase + LibraryListOffset, 14) ? 0 : FindDevice(execBase + LibraryListOffset, name);
+	private uint FindDevice(uint list, string name) { for (var node = _bus.ReadLong(list); node != 0 && node != list + ExecLayout.List.Tail && _bus.IsMappedMemoryRange(node, ExecLayout.Node.Name + 4); node = _bus.ReadLong(node)) if (string.Equals(ReadName(_bus.ReadLong(node + ExecLayout.Node.Name)), name, StringComparison.OrdinalIgnoreCase)) return node; return 0; }
+	private uint FindLibrary(uint execBase, string name) => execBase == 0 || !_bus.IsMappedMemoryRange(execBase + ExecLayout.ExecBase.LibraryList, (int)global::Amiga.List.Size) ? 0 : FindDevice(execBase + ExecLayout.ExecBase.LibraryList, name);
     private string ReadName(uint address) { Span<char> value = stackalloc char[64]; var length = 0; while (address != 0 && length < value.Length && _bus.IsMappedMemoryRange(address + (uint)length, 1)) { var c = _bus.ReadByte(address + (uint)length); if (c == 0) break; value[length++] = (char)c; } return new string(value[..length]); }
+}
+
+internal struct AmigaBusConsolePlatform : PortableDevices.IConsoleDevicePlatform
+{
+	private readonly AmigaBus _bus; private readonly long _cycle; private readonly Action<uint> _reply;
+	private readonly ConsoleDeviceServices? _owner; private readonly M68kCpuState? _state;
+	public AmigaBusConsolePlatform(AmigaBus bus, long cycle, Action<uint> reply) { _bus = bus; _cycle = cycle; _reply = reply; _owner = null; _state = null; }
+	public AmigaBusConsolePlatform(AmigaBus bus, long cycle, Action<uint> reply, ConsoleDeviceServices owner, M68kCpuState state) { _bus = bus; _cycle = cycle; _reply = reply; _owner = owner; _state = state; }
+	public byte ReadUInt8(APTR address, int offset = 0) => _bus.ReadByte(address.Raw + (uint)offset);
+	public ushort ReadUInt16(APTR address, int offset = 0) => _bus.ReadWord(address.Raw + (uint)offset);
+	public uint ReadUInt32(APTR address, int offset = 0) => _bus.ReadLong(address.Raw + (uint)offset);
+	public void WriteUInt8(APTR address, int offset, byte value) => _bus.WriteByte(address.Raw + (uint)offset, value, _cycle);
+	public void WriteUInt16(APTR address, int offset, ushort value) => _bus.WriteWord(address.Raw + (uint)offset, value, _cycle);
+	public void WriteUInt32(APTR address, int offset, uint value) => _bus.WriteLong(address.Raw + (uint)offset, value, _cycle);
+	public void Clear(APTR address, uint byteCount) => _bus.ClearMemory(address.Raw, checked((int)byteCount));
+	public bool IsMapped(APTR address, uint byteSize) => byteSize <= int.MaxValue && _bus.IsMappedMemoryRange(address.Raw, (int)byteSize);
+	public void Copy(APTR source, APTR destination, uint byteCount) { for (var offset = 0u; offset < byteCount; offset++) _bus.WriteByte(destination.Raw + offset, _bus.ReadByte(source.Raw + offset), _cycle); }
+	public void ReplyMessage(APTR request) => _reply(request.Raw);
+	public bool StartConsoleWrite(APTR unitState, APTR request, APTR data, uint length) => _owner is not null && _state is not null && _owner.StartPortableWrite(unitState, request, data, length, _state);
+	public bool StartConsoleClear(APTR unitState, APTR request, bool redraw) => _owner is not null && _state is not null && _owner.StartPortableClear(unitState, request, redraw, _state);
 }
