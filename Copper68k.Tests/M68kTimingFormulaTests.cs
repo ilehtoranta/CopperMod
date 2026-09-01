@@ -199,6 +199,7 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.MovemLongRegistersToAddressIndirect or
 			M68kInstructionTimingKey.MovemLongRegistersToAddressDisplacement or
 			M68kInstructionTimingKey.MovemLongRegistersToBriefIndexed or
+			M68kInstructionTimingKey.MovemLongRegistersToAbsoluteLong or
 			M68kInstructionTimingKey.MovemLongAddressIndirectToRegisters or
 			M68kInstructionTimingKey.MovemLongAddressDisplacementToRegisters or
 			M68kInstructionTimingKey.MovemLongPostIncrementToRegisters;

@@ -496,7 +496,9 @@ namespace Copper68k
         MoveLongPostIncrementToPredecrement,
         MoveLongAddressIndirectToAddressDisplacement,
         MoveLongPostIncrementToAddressDisplacement,
-        MoveLongAddressDisplacementToPredecrement
+        MoveLongAddressDisplacementToPredecrement,
+        MovemLongRegistersToAbsoluteLong,
+        MoveByteImmediateToPostIncrement
     }
 
     internal readonly record struct M68kInstructionPlan(

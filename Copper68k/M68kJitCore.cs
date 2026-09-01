@@ -10390,7 +10390,8 @@ namespace Copper68k
             M68kInstructionFetchPublicationPhase publicationPhase =
                 M68kInstructionFetchPublicationPhase.Required,
             long retirementFloor = long.MinValue,
-            M68kInstructionFetchPublicationContext publicationContext = default)
+            M68kInstructionFetchPublicationContext publicationContext = default,
+            bool commitPendingSuccessor = false)
         {
             if (pipeline.PrefetchCount >= 2)
             {
@@ -10401,7 +10402,11 @@ namespace Copper68k
             var address = unchecked(pipeline.PrefetchAddress + (uint)(slot * 2));
             if (pipeline.HasPendingPrefetch)
             {
-                publicationPhase = pipeline.PendingPublicationPhase;
+                publicationPhase = commitPendingSuccessor &&
+                    pipeline.PendingPublicationPhase ==
+                        M68kInstructionFetchPublicationPhase.CancellableSuccessor
+                            ? publicationPhase
+                            : pipeline.PendingPublicationPhase;
                 retirementFloor = pipeline.PendingRetirementFloor;
                 publicationContext = pipeline.PendingPublicationContext;
             }
@@ -10500,12 +10505,19 @@ namespace Copper68k
 
             while (pipeline.PrefetchCount < 2)
             {
+				var busCycleStartDelay =
+					_m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0;
                 var earliestCycle = pipeline.HasPendingPrefetch
                     ? Math.Max(pipeline.PendingPrefetchEarliestCycle, pipeline.NextBusTransferCycle)
                     : Math.Max(
-                        instructionStartCycle + (_m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0),
+                        instructionStartCycle + busCycleStartDelay,
                         pipeline.NextBusTransferCycle);
-                if (earliestCycle + 2 > instructionFloor)
+				var physicalRequestCycle = earliestCycle -
+					(_deferredCpuInstructionTiming?.HasPhysicalCpuBusCursor != false
+						? busCycleStartDelay
+						: 0);
+                if (earliestCycle + 2 > instructionFloor &&
+					physicalRequestCycle >= instructionFloor)
                 {
                     if (!pipeline.HasPendingPrefetch)
                     {
@@ -10530,7 +10542,8 @@ namespace Copper68k
                     instructionStartCycle,
                     M68kInstructionFetchPublicationPhase.RetirementQueue,
                     instructionFloor,
-                    _compiledM68000PublicationContext);
+                    _compiledM68000PublicationContext,
+                    commitPendingSuccessor: true);
             }
 
             _m68000PipelineState = pipeline;

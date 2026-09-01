@@ -471,6 +471,8 @@ namespace Copper68k
         SccData,
         SccAbsoluteLong,
         Dbcc,
+        MovemLongRegistersToAbsoluteLong,
+        MoveByteImmediateToPostIncrement,
     }
 
     internal static class M68020OpcodeDispatchTable
@@ -742,6 +744,11 @@ namespace Copper68k
             if ((opcode & 0xF1FF) == 0x10BC)
             {
                 return M68020OpcodeKind.MoveByteImmediateToAddressIndirect;
+            }
+
+            if ((opcode & 0xF1FF) == 0x10FC)
+            {
+                return M68020OpcodeKind.MoveByteImmediateToPostIncrement;
             }
 
             if ((opcode & 0xF1FF) == 0x117C)
@@ -2777,6 +2784,11 @@ namespace Copper68k
                 return M68020OpcodeKind.MovemLongRegistersToBriefIndexed;
             }
 
+            if (opcode == 0x48F9)
+            {
+                return M68020OpcodeKind.MovemLongRegistersToAbsoluteLong;
+            }
+
             if ((opcode & 0xFFF8) == 0x4CD8)
             {
                 return M68020OpcodeKind.MovemLongPostIncrementToRegisters;
@@ -4585,6 +4597,15 @@ namespace Copper68k
                     ExecuteMoveByteImmediateToAddressIndirect(opcode);
                     return true;
 
+                case M68020OpcodeKind.MoveByteImmediateToPostIncrement:
+                    // Keep the 040's existing fallback and fixed timing policy.
+                    if (_profile.Model == M68kAcceleratorModel.M68040)
+                    {
+                        return false;
+                    }
+                    ExecuteMoveByteImmediateToPostIncrement(opcode);
+                    return true;
+
                 case M68020OpcodeKind.MoveByteImmediateToAddressDisplacement:
                     ExecuteMoveByteImmediateToAddressDisplacement(opcode);
                     return true;
@@ -6205,6 +6226,16 @@ namespace Copper68k
                     ExecuteMovemLongRegistersToBriefIndexed(opcode);
                     return true;
 
+                case M68020OpcodeKind.MovemLongRegistersToAbsoluteLong:
+                    // This exact timing path is qualified for the 020 family.
+                    // Preserve the other models' existing fallback/timing policies.
+                    if (_profile.Model != M68kAcceleratorModel.M68020)
+                    {
+                        return false;
+                    }
+                    ExecuteMovemLongRegistersToAbsoluteLong(opcode);
+                    return true;
+
                 case M68020OpcodeKind.MovemLongPostIncrementToRegisters:
                     ExecuteMovemLongPostIncrementToRegisters(opcode);
                     return true;
@@ -7034,6 +7065,45 @@ namespace Copper68k
                 registerToMemory: true);
         }
 
+        private void ExecuteMovemLongRegistersToAbsoluteLong(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var mask = FetchWord();
+            var address = FetchLong();
+            var dataSnapshot = new uint[8];
+            var addressSnapshot = new uint[8];
+            Array.Copy(State.D, dataSnapshot, dataSnapshot.Length);
+            Array.Copy(State.A, addressSnapshot, addressSnapshot.Length);
+
+            for (var register = 0; register < 8; register++)
+            {
+                if ((mask & (1 << register)) != 0)
+                {
+                    WriteLong(address, dataSnapshot[register]);
+                    address += 4;
+                }
+            }
+
+            for (var register = 0; register < 8; register++)
+            {
+                if ((mask & (1 << (8 + register))) != 0)
+                {
+                    WriteLong(address, addressSnapshot[register]);
+                    address += 4;
+                }
+            }
+
+            // MC68020UM 8.2.7 cache case4+3n plus the word mask/absolute-long
+            // calculate-immediate address cost4 from8.2.4:8+3n. The existing
+            // MOVEM formula supplies this base cost without another EA increment.
+            CompleteMovemLongTiming(
+                M68kInstructionTimingKey.MovemLongRegistersToAbsoluteLong,
+                "MOVEM.L <list>,(xxx).L",
+                CountSetBits(mask),
+                registerToMemory: true);
+        }
+
         private void ExecuteMovemLongPostIncrementToRegisters(ushort opcode)
         {
             BeginInstruction(opcode);
@@ -7479,6 +7549,20 @@ namespace Copper68k
             WriteByte(State.A[destination], value);
             SetMoveFlags(value, M68kOperandSize.Byte);
             CompleteTiming(M68kInstructionTimingKey.MoveByteImmediateToAddressIndirect);
+        }
+
+        private void ExecuteMoveByteImmediateToPostIncrement(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destination = (opcode >> 9) & 7;
+            var value = (byte)FetchWord();
+            var address = State.A[destination];
+            WriteByte(address, value);
+            WriteGeneralRegister(true, destination,
+                unchecked(address + M68kIntegerSemantics.AddressIncrement(destination, M68kOperandSize.Byte)));
+            SetMoveFlags(value, M68kOperandSize.Byte);
+            CompleteTiming(M68kInstructionTimingKey.MoveByteImmediateToPostIncrement);
         }
 
         private void ExecuteMoveWordImmediateToAbsoluteLong()
