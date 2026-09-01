@@ -66,7 +66,14 @@ namespace CopperMod.Amiga.Bus
             while (_nextVerticalBlankCycle <= targetCycle)
             {
                 CiaA.IncrementTod(_nextVerticalBlankCycle, _pendingCiaInterrupts);
-                RequestHardwareInterrupt(AmigaConstants.IntreqVerticalBlank, _nextVerticalBlankCycle);
+                if (_chipset == AmigaChipset.OcsPal)
+                {
+                    Paula.ScheduleVerticalBlankInterrupt(_nextVerticalBlankCycle);
+                }
+                else
+                {
+                    RequestHardwareInterrupt(AmigaConstants.IntreqVerticalBlank, _nextVerticalBlankCycle);
+                }
                 _nextVerticalBlankCycle = GetNextVerticalBlankCycle(_nextVerticalBlankCycle);
             }
         }
@@ -201,7 +208,10 @@ namespace CopperMod.Amiga.Bus
         {
             var mask = (AmigaHardwareEventMask.All & ~AmigaHardwareEventMask.PaulaRegister) |
                 AmigaHardwareEventMask.CpuBoundary;
-            if (Paula.HasCpuWakeWorkThrough(targetCycle, cpuInterruptMask))
+            // Raster can schedule the following-CCK request latch during this
+            // drain. Include its consumer before selecting a fixed event mask.
+            if (Paula.HasCpuWakeWorkThrough(targetCycle, cpuInterruptMask) ||
+                (_chipset == AmigaChipset.OcsPal && _nextVerticalBlankCycle <= targetCycle))
             {
                 mask |= AmigaHardwareEventMask.PaulaRegister;
             }

@@ -14,6 +14,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         internal void ResetLiveDma()
         {
+            _physicalBitplanePipeline = default;
             _liveFrameValid = false;
             _liveCycle = 0;
             _liveFrameStartCycle = 0;
@@ -48,6 +49,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _liveWakeVersion++;
             InvalidateLiveDisplayEventCycle();
             ClearLiveFrameCapture(0);
+            SchedulePhysicalCopperVblankRestart(ref _liveCopper);
         }
 
         internal void AdvanceLiveDmaTo(long targetCycle)
@@ -58,7 +60,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
-            if (!_liveDmaEnabled || !HasLiveDisplayWork())
+            // An idle prefix may stop before the current frame's control edge,
+            // but crossing a frame start schedules a new edge that must run.
+            if (!_liveDmaEnabled ||
+                !HasLiveDisplayWorkThrough(targetCycle) &&
+                (!UsesPhysicalCopperPipeline || targetCycle < GetLiveFrameStopCycle()))
             {
                 AdvanceIdleLiveDmaTo(targetCycle);
                 if (!_presentationIndependentDisplayLedgerEnabled)
@@ -105,10 +111,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void EndLiveDmaCapture(bool savedAdvancingLiveDma)
         {
             _advancingLiveDma = savedAdvancingLiveDma;
-            if (!savedAdvancingLiveDma &&
-                !_presentationIndependentDisplayLedgerEnabled)
+            if (!savedAdvancingLiveDma)
             {
-                RenderBoundPresentationLinesIfReady(_liveCapturedThroughCycle);
+                FinalizeCapturedRasterlinePlanIfComplete();
+                if (!_presentationIndependentDisplayLedgerEnabled)
+                {
+                    RenderBoundPresentationLinesIfReady(_liveCapturedThroughCycle);
+                }
             }
         }
 
@@ -132,6 +141,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             _liveFrameStopCycle = frameStopCycle;
+            SchedulePhysicalCopperVblankRestart(ref _liveCopper);
             _liveWakeVersion++;
             InvalidateLiveDisplayEventCycle();
         }
@@ -246,6 +256,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
         }
 
         internal bool HasLiveDisplayWork()
+            => HasLiveDisplayDmaOrWriteWork() ||
+                _liveDmaEnabled && UsesPhysicalCopperPipeline &&
+                    _liveCopper.PhysicalPipeline.HasVblankControlWork;
+
+        // A scheduled nonreserving control edge is still scheduler work, but
+        // does not imply a live DMA owner or a presentation row to capture.
+        internal bool HasLiveDisplayDmaOrWriteWork()
         {
             if (!_liveDmaEnabled)
             {
@@ -253,10 +270,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             return IsLiveBitplaneDmaEnabled() ||
+                _physicalBitplanePipeline.HasOutput ||
                 IsLiveCopperDmaEnabled() ||
+                UsesPhysicalCopperPipeline && _liveCopper.PhysicalPipeline.HasIssuedWord ||
                 IsSpriteDmaEnabled() ||
                 TryPeekPendingWrite(out _);
         }
+
+        internal bool HasLiveDisplayWorkThrough(long targetCycle)
+            => HasLiveDisplayDmaOrWriteWork() ||
+                _liveDmaEnabled && UsesPhysicalCopperPipeline &&
+                    _liveCopper.PhysicalPipeline.HasVblankControlWork &&
+                    _liveCopper.PhysicalPipeline.NextVblankControlCycle <= targetCycle;
 
         private void AdvanceIdleLiveDmaTo(long targetCycle)
         {
@@ -269,6 +294,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             _liveCycle = Math.Max(_liveCycle, targetCycle);
             _liveCapturedThroughCycle = Math.Max(_liveCapturedThroughCycle, targetCycle);
+            FinalizeCapturedRasterlinePlanIfComplete();
         }
 
         private static bool IsDisplayRegisterWrite(ushort offset)
@@ -285,6 +311,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void StartLiveFrame(long frameStartCycle)
         {
+            var preserveCopperPipeline = UsesPhysicalCopperPipeline &&
+                _liveFrameValid && frameStartCycle == _liveFrameStopCycle;
             ClearLiveFrameCapture(frameStartCycle);
             _liveFrameStartCycle = frameStartCycle;
             _liveCycle = frameStartCycle;
@@ -313,7 +341,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ResetLiveRasterlinePlan();
             _liveFirstDisplayDmaCycle = -1;
             _liveLastDisplayDmaCycle = -1;
-            _liveCopper = CreateLiveCopperFrameStartState(frameStartCycle);
+            if (!preserveCopperPipeline)
+            {
+                _liveCopper = CreateLiveCopperFrameStartState(frameStartCycle);
+            }
+            SchedulePhysicalCopperVblankRestart(ref _liveCopper);
             ResetLiveCopperRequester(resetDiagnostics: false);
 
             ResetLiveDisplayWindowStateTracking();
@@ -322,9 +354,23 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private CopperPresentationState CreateLiveCopperFrameStartState(long frameStartCycle)
         {
-            return IsLiveCopperDmaEnabled() && _copperListPointer != 0
+            var copper = IsLiveCopperDmaEnabled() && _copperListPointer != 0
                 ? new CopperPresentationState(_copperListPointer, frameStartCycle)
                 : new CopperPresentationState(0, frameStartCycle, pendingStart: true);
+            SchedulePhysicalCopperVblankRestart(ref copper);
+            return copper;
+        }
+
+        private void SchedulePhysicalCopperVblankRestart(ref CopperPresentationState copper)
+        {
+            if (UsesPhysicalCopperPipeline)
+            {
+                // The frame strobe occurs at nominal h1, before the physical
+                // line wraps. Its next-CCK control latch owns no DMA slot.
+                var strobeCycle = _liveFrameStopCycle -
+                    ((AgnusCopperDmaPhases.PhysicalToNominalOffsetCcks - 1L) * CopperHpCycles);
+                copper.PhysicalPipeline.ScheduleVblankRestart(_liveFrameStopCycle, strobeCycle);
+            }
         }
 
         private void RecordLiveFrameWrite(long cycle, ushort offset, ushort value, bool isCopper = false)
@@ -1049,6 +1095,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
         }
 
+        private void FinalizeCapturedRasterlinePlanIfComplete()
+        {
+            // An idle suffix creates no next row event to close this plan.
+            // Close only the already-recorded row once its full line is past;
+            // slot preparation alone must not finalize uncaptured work.
+            if (_liveRasterlinePlanRow >= 0 &&
+                _liveCapturedThroughCycle > _liveRasterlinePlanLineStopCycle)
+            {
+                FinalizeLiveRasterlinePlanLine();
+            }
+        }
+
         private void FinalizeLiveRasterlinePlanLine()
         {
             if (_liveRasterlinePlanRow < 0)
@@ -1210,7 +1268,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var nextLineStateCycle = HasLiveLineStateWakeWork()
                 ? GetNextLiveLineStateCycle()
                 : long.MaxValue;
-            var nextBitplaneFetchCycle = IsLiveBitplaneDmaEnabled()
+            var nextBitplaneFetchCycle = IsLiveBitplaneDmaEnabled() || _physicalBitplanePipeline.HasOutput
                 ? GetNextLiveBitplaneFetchCycle()
                 : long.MaxValue;
             var nextSpriteFetchCycle = IsSpriteDmaEnabled()

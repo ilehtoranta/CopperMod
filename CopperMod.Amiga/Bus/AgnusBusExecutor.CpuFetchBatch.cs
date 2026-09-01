@@ -632,7 +632,7 @@ namespace CopperMod.Amiga.Bus
                 return true;
             }
 
-            if (_bus.LiveDisplayDmaEnabled && _bus.Display.HasLiveDisplayWork())
+            if (_bus.LiveDisplayDmaEnabled && _bus.Display.HasLiveDisplayDmaOrWriteWork())
             {
                 owner = AgnusChipSlotOwner.Free;
                 return false;

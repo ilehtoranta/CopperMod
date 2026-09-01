@@ -1320,6 +1320,54 @@ namespace CopperMod.Amiga.Bus
                 preservePhysicalPhaseAcrossLine,
                 out result);
 
+        /// <summary>
+        /// Accepts a Copper input after inspecting both committed ownership
+        /// and the caller-prepared fixed-DMA plan for the next OUT slot.
+        /// Preparing that plan is an execution-boundary responsibility, not
+        /// an action performed by this admission method.
+        /// </summary>
+        internal bool TryAcceptCopperInput(
+            uint address,
+            long requestedCycle,
+            long inputCycle,
+            out AmigaBusAccessResult access)
+        {
+            access = default;
+            if (requestedCycle < 0 || requestedCycle > inputCycle || inputCycle < 0)
+            {
+                return false;
+            }
+
+            var outputCycle = checked(inputCycle +
+                ((long)AgnusCopperDmaPhases.InputToOutputDelayCcks * AgnusChipSlotScheduler.SlotCycles));
+            if (outputCycle <= _executedThroughCycle || !CanAcceptCopperInputAt(inputCycle))
+            {
+                return false;
+            }
+
+            return _slots.TryAcceptCopperInput(
+                _bus.MaskChipDmaAddress(address), requestedCycle, inputCycle, out access);
+        }
+
+        /// <summary>
+        /// Executes an already accepted word at its immutable OUT cycle. This
+        /// never arbitrates again, changes the grant, or moves an expired word
+        /// to a later slot.
+        /// </summary>
+        internal AmigaDmaWordExecutionResult ExecuteAcceptedCopperWord(in AmigaBusAccessResult access)
+        {
+            if (access.GrantedCycle < _executedThroughCycle ||
+                (_copperGrantedWords != 0 && access.GrantedCycle <= _lastCopperGrantedCycle))
+            {
+                throw new InvalidOperationException("An accepted Copper output must execute once at its frozen physical cycle.");
+            }
+
+            var execution = _bus.ReadAcceptedCopperWord(in access);
+            RecordGrantedCopperWord(access.Request.Address, execution.Value, access.GrantedCycle);
+            ClearCopperIntent();
+            return execution;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public long PredictCopperWordCycle(
             uint address,
@@ -1928,14 +1976,11 @@ namespace CopperMod.Amiga.Bus
             barrier = Math.Min(barrier, _agenda.Get(AgnusBusAgendaSource.Control));
             barrier = Math.Min(barrier, _agenda.Get(AgnusBusAgendaSource.Raster));
             barrier = Math.Min(barrier, _agenda.Get(AgnusBusAgendaSource.Blitter));
-            if (_bus.Blitter.BusPipelineActive)
-            {
-                barrier = Math.Min(
-                    barrier,
-                    _bus.Blitter.NormalizeRawBusEligibilityCycle(
-                        _bus.Blitter.GetRawBusEligibilityCycle(),
-                        Math.Max(0, candidate - AgnusChipSlotScheduler.SlotCycles)));
-            }
+            barrier = Math.Min(
+                barrier,
+                _bus.Blitter.NormalizeRawBusEligibilityCycle(
+                    _bus.Blitter.GetRawBusEligibilityCycle(),
+                    Math.Max(0, candidate - AgnusChipSlotScheduler.SlotCycles)));
 
             return barrier;
         }
@@ -2393,6 +2438,35 @@ namespace CopperMod.Amiga.Bus
                 valueValid: true,
                 isWrite: false,
                 (byte)plane);
+        }
+
+        internal bool TryAcceptBitplaneInput(
+            uint address, long inputCycle, out AmigaBusAccessResult access)
+        {
+            access = default;
+            if (_bus.Chipset != AmigaChipset.OcsPal || inputCycle < 0 ||
+                checked(inputCycle + AgnusChipSlotScheduler.SlotCycles) <= _executedThroughCycle)
+            {
+                return false;
+            }
+
+            return _slots.TryAcceptBitplaneInput(
+                _bus.MaskChipDmaAddress(address), inputCycle, out access);
+        }
+
+        internal AmigaDmaWordExecutionResult ExecuteAcceptedBitplaneWord(
+            int plane, in AmigaBusAccessResult access)
+        {
+            if ((uint)plane >= 8 || access.GrantedCycle < _executedThroughCycle ||
+                access.GrantedCycle <= DisplayControlState.BitplaneLastFetchCycles[plane])
+            {
+                throw new InvalidOperationException("An accepted bitplane output must execute once at its frozen physical cycle.");
+            }
+
+            var execution = _bus.ReadAcceptedBitplaneWord(in access);
+            RecordGrantedBitplaneFetch(plane, access.Request.Address, execution.Value, access.GrantedCycle);
+            _executedThroughCycle = Math.Max(_executedThroughCycle, access.GrantedCycle);
+            return execution;
         }
 
         public bool TryExecuteBitplaneWord(
@@ -2878,11 +2952,9 @@ namespace CopperMod.Amiga.Bus
             var pendingBlitter = NormalizePersistentEligibility(
                 _agenda.Get(AgnusBusAgendaSource.Blitter),
                 currentCycle);
-            var engineBlitter = _bus.Blitter.BusPipelineActive
-                ? _bus.Blitter.NormalizeRawBusEligibilityCycle(
-                    _bus.Blitter.GetRawBusEligibilityCycle(),
-                    currentCycle)
-                : long.MaxValue;
+            var engineBlitter = _bus.Blitter.NormalizeRawBusEligibilityCycle(
+                _bus.Blitter.GetRawBusEligibilityCycle(),
+                currentCycle);
             var blitter = Math.Min(engineBlitter, pendingBlitter);
 
             if (paula <= targetCycle && paula < disk)
@@ -2945,7 +3017,7 @@ namespace CopperMod.Amiga.Bus
                 _agenda.Get(AgnusBusAgendaSource.Blitter) <= candidate ||
                 _bus.Blitter.NormalizeRawBusEligibilityCycle(
                     _bus.Blitter.GetRawBusEligibilityCycle(),
-                    candidate) <= candidate)
+                    Math.Max(0, candidate - AgnusChipSlotScheduler.SlotCycles)) <= candidate)
             {
                 candidate = long.MaxValue;
                 return false;
@@ -3151,7 +3223,7 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            if (!processBlitter || !_bus.Blitter.BusPipelineActive)
+            if (!processBlitter)
             {
                 return true;
             }
@@ -3187,7 +3259,7 @@ namespace CopperMod.Amiga.Bus
                 result |= AgnusBusExecutionResult.Disk;
             }
 
-            if (!blitterWasBusyAtDrainStart &&
+            if ((!blitterWasBusyAtDrainStart || _bus.Blitter.PendingCompletionSignalCycle <= targetCycle) &&
                 _bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle)
             {
                 _bus.SynchronizeBlitterThrough(targetCycle);
@@ -3211,6 +3283,57 @@ namespace CopperMod.Amiga.Bus
             return RasterlinePlans.TryGetFixedOwnerAt(slotCycle, out var owner, out entryIndex)
                 ? owner
                 : AgnusChipSlotOwner.Free;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal AgnusCopperDmaPhase GetCopperPhaseAt(long cycle)
+            => _slots.GetCopperPhaseAt(cycle);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal long GetNextCopperControlCycle(long earliestCycle)
+            => _slots.GetNextCopperControlCycle(earliestCycle);
+
+        /// <summary>
+        /// Observes incoming RGA availability without executing or reserving
+        /// a transfer. Include fixed requests that have not yet been committed
+        /// to the physical slot ledger; current OUT ownership is independent.
+        /// </summary>
+        internal bool CanAcceptCopperInputAt(long inputCycle)
+        {
+            if (!_slots.CanAcceptCopperInputAt(inputCycle))
+            {
+                return false;
+            }
+
+            var outputCycle = checked(inputCycle +
+                ((long)AgnusCopperDmaPhases.InputToOutputDelayCcks * AgnusChipSlotScheduler.SlotCycles));
+            return GetPlannedFixedOwnerAt(outputCycle, out _) == AgnusChipSlotOwner.Free;
+        }
+
+        // An internal blitter input observes the incoming DMA phase without
+        // allocating a transfer. CPU use of the idle OUT is legal; a real
+        // blitter word still goes through exclusive physical arbitration.
+        internal bool CanAdvanceBlitterControlAt(
+            long inputCycle,
+            AgnusHrmSlotEngine? observationSlots = null)
+        {
+            if (inputCycle < 0 || inputCycle % AgnusChipSlotScheduler.SlotCycles != 0)
+            {
+                return false;
+            }
+
+            var slots = observationSlots ?? _slots;
+            var outputCycle = checked(inputCycle + AgnusChipSlotScheduler.SlotCycles);
+            if (slots.IsCpuGrantAfterNiceBlitterWait(inputCycle) ||
+                GetPlannedFixedOwnerAt(outputCycle, out _) != AgnusChipSlotOwner.Free ||
+                _bus.Paula.HasPendingDmaWordAt(outputCycle) ||
+                _bus.Disk.HasPendingDmaWordAt(outputCycle))
+            {
+                return false;
+            }
+
+            return !slots.TryGetCommittedSlotOwner(outputCycle, out var owner) ||
+                owner is AgnusChipSlotOwner.Free or AgnusChipSlotOwner.Cpu;
         }
 
         internal long GetNextEligibleCopperControlPhase(

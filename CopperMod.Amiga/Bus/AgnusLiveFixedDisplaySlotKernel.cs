@@ -82,7 +82,9 @@ namespace CopperMod.Amiga.Bus
             if (request.Owner != requester.Owner ||
                 request.Owner is not (AgnusChipSlotOwner.Bitplane or AgnusChipSlotOwner.Sprite) ||
                 request.Transfer != AgnusLiveWordTransfer.Read ||
-                request.EarliestEligibleCycle != request.RequestedCycle ||
+                (request.EarliestEligibleCycle != request.RequestedCycle &&
+                 (request.Owner != AgnusChipSlotOwner.Bitplane ||
+                  request.EarliestEligibleCycle - request.RequestedCycle != AgnusChipSlotScheduler.SlotCycles)) ||
                 (uint)request.Channel >= 8 ||
                 request.Kind != GetExpectedKind(request.Owner))
             {

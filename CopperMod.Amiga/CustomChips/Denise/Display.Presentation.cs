@@ -417,7 +417,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             entry.Channel,
                             entry.Word,
                             entry.Value,
-                            entry.Granted);
+                            entry.Granted,
+                            entry.Cycle);
                     }
                     else if (entry.Kind == AgnusCommittedDisplayEventKind.SpriteSample)
                     {
@@ -1435,6 +1436,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             DisplayTimelineState state,
             DisplayFrameTimeline timeline)
         {
+            if (TryRenderTimelinePhysicalShifter(bgra, row, segment, timeline))
+            {
+                return true;
+            }
+
             var hasBitplaneDataSpans = HasBitplaneDataSpanInBand(row, row + 1, segment.XStart, segment.XStop);
             if (state.PlaneCount <= 0 || !IsBitplaneDmaEnabled(state.Dmacon))
             {
@@ -1967,18 +1973,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
 
 
-        private long GetCopperBlitterReadyCycle(ushort waitSecond, long currentCycle)
+        private long GetCopperBlitterReadyCycle(
+            ushort waitSecond,
+            long currentCycle,
+            CopperBlitterWaitSnapshot? scratchBlitter = null)
         {
-            if ((waitSecond & 0x8000) != 0 ||
-                !_bus.Blitter.BusPipelineActive)
+            if ((waitSecond & 0x8000) != 0)
             {
                 return currentCycle;
             }
 
-            var predicted = _bus.Blitter.GetPredictedCompletionCycle();
-            return predicted > currentCycle
-                ? predicted
-                : currentCycle + AgnusChipSlotScheduler.SlotCycles;
+            return scratchBlitter.HasValue
+                ? scratchBlitter.Value.GetReadyCycle(currentCycle)
+                : _bus.Blitter.GetCopperBlitterReadyCycle(currentCycle);
         }
 
 
@@ -2482,13 +2489,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return Math.Clamp(beamX + pixelDelay, 0, outputWidth);
         }
 
-        private bool IsCopperBlitterFinishedForWait(ushort second)
+        private bool IsCopperBlitterFinishedForWait(
+            ushort second,
+            long cycle,
+            CopperBlitterWaitSnapshot? scratchBlitter = null)
         {
-            // Copper BFD waits for BLTDONE/running to clear, not merely for
-            // the externally visible BBUSY edge. A pipelined final D write can
-            // remain after BBUSY clears.
+            // BFD samples the Copper completion signal at this comparison,
+            // not the CPU busy bit or the engine's eventual bus retirement.
             return (second & 0x8000) != 0 ||
-                !_bus.Blitter.BusPipelineActive;
+                (scratchBlitter.HasValue
+                    ? scratchBlitter.Value.IsFinishedAt(cycle)
+                    : _bus.Blitter.IsCopperBlitterFinishedAt(cycle));
         }
 
         private bool IsCopperComparisonSatisfied(

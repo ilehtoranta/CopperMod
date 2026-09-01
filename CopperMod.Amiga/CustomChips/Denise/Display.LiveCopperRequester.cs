@@ -31,7 +31,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             SkipComparison,
             WaitComparison,
             RestartArm,
-            RestartReady
+            RestartReady,
+            PhysicalInput
         }
 
         internal AgnusLiveCopperDeviceDiagnostics CaptureLiveCopperDeviceDiagnostics()
@@ -57,6 +58,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         internal bool HasPublishedLiveCopperWordClaimAt(long slotCycle)
         {
+            if (UsesPhysicalCopperPipeline)
+            {
+                return _liveCopper.PhysicalPipeline.HasIssuedWord &&
+                    _liveCopper.PhysicalPipeline.IssuedAccess.GrantedCycle == slotCycle;
+            }
             if (!_liveCopperRequesterEnabled)
             {
                 return false;
@@ -139,6 +145,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
 		internal bool HasIncomingLiveCopperWordClaimAt(long slotCycle)
 		{
+
+            if (UsesPhysicalCopperPipeline)
+            {
+                return _liveCopper.PhysicalPipeline.HasIssuedWord &&
+                    _liveCopper.PhysicalPipeline.IssuedAccess.GrantedCycle == slotCycle;
+            }
 			slotCycle = AgnusChipSlotScheduler.AlignToSlot(
 				Math.Max(0, slotCycle));
 			if (_bus.IsMandatoryRefreshSlot(slotCycle))
@@ -225,7 +237,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if (requester.TryPeekPendingRequest(out var request))
             {
                 var executedBusHorizon = _bus.ExecutedChipBusHorizon;
-                if (request.EarliestEligibleCycle < executedBusHorizon)
+                if (!UsesPhysicalCopperPipeline && request.EarliestEligibleCycle < executedBusHorizon)
                 {
                     var causalLag =
                         executedBusHorizon - request.EarliestEligibleCycle;
@@ -268,6 +280,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void EnsureLiveCopperRequesterPublication(LiveCopperRequester requester)
         {
+            if (UsesPhysicalCopperPipeline)
+            {
+                EnsurePhysicalCopperRequesterPublication(requester);
+                return;
+            }
             if (requester.TryPeekPendingRequest(out var publishedRequest))
             {
                 var current =
@@ -410,6 +427,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int phase)
         {
             var access = CreateLiveCopperAccess(grant);
+            if (phase >= 4)
+            {
+                CompletePhysicalLiveCopperWord(grant.SampledValue, access);
+                return;
+            }
             RecordLiveCopperBitplaneRgaCollision(grant.SlotCycle);
             if (phase is 0 or 3)
             {
@@ -495,6 +517,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             switch (kind)
             {
+                case LiveCopperTransitionKind.PhysicalInput:
+                    StepPhysicalLiveCopper(cycle);
+                    break;
                 case LiveCopperTransitionKind.Start:
                     if (_copperListPointer != 0)
                     {
@@ -540,7 +565,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 second,
                 _liveFrameStartCycle,
                 cycle,
-                IsCopperBlitterFinishedForWait(second)))
+                IsCopperBlitterFinishedForWait(second, cycle)))
             {
                 _liveCopper.SuppressNextMove = true;
             }
@@ -552,7 +577,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         {
             _liveCopperRequesterWaitComparisons++;
             var bfdEnabled = (_liveCopper.WaitSecond & 0x8000) == 0;
-            if (bfdEnabled && _bus.Blitter.BusPipelineActive)
+            if (bfdEnabled && !_bus.Blitter.IsCopperBlitterFinishedAt(cycle))
             {
                 _liveCopper.WaitObservedBlitterBusy = true;
                 _liveCopperRequesterBfdBusyObservations++;
@@ -905,9 +930,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return false;
             }
 
-            var bfdBusy =
-                (_liveCopper.WaitSecond & 0x8000) == 0 &&
-                _bus.Blitter.BusPipelineActive;
+            var bfdBusy = !IsCopperBlitterFinishedForWait(_liveCopper.WaitSecond, cycle);
             if (!bfdBusy &&
                 IsCopperComparisonSatisfied(
                     _liveCopper.WaitFirst,
@@ -959,15 +982,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void CommitLiveCopperRequesterRestartArm(long cycle)
         {
-            if (_liveCopper.WaitRestartIncomingRgaBlocked)
-            {
-                _liveCopper.WaitRestartIncomingRgaBlocked = false;
-                _liveCopper.Cycle = cycle + (2L * AgnusChipSlotScheduler.SlotCycles);
-                return;
-            }
-
-            _liveCopper.AdvanceWaitRestartStage(
-                cycle + (2L * AgnusChipSlotScheduler.SlotCycles));
+            _liveCopper.AdvanceWaitRestartArm(
+                cycle,
+                GetAgnusBitplaneFetchPlaneCount());
         }
 
         private void CompleteLiveCopperRequesterPendingMove(long cycle)
@@ -1209,6 +1226,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public void RetryDeniedWord(long observedSlotCycle)
             {
+                if (_phase >= 4)
+                {
+                    throw new InvalidOperationException("An accepted Copper output cannot be retried.");
+                }
                 var denied = _requestLatch.Cancel(_requestGeneration);
                 var retryCycle = Math.Max(
                     denied.EarliestEligibleCycle + AgnusChipSlotScheduler.SlotCycles,
@@ -1233,6 +1254,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public void DeferPendingWord(long earliestEligibleCycle)
             {
+                if (_phase >= 4)
+                {
+                    throw new InvalidOperationException("An accepted Copper output cannot be deferred.");
+                }
                 var pending = _requestLatch.Cancel(_requestGeneration);
                 PublishWord(
                     pending.Address,
@@ -1255,6 +1280,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             public void CancelPendingWord()
             {
+                if (_phase >= 4 && _requestLatch.HasPending)
+                {
+                    throw new InvalidOperationException("An accepted Copper output cannot be cancelled.");
+                }
                 if (_requestLatch.HasPending)
                 {
                     _requestLatch.Cancel(_requestGeneration);

@@ -354,6 +354,7 @@ namespace CopperMod.Amiga.Bus
 
             var predictedCompletion = predictedGrant + AgnusChipSlotScheduler.SlotCycles;
             if (predictedCompletion >= windowEndCycle ||
+                _bus.Blitter.PendingCompletionSignalCycle <= predictedCompletion ||
                 _bus.Paula.HasDmaWorkThrough(predictedCompletion))
             {
                 _copperQuiescentFastPathRejectedDynamicDma++;

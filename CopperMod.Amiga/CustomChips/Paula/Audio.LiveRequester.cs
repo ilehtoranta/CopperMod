@@ -19,6 +19,22 @@ namespace CopperMod.Amiga.CustomChips.Paula
         private long _liveDmaDisableTransitions;
         private long _liveInterrupts;
 
+        // Pending register/sample work is not a bus word. Observe only the
+        // existing DMA latch, before its fixed OUT is committed to the ledger.
+        internal bool HasPendingDmaWordAt(long outputCycle)
+        {
+            foreach (var channel in _registerTimeline.Channels)
+            {
+                if (channel.TryGetPendingLiveDmaWord(out _, out _, out var eligibleCycle) &&
+                    eligibleCycle == outputCycle)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         internal AgnusLivePaulaDeviceDiagnostics CaptureLivePaulaDeviceDiagnostics()
             => new(
                 _liveHighSampleTransitions,

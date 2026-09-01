@@ -32,6 +32,22 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return requester.TakeResult();
         }
 
+        private BitplaneDmaReadLatch LoadAcceptedBitplaneDmaLatchThroughContract(
+            in BitplaneDmaPipeline issued)
+        {
+            var requester = _liveBitplaneRequester ??
+                throw new InvalidOperationException("The live bitplane requester is not enabled.");
+            var word = issued.Word;
+            requester.Publish(word.Row, word.Plane, word.StorageWord,
+                issued.Access.Request.Address, issued.Access.RequestedCycle, issued.OutputCycle);
+            if (!_bus.TryCommitLiveFixedDisplayRequest(requester, out _))
+            {
+                throw new InvalidOperationException("An issued bitplane output cannot be denied after input acceptance.");
+            }
+
+            return requester.TakeResult();
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private SpriteDmaReadLatch LoadSpriteDmaReadLatchThroughContract(
             int row,
@@ -73,7 +89,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 int plane,
                 int word,
                 uint address,
-                long fetchCycle)
+                long fetchCycle,
+                long outputCycle = -1)
             {
                 if (_hasResult)
                 {
@@ -89,7 +106,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     AmigaBusAccessKind.Bitplane,
                     address,
                     fetchCycle,
-                    fetchCycle,
+                    outputCycle >= 0 ? outputCycle : fetchCycle,
                     AgnusLiveWordTransfer.Read,
                     channel: plane);
                 _publishedGeneration = request.Generation;

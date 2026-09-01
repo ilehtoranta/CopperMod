@@ -78,7 +78,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     StepLiveCopper(targetCycle);
                 }
-                _liveCycle = Math.Max(_liveCycle, _liveCopper.Cycle);
+                _liveCycle = Math.Max(_liveCycle, UsesPhysicalCopperPipeline ? nextCycle : _liveCopper.Cycle);
                 _liveDisplayEventCount++;
                 if (!_liveCopperRequesterEnabled)
                 {
@@ -118,6 +118,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if (_liveCopperRequesterEnabled)
             {
                 return GetNextLiveCopperRequesterCycle();
+            }
+
+            if (UsesPhysicalCopperPipeline)
+            {
+                return GetNextPhysicalCopperCycle(
+                    _liveCopper, IsLiveCopperDmaEnabled(), _copperListPointer);
             }
 
             if (_liveCopper.PendingInstructionSecondWord)
@@ -228,10 +234,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return _liveCopper.Cycle;
             }
 
-            if (_bus.Blitter.BusPipelineActive)
+            if (!_bus.Blitter.IsCopperBlitterFinishedAt(_liveCopper.Cycle))
             {
                 _liveCopper.WaitObservedBlitterBusy = true;
-                return Math.Max(_liveCopper.Cycle, _bus.Blitter.GetPredictedCompletionCycle());
+            }
+
+            if (_bus.Blitter.CaptureBOnlyCompletionSignals().Completed ||
+                _bus.Blitter.BusPipelineActive)
+            {
+                return _bus.Blitter.GetCopperBlitterReadyCycle(_liveCopper.Cycle);
             }
 
             return _liveCopper.WaitObservedBlitterBusy
@@ -249,6 +260,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _liveCopperRequesterLegacyStepCalls++;
                 throw new InvalidOperationException(
                     "The G2L live Copper requester cannot enter StepLiveCopper.");
+            }
+
+            if (UsesPhysicalCopperPipeline)
+            {
+                StepPhysicalLiveCopper(targetCycle);
+                return;
             }
 
             CopperInstructionLatch instruction;
@@ -325,21 +342,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return;
                 }
 
-                if (_liveCopper.WaitRestartIncomingRgaBlocked)
-                {
-                    _liveCopper.WaitRestartIncomingRgaBlocked = false;
-                    _liveCopper.Cycle += 2L * AgnusChipSlotScheduler.SlotCycles;
-                    InvalidateLiveDisplayEventCycle();
-                    return;
-                }
-
-                _liveCopper.AdvanceWaitRestartStage(
-                    _liveCopper.Cycle +
-                    (GetAgnusBitplaneFetchPlaneCount() == 4 &&
-                     (_liveCopper.WaitFirst & 0x00FE) < 0x00C0 &&
-                     _liveCopper.WaitStartCarryPending
-                        ? AgnusChipSlotScheduler.SlotCycles
-                        : 2L * AgnusChipSlotScheduler.SlotCycles));
+                _liveCopper.AdvanceWaitRestartArm(
+                    _liveCopper.Cycle,
+                    GetAgnusBitplaneFetchPlaneCount());
                 InvalidateLiveDisplayEventCycle();
                 return;
             }
@@ -362,7 +367,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         return;
                     }
 
-                    if (_bus.Blitter.BusPipelineActive)
+                    if (!IsCopperBlitterFinishedForWait(_liveCopper.WaitSecond, _liveCopper.Cycle))
                     {
                         return;
                     }
@@ -859,7 +864,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 instruction.Second,
                 _liveFrameStartCycle,
                 instruction.ControlStopCycle,
-                IsCopperBlitterFinishedForWait(instruction.Second)))
+                IsCopperBlitterFinishedForWait(instruction.Second, instruction.ControlStopCycle)))
             {
                 _liveCopper.SuppressNextMove = true;
             }
@@ -1251,7 +1256,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 second,
                 _liveFrameStartCycle,
                 skipCycle,
-                IsCopperBlitterFinishedForWait(second)))
+                IsCopperBlitterFinishedForWait(second, skipCycle)))
             {
                 _liveCopper.SuppressNextMove = true;
             }
@@ -1335,6 +1340,21 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         register,
                         value,
                         isCopper: true);
+                }
+
+                // Physical G2 commits share this path. The legacy requester
+                // retains its own MOVE accounting in its separate helper.
+                if (_liveCopperRequesterEnabled && UsesPhysicalCopperPipeline)
+                {
+                    _liveCopperRequesterCommittedMoves++;
+                    if (register is 0x088 or 0x08A)
+                    {
+                        _liveCopperRequesterCommittedCopjmps++;
+                    }
+                    if (register == 0x09C && (value & AmigaConstants.IntreqCopper) != 0)
+                    {
+                        _liveCopperRequesterCommittedInterruptMoves++;
+                    }
                 }
 
                 if (register == 0x088)
@@ -1421,7 +1441,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private long GetNextLiveLineStateCycle()
         {
-            if (_liveNextLineStateRow >= LowResOutputHeight)
+            if (_liveNextLineStateRow >= LowResOutputHeight ||
+                UsesPhysicalCopperPipeline && !HasLiveDisplayDmaOrWriteWork())
             {
                 return long.MaxValue;
             }
@@ -1431,6 +1452,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private long GetNextLiveBitplaneFetchCycle()
         {
+            if (UsesPhysicalBitplanePipeline)
+            {
+                return GetNextPhysicalBitplaneCycle();
+            }
+
             if (!NormalizeLiveBitplaneFetchCursor())
             {
                 return long.MaxValue;

@@ -121,6 +121,30 @@ namespace CopperMod.Amiga.Bus
                 out completedCycle,
                 allowAdjacentCopperPhase: allowAdjacentCopperPhase);
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrant(
+            AmigaBusAccessKind kind,
+            AmigaBusAccessTarget target,
+            uint address,
+            AmigaBusAccessSize size,
+            long searchCycle,
+            long requestedCycle,
+            bool isWrite,
+            out long grantedCycle,
+            out long completedCycle,
+            bool allowAdjacentCopperPhase = false)
+            => AdvanceUntilCpuGrantCore(
+                kind,
+                target,
+                address,
+                size,
+                searchCycle,
+                requestedCycle,
+                isWrite,
+                out grantedCycle,
+                out completedCycle,
+                allowAdjacentCopperPhase: allowAdjacentCopperPhase);
+
         internal CpuWaitGrantAdvanceResult AdvanceUntilCpuGrantOrInterrupt(
             AmigaBusAccessKind kind,
             AmigaBusAccessTarget target,
@@ -164,7 +188,8 @@ namespace CopperMod.Amiga.Bus
                 requestedCycle,
                 isWrite,
                 out grantedCycle,
-                out completedCycle);
+                out completedCycle,
+                observeLongWordInterPhase: true);
 
         private CpuWaitGrantAdvanceResult AdvanceUntilCpuGrantCore(
             AmigaBusAccessKind kind,
@@ -178,7 +203,8 @@ namespace CopperMod.Amiga.Bus
             out long completedCycle,
             int cpuInterruptMask = -1,
             bool allowAdjacentCopperPhase = false,
-            bool retainGrantAtInterruptPoll = false)
+            bool retainGrantAtInterruptPoll = false,
+            bool observeLongWordInterPhase = false)
         {
             grantedCycle = 0;
             completedCycle = 0;
@@ -198,12 +224,6 @@ namespace CopperMod.Amiga.Bus
                 _bus.CausalBusExecutor.ExecutedThroughCycle;
 
             var firstCandidateCycle = searchCycle;
-            if (_bus.Blitter.CpuStallActive &&
-                !_bus.AgnusLiveBlitterEnabled)
-            {
-                firstCandidateCycle =
-                    ExecuteThroughBlitterCpuStall(requestedCycle);
-            }
 
             // An expansion/RTC/custom-register access can enter this shared
             // slot path after another requester has already advanced Agnus
@@ -220,7 +240,7 @@ namespace CopperMod.Amiga.Bus
             // Hardware before the CPU request cannot observe the pending request.
             if (firstCandidateCycle > 0)
             {
-                if (_bus.AgnusLiveBlitterEnabled && _bus.Blitter.BusPipelineActive)
+                if (_bus.AgnusLiveBlitterEnabled)
                 {
                     var blitterCycle = _bus.Blitter.GetRawBusEligibilityCycle();
                     if (blitterCycle < firstCandidateCycle)
@@ -248,11 +268,6 @@ namespace CopperMod.Amiga.Bus
                         // invisible.
                         for (var step = 0; step < 16; step++)
                         {
-                            if (!_bus.Blitter.BusPipelineActive)
-                            {
-                                break;
-                            }
-
                             var rawBlitterCycle =
                                 _bus.Blitter.GetRawBusEligibilityCycle();
                             var blitterSlot =
@@ -294,7 +309,7 @@ namespace CopperMod.Amiga.Bus
                 var committedBranchTargetAtInterruptBoundary = false;
                 var branchInterruptBoundaryCycle = 0L;
 
-                if (searchCycle > requestedCycle)
+                if (observeLongWordInterPhase && searchCycle > requestedCycle)
                 {
                     // A 68000 longword keeps the CPU bus request pending across
                     // the mandatory inter-phase memory cycle. That already

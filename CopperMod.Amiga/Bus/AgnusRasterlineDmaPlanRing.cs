@@ -118,7 +118,7 @@ namespace CopperMod.Amiga.Bus
                 for (var index = plan.BitplaneStart; index < bitplaneEnd; index++)
                 {
                     if (AgnusChipSlotScheduler.AlignToSlot(
-                            BitplaneEntries[index].GetCycle(plan.LineStartCycle)) == slotCycle)
+                            BitplaneEntries[index].GetOutputCycle(plan.LineStartCycle)) == slotCycle)
                     {
                         owner = AgnusChipSlotOwner.Bitplane;
                         entryIndex = index;

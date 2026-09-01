@@ -132,6 +132,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var nextCopper = GetNextLiveCopperCycle(slotCycle);
+            if (UsesPhysicalCopperPipeline && nextCopper <= slotCycle)
+            {
+                // Let the exact event path commit fixed OUT, Copper OUT, then
+                // Copper IN. The old whole-MOVE shortcut cannot preserve an
+                // accepted transfer across this boundary.
+                bitplaneFetches = 0;
+                spriteFetches = 0;
+                return OcsCpuWaitLiveSlotResult.CopperBarrier;
+            }
             if (nextCopper <= slotCycle)
             {
                 if (!CanCompleteSafeCpuWaitCopperOperation(slotCycle))
@@ -382,6 +391,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void CaptureLiveDisplayDmaBeforeHrmGrant(long requestedCycle, bool includeCopper)
         {
             var requestedSlot = _bus.NextChipSlotCycle(requestedCycle);
+            if (UsesPhysicalCopperPipeline && !HasLiveDisplayDmaOrWriteWork())
+            {
+                // Only a nonreserving frame-control edge can be due here.
+                // It neither needs fixed-owner preparation nor may re-enter
+                // the Paula requester whose grant prompted this query.
+                if (includeCopper && requestedSlot < GetLiveFrameStopCycle() &&
+                    HasLiveDisplayWorkThrough(requestedSlot))
+                {
+                    AdvanceLiveDisplayStateTo(requestedSlot, includeCopper: true);
+                }
+                return;
+            }
             for (var attempt = 0; attempt < 32; attempt++)
             {
                 var before = _bus.FindHrmDmaCandidate(requestedCycle);

@@ -82,6 +82,7 @@ namespace CopperMod.Amiga.Bus
                 if ((mask & AmigaHardwareEventMask.Agnus) != 0 &&
                     !cpuBoundary &&
                     !_bus.Blitter.BusPipelineActive &&
+                    _bus.Blitter.PendingCompletionSignalCycle > targetCycle &&
                     !diskDmaMayAffectDisplay &&
                     (forceCatchUp || _bus.Display.HasLiveDisplayWork()))
                 {
@@ -895,7 +896,7 @@ namespace CopperMod.Amiga.Bus
                 InvalidateWakeAgenda();
             }
 
-            if (!blitterWasBusyAtDrainStart &&
+            if ((!blitterWasBusyAtDrainStart || _bus.Blitter.PendingCompletionSignalCycle <= targetCycle) &&
                 _bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle)
             {
                 SynchronizeBlitterThrough(targetCycle);
@@ -960,7 +961,7 @@ namespace CopperMod.Amiga.Bus
             }
 
             if ((mask & AmigaHardwareEventMask.Blitter) != 0 &&
-                !blitterWasBusyAtDrainStart &&
+                (!blitterWasBusyAtDrainStart || _bus.Blitter.PendingCompletionSignalCycle <= targetCycle) &&
                 (forceCatchUp
                     ? _bus.Blitter.HasAdvanceWorkThrough(targetCycle)
                     : _bus.Blitter.GetNextWakeCandidateCycle(Math.Max(0, targetCycle - 1), targetCycle) <= targetCycle))

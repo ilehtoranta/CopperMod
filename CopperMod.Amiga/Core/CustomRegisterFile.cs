@@ -381,9 +381,13 @@ internal sealed class CustomRegisterFile
             var access = descriptor.Access;
             var writableMask = descriptor.GetWritableMask(chipset);
             var storageMode = GetStorageMode(descriptor, present);
-            var readHandler = storageMode is CustomRegisterStorageMode.RegisterFile or CustomRegisterStorageMode.DevicePublished
-                ? CustomRegisterReadHandler.StoredValue
-                : GetReadHandler(offset, present);
+            // Keep the published diagnostic image, but sample OCS DMACONR's
+            // busy edge at the read cycle rather than the last publication.
+            var readHandler = present && offset == 0x002 && chipset == AmigaChipset.OcsPal
+                ? CustomRegisterReadHandler.Dmaconr
+                : storageMode is CustomRegisterStorageMode.RegisterFile or CustomRegisterStorageMode.DevicePublished
+                    ? CustomRegisterReadHandler.StoredValue
+                    : GetReadHandler(offset, present);
             result[index] = new ResolvedCustomRegister(
                 descriptor,
                 present,

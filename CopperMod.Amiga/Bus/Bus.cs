@@ -5334,7 +5334,8 @@ namespace CopperMod.Amiga.Bus
                     target,
                     address,
                     size,
-                    requestedCycle,
+                    searchCycle: requestedCycle,
+                    requestedCycle: originalRequestedCycle,
                     isWrite,
                     out var chronologicalGrantedCycle,
                     out var chronologicalCompletedCycle) ==
@@ -5417,7 +5418,8 @@ namespace CopperMod.Amiga.Bus
                     target,
                     address,
                     size,
-                    requestedCycle,
+                    searchCycle: requestedCycle,
+                    requestedCycle: originalRequestedCycle,
                     isWrite,
                     out var causalGrantedCycle,
                     out var causalCompletedCycle) == CpuWaitGrantAdvanceResult.Granted)
@@ -5481,12 +5483,10 @@ namespace CopperMod.Amiga.Bus
                     isWrite,
                     channel);
                 var fastResult = new AmigaBusAccessResult(fastSchedulingRequest, requestedCycle, requestedCycle);
-                var fastAccess = ShouldUseChipSlotScheduler(target)
-                    ? ArbitrateChipSlot(fastSchedulingRequest, fastResult)
-                    : fastResult;
+                var fastSlotRequest = fastSchedulingRequest;
                 if (originalRequestedCycle != requestedCycle)
                 {
-                    var originalRequest = new AmigaBusAccessRequest(
+                    fastSlotRequest = new AmigaBusAccessRequest(
                         requester,
                         kind,
                         target,
@@ -5495,11 +5495,15 @@ namespace CopperMod.Amiga.Bus
                         originalRequestedCycle,
                         isWrite,
                         channel);
-                    fastAccess = new AmigaBusAccessResult(
-                        originalRequest,
-                        fastAccess.GrantedCycle,
-                        fastAccess.CompletedCycle);
+                    fastResult = new AmigaBusAccessResult(
+                        fastSlotRequest,
+                        fastResult.GrantedCycle,
+                        fastResult.CompletedCycle);
                 }
+
+                var fastAccess = ShouldUseChipSlotScheduler(target)
+                    ? ArbitrateChipSlot(fastSlotRequest, fastResult)
+                    : fastResult;
                 return RememberCpuBusAccess(fastAccess);
             }
 
@@ -5513,14 +5517,10 @@ namespace CopperMod.Amiga.Bus
                 isWrite,
                 channel);
             var result = Arbiter.Arbitrate(schedulingRequest);
-            if (ShouldUseChipSlotScheduler(target))
-            {
-                result = ArbitrateChipSlot(schedulingRequest, result);
-            }
-
+            var slotRequest = schedulingRequest;
             if (originalRequestedCycle != requestedCycle)
             {
-                var originalRequest = new AmigaBusAccessRequest(
+                slotRequest = new AmigaBusAccessRequest(
                     requester,
                     kind,
                     target,
@@ -5530,9 +5530,16 @@ namespace CopperMod.Amiga.Bus
                     isWrite,
                     channel);
                 result = new AmigaBusAccessResult(
-                    originalRequest,
+                    slotRequest,
                     result.GrantedCycle,
                     result.CompletedCycle);
+            }
+
+            if (ShouldUseChipSlotScheduler(target))
+            {
+                // The base grant retains the causal search bound; the slot
+                // reservation must retain the transfer's original request.
+                result = ArbitrateChipSlot(slotRequest, result);
             }
 
             if (_captureBusAccesses)
@@ -8211,6 +8218,7 @@ namespace CopperMod.Amiga.Bus
             {
 				var executedThrough = ExecutedChipBusHorizon;
 				var causalTailSlots =
+					!Display.UsesPhysicalCopperPipeline &&
 					!allowAdjacentCopperPhase &&
 					(_agnusBusExecutor.LastCopperGrantedCycle == executedThrough ||
 					 (kind == AmigaBusAccessKind.CpuInstructionFetch &&
@@ -8218,6 +8226,9 @@ namespace CopperMod.Amiga.Bus
 					  _chipDataBusLatchCycle == executedThrough))
                         ? 2
                         : 1;
+                // An accepted physical OUT owns exactly one memory slot.
+                // Its internal input phase cannot impose a second bus hold
+                // on a CPU requesting the adjacent, otherwise free slot.
                 cycle = executedThrough +
                     causalTailSlots * AgnusChipSlotScheduler.SlotCycles;
             }

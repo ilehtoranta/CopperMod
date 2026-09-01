@@ -256,6 +256,24 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
             var pending = new PendingWrite(cycle, offset, value);
             _writes.Add(new CustomRegisterWrite(cycle, offset, value));
+            QueuePendingWrite(in pending);
+        }
+
+        internal void ScheduleVerticalBlankInterrupt(long strobeOutputCycle)
+        {
+            // Agnus' raster strobe reaches Paula's request latch on the next
+            // CCK. This is a source event, not a CPU/Copper INTREQ write and
+            // not the blitter's four-CCK completion propagation path.
+            var latchCycle = Math.Max(0, strobeOutputCycle) + _bus.RasterTiming.CpuCyclesPerColorClock;
+            var pending = new PendingWrite(
+                latchCycle, 0x09C, 0x8020, isHardwareInterruptLatch: true);
+            QueuePendingWrite(in pending);
+            _bus.NotifyHardwareWorkScheduled(latchCycle);
+        }
+
+        private void QueuePendingWrite(in PendingWrite pending)
+        {
+            var cycle = pending.Cycle;
             var insertIndex = _pendingWrites.Count;
             var consumedFloor = Math.Min(_audioTimeline.PendingWriteIndex, _registerTimeline.PendingWriteIndex);
             while (insertIndex > consumedFloor && _pendingWrites[insertIndex - 1].Cycle > cycle)
@@ -264,26 +282,25 @@ namespace CopperMod.Amiga.CustomChips.Paula
             }
 
             _pendingWrites.Insert(insertIndex, pending);
-            PreserveTimelinePendingWriteIndex(_audioTimeline, insertIndex, cycle, PaulaTimelineKind.Audio, offset, value);
-            PreserveTimelinePendingWriteIndex(_registerTimeline, insertIndex, cycle, PaulaTimelineKind.Register, offset, value);
+            PreserveTimelinePendingWriteIndex(_audioTimeline, insertIndex, PaulaTimelineKind.Audio, in pending);
+            PreserveTimelinePendingWriteIndex(_registerTimeline, insertIndex, PaulaTimelineKind.Register, in pending);
             InvalidateRegisterWakeCandidateCache();
         }
 
         private void PreserveTimelinePendingWriteIndex(
             PaulaTimelineState timeline,
             int insertIndex,
-            long cycle,
             PaulaTimelineKind kind,
-            ushort offset,
-            ushort value)
+            in PendingWrite pending)
         {
+            var cycle = pending.Cycle;
             if (insertIndex < timeline.PendingWriteIndex ||
                 (insertIndex == timeline.PendingWriteIndex && cycle < timeline.LastCycle))
             {
                 timeline.PendingWriteIndex++;
                 if (cycle <= timeline.LastCycle)
                 {
-                    ApplyWrite(timeline, kind, offset, value);
+                    ApplyPendingWrite(timeline, kind, insertIndex, in pending);
                 }
             }
         }
@@ -697,10 +714,11 @@ namespace CopperMod.Amiga.CustomChips.Paula
             while (timeline.PendingWriteIndex < _pendingWrites.Count &&
                 _pendingWrites[timeline.PendingWriteIndex].Cycle <= targetCycle)
             {
-                var write = _pendingWrites[timeline.PendingWriteIndex++];
+                var writeIndex = timeline.PendingWriteIndex++;
+                var write = _pendingWrites[writeIndex];
                 var writeCycle = Math.Max(timeline.LastCycle, write.Cycle);
                 AdvanceChannels(timeline, kind, writeCycle);
-                ApplyWrite(timeline, kind, write.Offset, write.Value);
+                ApplyPendingWrite(timeline, kind, writeIndex, in write);
             }
 
             AdvanceChannels(timeline, kind, targetCycle);
@@ -727,10 +745,11 @@ namespace CopperMod.Amiga.CustomChips.Paula
             while (_registerTimeline.PendingWriteIndex < _pendingWrites.Count &&
                 _pendingWrites[_registerTimeline.PendingWriteIndex].Cycle <= targetCycle)
             {
-                var write = _pendingWrites[_registerTimeline.PendingWriteIndex++];
+                var writeIndex = _registerTimeline.PendingWriteIndex++;
+                var write = _pendingWrites[writeIndex];
                 var writeCycle = Math.Max(_registerTimeline.LastCycle, write.Cycle);
                 AdvanceChannels(_registerTimeline, PaulaTimelineKind.Register, writeCycle);
-                ApplyWrite(_registerTimeline, PaulaTimelineKind.Register, write.Offset, write.Value);
+                ApplyPendingWrite(_registerTimeline, PaulaTimelineKind.Register, writeIndex, in write);
             }
 
             SyncInterruptSourcePendingWriteIndexTo(_registerTimeline.PendingWriteIndex);
@@ -751,7 +770,13 @@ namespace CopperMod.Amiga.CustomChips.Paula
             while (_interruptSourcePendingWriteIndex < _pendingWrites.Count &&
                 _pendingWrites[_interruptSourcePendingWriteIndex].Cycle <= targetCycle)
             {
-                var write = _pendingWrites[_interruptSourcePendingWriteIndex++];
+                var writeIndex = _interruptSourcePendingWriteIndex++;
+                var write = _pendingWrites[writeIndex];
+                if (write.IsHardwareInterruptLatch)
+                {
+                    ApplyPendingWrite(_registerTimeline, PaulaTimelineKind.Register, writeIndex, in write);
+                    continue;
+                }
                 switch (write.Offset)
                 {
                     case 0x096:
@@ -768,29 +793,10 @@ namespace CopperMod.Amiga.CustomChips.Paula
                         WriteRegisterWord(0x002, _registerTimeline.Dmacon, write.Cycle);
                         break;
                     case 0x09A:
-                        ApplySetClear(ref _registerTimeline.Intena, write.Value);
-                        WriteRegisterWord(0x01C, _registerTimeline.Intena, write.Cycle);
-                        RefreshCpuInterruptVisibility(
-                            write.Cycle,
-                            AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles);
-                        break;
                     case 0x09C:
-                        var mask = (ushort)(write.Value & WritableIntreqMask);
-                        if ((write.Value & 0x8000) != 0)
-                        {
-                            _registerTimeline.Intreq |= mask;
-                            QueuePendingEnabledAudioInterrupts(write.Cycle, mask);
-                        }
-                        else
-                        {
-                            _registerTimeline.Intreq &= (ushort)~mask;
-                            NotifyAudioInterruptsCleared(_registerTimeline, mask);
-                        }
-
-                        WriteRegisterWord(0x01E, _registerTimeline.Intreq, write.Cycle);
-                        RefreshCpuInterruptVisibility(
-                            write.Cycle,
-                            AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles);
+                        ApplyPendingWrite(
+                            _registerTimeline, PaulaTimelineKind.Register, writeIndex, in write,
+                            interruptWriteCycle: write.Cycle);
                         break;
                     case 0x09E:
                         ApplySetClear(ref _registerTimeline.Adkcon, write.Value);
@@ -870,7 +876,37 @@ namespace CopperMod.Amiga.CustomChips.Paula
             timeline.LastCycle = targetCycle;
         }
 
-        private void ApplyWrite(PaulaTimelineState timeline, PaulaTimelineKind kind, ushort offset, ushort value)
+        private void ApplyPendingWrite(
+            PaulaTimelineState timeline, PaulaTimelineKind kind, int writeIndex, in PendingWrite write,
+            long? interruptWriteCycle = null)
+        {
+            if (kind == PaulaTimelineKind.Register && write.Offset is 0x09A or 0x09C)
+            {
+                if (_pendingWrites[writeIndex].RegisterInterruptApplied)
+                {
+                    return;
+                }
+
+                // Both register consumers observe one ordered IRQ stream.
+                // Replaying either a latch or an older software clear/enable
+                // after interrupt-only catch-up would reverse that order.
+                // Audio retains its independent pending-write consumer.
+                _pendingWrites[writeIndex] = write.WithRegisterInterruptApplied();
+            }
+            if (write.IsHardwareInterruptLatch)
+            {
+                if (kind == PaulaTimelineKind.Register)
+                {
+                    LatchHardwareInterrupt(write.Value, write.Cycle);
+                }
+                return;
+            }
+            ApplyWrite(timeline, kind, write.Offset, write.Value, interruptWriteCycle);
+        }
+
+        private void ApplyWrite(
+            PaulaTimelineState timeline, PaulaTimelineKind kind, ushort offset, ushort value,
+            long? interruptWriteCycle)
         {
             if (kind == PaulaTimelineKind.Register && offset + 1 < _registerBytes.Length)
             {
@@ -921,10 +957,11 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 ApplySetClear(ref timeline.Intena, value);
                 if (kind == PaulaTimelineKind.Register)
                 {
-                    WriteRegisterWord(0x01C, timeline.Intena, timeline.LastCycle);
-                    QueuePendingEnabledAudioInterrupts(timeline.LastCycle);
+                    var cycle = interruptWriteCycle ?? timeline.LastCycle;
+                    WriteRegisterWord(0x01C, timeline.Intena, cycle);
+                    QueuePendingEnabledAudioInterrupts(cycle);
                     RefreshCpuInterruptVisibility(
-                        timeline.LastCycle,
+                        cycle,
                         AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles);
                 }
 
@@ -934,12 +971,13 @@ namespace CopperMod.Amiga.CustomChips.Paula
             if (offset == 0x09C)
             {
                 var mask = (ushort)(value & WritableIntreqMask);
+                var cycle = interruptWriteCycle ?? timeline.LastCycle;
                 if ((value & 0x8000) != 0)
                 {
                     timeline.Intreq |= mask;
                     if (kind == PaulaTimelineKind.Register)
                     {
-                        QueuePendingEnabledAudioInterrupts(timeline.LastCycle, mask);
+                        QueuePendingEnabledAudioInterrupts(cycle, mask);
                     }
                 }
                 else
@@ -950,9 +988,9 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
                 if (kind == PaulaTimelineKind.Register)
                 {
-                    WriteRegisterWord(0x01E, timeline.Intreq, timeline.LastCycle);
+                    WriteRegisterWord(0x01E, timeline.Intreq, cycle);
                     RefreshCpuInterruptVisibility(
-                        timeline.LastCycle,
+                        cycle,
                         AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles);
                 }
 
@@ -1048,6 +1086,9 @@ namespace CopperMod.Amiga.CustomChips.Paula
         }
 
         internal void RequestInterrupt(ushort bit, long cycle)
+            => RequestInterrupt(bit, cycle, AmigaConstants.A500IntreqToIplDelayCpuCycles);
+
+        private void RequestInterrupt(ushort bit, long cycle, int releaseDelayCycles)
         {
             bit = (ushort)(bit & 0x3FFF);
             if (bit == 0)
@@ -1064,7 +1105,23 @@ namespace CopperMod.Amiga.CustomChips.Paula
             _registerTimeline.Intreq |= bit;
             WriteRegisterWord(0x01E, _registerTimeline.Intreq, cycle);
             QueuePendingEnabledAudioInterrupts(cycle, bit);
-            RefreshCpuInterruptVisibility(cycle);
+            RefreshCpuInterruptVisibility(cycle, releaseDelayCycles);
+        }
+
+        private void LatchHardwareInterrupt(ushort bits, long cycle)
+        {
+            RequestInterrupt(bits, cycle, releaseDelayCycles: 0);
+            var activeBits = (ushort)(ActiveInterruptBits & bits);
+            for (var index = 0; index < _cpuInterruptReleaseCycles.Length; index++)
+            {
+                if ((activeBits & (1 << index)) != 0 && _cpuInterruptReleaseCycles[index] > cycle)
+                {
+                    // A source that has reached the latch also satisfies a
+                    // previously pending software assertion of the same bit.
+                    _cpuInterruptReleaseCycles[index] = cycle;
+                    _cpuInterruptVisibilityVersion++;
+                }
+            }
         }
 
         internal void DelayCopperInterruptRecognition(long cycle, ushort bits)
@@ -1934,11 +1991,15 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
         private readonly struct PendingWrite
         {
-            public PendingWrite(long cycle, ushort offset, ushort value)
+            public PendingWrite(
+                long cycle, ushort offset, ushort value,
+                bool isHardwareInterruptLatch = false, bool registerInterruptApplied = false)
             {
                 Cycle = cycle;
                 Offset = offset;
                 Value = value;
+                IsHardwareInterruptLatch = isHardwareInterruptLatch;
+                RegisterInterruptApplied = registerInterruptApplied;
             }
 
             public long Cycle { get; }
@@ -1946,6 +2007,13 @@ namespace CopperMod.Amiga.CustomChips.Paula
             public ushort Offset { get; }
 
             public ushort Value { get; }
+
+            public bool IsHardwareInterruptLatch { get; }
+
+            public bool RegisterInterruptApplied { get; }
+
+            public PendingWrite WithRegisterInterruptApplied()
+                => new PendingWrite(Cycle, Offset, Value, IsHardwareInterruptLatch, registerInterruptApplied: true);
         }
 
         private sealed partial class PaulaChannel

@@ -166,6 +166,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return true;
             }
 
+            if (IsRetainedBitplaneOutput(slotCycle))
+            {
+                owner = CpuWaitFixedSlotOwner.BitplaneRead;
+                unsupported = CpuWaitFixedSlotImageUnsupported.None;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImagePredictedSlots++;
+                }
+                return true;
+            }
+
             if (!TryGetCpuWaitFixedSlotLine(slotCycle, out var beamLine, out var lineStart, out var row))
             {
                 owner = CpuWaitFixedSlotOwner.Free;
@@ -218,6 +229,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             if (_bus.IsMandatoryRefreshSlot(slotCycle))
             {
                 owner = CpuWaitFixedSlotOwner.Refresh;
+                unsupported = CpuWaitFixedSlotImageUnsupported.None;
+                return true;
+            }
+
+            if (IsRetainedBitplaneOutput(slotCycle))
+            {
+                owner = CpuWaitFixedSlotOwner.BitplaneRead;
                 unsupported = CpuWaitFixedSlotImageUnsupported.None;
                 return true;
             }
@@ -310,6 +328,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 !_bus.IsMandatoryRefreshSlot(slotCycle),
                 "Mandatory refresh must be rejected before display ownership lookup.");
 
+            if (IsRetainedBitplaneOutput(slotCycle))
+            {
+                owner = CpuWaitFixedSlotOwner.BitplaneRead;
+                unsupported = CpuWaitFixedSlotImageUnsupported.None;
+                if (_cpuWaitFixedSlotImageDiagnosticsEnabled)
+                {
+                    _cpuWaitFixedSlotImagePredictedSlots++;
+                }
+                return true;
+            }
+
             if (cursor.Valid &&
                 cursor.Generation == _liveGeneration &&
                 cursor.WakeVersion == _liveWakeVersion &&
@@ -369,6 +398,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
             return true;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsRetainedBitplaneOutput(long slotCycle)
+            // A rebuilt future plan may no longer contain an issued word.
+            // Its frozen OUT still owns the slot, independent of DMA enable.
+            => UsesPhysicalBitplanePipeline &&
+                _physicalBitplanePipeline.HasOutput &&
+                _physicalBitplanePipeline.Granted &&
+                _physicalBitplanePipeline.OutputCycle == slotCycle;
 
         private bool TryGetCpuWaitFixedSlotLine(long cycle, out int beamLine, out long lineStart, out int row)
         {
@@ -500,7 +538,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var entry = _rowDmaBitplaneEntries[index];
                 if (entry.RowPresent)
                 {
-                    SetCpuWaitFixedSlotOwner(ownerBase, lineStart, entry.GetCycle(state.LineStartCycle), CpuWaitFixedSlotOwner.BitplaneRead);
+                    SetCpuWaitFixedSlotOwner(ownerBase, lineStart, entry.GetOutputCycle(state.LineStartCycle), CpuWaitFixedSlotOwner.BitplaneRead);
                 }
             }
 

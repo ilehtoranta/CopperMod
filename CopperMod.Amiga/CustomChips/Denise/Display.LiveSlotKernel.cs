@@ -46,7 +46,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     Math.Min(nextSpriteFetchCycle, nextBitplaneFetchCycle));
 
                 if (nextDisplayEventCycle <= effectiveTarget &&
-                    nextDisplayEventCycle <= nextFixedCycle)
+                    (nextDisplayEventCycle < nextFixedCycle ||
+                     nextDisplayEventCycle == nextFixedCycle &&
+                     (!UsesPhysicalCopperPipeline || nextPendingWriteCycle <= nextCopperCycle)))
                 {
                     if (nextPendingWriteCycle <= nextCopperCycle)
                     {
@@ -74,7 +76,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             _liveCopperStepCount++;
                         }
 
-                        _liveCycle = Math.Max(_liveCycle, _liveCopper.Cycle);
+                        _liveCycle = Math.Max(_liveCycle,
+                            UsesPhysicalCopperPipeline ? nextCopperCycle : _liveCopper.Cycle);
                         _liveDisplayEventCount++;
                     }
 
@@ -107,8 +110,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         return true;
                     }
 
-                    CaptureLiveBitplaneFetch(nextBitplaneFetchCycle);
-                    AdvanceLiveFetchCursor();
+                    if (CaptureLiveBitplaneFetch(nextBitplaneFetchCycle))
+                    {
+                        AdvanceLiveFetchCursor();
+                    }
                     InvalidateLiveWorkCycle();
                     return true;
                 }

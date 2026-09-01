@@ -19,6 +19,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             private readonly AgnusHrmSlotEngine _slots;
             private readonly OcsLiveDmaScratchCpuWrite _pendingCpuWrite;
             private readonly long _frameStopCycle;
+            private readonly CopperBlitterWaitSnapshot _blitterWait;
             private CopperPresentationState _copper;
             private bool _copperFirstWordPending;
             private uint _copperFirstWordAddress;
@@ -33,6 +34,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             private int _nextFetchWord;
             private int _nextFetchPlane;
             private int _nextFetchSlot;
+            private BitplaneDmaPipeline _physicalBitplanePipeline;
             private int _nextLineStateRow;
             private int _nextSpriteRow;
             private int _nextSpriteIndex;
@@ -97,6 +99,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _slots = slots;
                 _pendingCpuWrite = pendingCpuWrite;
                 _frameStopCycle = display.GetLiveFrameStopCycle();
+                _blitterWait = display.CaptureCopperBlitterWaitSnapshot();
                 _copper = display._liveCopper;
                 _capturedThroughCycle = display._liveCapturedThroughCycle;
                 _preparedFetchRow = display._livePreparedFetchRow;
@@ -107,6 +110,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _nextFetchWord = display._liveNextFetchWord;
                 _nextFetchPlane = display._liveNextFetchPlane;
                 _nextFetchSlot = display._liveNextFetchSlot;
+                _physicalBitplanePipeline = display._physicalBitplanePipeline;
                 _nextLineStateRow = display._liveNextLineStateRow;
                 _nextSpriteRow = display._liveNextSpriteRow;
                 _nextSpriteIndex = display._liveNextSpriteIndex;
@@ -382,6 +386,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     if (candidate < _frameStopCycle &&
                         HasWorkThrough(candidate) &&
                         !AdvanceThrough(candidate))
+                    {
+                        return false;
+                    }
+
+                    if (_unsupported.Length != 0)
                     {
                         return false;
                     }
@@ -1128,7 +1137,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         continue;
                     }
 
-                    if (nextCopper == next)
+                    if (nextCopper == next &&
+                        (!_display.UsesPhysicalCopperPipeline ||
+                         nextCopper < nextLineState && nextCopper < nextPreparedBitplane &&
+                         nextCopper < nextBitplane && nextCopper < nextSprite))
                     {
                         if (!StepCopper(cycle))
                         {
@@ -1166,7 +1178,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         continue;
                     }
 
-                    if (!ReserveSpriteFetch())
+                    if (nextSprite == next && !ReserveSpriteFetch())
                     {
                         return false;
                     }
@@ -1215,6 +1227,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private long GetNextPreparedBitplaneFetchCycle()
             {
+                if (_display.UsesPhysicalBitplanePipeline)
+                {
+                    return long.MaxValue;
+                }
+
                 if (!NormalizePreparedBitplaneCursor())
                 {
                     return long.MaxValue;
@@ -1357,6 +1374,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private long GetNextBitplaneFetchCycle()
             {
+                if (_display.UsesPhysicalBitplanePipeline)
+                {
+                    if (_physicalBitplanePipeline.HasOutput)
+                    {
+                        return _physicalBitplanePipeline.OutputCycle;
+                    }
+                    if (!IsBitplaneDmaEnabled(_dmacon))
+                    {
+                        return long.MaxValue;
+                    }
+                }
+
                 if (!NormalizeBitplaneCursor())
                 {
                     return long.MaxValue;
@@ -1438,6 +1467,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private bool ReserveBitplaneFetch()
             {
+                if (_display.UsesPhysicalBitplanePipeline)
+                {
+                    return StepPhysicalBitplane();
+                }
+
                 var state = GetScratchLineState(_nextFetchRow);
                 if (TryReserveBitplaneFetchWithRowPlan(state))
                 {
@@ -1458,6 +1492,133 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 AdvanceBitplaneCursor();
                 return true;
+            }
+
+            private long GetNextBitplaneOutputCycle()
+            {
+                var cycle = GetNextBitplaneFetchCycle();
+                return !_display.UsesPhysicalBitplanePipeline || _physicalBitplanePipeline.HasOutput || cycle == long.MaxValue
+                    ? cycle : checked(cycle + AgnusChipSlotScheduler.SlotCycles);
+            }
+
+            private bool StepPhysicalBitplane()
+            {
+                var cycle = GetNextBitplaneFetchCycle();
+                if (_physicalBitplanePipeline.HasOutput)
+                {
+                    var issued = _physicalBitplanePipeline.Complete(cycle);
+                    var word = issued.Word;
+                    if (issued.Granted)
+                    {
+                        var access = issued.Access;
+                        if (!_slots.MatchesAcceptedBitplaneWord(in access))
+                        {
+                            _unsupported = "bitplane-issued-output-lost";
+                            return false;
+                        }
+
+                        _ = ReadScratchChipWordAtCycle(access.Request.Address, access.GrantedCycle);
+                        _bitplaneFetches++;
+                        RecordDma(cycle);
+                        CompletePhysicalBitplanePointer(in issued);
+                    }
+                    if (_nextFetchRow == word.Row && _nextFetchWord == word.Word && _nextFetchSlot == word.Slot)
+                    {
+                        AdvanceBitplaneCursor();
+                    }
+                    return true;
+                }
+
+                var state = GetScratchLineState(_nextFetchRow);
+                var plane = _nextFetchPlane;
+                var storageWord = _nextFetchWord + state.BitplaneWordIndexOffsets[plane];
+                if ((uint)storageWord >= (uint)MaxBitplaneFetchWords)
+                {
+                    AdvanceBitplaneCursor();
+                    return true;
+                }
+
+                var valid = (state.PlaneHasRowMask & (1 << plane)) != 0;
+                var address = valid
+                    ? _display.AddDmaPointerOffset(state.BitplaneRowAddresses[plane], _nextFetchWord * 2)
+                    : 0u;
+                var provenance = default(BitplaneDmaPlanProvenance);
+                if (TryGetScratchRowDmaPlan(_nextFetchRow, state, out var plan) &&
+                    TryFindNextScratchRowDmaBitplaneEntry(plan, _nextFetchWord, _nextFetchSlot, out var entryIndex))
+                {
+                    var entry = _display._rowDmaBitplaneEntries[entryIndex];
+                    if (IsPhysicalBitplanePlanInput(
+                            in plan, in entry, state, _nextFetchRow, plane, _nextFetchWord, _nextFetchSlot, cycle))
+                    {
+                        valid = entry.RowPresent;
+                        address = entry.Address;
+                        provenance = new BitplaneDmaPlanProvenance(
+                            IsPlanBacked: true, plan.Generation, plan.DmaPlanVersion, plan.Signature, entryIndex);
+                    }
+                }
+
+                var lastWord = _nextFetchWord == state.FetchWords - 1;
+                var wordMetadata = new BitplaneDmaWordMetadata(
+                    _nextFetchRow, plane, _nextFetchWord, storageWord, _nextFetchSlot,
+                    valid, lastWord, lastWord ? ((plane & 1) == 0 ? _bpl1mod : _bpl2mod) : (short)0)
+                {
+                    Plan = provenance
+                };
+                var accepted = default(AmigaBusAccessResult);
+                var granted = valid && _slots.TryAcceptBitplaneInput(address, cycle, out accepted);
+                if (!granted)
+                {
+                    var request = new AmigaBusAccessRequest(
+                        AmigaBusRequester.Bitplane, AmigaBusAccessKind.Bitplane,
+                        AmigaBusAccessTarget.ChipRam, address, AmigaBusAccessSize.Word,
+                        cycle, isWrite: false);
+                    var outputCycle = checked(cycle + AgnusChipSlotScheduler.SlotCycles);
+                    accepted = new AmigaBusAccessResult(request, outputCycle, outputCycle);
+                }
+
+                _physicalBitplanePipeline.Accept(in wordMetadata, in accepted, granted);
+                return true;
+            }
+
+            private void RebaseFuturePhysicalBitplanePointer(int plane, long cycle)
+            {
+                _physicalBitplanePipeline.ObservePointerWrite(plane);
+                var row = _display.GetOutputRowForCycle(_display._liveFrameStartCycle, cycle);
+                if ((uint)row >= (uint)LowResOutputHeight)
+                {
+                    return;
+                }
+
+                var state = GetScratchLineState(row);
+                var nextWord = _display.GetFirstBitplaneWordAfterCycle(state, cycle, plane);
+                state.BitplanePointers[plane] = _bitplanePointers[plane];
+                state.BitplaneBaseRows[plane] = row;
+                state.BitplaneRowAddresses[plane] = _display.AddDmaPointerOffset(
+                    _bitplanePointers[plane], -(nextWord * 2));
+                state.PlaneHasRowMask |= (byte)(1 << plane);
+                AdvanceRowDmaPlanVersion(state);
+            }
+
+            private void CompletePhysicalBitplanePointer(in BitplaneDmaPipeline issued)
+            {
+                var word = issued.Word;
+                if (!word.LastWord && !issued.PointerWrittenAfterInput)
+                {
+                    return;
+                }
+
+                var pointer = _display.AddDmaPointerOffset(issued.Access.Request.Address, 2 + word.Modulo);
+                _bitplanePointers[word.Plane] = pointer;
+                _bitplaneBaseRows[word.Plane] = word.LastWord ? word.Row + 1 : word.Row;
+                if (!word.LastWord)
+                {
+                    var state = GetScratchLineState(word.Row);
+                    state.BitplanePointers[word.Plane] = pointer;
+                    state.BitplaneBaseRows[word.Plane] = word.Row;
+                    var nextWord = _display.GetFirstBitplaneWordAfterCycle(state, issued.OutputCycle, word.Plane);
+                    state.BitplaneRowAddresses[word.Plane] = _display.AddDmaPointerOffset(pointer, -(nextWord * 2));
+                    AdvanceRowDmaPlanVersion(state);
+                }
             }
 
             private bool TryReserveBitplaneFetchWithRowPlan(LiveLineState state)
@@ -1498,9 +1659,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 if (plan.Valid &&
                     plan.Generation == _display._liveGeneration &&
                     plan.Row == row &&
+                    (!_display.UsesPhysicalBitplanePipeline || plan.DmaPlanVersion == state.DmaPlanVersion) &&
                     plan.Signature == ComputeRowDmaPlanSignature(state))
                 {
                     return true;
+                }
+
+                if (_display.UsesPhysicalBitplanePipeline)
+                {
+                    // A prior OUT carries its own frozen entry. Future inputs
+                    // cannot borrow a live plan invalidated by a scratch write.
+                    return false;
                 }
 
                 if (plan.Valid &&
@@ -1802,8 +1971,120 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _nextSpriteRow++;
             }
 
+            private bool StepPhysicalCopper(long targetCycle)
+            {
+                var cycle = _display.GetNextPhysicalCopperCycle(
+                    _copper, IsLiveCopperDmaEnabled(), _copperListPointer, _slots, _blitterWait);
+                if (cycle > targetCycle)
+                {
+                    return true;
+                }
+                if (_copper.PhysicalPipeline.HasIssuedWord &&
+                    _copper.PhysicalPipeline.IssuedAccess.GrantedCycle == cycle)
+                {
+                    var access = _copper.PhysicalPipeline.IssuedAccess;
+                    if (!_slots.MatchesAcceptedCopperWord(access))
+                    {
+                        _unsupported = "copper-issued-output-lost";
+                        return false;
+                    }
+                    var value = ReadScratchChipWordAtCycle(access.Request.Address, access.GrantedCycle);
+                    RecordDma(access.GrantedCycle);
+                    if (_display.CompletePhysicalCopperWordState(
+                            ref _copper, value, access, out var instruction))
+                    {
+                        var suppress = _copper.SuppressNextMove;
+                        _copper.SuppressNextMove = false;
+                        return ApplyCopperMove(instruction.MoveRegister, instruction.Second,
+                            access.GrantedCycle, access.CompletedCycle, suppress);
+                    }
+                    return true;
+                }
+                if (_copper.PhysicalPipeline.IsVblankLatchDue(cycle))
+                {
+                    CompletePhysicalCopperVblankLatch(ref _copper, cycle, _copperListPointer);
+                    return true;
+                }
+
+                var strobeDue = _copper.PhysicalPipeline.IsVblankStrobeDue(cycle);
+                var wasStopped = _copper.Stopped;
+                var dmaEnabled = IsLiveCopperDmaEnabled();
+                if ((!strobeDue || _display.GetNextPhysicalCopperExecutionCycle(
+                        _copper, dmaEnabled, _copperListPointer, _slots, _blitterWait) == cycle) &&
+                    !StepPhysicalCopperInput(cycle))
+                {
+                    return false;
+                }
+                if (strobeDue)
+                {
+                    _display.BeginPhysicalCopperVblankRestart(
+                        ref _copper, cycle, _copperListPointer, dmaEnabled, wasStopped);
+                }
+                return true;
+            }
+
+            private bool StepPhysicalCopperInput(long cycle)
+            {
+                if (_copper.PendingStart)
+                {
+                    _copper.StartFrom(_copperListPointer);
+                }
+                if (_copper.PhysicalPipeline.NeedsComparison &&
+                    (_copper.WaitSecond & 0x8000) == 0 &&
+                    !_blitterWait.CanPredictCompletion)
+                {
+                    _unsupported = "copper-blitter-wait";
+                    return false;
+                }
+
+                // Consult this scratch state's future fixed cursors and copied
+                // ledger. Do not query live ownership after a hypothetical write.
+                var outputCycle = cycle + AgnusChipSlotScheduler.SlotCycles;
+                var inputAvailable = _slots.CanAcceptCopperInputAt(cycle) &&
+                    GetNextBitplaneOutputCycle() != outputCycle &&
+                    GetNextSpriteFetchCycle() != outputCycle;
+                var action = _display.AdvancePhysicalCopperControl(
+                    ref _copper, cycle, inputAvailable, _slots, _blitterWait);
+                if (action is CopperInputAction.ReadFirst or CopperInputAction.ReadSecond or
+                    CopperInputAction.SkipAndReadFirst or CopperInputAction.DummyRead or
+                    CopperInputAction.VblankInhibitedRead)
+                {
+                    var address = GetPhysicalCopperReadAddress(_copper, action);
+                    if (!_slots.TryAcceptCopperInput(
+                        address, GetPhysicalCopperRequestCycle(_copper, action, cycle), cycle, out var access))
+                    {
+                        _unsupported = "copper-input-availability-changed";
+                        return false;
+                    }
+                    _copper.PhysicalPipeline.AcceptWord(action, cycle, access);
+                    _copper.Cycle = access.GrantedCycle;
+                }
+                return true;
+            }
+
             private long GetNextCopperCycle(long targetCycle)
             {
+                var comparisonPending = _display.UsesPhysicalCopperPipeline
+                    ? _copper.PhysicalPipeline.NeedsComparison
+                    : _copper.Waiting || _copper.PendingSkip;
+                var comparisonSecond = !_display.UsesPhysicalCopperPipeline && _copper.PendingSkip
+                    ? _copper.PendingSkipSecond
+                    : _copper.WaitSecond;
+                if (comparisonPending && (comparisonSecond & 0x8000) == 0 &&
+                    !_blitterWait.CanPredictCompletion &&
+                    !_copper.Stopped && IsLiveCopperDmaEnabled())
+                {
+                    // A remote deadline must not make HasWorkThrough falsely
+                    // report a supported CPU grant across an unresolved F.
+                    _unsupported = "copper-blitter-wait";
+                    return long.MaxValue;
+                }
+
+                if (_display.UsesPhysicalCopperPipeline)
+                {
+                    return _display.GetNextPhysicalCopperCycle(
+                        _copper, IsLiveCopperDmaEnabled(), _copperListPointer, _slots, _blitterWait);
+                }
                 if (_copperFirstWordPending)
                 {
                     return _display.GetCopperSecondWordRequestCycle(_copperFirstWordAccess);
@@ -1843,11 +2124,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 if (_copper.Waiting)
                 {
+                    var blitterReadyCycle = _display.GetCopperBlitterReadyCycle(
+                        _copper.WaitSecond, _copper.Cycle, _blitterWait);
+                    if (blitterReadyCycle > targetCycle)
+                    {
+                        return long.MaxValue;
+                    }
                     if (!_display.TryGetCopperWaitCycle(
                             _copper.WaitFirst,
                             _copper.WaitSecond,
                             _display._liveFrameStartCycle,
-                            _copper.Cycle,
+                            Math.Max(_copper.Cycle, blitterReadyCycle),
                             targetCycle + 1,
                             blitterFinished: true,
                             out var waitCycle))
@@ -1863,6 +2150,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private bool StepCopper(long targetCycle)
             {
+                if (_display.UsesPhysicalCopperPipeline)
+                {
+                    return StepPhysicalCopper(targetCycle);
+                }
                 if (_copperFirstWordPending)
                 {
                     var secondRequestCycle = Math.Max(
@@ -1927,7 +2218,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             second,
                             _display._liveFrameStartCycle,
                             skipCycle,
-                            _display.IsCopperBlitterFinishedForWait(second)))
+                            _display.IsCopperBlitterFinishedForWait(second, skipCycle, _blitterWait)))
                     {
                         _copper.SuppressNextMove = true;
                     }
@@ -1958,20 +2249,9 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         return true;
                     }
 
-                    if (_copper.WaitRestartIncomingRgaBlocked)
-                    {
-                        _copper.WaitRestartIncomingRgaBlocked = false;
-                        _copper.Cycle += 2L * AgnusChipSlotScheduler.SlotCycles;
-                        return true;
-                    }
-
-                    _copper.AdvanceWaitRestartStage(
-                        _copper.Cycle +
-                        (_display.GetAgnusBitplaneFetchPlaneCount() == 4 &&
-                         (_copper.WaitFirst & 0x00FE) < 0x00C0 &&
-                         _copper.WaitStartCarryPending
-                            ? AgnusChipSlotScheduler.SlotCycles
-                            : 2L * AgnusChipSlotScheduler.SlotCycles));
+                    _copper.AdvanceWaitRestartArm(
+                        _copper.Cycle,
+                        _display.GetAgnusBitplaneFetchPlaneCount());
                     return true;
                 }
 
@@ -1982,7 +2262,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                 if (_copper.Waiting)
                 {
-                    var blitterReadyCycle = _display.GetCopperBlitterReadyCycle(_copper.WaitSecond, _copper.Cycle);
+                    var blitterReadyCycle = _display.GetCopperBlitterReadyCycle(
+                        _copper.WaitSecond, _copper.Cycle, _blitterWait);
                     if (blitterReadyCycle > _copper.Cycle)
                     {
                         _copper.Cycle = Math.Min(blitterReadyCycle, targetCycle);
@@ -1991,7 +2272,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             return true;
                         }
 
-                        if (_display._bus.Blitter.BusPipelineActive)
+                        if (!_display.IsCopperBlitterFinishedForWait(
+                                _copper.WaitSecond, _copper.Cycle, _blitterWait))
                         {
                             _unsupported = "copper-blitter-wait";
                             return false;
@@ -2064,13 +2346,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             _copper.WaitFirst,
                             _copper.WaitSecond,
                             _display._liveFrameStartCycle,
-                            _display._bus.Blitter.LastTerminationCycle,
+                            _blitterWait.LastTerminationCycle,
                             blitterFinished: true);
                     if (bfdReleasedByTermination &&
                         beamSatisfiedAtBlitterTermination &&
                         _display.GetCopperHorizontalForCycle(
                             _display._liveFrameStartCycle,
-                            _display._bus.Blitter.LastTerminationCycle) >= DefaultDdfStart)
+                            _blitterWait.LastTerminationCycle) >= DefaultDdfStart)
                     {
                         _copper.PendingWaitPresentationPixelOffset =
                             CopperBfdReleasePresentationPixelOffset;
@@ -2088,8 +2370,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
                     if (readyAtWakeCycle && !bfdReleasedByTermination)
                     {
-                        if (_display._bus.Blitter.BusPipelineActive &&
-                            _display._bus.BlitterNastyPriorityEnabled)
+                        if (_blitterWait.BusPipelineActive &&
+                            _blitterWait.NastyPriorityEnabled)
                         {
                             resumeCycle += AgnusChipSlotScheduler.SlotCycles;
                         }
@@ -2376,7 +2658,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         instruction.Second,
                         _display._liveFrameStartCycle,
                         instruction.ControlStopCycle,
-                        _display.IsCopperBlitterFinishedForWait(instruction.Second)))
+                        _display.IsCopperBlitterFinishedForWait(
+                            instruction.Second, instruction.ControlStopCycle, _blitterWait)))
                 {
                     _copper.SuppressNextMove = true;
                 }
@@ -2704,6 +2987,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         if (_bitplanePointers[plane] != previousPointer)
                         {
                             _bitplaneBaseRows[plane] = GetCurrentBitplaneBaseRow(cycle);
+                        }
+                        if (_display.UsesPhysicalBitplanePipeline)
+                        {
+                            RebaseFuturePhysicalBitplanePointer(plane, cycle);
                         }
                     }
 

@@ -1153,6 +1153,159 @@ namespace CopperMod.Amiga.CustomChips.Agnus
 
         public Func<long, long>? NextLineStartCycleProvider { get; set; }
 
+        /// <summary>
+        /// Observes the Copper clock phase of the containing CCK without
+        /// advancing or reserving the physical bus. This is a geometry query,
+        /// not permission to enable a chipset profile or cross an execution
+        /// horizon. Custom providers must describe one uninterrupted line.
+        /// </summary>
+        internal AgnusCopperDmaPhase GetCopperPhaseAt(long cycle)
+        {
+            if (_timing.CpuCyclesPerColorClock != SlotCycles)
+            {
+                throw new NotSupportedException("Copper phase queries require the chip-slot CCK timebase.");
+            }
+
+            var hasProviders = BeamPositionProvider != null ||
+                LineStartCycleProvider != null || NextLineStartCycleProvider != null;
+            if (hasProviders && (BeamPositionProvider == null ||
+                LineStartCycleProvider == null || NextLineStartCycleProvider == null))
+            {
+                throw new NotSupportedException("Copper phase queries require complete active beam and line-boundary providers.");
+            }
+
+            var slotCycle = FloorToSlot(Math.Max(0, cycle));
+            var beam = BeamPositionProvider?.Invoke(slotCycle) ??
+                AgnusBeamPosition.FromCycle(slotCycle, _timing);
+            var lineStart = LineStartCycleProvider?.Invoke(slotCycle) ??
+                slotCycle - ((long)beam.BeamHorizontal * SlotCycles);
+            var nextLineStart = NextLineStartCycleProvider?.Invoke(slotCycle) ??
+                lineStart + ((long)_timing.GetColorClocksForLine(beam.BeamLine) * SlotCycles);
+            if (lineStart < 0 || lineStart > slotCycle || nextLineStart <= slotCycle ||
+                lineStart % SlotCycles != 0 || nextLineStart % SlotCycles != 0 ||
+                slotCycle - lineStart != (long)beam.BeamHorizontal * SlotCycles)
+            {
+                throw new NotSupportedException("Copper phase queries do not support discontinuous or inconsistent beam geometry.");
+            }
+
+            var lineLengthCcks = (nextLineStart - lineStart) / SlotCycles;
+            if (lineLengthCcks is not (227 or 228))
+            {
+                throw new NotSupportedException("Copper phase queries support only explicit 227- or 228-CCK lines.");
+            }
+
+            return AgnusCopperDmaPhases.Classify(beam.BeamHorizontal, (int)lineLengthCcks);
+        }
+
+        /// <summary>
+        /// Finds the next normal control/input edge, ignoring bus ownership.
+        /// A wrap-dummy input is not a control edge. The query does not reserve
+        /// a slot, materialize refresh, or advance the scheduler.
+        /// </summary>
+        internal long GetNextCopperControlCycle(long earliestCycle)
+        {
+            var candidate = Math.Max(0, earliestCycle);
+            var remainder = candidate % SlotCycles;
+            if (remainder != 0)
+            {
+                candidate = checked(candidate + SlotCycles - remainder);
+            }
+
+            while (!GetCopperPhaseAt(candidate).ControlEligible)
+            {
+                candidate = checked(candidate + SlotCycles);
+            }
+
+            return candidate;
+        }
+
+        /// <summary>
+        /// Tests a normal or wrap-dummy input against the following physical
+        /// OUT slot. Every committed owner blocks that input, irrespective of
+        /// priority; ownership of the current OUT slot is independent. The
+        /// caller still supplies Copper state and uncommitted fixed-DMA plans.
+        /// </summary>
+        internal bool CanAcceptCopperInputAt(long inputCycle)
+        {
+            if (inputCycle < 0 || inputCycle % SlotCycles != 0 ||
+                GetCopperPhaseAt(inputCycle).Input == AgnusCopperDmaPhaseKind.None)
+            {
+                return false;
+            }
+
+            var outputCycle = checked(inputCycle +
+                ((long)AgnusCopperDmaPhases.InputToOutputDelayCcks * SlotCycles));
+            return !IsReserved(outputCycle);
+        }
+
+        /// <summary>
+        /// Accepts one incoming Copper request and freezes only its following
+        /// physical OUT slot. No RAM is sampled and neither refresh nor the
+        /// execution horizon is advanced by accepting a request.
+        /// </summary>
+        internal bool TryAcceptCopperInput(
+            uint address,
+            long requestedCycle,
+            long inputCycle,
+            out AmigaBusAccessResult access)
+        {
+            access = default;
+            if (requestedCycle < 0 || requestedCycle > inputCycle ||
+                !CanAcceptCopperInputAt(inputCycle))
+            {
+                return false;
+            }
+
+            var outputCycle = checked(inputCycle +
+                ((long)AgnusCopperDmaPhases.InputToOutputDelayCcks * SlotCycles));
+            var inputPhase = GetCopperPhaseAt(inputCycle).Input;
+            if (GetCopperPhaseAt(outputCycle).Output != inputPhase)
+            {
+                throw new NotSupportedException("Copper input/output phases require continuous active beam geometry.");
+            }
+
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Copper,
+                AmigaBusAccessKind.Copper,
+                AmigaBusAccessTarget.ChipRam,
+                address,
+                AmigaBusAccessSize.Word,
+                requestedCycle,
+                isWrite: false);
+            var completedCycle = checked(outputCycle + SlotCycles);
+            CommitSlot(outputCycle, request, AgnusChipSlotOwner.Copper,
+                AgnusChipSlotPriority.Copper, issuedCopperOutput: true);
+            access = new AmigaBusAccessResult(request, outputCycle, completedCycle);
+            _lastReservation = access;
+            _lastGrantedSlot = new AgnusChipSlotSnapshot(
+                AgnusChipSlotOwner.Copper, request.Kind, address,
+                requestedCycle, outputCycle, denied: false);
+            return true;
+        }
+
+        /// <summary>
+        /// Validates the frozen transfer identity, without reclassifying its
+        /// phase from beam state that may have changed after input acceptance.
+        /// </summary>
+        internal bool MatchesAcceptedCopperWord(in AmigaBusAccessResult access)
+        {
+            var request = access.Request;
+            return request.Requester == AmigaBusRequester.Copper &&
+                request.Kind == AmigaBusAccessKind.Copper &&
+                request.Target == AmigaBusAccessTarget.ChipRam &&
+                request.Size == AmigaBusAccessSize.Word && !request.IsWrite &&
+                request.RequestedCycle >= 0 &&
+                access.GrantedCycle >= SlotCycles &&
+                request.RequestedCycle <= access.GrantedCycle - SlotCycles &&
+                access.GrantedCycle % SlotCycles == 0 &&
+                access.CompletedCycle > access.GrantedCycle &&
+                access.CompletedCycle - access.GrantedCycle == SlotCycles &&
+                TryGetSlot(access.GrantedCycle, out var slot) &&
+                slot.Owner == AgnusChipSlotOwner.Copper &&
+                slot.IsIssuedCopperOutput &&
+                SlotMatchesRequest(access.GrantedCycle, slot, request);
+        }
+
         private int GetHorizontal(long slotCycle)
             => BeamPositionProvider?.Invoke(slotCycle).BeamHorizontal ??
                 AgnusBeamPosition.FromCycle(slotCycle, _timing).BeamHorizontal;
@@ -1464,6 +1617,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 var slot = _slots[index];
                 if (slot.Valid &&
                     slot.IsForSlot(slotCycle) &&
+                    !slot.IsIssuedDmaOutput &&
                     IsLiveDisplaySlotOwner(slot.Owner, owners))
                 {
                     _slots[index] = default;
@@ -1477,7 +1631,8 @@ namespace CopperMod.Amiga.CustomChips.Agnus
 
             if (_lastGrantedSlot is { GrantedCycle: >= 0 } granted &&
                 granted.GrantedCycle >= firstSlot &&
-                IsLiveDisplaySlotOwner(granted.Owner, owners))
+                IsLiveDisplaySlotOwner(granted.Owner, owners) &&
+                !(TryGetSlot(granted.GrantedCycle, out var retainedSlot) && retainedSlot.IsIssuedDmaOutput))
             {
                 _lastGrantedSlot = null;
             }
@@ -1626,6 +1781,56 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 granted,
                 AgnusChipSlotPriority.Bitplane,
                 out result);
+        }
+
+        /// <summary>
+        /// Accepts a bitplane address input and freezes only the following
+        /// physical output. RAM and execution horizons are unchanged at IN.
+        /// </summary>
+        internal bool TryAcceptBitplaneInput(
+            uint address,
+            long inputCycle,
+            out AmigaBusAccessResult access)
+        {
+            access = default;
+            if (inputCycle < 0 || inputCycle % SlotCycles != 0)
+            {
+                return false;
+            }
+
+            var outputCycle = checked(inputCycle + SlotCycles);
+            if (IsReserved(outputCycle))
+            {
+                return false;
+            }
+
+            var request = new AmigaBusAccessRequest(
+                AmigaBusRequester.Bitplane, AmigaBusAccessKind.Bitplane,
+                AmigaBusAccessTarget.ChipRam, address, AmigaBusAccessSize.Word,
+                inputCycle, isWrite: false);
+            CommitSlot(outputCycle, request, AgnusChipSlotOwner.Bitplane,
+                AgnusChipSlotPriority.Bitplane, issuedBitplaneOutput: true);
+            access = new AmigaBusAccessResult(request, outputCycle, checked(outputCycle + SlotCycles));
+            _lastReservation = access;
+            _lastGrantedSlot = new AgnusChipSlotSnapshot(
+                AgnusChipSlotOwner.Bitplane, request.Kind, address,
+                inputCycle, outputCycle, denied: false);
+            return true;
+        }
+
+        internal bool MatchesAcceptedBitplaneWord(in AmigaBusAccessResult access)
+        {
+            var request = access.Request;
+            return request.Requester == AmigaBusRequester.Bitplane &&
+                request.Kind == AmigaBusAccessKind.Bitplane &&
+                request.Target == AmigaBusAccessTarget.ChipRam &&
+                request.Size == AmigaBusAccessSize.Word && !request.IsWrite &&
+                request.RequestedCycle >= 0 && request.RequestedCycle % SlotCycles == 0 &&
+                access.GrantedCycle - request.RequestedCycle == SlotCycles &&
+                access.CompletedCycle - access.GrantedCycle == SlotCycles &&
+                TryGetSlot(access.GrantedCycle, out var slot) &&
+                slot.Owner == AgnusChipSlotOwner.Bitplane && slot.IsIssuedBitplaneOutput &&
+                SlotMatchesRequest(access.GrantedCycle, slot, request);
         }
 
         [HotPath]
@@ -2921,7 +3126,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             if (TryGetSlot(granted, out var existing) &&
                 !SlotMatchesRequest(granted, existing, request) &&
                 !existing.MatchesDisplayDmaReservation(owner, request) &&
-                existing.Priority >= priority)
+                (existing.IsIssuedDmaOutput || existing.Priority >= priority))
             {
                 result = new AmigaBusAccessResult(request, granted, granted);
                 _lastDeniedFixedSlot = new AgnusChipSlotSnapshot(owner, request.Kind, request.Address, request.RequestedCycle, granted, denied: true);
@@ -3202,7 +3407,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                     continue;
                 }
 
-                if (existing.Priority >= priority)
+                if (existing.IsIssuedDmaOutput || existing.Priority >= priority)
                 {
                     return false;
                 }
@@ -3290,7 +3495,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                     continue;
                 }
 
-                if (existing.Priority >= priority)
+                if (existing.IsIssuedDmaOutput || existing.Priority >= priority)
                 {
                     blocker = existing;
                     blockerSlotCycle = slotCycle;
@@ -3349,7 +3554,9 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             long slotCycle,
             AmigaBusAccessRequest request,
             AgnusChipSlotOwner owner,
-            AgnusChipSlotPriority priority)
+            AgnusChipSlotPriority priority,
+            bool issuedCopperOutput = false,
+            bool issuedBitplaneOutput = false)
         {
             CommitSlot(
                 slotCycle,
@@ -3361,7 +3568,9 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 request.RequestedCycle,
                 request.IsWrite,
                 owner,
-                priority);
+                priority,
+                issuedCopperOutput,
+                issuedBitplaneOutput);
         }
 
         private void CommitSlot(
@@ -3374,12 +3583,19 @@ namespace CopperMod.Amiga.CustomChips.Agnus
             long requestedCycle,
             bool isWrite,
             AgnusChipSlotOwner owner,
-            AgnusChipSlotPriority priority)
+            AgnusChipSlotPriority priority,
+            bool issuedCopperOutput = false,
+            bool issuedBitplaneOutput = false)
         {
             var index = GetSlotIndex(slotCycle);
             var existing = _slots[index];
             var replacedExisting = existing.Valid && existing.IsForSlot(slotCycle);
             var replacedOwner = replacedExisting ? existing.Owner : AgnusChipSlotOwner.Free;
+            if (replacedExisting && existing.IsIssuedDmaOutput &&
+                !SlotMatchesRequest(slotCycle, existing, requester, kind, target, address, size, requestedCycle, isWrite))
+            {
+                throw new InvalidOperationException("An issued DMA output cannot be replaced by another physical transfer.");
+            }
             if (existing.Valid &&
                 existing.IsForSlot(slotCycle) &&
                 (SlotMatchesRequest(slotCycle, existing, requester, kind, target, address, size, requestedCycle, isWrite) ||
@@ -3397,7 +3613,9 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 kind,
                 owner,
                 priority,
-                cpuGrantAfterNiceBlitterWait);
+                cpuGrantAfterNiceBlitterWait,
+                issuedCopperOutput,
+                issuedBitplaneOutput);
             _slotKeys[index] = new AgnusHrmCommittedSlotKey(
                 target,
                 address,
@@ -3649,14 +3867,17 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 AmigaBusAccessKind kind,
                 AgnusChipSlotOwner owner,
                 AgnusChipSlotPriority priority,
-                bool cpuGrantAfterNiceBlitterWait = false)
+                bool cpuGrantAfterNiceBlitterWait = false,
+                bool issuedCopperOutput = false,
+                bool issuedBitplaneOutput = false)
             {
                 _slotCycleLow = unchecked((uint)slotCycle);
                 _owner = (byte)owner;
                 _priority = (byte)priority;
                 _requester = (byte)requester;
                 _kind = (byte)kind;
-                _flags = cpuGrantAfterNiceBlitterWait ? (byte)1 : (byte)0;
+                _flags = (byte)((cpuGrantAfterNiceBlitterWait ? 1 : 0) |
+                    (issuedCopperOutput ? 2 : 0) | (issuedBitplaneOutput ? 4 : 0));
             }
 
             private readonly uint _slotCycleLow;
@@ -3683,6 +3904,14 @@ namespace CopperMod.Amiga.CustomChips.Agnus
 
             public bool CpuGrantAfterNiceBlitterWait => (_flags & 1) != 0;
 
+            // Accepted IN has already committed the one-CCK-later OUT. Its
+            // reservation is physical history, not a rebuildable DMA plan.
+            public bool IsIssuedCopperOutput => (_flags & 2) != 0;
+
+            public bool IsIssuedBitplaneOutput => (_flags & 4) != 0;
+
+            public bool IsIssuedDmaOutput => (_flags & 6) != 0;
+
             public bool IsForSlot(long slotCycle)
                 => _slotCycleLow == unchecked((uint)slotCycle);
 
@@ -3697,7 +3926,7 @@ namespace CopperMod.Amiga.CustomChips.Agnus
                 AmigaBusRequester requester,
                 AmigaBusAccessKind kind)
             {
-                if (Owner != owner ||
+                if (IsIssuedDmaOutput || Owner != owner ||
                     (owner != AgnusChipSlotOwner.Bitplane && owner != AgnusChipSlotOwner.Sprite))
                 {
                     return false;

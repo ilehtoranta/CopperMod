@@ -61,7 +61,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 {
                     var nextCopperBarrierCycle = GetNextLiveCopperBarrierCycle();
                     if (nextCopperBarrierCycle <= targetCycle &&
-                        nextCopperBarrierCycle <= nextCycle)
+                        (nextCopperBarrierCycle < nextCycle ||
+                         nextCopperBarrierCycle == nextCycle && !UsesPhysicalCopperPipeline))
                     {
                         var barrierStopCycle = nextCopperBarrierCycle - 1;
                         if (barrierStopCycle < _liveFrameStartCycle)
@@ -93,7 +94,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 var wakeVersionBeforeAdvance = _liveWakeVersion;
                 var fixedDisplaySlotDue =
                     nextBitplaneFetchCycle == nextCycle ||
-                    nextSpriteFetchCycle == nextCycle;
+                    nextSpriteFetchCycle == nextCycle ||
+                    UsesPhysicalCopperPipeline && nextLineStateCycle == nextCycle;
                 // Fixed display DMA owns the physical slot before Copper is
                 // allowed to arbitrate for it.  Register events at the same
                 // cycle must still become visible, so advance those events but
@@ -291,6 +293,17 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         internal long? GetNextLiveCopperCpuBatchBarrierCycle(long currentCycle, long targetCycle)
         {
+            if (UsesPhysicalCopperPipeline)
+            {
+                if (!_liveDmaEnabled || !_liveFrameValid)
+                {
+                    return null;
+                }
+                var physicalCycle = GetNextLiveCopperCycle(targetCycle);
+                return physicalCycle == long.MaxValue || physicalCycle > targetCycle
+                    ? null
+                    : physicalCycle;
+            }
             if (_liveCopperRequesterEnabled)
             {
                 var requesterCycle = GetNextLiveCopperRequesterCycle();
@@ -433,7 +446,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             out CpuBatchCopperLookahead lookahead)
         {
             lookahead = default;
-            if (_liveCopperRequesterEnabled)
+            if (_liveCopperRequesterEnabled || UsesPhysicalCopperPipeline)
             {
                 return false;
             }
@@ -644,15 +657,27 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var copperCycle = GetNextLiveCopperCycle(frameEndCycle);
+            var quietEndCycle = frameEndCycle;
             if (copperCycle != long.MaxValue && copperCycle < frameEndCycle)
             {
-                EndCopperQuiescentWindow(cycle);
-                return false;
+                if (!UsesPhysicalCopperPipeline ||
+                    _liveCopper.PhysicalPipeline.HasIssuedWord ||
+                    !_liveCopper.PhysicalPipeline.IsVblankStrobeDue(copperCycle) ||
+                    copperCycle <= cycle)
+                {
+                    EndCopperQuiescentWindow(cycle);
+                    return false;
+                }
+
+                // The quiet prefix ends at the unconsumed control strobe,
+                // not at the later frame boundary. Neither its latch nor
+                // an accepted output may be skipped by this lease.
+                quietEndCycle = copperCycle;
             }
 
             startCycle = cycle;
-            endCycle = frameEndCycle;
-            RecordCopperQuiescentWindow(cycle, frameEndCycle);
+            endCycle = quietEndCycle;
+            RecordCopperQuiescentWindow(cycle, quietEndCycle);
             return true;
         }
 

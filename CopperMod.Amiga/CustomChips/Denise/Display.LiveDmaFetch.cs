@@ -164,6 +164,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
+            offset &= 0x01FE;
+            if (UsesPhysicalBitplanePipeline && offset is >= 0x00E0 and <= 0x00FE)
+            {
+                RebaseFuturePhysicalBitplanePointer(row, (offset - 0x00E0) / 4, cycle);
+                return;
+            }
+
             if (HasCapturedLiveBitplaneWords(row) ||
                 HasStartedLiveBitplaneFetches(row, cycle))
             {
@@ -319,15 +326,18 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private int GetCapturedBitplaneStorageStop(int row, int plane)
         {
             var mask = _liveBitplaneWordMasks[GetLiveBitplaneMaskIndex(row, plane)];
+            var issuedStop = _physicalBitplanePipeline.HasOutput &&
+                _physicalBitplanePipeline.Word.Row == row && _physicalBitplanePipeline.Word.Plane == plane
+                ? _physicalBitplanePipeline.Word.StorageWord + 1 : 0;
             for (var word = MaxBitplaneFetchWords - 1; word >= 0; word--)
             {
                 if ((mask & ((UInt128)1 << word)) != 0)
                 {
-                    return word + 1;
+                    return Math.Max(word + 1, issuedStop);
                 }
             }
 
-            return 0;
+            return issuedStop;
         }
 
         private int GetFirstBitplaneWordAfterCycle(LiveLineState state, long cycle, int targetPlane)
@@ -449,7 +459,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                             word,
                             slot,
                             address,
-                            rowPresent);
+                            rowPresent,
+                            delayedOutput: UsesPhysicalBitplanePipeline);
                         _agnusRasterlinePlans.SetBitplaneEntry(bitplaneStart + bitplaneCount++, entry);
                     }
                 }
@@ -559,7 +570,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                                 word,
                                 slot,
                                 address,
-                                rowPresent));
+                                rowPresent,
+                                delayedOutput: UsesPhysicalBitplanePipeline));
                     }
                 }
             }
@@ -803,6 +815,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void CaptureLiveBitplaneFetchBatchCore(long stopCycle)
         {
+            if (UsesPhysicalBitplanePipeline)
+            {
+                CapturePhysicalBitplaneBatch(stopCycle);
+                return;
+            }
+
             while (_liveNextFetchRow < LowResOutputHeight)
             {
                 if (!NormalizeLiveBitplaneFetchCursor())
@@ -1076,6 +1094,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     var bit = (UInt128)1 << capturedWord;
                     var index = (entry.Plane * MaxBitplaneFetchWords) + capturedWord;
                     timelineLine.BitplaneWords[index] = value;
+                    _displayTimeline.RecordBitplaneOutputCycle(
+                        timelineLine, index, entry.GetOutputCycle(state.LineStartCycle));
                     timelineLine.BitplaneFetchMasks[entry.Plane] |= bit;
                     if (granted)
                     {
@@ -1263,6 +1283,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private long GetNextKnownLiveBitplaneFetchCycle()
         {
+            if (UsesPhysicalBitplanePipeline && _physicalBitplanePipeline.HasOutput)
+            {
+                return _physicalBitplanePipeline.OutputCycle;
+            }
+
             SkipLiveRowsWithoutFetches();
             if (_liveNextFetchRow >= LowResOutputHeight ||
                 !IsLiveLineValid(_liveNextFetchRow))
@@ -1275,6 +1300,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private long GetNextPreparedLiveBitplaneFetchCycle()
         {
+            if (UsesPhysicalBitplanePipeline)
+            {
+                // An OCS input is issued by the causal event cursor. Future
+                // row plans are queried, never committed as issued transfers.
+                return long.MaxValue;
+            }
+
             if (!NormalizePreparedLiveBitplaneFetchCursor())
             {
                 return long.MaxValue;
@@ -1444,6 +1476,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool CaptureKnownLiveBitplaneFetchesThrough(long targetCycle)
         {
+            if (UsesPhysicalBitplanePipeline)
+            {
+                var hasWork = GetNextPhysicalBitplaneCycle() <= targetCycle;
+                CapturePhysicalBitplaneBatch(targetCycle);
+                return hasWork;
+            }
+
             var captured = false;
             while (_liveNextFetchRow < LowResOutputHeight)
             {
@@ -1460,8 +1499,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return captured;
                 }
 
-                CaptureLiveBitplaneFetch(fetchCycle);
-                AdvanceLiveFetchCursor();
+                if (CaptureLiveBitplaneFetch(fetchCycle))
+                {
+                    AdvanceLiveFetchCursor();
+                }
                 captured = true;
             }
 
@@ -1521,22 +1562,28 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ConsumeLiveBitplaneDmaLatch(ref _bitplaneDmaReadLatch);
         }
 
-        private void CaptureLiveBitplaneFetch(long fetchCycle)
+        private bool CaptureLiveBitplaneFetch(long fetchCycle)
         {
+            if (UsesPhysicalBitplanePipeline)
+            {
+                return StepPhysicalBitplane(fetchCycle);
+            }
+
             if ((uint)_liveNextFetchRow >= (uint)LowResOutputHeight ||
                 (uint)_liveNextFetchPlane >= (uint)_bitplanePointers.Length ||
                 (uint)_liveNextFetchWord >= (uint)MaxBitplaneFetchWords)
             {
-                return;
+                return false;
             }
 
             var state = GetLiveLineState(_liveNextFetchRow);
             if (!IsLiveLineValid(_liveNextFetchRow))
             {
-                return;
+                return false;
             }
 
             CaptureLiveBitplaneFetch(_liveNextFetchRow, _liveNextFetchPlane, _liveNextFetchWord, fetchCycle, state);
+            return true;
         }
 
         private void RecordLiveDisplayDmaCycle(long cycle)

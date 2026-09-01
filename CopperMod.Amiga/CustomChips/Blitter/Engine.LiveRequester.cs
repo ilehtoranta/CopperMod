@@ -25,12 +25,16 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private ushort _liveAreaPendingDValue;
         private bool _liveAreaPendingDCompletesRow;
         private bool _liveAreaPendingDCompletesBlit;
+        private bool _liveAreaPendingDRequiresRetireControl;
         private bool _liveAreaFinalDDrainActive;
         private long _liveAreaFinalDDrainRequestCycle;
         private long _liveBlitterCpuAfterSlotBarrierCycle = -1;
 
         private enum LiveBlitterTransitionKind : byte
         {
+            AdvanceBOnlyCompletionSignal,
+            AdvanceAreaStartup,
+            AdvanceAreaWordControl,
             BeginAreaWord,
             PrepareAreaWrite,
             LatchAreaPipelineWrite,
@@ -80,6 +84,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _liveAreaPendingDValue = 0;
             _liveAreaPendingDCompletesRow = false;
             _liveAreaPendingDCompletesBlit = false;
+            _liveAreaPendingDRequiresRetireControl = false;
             _liveAreaFinalDDrainActive = false;
             _liveAreaFinalDDrainRequestCycle = 0;
             _liveBlitterCpuAfterSlotBarrierCycle = -1;
@@ -87,16 +92,23 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool UsesLiveAreaDPipeline()
-            => _bus.AgnusLiveBlitterEnabled &&
-                !_lineMode &&
+            => !_lineMode &&
                 (_useD ||
                  _liveAreaPendingDValid ||
-                 _liveAreaFinalDDrainActive);
+                 _liveAreaFinalDDrainActive) &&
+                (_bus.AgnusLiveBlitterEnabled ||
+                 (_bus.Chipset == AmigaChipset.OcsPal &&
+                  !_useA &&
+                  !_useB &&
+                  !_useC &&
+                  !_fillEnabled));
 
         private void PrimeLiveBlitterMicroOpUnit()
         {
             if (!_bus.AgnusLiveBlitterEnabled ||
                 !_busy ||
+                _bOnlyCompletion.Pending ||
+                HasAreaStartupControl ||
                 _completionPending ||
                 !IsBlitterDmaEnabled())
             {
@@ -142,9 +154,22 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
         internal long GetNextLiveAgnusSlotKernelCycle()
         {
-            if (!_bus.AgnusLiveBlitterEnabled || !_busy)
+            if (!_bus.AgnusLiveBlitterEnabled)
             {
                 return long.MaxValue;
+            }
+
+            var signalCycle = GetNextBOnlyCompletionSignalCycle();
+            if (!_busy || _bOnlyCompletion.Pending)
+            {
+                return signalCycle;
+            }
+
+            if (_areaMicroOpActive && !RequiresDmaForCurrentBlit())
+            {
+                return Math.Min(signalCycle, IsBlitterDmaEnabled()
+                    ? GetNextLiveBlitterRequesterCycle()
+                    : long.MaxValue);
             }
 
             if (!RequiresDmaForCurrentBlit())
@@ -153,12 +178,12 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 // source) still consumes sequencer time, but it must not
                 // publish a bus request. Let the slot kernel visit its scalar
                 // completion edge directly.
-                return GetPredictedCompletionCycle();
+                return Math.Min(signalCycle, GetPredictedCompletionCycle());
             }
 
-            return IsBlitterDmaEnabled()
+            return Math.Min(signalCycle, IsBlitterDmaEnabled()
                 ? GetNextLiveBlitterRequesterCycle()
-                : long.MaxValue;
+                : long.MaxValue);
         }
 
         private void StepLiveBlitterRequester(long targetCycle)
@@ -229,7 +254,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         internal void AdvanceLiveAgnusSlotKernelTo(long slotCycle)
         {
             if (!_bus.AgnusLiveBlitterEnabled ||
-                !_busy)
+                (!_busy && !HasBOnlyCompletionSignalWork))
             {
                 return;
             }
@@ -244,8 +269,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 return;
             }
 
-            if (!IsBlitterDmaEnabled())
+            if (!IsBlitterDmaEnabled() && GetNextBOnlyCompletionSignalCycle() > slotCycle)
             {
+                HoldBOnlyCompletionInputThrough(slotCycle);
                 return;
             }
 
@@ -350,7 +376,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             ref bool cpuBoundaryPrepared,
             ref bool settlingDeferredAfterSlot)
         {
-            if (!_bus.AgnusLiveBlitterEnabled || !_busy)
+            if (!_bus.AgnusLiveBlitterEnabled ||
+                (!_busy && !HasBOnlyCompletionSignalWork))
             {
                 return false;
             }
@@ -368,7 +395,17 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 var schedulerWake = CaptureSchedulerWakeSignature();
                 try
                 {
-                    if (_completionPending)
+                    if (BOnlyCompletionSignalPrecedesPipeline() &&
+                        AdvanceBOnlyCompletionSignalThrough(slotCycle))
+                    {
+                        // An old generation's N can outlive a restart into a
+                        // zero-channel program; it is still independent work.
+                    }
+                    else if (!_busy)
+                    {
+                        return false;
+                    }
+                    else if (_completionPending)
                     {
                         FinalizePendingCompletion();
                     }
@@ -397,8 +434,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 return true;
             }
 
-            if (!IsBlitterDmaEnabled())
+            if (!IsBlitterDmaEnabled() && GetNextBOnlyCompletionSignalCycle() > slotCycle)
             {
+                HoldBOnlyCompletionInputThrough(slotCycle);
                 return false;
             }
 
@@ -562,6 +600,28 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private void EnsureLiveBlitterRequesterPublication(
             LiveBlitterRequester requester)
         {
+            if (BOnlyCompletionSignalPrecedesPipeline())
+            {
+                var signalCycle = GetNextBOnlyCompletionSignalCycle();
+                if (requester.TransitionKind == LiveBlitterTransitionKind.AdvanceBOnlyCompletionSignal &&
+                    requester.TryPeekNextTransition(out var signalTransition) &&
+                    signalTransition.Cycle == signalCycle)
+                {
+                    return;
+                }
+
+                requester.CancelPendingWord();
+                requester.CancelPendingTransition();
+                if (signalCycle != long.MaxValue)
+                {
+                    requester.PublishTransition(
+                        LiveBlitterTransitionKind.AdvanceBOnlyCompletionSignal,
+                        signalCycle,
+                        AgnusLiveTransitionPhase.BeforeSlotSelection);
+                }
+                return;
+            }
+
             if (requester.TryPeekPendingRequest(out var request))
             {
                 if (IsLiveBlitterRequestCurrent(request))
@@ -603,6 +663,31 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 return;
             }
 
+            // Register writes can remove the last uncommitted DMA channel
+            // while a previously published transition is still latched. The
+            // scalar sequencer owns the remaining zero-channel work; do not
+            // republish an area-word transition that can no longer begin.
+            if (!RequiresDmaForCurrentBlit())
+            {
+                return;
+            }
+
+            if (HasAreaStartupControl)
+            {
+                requester.PublishTransition(
+                    LiveBlitterTransitionKind.AdvanceAreaStartup,
+                    GetNextAreaStartupInputCycle(),
+                    AgnusLiveTransitionPhase.BeforeSlotSelection);
+                return;
+            }
+
+            if (!_lineMode &&
+                !_areaMicroOpActive &&
+                !_useA && !_useB && !_useC && !_useD)
+            {
+                return;
+            }
+
             if (_lineMode)
             {
                 PublishLiveLineState(requester);
@@ -636,6 +721,15 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
             if (_areaMicroOpIndex >= GetAreaMicroOpCount())
             {
+                if (_areaWordRetireControl.Pending)
+                {
+                    requester.PublishTransition(
+                        LiveBlitterTransitionKind.AdvanceAreaWordControl,
+                        _areaWordRetireControl.NextInputCycle,
+                        AgnusLiveTransitionPhase.BeforeSlotSelection);
+                    return;
+                }
+
                 requester.PublishTransition(
                     UsesLiveAreaDPipeline() &&
                     _areaMicroOpFinalWord &&
@@ -705,6 +799,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             in AgnusLiveSlotRequest request)
         {
             if (!_busy ||
+                _bOnlyCompletion.Pending ||
+                HasAreaStartupControl ||
                 _completionPending ||
                 !IsBlitterDmaEnabled() ||
                 request.Owner != AgnusChipSlotOwner.Blitter ||
@@ -765,11 +861,27 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             in AgnusLiveTransition transition)
             => kind switch
             {
+                LiveBlitterTransitionKind.AdvanceBOnlyCompletionSignal =>
+                    BOnlyCompletionSignalPrecedesPipeline() &&
+                    transition.Cycle == GetNextBOnlyCompletionSignalCycle(),
+                LiveBlitterTransitionKind.AdvanceAreaStartup =>
+                    _busy && HasAreaStartupControl && IsBlitterDmaEnabled() &&
+                    transition.Cycle == GetNextAreaStartupInputCycle(),
+                LiveBlitterTransitionKind.AdvanceAreaWordControl =>
+                    _busy &&
+                    _areaMicroOpActive &&
+                    _areaMicroOpIndex >= GetAreaMicroOpCount() &&
+                    _areaWordRetireControl.Pending &&
+                    IsBlitterDmaEnabled() &&
+                    transition.Cycle == _areaWordRetireControl.NextInputCycle,
                 LiveBlitterTransitionKind.BeginAreaWord =>
                     _busy &&
+                    !_bOnlyCompletion.Pending &&
+                    !HasAreaStartupControl &&
                     !_completionPending &&
                     !_lineMode &&
                     !_areaMicroOpActive &&
+                    (_useA || _useB || _useC || _useD) &&
                     IsBlitterDmaEnabled(),
                 LiveBlitterTransitionKind.PrepareAreaWrite =>
                     _areaMicroOpActive &&
@@ -793,7 +905,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     !_liveAreaFinalDDrainActive &&
                     transition.Cycle == GetAreaMicroOpFinishCycle(),
                 LiveBlitterTransitionKind.FinishAreaWord =>
-                    _areaMicroOpActive &&
+                    !_bOnlyCompletion.Pending && _areaMicroOpActive &&
                     _areaMicroOpIndex >= GetAreaMicroOpCount() &&
                     transition.Cycle == GetAreaMicroOpFinishCycle(),
                 LiveBlitterTransitionKind.BeginLinePixel =>
@@ -810,7 +922,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     _lineMicroOpActive &&
                     _lineMicroOpIndex >= _lineMicroOpCount,
                 LiveBlitterTransitionKind.FinalizeCompletion =>
-                    _busy && _completionPending,
+                    _busy && !_bOnlyCompletion.Pending && _completionPending,
                 _ => false
             };
 
@@ -857,11 +969,13 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     IsBOnlyAreaBlit() &&
                     _areaMicroOpIndex >= GetAreaMicroOpCount())
                 {
-                    PublishBOnlyFinalInterrupt(
+                    ArmBOnlyCompletionFromFinalRead(
                         isFinalWord: true,
-                        access.CompletedCycle);
+                        access.GrantedCycle);
                 }
                 if (_areaMicroOpActive &&
+                    !_bOnlyCompletion.Pending &&
+                    !_areaWordRetireControl.Pending &&
                     _areaMicroOpIndex >= GetAreaMicroOpCount() &&
                     GetAreaMicroOpFinishCycle() <= grant.CompletedCycle)
                 {
@@ -943,6 +1057,10 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     break;
 
                 case BlitterSlotQueueOp.WriteD:
+                    var outgoingCompletesBlit =
+                        _liveAreaPendingDCompletesBlit;
+                    var outgoingRequiresRetireControl =
+                        _liveAreaPendingDRequiresRetireControl;
                     if (UsesLiveAreaDPipeline())
                     {
                         CommitLiveAreaPipelinedDPointer();
@@ -960,6 +1078,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     _areaMicroOpNextCycle = Math.Max(
                         _areaMicroOpNextCycle,
                         access.CompletedCycle);
+                    ArmAreaWordRetireControl(
+                        access.GrantedCycle,
+                        outgoingRequiresRetireControl,
+                        outgoingCompletesBlit ||
+                        (_areaMicroOpFinalWord && _useD));
                     break;
 
                 default:
@@ -1006,6 +1129,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
 
             _liveAreaPendingDValid = false;
+            _liveAreaPendingDRequiresRetireControl = false;
         }
 
         private void LatchLiveAreaPipelineWrite()
@@ -1016,10 +1140,14 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 _wordX == _widthWords - 1;
             _liveAreaPendingDCompletesBlit =
                 _areaMicroOpFinalWord;
+            _liveAreaPendingDRequiresRetireControl =
+                UsesAreaWordRetireControl;
             _liveAreaPendingDValid = true;
         }
 
-        private void BeginLiveAreaFinalDDrain(long completionCycle)
+        private void BeginLiveAreaFinalDDrain(
+            long completionCycle,
+            bool recordLiveDiagnostics = true)
         {
             if (!_liveAreaPendingDValid ||
                 !_liveAreaPendingDCompletesBlit)
@@ -1031,8 +1159,13 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _liveAreaFinalDDrainActive = true;
             _liveAreaFinalDDrainRequestCycle =
                 completionCycle + AgnusChipSlotScheduler.SlotCycles;
-            _liveBlitterAreaWords++;
-            PublishLiveAreaFinalDCompletion(completionCycle);
+            if (recordLiveDiagnostics)
+            {
+                _liveBlitterAreaWords++;
+            }
+            PublishLiveAreaFinalDCompletion(
+                completionCycle,
+                recordLiveDiagnostics);
         }
 
         private void CommitLiveAreaFinalDDrain(
@@ -1073,7 +1206,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             return _areaMicroOpInternalCompletionCycle;
         }
 
-        private void PublishLiveAreaFinalDCompletion(long completionCycle)
+        private void PublishLiveAreaFinalDCompletion(
+            long completionCycle,
+            bool recordLiveDiagnostics = true)
         {
             if (_liveAreaFinalDCompletionPublished)
             {
@@ -1096,8 +1231,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _bus.RequestHardwareInterrupt(
                 AmigaConstants.IntreqBlitter,
                 completionCycle);
-            _liveBlitterCompletions++;
-            _liveBlitterInterrupts++;
+            if (recordLiveDiagnostics)
+            {
+                _liveBlitterCompletions++;
+                _liveBlitterInterrupts++;
+            }
         }
 
         private void CommitLiveLineMicroOp(
@@ -1175,6 +1313,18 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             var previousCompletionCycle = _lastCompletionCycle;
             switch (kind)
             {
+                case LiveBlitterTransitionKind.AdvanceBOnlyCompletionSignal:
+                    AdvanceBOnlyCompletionSignalThrough(cycle);
+                    break;
+
+                case LiveBlitterTransitionKind.AdvanceAreaStartup:
+                    AdvanceAreaStartupInput(cycle);
+                    break;
+
+                case LiveBlitterTransitionKind.AdvanceAreaWordControl:
+                    AdvanceAreaWordRetireControlInput(cycle);
+                    break;
+
                 case LiveBlitterTransitionKind.BeginAreaWord:
                     if (!BeginAreaMicroOpWord())
                     {

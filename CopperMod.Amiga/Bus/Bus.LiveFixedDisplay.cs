@@ -10,6 +10,28 @@ namespace CopperMod.Amiga.Bus
 {
     internal sealed partial class Bus
     {
+        internal bool TryAcceptBitplaneInput(
+            uint address, long inputCycle, out AmigaBusAccessResult access)
+            => _agnusBusExecutor.TryAcceptBitplaneInput(address, inputCycle, out access);
+
+        internal AmigaDmaWordExecutionResult ExecuteAcceptedBitplaneWord(
+            int plane, in AmigaBusAccessResult access)
+            => _agnusBusExecutor.ExecuteAcceptedBitplaneWord(plane, in access);
+
+        internal AmigaDmaWordExecutionResult ReadAcceptedBitplaneWord(in AmigaBusAccessResult access)
+        {
+            if (!_hrmSlotEngine.MatchesAcceptedBitplaneWord(in access) ||
+                access.Request.Address != MaskChipDmaAddress(access.Request.Address) ||
+                access.GrantedCycle < _chipDataBusLatchCycle)
+            {
+                throw new InvalidOperationException("The bitplane output does not match its accepted physical reservation.");
+            }
+
+            var execution = ExecuteDmaWordRead(access.Request.Address, granted: true, access);
+            CaptureDmaAccess(access);
+            return execution;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryCommitLiveFixedDisplayRead(
             AgnusLiveSlotRequest liveRequest,
@@ -36,6 +58,16 @@ namespace CopperMod.Amiga.Bus
                 AmigaBusAccessSize.Word,
                 requestedCycle,
                 isWrite: false);
+            if (liveRequest.Owner == AgnusChipSlotOwner.Bitplane &&
+                liveRequest.EarliestEligibleCycle - requestedCycle == AgnusChipSlotScheduler.SlotCycles)
+            {
+                var accepted = new AmigaBusAccessResult(request,
+                    liveRequest.EarliestEligibleCycle,
+                    checked(liveRequest.EarliestEligibleCycle + AgnusChipSlotScheduler.SlotCycles));
+                execution = ExecuteAcceptedBitplaneWord(liveRequest.Channel, in accepted);
+                return true;
+            }
+
             if (requestedCycle <= ExecutedChipBusHorizon)
             {
                 var staleAccess = new AmigaBusAccessResult(

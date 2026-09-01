@@ -20,7 +20,7 @@ namespace CopperMod.Amiga.Bus
         internal void PublishDmaconrState(long cycle)
             => _customRegisterFile.PublishStoredValue(
                 0x002,
-                (ushort)(Paula.Dmacon | Blitter.DmaconStatusBits),
+                (ushort)(Paula.Dmacon | Blitter.GetDmaconStatusBitsAt(cycle)),
                 cycle);
 
         private void PublishGamePortRegisterState(long cycle)
@@ -89,7 +89,8 @@ namespace CopperMod.Amiga.Bus
                 }
                 case CustomRegisterReadHandler.Dmaconr:
                 {
-                    var value = (ushort)(Paula.Dmacon | Blitter.DmaconStatusBits);
+                    var value = (ushort)(Paula.Dmacon | Blitter.GetDmaconStatusBitsAt(
+                        sampleCycle == long.MinValue ? _lastRasterAdvanceCycle : sampleCycle));
                     return (offset & 1) == 0 ? (byte)(value >> 8) : (byte)value;
                 }
                 case CustomRegisterReadHandler.Agnus:
@@ -141,7 +142,8 @@ namespace CopperMod.Amiga.Bus
                         : (ushort)0;
                 }
                 case CustomRegisterReadHandler.Dmaconr:
-                    return (ushort)(Paula.Dmacon | Blitter.DmaconStatusBits);
+                    return (ushort)(Paula.Dmacon | Blitter.GetDmaconStatusBitsAt(
+                        sampleCycle == long.MinValue ? _lastRasterAdvanceCycle : sampleCycle));
                 case CustomRegisterReadHandler.BeamPosition:
                     CalculateBeamPosition(
                         sampleCycle == long.MinValue ? _lastRasterAdvanceCycle : sampleCycle,
@@ -475,7 +477,7 @@ namespace CopperMod.Amiga.Bus
                 accessKind,
                 requestedCycle,
                 searchCycle);
-            if (!Blitter.BusPipelineActive ||
+            if ((!Blitter.BusPipelineActive && Blitter.PendingCompletionSignalCycle == long.MaxValue) ||
                 !TryGrantCpuDataLongWordPhaseChronologically(
                     accessKind,
                     target,
@@ -689,7 +691,12 @@ namespace CopperMod.Amiga.Bus
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long GetDisplayWriteCycle(in CustomRegisterWriteContext write)
-            => GetDisplayWriteCycle(write.Requester, write.Offset, write.Cycle);
+            // Physical OCS transfers enter the shared display event stream at
+            // OUT. Converting a cycle into a pixel must not postpone an older
+            // CPU palette write until after a newer Copper palette write.
+            => Display.UsesPhysicalCopperPipeline
+                ? write.Cycle
+                : GetDisplayWriteCycle(write.Requester, write.Offset, write.Cycle);
 
         internal static long GetDisplayWriteCycle(
             AmigaBusRequester requester,
@@ -702,9 +709,9 @@ namespace CopperMod.Amiga.Bus
                 return cycle;
             }
 
-            // The slot engine records CPU grants three CCKs before externally
-            // visible Agnus HPOS. The palette transfer then reaches Denise
-            // three CCKs later; keep both physical phases in this conversion.
+            // Legacy presentation adapter for profiles not yet using physical
+            // display events. OCS PAL bypasses this conversion: it maps the
+            // unchanged OUT cycle through the Denise counter instead.
             return cycle + (6 * AgnusChipSlotScheduler.SlotCycles);
         }
 

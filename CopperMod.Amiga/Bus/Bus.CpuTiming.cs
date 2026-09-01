@@ -12,6 +12,12 @@ namespace CopperMod.Amiga.Bus
     internal sealed partial class Bus
     {
         private const int UnconditionalBranchEarlyLineControlCycles = 32;
+        private ulong _deferredCpuLastInterruptSampleToken;
+        private ulong _deferredCpuInstructionInterruptSampleToken;
+        private M68kDeferredCpuFetchResolution _deferredCpuLastInterruptSampleResolution;
+        private M68kDeferredCpuFetchResolution _deferredCpuInstructionInterruptSampleResolution;
+        private readonly long?[] _deferredCpuDataFollowingInstructionCycles =
+            new long?[MaxDeferredCpuDataAccesses];
 
         internal static int GetPendingInterruptedBranchControlCycles(
             in M68kInstructionFetchPublicationContext publicationContext,
@@ -93,17 +99,19 @@ namespace CopperMod.Amiga.Bus
             }
 
             var requestedCycle = cycle;
-            var result = _hardwareScheduler.AdvanceUntilCpuGrantOrInterrupt(
+            // Branch microcode has selected this target read. Its IPL sample
+            // follows the completed opcode read in the CPU, not an arbitrary
+            // point while the requested bus word is waiting for a grant.
+            var result = _hardwareScheduler.AdvanceUntilCpuGrant(
                 AmigaBusAccessKind.CpuInstructionFetch,
                 target,
                 address,
                 AmigaBusAccessSize.Word,
                 requestedCycle,
                 isWrite: false,
-                cpuInterruptMask,
-                retainGrantAtInterruptPoll: true,
                 out grantedCycle,
-                out var completedCycle);
+                out var completedCycle,
+                allowAdjacentCopperPhase: true);
 
             if (result != CpuWaitGrantAdvanceResult.Unsupported)
             {
@@ -183,6 +191,14 @@ namespace CopperMod.Amiga.Bus
         {
             if (_deferredCpuBusBatchActive)
             {
+                if (_deferredCpuDataAccessCount > 0)
+                {
+                    // The next instruction's entry is the preceding one's
+                    // architectural retirement floor. Record that boundary
+                    // explicitly, including instructions with no bus entries.
+                    _deferredCpuDataFollowingInstructionCycles[_deferredCpuDataAccessCount - 1] ??=
+                        cycle + _deferredCpuProjectedRetireDelay;
+                }
                 _deferredCpuInstructionTimingActive = !_captureBusAccesses;
                 if (_deferredCpuDataAccessCount == 0)
                 {
@@ -220,6 +236,27 @@ namespace CopperMod.Amiga.Bus
         bool IM68kDeferredCpuInstructionTiming.IsInternalNoBusWindowEnabled =>
             _deferredCpuInternalNoBusWindowEnabled && !_captureBusAccesses;
 
+        bool IM68kDeferredCpuInstructionTiming.HasPhysicalCpuBusCursor
+        {
+            get
+            {
+                var count = _deferredCpuDataAccessCount;
+                if (count == 0)
+                {
+                    return true;
+                }
+
+                // Chip instruction-fetch leases expose their proven completion
+                // immediately. Other deferred accesses retain a nominal cursor
+                // until replay resolves the physical transfer sequence.
+                var journalMask = count == 64
+                    ? ulong.MaxValue
+                    : (1UL << count) - 1UL;
+                return _deferredCpuChipFetchEpochArmed &&
+                    _deferredCpuDataChipFetchShapeBits == journalMask;
+            }
+        }
+
         bool IM68kDeferredCpuInstructionTiming.RequiresControlFlowBatchBoundary =>
             _deferredCpuChipFetchEpochArmed &&
             _deferredCpuDataChipFetchShapeBits != 0;
@@ -234,6 +271,40 @@ namespace CopperMod.Amiga.Bus
         ulong IM68kDeferredCpuInstructionTiming.CaptureDeferredCpuInstructionFetchTimingToken()
             => _lastDeferredCpuInstructionFetchTimingToken;
 
+        void IM68kDeferredCpuInstructionTiming.RegisterDeferredCpuInterruptSamples(
+            ulong lastSampleToken,
+            ulong instructionSampleToken)
+        {
+            // Keep only the two live sample owners. Resolve before replacing
+            // either slot because retirement can move instruction -> last.
+            var lastResolution = GetRetainedDeferredCpuInterruptSample(lastSampleToken);
+            var instructionResolution = GetRetainedDeferredCpuInterruptSample(instructionSampleToken);
+            _deferredCpuLastInterruptSampleToken = lastSampleToken;
+            _deferredCpuInstructionInterruptSampleToken = instructionSampleToken;
+            _deferredCpuLastInterruptSampleResolution = lastResolution;
+            _deferredCpuInstructionInterruptSampleResolution = instructionResolution;
+        }
+
+        M68kDeferredCpuFetchResolution IM68kDeferredCpuInstructionTiming.GetDeferredCpuInterruptSampleResolution(
+            ulong token)
+            => GetRetainedDeferredCpuInterruptSample(token);
+
+        private M68kDeferredCpuFetchResolution GetRetainedDeferredCpuInterruptSample(ulong token)
+        {
+            if (token != 0)
+            {
+                if (_deferredCpuLastInterruptSampleResolution.Token == token)
+                {
+                    return _deferredCpuLastInterruptSampleResolution;
+                }
+                if (_deferredCpuInstructionInterruptSampleResolution.Token == token)
+                {
+                    return _deferredCpuInstructionInterruptSampleResolution;
+                }
+            }
+            return default;
+        }
+
         bool IM68kDeferredCpuInstructionTiming.TryBeginDeferredCpuBusBatch(
             M68kCpuState state,
             long currentCycle,
@@ -247,20 +318,8 @@ namespace CopperMod.Amiga.Bus
             batchTargetCycle = currentCycle;
             wakeSource = M68kTraceBatchWakeSource.TargetCycle;
             if (_captureBusAccesses ||
-                _deferredCpuBusBatchActive)
-            {
-                return false;
-            }
-
-            var physicalHorizon = DeferredCpuPhysicalHorizon;
-            if (!Blitter.BusPipelineActive &&
-                currentCycle < physicalHorizon)
-            {
-                currentCycle = physicalHorizon;
-                state.Cycles = currentCycle;
-            }
-
-            if (!_deferredCpuBusBatchEnabled)
+                _deferredCpuBusBatchActive ||
+                !_deferredCpuBusBatchEnabled)
             {
                 return false;
             }
@@ -279,42 +338,50 @@ namespace CopperMod.Amiga.Bus
                 return false;
             }
 
-            currentCycle = Math.Max(0, currentCycle);
+            // A completed prefetch can put physical ownership ahead of
+            // architectural retirement. Admission only queries that physical
+            // suffix; it must not execute the pending instruction or advance
+            // its cycle floor, even when the proposed batch is rejected.
+            var physicalQueryCycle = Math.Max(0, currentCycle);
+            if (!Blitter.BusPipelineActive)
+            {
+                physicalQueryCycle = Math.Max(physicalQueryCycle, DeferredCpuPhysicalHorizon);
+            }
             var requestedTarget = targetCycle.HasValue
-                ? Math.Max(currentCycle + 1, targetCycle.Value)
-                : currentCycle + DeferredCpuBusBatchDefaultCycleWindow;
+                ? Math.Max(physicalQueryCycle + 1, targetCycle.Value)
+                : physicalQueryCycle + DeferredCpuBusBatchDefaultCycleWindow;
             var interruptMask = (state.StatusRegister >> 8) & 0x07;
             var horizon = _agnusBusExecutor.GetNextCpuVisibilityHorizon(
-                currentCycle,
+                physicalQueryCycle,
                 requestedTarget,
                 interruptMask);
             batchTargetCycle = horizon.Cycle;
             wakeSource = AgnusBusExecutor.MapLegacyReason(horizon.Reason);
             var diskWakeReason = horizon.DiskReason;
-            if (batchTargetCycle - currentCycle < DeferredCpuBusBatchMinimumHorizonCycles)
+            if (batchTargetCycle - physicalQueryCycle < DeferredCpuBusBatchMinimumHorizonCycles)
             {
                 return false;
             }
 
-            _deferredCpuChipFetchEpochArmed = false;
-            _deferredCpuChipFetchLeaseActive = false;
+            var chipFetchEpochArmed = false;
+            var chipFetchLease = default(CpuChipFetchLease);
             if (_deferredCpuChipInstructionFetchBatchEnabled)
             {
                 var chipFetchEpochTargetCycle =
                     Display.ClampCpuChipFetchBatchToPresentationSafeEnd(
-                        currentCycle,
+                        physicalQueryCycle,
                         batchTargetCycle);
                 if (allowChipInstructionFetchEpoch &&
                     IsChipRamInstructionFetchAddress(state.ProgramCounter) &&
-                    chipFetchEpochTargetCycle - currentCycle >=
+                    chipFetchEpochTargetCycle - physicalQueryCycle >=
                         DeferredCpuBusBatchMinimumHorizonCycles &&
                     _agnusBusExecutor.TryAcquireCpuChipFetchLease(
-                        currentCycle,
+                        physicalQueryCycle,
                         chipFetchEpochTargetCycle,
                         interruptMask,
-                        out _deferredCpuChipFetchLease) &&
+                        out chipFetchLease) &&
                     _agnusBusExecutor.TryProveCpuChipInstructionFetch(
-                        _deferredCpuChipFetchLease,
+                        chipFetchLease,
                         chipInstructionFetchPreflightAddress,
                         chipInstructionFetchPreflightCycle,
                         out _,
@@ -323,8 +390,7 @@ namespace CopperMod.Amiga.Bus
                     // This is the epoch admission point. Until it succeeds,
                     // enabling Chip fetch batching must not alter ordinary CPU
                     // batch partitioning.
-                    _deferredCpuChipFetchLeaseActive = true;
-                    _deferredCpuChipFetchEpochArmed = true;
+                    chipFetchEpochArmed = true;
                 }
             }
 
@@ -334,11 +400,14 @@ namespace CopperMod.Amiga.Bus
             // epoch that commits no words can still change instruction-batch
             // boundaries and therefore architectural timing.
             if (IsChipRamInstructionFetchAddress(state.ProgramCounter) &&
-                !_deferredCpuChipFetchEpochArmed)
+                !chipFetchEpochArmed)
             {
                 return false;
             }
 
+            _deferredCpuChipFetchEpochArmed = chipFetchEpochArmed;
+            _deferredCpuChipFetchLeaseActive = chipFetchEpochArmed;
+            _deferredCpuChipFetchLease = chipFetchLease;
             _deferredCpuBusBatchActive = true;
             _deferredCpuBusBatchEntryProgramCounter = state.ProgramCounter;
             _deferredCpuBusBatchRebasesCpuTimeline = false;
@@ -350,7 +419,7 @@ namespace CopperMod.Amiga.Bus
             _deferredCpuDataCiaShapeBits = 0;
             _deferredCpuDataInstructionFetchShapeBits = 0;
             _deferredCpuDataRomShapeBits = 0;
-            _deferredCpuDataReplayCycle = currentCycle;
+            _deferredCpuDataReplayCycle = physicalQueryCycle;
             _deferredCpuProjectedRetireDelay = 0;
             _deferredCpuProjectedMaxRetireDelay = 0;
             _deferredCpuProjectedMaxRetireVirtualCycle = -1;
@@ -581,6 +650,10 @@ namespace CopperMod.Amiga.Bus
                 for (var index = 0; index < _deferredCpuDataAccessCount; index++)
                 {
                     _deferredCpuDataRequestedCycles[index] += rebaseCycles;
+                    if (_deferredCpuDataFollowingInstructionCycles[index].HasValue)
+                    {
+                        _deferredCpuDataFollowingInstructionCycles[index] += rebaseCycles;
+                    }
                 }
 
                 _deferredCpuDataReplayCycle = Math.Max(
@@ -1444,6 +1517,7 @@ namespace CopperMod.Amiga.Bus
             }
             _deferredCpuDataRequestedCycles[count] = cycle;
             _deferredCpuDataRequestedRetireDelays[count] = _deferredCpuProjectedRetireDelay;
+            _deferredCpuDataFollowingInstructionCycles[count] = null;
             var timingToken = ++_deferredCpuDataTimingTokenClock;
             if (timingToken == 0)
             {
@@ -1598,6 +1672,7 @@ namespace CopperMod.Amiga.Bus
 
             _deferredCpuDataRequestedCycles[index] = cycle;
             _deferredCpuDataRequestedRetireDelays[index] = _deferredCpuProjectedRetireDelay;
+            _deferredCpuDataFollowingInstructionCycles[index] = null;
             var timingToken = ++_deferredCpuDataTimingTokenClock;
             if (timingToken == 0)
             {
@@ -1664,6 +1739,7 @@ namespace CopperMod.Amiga.Bus
 
             _deferredCpuDataRequestedCycles[index] = cycle;
             _deferredCpuDataRequestedRetireDelays[index] = _deferredCpuProjectedRetireDelay;
+            _deferredCpuDataFollowingInstructionCycles[index] = null;
             var timingToken = ++_deferredCpuDataTimingTokenClock;
             if (timingToken == 0)
             {
@@ -1730,7 +1806,8 @@ namespace CopperMod.Amiga.Bus
             {
                 if (_deferredCpuBusBatchRebasesCpuTimeline)
                 {
-                    checkpoint = _lastDeferredCpuBusCheckpoint;
+                    checkpoint = RestoreDeferredCpuInterruptSampleResolutions(
+                        _lastDeferredCpuBusCheckpoint, in checkpointRequest);
                     return;
                 }
 
@@ -1761,7 +1838,13 @@ namespace CopperMod.Amiga.Bus
                     cycle + AgnusChipSlotScheduler.SlotCycles,
                     checkpointRequest.PendingSuccessorPredecessorToken,
                     checkpointRequest.PendingSuccessorRequiresIrcGap,
-                    false);
+                    false)
+                {
+                    LastInterruptSampleResolution = GetRetainedDeferredCpuInterruptSample(
+                        checkpointRequest.LastInterruptSampleToken),
+                    InstructionInterruptSampleResolution = GetRetainedDeferredCpuInterruptSample(
+                        checkpointRequest.InstructionInterruptSampleToken)
+                };
                 _deferredCpuTrimmedPendingTransitionActive = false;
                 return;
             }
@@ -1799,6 +1882,63 @@ namespace CopperMod.Amiga.Bus
             var queueReadyCycle1 = -1L;
             var requiredReadyCycle = -1L;
             byte resolvedQueueMask = 0;
+            var lastInterruptSampleResolution = default(M68kDeferredCpuFetchResolution);
+            var instructionInterruptSampleResolution = default(M68kDeferredCpuFetchResolution);
+            long? resolvedCpuNextBusCycle = null;
+            var replayMixedRomWordOrigins = romShapeBits != 0 &&
+                longShapeBits == 0 && ciaShapeBits == 0 && chipFetchShapeBits == 0;
+            var mixedRomReadyTranslation = 0L;
+            var mixedInstructionStartTranslation = 0L;
+            var mixedRomStartsInstruction = false;
+            var queueToken0 = checkpointRequest.QueueToken0;
+            var queueToken1 = checkpointRequest.QueueToken1;
+            var consumedThroughToken = checkpointRequest.ConsumedThroughToken;
+
+            void ResolveMixedRomWord(int index)
+            {
+                if (!replayMixedRomWordOrigins)
+                {
+                    return;
+                }
+
+                // These deferred accesses returned their virtual request as
+                // ready. Preserve the caller's interval after that ready
+                // phase when translating the next word onto the physical bus.
+                // A raw back-to-back bus caller has a zero interval; the CPU
+                // microsequence retains its own explicitly captured interval.
+                var nominalReadyCycle = _deferredCpuDataRequestedCycles[index] +
+                    _deferredCpuDataRequestedRetireDelays[index];
+                mixedRomReadyTranslation = replayCycle - nominalReadyCycle;
+                if (_deferredCpuDataFollowingInstructionCycles[index] is long instructionCycle)
+                {
+                    // A ready phase can fit inside the previous instruction's
+                    // retirement floor. Carry only its unabsorbed dependency
+                    // into the next instruction, while retaining an earlier
+                    // architectural delay and the frozen physical bus tail.
+                    mixedInstructionStartTranslation = Math.Max(
+                        mixedInstructionStartTranslation,
+                        replayCycle - Math.Max(instructionCycle, nominalReadyCycle));
+                    mixedRomReadyTranslation = mixedInstructionStartTranslation;
+                    mixedRomStartsInstruction = true;
+                }
+                lastReadyCycle = replayCycle;
+                var token = _deferredCpuDataTimingTokens[index];
+                if (token != 0 && token == consumedThroughToken)
+                {
+                    requiredReadyCycle = replayCycle;
+                }
+                if (token != 0 && token == queueToken0)
+                {
+                    queueReadyCycle0 = replayCycle;
+                    resolvedQueueMask |= 1;
+                }
+                if (token != 0 && token == queueToken1)
+                {
+                    queueReadyCycle1 = replayCycle;
+                    resolvedQueueMask |= 2;
+                }
+            }
+
             var replayedRequestedCycleJournal =
                 longShapeBits == 0 &&
                 ciaShapeBits == 0 &&
@@ -1815,12 +1955,29 @@ namespace CopperMod.Amiga.Bus
                     out queueReadyCycle0,
                     out queueReadyCycle1,
                     out requiredReadyCycle,
-                    out resolvedQueueMask);
+                    out resolvedQueueMask,
+                    out lastInterruptSampleResolution,
+                    out instructionInterruptSampleResolution,
+                    out resolvedCpuNextBusCycle);
             for (var i = 0; !replayedRequestedCycleJournal && i < count; i++)
             {
+                if (replayMixedRomWordOrigins)
+                {
+                    var requestedCycle = _deferredCpuDataRequestedCycles[i] +
+                        _deferredCpuDataRequestedRetireDelays[i];
+                    if (mixedRomStartsInstruction && resolvedCpuNextBusCycle.HasValue)
+                    {
+                        replayCycle = Math.Max(replayCycle, resolvedCpuNextBusCycle.Value);
+                    }
+                    mixedRomStartsInstruction = false;
+                    replayCycle = Math.Max(
+                        replayCycle,
+                        requestedCycle + mixedRomReadyTranslation);
+                }
                 if (((ciaShapeBits >> i) & 1UL) != 0)
                 {
                     replayCycle = CiaPeripheralAccessTiming.AlignToCiaPeripheralAccessCycle(Math.Max(0, replayCycle));
+                    resolvedCpuNextBusCycle = null;
                     continue;
                 }
 
@@ -1831,6 +1988,7 @@ namespace CopperMod.Amiga.Bus
                 var isChipFetch = ((chipFetchShapeBits >> i) & 1UL) != 0;
                 if (isChipFetch)
                 {
+                    var requestedCycle = replayCycle;
                     CommitExactCpuDataTiming(
                         AmigaBusAccessTarget.ChipRam,
                         _deferredCpuDataChipFetchAddresses[i],
@@ -1840,7 +1998,19 @@ namespace CopperMod.Amiga.Bus
                         AmigaBusAccessKind.CpuInstructionFetch,
                         out _,
                         out _);
+                    resolvedCpuNextBusCycle = GetDeferredCpuReplayNextBusCycle(
+                        _deferredCpuDataChipFetchAddresses[i],
+                        AmigaBusAccessSize.Word,
+                        AmigaBusAccessKind.CpuInstructionFetch,
+                        requestedCycle,
+                        replayCycle);
                     lastReadyCycle = replayCycle;
+                    ResolveDeferredCpuInterruptSampleFetch(
+                        in checkpointRequest,
+                        _deferredCpuDataTimingTokens[i],
+                        replayCycle,
+                        ref lastInterruptSampleResolution,
+                        ref instructionInterruptSampleResolution);
                     continue;
                 }
                 var target = ((romShapeBits >> i) & 1UL) != 0
@@ -1849,7 +2019,14 @@ namespace CopperMod.Amiga.Bus
                 if (!isLong)
                 {
                     var runLength = 1;
-                    while (i + runLength < count &&
+                    while (!replayMixedRomWordOrigins &&
+                        i + runLength < count &&
+                        !IsDeferredCpuInterruptSampleFetch(
+                            in checkpointRequest,
+                            _deferredCpuDataTimingTokens[i + runLength - 1]) &&
+                        !IsDeferredCpuInterruptSampleFetch(
+                            in checkpointRequest,
+                            _deferredCpuDataTimingTokens[i + runLength]) &&
                         ((ciaShapeBits >> (i + runLength)) & 1UL) == 0 &&
                         ((longShapeBits >> (i + runLength)) & 1UL) == 0 &&
                         (((romShapeBits >> (i + runLength)) & 1UL) != 0) ==
@@ -1864,12 +2041,31 @@ namespace CopperMod.Amiga.Bus
                         runInstructionFetchShapeBits &= (1UL << runLength) - 1UL;
                     }
 
+                    var runRequestedCycle = replayCycle;
                     if (TryReplayDeferredCpuExpansionWordTimingSequence(
                         runLength,
                         runInstructionFetchShapeBits,
                         target,
                         ref replayCycle))
                     {
+                        var lastKind = ((instructionFetchShapeBits >> (i + runLength - 1)) & 1UL) != 0
+                            ? AmigaBusAccessKind.CpuInstructionFetch
+                            : AmigaBusAccessKind.CpuDataRead;
+                        resolvedCpuNextBusCycle = GetDeferredCpuReplayNextBusCycle(
+                            target == AmigaBusAccessTarget.Rom ? 0x00FC0000u : ExpansionRamBase,
+                            AmigaBusAccessSize.Word,
+                            lastKind,
+                            runRequestedCycle,
+                            replayCycle);
+                        // A live sample token is replayed as a one-word run, so
+                        // its individual ready phase remains exact.
+                        ResolveDeferredCpuInterruptSampleFetch(
+                            in checkpointRequest,
+                            _deferredCpuDataTimingTokens[i + runLength - 1],
+                            replayCycle,
+                            ref lastInterruptSampleResolution,
+                            ref instructionInterruptSampleResolution);
+                        ResolveMixedRomWord(i + runLength - 1);
                         i += runLength - 1;
                         continue;
                     }
@@ -1878,6 +2074,7 @@ namespace CopperMod.Amiga.Bus
                 var size = isLong
                     ? AmigaBusAccessSize.Long
                     : AmigaBusAccessSize.Word;
+                var exactRequestedCycle = replayCycle;
                 if (target == AmigaBusAccessTarget.Rom)
                 {
                     CommitExactCpuDataTiming(
@@ -1902,6 +2099,19 @@ namespace CopperMod.Amiga.Bus
                         out _,
                         out _);
                 }
+                resolvedCpuNextBusCycle = GetDeferredCpuReplayNextBusCycle(
+                    target == AmigaBusAccessTarget.Rom ? 0x00FC0000u : ExpansionRamBase,
+                    size,
+                    kind,
+                    exactRequestedCycle,
+                    replayCycle);
+                ResolveDeferredCpuInterruptSampleFetch(
+                    in checkpointRequest,
+                    _deferredCpuDataTimingTokens[i],
+                    replayCycle,
+                    ref lastInterruptSampleResolution,
+                    ref instructionInterruptSampleResolution);
+                ResolveMixedRomWord(i);
             }
 
             if (cycle < replayCycle)
@@ -1915,6 +2125,10 @@ namespace CopperMod.Amiga.Bus
                     cycle,
                     virtualRetireCycle + _deferredCpuProjectedRetireDelay);
             }
+            else if (replayMixedRomWordOrigins)
+            {
+                cycle = Math.Max(cycle, virtualRetireCycle + mixedInstructionStartTranslation);
+            }
 
             // Deferred issue translates later CPU requests by the cumulative
             // physical wait. That translation is present in the speculative
@@ -1922,7 +2136,8 @@ namespace CopperMod.Amiga.Bus
             // the resolved ready phase instead. Remove the translated delay
             // once, then retain any genuinely later required publication.
             var architecturalRetireCycle = Math.Max(
-                virtualRetireCycle - Math.Max(0, replayCycle - lastReadyCycle),
+                virtualRetireCycle + mixedInstructionStartTranslation -
+                    Math.Max(0, replayCycle - lastReadyCycle),
                 requiredReadyCycle);
             if (chipFetchShapeBits != 0)
             {
@@ -1980,7 +2195,13 @@ namespace CopperMod.Amiga.Bus
                 checkpointRequest.PendingSuccessorPredecessorToken,
                 checkpointRequest.PendingSuccessorRequiresIrcGap,
                 false,
-                _deferredCpuBusBatchRebasesCpuTimeline);
+                _deferredCpuBusBatchRebasesCpuTimeline)
+            {
+                ResolvedCpuNextBusCycle = resolvedCpuNextBusCycle,
+                LastInterruptSampleResolution = lastInterruptSampleResolution,
+                InstructionInterruptSampleResolution = instructionInterruptSampleResolution
+            };
+            checkpoint = RestoreDeferredCpuInterruptSampleResolutions(checkpoint, in checkpointRequest);
             _deferredCpuTrimmedPendingTransitionActive = false;
 
             if (projectionSupported)
@@ -2025,7 +2246,10 @@ namespace CopperMod.Amiga.Bus
             out long queueReadyCycle0,
             out long queueReadyCycle1,
             out long requiredReadyCycle,
-            out byte resolvedQueueMask)
+            out byte resolvedQueueMask,
+            out M68kDeferredCpuFetchResolution lastInterruptSampleResolution,
+            out M68kDeferredCpuFetchResolution instructionInterruptSampleResolution,
+            out long? resolvedCpuNextBusCycle)
         {
             replayCumulativeDelay = 0;
             lastReadyCycle = replayCycle;
@@ -2033,6 +2257,9 @@ namespace CopperMod.Amiga.Bus
             queueReadyCycle1 = -1;
             requiredReadyCycle = -1;
             resolvedQueueMask = 0;
+            lastInterruptSampleResolution = default;
+            instructionInterruptSampleResolution = default;
+            resolvedCpuNextBusCycle = null;
             if (count <= 0)
             {
                 return false;
@@ -2154,14 +2381,21 @@ namespace CopperMod.Amiga.Bus
 
                 actualCompletedCycle = runCycle;
                 var identityReadyCycle = runCycle - AgnusChipSlotScheduler.SlotCycles;
-                // A Chip slot is four color clocks wide, while the CE000 CPU
-                // observes its word at the midpoint. The executor returns the
-                // end of the reserved slot; publication must use the CPU-ready
-                // phase, matching scalar CommitExactCpuDataTiming.
+                // Use the granted word's CPU-ready phase. The executor cursor
+                // and the scalar CPU's next transfer remain separate results.
                 var readyCycle = chipFetches
                     ? chipResults[index].GrantedCycle +
                         AgnusChipSlotScheduler.SlotCycles
                     : runCycle;
+                var physicalReadyCycle = readyCycle;
+                resolvedCpuNextBusCycle = GetDeferredCpuReplayNextBusCycle(
+                    chipFetches ? chipRequests[index].Address : ExpansionRamBase,
+                    AmigaBusAccessSize.Word,
+                    ((instructionFetchShapeBits >> index) & 1UL) != 0
+                        ? AmigaBusAccessKind.CpuInstructionFetch
+                        : AmigaBusAccessKind.CpuDataRead,
+                    requestedCycle,
+                    readyCycle);
                 if (((instructionFetchShapeBits >> index) & 1UL) != 0 &&
                     _deferredCpuDataInstructionFetchPublicationPhases[index] is
                         M68kInstructionFetchPublicationPhase.RetirementQueue or
@@ -2186,6 +2420,12 @@ namespace CopperMod.Amiga.Bus
                 _deferredCpuIrcPairLastToken = token;
                 _deferredCpuIrcPairLastReadyCycle = identityReadyCycle;
                 lastReadyCycle = readyCycle;
+                ResolveDeferredCpuInterruptSampleFetch(
+                    in checkpointRequest,
+                    token,
+                    physicalReadyCycle,
+                    ref lastInterruptSampleResolution,
+                    ref instructionInterruptSampleResolution);
                 if (token != 0 && token == checkpointRequest.ConsumedThroughToken)
                 {
                     requiredReadyCycle = readyCycle;
@@ -2222,6 +2462,82 @@ namespace CopperMod.Amiga.Bus
             replayCycle = actualCompletedCycle;
             return true;
         }
+
+        private long GetDeferredCpuReplayNextBusCycle(
+            uint address,
+            AmigaBusAccessSize size,
+            AmigaBusAccessKind kind,
+            long requestedCycle,
+            long readyCycle)
+            => ((IM68000BusCycleTiming)this).GetM68000BusAccessTiming(
+                address,
+                size == AmigaBusAccessSize.Long ? M68kOperandSize.Long : M68kOperandSize.Word,
+                kind == AmigaBusAccessKind.CpuInstructionFetch
+                    ? M68kBusAccessKind.CpuInstructionFetch
+                    : M68kBusAccessKind.CpuDataRead,
+                isWrite: false,
+                requestedCycle,
+                readyCycle).NextBusCycle;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsDeferredCpuInterruptSampleFetch(
+            in M68kDeferredCpuBusCheckpointRequest request,
+            ulong token)
+            => token != 0 &&
+                (token == request.LastInterruptSampleToken ||
+                    token == request.InstructionInterruptSampleToken ||
+                    token == _deferredCpuLastInterruptSampleToken ||
+                    token == _deferredCpuInstructionInterruptSampleToken);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ResolveDeferredCpuInterruptSampleFetch(
+            in M68kDeferredCpuBusCheckpointRequest request,
+            ulong token,
+            long readyCycle,
+            ref M68kDeferredCpuFetchResolution lastSample,
+            ref M68kDeferredCpuFetchResolution instructionSample)
+        {
+            if (token == 0)
+            {
+                return;
+            }
+
+            if (token == request.LastInterruptSampleToken)
+            {
+                lastSample = new M68kDeferredCpuFetchResolution(token, readyCycle);
+            }
+            if (token == request.InstructionInterruptSampleToken)
+            {
+                instructionSample = new M68kDeferredCpuFetchResolution(token, readyCycle);
+            }
+            if (token == _deferredCpuLastInterruptSampleToken)
+            {
+                _deferredCpuLastInterruptSampleResolution =
+                    new M68kDeferredCpuFetchResolution(token, readyCycle);
+            }
+            if (token == _deferredCpuInstructionInterruptSampleToken)
+            {
+                _deferredCpuInstructionInterruptSampleResolution =
+                    new M68kDeferredCpuFetchResolution(token, readyCycle);
+            }
+        }
+
+        private M68kDeferredCpuBusCheckpoint RestoreDeferredCpuInterruptSampleResolutions(
+            M68kDeferredCpuBusCheckpoint checkpoint,
+            in M68kDeferredCpuBusCheckpointRequest request)
+            => checkpoint with
+            {
+                LastInterruptSampleResolution =
+                    request.LastInterruptSampleToken != 0 &&
+                    checkpoint.LastInterruptSampleResolution.Token == request.LastInterruptSampleToken
+                        ? checkpoint.LastInterruptSampleResolution
+                        : GetRetainedDeferredCpuInterruptSample(request.LastInterruptSampleToken),
+                InstructionInterruptSampleResolution =
+                    request.InstructionInterruptSampleToken != 0 &&
+                    checkpoint.InstructionInterruptSampleResolution.Token == request.InstructionInterruptSampleToken
+                        ? checkpoint.InstructionInterruptSampleResolution
+                        : GetRetainedDeferredCpuInterruptSample(request.InstructionInterruptSampleToken)
+            };
 
         internal static bool ValidateDeferredCpuChipFetchBatchResult(
             in CpuChipFetchBatchResult batch,
@@ -2348,10 +2664,13 @@ namespace CopperMod.Amiga.Bus
         {
             if (_captureBusAccesses ||
                 !_agnusBusExecutor.ProductionEnabled ||
-                !_useChipSlotScheduler ||
+                !ShouldUseChipSlotScheduler(target) ||
                 _deferredCpuWaitDiagnosticsEnabled ||
                 cycle < DeferredCpuPhysicalHorizon)
             {
+                // A replay must use the same physical resource as its scalar
+                // access. ROM words do not own chip slots; replaying them in
+                // the expansion-slot sequence invents DMA waits and owners.
                 return false;
             }
 
@@ -2866,12 +3185,15 @@ namespace CopperMod.Amiga.Bus
             if (!cpuGrantCommitted &&
                 size != AmigaBusAccessSize.Long)
             {
+                // Draining can advance the earliest usable slot without
+                // changing when this CPU transfer originally requested it.
                 var advanceResult = _hardwareScheduler.AdvanceUntilCpuGrant(
                     kind,
                     target,
                     address,
                     size,
-                    grantRequestCycle,
+                    searchCycle: grantRequestCycle,
+                    requestedCycle,
                     isWrite,
                     out grantedCycle,
                     out completedCycle);
@@ -3117,6 +3439,7 @@ namespace CopperMod.Amiga.Bus
         internal bool HasNonDisplayDynamicCpuWaitSlotWorkThrough(long cycle)
             =>
                 Blitter.BusPipelineActive ||
+                Blitter.PendingCompletionSignalCycle <= cycle ||
                 Disk.ActiveDma ||
                 Disk.HasSlotDmaWakeSourceThrough(cycle) ||
                 Paula.HasDmaWorkThrough(cycle);
@@ -3125,6 +3448,7 @@ namespace CopperMod.Amiga.Bus
         internal bool HasUnsupportedCpuWaitSlotWorkThrough(long cycle)
             =>
                 (Blitter.BusPipelineActive && !Blitter.CanUseCpuWaitAreaMicroOps) ||
+                Blitter.PendingCompletionSignalCycle <= cycle ||
                 Disk.ActiveDma ||
                 Disk.HasSlotDmaWakeSourceThrough(cycle) ||
                 Paula.HasDmaWorkThrough(cycle);
