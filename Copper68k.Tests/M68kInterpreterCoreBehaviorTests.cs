@@ -981,7 +981,8 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		{
 			HasPendingPrefetch = true,
 			PendingPrefetchAddress = 0x1004,
-			PendingPrefetchEarliestCycle = 10
+			PendingPrefetchEarliestCycle = 10,
+			PendingPrefetchAddressPhaseIssued = false
 		};
 		scalarPipeline.ImportM68000PipelineState(in entry);
 		plannedPipeline.ImportM68000PipelineState(in entry);
@@ -1152,7 +1153,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan, false)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable, true)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan, true)]
-	public void SequentialRetirementPollsIplAtFinalCommittedPrefetchCompletion(
+	public void RegisterImmediatePollsIplAtSelectedOpcodeBeforeCommittedIrcCompletes(
 		bool enableOpcodePlan,
 		int dispatchValue,
 		bool executeBatch)
@@ -1194,9 +1195,9 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			phase.Address == 0x1006);
 		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
 
-		Assert.True(nextOpcode.CompletedCycle < recognition.LastInterruptSampleCycle);
-		Assert.True(finalPrefetch.RequestedCycle < recognition.LastInterruptSampleCycle);
-		Assert.Equal(finalPrefetch.CompletedCycle, recognition.LastInterruptSampleCycle);
+		Assert.Equal(nextOpcode.CompletedCycle, recognition.LastInterruptSampleCycle);
+		Assert.True(recognition.LastInterruptSampleCycle < finalPrefetch.CompletedCycle);
+		Assert.True(finalPrefetch.RequestedCycle < finalPrefetch.CompletedCycle);
 	}
 
 	[Theory]
@@ -1238,7 +1239,8 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			RetireBusCycle = 2,
 			HasPendingPrefetch = true,
 			PendingPrefetchAddress = 0x1004,
-			PendingPrefetchEarliestCycle = 2
+			PendingPrefetchEarliestCycle = 2,
+			PendingPrefetchAddressPhaseIssued = false
 		};
 		pipeline.ImportM68000PipelineState(in entry);
 
@@ -1750,6 +1752,74 @@ public sealed class M68kInterpreterCoreBehaviorTests
 
 		Assert.Equal(8, elapsed);
 		Assert.Equal(new uint[] { 0x1002, 0x1004 }, branchFetches.Select(phase => phase.Address));
+		Assert.Equal(2, after.PrefetchCount);
+		Assert.Equal(0x1002u, after.PrefetchAddress);
+	}
+	[Theory]
+	[InlineData(false, (int)M68kOpcodePlanDispatch.KindTable, false)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable, false)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan, false)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable, true)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan, true)]
+	public void ShortConditionalBranchNotTakenPreservesStartedFallthroughHeadBeforeInternalTailGap(
+		bool enableOpcodePlan,
+		int dispatchValue,
+		bool executeBatch)
+	{
+		var bus = new M68000CycleCountingBus();
+		Write(bus.Memory, 0x1000, Words(0x6702, 0x4E71, 0x4E71)); // BEQ.S not taken
+		var cpu = CreateCycleParityCpu(
+			bus,
+			enableOpcodePlan,
+			(M68kOpcodePlanDispatch)dispatchValue);
+		cpu.State.StatusRegister &= unchecked((ushort)~M68kCpuState.Zero);
+		cpu.State.Cycles = 0;
+		var pipeline = Assert.IsAssignableFrom<IM68000PipelineStateTransfer>(cpu);
+		var entry = pipeline.ExportM68000PipelineState() with
+		{
+			PrefetchAddress = 0x1000,
+			Word0 = 0x6702,
+			Word1 = 0,
+			ReadyCycle0 = 0,
+			ReadyCycle1 = 0,
+			PrefetchCount = 1,
+			NextBusTransferCycle = 2,
+			LastBusReadyCycle = 2,
+			RetireBusCycle = 0,
+			HasPendingPrefetch = true,
+			PendingPrefetchAddress = 0x1002,
+			PendingPrefetchEarliestCycle = 2,
+			PendingVirtualRequestedCycle = 0,
+			PendingPrefetchAddressPhaseIssued = true
+		};
+		pipeline.ImportM68000PipelineState(in entry);
+		bus.CpuBusPhases.Clear();
+
+		if (executeBatch)
+		{
+			Assert.Equal(1, ((IM68kBatchCore)cpu).ExecuteInstructions(
+				1,
+				long.MaxValue,
+				new BusAccessBatchBoundary()));
+		}
+		else
+		{
+			cpu.ExecuteInstruction();
+		}
+
+		var fetches = bus.CpuBusPhases
+			.Where(phase =>
+				phase.InstructionProgramCounter == 0x1000 &&
+				phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
+			.ToArray();
+		var after = pipeline.ExportM68000PipelineState();
+
+		Assert.Equal(new uint[] { 0x1002, 0x1004 }, fetches.Select(phase => phase.Address));
+		Assert.Equal(entry.PendingVirtualRequestedCycle, fetches[0].RequestedCycle);
+		Assert.True(fetches[0].RequestedCycle < entry.PendingPrefetchEarliestCycle);
+		Assert.Equal(fetches[0].CompletedCycle + 4, fetches[1].RequestedCycle);
+		Assert.False(after.HasPendingPrefetch);
+		Assert.False(after.PendingPrefetchAddressPhaseIssued);
 		Assert.Equal(2, after.PrefetchCount);
 		Assert.Equal(0x1002u, after.PrefetchAddress);
 	}
@@ -2844,7 +2914,8 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			PrefetchCount = 2,
 			HasPendingPrefetch = true,
 			PendingPrefetchAddress = 0x1004,
-			PendingPrefetchEarliestCycle = 8
+			PendingPrefetchEarliestCycle = 8,
+			PendingPrefetchAddressPhaseIssued = false
 		};
 		scalarPipeline.ImportM68000PipelineState(in entry);
 		cachedPipeline.ImportM68000PipelineState(in entry);
@@ -5442,7 +5513,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			AfterBatchLastInstructionProgramCounter = state.LastInstructionProgramCounter;
 		}
 	}
-	private sealed class CycleCountingBus :
+	private class CycleCountingBus :
 		IM68kBus,
 		IM68kCpuBusPhaseTrace,
 		IM68kFixedPlanRunBus,
@@ -5553,6 +5624,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		{
 			_ = cycle;
 		}
+
 		public bool TryReadFastByte(uint address, M68kBusAccessKind accessKind, out byte value)
 		{
 			if (!FastMemoryEnabled || accessKind != M68kBusAccessKind.CpuDataRead)
@@ -5657,6 +5729,29 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		{
 			Memory[address] = (byte)(value >> 8);
 			Memory[address + 1] = (byte)value;
+		}
+	}
+
+	private sealed class M68000CycleCountingBus : CycleCountingBus, IM68000BusCycleTiming
+	{
+		public int M68000BusCycleStartDelay => 2;
+
+		public bool RequiresExactM68000PipelineFallback => false;
+
+		public M68000BusAccessTiming GetM68000BusAccessTiming(
+			uint address,
+			M68kOperandSize size,
+			M68kBusAccessKind accessKind,
+			bool isWrite,
+			long requestedCycle,
+			long completedCycle)
+		{
+			_ = address;
+			_ = size;
+			_ = accessKind;
+			_ = isWrite;
+			_ = requestedCycle;
+			return new M68000BusAccessTiming(completedCycle, completedCycle + 2);
 		}
 	}
 }

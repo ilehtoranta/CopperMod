@@ -1051,7 +1051,10 @@ namespace Copper68k
         ulong BranchInterruptPredecessorToken = 0,
         bool BranchInterruptRequiresIrcGap = false,
         bool BranchInterruptCapturedDuringDeferredBatch = false,
-        int BranchInterruptPendingInternalCycles = 0);
+        int BranchInterruptPendingInternalCycles = 0)
+    {
+        public bool PendingPrefetchAddressPhaseIssued { get; init; }
+    }
 
     internal interface IM68kBatchCore : IM68kCore
     {
@@ -1098,6 +1101,7 @@ namespace Copper68k
     {
         public ulong LastBusReadyTimingToken { get; init; }
         public ulong LastInterruptSampleTimingToken { get; init; }
+        public bool PendingPrefetchAddressPhaseIssued { get; init; }
     }
 
     internal interface IM68000PipelineStateTransfer
@@ -2119,6 +2123,7 @@ namespace Copper68k
             public M68kInstructionFetchPublicationContext PendingPublicationContext;
             public long PendingVirtualRequestedCycle;
             public bool PendingBlocksInstructionEntry;
+            public bool PendingAddressPhaseIssued;
             public bool ConsumeWithoutPrefetch;
             public bool SkipRetireTopUp;
         }
@@ -2158,6 +2163,8 @@ namespace Copper68k
             public ushort PrefetchWord1;
             public long PrefetchReadyCycle0;
             public long PrefetchReadyCycle1;
+            public ulong PrefetchTimingToken0;
+            public ulong PrefetchTimingToken1;
             public bool PrefetchDeferredBatchEligible0;
             public bool PrefetchDeferredBatchEligible1;
             public int PrefetchCount;
@@ -2165,6 +2172,7 @@ namespace Copper68k
             public uint PendingPrefetchAddress;
             public long PendingPrefetchEarliestCycle;
             public bool PendingPrefetchBlocksInstructionEntry;
+            public bool PendingPrefetchAddressPhaseIssued;
             public bool ConsumeWithoutPrefetch;
             public bool SkipRetirePrefetchTopUp;
 
@@ -2353,6 +2361,11 @@ namespace Copper68k
         private bool _hasPendingPrefetch { get => _prefetchQueue.HasPending; set => _prefetchQueue.HasPending = value; }
         private uint _pendingPrefetchAddress { get => _prefetchQueue.PendingAddress; set => _prefetchQueue.PendingAddress = value; }
         private long _pendingPrefetchEarliestCycle { get => _prefetchQueue.PendingEarliestCycle; set => _prefetchQueue.PendingEarliestCycle = value; }
+        private bool _pendingPrefetchAddressPhaseIssued
+        {
+            get => _prefetchQueue.PendingAddressPhaseIssued;
+            set => _prefetchQueue.PendingAddressPhaseIssued = value;
+        }
         private M68kInstructionFetchPublicationPhase _pendingPrefetchPublicationPhase
         {
             get => _prefetchQueue.PendingPublicationPhase;
@@ -2691,7 +2704,11 @@ namespace Copper68k
                 _branchInterruptPredecessorToken,
                 _branchInterruptRequiresIrcGap,
                 _branchInterruptCapturedDuringDeferredBatch,
-                _branchInterruptPendingInternalCycles);
+                _branchInterruptPendingInternalCycles)
+            {
+                PendingPrefetchAddressPhaseIssued =
+                    _pendingPrefetchAddressPhaseIssued
+            };
 
         int IM68kBatchCore.ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
             => ExecuteInstructions(maxInstructions, targetCycle, boundary);
@@ -3272,6 +3289,7 @@ namespace Copper68k
             _pendingPrefetchPublicationContext = trimmedFetch.PublicationContext;
             _pendingPrefetchVirtualRequestedCycle = trimmedFetch.VirtualRequestedCycle;
             _pendingPrefetchBlocksInstructionEntry = false;
+            _pendingPrefetchAddressPhaseIssued = false;
             _pendingPrefetchEarliestCycle = Math.Max(
                 _pendingPrefetchEarliestCycle,
                 trimmedFetch.VirtualRequestedCycle);
@@ -4291,7 +4309,10 @@ namespace Copper68k
             BeginCachedRunInstruction(ref context, in instruction);
             if (taken)
             {
-                ExecuteFixedBatchShortBranch(ref context, plan.Displacement);
+                ExecuteFixedBatchShortBranch(
+                    ref context,
+                    plan.Displacement,
+                    retainStartedConditionalFallthrough: true);
                 RecordPlannedFast(instruction.Kind);
                 CompleteFixedBatchInstruction(
                     ref context,
@@ -4300,9 +4321,9 @@ namespace Copper68k
             }
 
             context.PendingInternalCycles += 4;
-            var readyCycle = TopUpFixedBatchPrefetchOne(ref context);
-            context.RetireBusCycle = Math.Max(context.RetireBusCycle, readyCycle);
-            context.SkipRetirePrefetchTopUp = true;
+            CommitStartedFixedBatchConditionalBranchFallthroughPrefetch(
+                ref context);
+            CommitShortConditionalBranchFallthroughPrefetch(ref context);
             SetFixedBatchInstructionCycles(ref context, 8);
             RecordPlannedFast(instruction.Kind);
             CompleteFixedBatchInstruction(ref context, PlannedRetireMode.General);
@@ -4836,6 +4857,8 @@ namespace Copper68k
                 after.PrefetchCount == before.PrefetchCount &&
                 after.HasPendingPrefetch == before.HasPendingPrefetch &&
                 after.PendingPrefetchAddress == before.PendingPrefetchAddress &&
+                after.PendingPrefetchAddressPhaseIssued ==
+                    before.PendingPrefetchAddressPhaseIssued &&
                 after.ConsumeWithoutPrefetch == before.ConsumeWithoutPrefetch &&
                 after.SkipRetirePrefetchTopUp == before.SkipRetirePrefetchTopUp &&
                 after.PrefetchReadyCycle0 - before.PrefetchReadyCycle0 == cycleDelta &&
@@ -5407,6 +5430,8 @@ namespace Copper68k
                 PrefetchWord1 = _prefetchWord1,
                 PrefetchReadyCycle0 = _prefetchCompletedCycle0,
                 PrefetchReadyCycle1 = _prefetchCompletedCycle1,
+                PrefetchTimingToken0 = _prefetchTimingToken0,
+                PrefetchTimingToken1 = _prefetchTimingToken1,
                 PrefetchDeferredBatchEligible0 = _prefetchDeferredCpuBusBatchEligible0,
                 PrefetchDeferredBatchEligible1 = _prefetchDeferredCpuBusBatchEligible1,
                 PrefetchCount = _prefetchCount,
@@ -5415,6 +5440,8 @@ namespace Copper68k
                 PendingPrefetchEarliestCycle = _pendingPrefetchEarliestCycle,
                 PendingPrefetchBlocksInstructionEntry =
                     _pendingPrefetchBlocksInstructionEntry,
+                PendingPrefetchAddressPhaseIssued =
+                    _pendingPrefetchAddressPhaseIssued,
                 ConsumeWithoutPrefetch = _consumeWithoutPrefetch,
                 SkipRetirePrefetchTopUp = _skipRetirePrefetchTopUp,
                 ActiveInstructionProgramCounter = _activeInstructionProgramCounter,
@@ -5449,6 +5476,8 @@ namespace Copper68k
             _prefetchWord1 = context.PrefetchWord1;
             _prefetchCompletedCycle0 = context.PrefetchReadyCycle0;
             _prefetchCompletedCycle1 = context.PrefetchReadyCycle1;
+            _prefetchTimingToken0 = context.PrefetchTimingToken0;
+            _prefetchTimingToken1 = context.PrefetchTimingToken1;
             _prefetchDeferredCpuBusBatchEligible0 = context.PrefetchDeferredBatchEligible0;
             _prefetchDeferredCpuBusBatchEligible1 = context.PrefetchDeferredBatchEligible1;
             _prefetchCount = context.PrefetchCount;
@@ -5457,6 +5486,8 @@ namespace Copper68k
             _pendingPrefetchEarliestCycle = context.PendingPrefetchEarliestCycle;
             _pendingPrefetchBlocksInstructionEntry =
                 context.PendingPrefetchBlocksInstructionEntry;
+            _pendingPrefetchAddressPhaseIssued =
+                context.PendingPrefetchAddressPhaseIssued;
             _consumeWithoutPrefetch = context.ConsumeWithoutPrefetch;
             _skipRetirePrefetchTopUp = context.SkipRetirePrefetchTopUp;
             _activeInstructionProgramCounter = context.ActiveInstructionProgramCounter;
@@ -5528,15 +5559,18 @@ namespace Copper68k
             {
                 context.PrefetchWord0 = context.PrefetchWord1;
                 context.PrefetchReadyCycle0 = context.PrefetchReadyCycle1;
+                context.PrefetchTimingToken0 = context.PrefetchTimingToken1;
                 context.PrefetchDeferredBatchEligible0 = context.PrefetchDeferredBatchEligible1;
                 context.PrefetchCount = 1;
             }
             else
             {
                 context.PrefetchCount = 0;
+                context.PrefetchTimingToken0 = 0;
                 context.PrefetchDeferredBatchEligible0 = false;
             }
 
+            context.PrefetchTimingToken1 = 0;
             context.PrefetchDeferredBatchEligible1 = false;
             return value;
         }
@@ -5815,14 +5849,99 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecuteFixedBatchShortBranch(
             ref M68000FixedBatchContext context,
-            int displacement)
+            int displacement,
+            bool retainStartedConditionalFallthrough = false)
         {
             var branchBase = context.ProgramCounter;
             context.PendingInternalCycles += 2;
+            if (retainStartedConditionalFallthrough)
+            {
+                CommitStartedFixedBatchConditionalBranchFallthroughPrefetch(
+                    ref context);
+            }
             SetFixedBatchInstructionCycles(ref context, 10);
             PrimeFixedBatchBranchTarget(
                 ref context,
                 unchecked((uint)(branchBase + displacement)));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CommitStartedFixedBatchConditionalBranchFallthroughPrefetch(
+            ref M68000FixedBatchContext context)
+        {
+            if (_m68000BusCycleTiming == null ||
+                !context.HasPendingPrefetch ||
+                !context.PendingPrefetchAddressPhaseIssued ||
+                context.PrefetchCount >= 2 ||
+                context.PrefetchAddress != context.ProgramCounter ||
+                context.PendingPrefetchAddress != unchecked(
+                    context.PrefetchAddress + (uint)(context.PrefetchCount * 2)))
+            {
+                return;
+            }
+
+            var pendingInternalCycles = context.PendingInternalCycles;
+            context.PendingInternalCycles = 0;
+            try
+            {
+                var readyCycle = TopUpFixedBatchPrefetchOne(ref context);
+                context.Cycles = Math.Max(context.Cycles, readyCycle);
+                context.RetireBusCycle = Math.Max(context.RetireBusCycle, readyCycle);
+            }
+            finally
+            {
+                context.PendingInternalCycles = pendingInternalCycles;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CommitShortConditionalBranchFallthroughPrefetch(
+            ref M68000FixedBatchContext context)
+        {
+            if (context.PrefetchCount == 0)
+            {
+                context.PrefetchAddress = context.ProgramCounter;
+                var selectedReadyCycle = TopUpFixedBatchPrefetchOne(ref context);
+                context.RetireBusCycle = Math.Max(
+                    context.RetireBusCycle,
+                    selectedReadyCycle);
+            }
+
+            if (context.PendingInternalCycles != 0)
+            {
+                context.Cycles += context.PendingInternalCycles;
+                context.PendingInternalCycles = 0;
+            }
+
+            if (context.PrefetchCount > 0 &&
+                context.PrefetchAddress == context.ProgramCounter)
+            {
+                var selectedReadyCycle = context.PrefetchReadyCycle0;
+                context.Cycles = Math.Max(context.Cycles, selectedReadyCycle);
+                context.RetireBusCycle = Math.Max(
+                    context.RetireBusCycle,
+                    selectedReadyCycle);
+                if (context.InstructionInterruptSampleCycle == long.MinValue)
+                {
+                    var timingToken = context.Cycles == selectedReadyCycle
+                        ? context.PrefetchTimingToken0
+                        : 0;
+                    context.InstructionInterruptSample = new M68000InterruptSample(
+                        context.Cycles,
+                        timingToken);
+                    RegisterDeferredInterruptSamples(in context);
+                }
+            }
+
+            if (context.PrefetchCount < 2)
+            {
+                var tailReadyCycle = TopUpFixedBatchPrefetchOne(ref context);
+                context.RetireBusCycle = Math.Max(
+                    context.RetireBusCycle,
+                    tailReadyCycle);
+            }
+
+            context.SkipRetirePrefetchTopUp = true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -5857,6 +5976,9 @@ namespace Copper68k
             context.PendingPrefetchAddress = 0;
             context.PendingPrefetchEarliestCycle = 0;
             context.PendingPrefetchBlocksInstructionEntry = false;
+            context.PendingPrefetchAddressPhaseIssued = false;
+            context.PrefetchTimingToken0 = 0;
+            context.PrefetchTimingToken1 = 0;
             context.PrefetchDeferredBatchEligible0 = false;
             context.PrefetchDeferredBatchEligible1 = false;
             context.ConsumeWithoutPrefetch = false;
@@ -5891,7 +6013,8 @@ namespace Copper68k
             if (context.InstructionInterruptSampleCycle == long.MinValue)
             {
                 context.InstructionInterruptSample = new M68000InterruptSample(
-                    context.ReadyBusCycle, context.ReadyBusTimingToken);
+                    context.ReadyBusCycle,
+                    context.ReadyBusTimingToken);
                 RegisterDeferredInterruptSamples(in context);
             }
 
@@ -5944,12 +6067,8 @@ namespace Copper68k
 					: Math.Max(
 						context.Cycles + busCycleStartDelay,
 						context.NextBusCycle);
-				var physicalRequestCycle = earliestCycle -
-					(_deferredCpuInstructionTiming?.HasPhysicalCpuBusCursor != false
-						? busCycleStartDelay
-						: 0);
-				if (earliestCycle + 2 > context.InstructionFloor &&
-					physicalRequestCycle >= context.InstructionFloor)
+				if (!context.PendingPrefetchAddressPhaseIssued &&
+					earliestCycle + 2 > context.InstructionFloor)
                 {
                     if (!context.HasPendingPrefetch)
                     {
@@ -5958,6 +6077,7 @@ namespace Copper68k
                             context.PrefetchAddress + (uint)(context.PrefetchCount * 2));
                         context.PendingPrefetchEarliestCycle = earliestCycle;
                         context.PendingPrefetchBlocksInstructionEntry = false;
+                        context.PendingPrefetchAddressPhaseIssued = false;
                     }
                     return;
                 }
@@ -5992,16 +6112,23 @@ namespace Copper68k
 
             var slot = context.PrefetchCount;
             var address = unchecked(context.PrefetchAddress + (uint)(slot * 2));
+            var addressPhaseAlreadyIssued = false;
+            var issuedAddressPhaseEarliestCycle = 0L;
             if (context.HasPendingPrefetch)
             {
                 System.Diagnostics.Debug.Assert(context.PendingPrefetchAddress == address);
                 context.NextBusCycle = Math.Max(
                     context.NextBusCycle,
                     context.PendingPrefetchEarliestCycle);
+                addressPhaseAlreadyIssued =
+                    context.PendingPrefetchAddressPhaseIssued;
+                issuedAddressPhaseEarliestCycle =
+                    context.PendingPrefetchEarliestCycle;
                 context.HasPendingPrefetch = false;
                 context.PendingPrefetchAddress = 0;
                 context.PendingPrefetchEarliestCycle = 0;
                 context.PendingPrefetchBlocksInstructionEntry = false;
+                context.PendingPrefetchAddressPhaseIssued = false;
             }
 
             var value = ReadFixedBatchPrefetchWord(
@@ -6009,17 +6136,21 @@ namespace Copper68k
                 address,
                 out var completedCycle,
                 out var deferredEligible,
-                out requestedCycle);
+                out requestedCycle,
+                addressPhaseAlreadyIssued,
+                issuedAddressPhaseEarliestCycle);
             if (slot == 0)
             {
                 context.PrefetchWord0 = value;
                 context.PrefetchReadyCycle0 = completedCycle;
+                context.PrefetchTimingToken0 = context.ReadyBusTimingToken;
                 context.PrefetchDeferredBatchEligible0 = deferredEligible;
             }
             else
             {
                 context.PrefetchWord1 = value;
                 context.PrefetchReadyCycle1 = completedCycle;
+                context.PrefetchTimingToken1 = context.ReadyBusTimingToken;
                 context.PrefetchDeferredBatchEligible1 = deferredEligible;
             }
 
@@ -6046,17 +6177,23 @@ namespace Copper68k
             uint address,
             out long completedCycle,
             out bool deferredEligible,
-            out long requestedCycle)
+            out long requestedCycle,
+            bool addressPhaseAlreadyIssued = false,
+            long issuedAddressPhaseEarliestCycle = 0)
         {
             var busAddress = GetCpuBusAddress(address);
-            var cycle = context.Cycles;
-            if (context.PendingInternalCycles != 0)
+            var cycle = addressPhaseAlreadyIssued
+                ? Math.Max(
+                    issuedAddressPhaseEarliestCycle,
+                    context.NextBusCycle)
+                : context.Cycles;
+            if (!addressPhaseAlreadyIssued && context.PendingInternalCycles != 0)
             {
                 cycle += context.PendingInternalCycles;
                 context.PendingInternalCycles = 0;
             }
 
-            if (_m68000BusCycleTiming != null)
+            if (!addressPhaseAlreadyIssued && _m68000BusCycleTiming != null)
             {
                 cycle += _m68000BusCycleTiming.M68000BusCycleStartDelay;
             }
@@ -6357,6 +6494,7 @@ namespace Copper68k
                         }
                         else
                         {
+                            CommitIssuedPendingPrefetch();
                             FlushPrefetch();
                         }
 
@@ -6597,7 +6735,11 @@ namespace Copper68k
             var extensionDisplacement = displacement == 0;
             var condition = (opcode >> 8) & 0x0F;
             var taken = condition == 0 || CheckCondition(condition);
-			AddPendingInternalCycles(taken ? 2 : 4);
+            AddPendingInternalCycles(taken ? 2 : 4);
+			if (condition >= 2 && !extensionDisplacement)
+			{
+				CommitStartedConditionalBranchFallthroughPrefetch();
+			}
             _consumeWithoutPrefetch = taken;
             var offset = extensionDisplacement
                 ? unchecked((short)FetchWord())
@@ -6801,7 +6943,11 @@ namespace Copper68k
             var value = ReadPlannedEaValue(in source);
             if (!moveWritesMemory)
             {
-                PrefetchFallthroughAfterMoveSourceRead();
+                PrefetchFallthroughAfterMoveSourceRead(
+                    sampleIplAfterDataPhase:
+                        size == M68kOperandSize.Word &&
+                        sourceMode == 2 &&
+                        destinationMode == 0);
             }
             var updateNegativeZeroBeforeWrite =
                 (size == M68kOperandSize.Word && destinationMode is 2 or 3 or 4 or 5 or 6 or 7) ||
@@ -7361,8 +7507,13 @@ namespace Copper68k
             var register = opcode & 7;
             var isCompare = (opcode & 0xFF00) == 0x0C00;
             var writesEffectiveAddress = !isCompare;
-            var immediate = FetchImmediate(size);
-            if (isCompare && mode == 0)
+            var operation = opcode & 0xFF00;
+            var sampleIplBetweenLongWords =
+                mode == 0 &&
+                size == M68kOperandSize.Long &&
+                operation is 0x0400 or 0x0600;
+            var immediate = FetchImmediate(size, sampleIplBetweenLongWords);
+            if (mode == 0 && !sampleIplBetweenLongWords)
             {
                 SampleM68000IplAtQueuedOpcode();
             }
@@ -7427,6 +7578,10 @@ namespace Copper68k
                     break;
             }
 
+            if (!_useM68020BriefIndexedAddressing && mode == 0)
+            {
+                CommitRequiredSequentialFinalPrefetch();
+            }
 
             AddInstructionCycles(isCompare
                 ? GetCmpiCycles(size, mode, register)
@@ -7437,9 +7592,15 @@ namespace Copper68k
         private void ExecutePlannedAndiByteDataRegister(ushort opcode)
         {
             var register = opcode & 7;
-            var result = (State.D[register] & 0xFF) & FetchImmediate(M68kOperandSize.Byte);
+            var immediate = FetchImmediate(M68kOperandSize.Byte);
+            SampleM68000IplAtQueuedOpcode();
+            var result = (State.D[register] & 0xFF) & immediate;
             WriteDataRegister(register, result, M68kOperandSize.Byte);
             SetLogicFlags(result, M68kOperandSize.Byte);
+            if (!_useM68020BriefIndexedAddressing)
+            {
+                CommitRequiredSequentialFinalPrefetch();
+            }
             AddInstructionCycles(8);
         }
 
@@ -7728,6 +7889,10 @@ namespace Copper68k
             M68kOperandSize size)
         {
             var eaValue = ReadRegisterArithmeticSourceEa(sourceMode, sourceRegister, size);
+            if (sourceMode == 7 && sourceRegister == 4)
+            {
+                SampleM68000IplAtQueuedOpcode();
+            }
             var regValue = State.D[register] & M68kCpuState.Mask(size);
             uint result;
             switch (line)
@@ -7753,6 +7918,13 @@ namespace Copper68k
                     result = Add(regValue, eaValue, size, setExtend: true);
                     WriteDataRegister(register, result, size);
                     break;
+            }
+
+            if (!_useM68020BriefIndexedAddressing &&
+                sourceMode == 7 &&
+                sourceRegister == 4)
+            {
+                CommitRequiredSequentialFinalPrefetch();
             }
 
             AddInstructionCycles(line == 0xB && opmode < 4
@@ -7828,7 +8000,11 @@ namespace Copper68k
         {
 			var branchBase = State.ProgramCounter;
 			var taken = plan.Condition == 0 || CheckCondition(plan.Condition);
-			AddPendingInternalCycles(taken ? 2 : 4);
+            AddPendingInternalCycles(taken ? 2 : 4);
+			if (plan.Condition >= 2 && !plan.ExtensionDisplacement)
+			{
+				CommitStartedConditionalBranchFallthroughPrefetch();
+			}
             _consumeWithoutPrefetch = taken;
             var offset = plan.ExtensionDisplacement
                 ? unchecked((short)FetchWord())
@@ -7952,7 +8128,11 @@ namespace Copper68k
             var value = ReadPlannedEaValue(in source);
             if (!moveWritesMemory)
             {
-                PrefetchFallthroughAfterMoveSourceRead();
+                PrefetchFallthroughAfterMoveSourceRead(
+                    sampleIplAfterDataPhase:
+                        plan.Size == M68kOperandSize.Word &&
+                        plan.SourceMode == 2 &&
+                        plan.DestinationMode == 0);
             }
             var updateNegativeZeroBeforeWrite =
                 (plan.Size == M68kOperandSize.Word && plan.DestinationMode is 2 or 3 or 4 or 5 or 6 or 7) ||
@@ -8186,8 +8366,12 @@ namespace Copper68k
             }
 
             var writesEffectiveAddress = plan.Variant != 5;
-            var immediate = FetchImmediate(plan.Size);
-            if (!writesEffectiveAddress && plan.DestinationMode == 0)
+            var sampleIplBetweenLongWords =
+                plan.DestinationMode == 0 &&
+                plan.Size == M68kOperandSize.Long &&
+                plan.Variant is 2 or 3;
+            var immediate = FetchImmediate(plan.Size, sampleIplBetweenLongWords);
+            if (plan.DestinationMode == 0 && !sampleIplBetweenLongWords)
             {
                 SampleM68000IplAtQueuedOpcode();
             }
@@ -8236,6 +8420,11 @@ namespace Copper68k
                 default:
                     _ = Subtract(destination, immediate, plan.Size, setExtend: false, storeResult: false);
                     break;
+            }
+
+            if (!_useM68020BriefIndexedAddressing && plan.DestinationMode == 0)
+            {
+                CommitRequiredSequentialFinalPrefetch();
             }
 
             AddInstructionCycles(plan.Variant == 5
@@ -8822,7 +9011,8 @@ namespace Copper68k
             FlushDeferredCpuTimingBoundary();
             Array.Clear(State.D);
             Array.Clear(State.A);
-            SetProgramCounterAndFlushPrefetch(programCounter);
+            State.ProgramCounter = programCounter;
+            FlushPrefetch();
             State.ResetStackPointers(stackPointer, 0, supervisorMode: true);
             State.StatusRegister = M68kCpuState.ResetStatusRegister;
             State.VectorBaseRegister = 0;
@@ -8995,7 +9185,9 @@ namespace Copper68k
                 _lastInterruptSampleCycle)
             {
                 LastBusReadyTimingToken = _cpuBusReadyTimingToken,
-                LastInterruptSampleTimingToken = _lastInterruptSample.DeferredFetchToken
+                LastInterruptSampleTimingToken = _lastInterruptSample.DeferredFetchToken,
+                PendingPrefetchAddressPhaseIssued =
+                    _pendingPrefetchAddressPhaseIssued
             };
 
         void IM68000PipelineStateTransfer.ImportM68000PipelineState(in M68000PipelineState state)
@@ -9020,6 +9212,8 @@ namespace Copper68k
             _hasPendingPrefetch = state.HasPendingPrefetch;
             _pendingPrefetchAddress = state.PendingPrefetchAddress;
             _pendingPrefetchEarliestCycle = state.PendingPrefetchEarliestCycle;
+            _pendingPrefetchAddressPhaseIssued =
+                state.PendingPrefetchAddressPhaseIssued;
             _pendingPrefetchPublicationPhase = state.PendingPublicationPhase;
             _pendingPrefetchRetirementFloor = state.PendingRetirementFloor;
             _pendingPrefetchPublicationContext = state.PendingPublicationContext;
@@ -9076,7 +9270,9 @@ namespace Copper68k
             var firstReadyCycle = TopUpPrefetchOne();
             State.Cycles = Math.Max(State.Cycles, firstReadyCycle);
             // The exception microsequence separates IR and IRC by two internal
-            // CPU cycles. These do not reserve a physical chip-bus slot.
+            // clocks. They advance CPU control without reserving an Agnus slot;
+            // the subsequent IRC read still begins with its ordinary address
+            // phase.
             AdvanceInterruptInternalCycles(2);
             var secondReadyCycle = TopUpPrefetchOne();
             State.Cycles = Math.Max(State.Cycles, secondReadyCycle);
@@ -9129,7 +9325,11 @@ namespace Copper68k
             var value = src.Read();
             if (!moveWritesMemory)
             {
-                PrefetchFallthroughAfterMoveSourceRead();
+                PrefetchFallthroughAfterMoveSourceRead(
+                    sampleIplAfterDataPhase:
+                        size == M68kOperandSize.Word &&
+                        srcMode == 2 &&
+                        destMode == 0);
             }
             var updateNegativeZeroBeforeWrite =
                 (size == M68kOperandSize.Word && destMode is 2 or 3 or 4 or 5 or 6 or 7) ||
@@ -9293,6 +9493,7 @@ namespace Copper68k
             }
 
             AddInstructionCycles(EstimateMoveCycles(src.EaCycles, destMode, destReg, size));
+
             return true;
         }
 
@@ -9327,7 +9528,11 @@ namespace Copper68k
 				condition == 1 && displacement == 0 && !_useM68020BriefIndexedAddressing;
 			if (!dependentWordBsrInternalPhase)
 			{
-				AddPendingInternalCycles(taken ? 2 : 4);
+                AddPendingInternalCycles(taken ? 2 : 4);
+			}
+			if (condition >= 2 && displacement != 0)
+			{
+				CommitStartedConditionalBranchFallthroughPrefetch();
 			}
             _consumeWithoutPrefetch = taken;
             int offset;
@@ -9680,8 +9885,12 @@ namespace Copper68k
             }
 
             var writesEffectiveAddress = high != 0x0C00;
-            var immediate = FetchImmediate(size);
-            if (!writesEffectiveAddress && mode == 0)
+            var sampleIplBetweenLongWords =
+                mode == 0 &&
+                size == M68kOperandSize.Long &&
+                high is 0x0400 or 0x0600;
+            var immediate = FetchImmediate(size, sampleIplBetweenLongWords);
+            if (mode == 0 && !sampleIplBetweenLongWords)
             {
                 SampleM68000IplAtQueuedOpcode();
             }
@@ -9743,6 +9952,11 @@ namespace Copper68k
                 case 0x0C00:
                     _ = Subtract(destination, immediate, size, setExtend: false, storeResult: false);
                     break;
+            }
+
+            if (!_useM68020BriefIndexedAddressing && mode == 0)
+            {
+                CommitRequiredSequentialFinalPrefetch();
             }
 
             AddInstructionCycles(high == 0x0C00
@@ -10164,6 +10378,8 @@ namespace Copper68k
 
                 var ea = ResolveEa(mode, register, M68kOperandSize.Long, addressOnly: true);
                 SetAddressRegister(addressRegister, ea.Address);
+                SampleM68000IplAtQueuedOpcode();
+                CommitRequiredSequentialFinalPrefetch();
                 AddInstructionCycles(GetLeaCycles(mode, register));
                 return true;
             }
@@ -10797,7 +11013,11 @@ namespace Copper68k
                 AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
-            var value = ea.Read();
+            var isMemoryTstLong =
+                unary == 0x4A00 && size == M68kOperandSize.Long;
+            var value = isMemoryTstLong
+                ? ea.ReadTstLongWithIplSampleBetweenWords()
+                : ea.Read();
             switch (unary)
             {
                 case 0x4000:
@@ -10820,6 +11040,11 @@ namespace Copper68k
                     break;
                 case 0x4A00:
                     State.SetSizedLogicFlags(value, size);
+                    if (isMemoryTstLong)
+                    {
+                        CommitRequiredSequentialFinalPrefetch(
+                            requireTransferRetirementEdge: true);
+                    }
                     break;
             }
 
@@ -11283,6 +11508,10 @@ namespace Copper68k
             }
 
             var eaValue = eaOperand.Read();
+            if (mode == 7 && eaReg == 4 && !writesEffectiveAddress)
+            {
+                SampleM68000IplAtQueuedOpcode();
+            }
             var regValue = State.D[reg] & M68kCpuState.Mask(operandSize);
             uint result;
             void CompletePredecrementLongDestinationBeforeWrite()
@@ -11365,6 +11594,14 @@ namespace Copper68k
                     }
 
                     break;
+            }
+
+            if (!_useM68020BriefIndexedAddressing &&
+                mode == 7 &&
+                eaReg == 4 &&
+                !writesEffectiveAddress)
+            {
+                CommitRequiredSequentialFinalPrefetch();
             }
 
             AddInstructionCycles(line == 0xB && opmode < 4
@@ -12164,14 +12401,29 @@ namespace Copper68k
             };
         }
 
-        private uint FetchImmediate(M68kOperandSize size)
+        private uint FetchImmediate(
+            M68kOperandSize size,
+            bool sampleIplBetweenLongWords = false)
         {
-            return size switch
+            if (size == M68kOperandSize.Byte)
             {
-                M68kOperandSize.Byte => (uint)(FetchWord() & 0xFF),
-                M68kOperandSize.Word => FetchWord(),
-                _ => FetchLong()
-            };
+                return (uint)(FetchWord() & 0xFF);
+            }
+
+            if (size == M68kOperandSize.Word)
+            {
+                return FetchWord();
+            }
+
+            var high = FetchWord();
+            if (sampleIplBetweenLongWords)
+            {
+                // Long SUBI/ADDI poll the current IPL pins after the first
+                // immediate micro-operation refills IRC with the low word.
+                SampleM68000IplAtCurrentBusPhase();
+            }
+            var low = FetchWord();
+            return ((uint)high << 16) | low;
         }
 
         private uint FetchImmediateWithoutPrefetchTopUp(M68kOperandSize size)
@@ -12256,6 +12508,7 @@ namespace Copper68k
             _pendingPrefetchAddress = 0;
             _pendingPrefetchEarliestCycle = 0;
             _pendingPrefetchBlocksInstructionEntry = false;
+            _pendingPrefetchAddressPhaseIssued = false;
             _prefetchDeferredCpuBusBatchEligible0 = false;
             _prefetchDeferredCpuBusBatchEligible1 = false;
             _consumeWithoutPrefetch = false;
@@ -12264,6 +12517,7 @@ namespace Copper68k
 
         private void SetProgramCounterAndFlushPrefetch(uint target)
         {
+            CommitIssuedPendingPrefetch();
             State.ProgramCounter = target;
             FlushPrefetch();
         }
@@ -12640,6 +12894,13 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long FullPrefetch(uint address)
         {
+            if (_hasPendingPrefetch &&
+                _pendingPrefetchAddressPhaseIssued &&
+                _pendingPrefetchAddress != address)
+            {
+                CommitIssuedPendingPrefetch();
+            }
+
             var publicationContext = _hasPendingPrefetch &&
                 _pendingPrefetchAddress == address
                     ? _pendingPrefetchPublicationContext
@@ -12650,6 +12911,7 @@ namespace Copper68k
                 _pendingPrefetchAddress = 0;
                 _pendingPrefetchEarliestCycle = 0;
                 _pendingPrefetchBlocksInstructionEntry = false;
+                _pendingPrefetchAddressPhaseIssued = false;
             }
 
             _prefetchAddress = address;
@@ -12686,7 +12948,9 @@ namespace Copper68k
             M68kInstructionFetchPublicationPhase publicationPhase,
             long retirementFloor,
             M68kInstructionFetchPublicationContext publicationContext,
-            bool commitPendingSuccessor = false)
+            bool commitPendingSuccessor = false,
+            bool addressPhaseAlreadyIssued = false,
+            long issuedAddressPhaseEarliestCycle = 0)
         {
             if (_prefetchCount >= 2)
             {
@@ -12700,6 +12964,14 @@ namespace Copper68k
             {
                 System.Diagnostics.Debug.Assert(_pendingPrefetchAddress == address);
                 _cpuBusCycle = Math.Max(_cpuBusCycle, _pendingPrefetchEarliestCycle);
+                addressPhaseAlreadyIssued |=
+                    _pendingPrefetchAddressPhaseIssued;
+                if (_pendingPrefetchAddressPhaseIssued)
+                {
+                    issuedAddressPhaseEarliestCycle = Math.Max(
+                        issuedAddressPhaseEarliestCycle,
+                        _pendingPrefetchEarliestCycle);
+                }
                 // An explicit MOVE or admitted retirement fetch can require a
                 // successor previously left cancellable. Commit only
                 // its ownership: the original phase floor and context still
@@ -12719,6 +12991,7 @@ namespace Copper68k
                 _pendingPrefetchPublicationContext = default;
                 _pendingPrefetchVirtualRequestedCycle = 0;
                 _pendingPrefetchBlocksInstructionEntry = false;
+                _pendingPrefetchAddressPhaseIssued = false;
             }
 
             var value = ReadPrefetchWord(
@@ -12728,7 +13001,9 @@ namespace Copper68k
                 out requestedCycle,
                 publicationPhase,
                 retirementFloor,
-                in publicationContext);
+                in publicationContext,
+                addressPhaseAlreadyIssued,
+                issuedAddressPhaseEarliestCycle);
             var timingToken = _deferredCpuInstructionTiming?
                 .CaptureDeferredCpuInstructionFetchTimingToken() ?? 0;
             if (slot == 0)
@@ -12805,21 +13080,13 @@ namespace Copper68k
 					: Math.Max(
 						State.Cycles + busCycleStartDelay,
 						_cpuBusCycle);
-				// Deferred ROM/expansion timing keeps a nominal cursor until replay.
-				// Subtracting the CE000 start phase from that cursor would invent an
-				// address phase before retirement. Proven Chip-RAM grants and scalar
-				// transfers already expose a physical cursor and retain the overlap.
-				var physicalRequestCycle = earliestCycle -
-					(_deferredCpuInstructionTiming?.HasPhysicalCpuBusCursor != false
-						? busCycleStartDelay
-						: 0);
-
-				// Once the request phase has begun before the retirement boundary,
-				// the transfer belongs to the physical bus even when contention moves
-				// its grant or completion beyond the nominal instruction floor. Only
-				// work whose request phase has not started remains cancellable.
-				if (earliestCycle + 2 > _instructionCycleFloor &&
-					physicalRequestCycle >= _instructionCycleFloor)
+				// A pending transfer remains cancellable until its address phase is
+				// explicitly recorded as issued. A bus cursor describes eligibility;
+				// subtracting the start delay from it does not prove that microcode
+				// started the request. An issued phase, however, remains committed even
+				// when contention moves completion past the retirement boundary.
+				if (!_pendingPrefetchAddressPhaseIssued &&
+					earliestCycle + 2 > _instructionCycleFloor)
                 {
                     if (!_hasPendingPrefetch)
                     {
@@ -12833,6 +13100,7 @@ namespace Copper68k
                             retirementPublicationContext;
                         _pendingPrefetchVirtualRequestedCycle = earliestCycle;
                         _pendingPrefetchBlocksInstructionEntry = false;
+                        _pendingPrefetchAddressPhaseIssued = false;
                     }
                     return;
                 }
@@ -12973,14 +13241,67 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CommitStartedConditionalBranchFallthroughPrefetch()
+        {
+            if (_m68000BusCycleTiming == null ||
+                !_hasPendingPrefetch ||
+                !_pendingPrefetchAddressPhaseIssued ||
+                _prefetchCount >= 2 ||
+                _prefetchAddress != State.ProgramCounter ||
+                _pendingPrefetchAddress != unchecked(
+                    _prefetchAddress + (uint)(_prefetchCount * 2)))
+            {
+                return;
+            }
+
+            // The predecessor selected this fall-through word before Bcc
+            // redirected the queue. Once its address phase has begun, the
+            // transfer belongs to the physical bus even though the fetched
+            // value will be discarded. Promote only that existing request;
+            // future look-ahead work remains cancellable.
+            var pendingInternalCycles = _pendingInternalCycles;
+            _pendingInternalCycles = 0;
+            try
+            {
+                var readyCycle = TopUpPrefetchOne(
+                    out _,
+                    M68kInstructionFetchPublicationPhase.RetirementQueue,
+                    _pendingPrefetchRetirementFloor,
+                    _pendingPrefetchPublicationContext,
+                    commitPendingSuccessor: true);
+                _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, readyCycle);
+                // The branch redirect starts from the frozen completion edge of
+                // the already-started fall-through transfer.  Keeping the old
+                // architectural cursor here would let the target address phase
+                // overlap that transfer and make it eligible one chip slot early.
+                State.Cycles = Math.Max(State.Cycles, readyCycle);
+            }
+            finally
+            {
+                _pendingInternalCycles = pendingInternalCycles;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void CommitShortConditionalBranchFallthroughPrefetch()
         {
-            // CE000 short Bcc not-taken performs both internal two-cycle
-            // steps before its explicit fallthrough lookahead transfer.
-            // CompleteInstruction clears pending internal progress before its
-            // generic retirement top-up, so commit this physical fetch here.
-            PrefetchFallthroughAfterMoveSourceRead(commitPendingSuccessor: false);
-            if (_instructionEntryPrefetchCount < 2 && _prefetchCount < 2)
+            if (_prefetchCount == 0)
+            {
+                _prefetchAddress = State.ProgramCounter;
+                var selectedReadyCycle = TopUpPrefetchOne(
+                    out _,
+                    M68kInstructionFetchPublicationPhase.Required,
+                    long.MinValue,
+                    CaptureInstructionFetchPublicationContext(),
+                    commitPendingSuccessor: false);
+                _cpuRetireBusCycle = Math.Max(
+                    _cpuRetireBusCycle,
+                    selectedReadyCycle);
+            }
+
+            SampleM68000IplAtShortConditionalBranchControlPhase();
+
+            if (_prefetchCount < 2)
             {
                 var publicationContext = CaptureInstructionFetchPublicationContext() with
                 {
@@ -12994,6 +13315,39 @@ namespace Copper68k
                     publicationContext);
                 _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, readyCycle);
             }
+
+            _skipRetirePrefetchTopUp = true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void SampleM68000IplAtShortConditionalBranchControlPhase()
+        {
+            if (_pendingInternalCycles != 0)
+            {
+                State.Cycles += _pendingInternalCycles;
+                _pendingInternalCycles = 0;
+            }
+
+            if (_useM68020BriefIndexedAddressing ||
+                _instructionInterruptSampleCycle != long.MinValue ||
+                _prefetchCount == 0 ||
+                _prefetchAddress != State.ProgramCounter)
+            {
+                return;
+            }
+
+            var selectedReadyCycle = _prefetchCompletedCycle0;
+            State.Cycles = Math.Max(State.Cycles, selectedReadyCycle);
+            _cpuRetireBusCycle = Math.Max(
+                _cpuRetireBusCycle,
+                selectedReadyCycle);
+            var timingToken = State.Cycles == selectedReadyCycle
+                ? _prefetchTimingToken0
+                : 0;
+            _instructionInterruptSample = new M68000InterruptSample(
+                State.Cycles,
+                timingToken);
+            RegisterDeferredInterruptSamples();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -13041,7 +13395,18 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void PrefetchFallthroughAfterMoveSourceRead(bool commitPendingSuccessor = true)
+        private void PrefetchFallthroughAfterMoveSourceRead(
+            bool commitPendingSuccessor = true,
+            bool sampleIplAfterDataPhase = false)
+            => CommitRequiredSequentialFinalPrefetch(
+                commitPendingSuccessor,
+                sampleIplAfterDataPhase);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CommitRequiredSequentialFinalPrefetch(
+            bool commitPendingSuccessor = true,
+            bool sampleIplBeforeFetch = false,
+            bool requireTransferRetirementEdge = false)
         {
             if ((State.ProgramCounter & 1) != 0)
             {
@@ -13055,6 +13420,14 @@ namespace Copper68k
 
             if (_prefetchAddress == State.ProgramCounter)
             {
+                // Some MC68000 microsequences poll IPL at the completed data
+                // phase before issuing their mandatory final queue refill.
+                // Keep that sample attached to the earlier physical phase;
+                // completion of the following fetch must not move it.
+                if (sampleIplBeforeFetch)
+                {
+                    SampleM68000IplAtCurrentBusPhase();
+                }
                 var readyCycle = TopUpPrefetchOne(
                     out _,
                     M68kInstructionFetchPublicationPhase.Required,
@@ -13062,16 +13435,63 @@ namespace Copper68k
                     CaptureInstructionFetchPublicationContext(),
                     commitPendingSuccessor);
 
-                // This is the explicit final get_word_ce000_prefetch() in the
-                // MOVE microsequence, not speculative retirement top-up.  The
-                // instruction cannot finish while that granted transfer is
-                // still in flight.  Keeping it as background work lets the
-                // successor start with IR/IRC both future-ready and shifts the
-                // first DBRA of cycle01v across the VBlank sample boundary.
-                _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, readyCycle);
+                // Some final reads may overlap retirement after publication;
+                // others are synchronous micro-operations whose data phase is
+                // part of the instruction itself. Fast-memory publication can
+                // precede that physical data edge, while NextBusCycle retains
+                // the complete bus tail. Chip transfers normally make the two
+                // edges identical.
+                var transferRetireCycle = readyCycle;
+                if (requireTransferRetirementEdge)
+                {
+                    var startDelay =
+                        _m68000BusCycleTiming?.M68000BusCycleStartDelay ?? 0;
+                    transferRetireCycle = Math.Max(
+                        transferRetireCycle,
+                        _cpuBusCycle - startDelay);
+                }
+                _cpuRetireBusCycle = Math.Max(
+                    _cpuRetireBusCycle,
+                    transferRetireCycle);
             }
 
             _skipRetirePrefetchTopUp = true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void SampleM68000IplAtCurrentBusPhase()
+        {
+            if (_useM68020BriefIndexedAddressing ||
+                _instructionInterruptSampleCycle != long.MinValue)
+            {
+                return;
+            }
+
+            _instructionInterruptSample = new M68000InterruptSample(
+                _cpuBusReadyCycle,
+                _cpuBusReadyTimingToken);
+            RegisterDeferredInterruptSamples();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void SampleM68000IplAtQueuedOpcode()
+        {
+            if (_useM68020BriefIndexedAddressing ||
+                _instructionInterruptSampleCycle != long.MinValue ||
+                _prefetchCount == 0 ||
+                _prefetchAddress != State.ProgramCounter)
+            {
+                return;
+            }
+
+            // Register-immediate microcode selects the following opcode and
+            // polls IPL before the final IRC refill. Preserve the selected
+            // word's physical identity so deferred replay cannot move the
+            // sample to that later tail transfer.
+            _instructionInterruptSample = new M68000InterruptSample(
+                _prefetchCompletedCycle0,
+                _prefetchTimingToken0);
+            RegisterDeferredInterruptSamples();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -13098,10 +13518,14 @@ namespace Copper68k
             out long requestedCycle,
             M68kInstructionFetchPublicationPhase publicationPhase = M68kInstructionFetchPublicationPhase.Required,
             long retirementFloor = long.MinValue,
-            in M68kInstructionFetchPublicationContext publicationContext = default)
+            in M68kInstructionFetchPublicationContext publicationContext = default,
+            bool addressPhaseAlreadyIssued = false,
+            long issuedAddressPhaseEarliestCycle = 0)
         {
             var busAddress = GetCpuBusAddress(address);
-            var cycle = BeginPrefetchBusAccessCycle();
+            var cycle = addressPhaseAlreadyIssued
+                ? Math.Max(issuedAddressPhaseEarliestCycle, _cpuBusCycle)
+                : BeginPrefetchBusAccessCycle();
             requestedCycle = cycle;
             var value = ReadInstructionFetchWord(
                 busAddress,
@@ -13446,9 +13870,70 @@ namespace Copper68k
             return value;
         }
 
+        private void CommitIssuedPendingPrefetch()
+        {
+            if (!_hasPendingPrefetch ||
+                !_pendingPrefetchAddressPhaseIssued)
+            {
+                return;
+            }
+
+            var queueTailAddress = unchecked(
+                _prefetchAddress + (uint)(_prefetchCount * 2));
+            if (_prefetchCount < 2 &&
+                _pendingPrefetchAddress == queueTailAddress)
+            {
+                var readyCycle = TopUpPrefetchOne(
+                    out _,
+                    M68kInstructionFetchPublicationPhase.Required,
+                    long.MinValue,
+                    CaptureInstructionFetchPublicationContext(),
+                    commitPendingSuccessor: true);
+                _cpuRetireBusCycle = Math.Max(
+                    _cpuRetireBusCycle,
+                    readyCycle);
+                return;
+            }
+
+            // A redirect or another CPU bus claimant cannot cancel an address
+            // phase that has already started. Complete that physical transfer
+            // from its frozen earliest grant, but discard the word when the
+            // two-entry queue has no matching destination.
+            var address = _pendingPrefetchAddress;
+            var earliestCycle = _pendingPrefetchEarliestCycle;
+            var publicationPhase = _pendingPrefetchPublicationPhase;
+            var retirementFloor = _pendingPrefetchRetirementFloor;
+            var publicationContext = _pendingPrefetchPublicationContext;
+            _hasPendingPrefetch = false;
+            _pendingPrefetchAddress = 0;
+            _pendingPrefetchEarliestCycle = 0;
+            _pendingPrefetchPublicationPhase =
+                M68kInstructionFetchPublicationPhase.Required;
+            _pendingPrefetchRetirementFloor = long.MinValue;
+            _pendingPrefetchPublicationContext = default;
+            _pendingPrefetchVirtualRequestedCycle = 0;
+            _pendingPrefetchBlocksInstructionEntry = false;
+            _pendingPrefetchAddressPhaseIssued = false;
+
+            _ = ReadPrefetchWord(
+                address,
+                out var completedCycle,
+                out _,
+                out _,
+                publicationPhase,
+                retirementFloor,
+                in publicationContext,
+                addressPhaseAlreadyIssued: true,
+                issuedAddressPhaseEarliestCycle: earliestCycle);
+            _cpuRetireBusCycle = Math.Max(
+                _cpuRetireBusCycle,
+                completedCycle);
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long BeginCpuBusAccessCycle()
         {
+            CommitIssuedPendingPrefetch();
             var cycle = State.Cycles;
             if (_pendingInternalCycles != 0)
             {
@@ -13829,30 +14314,10 @@ namespace Copper68k
             if (_instructionInterruptSampleCycle == long.MinValue)
             {
                 _instructionInterruptSample = new M68000InterruptSample(
-                    _cpuBusReadyCycle, _cpuBusReadyTimingToken);
+                    _cpuBusReadyCycle,
+                    _cpuBusReadyTimingToken);
                 RegisterDeferredInterruptSamples();
             }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void SampleM68000IplAtQueuedOpcode()
-        {
-            if (_useM68020BriefIndexedAddressing ||
-                _instructionInterruptSampleCycle != long.MinValue ||
-                _prefetchCount == 0 ||
-                _prefetchAddress != State.ProgramCounter)
-            {
-                return;
-            }
-
-            // A register compare with an immediate operand has consumed its
-            // extension when the following opcode enters IR. Its final IRC fill
-            // remains part of retirement, but the MC68000 IPL poll is tied to
-            // this IR phase.
-            _instructionInterruptSample = new M68000InterruptSample(
-                _prefetchCompletedCycle0,
-                _prefetchTimingToken0);
-            RegisterDeferredInterruptSamples();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -14419,6 +14884,23 @@ namespace Copper68k
                 var value = _cpu.ReadLong(Address);
                 CompleteReadMemoryAccess();
                 return value;
+            }
+
+            public uint ReadTstLongWithIplSampleBetweenWords()
+            {
+                _cpu._dataAccessStackedProgramCounter = _addressErrorStackedProgramCounter;
+                _cpu._dataReadFaultAccessKind = _readFaultAccessKind;
+                if (EaCycles > 0)
+                {
+                    _cpu.AddInstructionCyclesFromBase(_cpu._instructionCycleFloor, EaCycles);
+                }
+
+                CompleteBeforeReadMemoryAccess();
+                var high = _cpu.ReadWord(Address);
+                _cpu.SampleM68000IplAtCurrentBusPhase();
+                var low = _cpu.ReadWord(Address + 2);
+                CompleteReadMemoryAccess();
+                return ((uint)high << 16) | low;
             }
 
             private void CompleteReadMemoryAccess()
