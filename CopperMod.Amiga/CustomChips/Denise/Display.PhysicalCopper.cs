@@ -137,7 +137,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private bool PreparePhysicalCopperInputPlan(long inputCycle)
         {
             var row = GetOutputRowForCycle(_liveFrameStartCycle, inputCycle);
-            if ((uint)row >= (uint)LowResOutputHeight)
+            if ((uint)row >= (uint)_liveHardwareRowCount)
             {
                 return true;
             }

@@ -9,6 +9,10 @@ using System.Diagnostics;
 
 namespace CopperMod.Amiga.CustomChips.Paula
 {
+    internal readonly record struct CpuInterruptPinSnapshot(
+        int Level,
+        long TransitionCycle);
+
     internal sealed partial class Paula
     {
         private const ushort IntenaMasterEnable = 0x4000;
@@ -38,6 +42,9 @@ namespace CopperMod.Amiga.CustomChips.Paula
         private ushort _vposr;
         private ushort _vhposr;
         private ushort _lastCpuActiveInterruptBits;
+        private int _cpuInterruptPinLevel;
+        private long _cpuInterruptPinTransitionCycle = long.MinValue;
+        private long _cpuInterruptPinObservationCycle = long.MinValue;
         private ulong _cpuInterruptVisibilityVersion;
         private int _interruptSourcePendingWriteIndex;
         private ulong _registerWakeVersion;
@@ -136,6 +143,9 @@ namespace CopperMod.Amiga.CustomChips.Paula
             _vposr = 0;
             _vhposr = 0;
             _lastCpuActiveInterruptBits = 0;
+            _cpuInterruptPinLevel = 0;
+            _cpuInterruptPinTransitionCycle = long.MinValue;
+            _cpuInterruptPinObservationCycle = long.MinValue;
             _cpuInterruptVisibilityVersion = 0;
             _interruptSourcePendingWriteIndex = 0;
             InvalidateRegisterWakeCandidateCache();
@@ -351,6 +361,24 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
         public int GetHighestCpuVisibleInterruptLevel(long cycle)
             => GetHighestInterruptLevel(GetCpuVisibleInterruptBits(cycle));
+
+        internal CpuInterruptPinSnapshot GetCpuInterruptPinSnapshot(long cycle)
+        {
+            var visibleBits = GetCpuVisibleInterruptBits(cycle);
+            ObserveCpuInterruptPin(visibleBits, cycle);
+            var level = GetHighestInterruptLevel(visibleBits);
+            if (level == _cpuInterruptPinLevel)
+            {
+                return new CpuInterruptPinSnapshot(level, _cpuInterruptPinTransitionCycle);
+            }
+
+            // Historical diagnostic queries do not rewind the live pin. Return
+            // the best transition for that queried level without mutating the
+            // monotonically observed CPU input.
+            return new CpuInterruptPinSnapshot(
+                level,
+                ResolveCpuInterruptPinTransitionCycle(level, cycle));
+        }
 
         internal long? GetCpuInterruptReleaseCycleForLevel(int level, long cycle)
         {
@@ -1146,6 +1174,11 @@ namespace CopperMod.Amiga.CustomChips.Paula
         {
             cycle = Math.Max(0, cycle);
             RefreshCpuInterruptVisibility(cycle);
+            return GetCpuVisibleInterruptBitsWithoutRefresh(cycle);
+        }
+
+        private ushort GetCpuVisibleInterruptBitsWithoutRefresh(long cycle)
+        {
             var active = ActiveInterruptBits;
             if (active == 0)
             {
@@ -1163,6 +1196,53 @@ namespace CopperMod.Amiga.CustomChips.Paula
             }
 
             return visible;
+        }
+
+        private void ObserveCpuInterruptPin(ushort visibleBits, long cycle)
+        {
+            if (cycle < _cpuInterruptPinObservationCycle)
+            {
+                return;
+            }
+
+            _cpuInterruptPinObservationCycle = cycle;
+            var level = GetHighestInterruptLevel(visibleBits);
+            if (level == _cpuInterruptPinLevel)
+            {
+                return;
+            }
+
+            _cpuInterruptPinTransitionCycle = level > _cpuInterruptPinLevel
+                ? ResolveCpuInterruptPinTransitionCycle(level, cycle)
+                : cycle;
+            _cpuInterruptPinLevel = level;
+        }
+
+        private long ResolveCpuInterruptPinTransitionCycle(int level, long cycle)
+        {
+            if (level <= 0)
+            {
+                return cycle;
+            }
+
+            var active = ActiveInterruptBits;
+            var transitionCycle = long.MaxValue;
+            for (var bitIndex = 0; bitIndex < _cpuInterruptReleaseCycles.Length; bitIndex++)
+            {
+                var bit = (ushort)(1 << bitIndex);
+                if ((active & bit) == 0 ||
+                    GetInterruptLevelForBit(bit) != level ||
+                    _cpuInterruptReleaseCycles[bitIndex] > cycle)
+                {
+                    continue;
+                }
+
+                transitionCycle = Math.Min(
+                    transitionCycle,
+                    _cpuInterruptReleaseCycles[bitIndex]);
+            }
+
+            return transitionCycle == long.MaxValue ? cycle : transitionCycle;
         }
 
         private void RefreshCpuInterruptVisibility(long cycle, int? releaseDelayCycles = null)
@@ -1194,6 +1274,7 @@ namespace CopperMod.Amiga.CustomChips.Paula
             }
 
             _lastCpuActiveInterruptBits = active;
+            ObserveCpuInterruptPin(GetCpuVisibleInterruptBitsWithoutRefresh(cycle), cycle);
             _cpuInterruptVisibilityVersion++;
         }
 

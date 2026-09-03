@@ -1001,6 +1001,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
 
                     var output = state.DataFetchStart + (word * state.FetchSlotStride) + slot;
+                    var inputCycle = state.LineStartCycle + ((long)output * CopperHpCycles);
+                    if (inputCycle <= state.BitplaneInputSuppressedThroughCycle)
+                    {
+                        continue;
+                    }
+
                     SetRgaStage(ref state.BitplaneRgaOutput0, ref state.BitplaneRgaOutput1,
                         ref state.BitplaneRgaOutput2, ref state.BitplaneRgaOutput3, output);
                     SetRgaStage(ref state.BitplaneRgaIncoming0, ref state.BitplaneRgaIncoming1,
@@ -1073,6 +1079,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 return false;
             }
+            if (fetchCycle <= state.BitplaneInputSuppressedThroughCycle)
+            {
+                return false;
+            }
 
             var lineOffset = fetchCycle - state.LineStartCycle;
             if (lineOffset < 0 || lineOffset % CopperHpCycles != 0)
@@ -1124,7 +1134,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void CommitLateBitplaneRgaCollisionsForPreviousRow(long dataCycle)
         {
             var row = GetOutputRowForCycle(_liveFrameStartCycle, dataCycle) - 1;
-            if ((uint)row >= LowResOutputHeight)
+            if ((uint)row >= (uint)_liveHardwareRowCount)
             {
                 return;
             }
@@ -1140,7 +1150,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
 
                     _liveBitplaneWords[GetLiveBitplaneWordIndex(row, plane, word)] = 0;
-                    _displayTimeline.RecordBitplaneFetch(row, plane, word, 0, granted: false);
+                    if (row < LowResOutputHeight)
+                    {
+                        _displayTimeline.RecordBitplaneFetch(row, plane, word, 0, granted: false);
+                    }
                 }
             }
         }
@@ -1441,7 +1454,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private long GetNextLiveLineStateCycle()
         {
-            if (_liveNextLineStateRow >= LowResOutputHeight ||
+            if (_liveNextLineStateRow >= _liveHardwareRowCount ||
                 UsesPhysicalCopperPipeline && !HasLiveDisplayDmaOrWriteWork())
             {
                 return long.MaxValue;
@@ -1488,7 +1501,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void SkipLiveRowsWithoutFetches()
         {
             var advanced = false;
-            while (_liveNextFetchRow < LowResOutputHeight)
+            while (_liveNextFetchRow < _liveHardwareRowCount)
             {
                 if (!IsLiveLineValid(_liveNextFetchRow))
                 {

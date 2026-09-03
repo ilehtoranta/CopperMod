@@ -1714,6 +1714,10 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
             if (_areaMicroOpActive && !RequiresDmaForCurrentBlit())
             {
+                // An already-started word can retain non-reserving control
+                // transitions after a register write removes its last future
+                // DMA channel. Keep those transitions on the same live path
+                // that captured their physical cycles.
                 return Math.Min(signalCycle, IsBlitterDmaEnabled()
                     ? GetNextCausalDmaTransitionCycle()
                     : long.MaxValue);
@@ -2341,7 +2345,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 return false;
             }
 
-            if ((!_useA && !_useB && !_useC && !_useD) ||
+            if ((!_useA && !_useB && !_useC && !_useD &&
+                 !_liveAreaPendingDValid && !_liveAreaFinalDDrainActive) ||
                 !RequiresDmaForCurrentBlit() ||
                 !IsBlitterDmaEnabled())
             {
@@ -2503,20 +2508,26 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
             else
             {
-                // Preserve the other channel programs while B-only startup
-                // advances its two nonreserving input stages explicitly.
-                _currentCycle = _bus.NextChipSlotCycle(
-                    Math.Max(_currentCycle, cycle) +
-                    (4 * ChipSlotCycles));
+                var startCycle = Math.Max(_currentCycle, cycle);
                 var descending = (_bltcon1 & Bltcon1Descending) != 0;
                 var fillEnabled = descending &&
                     (_bltcon1 & (Bltcon1InclusiveFill | Bltcon1ExclusiveFill)) != 0;
-                if (_bus.Chipset == AmigaChipset.OcsPal &&
+                var explicitDOnlyStartup =
+                    _bus.Chipset == AmigaChipset.OcsPal &&
                     !_lineMode &&
                     !_useA && !_useB && !_useC && _useD &&
-                    !fillEnabled)
+                    !fillEnabled;
+                if (explicitDOnlyStartup)
                 {
-                    _dOnlyStartup.Begin(_currentCycle);
+                    _dOnlyStartup.Begin(startCycle);
+                    _currentCycle = _dOnlyStartup.NextInputCycle;
+                }
+                else
+                {
+                    // Other area programs retain the four non-reserving
+                    // startup clocks folded into their first word cursor.
+                    _currentCycle = _bus.NextChipSlotCycle(
+                        startCycle + (4 * ChipSlotCycles));
                 }
             }
             ResetLiveAreaDPipeline();
@@ -3422,7 +3433,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         private bool BeginAreaMicroOpWord()
         {
             if (HasAreaStartupControl || _lineMode ||
-                (! _useA && !_useB && !_useC && !_useD))
+                (!_useA && !_useB && !_useC && !_useD &&
+                 !_liveAreaPendingDValid && !_liveAreaFinalDDrainActive))
             {
                 return false;
             }
@@ -5453,7 +5465,12 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                     CurrentCycle = _dOnlyStartup.Pending
                         ? _dOnlyStartup.NextInputCycle
                         : slotCycle;
-                    return true;
+                    if (_dOnlyStartup.Pending)
+                    {
+                        return true;
+                    }
+
+                    PrimeDOnlyStartupWord(slotCycle);
                 }
 
                 if (_finalDDrainActive)
@@ -5610,6 +5627,24 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 _internalCompletionCycle = _stepEnd;
                 _outputReady = false;
                 _finalWord = _rowY == _height - 1 && _wordX == _widthWords - 1;
+            }
+
+            private void PrimeDOnlyStartupWord(long completionCycle)
+            {
+                System.Diagnostics.Debug.Assert(
+                    _areaDestinationPipeline && _useD && !_wordActive &&
+                    !_pendingDValid);
+                _wordActive = true;
+                _opIndex = GetOpCount();
+                _stepStart = completionCycle;
+                _stepEnd = completionCycle;
+                _nextReadCycle = completionCycle;
+                _nextCycle = completionCycle;
+                _internalCompletionCycle = completionCycle;
+                _outputReady = true;
+                _finalWord =
+                    _rowY == _height - 1 && _wordX == _widthWords - 1;
+                LatchCurrentDestination();
             }
 
             private int GetOpCount()

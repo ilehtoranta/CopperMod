@@ -26,7 +26,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void CaptureLiveLineStateCore(int row, bool recordTimeline)
         {
-            if ((uint)row >= (uint)LowResOutputHeight)
+            if ((uint)row >= (uint)_liveHardwareRowCount)
             {
                 return;
             }
@@ -96,7 +96,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             state.FetchWords = GetDataFetchWordCount();
             state.DataFetchStart = _dataFetchWindow.Start;
             state.FetchSlotStride = DisplayGeometryDecoder.GetDataFetchSlotStride(_dataFetchWindow);
-            state.PaletteSnapshotIndex = CaptureLivePaletteSnapshot(row);
+            state.BitplaneInputSuppressedThroughCycle = long.MinValue;
+            state.PaletteSnapshotIndex = row < LowResOutputHeight
+                ? CaptureLivePaletteSnapshot(row)
+                : -1;
             state.PlaneHasRowMask = 0;
             if (state.PlaneCount > 0 || state.DecodePlaneCount > 0)
             {
@@ -144,7 +147,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _liveSpriteWordMasks,
                 GetLiveCaptureSlot(row) * LiveSpriteChannelCount,
                 LiveSpriteChannelCount);
-            if (recordTimeline && !_displayTimeline.HasLine(row))
+            if (recordTimeline && row < LowResOutputHeight && !_displayTimeline.HasLine(row))
             {
                 RecordTimelineLineStart(row, state);
             }
@@ -158,7 +161,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var row = GetOutputRowForCycle(_liveFrameStartCycle, cycle);
-            if ((uint)row >= (uint)LowResOutputHeight ||
+            if ((uint)row >= (uint)_liveHardwareRowCount ||
                 !IsLiveLineValid(row))
             {
                 return;
@@ -210,6 +213,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void RefreshStartedLiveLineDmaState(int row, long cycle)
         {
             var state = GetLiveLineState(row);
+            var oldPlaneCount = state.PlaneCount;
             state.DisplayWindowVerticallyOpen = _liveDisplayWindowVerticallyOpen;
             state.DeniseDisplayWindowVerticallyOpen = _liveDeniseDisplayWindowVerticallyOpen;
             state.Resolution = GetDeniseResolution(_bplcon0);
@@ -248,6 +252,19 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 state.Bpl2Mod);
             state.PlaneCount = GetAgnusBitplaneFetchPlaneCount();
             state.DecodePlaneCount = GetDeniseBitplaneDecodePlaneCount();
+            var transitionCutoffCycle = GetBitplaneCursorCutoffAfterPlaneCountChange(
+                cycle,
+                oldPlaneCount,
+                state.PlaneCount);
+            if (transitionCutoffCycle > cycle)
+            {
+                state.BitplaneInputSuppressedThroughCycle = Math.Max(
+                    state.BitplaneInputSuppressedThroughCycle,
+                    transitionCutoffCycle);
+            }
+            var bitplaneCursorCutoffCycle = Math.Max(
+                cycle,
+                state.BitplaneInputSuppressedThroughCycle);
             state.FetchWords = GetDataFetchWordCount();
             state.DataFetchStart = _dataFetchWindow.Start;
             state.FetchSlotStride = DisplayGeometryDecoder.GetDataFetchSlotStride(_dataFetchWindow);
@@ -312,15 +329,37 @@ namespace CopperMod.Amiga.CustomChips.Denise
             // their physical slots instead of being revisited behind horizon.
             if (_liveNextFetchRow >= row)
             {
-                SetBitplaneCursorAfterCycle(ref _liveBitplaneFetchTimeline.Captured, state, cycle);
+                SetBitplaneCursorAfterCycle(
+                    ref _liveBitplaneFetchTimeline.Captured,
+                    state,
+                    bitplaneCursorCutoffCycle);
             }
 
             if (_livePreparedFetchRow >= row)
             {
-                SetBitplaneCursorAfterCycle(ref _liveBitplaneFetchTimeline.Prepared, state, cycle);
+                SetBitplaneCursorAfterCycle(
+                    ref _liveBitplaneFetchTimeline.Prepared,
+                    state,
+                    bitplaneCursorCutoffCycle);
             }
 
             InvalidateLiveWorkCycle();
+        }
+
+        private long GetBitplaneCursorCutoffAfterPlaneCountChange(
+            long writeCycle,
+            int oldPlaneCount,
+            int newPlaneCount)
+        {
+            if (!UsesPhysicalBitplanePipeline || oldPlaneCount != 0 || newPlaneCount <= 0)
+            {
+                return writeCycle;
+            }
+
+            // The OCS RGA decision for a bitplane input occurs two color clocks
+            // earlier. A simultaneous BPLCON0 write cannot retroactively admit
+            // that input, so restart after the last already-decided candidate.
+            return checked(writeCycle + (2L * CopperHpCycles));
         }
 
         private int GetCapturedBitplaneStorageStop(int row, int plane)
@@ -412,7 +451,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void BuildRowDmaPlan(int row, LiveLineState state)
         {
-            if ((uint)row >= (uint)LowResOutputHeight ||
+            if ((uint)row >= (uint)_liveHardwareRowCount ||
                 state.Generation != _liveGeneration)
             {
                 return;
@@ -449,6 +488,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
                         var fetchHorizontal = state.DataFetchStart + (word * state.FetchSlotStride) + slot;
                         var cycleOffset = fetchHorizontal * CopperHpCycles;
+                        if (state.LineStartCycle + cycleOffset <=
+                            state.BitplaneInputSuppressedThroughCycle)
+                        {
+                            continue;
+                        }
+
                         var rowPresent = (state.PlaneHasRowMask & (1 << plane)) != 0;
                         var address = rowPresent
                             ? AddDmaPointerOffset(state.BitplaneRowAddresses[plane], word * 2)
@@ -558,6 +603,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         }
 
                         var fetchHorizontal = _dataFetchWindow.Start + (word * fetchStride) + slot;
+                        var fetchCycle = state.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles);
+                        if (fetchCycle <= state.BitplaneInputSuppressedThroughCycle)
+                        {
+                            continue;
+                        }
+
                         var rowPresent = (state.PlaneHasRowMask & (1 << plane)) != 0;
                         var address = rowPresent
                             ? AddDmaPointerOffset(state.BitplaneRowAddresses[plane], word * 2)
@@ -594,7 +645,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void InvalidateRowDmaPlan(int row)
         {
-            if ((uint)row >= (uint)LowResOutputHeight)
+            if ((uint)row >= (uint)_liveHardwareRowCount)
             {
                 return;
             }
@@ -616,7 +667,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             bool recordFallback = true)
         {
             plan = default;
-            if ((uint)row >= (uint)LowResOutputHeight)
+            if ((uint)row >= (uint)_liveHardwareRowCount)
             {
                 return false;
             }
@@ -689,7 +740,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void RecordRowDmaPlanExecuted(int row, byte mask)
         {
-            if ((uint)row >= (uint)LowResOutputHeight)
+            if ((uint)row >= (uint)_liveHardwareRowCount)
             {
                 return;
             }
@@ -734,6 +785,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 hash = AddRowDmaPlanSignature(hash, state.FetchWords);
                 hash = AddRowDmaPlanSignature(hash, state.DataFetchStart);
                 hash = AddRowDmaPlanSignature(hash, state.FetchSlotStride);
+                hash = AddRowDmaPlanSignature(hash, (int)state.BitplaneInputSuppressedThroughCycle);
+                hash = AddRowDmaPlanSignature(hash, (int)(state.BitplaneInputSuppressedThroughCycle >> 32));
                 hash = AddRowDmaPlanSignature(hash, state.PlaneHasRowMask);
                 for (var plane = 0; plane < LiveBitplanePlaneCount; plane++)
                 {
@@ -763,7 +816,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool HasCapturedLiveBitplaneWords(int row)
         {
-            if ((uint)row >= (uint)LowResOutputHeight)
+            if ((uint)row >= (uint)_liveHardwareRowCount)
             {
                 return false;
             }
@@ -821,7 +874,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return;
             }
 
-            while (_liveNextFetchRow < LowResOutputHeight)
+            while (_liveNextFetchRow < _liveHardwareRowCount)
             {
                 if (!NormalizeLiveBitplaneFetchCursor())
                 {
@@ -911,7 +964,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var row = _liveNextFetchRow;
-            if ((uint)row >= (uint)LowResOutputHeight ||
+            if ((uint)row >= (uint)_liveHardwareRowCount ||
                 !IsLiveLineValid(row))
             {
                 return false;
@@ -1289,7 +1342,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             SkipLiveRowsWithoutFetches();
-            if (_liveNextFetchRow >= LowResOutputHeight ||
+            if (_liveNextFetchRow >= _liveHardwareRowCount ||
                 !IsLiveLineValid(_liveNextFetchRow))
             {
                 return long.MaxValue;
@@ -1334,7 +1387,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ref LiveBitplaneFetchCursor cursor,
             bool advanceCapturedPointers)
         {
-            while (cursor.Row < LowResOutputHeight)
+            while (cursor.Row < _liveHardwareRowCount)
             {
                 if (!IsLiveLineValid(cursor.Row))
                 {
@@ -1395,7 +1448,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var previousAuditSource = _bus.PushSlotScheduleAuditSource(AgnusSlotAuditSource.PreparedBitplaneSlot);
             try
             {
-                while (_livePreparedFetchRow < LowResOutputHeight)
+                while (_livePreparedFetchRow < _liveHardwareRowCount)
                 {
                     if (!NormalizePreparedLiveBitplaneFetchCursor())
                     {
@@ -1484,10 +1537,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var captured = false;
-            while (_liveNextFetchRow < LowResOutputHeight)
+            while (_liveNextFetchRow < _liveHardwareRowCount)
             {
                 SkipLiveRowsWithoutFetches();
-                if (_liveNextFetchRow >= LowResOutputHeight ||
+                if (_liveNextFetchRow >= _liveHardwareRowCount ||
                     !IsLiveLineValid(_liveNextFetchRow))
                 {
                     return captured;
@@ -1569,7 +1622,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 return StepPhysicalBitplane(fetchCycle);
             }
 
-            if ((uint)_liveNextFetchRow >= (uint)LowResOutputHeight ||
+            if ((uint)_liveNextFetchRow >= (uint)_liveHardwareRowCount ||
                 (uint)_liveNextFetchPlane >= (uint)_bitplanePointers.Length ||
                 (uint)_liveNextFetchWord >= (uint)MaxBitplaneFetchWords)
             {
@@ -1634,7 +1687,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             ref LiveBitplaneFetchCursor cursor,
             bool advanceCapturedPointers)
         {
-            if (cursor.Row >= LowResOutputHeight)
+            if (cursor.Row >= _liveHardwareRowCount)
             {
                 return;
             }
@@ -1677,7 +1730,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void AdvanceLiveBitplanePointersPastCapturedRow(int row)
         {
-            if ((uint)row >= (uint)LowResOutputHeight || !IsLiveLineValid(row))
+            if ((uint)row >= (uint)_liveHardwareRowCount || !IsLiveLineValid(row))
             {
                 return;
             }

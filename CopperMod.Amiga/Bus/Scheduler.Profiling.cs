@@ -380,6 +380,17 @@ namespace CopperMod.Amiga.Bus
             }
 
             if ((mask & AmigaHardwareEventMask.Agnus) != 0 &&
+                cycle == AgnusChipSlotScheduler.AlignToSlot(cycle) &&
+                _bus.HasCarriedLiveBlitterWorkBefore(cycle))
+            {
+                var start = Stopwatch.GetTimestamp();
+                _bus.SettleCarriedLiveBlitterBeforeFixedInput(cycle);
+                _hostBlitterTicks += Stopwatch.GetTimestamp() - start;
+                _blitterEvents++;
+                visibilityDirty = CpuVisibilityDirtySource.All;
+            }
+
+            if ((mask & AmigaHardwareEventMask.Agnus) != 0 &&
                 GetNextAgnusEventCycle(cycle, cycle, mask) <= cycle)
             {
                 var start = Stopwatch.GetTimestamp();
@@ -421,6 +432,15 @@ namespace CopperMod.Amiga.Bus
                 _hostDiskTicks += Stopwatch.GetTimestamp() - start;
                 InvalidateDiskWakeFalseCache();
                 _diskEvents++;
+            }
+
+            if (cycle == AgnusChipSlotScheduler.AlignToSlot(cycle) &&
+                _bus.HasCarriedLiveBlitterWorkBefore(cycle))
+            {
+                var start = Stopwatch.GetTimestamp();
+                _bus.SettleCarriedLiveBlitterBeforeFixedInput(cycle);
+                _hostBlitterTicks += Stopwatch.GetTimestamp() - start;
+                _blitterEvents++;
             }
 
             if (_bus.GetNextAgnusEventCycle(cycle, cycle) <= cycle)

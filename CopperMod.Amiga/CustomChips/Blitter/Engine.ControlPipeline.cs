@@ -54,20 +54,22 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
         }
 
-        // Destination-only startup has one control input at the normal area
-        // startup cursor. The input itself owns no bus slot. If its outgoing
-        // phase is unavailable, the input is retried on the next Agnus clock;
-        // an accepted input leaves the first D request on the existing area
-        // word timeline.
+        // Destination-only startup clocks six non-reserving control inputs
+        // before the first pipelined D output. Each input observes the next
+        // physical OUT phase. A blocked OUT retries only that input, so dense
+        // display DMA stretches startup without changing the later D cadence.
         private struct DOnlyStartupControlState
         {
-            internal bool Pending;
+            internal int RemainingStages;
             internal long NextInputCycle;
 
-            internal void Begin(long inputCycle)
+            internal readonly bool Pending => RemainingStages != 0;
+
+            internal void Begin(long startCycle)
             {
-                Pending = true;
-                NextInputCycle = AgnusChipSlotScheduler.AlignToSlot(inputCycle);
+                RemainingStages = 6;
+                NextInputCycle = AgnusChipSlotScheduler.AlignToSlot(
+                    startCycle + ChipSlotCycles);
             }
 
             internal void Advance(long inputCycle, bool inputAvailable)
@@ -75,8 +77,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 System.Diagnostics.Debug.Assert(Pending && inputCycle >= NextInputCycle);
                 if (inputAvailable)
                 {
-                    Pending = false;
-                    return;
+                    RemainingStages--;
                 }
 
                 NextInputCycle = inputCycle + ChipSlotCycles;
@@ -124,6 +125,43 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             _currentCycle = _dOnlyStartup.Pending
                 ? _dOnlyStartup.NextInputCycle
                 : inputCycle;
+            if (!_dOnlyStartup.Pending)
+            {
+                PrimeDOnlyStartupWord(inputCycle);
+            }
+        }
+
+        // The six explicit startup inputs include the initial destination
+        // pipeline fill. Materialize that completed, non-bus word at the last
+        // accepted input so the first physical D request is the following CCK.
+        private void PrimeDOnlyStartupWord(long completionCycle)
+        {
+            System.Diagnostics.Debug.Assert(
+                _bus.Chipset == AmigaChipset.OcsPal &&
+                !_lineMode && !_useA && !_useB && !_useC && _useD &&
+                !_fillEnabled && !_areaMicroOpActive &&
+                !_liveAreaPendingDValid);
+
+            BeginDmaRollbackSnapshot();
+            _areaMicroOpActive = true;
+            _areaMicroOpOwnedByBoundedAdvance = false;
+            _areaMicroOpIndex = 0;
+            _areaMicroOpStepStart = completionCycle;
+            _areaMicroOpStepEnd = completionCycle;
+            _areaMicroOpNextReadCycle = completionCycle;
+            _areaMicroOpNextCycle = completionCycle;
+            _areaMicroOpInternalCompletionCycle = completionCycle;
+            _areaMicroOpRawA = _activeDataA;
+            _areaMicroOpRawB = _activeDataB;
+            _areaMicroOpRawC = _activeDataC;
+            _areaMicroOpMask = GetCurrentAreaWordMask();
+            _areaMicroOpOutput = 0;
+            _areaMicroOpOutputReady = false;
+            _areaMicroOpFinalWord =
+                _rowY == _height - 1 && _wordX == _widthWords - 1;
+            EnsureAreaMicroOpOutputReady();
+            LatchLiveAreaPipelineWrite();
+            _areaMicroOpIndex = GetAreaMicroOpCount();
         }
 
         private void HoldBOnlyStartupThrough(long cycle)

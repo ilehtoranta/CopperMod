@@ -427,7 +427,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             lineStart = _liveFrameStartCycle + ((long)beamLine * LineCycles);
             row = beamLine - StandardVStart;
-            return (uint)row < LowResOutputHeight;
+            return (uint)row < (uint)_liveHardwareRowCount;
         }
 
         internal bool CanPredictCpuWaitBlankingSlotAsFree(long slotCycle, long barrierHorizon)

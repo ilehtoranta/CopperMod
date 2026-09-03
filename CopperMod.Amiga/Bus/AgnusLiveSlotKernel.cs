@@ -283,6 +283,22 @@ namespace CopperMod.Amiga.Bus
                     {
                         _bus.AdvanceDueLiveFixedRequestersTo(candidate);
                     }
+
+                    if (_bus.HasCarriedLiveBlitterWorkBefore(candidate))
+                    {
+                        // Keep CPU-vs-blitter priority visible during the
+                        // carried-edge prepass, then withdraw the speculative
+                        // CPU intent before display input materialization.
+                        _bus.PublishLiveSlotKernelCpuRequest(
+                            kind,
+                            target,
+                            address,
+                            size,
+                            requestedCycle,
+                            isWrite);
+                        _bus.SettleCarriedLiveBlitterBeforeFixedInput(candidate);
+                        _bus.WithdrawLiveSlotKernelCpuRequest();
+                    }
                     // The display control horizon can be ahead of its
                     // uncommitted fixed-fetch cursor. Materialize the same
                     // candidate-bounded display/Copper suffix used by the

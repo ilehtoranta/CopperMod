@@ -42,8 +42,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
             private int _pendingWriteIndex;
             private readonly bool[] _spriteExhausted = new bool[LiveSpriteChannelCount];
             private readonly LiveSpriteDmaState[] _spriteStates = new LiveSpriteDmaState[LiveSpriteChannelCount];
-            private readonly LiveLineState[] _lineStates = new LiveLineState[LowResOutputHeight];
-            private readonly bool[] _lineStateDirtyFromScratchWrite = new bool[LowResOutputHeight];
+            private readonly LiveLineState[] _lineStates;
+            private readonly bool[] _lineStateDirtyFromScratchWrite;
             private readonly uint[] _bitplanePointers = new uint[LiveBitplanePlaneCount];
             private readonly int[] _bitplaneBaseRows = new int[LiveBitplanePlaneCount];
             private readonly ushort[] _bitplaneDataRegisters = new ushort[LiveBitplanePlaneCount];
@@ -98,6 +98,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 _display = display;
                 _slots = slots;
                 _pendingCpuWrite = pendingCpuWrite;
+                _lineStates = new LiveLineState[display._liveHardwareRowCount];
+                _lineStateDirtyFromScratchWrite = new bool[display._liveHardwareRowCount];
                 _frameStopCycle = display.GetLiveFrameStopCycle();
                 _blitterWait = display.CaptureCopperBlitterWaitSnapshot();
                 _copper = display._liveCopper;
@@ -167,7 +169,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 result = default;
                 _requestCycle = requestedCycle;
-                _requestRow = Math.Clamp(_display.GetOutputRowForCycle(_display._liveFrameStartCycle, requestedCycle), 0, LowResOutputHeight - 1);
+                _requestRow = Math.Clamp(
+                    _display.GetOutputRowForCycle(_display._liveFrameStartCycle, requestedCycle),
+                    0,
+                    _display._liveHardwareRowCount - 1);
                 SeedBitplaneCursorsForCpuRequest(requestedCycle);
 
                 _slots.BeginPendingCpuSlotRequest(kind, target, address, size, requestedCycle, isWrite);
@@ -190,7 +195,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private void SeedBitplaneCursorsForCpuRequest(long requestedCycle)
             {
-                var row = Math.Clamp(_display.GetOutputRowForCycle(_display._liveFrameStartCycle, requestedCycle), 0, LowResOutputHeight - 1);
+                var row = Math.Clamp(
+                    _display.GetOutputRowForCycle(_display._liveFrameStartCycle, requestedCycle),
+                    0,
+                    _display._liveHardwareRowCount - 1);
                 if (!TryGetBitplaneCursorAtOrAfterCycle(
                         row,
                         requestedCycle,
@@ -255,6 +263,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     for (var candidateSlot = 0; candidateSlot < state.FetchSlotStride; candidateSlot++)
                     {
                         if (!TryGetBitplanePlaneForFetchSlot(candidateSlot, planeCount, state.FetchResolution, out var candidatePlane))
+                        {
+                            continue;
+                        }
+                        if (IsScratchBitplaneInputSuppressed(state, candidateWord, candidateSlot))
                         {
                             continue;
                         }
@@ -417,7 +429,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private string BuildScratchDetail(long requestedCycle)
             {
-                var detailRow = Math.Clamp(_display.GetOutputRowForCycle(_display._liveFrameStartCycle, requestedCycle), 0, LowResOutputHeight - 1);
+                var detailRow = Math.Clamp(
+                    _display.GetOutputRowForCycle(_display._liveFrameStartCycle, requestedCycle),
+                    0,
+                    _display._liveHardwareRowCount - 1);
                 var detailState = GetScratchLineState(detailRow);
                 var detailPlan = _display._rowDmaPlans[GetRasterlineRingSlot(detailRow)];
                 var nextPending = _pendingWriteIndex < _display._pendingWrites.Count
@@ -1187,7 +1202,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private long GetNextLineStateCycle()
             {
-                if (_nextLineStateRow >= LowResOutputHeight)
+                if (_nextLineStateRow >= _display._liveHardwareRowCount)
                 {
                     return long.MaxValue;
                 }
@@ -1251,7 +1266,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private bool NormalizePreparedBitplaneCursor()
             {
-                while (_preparedFetchRow < LowResOutputHeight)
+                while (_preparedFetchRow < _display._liveHardwareRowCount)
                 {
                     var state = GetScratchLineState(_preparedFetchRow);
                     if (TryGetScratchRowDmaPlan(_preparedFetchRow, state, out var plan))
@@ -1293,7 +1308,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     {
                         while (_preparedFetchSlot < state.FetchSlotStride)
                         {
-                            if (TryGetBitplanePlaneForFetchSlot(_preparedFetchSlot, planeCount, state.FetchResolution, out var plane))
+                            if (TryGetBitplanePlaneForFetchSlot(
+                                    _preparedFetchSlot,
+                                    planeCount,
+                                    state.FetchResolution,
+                                    out var plane) &&
+                                !IsScratchBitplaneInputSuppressed(
+                                    state,
+                                    _preparedFetchWord,
+                                    _preparedFetchSlot))
                             {
                                 _preparedFetchPlane = plane;
                                 return true;
@@ -1404,7 +1427,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private bool NormalizeBitplaneCursor()
             {
-                while (_nextFetchRow < LowResOutputHeight)
+                while (_nextFetchRow < _display._liveHardwareRowCount)
                 {
                     var state = GetScratchLineState(_nextFetchRow);
                     if (TryGetScratchRowDmaPlan(_nextFetchRow, state, out var plan))
@@ -1446,7 +1469,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     {
                         while (_nextFetchSlot < state.FetchSlotStride)
                         {
-                            if (TryGetBitplanePlaneForFetchSlot(_nextFetchSlot, planeCount, state.FetchResolution, out var plane))
+                            if (TryGetBitplanePlaneForFetchSlot(
+                                    _nextFetchSlot,
+                                    planeCount,
+                                    state.FetchResolution,
+                                    out var plane) &&
+                                !IsScratchBitplaneInputSuppressed(
+                                    state,
+                                    _nextFetchWord,
+                                    _nextFetchSlot))
                             {
                                 _nextFetchPlane = plane;
                                 return true;
@@ -1584,7 +1615,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             {
                 _physicalBitplanePipeline.ObservePointerWrite(plane);
                 var row = _display.GetOutputRowForCycle(_display._liveFrameStartCycle, cycle);
-                if ((uint)row >= (uint)LowResOutputHeight)
+                if ((uint)row >= (uint)_display._liveHardwareRowCount)
                 {
                     return;
                 }
@@ -1650,7 +1681,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             private bool TryGetScratchRowDmaPlan(int row, LiveLineState state, out RowDmaPlan plan)
             {
                 plan = default;
-                if ((uint)row >= (uint)LowResOutputHeight)
+                if ((uint)row >= (uint)_display._liveHardwareRowCount)
                 {
                     return false;
                 }
@@ -2688,7 +2719,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             private void RecordCopperBitplaneRgaCollision(long copperRequestCycle)
             {
                 var row = _display.GetOutputRowForCycle(_display._liveFrameStartCycle, copperRequestCycle);
-                if ((uint)row >= LowResOutputHeight)
+                if ((uint)row >= (uint)_display._liveHardwareRowCount)
                 {
                     return;
                 }
@@ -2784,6 +2815,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     PreserveStartedBitplaneRow(cycle);
                     var oldPlaneCount = _display.GetAgnusBitplaneFetchPlaneCount(_bplcon0);
                     var newPlaneCount = _display.GetAgnusBitplaneFetchPlaneCount(value);
+                    var bitplaneCursorCutoffCycle =
+                        _display.GetBitplaneCursorCutoffAfterPlaneCountChange(
+                            cycle,
+                            oldPlaneCount,
+                            newPlaneCount);
                     if (oldPlaneCount != newPlaneCount)
                     {
                         MarkDynamicBitplaneScheduleChange(cycle);
@@ -2805,6 +2841,10 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     }
 
                     ResetBitplaneCursorsFromCycle(cycle);
+                    if (bitplaneCursorCutoffCycle != cycle)
+                    {
+                        SeekBitplaneCursorsAfterCycle(bitplaneCursorCutoffCycle);
+                    }
                     return true;
                 }
 
@@ -3173,7 +3213,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private LiveLineState GetScratchLineState(int row)
             {
-                row = Math.Clamp(row, 0, LowResOutputHeight - 1);
+                row = Math.Clamp(row, 0, _display._liveHardwareRowCount - 1);
                 var state = _lineStates[row];
                 if (state == null)
                 {
@@ -3204,7 +3244,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private void CaptureScratchLineStateFromCurrentRegisters(int row)
             {
-                if ((uint)row >= (uint)LowResOutputHeight)
+                if ((uint)row >= (uint)_display._liveHardwareRowCount)
                 {
                     return;
                 }
@@ -3314,6 +3354,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 destination.FetchWords = source.FetchWords;
                 destination.DataFetchStart = source.DataFetchStart;
                 destination.FetchSlotStride = source.FetchSlotStride;
+                destination.BitplaneInputSuppressedThroughCycle =
+                    source.BitplaneInputSuppressedThroughCycle;
                 destination.PaletteSnapshotIndex = source.PaletteSnapshotIndex;
                 destination.PlaneHasRowMask = source.PlaneHasRowMask;
                 Array.Copy(source.BitplanePointers, destination.BitplanePointers, source.BitplanePointers.Length);
@@ -3328,10 +3370,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
             private void ResetBitplaneCursorsFromCycle(long cycle)
             {
-                var row = Math.Clamp(_display.GetOutputRowForCycle(_display._liveFrameStartCycle, cycle), 0, LowResOutputHeight - 1);
+                var row = Math.Clamp(
+                    _display.GetOutputRowForCycle(_display._liveFrameStartCycle, cycle),
+                    0,
+                    _display._liveHardwareRowCount - 1);
                 var currentRowStarted = HasStartedBitplaneFetch(row, cycle);
                 var invalidateRow = currentRowStarted
-                    ? Math.Min(row + 1, LowResOutputHeight)
+                    ? Math.Min(row + 1, _display._liveHardwareRowCount)
                     : row;
                 for (var i = invalidateRow; i < _lineStates.Length; i++)
                 {
@@ -3370,9 +3415,47 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 }
             }
 
+            private void SeekBitplaneCursorsAfterCycle(long cycle)
+            {
+                var firstEligibleCycle = checked(cycle + AgnusChipSlotScheduler.SlotCycles);
+                var row = Math.Clamp(
+                    _display.GetOutputRowForCycle(_display._liveFrameStartCycle, firstEligibleCycle),
+                    0,
+                    _display._liveHardwareRowCount - 1);
+                var state = GetScratchLineState(row);
+                state.BitplaneInputSuppressedThroughCycle = Math.Max(
+                    state.BitplaneInputSuppressedThroughCycle,
+                    cycle);
+                AdvanceRowDmaPlanVersion(state);
+                if (!TryGetBitplaneCursorAtOrAfterCycle(
+                        row,
+                        firstEligibleCycle,
+                        out var word,
+                        out var slot,
+                        out var plane))
+                {
+                    row = Math.Min(row + 1, _display._liveHardwareRowCount);
+                    word = 0;
+                    slot = 0;
+                    plane = 0;
+                }
+
+                _nextFetchRow = row;
+                _nextFetchWord = word;
+                _nextFetchPlane = plane;
+                _nextFetchSlot = slot;
+                _preparedFetchRow = row;
+                _preparedFetchWord = word;
+                _preparedFetchPlane = plane;
+                _preparedFetchSlot = slot;
+            }
+
             private void PreserveStartedBitplaneRow(long cycle)
             {
-                var row = Math.Clamp(_display.GetOutputRowForCycle(_display._liveFrameStartCycle, cycle), 0, LowResOutputHeight - 1);
+                var row = Math.Clamp(
+                    _display.GetOutputRowForCycle(_display._liveFrameStartCycle, cycle),
+                    0,
+                    _display._liveHardwareRowCount - 1);
                 var state = GetScratchLineState(row);
                 if (HasStartedBitplaneFetch(row, cycle))
                 {
@@ -3416,17 +3499,43 @@ namespace CopperMod.Amiga.CustomChips.Denise
                     return false;
                 }
 
-                for (var slot = 0; slot < state.FetchSlotStride; slot++)
+                for (var word = 0; word < state.FetchWords; word++)
                 {
-                    if (TryGetBitplanePlaneForFetchSlot(slot, Math.Max(0, state.PlaneCount), state.FetchResolution, out _))
+                    for (var slot = 0; slot < state.FetchSlotStride; slot++)
                     {
-                        var fetchHorizontal = state.DataFetchStart + slot;
-                        var fetchCycle = AgnusChipSlotScheduler.AlignToSlot(state.LineStartCycle + ((long)fetchHorizontal * _display.CopperHpCycles));
+                        if (!TryGetBitplanePlaneForFetchSlot(
+                                slot,
+                                Math.Max(0, state.PlaneCount),
+                                state.FetchResolution,
+                                out _) ||
+                            IsScratchBitplaneInputSuppressed(state, word, slot))
+                        {
+                            continue;
+                        }
+
+                        var fetchHorizontal = state.DataFetchStart +
+                            (word * state.FetchSlotStride) + slot;
+                        var fetchCycle = AgnusChipSlotScheduler.AlignToSlot(
+                            state.LineStartCycle +
+                            ((long)fetchHorizontal * _display.CopperHpCycles));
                         return fetchCycle <= cycle;
                     }
                 }
 
                 return false;
+            }
+
+            private bool IsScratchBitplaneInputSuppressed(
+                LiveLineState state,
+                int word,
+                int slot)
+            {
+                var fetchHorizontal = state.DataFetchStart +
+                    (word * state.FetchSlotStride) + slot;
+                var fetchCycle = AgnusChipSlotScheduler.AlignToSlot(
+                    state.LineStartCycle +
+                    ((long)fetchHorizontal * _display.CopperHpCycles));
+                return fetchCycle <= state.BitplaneInputSuppressedThroughCycle;
             }
 
             private void AdvanceDisplayWindowStateToLine(int targetLine)

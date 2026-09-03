@@ -62,14 +62,6 @@ namespace CopperMod.Amiga.Bus
             => _hrmSlotEngine.ClearPendingCpuSlotRequest();
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool WasCopperWordGrantedAt(long slotCycle)
-            => (_chipDataBusLatchRequester == AmigaBusRequester.Copper &&
-                _chipDataBusLatchCycle == slotCycle) ||
-               _agnusBusExecutor.LastCopperGrantedCycle == slotCycle ||
-               (TryGetCommittedAgnusSlotOwner(slotCycle, out var owner) &&
-                owner == AgnusChipSlotOwner.Copper);
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryGrantLiveSlotKernelCpuWord(
             AmigaBusAccessKind kind,
             AmigaBusAccessTarget target,
@@ -81,15 +73,6 @@ namespace CopperMod.Amiga.Bus
             out long completedCycle)
         {
             if (slotCycle < ExecutedChipBusHorizon)
-            {
-                completedCycle = 0;
-                return false;
-            }
-
-            if (kind == AmigaBusAccessKind.CpuInstructionFetch &&
-                requestedCycle ==
-                    slotCycle - AgnusChipSlotScheduler.SlotCycles &&
-                WasCopperWordGrantedAt(requestedCycle))
             {
                 completedCycle = 0;
                 return false;
@@ -287,6 +270,22 @@ namespace CopperMod.Amiga.Bus
                 Blitter.GetNextLiveAgnusSlotKernelCycle() <= slotCycle)
             {
                 PrepareLiveSlotKernelBlitter(slotCycle);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool HasCarriedLiveBlitterWorkBefore(long slotCycle)
+            => _agnusLiveBlitterEnabled &&
+               slotCycle >= AgnusChipSlotScheduler.SlotCycles &&
+               Blitter.GetNextLiveAgnusSlotKernelCycle() <=
+                   slotCycle - AgnusChipSlotScheduler.SlotCycles;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void SettleCarriedLiveBlitterBeforeFixedInput(long slotCycle)
+        {
+            if (HasCarriedLiveBlitterWorkBefore(slotCycle))
+            {
+                Blitter.AdvanceLiveAgnusCpuPreGrantTo(slotCycle);
             }
         }
 

@@ -672,7 +672,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             row = _bus.GetBeamPosition(cycle).BeamLine - StandardVStart;
-            return (uint)row < (uint)LowResOutputHeight;
+            return (uint)row < (uint)_liveHardwareRowCount;
         }
 
         private void RecordLiveRasterlinePlanEvent(
@@ -762,7 +762,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private void TryBuildPredictedRasterlinePlanForCapturedLine(int row)
         {
             var slot = GetRasterlineRingSlot(row);
-            if ((uint)row >= (uint)LowResOutputHeight ||
+            if ((uint)row >= (uint)_liveHardwareRowCount ||
                 _liveRasterlinePlanRows[slot] != row ||
                 _predictedRasterlinePlanStatuses[slot] != LiveRasterlinePredictionStatus.None)
             {
@@ -820,7 +820,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
             var firstFetchCycle = GetFirstLiveBitplaneFetchCycleForRendering(row, state);
             if (firstFetchCycle == long.MaxValue ||
                 firstFetchCycle > lineStop ||
-                !TryGetFirstLiveBitplaneFetchCursor(state, out var firstPlane, out var firstSlot))
+                !TryGetFirstLiveBitplaneFetchCursor(
+                    state,
+                    out var firstPlane,
+                    out var firstWord,
+                    out var firstSlot))
             {
                 return;
             }
@@ -833,23 +837,44 @@ namespace CopperMod.Amiga.CustomChips.Denise
                         row,
                         lineStop,
                         firstPlane,
-                        0,
+                        firstWord,
                         firstSlot)))
             {
                 MarkPredictedRasterlinePlanUnsupported(row, LiveRasterlinePredictionStatus.UnsupportedOverflow);
             }
         }
 
-        private static bool TryGetFirstLiveBitplaneFetchCursor(LiveLineState state, out int plane, out int slot)
+        private static bool TryGetFirstLiveBitplaneFetchCursor(
+            LiveLineState state,
+            out int plane,
+            out int word,
+            out int slot)
         {
             plane = 0;
+            word = 0;
             slot = 0;
             var planeCount = Math.Max(0, state.PlaneCount);
-            for (; slot < state.FetchSlotStride; slot++)
+            for (; word < state.FetchWords; word++)
             {
-                if (TryGetBitplanePlaneForFetchSlot(slot, planeCount, state.FetchResolution, out plane))
+                for (slot = 0; slot < state.FetchSlotStride; slot++)
                 {
-                    return true;
+                    if (!TryGetBitplanePlaneForFetchSlot(
+                            slot,
+                            planeCount,
+                            state.FetchResolution,
+                            out plane))
+                    {
+                        continue;
+                    }
+
+                    var fetchHorizontal = state.DataFetchStart +
+                        (word * state.FetchSlotStride) + slot;
+                    var fetchCycle = state.LineStartCycle +
+                        ((long)fetchHorizontal * CanonicalCopperHpCycles);
+                    if (fetchCycle > state.BitplaneInputSuppressedThroughCycle)
+                    {
+                        return true;
+                    }
                 }
             }
 
@@ -866,7 +891,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             int cursorC)
         {
             var slot = GetRasterlineRingSlot(row);
-            if ((uint)row >= (uint)LowResOutputHeight ||
+            if ((uint)row >= (uint)_liveHardwareRowCount ||
                 _liveRasterlinePlanRows[slot] != row ||
                 _predictedRasterlinePlanStatuses[slot] != LiveRasterlinePredictionStatus.PendingValidation)
             {
@@ -880,7 +905,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool TryAppendPredictedRasterlinePlanEvent(int row, LiveRasterlinePlanEvent planEvent)
         {
-            if ((uint)row >= (uint)LowResOutputHeight)
+            if ((uint)row >= (uint)_liveHardwareRowCount)
             {
                 return false;
             }
@@ -937,7 +962,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void MarkPredictedRasterlinePlanUnsupported(int row, LiveRasterlinePredictionStatus status)
         {
-            if ((uint)row >= (uint)LowResOutputHeight)
+            if ((uint)row >= (uint)_liveHardwareRowCount)
             {
                 return;
             }
@@ -960,7 +985,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private void ValidatePredictedRasterlinePlan(int row)
         {
-            if ((uint)row >= (uint)LowResOutputHeight)
+            if ((uint)row >= (uint)_liveHardwareRowCount)
             {
                 return;
             }

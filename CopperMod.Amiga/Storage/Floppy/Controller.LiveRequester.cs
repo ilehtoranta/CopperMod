@@ -20,6 +20,14 @@ namespace CopperMod.Amiga.Storage.Floppy
         private long _liveCancelledBlocks;
         private long _liveInterrupts;
 
+        // A serial deadline alone does not own an RGA phase. The word must
+        // already be ready and waiting for this exact fixed output slot.
+        internal bool HasPendingDmaWordAt(long outputCycle)
+            => _activeDma && _activeDmaRequestPending &&
+                IsDiskDmaControlEnabled() &&
+                GetDriveOrNull(_activeDmaDrive)?.Disk != null &&
+                _activeDmaRequestServiceCycle == outputCycle;
+
         internal AgnusLiveDiskDeviceDiagnostics CaptureLiveDiskDeviceDiagnostics()
             => new(
                 _liveSyncMatches,

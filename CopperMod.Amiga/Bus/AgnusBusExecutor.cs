@@ -3107,6 +3107,20 @@ namespace CopperMod.Amiga.Bus
                 result |= AgnusBusExecutionResult.Disk;
             }
 
+            if (processBlitter &&
+                _bus.AgnusLiveBlitterEnabled &&
+                cycle == AgnusChipSlotScheduler.AlignToSlot(cycle) &&
+                _bus.HasCarriedLiveBlitterWorkBefore(cycle))
+            {
+                // A transition deferred from the preceding OUT can publish a
+                // word for this physical slot. Settle it before Agnus accepts
+                // the current fixed input, whose transfer completes one CCK
+                // later and would otherwise move the data-bus horizon past the
+                // older word. Same-cycle after-slot work remains deferred.
+                _bus.SettleCarriedLiveBlitterBeforeFixedInput(cycle);
+                result |= AgnusBusExecutionResult.Blitter;
+            }
+
             if (_bus.GetNextAgnusEventCycle(cycle, cycle) <= cycle)
             {
                 _bus.AdvanceAgnusCoreTo(cycle);

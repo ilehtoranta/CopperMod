@@ -103,6 +103,12 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                   !_useC &&
                   !_fillEnabled));
 
+        // Current channel enables describe future bus work. They must not
+        // discard the internal transitions of an area word which has already
+        // started under the live requester.
+        private bool HasActiveLiveAreaTransition
+            => !_lineMode && _areaMicroOpActive;
+
         private void PrimeLiveBlitterMicroOpUnit()
         {
             if (!_bus.AgnusLiveBlitterEnabled ||
@@ -167,6 +173,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
             if (_areaMicroOpActive && !RequiresDmaForCurrentBlit())
             {
+                // The live requester has no bus word after the final channel
+                // is removed, but the active word still owns its frozen
+                // retire and completion transitions.
                 return Math.Min(signalCycle, IsBlitterDmaEnabled()
                     ? GetNextLiveBlitterRequesterCycle()
                     : long.MaxValue);
@@ -259,7 +268,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 return;
             }
 
-            if (!RequiresDmaForCurrentBlit())
+            if (!RequiresDmaForCurrentBlit() &&
+                !HasActiveLiveAreaTransition)
             {
                 if (HasAdvanceWorkThrough(slotCycle))
                 {
@@ -343,7 +353,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         {
             if (!_bus.AgnusLiveBlitterEnabled ||
                 !_busy ||
-                !RequiresDmaForCurrentBlit() ||
+                (!RequiresDmaForCurrentBlit() &&
+                 !HasActiveLiveAreaTransition) ||
                 !IsBlitterDmaEnabled())
             {
                 AdvanceLiveAgnusSlotKernelTo(slotCycle);
@@ -382,7 +393,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 return false;
             }
 
-            if (!RequiresDmaForCurrentBlit())
+            if (!RequiresDmaForCurrentBlit() &&
+                !HasActiveLiveAreaTransition)
             {
                 if (!HasAdvanceWorkThrough(slotCycle))
                 {
@@ -503,7 +515,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         {
             if (!_bus.AgnusLiveBlitterEnabled ||
                 !_busy ||
-                !RequiresDmaForCurrentBlit() ||
+                (!RequiresDmaForCurrentBlit() &&
+                 !HasActiveLiveAreaTransition) ||
                 !IsBlitterDmaEnabled())
             {
                 return false;
@@ -520,7 +533,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         {
             if (!_bus.AgnusLiveBlitterEnabled ||
                 !_busy ||
-                !RequiresDmaForCurrentBlit() ||
+                (!RequiresDmaForCurrentBlit() &&
+                 !HasActiveLiveAreaTransition) ||
                 !IsBlitterDmaEnabled())
             {
                 return false;
@@ -537,7 +551,8 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         {
             if (!_bus.AgnusLiveBlitterEnabled ||
                 !_busy ||
-                !RequiresDmaForCurrentBlit() ||
+                (!RequiresDmaForCurrentBlit() &&
+                 !HasActiveLiveAreaTransition) ||
                 !IsBlitterDmaEnabled())
             {
                 return false;
@@ -663,11 +678,11 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                 return;
             }
 
-            // Register writes can remove the last uncommitted DMA channel
-            // while a previously published transition is still latched. The
-            // scalar sequencer owns the remaining zero-channel work; do not
-            // republish an area-word transition that can no longer begin.
-            if (!RequiresDmaForCurrentBlit())
+            // Do not begin a new zero-channel word. An area word which was
+            // already active before its final channel was removed retains its
+            // frozen internal transitions on this requester.
+            if (!RequiresDmaForCurrentBlit() &&
+                !HasActiveLiveAreaTransition)
             {
                 return;
             }
@@ -683,7 +698,9 @@ namespace CopperMod.Amiga.CustomChips.Blitter
 
             if (!_lineMode &&
                 !_areaMicroOpActive &&
-                !_useA && !_useB && !_useC && !_useD)
+                !_useA && !_useB && !_useC && !_useD &&
+                !_liveAreaPendingDValid &&
+                !_liveAreaFinalDDrainActive)
             {
                 return;
             }

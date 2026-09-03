@@ -137,6 +137,11 @@ namespace CopperMod.Amiga.CustomChips.Denise
         private readonly RasterTiming _timing;
         private readonly int _lowResWidth;
         private readonly int _lowResHeight;
+        // Presentation starts at StandardVStart and intentionally ends before
+        // the physical PAL field does. Agnus must still arbitrate display DMA
+        // on the hidden full rasterline when the vertical window remains open;
+        // the final PAL rasterline does not start another bitplane DMA row.
+        private readonly int _liveHardwareRowCount;
         private readonly bool _liveDmaEnabled;
         private readonly bool _presentationIndependentDisplayLedgerEnabled;
         private readonly bool _liveCopperRequesterEnabled;
@@ -472,12 +477,15 @@ namespace CopperMod.Amiga.CustomChips.Denise
             _timing = bus.RasterTiming;
             _lowResWidth = Math.Min(MaxLowResWidth, _timing.PresentationLowResWidth);
             _lowResHeight = Math.Min(LowResOutputHeight, _timing.PresentationLowResHeight);
+            _liveHardwareRowCount = chipset == AmigaChipset.OcsPal
+                ? Math.Max(LowResOutputHeight, _timing.LongFrameLines - StandardVStart - 1)
+                : LowResOutputHeight;
             _paletteFrameSpanIndexByPixel = new int[_lowResWidth];
             _liveDmaEnabled = liveDmaEnabled;
             _presentationIndependentDisplayLedgerEnabled = enableCommittedDisplayLedger;
             _liveCopperRequesterEnabled = enableLiveCopperRequester;
             var retainedDisplayLineCount = enableCommittedDisplayLedger
-                ? LowResOutputHeight
+                ? _liveHardwareRowCount
                 : RasterlineRingSize;
             _liveLineStates = new LiveLineState[retainedDisplayLineCount];
             _liveBitplaneWords = new ushort[retainedDisplayLineCount * LiveBitplaneWordsPerRow];
@@ -1075,7 +1083,8 @@ namespace CopperMod.Amiga.CustomChips.Denise
                 RecordLiveDisplayDmaCycle(latch.GrantedCycle);
             }
 
-            if (!_liveTimelineUnsafeForFrame &&
+            if ((uint)row < (uint)LowResOutputHeight &&
+                !_liveTimelineUnsafeForFrame &&
                 !_presentationIndependentDisplayLedgerEnabled)
             {
                 _displayTimeline.RecordBitplaneFetch(
@@ -1422,14 +1431,16 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private long GetFirstLiveBitplaneFetchCycleForRendering(int row, LiveLineState state)
         {
-            var planeCount = Math.Max(0, state.PlaneCount);
-            for (var slot = 0; slot < state.FetchSlotStride; slot++)
+            if (TryGetFirstLiveBitplaneFetchCursor(
+                    state,
+                    out _,
+                    out var word,
+                    out var slot))
             {
-                if (TryGetBitplanePlaneForFetchSlot(slot, planeCount, state.FetchResolution, out _))
-                {
-                    var fetchHorizontal = state.DataFetchStart + slot;
-                    return AgnusChipSlotScheduler.AlignToSlot(state.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles));
-                }
+                var fetchHorizontal = state.DataFetchStart +
+                    (word * state.FetchSlotStride) + slot;
+                return AgnusChipSlotScheduler.AlignToSlot(
+                    state.LineStartCycle + ((long)fetchHorizontal * CopperHpCycles));
             }
 
             return long.MaxValue;
@@ -1456,7 +1467,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private bool IsLiveLineValid(int row)
         {
-            if ((uint)row >= (uint)LowResOutputHeight)
+            if ((uint)row >= (uint)_liveHardwareRowCount)
             {
                 return false;
             }
@@ -1482,7 +1493,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
 
         private int GetLiveCaptureSlot(int row)
             => _presentationIndependentDisplayLedgerEnabled
-                ? Math.Clamp(row, 0, LowResOutputHeight - 1)
+                ? Math.Clamp(row, 0, _liveHardwareRowCount - 1)
                 : GetRasterlineRingSlot(row);
 
         private int GetLiveBitplaneWordIndex(int row, int plane, int word)
@@ -4089,6 +4100,7 @@ namespace CopperMod.Amiga.CustomChips.Denise
             public int FetchWords;
             public int DataFetchStart;
             public int FetchSlotStride;
+            public long BitplaneInputSuppressedThroughCycle = long.MinValue;
             public int PaletteSnapshotIndex;
             public byte PlaneHasRowMask;
             public ulong BitplaneRgaDecision0;
