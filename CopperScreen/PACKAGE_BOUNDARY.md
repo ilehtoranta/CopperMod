@@ -6,8 +6,15 @@
 Its standalone checkout preserves 90 app commits, owns its focused tests and
 uses unconditional package references. All 66 standalone checks passed, including
 both native replays; its local Windows package also built. Source checkout:
-`C:/D-drive/Koodit/GIT/CopperScreen`. The original app remains intact here while
-package publication and public-feed-only verification are pending feed selection.
+`C:/D-drive/Koodit/GIT/CopperScreen`. The original app remains intact here.
+The user authorized NuGet.org publication; the exact verified Copper68k
+`1.4.1-boundary.1`, CopperDisk `2.1.1-boundary.1` and Lightweight
+`0.1.0-preview.1` artifacts were submitted successfully on 2026-09-16.
+After indexing, a fresh standalone clone restored from NuGet.org with unchanged
+package locks and an empty package cache, built and passed 64 tests (2 native
+tests explicitly skipped). All three downloaded library payloads match the
+previously verified files. Automatic CopperScreen CI is enabled for main pushes
+and pull requests; the previous native 66/66 result remains unchanged evidence.
 See the new repository's `docs/MIGRATION.md` for package hashes and evidence.
 The preparation record below is retained as historical context.
 
