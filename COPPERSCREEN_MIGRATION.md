@@ -1,5 +1,30 @@
 # CopperScreen product migration — 2026-09-16
 
+## Follow-up: old host projects retired
+
+The owner approved removing the six remaining CopperScreen app, test, benchmark
+and headless project trees after preserving their unfinished work. Their 108
+tracked files, five new files and eight obsolete launch scripts are now removed
+from this repository. Ignored local media/build files are deliberately untouched.
+
+The verified [recovery archive](https://github.com/ilehtoranta/CopperScreen/blob/main/archive/legacy-copperscreen-20260916/README.md)
+was committed and pushed in CopperScreen as `5a32c483` before removal. It contains
+the exact working source, per-file hashes, tracked-change patch and base commit;
+the CopperStart feature matrix is also directly readable there. All removed work
+is recoverable. The shared host-load support scripts remain here.
+
+The phosphor hold/resume regression test was moved into CopperScreen's focused
+host tests and passed without a production change. The complete focused suite
+passed 65 tests; two optional native-media replays were explicitly skipped.
+No new FPS or hardware-correctness claim is made.
+
+No remaining project/solution/build reference points at the deleted projects.
+Shared Copper68k, CopperMod.Amiga, Cust/AHX and unrelated unfinished CopperStart
+work are unchanged. Older statements below about retaining the old host trees
+are historical and superseded by this retirement.
+
+## Original migration record
+
 The canonical emulator product is now
 [ilehtoranta/CopperScreen](https://github.com/ilehtoranta/CopperScreen), including
 the desktop app, Lightweight engine, CopperDisk, tests, headless runner, workloads

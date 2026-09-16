@@ -7,6 +7,9 @@ Older CopperScreen commands and feature notes below are historical; use that
 repository for emulator development and releases. See [migration status](COPPERSCREEN_MIGRATION.md)
 for the shared player dependencies and unfinished Legacy workspace retained here.
 
+The old CopperScreen project trees and launch scripts have been archived and
+removed. Recovery details are in the migration status above.
+
 [![CopperMod.Abstractions](https://img.shields.io/nuget/v/CopperMod.Abstractions?label=CopperMod.Abstractions)](https://www.nuget.org/packages/CopperMod.Abstractions)
 [![CopperMod.Med](https://img.shields.io/nuget/v/CopperMod.Med?label=CopperMod.Med)](https://www.nuget.org/packages/CopperMod.Med)
 [![CopperMod.ProTracker](https://img.shields.io/nuget/v/CopperMod.ProTracker?label=CopperMod.ProTracker)](https://www.nuget.org/packages/CopperMod.ProTracker)
