@@ -17,6 +17,11 @@
     <ApplicationIcon>Assets\CopperScreen.ico</ApplicationIcon>
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <!-- Keep source-mode development available until packages are published. -->
+    <UseEmulatorProjectReferences Condition="'$(UseEmulatorProjectReferences)' == ''">true</UseEmulatorProjectReferences>
+    <LightweightPackageVersion Condition="'$(LightweightPackageVersion)' == ''">0.1.0-preview.1</LightweightPackageVersion>
+    <Copper68kBoundaryVersion Condition="'$(Copper68kBoundaryVersion)' == ''">1.4.1-boundary.1</Copper68kBoundaryVersion>
+    <CopperDiskBoundaryVersion Condition="'$(CopperDiskBoundaryVersion)' == ''">2.1.1-boundary.1</CopperDiskBoundaryVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
@@ -39,11 +44,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\CopperDisk\CopperDisk.csproj" />
-    <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
-    <ProjectReference Include="..\CopperMod.Amiga.CyberGraphics\CopperMod.Amiga.CyberGraphics.csproj" />
-    <ProjectReference Include="..\Copper68k\Copper68k.csproj" />
-    <ProjectReference Include="..\CopperMod.Amiga.Lightweight\CopperMod.Amiga.Lightweight.csproj" />
+    <ProjectReference Include="..\CopperDisk\CopperDisk.csproj" Condition="'$(UseEmulatorProjectReferences)' == 'true'" />
+    <ProjectReference Include="..\Copper68k\Copper68k.csproj" Condition="'$(UseEmulatorProjectReferences)' == 'true'" />
+    <ProjectReference Include="..\CopperMod.Amiga.Lightweight\CopperMod.Amiga.Lightweight.csproj" Condition="'$(UseEmulatorProjectReferences)' == 'true'" />
+    <PackageReference Include="CopperMod.Amiga.Lightweight" Version="[$(LightweightPackageVersion)]" Condition="'$(UseEmulatorProjectReferences)' != 'true'" />
+    <PackageReference Include="Copper68k" Version="[$(Copper68kBoundaryVersion)]" Condition="'$(UseEmulatorProjectReferences)' != 'true'" />
+    <PackageReference Include="CopperDisk" Version="[$(CopperDiskBoundaryVersion)]" Condition="'$(UseEmulatorProjectReferences)' != 'true'" />
   </ItemGroup>
 
   <ItemGroup>
@@ -54,7 +60,7 @@
   <ItemGroup>
     <Compile Remove="artifacts\**\*.cs" />
     <!-- Legacy/CopperStart restoration is separate from the native host build. -->
-    <Compile Remove="CopperScreenEmulator.cs;CopperBenchViewModel.cs" />
+    <Compile Remove="CopperScreenEmulator.cs;CopperBenchViewModel.cs;CopperScreenPresentationFrame.cs" />
   </ItemGroup>
 
   <Target Name="SetCopperStartAssemblyMetadata" BeforeTargets="GetAssemblyAttributes">

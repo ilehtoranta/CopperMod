@@ -5,7 +5,6 @@
 
 using System.Globalization;
 using System.Text.Json;
-using CopperMod.Amiga;
 using ExecMemoryAllocatorKind = CopperScreen.CopperScreenMemoryAllocator;
 
 namespace CopperScreen;
@@ -134,42 +133,6 @@ internal sealed class CopperScreenProfile
 
 	public bool BootsWithoutDisk => KickstartSource == CopperScreenKickstartSource.DiagRom;
 
-	public MachineProfile MachineProfile => Chipset.DmaChip == DmaChipModel.EcsAgnus &&
-		Chipset.DisplayChip == DisplayChipModel.EcsDenise
-		? Chipset.VideoStandard == VideoStandard.Ntsc
-			? MachineProfile.A500PlusEcsNtsc
-			: MachineProfile.A500PlusEcsPal
-		: Chipset.DmaChip == DmaChipModel.AgaAlice && Chipset.DisplayChip == DisplayChipModel.AgaLisa
-			? Chipset.VideoStandard == VideoStandard.Ntsc
-				? MachineProfile.A1200AgaNtsc
-				: MachineProfile.A1200AgaPal
-		: ExpansionRamSize == 0
-			? MachineProfile.A500Pal512KChipOnlyBoot
-			: MachineProfile.A500Pal512KBoot;
-
-	public MachineOptions CreateMachineOptions()
-	{
-		return MachineOptions
-			.ForProfile(MachineProfile)
-			.WithChipset(Chipset)
-			.WithChipRam(ChipRamSize)
-			.WithExpansionRam(ExpansionRamSize, ExpansionRamBase)
-			.WithRealFastRam(RealFastRamSize, RealFastRamBase)
-			.WithRtgVram(RtgVramSize)
-			.WithRealTimeClock(RtcEnabled)
-			.WithFloppyDriveCount(FloppyDriveCount)
-			.WithHardfiles(HardDrives.Select(drive => new AmigaHardfileConfiguration(
-				drive.Unit,
-				drive.Path,
-				drive.ReadOnly,
-				drive.CreateSizeBytes,
-				drive.Mode,
-				drive.Partition)))
-			.WithCpu(AmigaM68kCoreFactory.Default, CpuBackend)
-			.WithLiveAgnusDma(true)
-			.WithBusAccessLogging(false);
-	}
-
 	public static CopperScreenProfile LoadDefault(string baseDirectory, out string? error,
 		string profileId = DefaultProfileId)
 	{
@@ -280,11 +243,11 @@ internal sealed class CopperScreenProfile
 
 		var chipRamSize = CheckedKilobytes(machine.ChipRamKb, "machine.chipRamKb");
 		var expansionRamSize = CheckedKilobytes(machine.PseudoFastRamKb, "machine.pseudoFastRamKb");
-		var expansionRamBase = ParseAddress(machine.PseudoFastBase, AmigaConstants.A500BootPseudoFastRamBase);
+		var expansionRamBase = ParseAddress(machine.PseudoFastBase, CopperScreenDefaults.A500BootPseudoFastRamBase);
 		var realFastRamSize = CheckedKilobytes(machine.RealFastRamKb, "machine.realFastRamKb");
 		var realFastRamBase = string.IsNullOrWhiteSpace(machine.RealFastBase) && realFastRamSize > 0
-			? AutoconfigFastRamBoard.GetDefaultBase(realFastRamSize)
-			: ParseAddress(machine.RealFastBase, AmigaConstants.A500RealFastRamBase);
+			? CopperScreenDefaults.GetDefaultFastRamBase(realFastRamSize)
+			: ParseAddress(machine.RealFastBase, CopperScreenDefaults.A500RealFastRamBase);
 		var rtgVramSize = CheckedMegabytes(machine.RtgVramMb, "machine.rtgVramMb");
 		var rtcEnabled = machine.RtcEnabled ?? expansionRamSize > 0;
 		var floppyDriveCount = machine.FloppyDriveCount ?? (expansionRamSize > 0 ? 2 : 1);
@@ -896,11 +859,11 @@ internal sealed class CopperScreenProfile
 			"Lightweight A500 + Kickstart 1.3",
 			"PAL OCS, 512 KiB Chip + 512 KiB slow, native Kickstart 1.3, read-only DF0 ADF.",
 			AmigaChipset.OcsPal,
-			AmigaConstants.A500BootChipRamSize,
-			AmigaConstants.A500BootPseudoFastRamSize,
-			AmigaConstants.A500BootPseudoFastRamBase,
+			CopperScreenDefaults.A500BootChipRamSize,
+			CopperScreenDefaults.A500BootPseudoFastRamSize,
+			CopperScreenDefaults.A500BootPseudoFastRamBase,
 			0,
-			AmigaConstants.A500RealFastRamBase,
+			CopperScreenDefaults.A500RealFastRamBase,
 			0,
 			false,
 			1,

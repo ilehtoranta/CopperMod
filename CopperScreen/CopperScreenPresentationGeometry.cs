@@ -1,5 +1,4 @@
 using Avalonia;
-using CopperMod.Amiga.Core;
 
 namespace CopperScreen;
 
@@ -22,16 +21,9 @@ internal readonly record struct CopperScreenPresentationGeometry(
 	public PixelRect? FullViewport { get; init; }
 	public PixelRect? StandardViewport { get; init; }
 
-	public static CopperScreenPresentationGeometry FromRasterTiming(RasterTiming timing, bool superHighRes)
-		=> new(
-			timing.PresentationLowResWidth,
-			timing.PresentationLowResHeight,
-			timing.StandardLowResWidth,
-			timing.StandardLowResHeight,
-			superHighRes ? 4 : 2,
-			2,
-			timing.IsCanonicalPal,
-			superHighRes);
+	public static CopperScreenPresentationGeometry ForStandardRaster(bool isPal, bool superHighRes)
+		=> new(isPal ? 358 : 362, isPal ? 285 : 241, 320, isPal ? 256 : 200,
+			superHighRes ? 4 : 2, 2, isPal, superHighRes);
 
 	public PixelRect GetCroppedViewport()
 		=> StandardViewport ?? new(

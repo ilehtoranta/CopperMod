@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using CopperMod.Amiga;
 
 namespace CopperScreen;
 
@@ -467,7 +466,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 		{
 			disk = await Task.Run(() => CopperScreenDiskImageArchive.LoadDiskImage(fullPath)).ConfigureAwait(false);
 		}
-		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidDataException)
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException or InvalidDataException)
 		{
 			return await SetStatusAsync(ex.Message).ConfigureAwait(false);
 		}
@@ -498,7 +497,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 		{
 			disk = await Task.Run(() => CopperScreenDiskImageArchive.LoadDiskImage(fullPath)).ConfigureAwait(false);
 		}
-		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AmigaEmulationException or ArgumentException or InvalidDataException)
+		catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException or InvalidDataException)
 		{
 			return await SetStatusAsync(ex.Message).ConfigureAwait(false);
 		}

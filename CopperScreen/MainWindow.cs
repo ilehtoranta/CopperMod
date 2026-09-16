@@ -14,7 +14,6 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
-using CopperMod.Amiga;
 using CopperPad;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -217,8 +216,8 @@ internal sealed class MainWindow : Window
 		_applyPendingGamepadInputsAction = ApplyPendingGamepadInputs;
 
 		_presenter = new FramebufferPresenter(
-			_runtime?.Width ?? AmigaConstants.PalHighResWidth,
-			_runtime?.Height ?? AmigaConstants.PalHighResHeight)
+			_runtime?.Width ?? CopperScreenDefaults.PalHighResWidth,
+			_runtime?.Height ?? CopperScreenDefaults.PalHighResHeight)
 		{
 			Focusable = true,
 			Cursor = new Cursor(StandardCursorType.None),
@@ -953,7 +952,7 @@ internal sealed class MainWindow : Window
 	{
 		var drive = state.Drives.Length > 0 ? FormatDriveStatus(state.Drives[0]) : "DF0 unavailable";
 		var debugger = state.DebugSnapshot == null ? "none" : state.DebugSnapshot.ReasonCode;
-		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, skipped={state.PresentationSkippedFrames}, bufferDropped={state.PresentationBufferDroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, cpuMs={state.LastCpuFrameMilliseconds:F2}, hwMs={state.LastHardwareFrameMilliseconds:F2}, displayMs={state.LastDisplayFrameMilliseconds:F2}, audioMs={state.LastAudioFrameMilliseconds:F2}, reserveMs={state.LastPresentationBufferReserveMilliseconds:F2}, publishMs={state.LastPublishFrameMilliseconds:F2}, copyMs={state.LastPublishCopyMilliseconds:F2}, presentMs={_lastPresentationFrameMilliseconds:F2}, uploadMs={_lastPresenterUpdateMilliseconds:F2}, renderMs={_presenter.LastRenderMilliseconds:F2}, framebuffer={_runtime?.Width ?? AmigaConstants.PalHighResWidth}x{_runtime?.Height ?? AmigaConstants.PalHighResHeight}";
+		return $"frame={_presentedFrames}, rendered={state.FramesRendered}, paused={state.IsPaused}, profile=\"{state.ProfileName}\", disk=\"{state.DiskName}\", drive=\"{drive}\", pc=0x{state.Cpu.ProgramCounter & 0x00FF_FFFF:X6}, lastPc=0x{state.Cpu.LastInstructionProgramCounter & 0x00FF_FFFF:X6}, sr=0x{state.Cpu.StatusRegister:X4}, filter={state.AudioFilterEnabled}, debugger={debugger}, status=\"{state.StatusText}\", queuedAudio={state.QueuedAudioBuffers}, dropped={state.DroppedFrames}, skipped={state.PresentationSkippedFrames}, bufferDropped={state.PresentationBufferDroppedFrames}, audioSubmitFailures={state.AudioSubmitFailures}, emuMs={state.LastEmulationFrameMilliseconds:F2}, cpuMs={state.LastCpuFrameMilliseconds:F2}, hwMs={state.LastHardwareFrameMilliseconds:F2}, displayMs={state.LastDisplayFrameMilliseconds:F2}, audioMs={state.LastAudioFrameMilliseconds:F2}, reserveMs={state.LastPresentationBufferReserveMilliseconds:F2}, publishMs={state.LastPublishFrameMilliseconds:F2}, copyMs={state.LastPublishCopyMilliseconds:F2}, presentMs={_lastPresentationFrameMilliseconds:F2}, uploadMs={_lastPresenterUpdateMilliseconds:F2}, renderMs={_presenter.LastRenderMilliseconds:F2}, framebuffer={_runtime?.Width ?? CopperScreenDefaults.PalHighResWidth}x{_runtime?.Height ?? CopperScreenDefaults.PalHighResHeight}";
 	}
 
 	private static string FormatDriveStatus(CopperScreenDriveState drive)

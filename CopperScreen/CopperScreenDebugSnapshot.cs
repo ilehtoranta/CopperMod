@@ -1,5 +1,4 @@
 using System.Text;
-using CopperMod.Amiga;
 
 namespace CopperScreen;
 

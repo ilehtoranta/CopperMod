@@ -5,15 +5,35 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>CS1591</NoWarn>
-    <IsPackable>false</IsPackable>
+    <IsPackable>true</IsPackable>
+    <PackageId>CopperMod.Amiga.Lightweight</PackageId>
+    <PackageVersion>0.1.0-preview.1</PackageVersion>
+    <Authors>Ilkka Lehtoranta</Authors>
+    <Description>Independent single-clock PAL OCS A500 engine with reusable framebuffer and 48 kHz stereo audio output.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/ilehtoranta/CopperMod</RepositoryUrl>
+    <Copper68kBoundaryVersion Condition="'$(Copper68kBoundaryVersion)' == ''">1.4.1-boundary.1</Copper68kBoundaryVersion>
+    <CopperDiskBoundaryVersion Condition="'$(CopperDiskBoundaryVersion)' == ''">2.1.1-boundary.1</CopperDiskBoundaryVersion>
     <LightweightDiagnostics Condition="'$(LightweightDiagnostics)' == '' and '$(Configuration)' == 'Debug'">true</LightweightDiagnostics>
     <DefineConstants Condition="'$(LightweightDiagnostics)' == 'true'">$(DefineConstants);LIGHTWEIGHT_DIAGNOSTICS</DefineConstants>
   </PropertyGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(UseEmulatorPackageDependencies)' != 'true'">
     <ProjectReference Include="..\Copper68k\Copper68k.csproj"
                       GlobalPropertiesToRemove="LightweightDiagnostics" />
     <ProjectReference Include="..\CopperDisk\CopperDisk.csproj"
                       GlobalPropertiesToRemove="LightweightDiagnostics" />
   </ItemGroup>
+  <ItemGroup Condition="'$(UseEmulatorPackageDependencies)' == 'true'">
+    <PackageReference Include="Copper68k" Version="[$(Copper68kBoundaryVersion)]" />
+    <PackageReference Include="CopperDisk" Version="[$(CopperDiskBoundaryVersion)]" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+  <Target Name="ValidatePackageBoundary" BeforeTargets="GenerateNuspec">
+    <Error Condition="'$(LightweightDiagnostics)' == 'true' or '$(Configuration)' != 'Release'" Text="Do not package diagnostic execution. Pack Release with LightweightDiagnostics=false." />
+    <Error Condition="'$(UseEmulatorPackageDependencies)' != 'true'" Text="Pack with UseEmulatorPackageDependencies=true to pin the tested Copper68k and CopperDisk package versions." />
+  </Target>
 </Project>

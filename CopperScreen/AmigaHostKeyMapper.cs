@@ -1,5 +1,4 @@
 using Avalonia.Input;
-using CopperMod.Amiga;
 
 namespace CopperScreen;
 

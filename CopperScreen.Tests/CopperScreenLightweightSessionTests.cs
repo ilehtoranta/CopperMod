@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using CopperMod.Amiga;
 using CopperMod.Amiga.Lightweight;
 using CopperScreen;
 

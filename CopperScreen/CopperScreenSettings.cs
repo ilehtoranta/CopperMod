@@ -5,7 +5,6 @@
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using CopperMod.Amiga;
 
 namespace CopperScreen;
 
@@ -28,9 +27,9 @@ internal sealed class CopperScreenSettingsDraft
 	public AmigaChipset Chipset { get; set; } = AmigaChipset.OcsPal;
 	public KickstartVersion RomVersion { get; set; } = KickstartVersion.Kickstart13;
 
-	public int ChipRamKb { get; set; } = AmigaConstants.A500BootChipRamSize / Kilobyte;
+	public int ChipRamKb { get; set; } = CopperScreenDefaults.A500BootChipRamSize / Kilobyte;
 
-	public int PseudoFastRamKb { get; set; } = AmigaConstants.A500BootPseudoFastRamSize / Kilobyte;
+	public int PseudoFastRamKb { get; set; } = CopperScreenDefaults.A500BootPseudoFastRamSize / Kilobyte;
 
 	public string PseudoFastBase { get; set; } = "$C00000";
 
@@ -150,15 +149,15 @@ internal sealed class CopperScreenSettingsDraft
 	{
 		var realFastRamSize = checked(RealFastRamKb * Kilobyte);
 		var realFastRamBase = string.IsNullOrWhiteSpace(RealFastBase) && realFastRamSize > 0
-			? AutoconfigFastRamBoard.GetDefaultBase(realFastRamSize)
-			: ParseAddress(RealFastBase, AmigaConstants.A500RealFastRamBase);
+			? CopperScreenDefaults.GetDefaultFastRamBase(realFastRamSize)
+			: ParseAddress(RealFastBase, CopperScreenDefaults.A500RealFastRamBase);
 		return CopperScreenProfile.Create(
 			Id,
 			DisplayName,
 			Description,
 			checked(ChipRamKb * Kilobyte),
 			checked(PseudoFastRamKb * Kilobyte),
-			ParseAddress(PseudoFastBase, AmigaConstants.A500BootPseudoFastRamBase),
+			ParseAddress(PseudoFastBase, CopperScreenDefaults.A500BootPseudoFastRamBase),
 			realFastRamSize,
 			realFastRamBase,
 			RtcEnabled,

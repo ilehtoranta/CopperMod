@@ -5,12 +5,28 @@ namespace CopperScreen.Lightweight.Tests;
 
 public sealed class HostDependencyTests
 {
+    [Theory]
+    [InlineData(512 * 1024, 0x200000u)]
+    [InlineData(8 * 1024 * 1024, 0x200000u)]
+    [InlineData(16 * 1024 * 1024, 0x10000000u)]
+    [InlineData(512 * 1024 * 1024, 0x20000000u)]
+    [InlineData(1024 * 1024 * 1024, 0x40000000u)]
+    public void HostProfileKeepsStandardFastRamAddresses(int size, uint address)
+        => Assert.Equal(address, CopperScreenDefaults.GetDefaultFastRamBase(size));
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(256 * 1024)]
+    [InlineData(3 * 1024 * 1024)]
+    public void HostProfileRejectsNonstandardFastRamSizes(int size)
+        => Assert.Throws<ArgumentOutOfRangeException>(() => CopperScreenDefaults.GetDefaultFastRamBase(size));
+
     [Fact]
     public void HostAssemblyDoesNotReferenceCopperStartOrLegacyHost()
     {
         var references = typeof(CopperScreenSession).Assembly.GetReferencedAssemblies();
         Assert.DoesNotContain(references, r => r.Name!.StartsWith("CopperStart", StringComparison.Ordinal));
-        Assert.DoesNotContain(references, r => r.Name is "CopperMod.Amiga.Emulator" or "CopperSharp.Sdk.Amiga.Support");
+        Assert.DoesNotContain(references, r => r.Name is "CopperMod.Amiga" or "CopperMod.Amiga.CyberGraphics" or "CopperMod.Amiga.Emulator" or "CopperSharp.Sdk.Amiga.Support");
     }
 
     [Fact]

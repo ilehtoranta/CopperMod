@@ -35,10 +35,13 @@ and audio tests and adds build-boundary/media checks.
 - Clipboard BGRA payload and allocator profile metadata are host-owned types.
   CopperStart must convert these in a future adapter, not own the common types.
 - Filename-based disk navigation was extracted unchanged from Legacy.
-- `CopperMod.Amiga` / CyberGraphics remain build dependencies for existing
-  configuration and presentation types. No Legacy machine is constructed by
-  Lightweight. Removing those remaining type dependencies is optional future
-  cleanup, not required to remove CopperStart.
+- The package-boundary follow-up also removed `CopperMod.Amiga` and
+  CyberGraphics build dependencies. Profile metadata, raw-key names and standard
+  raster geometry are now host-owned. The old presentation-frame helper is
+  excluded with the Legacy emulator. A restored adapter must explicitly convert
+  these values instead of importing Legacy types into the common host.
+- See `PACKAGE_BOUNDARY.md` for the package-only build and repository split
+  boundary. No emulator execution abstraction was added by this separation.
 
 Restore CopperStart through a separately buildable optional Legacy adapter,
 with explicit factory registration and unavailable handling when absent.

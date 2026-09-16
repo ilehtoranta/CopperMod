@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: MIT
  */
 
-using CopperMod.Amiga;
 
 namespace CopperScreen;
 

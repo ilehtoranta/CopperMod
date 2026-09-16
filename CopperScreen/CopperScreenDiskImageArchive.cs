@@ -5,7 +5,6 @@
 
 using System.IO.Compression;
 using System.Text.RegularExpressions;
-using CopperMod.Amiga;
 
 namespace CopperScreen;
 
@@ -269,10 +268,10 @@ internal static class CopperScreenDiskImageArchive
 	{
 		using var archive = ZipFile.OpenRead(archivePath);
 		var entry = archive.GetEntry(entryName)
-			?? throw new AmigaEmulationException($"ZIP archive does not contain '{entryName}'.");
+			?? throw new NotSupportedException($"ZIP archive does not contain '{entryName}'.");
 		if (!IsSupportedDiskEntryName(entry.Name))
 		{
-			throw new AmigaEmulationException("ZIP archive entry is not a supported disk image.");
+			throw new NotSupportedException("ZIP archive entry is not a supported disk image.");
 		}
 
 		if (TryLoadArchiveEntryInMemory(entry, out var disk))

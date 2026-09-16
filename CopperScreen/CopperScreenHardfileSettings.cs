@@ -1,4 +1,3 @@
-using CopperMod.Amiga;
 
 namespace CopperScreen;
 

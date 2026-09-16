@@ -12,7 +12,6 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("CopperMod.Cust")]
 [assembly: InternalsVisibleTo("CopperMod.Cust.Tests")]
 [assembly: InternalsVisibleTo("CopperMod.Ahx")]
-[assembly: InternalsVisibleTo("CopperScreen")]
 [assembly: InternalsVisibleTo("CopperScreen.Tests")]
 [assembly: InternalsVisibleTo("CopperScreen.Benchmarks")]
 [assembly: InternalsVisibleTo("Copper68k.Benchmarks")]
@@ -20,4 +19,3 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("CopperScreen.Headless")]
 [assembly: InternalsVisibleTo("CopperMod.Amiga.Lightweight")]
 [assembly: InternalsVisibleTo("CopperMod.Amiga.Lightweight.Tests")]
-[assembly: InternalsVisibleTo("CopperScreen.Lightweight.Tests")]
