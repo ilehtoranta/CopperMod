@@ -215,53 +215,58 @@ binaries use the shared [`Replayers`](Replayers/README.md) directory convention.
 
 ## CopperScreen
 
-`CopperScreen` is the Amiga 500 PAL emulator front-end in this workspace. It can
-boot ADF, ADZ, DMS, and IPF disk images directly, or a ZIP containing exactly one
-supported disk image:
+`CopperScreen` is the Amiga emulator front-end in this workspace. **Lightweight
+is the default engine for every profile**; it currently implements PAL OCS A500,
+68000, 512 KiB Chip + 512 KiB slow RAM, native Kickstart 1.3 and one read-only
+standard 880 KiB ADF drive (including ADF in ZIP). Supply your own ROM:
 
 ```powershell
-dotnet run --project .\CopperScreen -- "path\to\disk.adf"
-dotnet run --project .\CopperScreen -- "path\to\disk.adz"
-dotnet run --project .\CopperScreen -- "path\to\disk.dms"
-dotnet run --project .\CopperScreen -- "path\to\disk.ipf"
-dotnet run --project .\CopperScreen -- "path\to\disk.zip"
+dotnet run --project .\CopperScreen -- --kickstart "path\to\Kickstart_13.rom" "path\to\disk.adf"
+dotnet run --project .\CopperScreen -- --kickstart "path\to\Kickstart_13.rom" "path\to\disk.zip"
 ```
 
-Disk image loading is provided by the managed `CopperDisk` library. It parses
-standard and modern extended ADF images, decompresses ADZ and unencrypted
-standard DD DMS images, and decodes SPS / CAPS IPF images into raw Amiga track
-streams for CopperScreen's floppy path. This is still part of emulator bring-up,
-so tricky protection schemes may continue to expose missing floppy-controller or
-disk-DMA behavior.
+Unsupported hardware/media is reported explicitly: there is no automatic Legacy
+fallback or silent replacement of your configured machine. **Legacy/CopperStart
+and CopperBench support are temporarily unavailable**; selecting Legacy reports
+that limitation. Their source is retained for separate restoration.
+No-argument startup opens Settings with the native A500 defaults; set the ROM
+path there before starting. Existing explicit profiles retain their hardware.
 
-By default CopperScreen starts from the `expanded-copperstart` profile config in
+Build and test the independent native host without the unfinished CopperStart
+projects:
+
+```powershell
+dotnet build CopperScreen.Lightweight.slnx -c Release
+dotnet test CopperScreen.Lightweight.Tests/CopperScreen.Lightweight.Tests.csproj -c Release
+```
+
+Only standard 880 KiB ADF and ADF-in-ZIP are supported by this host. See
+[CopperStart restoration notes](CopperScreen/COPPERSTART_RESTORATION.md) for the
+retained Legacy source, historical test projects and future adapter boundary.
+
+By default CopperScreen starts from the `lightweight-a500-kickstart13` profile in
 `CopperScreen\Profiles`. Profiles are JSON files that describe the machine
 memory layout and Kickstart source. Select a bundled profile by id, or pass a
 path to a custom profile JSON file with `--profile`.
 
-A local real Kickstart 1.3 ROM can also be used for testing. Place it at
-`CopperScreen\ROM\Kickstart_13.rom`, or pass a path with `--kickstart-rom`.
-ROM files are local-only and should not be committed.
+Native Kickstart 1.3 is required by Lightweight. Set its path in Settings or pass
+`--kickstart-rom`. ROM files are local-only and should not be committed.
 
-Available startup profiles:
+Retained profile definitions (only the default configuration currently runs):
 
 | Profile config | Memory | Kickstart source |
 | --- | --- | --- |
+| `lightweight-a500-kickstart13` (default) | 512 KiB chip + 512 KiB slow, one read-only drive, no RTC | native Kickstart 1.3 ROM |
 | `vanilla-copperstart` | 512 KB chip RAM | CopperStart 1.3 |
 | `expanded-copperstart` | 512 KB chip RAM + 512 KB pseudo-fast at `$C00000` | CopperStart 1.3 |
 | `vanilla-kickstart13` | 512 KB chip RAM | real Kickstart 1.3 ROM |
 | `expanded-kickstart13` | 512 KB chip RAM + 512 KB pseudo-fast at `$C00000` | real Kickstart 1.3 ROM |
 
-Examples:
-
-```powershell
-dotnet run --project .\CopperScreen -- --profile vanilla-copperstart "path\to\disk.adf"
-dotnet run --project .\CopperScreen -- --profile expanded-kickstart13 --kickstart-rom ".\CopperScreen\ROM\Kickstart_13.rom" "path\to\disk.zip"
-dotnet run --project .\CopperScreen -- --profile ".\CopperScreen\Profiles\expanded-copperstart.json" "path\to\disk.adf"
-```
-
-The ROM-backed profiles are still an emulator bring-up path; CopperStart remains
-the default for day-to-day disk testing.
+Other profiles above require the deferred Legacy/CopperStart restoration. Lightweight
+compatibility will expand incrementally; being the default does not imply that
+it implements every configured machine. See the
+[supported-v1 readiness record](CopperMod.Amiga/LIGHTWEIGHT_A500_SUPPORTED_V1_READINESS.md)
+for accepted workloads and disclosed timing/interlace limitations.
 
 ### CopperScreen Floppy Drive Sounds
 

@@ -39,10 +39,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\CopperMod.Amiga.Emulator\CopperMod.Amiga.Emulator.csproj" />
+    <ProjectReference Include="..\CopperDisk\CopperDisk.csproj" />
     <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
     <ProjectReference Include="..\CopperMod.Amiga.CyberGraphics\CopperMod.Amiga.CyberGraphics.csproj" />
     <ProjectReference Include="..\Copper68k\Copper68k.csproj" />
+    <ProjectReference Include="..\CopperMod.Amiga.Lightweight\CopperMod.Amiga.Lightweight.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -52,6 +53,8 @@
 
   <ItemGroup>
     <Compile Remove="artifacts\**\*.cs" />
+    <!-- Legacy/CopperStart restoration is separate from the native host build. -->
+    <Compile Remove="CopperScreenEmulator.cs;CopperBenchViewModel.cs" />
   </ItemGroup>
 
   <Target Name="SetCopperStartAssemblyMetadata" BeforeTargets="GetAssemblyAttributes">

@@ -91,6 +91,20 @@ public sealed class M68kDispatchTierTests
 	}
 
 	[Fact]
+	public void TestByteDisplacementPlansOnlyTheEightByteFormsWithoutBatching()
+	{
+		for (var opcode = 0; opcode <= ushort.MaxValue; opcode++)
+		{
+			var expected = (opcode & 0xFFF8) == 0x4A28;
+			Assert.Equal(expected, M68kOpcodePlanTable.Kinds[opcode].ToString() == "TestByteDisplacement");
+			Assert.Equal(expected, M68kOpcodePlanTable.PackedPlans[opcode].Kind.ToString() == "TestByteDisplacement");
+			if (!expected) continue;
+			Assert.Equal(M68kDispatchTier.PlannedOnly, ClassifyTier((ushort)opcode));
+			Assert.Equal(M68000MicrosequenceClass.Unsupported, M68kOpcodePlanTable.PackedPlans[opcode].Microsequence);
+		}
+	}
+
+	[Fact]
 	public void PlanKindOrdinalsStayInsideThePackedFiveBitField()
 	{
 		// M68kPackedOpcodePlan stores Kind in five bits (FiveBitMask). Running

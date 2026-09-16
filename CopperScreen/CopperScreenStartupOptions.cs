@@ -41,7 +41,8 @@ internal sealed class CopperScreenStartupOptions
 		bool deferredCpuChipInstructionFetchBatchConfigured = false,
 		bool deferredCpuChipInstructionFetchShadow = false,
 		bool deferredCpuChipInstructionFetchShadowConfigured = false,
-		AgnusBusArbitrationMode agnusBusArbitration = AgnusBusArbitrationMode.Legacy)
+		AgnusBusArbitrationMode agnusBusArbitration = AgnusBusArbitrationMode.Legacy,
+		CopperScreenEngine engine = CopperScreenEngine.Lightweight)
 	{
 		Profile = profile;
 		DiskPath = diskPath;
@@ -75,9 +76,12 @@ internal sealed class CopperScreenStartupOptions
 		DeferredCpuChipInstructionFetchShadow = deferredCpuChipInstructionFetchShadow;
 		DeferredCpuChipInstructionFetchShadowConfigured = deferredCpuChipInstructionFetchShadowConfigured;
 		AgnusBusArbitration = agnusBusArbitration;
+		Engine = engine;
 	}
 
 	public CopperScreenProfile Profile { get; }
+
+	public CopperScreenEngine Engine { get; }
 
 	public string? DiskPath { get; }
 
@@ -164,7 +168,8 @@ internal sealed class CopperScreenStartupOptions
 		bool deferredCpuCustomCompositionWrites = false,
 		bool cpuWaitSlotReference = false,
 		bool hardwareSpecialization = true,
-		AgnusBusArbitrationMode agnusBusArbitration = AgnusBusArbitrationMode.Legacy)
+		AgnusBusArbitrationMode agnusBusArbitration = AgnusBusArbitrationMode.Legacy,
+		CopperScreenEngine engine = CopperScreenEngine.Lightweight)
 	{
 		var normalizedDriveDiskPaths = NormalizeDrivePaths(driveDiskPaths, baseDirectory);
 		var normalizedWriteProtected = NormalizeDriveWriteProtected(driveWriteProtected);
@@ -201,48 +206,34 @@ internal sealed class CopperScreenStartupOptions
 			deferredCpuChipInstructionFetchBatch,
 			deferredCpuChipInstructionFetchShadow,
 			deferredCpuChipInstructionFetchShadow,
-			agnusBusArbitration);
+			agnusBusArbitration, engine);
 	}
 
 	public static CopperScreenStartupOptions Default(string baseDirectory)
 	{
 		var profile = CopperScreenProfile.LoadDefault(baseDirectory, out var error);
 		var driveDiskPaths = CreateDriveDiskPathArray(profile, null, baseDirectory);
-		var hardDrives = NormalizeHardDrivePaths(profile.HardDrives, baseDirectory);
-		return new CopperScreenStartupOptions(
+		return FromSettings(
 			profile,
-			null,
 			driveDiskPaths,
 			CreateDriveWriteProtectedArray(profile),
-			hardDrives,
-			ResolveRomPath(profile.KickstartRomPath, baseDirectory),
+			profile.KickstartRomPath,
 			null,
-			false,
-			false,
-			false,
-			false,
-			false,
-			false,
-			false,
-			false,
-			false,
-			false,
-			false,
-			false,
-			false,
-			false,
-			false,
 			profile.FloppyDriveAudio,
 			profile.Input,
 			baseDirectory,
-			false,
-			error);
+			hasExplicitProfile: false,
+			error: error);
 	}
 
-	public static CopperScreenStartupOptions Parse(string[]? args, string baseDirectory)
+	public static CopperScreenStartupOptions Parse(string[]? args, string baseDirectory,
+		CopperScreenEngine defaultEngine = CopperScreenEngine.Lightweight)
 	{
 		var startupArgs = args ?? Array.Empty<string>();
-		var profile = CopperScreenProfile.LoadDefault(baseDirectory, out var defaultProfileError);
+		// Direct Legacy APIs retain their historical profile; application startup
+		// always defaults to Lightweight, regardless of the requested hardware.
+		var profile = CopperScreenProfile.LoadDefault(baseDirectory, out var defaultProfileError,
+			defaultEngine == CopperScreenEngine.Legacy ? "expanded-m68040-kickstart-rom" : CopperScreenProfile.DefaultProfileId);
 		var error = defaultProfileError;
 		var profileExplicit = false;
 		string? diskPath = null;
@@ -262,6 +253,7 @@ internal sealed class CopperScreenStartupOptions
 		var deferredCpuChipInstructionFetchShadow = false;
 		var deferredCpuChipInstructionFetchShadowConfigured = false;
 		var agnusBusArbitration = AgnusBusArbitrationMode.Legacy;
+		var engine = defaultEngine;
 		var deferredCpuCustomPointerWrites = false;
 		var deferredCpuCustomPointerWritesConfigured = false;
 		var deferredCpuCustomCompositionWrites = false;
@@ -279,6 +271,17 @@ internal sealed class CopperScreenStartupOptions
 			var arg = startupArgs[i];
 			if (string.IsNullOrWhiteSpace(arg))
 			{
+				continue;
+			}
+
+			if (TryReadOptionValue(startupArgs, ref i, arg, "--engine", null, out var engineValue))
+			{
+				engine = engineValue?.ToLowerInvariant() switch
+				{
+					"legacy" => CopperScreenEngine.Legacy,
+					"lightweight" => CopperScreenEngine.Lightweight,
+					_ => (CopperScreenEngine)(-1)
+				};
 				continue;
 			}
 
@@ -636,7 +639,8 @@ internal sealed class CopperScreenStartupOptions
 			}
 		}
 
-		if (kickstartRomPath != null && !profileExplicit)
+		if (kickstartRomPath != null && !profileExplicit &&
+			profile.Id != CopperScreenProfile.DefaultProfileId)
 		{
 			if (!CopperScreenProfile.TryLoadWithKickstartSource(
 				profile,
@@ -700,7 +704,7 @@ internal sealed class CopperScreenStartupOptions
 			deferredCpuChipInstructionFetchBatchConfigured,
 			deferredCpuChipInstructionFetchShadow,
 			deferredCpuChipInstructionFetchShadowConfigured,
-			agnusBusArbitration);
+			agnusBusArbitration, engine);
 	}
 
 	private static string?[] CreateDriveDiskPathArray(CopperScreenProfile profile, string? diskPath, string baseDirectory)

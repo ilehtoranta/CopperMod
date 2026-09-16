@@ -6,7 +6,7 @@
 using System.Globalization;
 using System.Text.Json;
 using CopperMod.Amiga;
-using ExecMemoryAllocatorKind = CopperStart.Exec.ExecMemoryAllocatorKind;
+using ExecMemoryAllocatorKind = CopperScreen.CopperScreenMemoryAllocator;
 
 namespace CopperScreen;
 
@@ -20,8 +20,8 @@ internal enum CopperScreenKickstartSource
 
 internal sealed class CopperScreenProfile
 {
-	// ROM-backed by default; CopperStart remains an explicit compatibility profile.
-	public const string DefaultProfileId = "expanded-m68040-kickstart-rom";
+	// Default hardware matches the lightweight engine; other profiles remain explicit.
+	public const string DefaultProfileId = "lightweight-a500-kickstart13";
 	private const int Kilobyte = 1024;
 	private static readonly JsonSerializerOptions JsonOptions = new()
 	{
@@ -170,9 +170,10 @@ internal sealed class CopperScreenProfile
 			.WithBusAccessLogging(false);
 	}
 
-	public static CopperScreenProfile LoadDefault(string baseDirectory, out string? error)
+	public static CopperScreenProfile LoadDefault(string baseDirectory, out string? error,
+		string profileId = DefaultProfileId)
 	{
-		if (TryLoad(DefaultProfileId, baseDirectory, out var profile, out error))
+		if (TryLoad(profileId, baseDirectory, out var profile, out error))
 		{
 			return profile;
 		}
@@ -238,7 +239,8 @@ internal sealed class CopperScreenProfile
 			.Replace(' ', '-');
 		return normalized switch
 		{
-			"default" or "expanded" => "expanded-copperstart",
+			"default" => DefaultProfileId,
+			"expanded" => "expanded-copperstart",
 			"vanilla" => "vanilla-copperstart",
 			"expanded-rom" or "expanded-kickstart" or "expanded-kickstart-13" => "expanded-kickstart13",
 			"vanilla-rom" or "vanilla-kickstart" or "vanilla-kickstart-13" => "vanilla-kickstart13",
@@ -891,8 +893,8 @@ internal sealed class CopperScreenProfile
 	{
 		return new CopperScreenProfile(
 			DefaultProfileId,
-			"Expanded A500 + CopperStart",
-			"A500 PAL, 512 KB chip RAM, 512 KB pseudo-fast RAM at $C00000, CopperStart Kickstart 1.3 shim.",
+			"Lightweight A500 + Kickstart 1.3",
+			"PAL OCS, 512 KiB Chip + 512 KiB slow, native Kickstart 1.3, read-only DF0 ADF.",
 			AmigaChipset.OcsPal,
 			AmigaConstants.A500BootChipRamSize,
 			AmigaConstants.A500BootPseudoFastRamSize,
@@ -900,11 +902,11 @@ internal sealed class CopperScreenProfile
 			0,
 			AmigaConstants.A500RealFastRamBase,
 			0,
-			true,
-			2,
+			false,
+			1,
 			M68kBackendKind.AccurateM68000,
 			FloppyDriveAudioOptions.Default,
-			CopperScreenKickstartSource.CopperStart,
+			CopperScreenKickstartSource.Kickstart13Rom,
 			KickstartVersion.Kickstart13,
 			null,
 			ExecMemoryAllocatorKind.Tlsf,

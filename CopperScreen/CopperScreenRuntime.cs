@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using CopperMod.Amiga;
-using CopperMod.Amiga.CopperStart.Devices.Clipboard;
 
 namespace CopperScreen;
 
@@ -10,6 +9,8 @@ internal interface ICopperScreenAudioOutput : IDisposable
 	int QueuedBufferCount { get; }
 
 	bool Submit(ReadOnlySpan<float> samples);
+
+	void DiscardQueuedSamples() { }
 }
 
 internal readonly record struct CopperScreenCommandResult(bool Success, string Message, CopperScreenState State);
@@ -65,7 +66,10 @@ internal readonly record struct CopperScreenState(
 	double LastDisplayFrameMilliseconds,
 	double LastAudioFrameMilliseconds,
 	bool IsInterlaced,
-	int InterlaceField);
+	int InterlaceField)
+{
+	public string? FaultMessage { get; init; }
+}
 
 internal sealed class CopperScreenFrameLease : IDisposable
 {
@@ -94,7 +98,7 @@ internal sealed class CopperScreenFrameLease : IDisposable
 
 internal sealed class CopperScreenRuntime : IDisposable
 {
-	private const int AudioSampleRate = 44_100;
+	private readonly int _audioSampleRate;
 	private const int AudioChannels = 2;
 	private const int AudioOutputBufferCount = 8;
 	private const int TargetQueuedAudioBuffers = 8;
@@ -105,7 +109,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 	private const int DisplayFrameMilliseconds = 20;
 	private const int MaxSteadyAudioWaitMilliseconds = 5;
 	private readonly long _displayFrameStopwatchTicks;
-	private readonly CopperScreenEmulator _emulator;
+	private readonly ICopperScreenSession _emulator;
 	private readonly ICopperScreenAudioOutput? _audio;
 	private readonly bool _disposeAudio;
 	private readonly FloppyDriveAudio? _floppyDriveAudio;
@@ -142,19 +146,20 @@ internal sealed class CopperScreenRuntime : IDisposable
 	private double _lastAudioFrameMilliseconds;
 	private bool _disposed;
 
-	private CopperScreenRuntime(CopperScreenEmulator emulator, ICopperScreenAudioOutput? audio, bool disposeAudio)
+	private CopperScreenRuntime(ICopperScreenSession emulator, ICopperScreenAudioOutput? audio, bool disposeAudio)
 	{
 		_emulator = emulator ?? throw new ArgumentNullException(nameof(emulator));
+		_audioSampleRate = emulator.AudioSampleRate;
 		_displayFrameStopwatchTicks = Math.Max(
 			1,
 			(long)Math.Round(Stopwatch.Frequency / _emulator.VideoVBlankHz));
 		_audio = audio;
 		_disposeAudio = disposeAudio;
-		_audioBuffer = new float[_emulator.AudioFramesPerAppFrame(AudioSampleRate) * AudioChannels];
+		_audioBuffer = new float[_emulator.AudioFramesPerAppFrame(_audioSampleRate) * AudioChannels];
 		_floppyDriveAudio = FloppyDriveAudio.TryCreate(
 			_emulator.FloppyDriveAudioOptions,
 			_emulator.BaseDirectory,
-			AudioSampleRate,
+			_audioSampleRate,
 			out var floppyDriveAudioStatus);
 		if (floppyDriveAudioStatus != null)
 		{
@@ -211,28 +216,23 @@ internal sealed class CopperScreenRuntime : IDisposable
 	}
 
 	public static CopperScreenRuntime Create(string[] args, string baseDirectory)
-	{
-		var emulator = CopperScreenEmulator.Create(args, baseDirectory);
-		var audio = MiniaudioAudioOutput.TryCreate(
-			AudioSampleRate,
-			AudioChannels,
-			emulator.AudioFramesPerAppFrame(AudioSampleRate),
-			AudioOutputBufferCount);
-		return new CopperScreenRuntime(emulator, audio, disposeAudio: true);
-	}
+		=> Create(CopperScreenStartupOptions.Parse(args, baseDirectory));
 
 	public static CopperScreenRuntime Create(CopperScreenStartupOptions startupOptions)
 	{
-		var emulator = CopperScreenEmulator.Create(startupOptions);
-		var audio = MiniaudioAudioOutput.TryCreate(
-			AudioSampleRate,
-			AudioChannels,
-			emulator.AudioFramesPerAppFrame(AudioSampleRate),
-			AudioOutputBufferCount);
-		return new CopperScreenRuntime(emulator, audio, disposeAudio: true);
+		var emulator = CopperScreenSession.Create(startupOptions);
+		try
+		{
+			var audio = MiniaudioAudioOutput.TryCreate(
+				emulator.AudioSampleRate, AudioChannels,
+				emulator.AudioFramesPerAppFrame(emulator.AudioSampleRate), AudioOutputBufferCount);
+			try { return new CopperScreenRuntime(emulator, audio, disposeAudio: true); }
+			catch { audio?.Dispose(); throw; }
+		}
+		catch { emulator.Dispose(); throw; }
 	}
 
-	internal static CopperScreenRuntime CreateForTests(CopperScreenEmulator emulator, ICopperScreenAudioOutput? audio = null)
+	internal static CopperScreenRuntime CreateForTests(ICopperScreenSession emulator, ICopperScreenAudioOutput? audio = null)
 		=> new CopperScreenRuntime(emulator, audio, disposeAudio: false);
 
 	public static int CalculateFramesToRender(int? queuedAudioBuffers, bool catchUpAudio)
@@ -419,6 +419,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 		=> EnqueueAsync(emulator =>
 		{
 			var paused = emulator.TogglePaused();
+			if (paused && emulator is CopperScreenLightweightSession) _audio?.DiscardQueuedSamples();
 			return new CopperScreenCommandResult(true, paused ? "Paused" : "Running", CaptureState(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0));
 		});
 
@@ -426,6 +427,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 		=> EnqueueAsync(emulator =>
 		{
 			emulator.Reset();
+			if (emulator is CopperScreenLightweightSession) _audio?.DiscardQueuedSamples();
 			return new CopperScreenCommandResult(true, "Reset", CaptureState(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0));
 		});
 
@@ -438,7 +440,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 
 	public Task<CopperScreenCommandResult> InsertNextDiskAsync()
 	{
-		var nextDiskPath = CopperScreenEmulator.ResolveNextDiskPath(CurrentState.DiskPath);
+		var nextDiskPath = CopperScreenDiskNavigation.ResolveAdjacentDiskPath(CurrentState.DiskPath, 1);
 		return nextDiskPath == null
 			? SetStatusAsync("no next disk image")
 			: InsertDiskAsync(nextDiskPath, markChanged: true);
@@ -446,7 +448,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 
 	public Task<CopperScreenCommandResult> InsertPreviousDiskAsync()
 	{
-		var previousDiskPath = CopperScreenEmulator.ResolvePreviousDiskPath(CurrentState.DiskPath);
+		var previousDiskPath = CopperScreenDiskNavigation.ResolveAdjacentDiskPath(CurrentState.DiskPath, -1);
 		return previousDiskPath == null
 			? SetStatusAsync("no previous disk image")
 			: InsertDiskAsync(previousDiskPath, markChanged: true);
@@ -460,7 +462,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 		}
 
 		var fullPath = CopperScreenDiskImageArchive.NormalizeDiskPath(diskPath);
-		AmigaDiskImage disk;
+		CopperScreenAdfImage disk;
 		try
 		{
 			disk = await Task.Run(() => CopperScreenDiskImageArchive.LoadDiskImage(fullPath)).ConfigureAwait(false);
@@ -491,7 +493,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 		}
 
 		var fullPath = CopperScreenDiskImageArchive.NormalizeDiskPath(diskPath);
-		AmigaDiskImage disk;
+		CopperScreenAdfImage disk;
 		try
 		{
 			disk = await Task.Run(() => CopperScreenDiskImageArchive.LoadDiskImage(fullPath)).ConfigureAwait(false);
@@ -514,6 +516,13 @@ internal sealed class CopperScreenRuntime : IDisposable
 		{
 			var updated = emulator.SetDriveWriteProtected(driveIndex, writeProtected);
 			return new CopperScreenCommandResult(updated, emulator.StatusText, CaptureState(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0));
+		});
+
+	public Task<CopperScreenCommandResult> EjectDiskAsync(int driveIndex = 0)
+		=> EnqueueAsync(emulator =>
+		{
+			var ejected = emulator.EjectDisk(driveIndex);
+			return new CopperScreenCommandResult(ejected, emulator.StatusText, CaptureState(0, _audio?.QueuedBufferCount ?? 0));
 		});
 
 	public Task<CopperScreenCommandResult> LaunchCopperBenchPathAsync(string amigaPath)
@@ -557,13 +566,13 @@ internal sealed class CopperScreenRuntime : IDisposable
 			return new CopperScreenCommandResult(false, message, CaptureState(framesRendered: 0, queuedAudioBuffers: _audio?.QueuedBufferCount ?? 0));
 		});
 
-	private void Post(Action<CopperScreenEmulator> action, bool publishAfterExecute = false)
+	private void Post(Action<ICopperScreenSession> action, bool publishAfterExecute = false)
 	{
 		_commands.Enqueue(new CopperScreenCommand(action, null, publishAfterExecute));
 		_wake.Set();
 	}
 
-	private Task<CopperScreenCommandResult> EnqueueAsync(Func<CopperScreenEmulator, CopperScreenCommandResult> action)
+	private Task<CopperScreenCommandResult> EnqueueAsync(Func<ICopperScreenSession, CopperScreenCommandResult> action)
 	{
 		var completion = new TaskCompletionSource<CopperScreenCommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
 		_commands.Enqueue(new CopperScreenCommand(
@@ -756,7 +765,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 				while (_emulator.TryTakeHostClipboardImage(out var clipboardImage) && clipboardImage is not null)
 					HostClipboardImageChanged?.Invoke(clipboardImage);
 				var audioStartTimestamp = Stopwatch.GetTimestamp();
-				audioFrames = _emulator.RenderAudio(_audioBuffer, AudioSampleRate, AudioChannels);
+				audioFrames = _emulator.RenderAudio(_audioBuffer, _audioSampleRate, AudioChannels);
 				if (_audio != null && _floppyDriveAudio != null && audioFrames > 0)
 				{
 					_emulator.CaptureDriveStates(_floppyDriveAudioStates);
@@ -769,6 +778,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 			{
 				CopperScreenCrashLog.WriteException("CopperScreenRuntime.RenderFrames", ex, ex);
 				_emulator.CaptureFatalException(ex);
+				if (_emulator is CopperScreenLightweightSession) _audio?.DiscardQueuedSamples();
 				_audioBuffer.AsSpan().Clear();
 				_lastAudioFrameMilliseconds = 0;
 				_lastEmulationFrameMilliseconds = Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
@@ -1023,7 +1033,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 			_emulator.LastFrameTiming.DisplayMilliseconds,
 			_lastAudioFrameMilliseconds,
 			_emulator.IsInterlaced,
-			_emulator.CompletedInterlaceField);
+			_emulator.CompletedInterlaceField) { FaultMessage = _emulator.FaultMessage };
 	}
 
 	private CopperScreenDriveState[] CaptureDriveStates()
@@ -1081,7 +1091,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 	private sealed class CopperScreenCommand
 	{
 		public CopperScreenCommand(
-			Action<CopperScreenEmulator> execute,
+			Action<ICopperScreenSession> execute,
 			TaskCompletionSource<CopperScreenCommandResult>? completion,
 			bool publishAfterExecute)
 		{
@@ -1090,7 +1100,7 @@ internal sealed class CopperScreenRuntime : IDisposable
 			PublishAfterExecute = publishAfterExecute;
 		}
 
-		public Action<CopperScreenEmulator> Execute { get; }
+		public Action<ICopperScreenSession> Execute { get; }
 
 		public TaskCompletionSource<CopperScreenCommandResult>? Completion { get; }
 

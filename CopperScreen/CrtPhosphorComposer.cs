@@ -14,9 +14,12 @@ internal sealed class CrtPhosphorComposer
 	private float[]? _blue;
 	private int[]? _output;
 	private long _lastUpdateTimestamp;
+	private long _decayStopTimestamp;
 	private bool _initialized;
 
 	public bool HasBuffers => _output != null;
+
+	public bool HasPendingDecay => HasBuffers && _lastUpdateTimestamp < _decayStopTimestamp;
 
 	public int[] Output => _output ?? Array.Empty<int>();
 
@@ -39,6 +42,13 @@ internal sealed class CrtPhosphorComposer
 		}
 
 		_initialized = true;
+		_lastUpdateTimestamp = timestamp;
+		// A delayed host callback is not loss of the emulated video signal. Decay
+		// only until the next field should arrive, then hold until one is consumed.
+		var fieldDurationTicks = Math.Max(1L, (long)Math.Round(fieldDurationSeconds * Stopwatch.Frequency));
+		_decayStopTimestamp = timestamp > long.MaxValue - fieldDurationTicks
+			? long.MaxValue
+			: timestamp + fieldDurationTicks;
 		PackOutput();
 	}
 
@@ -49,20 +59,27 @@ internal sealed class CrtPhosphorComposer
 			return;
 		}
 
-		if (_lastUpdateTimestamp != 0)
+		var decayTimestamp = _decayStopTimestamp == 0
+			? timestamp
+			: Math.Min(timestamp, _decayStopTimestamp);
+		if (_lastUpdateTimestamp != 0 && decayTimestamp > _lastUpdateTimestamp)
 		{
-			var elapsed = Stopwatch.GetElapsedTime(_lastUpdateTimestamp, timestamp).TotalSeconds;
-			var decay = DecayForSeconds(Math.Max(0, elapsed));
+			var elapsed = Stopwatch.GetElapsedTime(_lastUpdateTimestamp, decayTimestamp).TotalSeconds;
+			var decay = DecayForSeconds(elapsed);
 			for (var i = 0; i < _output!.Length; i++)
 			{
 				_red![i] *= (float)decay;
 				_green![i] *= (float)decay;
 				_blue![i] *= (float)decay;
 			}
-		}
 
-		_lastUpdateTimestamp = timestamp;
-		PackOutput();
+			_lastUpdateTimestamp = decayTimestamp;
+			PackOutput();
+		}
+		else if (_lastUpdateTimestamp == 0)
+		{
+			_lastUpdateTimestamp = decayTimestamp;
+		}
 	}
 
 	public void Reset()
@@ -74,6 +91,7 @@ internal sealed class CrtPhosphorComposer
 		_blue = null;
 		_output = null;
 		_lastUpdateTimestamp = 0;
+		_decayStopTimestamp = 0;
 		_initialized = false;
 	}
 
@@ -95,6 +113,7 @@ internal sealed class CrtPhosphorComposer
 		_blue = new float[length];
 		_output = new int[length];
 		_lastUpdateTimestamp = 0;
+		_decayStopTimestamp = 0;
 		_initialized = false;
 	}
 

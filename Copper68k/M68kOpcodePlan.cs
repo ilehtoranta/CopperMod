@@ -40,7 +40,10 @@ namespace Copper68k
         /// CLR, NEG, NOT, or TST with a data-register-direct operand: one opcode
         /// word, no extension, no bus access, and no register side effect.
         /// </summary>
-        DataRegisterUnary
+        DataRegisterUnary,
+
+        /// <summary>TST.B d16(An), retaining ordinary per-instruction bus execution.</summary>
+        TestByteDisplacement
     }
 
     internal enum M68000MicrosequenceClass : byte
@@ -477,6 +480,11 @@ namespace Copper68k
                 return M68kOpcodePlanKind.Dbcc;
             }
 
+            if ((opcode & 0xFFF8) == 0x4A28)
+            {
+                return M68kOpcodePlanKind.TestByteDisplacement;
+            }
+
             if (TryCreateDataRegisterUnaryKind(opcode, out var unaryKind))
             {
                 return unaryKind;
@@ -566,6 +574,11 @@ namespace Copper68k
             if (TryCreateQuickRegisterPackedPlan(opcode, out var quickPlan))
             {
                 return quickPlan;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4A28)
+            {
+                return new M68kPackedOpcodePlan(M68kOpcodePlanKind.TestByteDisplacement);
             }
 
             if (TryCreateDataRegisterUnaryPackedPlan(opcode, out var unaryPlan))

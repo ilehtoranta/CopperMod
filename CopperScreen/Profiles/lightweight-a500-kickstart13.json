@@ -1,0 +1,16 @@
+{
+  "id": "lightweight-a500-kickstart13",
+  "displayName": "Lightweight A500 + Kickstart 1.3",
+  "description": "Default engine and hardware. PAL OCS, 512 KiB Chip + 512 KiB slow, native Kickstart 1.3, read-only DF0 ADF. Supply your ROM path in Settings or with --kickstart.",
+  "machine": {
+    "model": "A500PAL",
+    "chipRamKb": 512,
+    "pseudoFastRamKb": 512,
+    "pseudoFastBase": "$C00000",
+    "rtcEnabled": false,
+    "floppyDriveCount": 1
+  },
+  "cpu": { "backend": "AccurateM68000" },
+  "kickstart": { "source": "Kickstart13Rom", "version": "1.3" },
+  "audio": { "floppyDriveSounds": { "enabled": false, "mode": "synthetic" } }
+}

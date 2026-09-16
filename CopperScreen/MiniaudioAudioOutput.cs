@@ -80,6 +80,8 @@ internal sealed unsafe class MiniaudioAudioOutput : ICopperScreenAudioOutput
 	public bool Submit(ReadOnlySpan<float> samples)
 		=> Volatile.Read(ref _disposed) == 0 && _queue.TryEnqueue(samples);
 
+	public void DiscardQueuedSamples() => _queue.DiscardQueuedSamples();
+
 	public void Dispose()
 	{
 		if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -136,6 +138,8 @@ internal sealed class MiniaudioSampleQueue
 {
 	private readonly float[][] _buffers;
 	private readonly int[] _sampleCounts;
+	private readonly int[] _generations;
+	private int _generation;
 	private int _readBufferIndex;
 	private int _readSampleOffset;
 	private int _writeBufferIndex;
@@ -155,6 +159,7 @@ internal sealed class MiniaudioSampleQueue
 
 		_buffers = new float[bufferCount][];
 		_sampleCounts = new int[bufferCount];
+		_generations = new int[bufferCount];
 		for (var i = 0; i < _buffers.Length; i++)
 		{
 			_buffers[i] = new float[samplesPerBuffer];
@@ -162,6 +167,11 @@ internal sealed class MiniaudioSampleQueue
 	}
 
 	public int QueuedBufferCount => Volatile.Read(ref _queuedBufferCount);
+
+	// Producer requests a new epoch; only the audio consumer moves read indexes.
+	// Already submitted device audio cannot be recalled, but the next callback
+	// discards old queued/partially consumed buffers without racing ring indexes.
+	public void DiscardQueuedSamples() => Interlocked.Increment(ref _generation);
 
 	public bool TryEnqueue(ReadOnlySpan<float> samples)
 	{
@@ -178,6 +188,7 @@ internal sealed class MiniaudioSampleQueue
 		var writeIndex = _writeBufferIndex;
 		samples.CopyTo(_buffers[writeIndex]);
 		_sampleCounts[writeIndex] = samples.Length;
+		_generations[writeIndex] = Volatile.Read(ref _generation);
 		_writeBufferIndex = (writeIndex + 1) % _buffers.Length;
 		Interlocked.Increment(ref _queuedBufferCount);
 		return true;
@@ -190,6 +201,11 @@ internal sealed class MiniaudioSampleQueue
 		while (destinationOffset < destination.Length && Volatile.Read(ref _queuedBufferCount) > 0)
 		{
 			var readIndex = _readBufferIndex;
+			if (_generations[readIndex] != Volatile.Read(ref _generation))
+			{
+				FinishReadBuffer();
+				continue;
+			}
 			var available = _sampleCounts[readIndex] - _readSampleOffset;
 			if (available <= 0)
 			{

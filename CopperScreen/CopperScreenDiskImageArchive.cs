@@ -52,7 +52,7 @@ internal readonly record struct CopperScreenDriveDiskAssignment(int DriveIndex, 
 internal static class CopperScreenDiskImageArchive
 {
 	private const string ZipEntrySeparator = "#/";
-	private static readonly string[] SupportedDiskEntryExtensions = [".adf", ".adz", ".dms", ".ipf", ".scp"];
+    private static readonly string[] SupportedDiskEntryExtensions = [".adf"];
 
 	public static bool TryReadDiskSet(string path, out CopperScreenArchiveDiskSet? diskSet, out string? error)
 	{
@@ -125,11 +125,11 @@ internal static class CopperScreenDiskImageArchive
 		}
 	}
 
-	public static AmigaDiskImage LoadDiskImage(string path)
+	public static CopperScreenAdfImage LoadDiskImage(string path)
 	{
 		if (!TrySplitEntryPath(path, out var archivePath, out var entryName))
 		{
-			return AmigaDiskImage.Load(path);
+			return CopperScreenAdfImage.Load(path);
 		}
 
 		return LoadArchiveEntry(archivePath, entryName);
@@ -265,7 +265,7 @@ internal static class CopperScreenDiskImageArchive
 		return ordered;
 	}
 
-	private static AmigaDiskImage LoadArchiveEntry(string archivePath, string entryName)
+	private static CopperScreenAdfImage LoadArchiveEntry(string archivePath, string entryName)
 	{
 		using var archive = ZipFile.OpenRead(archivePath);
 		var entry = archive.GetEntry(entryName)
@@ -280,28 +280,10 @@ internal static class CopperScreenDiskImageArchive
 			return disk;
 		}
 
-		var tempPath = Path.Combine(Path.GetTempPath(), "copperscreen-" + Guid.NewGuid().ToString("N") + Path.GetExtension(entry.Name));
-		try
-		{
-			entry.ExtractToFile(tempPath);
-			return AmigaDiskImage.Load(tempPath);
-		}
-		finally
-		{
-			try
-			{
-				File.Delete(tempPath);
-			}
-			catch (IOException)
-			{
-			}
-			catch (UnauthorizedAccessException)
-			{
-			}
-		}
+		throw new NotSupportedException("Lightweight requires a complete standard 880 KiB ADF entry.");
 	}
 
-	private static bool TryLoadArchiveEntryInMemory(ZipArchiveEntry entry, out AmigaDiskImage disk)
+	private static bool TryLoadArchiveEntryInMemory(ZipArchiveEntry entry, out CopperScreenAdfImage disk)
 	{
 		disk = null!;
 		var extension = Path.GetExtension(entry.Name);
@@ -310,15 +292,15 @@ internal static class CopperScreenDiskImageArchive
 			return false;
 		}
 
-		if (entry.Length != AmigaDiskImage.StandardAdfSize)
+		if (entry.Length != CopperScreenAdfImage.StandardAdfSize)
 		{
 			return false;
 		}
 
-		var data = new byte[AmigaDiskImage.StandardAdfSize];
+		var data = new byte[CopperScreenAdfImage.StandardAdfSize];
 		using var input = entry.Open();
 		input.ReadExactly(data);
-		disk = AmigaDiskImage.FromAdfBytes(data, Path.GetFileName(entry.Name));
+		disk = CopperScreenAdfImage.FromAdfBytes(data, Path.GetFileName(entry.Name));
 		return true;
 	}
 

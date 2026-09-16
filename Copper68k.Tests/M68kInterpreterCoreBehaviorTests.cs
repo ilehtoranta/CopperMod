@@ -5527,6 +5527,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		public uint? DelayedInstructionFetchAddress { get; init; }
 		public int DelayedInstructionFetchOccurrence { get; init; } = 1;
 		public int DelayedInstructionFetchCycles { get; init; }
+		public int DataByteReadDelayCycles { get; init; }
 		public uint? ThrowingInstructionFetchAddress { get; init; }
 		public bool ZeroWaitInstructionFetch { get; init; }
 		public bool FixedPlanRunEnabled { get; init; }
@@ -5552,6 +5553,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			cycle += accessKind == M68kBusAccessKind.CpuInstructionFetch && ZeroWaitInstructionFetch
 				? 0
 				: AccessCycles;
+			if (accessKind == M68kBusAccessKind.CpuDataRead) cycle += DataByteReadDelayCycles;
 			return value;
 		}
 		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
@@ -5729,6 +5731,56 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		{
 			Memory[address] = (byte)(value >> 8);
 			Memory[address + 1] = (byte)value;
+		}
+	}
+
+	[Theory]
+	[InlineData(0, 0, 0)]
+	[InlineData(1, 0x80, 0)]
+	[InlineData(-1, 0x7F, 6)]
+	[InlineData(-32768, 0xFF, 12)]
+	[InlineData(32767, 0, 18)]
+	public void TestByteDisplacementPreservesReadsPrefetchFlagsAndInterruptSamples(
+		int displacement, int value, int fetchDelay)
+	{
+		foreach (var register in new[] { 0, 5, 7 })
+		foreach (var dispatch in new[] { M68kOpcodePlanDispatch.KindTable, M68kOpcodePlanDispatch.PackedPlan })
+		{
+			var scalarBus = new CycleCountingBus { DelayedInstructionFetchAddress = 0x1004, DelayedInstructionFetchCycles = fetchDelay, DataByteReadDelayCycles = fetchDelay };
+			var plannedBus = new CycleCountingBus { DelayedInstructionFetchAddress = 0x1004, DelayedInstructionFetchCycles = fetchDelay, DataByteReadDelayCycles = fetchDelay };
+			var program = Words(0x7001, (ushort)(0x4A28 | register), unchecked((ushort)displacement), 0x67FA, 0x4E71, 0x4E71, 0x4E71, 0x4E71);
+			Write(scalarBus.Memory, 0x1000, program);
+			Write(plannedBus.Memory, 0x1000, program);
+			using var scalar = CreateCycleParityCpu(scalarBus, false);
+			using var planned = CreateCycleParityCpu(plannedBus, true, dispatch);
+			scalar.State.A[register] = planned.State.A[register] = 0x20000;
+			scalar.State.StatusRegister = planned.State.StatusRegister = M68kCpuState.ResetStatusRegister | M68kCpuState.Extend | M68kCpuState.Carry | M68kCpuState.Overflow;
+			var address = (uint)(0x20000 + displacement);
+			scalarBus.Memory[address] = plannedBus.Memory[address] = (byte)value;
+			for (var instruction = 0; instruction < 7; instruction++)
+			{
+				scalar.ExecuteInstruction();
+				planned.ExecuteInstruction();
+				AssertCycleParity(scalar, scalarBus, planned, plannedBus);
+				AssertCachedRunParity(scalar, planned);
+				if (instruction == 0)
+				{
+					// MOVEQ cleared C/V; set them again so TST must clear them.
+					scalar.State.StatusRegister |= M68kCpuState.Carry | M68kCpuState.Overflow;
+					planned.State.StatusRegister |= M68kCpuState.Carry | M68kCpuState.Overflow;
+				}
+				if (instruction == 1)
+				{
+					Assert.Equal(value == 0, planned.State.GetFlag(M68kCpuState.Zero));
+					Assert.Equal((value & 0x80) != 0, planned.State.GetFlag(M68kCpuState.Negative));
+					Assert.True(planned.State.GetFlag(M68kCpuState.Extend));
+					Assert.False(planned.State.GetFlag(M68kCpuState.Carry));
+					Assert.False(planned.State.GetFlag(M68kCpuState.Overflow));
+				}
+				// A live read must observe the changed byte on the next loop turn.
+				if (instruction == 3) scalarBus.Memory[address] = plannedBus.Memory[address] = 0x80;
+			}
+			Assert.Equal(0x20000u, planned.State.A[register]);
 		}
 	}
 

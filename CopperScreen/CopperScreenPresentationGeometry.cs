@@ -17,6 +17,11 @@ internal readonly record struct CopperScreenPresentationGeometry(
 	private const int CropBorderLowResX = 32;
 	private const int CropBorderLowResY = 16;
 
+	// Beam-coordinate producers retain blanking in their buffers. Legacy
+	// producers already translate to capture coordinates before publication.
+	public PixelRect? FullViewport { get; init; }
+	public PixelRect? StandardViewport { get; init; }
+
 	public static CopperScreenPresentationGeometry FromRasterTiming(RasterTiming timing, bool superHighRes)
 		=> new(
 			timing.PresentationLowResWidth,
@@ -29,7 +34,7 @@ internal readonly record struct CopperScreenPresentationGeometry(
 			superHighRes);
 
 	public PixelRect GetCroppedViewport()
-		=> new(
+		=> StandardViewport ?? new(
 			CropBorderLowResX * HorizontalSamplesPerLowResPixel,
 			CropBorderLowResY * VerticalSamplesPerLowResPixel,
 			StandardLowResWidth * HorizontalSamplesPerLowResPixel,

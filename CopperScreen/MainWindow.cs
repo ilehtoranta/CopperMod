@@ -15,7 +15,6 @@ using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CopperMod.Amiga;
-using CopperMod.Amiga.CopperStart.Devices.Clipboard;
 using CopperPad;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -26,6 +25,9 @@ namespace CopperScreen;
 internal sealed class MainWindow : Window
 {
 	private const int StatusUpdateIntervalMilliseconds = 250;
+	// A continuously replenished frame queue must yield to native input. Render
+	// priority bypasses Avalonia's input-starvation protection when the host is busy.
+	internal static readonly DispatcherPriority FramePresentationPriority = DispatcherPriority.Background;
 	private const double DebuggerPanelWidth = 1120;
 	private const double DebuggerLeftColumnWidth = 500;
 	private const double SettingsNavigationWidth = 172;
@@ -40,7 +42,7 @@ internal sealed class MainWindow : Window
 		"Audio",
 		"Input"
 	];
-	internal static readonly string[] AmigaDiskImagePickerPatterns = ["*.adf", "*.adz", "*.dms", "*.ipf", "*.zip"];
+	internal static readonly string[] AmigaDiskImagePickerPatterns = ["*.adf", "*.zip"];
 	private sealed record ArchiveDiskAssignmentDialogResult(CopperScreenDriveDiskAssignment[] Assignments, int FloppyDriveCount);
 	private sealed record ArchiveEntryChoice(string Label, string? DiskPath)
 	{
@@ -65,6 +67,8 @@ internal sealed class MainWindow : Window
 	private readonly TextBlock _frameStatus;
 	private readonly TextBlock _perfStatus;
 	private Border _perfStatusBox = null!;
+	private readonly TextBlock _faultMessage = new() { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.White };
+	private readonly Border _faultBanner;
 	private readonly TextBlock[] _driveStatusTexts = new TextBlock[4];
 	private readonly Border[] _driveStatusBoxes = new Border[4];
 	private readonly Button[] _driveStatusButtons = new Button[4];
@@ -123,6 +127,7 @@ internal sealed class MainWindow : Window
 	private ComboBox _kickstartSourceBox = null!;
 	private TextBox _kickstartRomBox = null!;
 	private ComboBox _cpuBackendBox = null!;
+	private ComboBox _engineBox = null!;
 	private TextBox _chipRamBox = null!;
 	private TextBox _pseudoFastRamBox = null!;
 	private TextBox _pseudoFastBaseBox = null!;
@@ -185,8 +190,17 @@ internal sealed class MainWindow : Window
 		_inputOptions = _settingsDraft.Input;
 		if (_initialStartupOptions.HasExplicitProfile)
 		{
-			_runtime = CopperScreenRuntime.Create(_initialStartupOptions);
-			_latestState = _runtime.CurrentState;
+			try
+			{
+				_runtime = CopperScreenRuntime.Create(_initialStartupOptions);
+				_latestState = _runtime.CurrentState;
+			}
+			catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException or IOException or UnauthorizedAccessException)
+			{
+				_settingsStartupError = ex.Message;
+				_latestState = CreateIdleState(_settingsDraft);
+				_settingsVisible = true;
+			}
 		}
 		else
 		{
@@ -257,6 +271,15 @@ internal sealed class MainWindow : Window
 		_root.Children.Add(_debuggerPanel);
 		_root.Children.Add(_toolbar);
 		_root.Children.Add(_gamepadAssignmentOverlay);
+		_faultBanner = new Border
+		{
+			Child = _faultMessage, IsVisible = false, IsHitTestVisible = false,
+			Background = new SolidColorBrush(Color.FromRgb(100, 28, 20)),
+			Padding = new Thickness(12), Margin = new Thickness(12),
+			HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Bottom
+		};
+		Grid.SetRowSpan(_faultBanner, 2);
+		_root.Children.Add(_faultBanner);
 		Content = _root;
 		ApplyWindowPresentationMode();
 		RefreshCopperBenchUi();
@@ -785,7 +808,7 @@ internal sealed class MainWindow : Window
 			return;
 		}
 
-		Dispatcher.UIThread.Post(PresentQueuedFrame, DispatcherPriority.Render);
+		Dispatcher.UIThread.Post(PresentQueuedFrame, FramePresentationPriority);
 	}
 
 	private void PresentQueuedFrame()
@@ -914,7 +937,10 @@ internal sealed class MainWindow : Window
 		_crtPhosphor.Advance(Stopwatch.GetTimestamp());
 		_presenter.Update(_crtPhosphor.Output);
 		_lastPresenterUpdateMilliseconds = _presenter.LastUpdateMilliseconds;
-		QueueCrtPhosphorAnimationFrame();
+		if (_crtPhosphor.HasPendingDecay)
+		{
+			QueueCrtPhosphorAnimationFrame();
+		}
 	}
 
 	private void DisableCrtPhosphorPresentation()
@@ -1875,6 +1901,7 @@ internal sealed class MainWindow : Window
 		_kickstartSourceBox = AddComboSetting(kickstart, "Kickstart", ["CopperStart", "KickstartRom", "Kickstart13Rom", "DiagRom"]);
 		_kickstartRomBox = AddTextSetting(kickstart, "ROM path");
 		var cpu = CreateSettingsGroupForm();
+		_engineBox = AddComboSetting(cpu, "Engine", ["Lightweight", "Legacy"]);
 		_cpuBackendBox = AddComboSetting(cpu, "CPU backend", ["AccurateM68000", "AccurateM68EC020", "AccurateM68020", "AccurateM68030", "AccurateM68040", "JitM68040"]);
 
 		layout.Children.Add(CreateSettingsGroupPair(
@@ -2354,6 +2381,7 @@ internal sealed class MainWindow : Window
 			_kickstartSourceBox.SelectedItem = _settingsDraft.KickstartSource.ToString();
 			_kickstartRomBox.Text = _settingsDraft.KickstartRomPath ?? string.Empty;
 			_cpuBackendBox.SelectedItem = _settingsDraft.CpuBackend.ToString();
+			_engineBox.SelectedItem = _settingsDraft.Engine.ToString();
 			_chipRamBox.Text = _settingsDraft.ChipRamKb.ToString(System.Globalization.CultureInfo.InvariantCulture);
 			_pseudoFastRamBox.Text = _settingsDraft.PseudoFastRamKb.ToString(System.Globalization.CultureInfo.InvariantCulture);
 			_pseudoFastBaseBox.Text = _settingsDraft.PseudoFastBase;
@@ -2519,7 +2547,9 @@ internal sealed class MainWindow : Window
 		}
 
 		ClearSettingsStartupError();
+		var selectedEngine = _engineBox.SelectedItem is "Legacy" ? CopperScreenEngine.Legacy : CopperScreenEngine.Lightweight;
 		_settingsDraft = CopperScreenSettingsDraft.FromProfile(profile);
+		_settingsDraft.Engine = selectedEngine;
 		_settingsDraft.MarkRequiresRestart();
 		_inputOptions = _settingsDraft.Input;
 		_runtime?.SetPresentationOptions(_settingsDraft.PresentationOptions);
@@ -2598,7 +2628,13 @@ internal sealed class MainWindow : Window
 			_runtime.Dispose();
 		}
 
-		_runtime = CopperScreenRuntime.Create(options);
+		_runtime = null;
+		try { _runtime = CopperScreenRuntime.Create(options); }
+		catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException or IOException or UnauthorizedAccessException)
+		{
+			SetSettingsError(ex.Message);
+			return;
+		}
 		_runtime.FramePublished += QueueFramePresentation;
 		_runtime.HostClipboardTextChanged += PublishGuestClipboardText;
 		_runtime.HostClipboardImageChanged += PublishGuestClipboardImage;
@@ -2626,9 +2662,25 @@ internal sealed class MainWindow : Window
 			_settingsDraft.Id = _profileIdBox.Text?.Trim() ?? string.Empty;
 			_settingsDraft.DisplayName = _profileNameBox.Text?.Trim() ?? string.Empty;
 			_settingsDraft.Description = _profileDescriptionBox.Text?.Trim() ?? string.Empty;
-			_settingsDraft.KickstartSource = ParseKickstartSourceSelection(_kickstartSourceBox.SelectedItem);
+			var kickstartSource = ParseKickstartSourceSelection(_kickstartSourceBox.SelectedItem);
+			if (kickstartSource != _settingsDraft.KickstartSource)
+			{
+				_settingsDraft.RomVersion = kickstartSource switch
+				{
+					CopperScreenKickstartSource.CopperStart or CopperScreenKickstartSource.Kickstart13Rom => KickstartVersion.Kickstart13,
+					CopperScreenKickstartSource.DiagRom => KickstartVersion.Kickstart20,
+					_ => _settingsDraft.RomVersion
+				};
+			}
+			_settingsDraft.KickstartSource = kickstartSource;
 			_settingsDraft.KickstartRomPath = string.IsNullOrWhiteSpace(_kickstartRomBox.Text) ? null : _kickstartRomBox.Text.Trim();
 			_settingsDraft.CpuBackend = ParseCpuSelection(_cpuBackendBox.SelectedItem);
+			_settingsDraft.Engine = _engineBox.SelectedItem switch
+			{
+				"Lightweight" => CopperScreenEngine.Lightweight,
+				"Legacy" => CopperScreenEngine.Legacy,
+				_ => throw new InvalidOperationException("Select Lightweight or Legacy as the engine.")
+			};
 			_settingsDraft.ChipRamKb = ParsePositiveInt(_chipRamBox.Text, "Chip RAM KB");
 			_settingsDraft.PseudoFastRamKb = ParseNonNegativeInt(_pseudoFastRamBox.Text, "Pseudo-fast RAM KB");
 			_settingsDraft.PseudoFastBase = _pseudoFastBaseBox.Text?.Trim() ?? "$C00000";
@@ -3661,7 +3713,8 @@ internal sealed class MainWindow : Window
 	{
 		if (_showFullOverscan)
 		{
-			var viewport = new PixelRect(0, 0, _presenter.PixelWidth, _presenter.PixelHeight);
+			var viewport = _presenterGeometry.FullViewport ??
+				new PixelRect(0, 0, _presenter.PixelWidth, _presenter.PixelHeight);
 			_presenter.SetSourceViewport(viewport.X, viewport.Y, viewport.Width, viewport.Height);
 		}
 		else
@@ -4168,6 +4221,12 @@ internal sealed class MainWindow : Window
 
 	private void UpdateToolbarStatus(CopperScreenState state)
 	{
+		_faultBanner.IsVisible = state.FaultMessage != null;
+		if (state.FaultMessage is { } fault)
+		{
+			SetText(_faultMessage, $"Emulation stopped: {fault}\nReset the machine to recover. Unsupported behavior was not bypassed.");
+			if (_mouseGrabActive) ReleaseMouseGrab();
+		}
 		_pauseButton.Content = state.IsPaused ? "Run" : "Pause";
 		_numpadModeButton.Content = _numpadMode == NumpadInputMode.Joystick ? "N:Joy" : "N:Key";
 		_fullscreenButton.Content = WindowState == WindowState.FullScreen ? "Win" : "Full";

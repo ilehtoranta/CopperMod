@@ -1,0 +1,10 @@
+<Solution>
+  <Project Path="Copper68k/Copper68k.csproj" />
+  <Project Path="CopperDisk/CopperDisk.csproj" />
+  <Project Path="CopperMod.Amiga/CopperMod.Amiga.csproj" />
+  <Project Path="CopperMod.Amiga.CyberGraphics/CopperMod.Amiga.CyberGraphics.csproj" />
+  <Project Path="CopperMod.Amiga.Lightweight/CopperMod.Amiga.Lightweight.csproj" />
+  <Project Path="CopperScreen/CopperScreen.csproj" />
+  <Project Path="CopperScreen.Lightweight.Tests/CopperScreen.Lightweight.Tests.csproj" />
+  <Project Path="CopperMod.Amiga.Lightweight.Runner/CopperMod.Amiga.Lightweight.Runner.csproj" />
+</Solution>

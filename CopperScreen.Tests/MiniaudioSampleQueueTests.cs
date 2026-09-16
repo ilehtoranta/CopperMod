@@ -5,6 +5,37 @@ namespace CopperScreen.Tests;
 public sealed class MiniaudioSampleQueueTests
 {
 	[Fact]
+	public void DiscardDropsPartialAndQueuedOldAudioButKeepsNewGeneration()
+	{
+		var queue = new MiniaudioSampleQueue(4, 4);
+		Assert.True(queue.TryEnqueue([1f, 2f, 3f, 4f]));
+		Assert.True(queue.TryEnqueue([5f, 6f]));
+		queue.Dequeue(new float[1]);
+		queue.DiscardQueuedSamples();
+		Assert.True(queue.TryEnqueue([7f, 8f]));
+		var output = new float[4];
+		queue.Dequeue(output);
+		Assert.Equal([7f, 8f, 0f, 0f], output);
+		Assert.Equal(0, queue.QueuedBufferCount);
+	}
+
+	[Fact]
+	public void RepeatedDiscardOfFullQueueRecoversWithoutStaleSamples()
+	{
+		var queue = new MiniaudioSampleQueue(2, 2);
+		Assert.True(queue.TryEnqueue([1f, 2f]));
+		Assert.True(queue.TryEnqueue([3f, 4f]));
+		queue.DiscardQueuedSamples();
+		queue.DiscardQueuedSamples();
+		var output = new float[4];
+		queue.Dequeue(output);
+		Assert.Equal(new float[4], output);
+		Assert.True(queue.TryEnqueue([5f, 6f]));
+		queue.Dequeue(output);
+		Assert.Equal([5f, 6f, 0f, 0f], output);
+	}
+
+	[Fact]
 	public void DequeuePreservesSamplesAcrossCallbackBoundaries()
 	{
 		var queue = new MiniaudioSampleQueue(samplesPerBuffer: 4, bufferCount: 3);

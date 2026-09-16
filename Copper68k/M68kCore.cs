@@ -882,6 +882,16 @@ namespace Copper68k
         void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount);
     }
 
+    /// <summary>
+    /// Opts a simple hardware boundary into the conservative visible-bus
+    /// NOP/short-branch loop batch. Every instruction fetch still enters the
+    /// normal bus; other planned instruction kinds remain scalar.
+    /// </summary>
+    internal interface IM68kConservativeBusAccessBatchBoundary :
+        IM68kBusAccessTraceBatchBoundary
+    {
+    }
+
     internal interface IM68kDeferredCpuBusBatchBoundary
     {
         bool TryPrepareDeferredCpuBusBatch(M68kCpuState state);
@@ -2540,6 +2550,11 @@ namespace Copper68k
                 targetCycle.HasValue &&
                 !_instructionFrequency.Enabled &&
                 busAccessBatchBoundary != null;
+            var conservativeBatchAdmissionPending =
+                fastBatchAdmissionPending &&
+                boundary is IM68kConservativeBusAccessBatchBoundary;
+            var conservativeBatchBranchRetryAvailable =
+                conservativeBatchAdmissionPending;
             var fixedPlanRunAdmissionEnabled =
                 _fixedPlanRunBus != null &&
                 _fixedPlanRunSlots != null &&
@@ -2648,6 +2663,40 @@ namespace Copper68k
                     // one-shot admission open until IRC arrives; a fixed-plan
                     // pair cannot be classified safely from a single word.
                     fastBatchAdmissionPending = _prefetchCount < 2;
+                }
+
+                if (conservativeBatchAdmissionPending &&
+                    _prefetchCount > 0 &&
+                    _prefetchAddress == State.ProgramCounter)
+                {
+                    if (_prefetchCount >= 2 &&
+                        TryExecuteFixedPlanBatch(
+                            maxInstructions - instructions,
+                            targetCycle,
+                            busAccessBatchBoundary!,
+                            out var conservativeBatchInstructions,
+                            conservativeLoopOnly: true))
+                    {
+                        instructions += conservativeBatchInstructions;
+                        conservativeBatchAdmissionPending = false;
+                        continue;
+                    }
+
+                    // Permit one scalar short branch to reveal the head of a
+                    // two-word NOP/BRA loop, then stop probing if the stream
+                    // still is not eligible.
+                    var retryAfterShortBranch =
+                        conservativeBatchBranchRetryAvailable &&
+                        _prefetchCount == 2 &&
+                        M68kOpcodePlanTable.Kinds[_prefetchWord0] ==
+                            M68kOpcodePlanKind.ShortUnconditionalBranch;
+                    if (retryAfterShortBranch)
+                    {
+                        conservativeBatchBranchRetryAvailable = false;
+                    }
+
+                    conservativeBatchAdmissionPending =
+                        _prefetchCount < 2 || retryAfterShortBranch;
                 }
 
                 if (!boundary.BeforeInstruction())
@@ -5236,7 +5285,8 @@ namespace Copper68k
             int maxInstructions,
             long? targetCycle,
             IM68kBusAccessTraceBatchBoundary batchBoundary,
-            out int executedInstructions)
+            out int executedInstructions,
+            bool conservativeLoopOnly = false)
         {
             executedInstructions = 0;
             if (maxInstructions <= 1 ||
@@ -5246,7 +5296,7 @@ namespace Copper68k
                 return false;
             }
 
-            if (!HasQueuedFixedPlanPair())
+            if (!HasQueuedFixedPlanPair(conservativeLoopOnly))
             {
                 return false;
             }
@@ -5264,10 +5314,12 @@ namespace Copper68k
             {
                 M68kOpcodePlanDispatch.KindTable => ExecuteFixedPlanKindBatch(
                     maxInstructions,
-                    batchTargetCycle),
+                    batchTargetCycle,
+                    conservativeLoopOnly),
                 M68kOpcodePlanDispatch.PackedPlan => ExecuteFixedPackedPlanBatch(
                     maxInstructions,
-                    batchTargetCycle),
+                    batchTargetCycle,
+                    conservativeLoopOnly),
                 _ => 0
             };
 
@@ -5283,7 +5335,10 @@ namespace Copper68k
             return true;
         }
 
-        private int ExecuteFixedPlanKindBatch(int maxInstructions, long batchTargetCycle)
+        private int ExecuteFixedPlanKindBatch(
+            int maxInstructions,
+            long batchTargetCycle,
+            bool conservativeLoopOnly)
         {
             var executedInstructions = 0;
             var context = CaptureFixedBatchContext();
@@ -5295,7 +5350,8 @@ namespace Copper68k
                 {
                     var queuedOpcode = context.PrefetchWord0;
                     var kind = M68kOpcodePlanTable.Kinds[queuedOpcode];
-                    if (!IsFixedPlanBatchOpcode(queuedOpcode, kind))
+                    if (!IsFixedPlanBatchOpcode(queuedOpcode, kind) ||
+                        conservativeLoopOnly && !IsConservativeLoopBatchKind(kind))
                     {
                         break;
                     }
@@ -5312,7 +5368,10 @@ namespace Copper68k
             return executedInstructions;
         }
 
-        private int ExecuteFixedPackedPlanBatch(int maxInstructions, long batchTargetCycle)
+        private int ExecuteFixedPackedPlanBatch(
+            int maxInstructions,
+            long batchTargetCycle,
+            bool conservativeLoopOnly)
         {
             var executedInstructions = 0;
             var context = CaptureFixedBatchContext();
@@ -5324,7 +5383,8 @@ namespace Copper68k
                 {
                     var queuedOpcode = context.PrefetchWord0;
                     var plan = M68kOpcodePlanTable.PackedPlans[queuedOpcode];
-                    if (!IsFixedPlanBatchOpcode(queuedOpcode, plan.Kind))
+                    if (!IsFixedPlanBatchOpcode(queuedOpcode, plan.Kind) ||
+                        conservativeLoopOnly && !IsConservativeLoopBatchKind(plan.Kind))
                     {
                         break;
                     }
@@ -6282,7 +6342,7 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool HasQueuedFixedPlanPair()
+        private bool HasQueuedFixedPlanPair(bool conservativeLoopOnly = false)
         {
             if (_opcodePlanDispatch == M68kOpcodePlanDispatch.Scalar ||
                 State.Halted ||
@@ -6297,10 +6357,18 @@ namespace Copper68k
             var firstKind = M68kOpcodePlanTable.Kinds[_prefetchWord0];
             return firstKind != M68kOpcodePlanKind.ShortUnconditionalBranch &&
                 IsFixedPlanBatchOpcode(_prefetchWord0, firstKind) &&
+                (!conservativeLoopOnly || IsConservativeLoopBatchKind(firstKind)) &&
                 IsFixedPlanBatchOpcode(
                     _prefetchWord1,
-                    M68kOpcodePlanTable.Kinds[_prefetchWord1]);
+                    M68kOpcodePlanTable.Kinds[_prefetchWord1]) &&
+                (!conservativeLoopOnly || IsConservativeLoopBatchKind(
+                    M68kOpcodePlanTable.Kinds[_prefetchWord1]));
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsConservativeLoopBatchKind(M68kOpcodePlanKind kind)
+            => kind is M68kOpcodePlanKind.Nop or
+                M68kOpcodePlanKind.ShortUnconditionalBranch;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsFixedPlanBatchOpcode(ushort opcode, M68kOpcodePlanKind kind)
@@ -6621,6 +6689,10 @@ namespace Copper68k
                         DecodeImmediateSize(opcode));
                     RecordPlannedFast(kind);
                     return PlannedRetireMode.SequentialOneWordRefill;
+                case M68kOpcodePlanKind.TestByteDisplacement:
+                    ExecutePlannedTestByteDisplacement(opcode, instructionPc);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.General;
                 default:
                     return PlannedRetireMode.Unsupported;
             }
@@ -6717,9 +6789,33 @@ namespace Copper68k
                     ExecuteDataRegisterUnaryOperation(plan.Variant << 8, plan.Register, plan.Size);
                     RecordPlannedFast(kind);
                     return PlannedRetireMode.SequentialOneWordRefill;
+                case M68kOpcodePlanKind.TestByteDisplacement:
+                    ExecutePlannedTestByteDisplacement(opcode, instructionPc);
+                    RecordPlannedFast(kind);
+                    return PlannedRetireMode.General;
                 default:
                     return PlannedRetireMode.Unsupported;
             }
+        }
+
+        private void ExecutePlannedTestByteDisplacement(ushort opcode, uint instructionPc)
+        {
+            // Same microsequence as scalar TST.B d16(An), without constructing
+            // a general read/write EA operand. No polling reads are coalesced.
+            _dataAccessStackedProgramCounter = instructionPc;
+            _addressErrorInstructionWord = null;
+            _addressErrorIsWriteOverride = null;
+            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
+            var extensionAddress = State.ProgramCounter;
+            var displacement = unchecked((short)FetchWord());
+            var address = unchecked((uint)(State.A[opcode & 7] + displacement));
+            AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+            _dataAccessStackedProgramCounter = extensionAddress;
+            _dataReadFaultAccessKind = M68kBusAccessKind.CpuDataRead;
+            AddInstructionCyclesFromBase(_instructionCycleFloor, 8);
+            var value = ReadByte(address);
+            State.SetSizedLogicFlags(value, M68kOperandSize.Byte);
+            AddInstructionCycles(12);
         }
 
         private void ExecutePlannedMoveq(ushort opcode)
@@ -12942,7 +13038,9 @@ namespace Copper68k
                 long.MinValue,
                 CaptureInstructionFetchPublicationContext());
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        // Intentionally keep the context by value. A .NET 10 readonly-reference
+        // experiment enlarged this hot path and regressed the direct-bus ROM
+        // smoke workload; suppressing unobservable capture is the measured win.
         private long TopUpPrefetchOne(
             out long requestedCycle,
             M68kInstructionFetchPublicationPhase publicationPhase,
@@ -13027,7 +13125,16 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private M68kInstructionFetchPublicationContext CaptureInstructionFetchPublicationContext()
-            => new(
+        {
+            // A plain IM68kBus never receives publication metadata. Avoid
+            // constructing the large snapshot on every prefetch for simple
+            // consumers such as the independent Lightweight engine.
+            if (_instructionFetchWindowBus == null)
+            {
+                return default;
+            }
+
+            return new(
                 _instructionFetchPublicationGroup,
                 _instructionEntryBusCycle,
                 _instructionEntryPrefetchCount,
@@ -13040,6 +13147,7 @@ namespace Copper68k
                 StatusRegister: State.StatusRegister,
                 IplPipelineState: _iplPipelineState,
                 LastInterruptSampleCycle: _lastInterruptSampleCycle);
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void TopUpPrefetchAtRetirement()

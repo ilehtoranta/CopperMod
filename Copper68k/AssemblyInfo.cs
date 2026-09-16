@@ -18,3 +18,6 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Copper68k.Benchmarks")]
 [assembly: InternalsVisibleTo("CopperMod.Amiga.Layers.Benchmarks")]
 [assembly: InternalsVisibleTo("CopperScreen.Headless")]
+[assembly: InternalsVisibleTo("CopperMod.Amiga.Lightweight")]
+[assembly: InternalsVisibleTo("CopperMod.Amiga.Lightweight.Tests")]
+[assembly: InternalsVisibleTo("CopperScreen.Lightweight.Tests")]

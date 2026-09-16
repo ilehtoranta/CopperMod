@@ -15,11 +15,18 @@ internal sealed class CopperScreenSettingsDraft
 {
 	private const int Kilobyte = 1024;
 
+	// Session choice, independent of hardware profiles. Legacy must be selected explicitly.
+	public CopperScreenEngine Engine { get; set; } = CopperScreenEngine.Lightweight;
+
 	public string Id { get; set; } = CopperScreenProfile.DefaultProfileId;
 
-	public string DisplayName { get; set; } = "Expanded A500 + CopperStart";
+	public string DisplayName { get; set; } = "Lightweight A500 + Kickstart 1.3";
 
 	public string Description { get; set; } = string.Empty;
+
+	// Preserve profile fields that are not editable in the current Settings UI.
+	public AmigaChipset Chipset { get; set; } = AmigaChipset.OcsPal;
+	public KickstartVersion RomVersion { get; set; } = KickstartVersion.Kickstart13;
 
 	public int ChipRamKb { get; set; } = AmigaConstants.A500BootChipRamSize / Kilobyte;
 
@@ -33,13 +40,13 @@ internal sealed class CopperScreenSettingsDraft
 
 	public int RtgVramMb { get; set; }
 
-	public bool RtcEnabled { get; set; } = true;
+	public bool RtcEnabled { get; set; }
 
-	public int FloppyDriveCount { get; set; } = 2;
+	public int FloppyDriveCount { get; set; } = 1;
 
 	public M68kBackendKind CpuBackend { get; set; } = M68kBackendKind.AccurateM68000;
 
-	public CopperScreenKickstartSource KickstartSource { get; set; } = CopperScreenKickstartSource.CopperStart;
+	public CopperScreenKickstartSource KickstartSource { get; set; } = CopperScreenKickstartSource.Kickstart13Rom;
 
 	public string? KickstartRomPath { get; set; }
 
@@ -60,6 +67,7 @@ internal sealed class CopperScreenSettingsDraft
 	public static CopperScreenSettingsDraft FromStartupOptions(CopperScreenStartupOptions options)
 	{
 		var draft = FromProfile(options.Profile);
+		draft.Engine = options.Engine;
 		draft.KickstartRomPath = options.KickstartRomPath;
 		draft.CpuBackend = options.CpuBackendOverride ?? options.Profile.CpuBackend;
 		draft.FloppyDriveAudio = options.FloppyDriveAudio;
@@ -83,6 +91,8 @@ internal sealed class CopperScreenSettingsDraft
 			Id = profile.Id,
 			DisplayName = profile.DisplayName,
 			Description = profile.Description,
+			Chipset = profile.Chipset,
+			RomVersion = profile.KickstartVersion,
 			ChipRamKb = profile.ChipRamSize / Kilobyte,
 			PseudoFastRamKb = profile.ExpansionRamSize / Kilobyte,
 			PseudoFastBase = FormatAddress(profile.ExpansionRamBase),
@@ -133,7 +143,7 @@ internal sealed class CopperScreenSettingsDraft
 			null,
 			FloppyDriveAudio,
 			Input,
-			baseDirectory);
+			baseDirectory, engine: Engine);
 	}
 
 	public CopperScreenProfile ToProfile(string? configPath = null)
@@ -162,7 +172,9 @@ internal sealed class CopperScreenSettingsDraft
 			configPath,
 			PresentationOptions,
 			KickstartRomPath,
-			rtgVramSize: checked((long)RtgVramMb * 1024 * 1024));
+			rtgVramSize: checked((long)RtgVramMb * 1024 * 1024),
+			chipset: Chipset,
+			kickstartVersion: RomVersion);
 	}
 
 	public IReadOnlyList<CopperScreenMediaDriveSettings> CreateMediaDrives()
@@ -355,6 +367,9 @@ internal static class CopperScreenProfileStore
 				Machine = new MachineFile
 				{
 					Model = "A500PAL",
+					Agnus = draft.Chipset.DmaChip switch { DmaChipModel.EcsAgnus => "ecs", DmaChipModel.AgaAlice => "aga", _ => "ocs" },
+					Denise = draft.Chipset.DisplayChip switch { DisplayChipModel.EcsDenise => "ecs", DisplayChipModel.AgaLisa => "aga", _ => "ocs" },
+					VideoStandard = draft.Chipset.VideoStandard.ToString(),
 					ChipRamKb = draft.ChipRamKb,
 					PseudoFastRamKb = draft.PseudoFastRamKb,
 					PseudoFastBase = draft.PseudoFastBase,
@@ -380,9 +395,13 @@ internal static class CopperScreenProfileStore
 				Kickstart = new KickstartFile
 				{
 					Source = draft.KickstartSource.ToString(),
-					Version = draft.KickstartSource == CopperScreenKickstartSource.Kickstart13Rom
-						? "1.3"
-						: draft.KickstartSource == CopperScreenKickstartSource.DiagRom ? "2.0" : null,
+					Version = draft.RomVersion switch
+					{
+						KickstartVersion.Kickstart20 => "2.0",
+						KickstartVersion.Kickstart30 => "3.0",
+						KickstartVersion.Kickstart31 => "3.1",
+						_ => "1.3"
+					},
 					Path = string.IsNullOrWhiteSpace(draft.KickstartRomPath) ? null : draft.KickstartRomPath.Trim()
 				},
 				Media = draft.CreateMediaDrives().Count == 0
@@ -480,6 +499,9 @@ internal static class CopperScreenProfileStore
 	private sealed class MachineFile
 	{
 		public string Model { get; set; } = "A500PAL";
+		public string? Agnus { get; set; }
+		public string? Denise { get; set; }
+		public string? VideoStandard { get; set; }
 
 		public int ChipRamKb { get; set; }
 

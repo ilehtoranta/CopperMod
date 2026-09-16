@@ -8,6 +8,20 @@ namespace CopperScreen.Tests;
 public sealed class FramebufferPresenterTests
 {
 	[Fact]
+	public void LightweightViewportsTranslateBeamCoordinatesWithoutLosingVisibleRaster()
+	{
+		var geometry = CopperScreenLightweightSession.NativePresentationGeometry;
+		Assert.Equal(new PixelRect(196, 52, 712, 570), geometry.FullViewport);
+		Assert.Equal(new PixelRect(258, 88, 640, 512), geometry.GetCroppedViewport());
+		Assert.Equal(908, geometry.FullViewport!.Value.Right);
+		Assert.Equal(622, geometry.FullViewport.Value.Bottom);
+		Assert.True(FramebufferPresenter.TryMapUniformStretchPoint(
+			new Size(640, 512), geometry.GetCroppedViewport(), new Point(0, 0), out var point));
+		Assert.Equal(new Point(258, 88), point);
+		Assert.Null(CopperScreenPresentationGeometry.FromRasterTiming(RasterTiming.Pal, false).FullViewport);
+	}
+
+	[Fact]
 	public void CopyBgraRowsCopiesTightlyPackedFrame()
 	{
 		var source = new[]
