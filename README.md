@@ -1,430 +1,110 @@
 # CopperMod
 
-**Repository ownership:** the complete active CopperScreen emulator (desktop,
-Lightweight engine, CopperDisk, tests and runner) now lives in
-[ilehtoranta/CopperScreen](https://github.com/ilehtoranta/CopperScreen).
-Older CopperScreen commands and feature notes below are historical; use that
-repository for emulator development and releases. See [migration status](COPPERSCREEN_MIGRATION.md)
-for the shared player dependencies and unfinished Legacy workspace retained here.
+CopperMod is a terminal music player for classic tracker and chip music, with
+reusable C# playback libraries and a command-line audio exporter.
 
-The old CopperScreen project trees and launch scripts have been archived and
-removed. Recovery details are in the migration status above.
-
-[![CopperMod.Abstractions](https://img.shields.io/nuget/v/CopperMod.Abstractions?label=CopperMod.Abstractions)](https://www.nuget.org/packages/CopperMod.Abstractions)
 [![CopperMod.Med](https://img.shields.io/nuget/v/CopperMod.Med?label=CopperMod.Med)](https://www.nuget.org/packages/CopperMod.Med)
 [![CopperMod.ProTracker](https://img.shields.io/nuget/v/CopperMod.ProTracker?label=CopperMod.ProTracker)](https://www.nuget.org/packages/CopperMod.ProTracker)
 [![CopperMod.Sid](https://img.shields.io/nuget/v/CopperMod.Sid?label=CopperMod.Sid)](https://www.nuget.org/packages/CopperMod.Sid)
-[![Copper68k](https://img.shields.io/nuget/v/Copper68k?label=Copper68k)](https://www.nuget.org/packages/Copper68k)
-[![CopperFloat](https://img.shields.io/nuget/v/CopperFloat?label=CopperFloat)](https://www.nuget.org/packages/CopperFloat)
-[![Copper6510](https://img.shields.io/nuget/v/Copper6510?label=Copper6510)](https://www.nuget.org/packages/Copper6510)
 [![CopperMod.Cust](https://img.shields.io/nuget/v/CopperMod.Cust?label=CopperMod.Cust)](https://www.nuget.org/packages/CopperMod.Cust)
-[![CopperDisk](https://img.shields.io/nuget/v/CopperDisk?label=CopperDisk)](https://www.nuget.org/packages/CopperDisk)
 
-CopperMod is a terminal music player for classic tracker and chip music formats.
-It started as a portable MED renderer, but is growing into a small playback stack
-with reusable C# backends and a Terminal.Gui based player application.
+## Formats
 
-The project focuses on accurate replay behavior rather than format conversion.
-Backends render audio in small time slices, making them useful both for the
-CopperMod player and for other applications that need tracker playback.
+- **MED / OctaMED:** MMD0–MMD3 parsing and Amiga-style playback.
+- **ProTracker MOD:** four-channel playback with Amiga-style sample output.
+- **AHX0 / AHX1:** playback through the original 68000 replay routine; requires
+  a locally supplied, hash-verified AHX 2.3d replay binary.
+- **SID / RSID:** C64/SID emulation with cycle-counted register scheduling.
+- **Amiga CUST:** custom-player execution in an Amiga/Paula playback sandbox.
 
-## Built with GPT-5.6 and Codex for OpenAI Build Week
+Replay accuracy is a work in progress. Advanced effects, difficult RSID tunes
+and SID analog behavior remain areas of ongoing development. Music files and
+third-party replay binaries are not distributed with the player.
 
-Codex, powered by GPT-5.6, was used as an active engineering collaborator during
-OpenAI Build Week. It worked directly in the repository: reading the existing
-architecture, implementing focused changes, running .NET tests, profiling Release
-builds, and comparing emulator output across a corpus of Amiga software.
+## Build and run
 
-The collaboration was especially useful in the Amiga work behind CopperScreen and
-its reusable components. Notable Build Week changes include:
-
-- **CRT-faithful ECS and interlace presentation.** CopperScreen now preserves its
-  full ECS superhires and overscan capture internally while presenting it with
-  pixel-aspect-correct LCD or CRT geometry. Its interlaced CRT mode uses a
-  host-side phosphor-persistence compositor, updated at monitor render cadence,
-  instead of an artificial alternating odd/even-field dimmer. The expensive path
-  is allocated and active only for interlaced CRT output; stable weave and normal
-  non-interlaced presentation retain the lightweight 50/60 Hz path.
-- **Native, managed IPF disk support.** `CopperDisk` provides what we believe is the
-  first native C# implementation for reading SPS/CAPS IPF preservation images. It
-  is MIT licensed, requires no native CAPS library, and feeds decoded track data
-  into the same cycle-exact floppy and disk-DMA path used for ADF images. Codex
-  helped implement the decoder, validate disk-DMA behavior, and test real images.
-- **One cycle-exact timeline for the CPU and Amiga custom chips.** An Amiga's CPU,
-  display, Copper coprocessor, and blitter all compete for the same memory bus.
-  Previously, advancing those components through separate catch-up paths made both
-  correctness and performance work difficult. The refactor brought CPU/Agnus bus
-  arbitration, live display DMA, Copper execution, and a bounded blitter executor
-  onto one ordered slot timeline. In simple terms, every device now performs its
-  read or write at the exact point when it owns the bus, so later devices observe
-  the correct data without sacrificing cycle accuracy. Copper WAIT restart phases
-  are modeled as internal, non-reserving control phases on that same physical
-  timeline, including DMA, refresh, and phase-polarity interactions.
-- **CPU-visible horizon batching without retrospective emulation.** The Accurate
-  MC68000 interpreter can execute ROM and Fast RAM instructions in batches up to
-  the next indexed CPU-visible deadline. CIA, Paula, disk, Copper, blitter,
-  raster, interrupt, and queued control deadlines live in the causal Agnus
-  executor; production wake queries read that agenda instead of rescanning every
-  device. Chip RAM accesses and custom-register effects still end or segment the
-  batch at their exact bus cycles, so batching never reconstructs past memory or
-  moves an event behind the executed bus horizon. Independent rollback switches
-  remain available while the final corpus matrix is stabilized.
-- **68EC020 CPU support with executable timing evidence.** `Copper68k` now exposes
-  the 68EC020 as a distinct CPU model: it retains the MC68020 instruction set,
-  32-bit registers, exception behavior, and timing profile while applying the
-  processor's 24-bit external address bus to instruction and data accesses. Codex
-  helped implement the reusable bus boundary and add direct MC68020/68EC020 state,
-  machine-cycle, native-cycle, and high-address alias regression tests.
-- **Independent 68k conformance gates.** Codex integrated optional, reproducible
-  runners for the Musashi MC68000/MC68040 program corpora and the WinUAE CPU
-  Tester MC68000 data, alongside the project's focused instruction tests. These
-  external suites are used as discovery and regression evidence, with documented
-  exclusions where their expectations concern undefined processor behavior or
-  currently unsupported features; they do not replace the project's chosen CPU
-  semantics or hardware evidence.
-- **Deterministic extended-precision arithmetic in CopperFloat.** The new
-  `CopperFloat` package provides allocation-free managed extF80 arithmetic with
-  explicit precision, rounding, tininess, and IEEE exception flags. It preserves
-  complete 80-bit encodings, including NaN payloads and noncanonical values, and
-  validates results against committed Berkeley TestFloat 3e-derived fixtures.
-  Codex helped build the arithmetic, differential tests, exactness-gated host
-  acceleration, and package boundary used by MC68040 floating-point emulation.
-- **AI-automated regression testing with real software.** Codex runs a corpus of
-  games and demos, drives repeatable workloads, records framebuffer and audio
-  checksums, CPU and scheduler cycles, boot status, and bus ownership, and compares
-  the results after each timing change. When a checksum diverges, the AI narrows the
-  first mismatching event and helps turn it into a focused synthetic test. Lemmings
-  and Full Contact also serve as recurring performance workloads. Selected
-  vAmigaTS timing cases are additionally checked as deterministic raw-frame
-  comparisons with offset scanning disabled.
-- **ECS and CyberGraphX support.** The project added Enhanced Chip Set timing and
-  display behavior as well as CyberGraphX RTG integration, extending CopperScreen
-  beyond its original OCS-only A500 target.
-- **ROM-first Kickstart gateway groundwork.** CopperScreen can boot a user-supplied
-  Kickstart ROM and use an opt-in CopperStart development overlay. Codex helped
-  migrate host calls to a six-byte `FF00 + uint32` gateway, preserving native ROM
-  execution for every unimplemented vector while establishing the testable path for
-  incremental Exec replacement against the ROM-created ExecBase.
-
-Codex also built differential tests for CPU timing and custom-chip behavior,
-created benchmark and audit tooling, profiled Release builds down to individual
-methods, and evaluated speculative optimizations experimentally. Ideas that failed
-their correctness or repeat-5 performance gate were removed rather than retained as
-unproven complexity.
-
-GPT-5.6 was not treated as a source of hardware truth. The project owner supplied
-the emulator architecture, hardware reasoning, priorities, and acceptance criteria.
-Codex turned those decisions into code and tests, challenged assumptions when traces
-disagreed, and iterated against executable evidence. Changes were accepted only when
-cycle timing, framebuffer and audio checksums, regression tests, and Release
-benchmarks agreed. This made the AI workflow valuable not just for generating code,
-but for sustaining a long, measurement-driven systems-engineering loop.
-
-## Current Status
-
-- MED / OctaMED: MMD0-MMD3 parsing and Amiga-style playback work is underway.
-- ProTracker MOD: 4-channel ProTracker playback with Amiga-style sample output.
-- AHX0/AHX1: original 68000 replay on the cycle-scheduled A500 PAL OCS model;
-  requires a locally supplied, hash-verified AHX 2.3d replay binary.
-- SID / RSID: native C# C64/SID emulation with cycle-counted register scheduling.
-- CopperMod: terminal UI player with NAudio output and optional output shaping.
-
-This is still an accuracy project in progress. Some advanced replay details,
-especially for SID analog behavior and difficult RSID tunes, are expected to keep
-improving over time.
-
-## Build
-
-Requires the .NET 10 SDK.
+Requires the .NET 10 SDK. The terminal player uses Terminal.Gui and NAudio.
 
 ```powershell
-dotnet build .\CopperMod.sln
-dotnet test .\CopperMod.sln
+dotnet build CopperMod/CopperMod.csproj -c Release
+dotnet run --project CopperMod -c Release -- "path/to/tune.sid"
 ```
 
-## Performance Guardrails
+Without a filename, the player tries the default MED test tune if it is available
+locally.
 
-CopperScreen's A500 runtime hot paths must not allocate managed objects after
-warmup. Methods and types marked with `[HotPath]` are checked by the
-`HotPathGuard.Analyzers` Roslyn analyzer, and analyzer diagnostics are treated
-as build errors.
+**Current source-build limitation:** the Cust backend has a known
+`KickstartTrapTable` constructor mismatch. The player build is blocked until
+that shared API mismatch is repaired.
 
-Avoid LINQ, string formatting, closures, iterator or async state machines,
-boxing, heap arrays, and reference-type `new` in hot-path code. Prefer
-preallocated buffers, spans, fixed-size tables, ring buffers, value types, and
-explicit counters. Cold paths such as disk loading, ROM loading, diagnostics,
-crash logging, CopperBench browsing, and test/debug snapshots may allocate, but
-must use `[HotPathAllocationAllowed("reason")]` with a non-empty reason when
-they sit near hot-path code. Hot paths must not call allocation-allowed helpers.
+## Export audio
 
-## Packages
+`CopperMod.Tools` renders supported modules without opening the player:
 
-Reusable libraries are published on NuGet:
+```powershell
+dotnet run --project CopperMod.Tools -- render "path/to/tune.mod" --out tune.wav --seconds 30
+dotnet run --project CopperMod.Tools -- render "path/to/tune.sid" --out tune.pcm --seconds 30
+dotnet run --project CopperMod.Tools -- render "path/to/tune.sid" --out tune.mp3 --seconds 30 --mp3-bitrate 192
+```
 
-| Package | Description |
+WAV output is 32-bit float; raw PCM is interleaved little-endian Float32.
+MP3 export uses the Windows Media Foundation encoder. See the
+[export tool reference](CopperMod.Tools/README.md) for output shaping,
+voice selection, duration detection and other options.
+
+## Reusable libraries
+
+Playback backends render audio in small slices and can be used independently
+of the terminal application.
+
+| Component | Purpose |
 | --- | --- |
-| [CopperMod.Abstractions](https://www.nuget.org/packages/CopperMod.Abstractions) | Shared module loading and rendering interfaces. |
-| [CopperMod.Med](https://www.nuget.org/packages/CopperMod.Med) | MED / OctaMED MMD module parser and renderer. |
+| [CopperMod.Abstractions](https://www.nuget.org/packages/CopperMod.Abstractions) | Module loading and audio-rendering interfaces. |
+| [CopperMod.Med](https://www.nuget.org/packages/CopperMod.Med) | MED / OctaMED parser and renderer. |
 | [CopperMod.ProTracker](https://www.nuget.org/packages/CopperMod.ProTracker) | ProTracker MOD parser and renderer. |
-| CopperMod.Ahx | AHX0/AHX1 loader using the original locally supplied 68000 replay binary. |
-| [CopperMod.Sid](https://www.nuget.org/packages/CopperMod.Sid) | PSID / RSID parser and SID renderer. |
-| [Copper68k](https://www.nuget.org/packages/Copper68k) | Reusable Motorola 68000-family CPU emulation core. |
-| [CopperFloat](https://www.nuget.org/packages/CopperFloat) | Allocation-free deterministic extF80 arithmetic for .NET. |
-| [Copper6510](https://www.nuget.org/packages/Copper6510) | Reusable MOS 6510 CPU emulation core. |
-| [CopperMod.Cust](https://www.nuget.org/packages/CopperMod.Cust) | Amiga CUST loader and Paula playback sandbox. |
-| [CopperDisk](https://www.nuget.org/packages/CopperDisk) | Managed Amiga ADF and IPF disk image library. |
+| CopperMod.Ahx | AHX loading and original 68000 replay integration. |
+| [CopperMod.Sid](https://www.nuget.org/packages/CopperMod.Sid) | PSID / RSID parsing and emulation. |
+| [CopperMod.Cust](https://www.nuget.org/packages/CopperMod.Cust) | Amiga custom-player and Paula playback sandbox. |
+| [Copper68k](Copper68k/README.md) | Motorola 68000-family CPU emulation. |
+| [CopperFloat](CopperFloat/README.md) | Deterministic, allocation-free extended 80-bit arithmetic. |
+| [Copper6510](Copper6510/README.md) | MOS 6510 CPU emulation. |
+| CopperMod.Amiga | Shared Amiga emulation used by the Cust and AHX backends. |
+| CopperMod.Rendering | Format registration and offline-rendering helpers. |
 
-Install the playback backends separately:
+For example:
 
 ```powershell
 dotnet add package CopperMod.Med
 dotnet add package CopperMod.ProTracker
-dotnet add package CopperMod.Ahx
 dotnet add package CopperMod.Sid
 ```
 
-All backend packages depend on `CopperMod.Abstractions`, which contains the
-shared module loading and rendering interfaces.
+## Development
 
-`CopperDisk` is the managed Amiga disk-image package used by CopperScreen for
-ADF and IPF loading:
-
-```powershell
-dotnet add package CopperDisk
-```
-
-CopperDisk package automation lives under `scripts\nuget`:
+Tests live alongside their components. Run the relevant project when changing
+a backend or shared library, for example:
 
 ```powershell
-.\scripts\nuget\pack-copperdisk.ps1
-.\scripts\nuget\publish-copperdisk.ps1 -PackagePath .\artifacts\packages\CopperDisk.1.0.0.nupkg -WhatIf
+dotnet test CopperMod.Med.Tests/CopperMod.Med.Tests.csproj -c Release
+dotnet test CopperMod.ProTracker.Tests/CopperMod.ProTracker.Tests.csproj -c Release
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release
 ```
 
-CopperScreen uses the standalone CopperPad preview packages from NuGet.org:
+Some integration tests require local reference programs or media. Their absence
+is not evidence that the corresponding emulation behavior has been verified.
 
-```powershell
-dotnet add .\CopperScreen\CopperScreen.csproj package CopperPad --version 2.0.0-preview.1
-dotnet add .\CopperScreen\CopperScreen.csproj package CopperPad.HidSharp --version 2.0.0-preview.1
-```
+Package build and publication helpers are under `scripts/nuget`. Windows
+self-contained and framework-dependent player archives are produced by
+`scripts/release/publish-coppermod.ps1`; the corresponding release helper uses
+GitHub CLI. Review artifacts before publishing.
 
-CopperPad source, CI, releases, and issue tracking live in the [standalone CopperPad repository](https://github.com/ilehtoranta/CopperPad).
+The static project website is under `docs`.
 
-## Run
+## Related project
 
-```powershell
-dotnet run --project .\CopperMod -- "path\to\tune.sid"
-```
+[CopperScreen](https://github.com/ilehtoranta/CopperScreen) is the native Amiga
+emulator application, including the Lightweight A500 engine and CopperDisk.
 
-If no file is provided, CopperMod tries to open the default MED test tune when it
-is available in the workspace.
+## License
 
-AHX playback requires local reference-player setup; see
-[`docs/AHX-reference-player.md`](docs/AHX-reference-player.md). The replay
-binary and songs are not distributed by CopperMod. User-supplied native replay
-binaries use the shared [`Replayers`](Replayers/README.md) directory convention.
-
-## CopperScreen
-
-`CopperScreen` is the Amiga emulator front-end in this workspace. **Lightweight
-is the default engine for every profile**; it currently implements PAL OCS A500,
-68000, 512 KiB Chip + 512 KiB slow RAM, native Kickstart 1.3 and one read-only
-standard 880 KiB ADF drive (including ADF in ZIP). Supply your own ROM:
-
-```powershell
-dotnet run --project .\CopperScreen -- --kickstart "path\to\Kickstart_13.rom" "path\to\disk.adf"
-dotnet run --project .\CopperScreen -- --kickstart "path\to\Kickstart_13.rom" "path\to\disk.zip"
-```
-
-Unsupported hardware/media is reported explicitly: there is no automatic Legacy
-fallback or silent replacement of your configured machine. **Legacy/CopperStart
-and CopperBench support are temporarily unavailable**; selecting Legacy reports
-that limitation. Their source is retained for separate restoration.
-No-argument startup opens Settings with the native A500 defaults; set the ROM
-path there before starting. Existing explicit profiles retain their hardware.
-
-Build and test the independent native host without the unfinished CopperStart
-projects:
-
-```powershell
-dotnet build CopperScreen.Lightweight.slnx -c Release
-dotnet test CopperScreen.Lightweight.Tests/CopperScreen.Lightweight.Tests.csproj -c Release
-```
-
-Only standard 880 KiB ADF and ADF-in-ZIP are supported by this host. See
-[CopperStart restoration notes](CopperScreen/COPPERSTART_RESTORATION.md) for the
-retained Legacy source, historical test projects and future adapter boundary.
-
-By default CopperScreen starts from the `lightweight-a500-kickstart13` profile in
-`CopperScreen\Profiles`. Profiles are JSON files that describe the machine
-memory layout and Kickstart source. Select a bundled profile by id, or pass a
-path to a custom profile JSON file with `--profile`.
-
-Native Kickstart 1.3 is required by Lightweight. Set its path in Settings or pass
-`--kickstart-rom`. ROM files are local-only and should not be committed.
-
-Retained profile definitions (only the default configuration currently runs):
-
-| Profile config | Memory | Kickstart source |
-| --- | --- | --- |
-| `lightweight-a500-kickstart13` (default) | 512 KiB chip + 512 KiB slow, one read-only drive, no RTC | native Kickstart 1.3 ROM |
-| `vanilla-copperstart` | 512 KB chip RAM | CopperStart 1.3 |
-| `expanded-copperstart` | 512 KB chip RAM + 512 KB pseudo-fast at `$C00000` | CopperStart 1.3 |
-| `vanilla-kickstart13` | 512 KB chip RAM | real Kickstart 1.3 ROM |
-| `expanded-kickstart13` | 512 KB chip RAM + 512 KB pseudo-fast at `$C00000` | real Kickstart 1.3 ROM |
-
-Other profiles above require the deferred Legacy/CopperStart restoration. Lightweight
-compatibility will expand incrementally; being the default does not imply that
-it implements every configured machine. See the
-[supported-v1 readiness record](CopperMod.Amiga/LIGHTWEIGHT_A500_SUPPORTED_V1_READINESS.md)
-for accepted workloads and disclosed timing/interlace limitations.
-
-### CopperScreen Floppy Drive Sounds
-
-CopperScreen can optionally mix user-supplied mechanical floppy drive sounds into
-the host audio output. These sounds are a front-end feature only: they are mixed
-after Paula audio, and are not referenced by `CopperMod.Amiga` or the CUST
-player. No sound samples are bundled or committed.
-
-Sound packs live under `CopperScreen\Sounds\Floppy\<pack-name>` by default:
-
-```text
-CopperScreen/
-  Sounds/
-    Floppy/
-      default/
-        motor-start.*
-        motor-loop.*
-        motor-stop.*
-        disk-insert.*
-        disk-eject.*
-        step/
-          step-01.*
-          step-02.*
-        seek/
-          seek-01.*
-          seek-02.*
-```
-
-File extensions are ignored when matching the stems above. Samples are decoded
-with NAudio, so supported formats depend on the host. In `samples` mode,
-missing individual files are fine; a missing or empty pack disables drive sounds
-with a status message.
-
-Profile configuration:
-
-```json
-"audio": {
-  "floppyDriveSounds": {
-    "enabled": false,
-    "mode": "synthetic",
-    "soundPack": "default",
-    "volume": 0.25
-  }
-}
-```
-
-Command-line overrides:
-
-```powershell
-dotnet run --project .\CopperScreen -- --floppy-sounds on --floppy-sound-mode synthetic --floppy-sound-volume 0.25 "path\to\disk.adf"
-dotnet run --project .\CopperScreen -- --floppy-sounds on --floppy-sound-mode samples --floppy-sound-pack default --floppy-sound-volume 0.25 "path\to\disk.adf"
-```
-
-`mode` defaults to `synthetic` when drive sounds are enabled. Synthetic mode
-does not require sample files. `samples` mode uses `soundPack`, which resolves
-as `CopperScreen\Sounds\Floppy\<name>` unless it is an absolute path or an
-explicit relative path such as `.\MyPack`.
-
-## Website
-
-The static project website lives in `docs`. GitHub Pages deploys it through
-`.github/workflows/pages.yml` on pushes to `main` and manual workflow runs.
-
-## Export
-
-`CopperMod.Tools` renders supported modules to files without opening the player:
-
-```powershell
-dotnet run --project .\CopperMod.Tools -- render "path\to\tune.mod" --out tune.wav --seconds 30
-dotnet run --project .\CopperMod.Tools -- render "path\to\tune.sid" --out tune.pcm --seconds 30
-dotnet run --project .\CopperMod.Tools -- render "path\to\tune.sid" --out tune.mp3 --seconds 30 --mp3-bitrate 192
-```
-
-WAV output is 32-bit float. PCM output is raw interleaved little-endian Float32.
-MP3 output uses the Windows Media Foundation encoder through NAudio.Wasapi.
-See [CopperMod.Tools README](CopperMod.Tools/README.md) for the full command reference.
-
-## Binary Releases
-
-CopperMod and CopperScreen are released separately. Each release script publishes
-a Windows self-contained zip and a portable .NET zip that can be run with
-`dotnet CopperMod.dll` or `dotnet CopperScreen.dll`.
-
-```powershell
-.\scripts\release\publish-coppermod.ps1 -Version 1.0.0
-.\scripts\release\release-coppermod.ps1 -Version 1.0.0
-
-.\scripts\release\publish-copperscreen.ps1 -Version 1.0.0
-.\scripts\release\release-copperscreen.ps1 -Version 1.0.0
-```
-
-The publish scripts strip `.pdb` and `.xml` files before zipping. CopperMod
-releases use tags like `coppermod-v1.0.0`; CopperScreen releases use tags like
-`copperscreen-v1.0.0`.
-
-The release scripts use GitHub CLI (`gh`) when it is installed. Without `gh`,
-run the release script with `-TagOnly`, then create the GitHub release manually
-and upload the generated zip files plus `SHA256SUMS.txt`.
-
-## NuGet Packages
-
-CopperFloat 1.0.0 is the stable release of the deterministic, allocation-free
-extended 80-bit floating-point library. Build, test, pack, and validate it with:
-
-```powershell
-.\scripts\nuget\pack-copperfloat.ps1 -Version 1.0.0
-```
-
-After reviewing the generated package, publish it and its symbols with:
-
-```powershell
-.\scripts\nuget\publish-copperfloat.ps1 `
-    -PackagePath .\artifacts\packages\CopperFloat.1.0.0.nupkg
-```
-
-The publisher requires `NUGET_API_KEY` or an explicit `-ApiKey`; use `-WhatIf`
-to inspect the push operations without publishing.
-
-Copper6510 2.0.0 is a breaking API release. Build, test, pack, and validate it
-with:
-
-```powershell
-.\scripts\nuget\pack-copper6510.ps1 -Version 2.0.0
-```
-
-After reviewing the generated package, publish it and its symbols with:
-
-```powershell
-.\scripts\nuget\publish-copper6510.ps1 `
-    -PackagePath .\artifacts\packages\Copper6510.2.0.0.nupkg
-```
-
-The publisher requires `NUGET_API_KEY` or an explicit `-ApiKey`; use `-WhatIf`
-to inspect the push operations without publishing.
-
-## Projects
-
-- `CopperMod` - terminal player application.
-- `CopperMod.Abstractions` - shared playback interfaces.
-- `CopperMod.Rendering` - shared format registration and offline rendering helpers.
-- `CopperMod.Tools` - offline render/export utility.
-- `CopperMod.Med` - MED / OctaMED backend.
-- `CopperMod.ProTracker` - ProTracker MOD backend.
-- `CopperMod.Sid` - PSID / RSID backend.
-- `Copper68k` - reusable Motorola 68000-family CPU emulation core.
-- `CopperFloat` - deterministic, allocation-free extended 80-bit floating-point
-  arithmetic.
-- `Copper6510` - reusable MOS 6510 CPU emulation core.
-- `CopperDisk` - managed Amiga ADF / IPF disk image library.
-- `CopperMod.Amiga` - shared Amiga 500 emulation core.
-- `CopperScreen` - Avalonia Amiga 500 emulator front-end.
+MIT; see [LICENSE](LICENSE) and [third-party notices](THIRD-PARTY-NOTICES.md).
