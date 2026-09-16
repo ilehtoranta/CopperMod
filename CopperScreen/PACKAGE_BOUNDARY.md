@@ -1,5 +1,16 @@
 # CopperScreen standalone repository boundary
 
+**2026-09-16 migration update:** the scoped boundary is committed and pushed as
+`713ad6c1bc1bc31efc038996c50faccec31208d6`. The user selected the public
+[`ilehtoranta/CopperScreen`](https://github.com/ilehtoranta/CopperScreen) repository.
+Its standalone checkout preserves 90 app commits, owns its focused tests and
+uses unconditional package references. All 66 standalone checks passed, including
+both native replays; its local Windows package also built. Source checkout:
+`C:/D-drive/Koodit/GIT/CopperScreen`. The original app remains intact here while
+package publication and public-feed-only verification are pending feed selection.
+See the new repository's `docs/MIGRATION.md` for package hashes and evidence.
+The preparation record below is retained as historical context.
+
 ## Decision and scope — 2026-09-16
 
 Prepare CopperScreen to move into its own repository without moving or copying
