@@ -1,5 +1,12 @@
 # CopperMod
 
+**Repository ownership:** the complete active CopperScreen emulator (desktop,
+Lightweight engine, CopperDisk, tests and runner) now lives in
+[ilehtoranta/CopperScreen](https://github.com/ilehtoranta/CopperScreen).
+Older CopperScreen commands and feature notes below are historical; use that
+repository for emulator development and releases. See [migration status](COPPERSCREEN_MIGRATION.md)
+for the shared player dependencies and unfinished Legacy workspace retained here.
+
 [![CopperMod.Abstractions](https://img.shields.io/nuget/v/CopperMod.Abstractions?label=CopperMod.Abstractions)](https://www.nuget.org/packages/CopperMod.Abstractions)
 [![CopperMod.Med](https://img.shields.io/nuget/v/CopperMod.Med?label=CopperMod.Med)](https://www.nuget.org/packages/CopperMod.Med)
 [![CopperMod.ProTracker](https://img.shields.io/nuget/v/CopperMod.ProTracker?label=CopperMod.ProTracker)](https://www.nuget.org/packages/CopperMod.ProTracker)

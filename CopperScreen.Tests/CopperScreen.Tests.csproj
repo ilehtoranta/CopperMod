@@ -30,7 +30,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CopperMod.Amiga.CyberGraphics\CopperMod.Amiga.CyberGraphics.csproj" />
-    <ProjectReference Include="..\CopperDisk\CopperDisk.csproj" />
+    <PackageReference Include="CopperDisk" Version="[2.1.1-boundary.1]" />
     <ProjectReference Include="..\CopperMod.Amiga.Emulator\CopperMod.Amiga.Emulator.csproj" />
     <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
     <ProjectReference Include="..\Copper68k\Copper68k.csproj" />

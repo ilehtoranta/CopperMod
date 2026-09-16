@@ -26,17 +26,5 @@ jobs:
       - name: Test Copper68k
         run: dotnet test Copper68k.Tests\Copper68k.Tests.csproj --configuration Release
 
-      - name: Build CopperScreen
-        run: dotnet build CopperScreen\CopperScreen.csproj --configuration Release
-
-      - name: Build CopperScreen benchmarks
-        run: dotnet build CopperScreen.Benchmarks\CopperScreen.Benchmarks.csproj --configuration Release
-
-      - name: Smoke CopperScreen benchmarks
-        run: dotnet run --project CopperScreen.Benchmarks\CopperScreen.Benchmarks.csproj --configuration Release -- --smoke
-
-      - name: Test performance analyzer
-        run: dotnet test CopperMod.PerformanceAnalyzers.Tests\CopperMod.PerformanceAnalyzers.Tests.csproj --configuration Release
-
-      - name: Test CopperScreen allocation guards
-        run: dotnet test CopperScreen.Tests\CopperScreen.Tests.csproj --configuration Release --filter "FullyQualifiedName~Allocation"
+      - name: Test AHX shared Amiga dependency
+        run: dotnet test CopperMod.Ahx.Tests\CopperMod.Ahx.Tests.csproj --configuration Release
