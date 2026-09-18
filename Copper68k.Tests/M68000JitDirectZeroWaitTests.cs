@@ -7,6 +7,28 @@ public sealed class M68000JitDirectZeroWaitTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void ArchitecturalTraceUsesInterpreterEvenWithAWarmCompiledLoop(bool enableV2)
+    {
+        var bus = new DirectZeroWaitBus();
+        bus.WriteWords(0x1000, [0x4E71, 0x60FC]);
+        bus.WriteWords(0x5000, [0x4E71, 0x4E71]);
+        bus.WriteLongValue(9 * 4, 0x5000);
+        using var jit = new M68kJitCore(bus, enableV2: enableV2);
+        jit.Reset(0x1000, 0x8000);
+        Assert.Equal(400, jit.ExecuteInstructions(400, 500_000, new BatchBoundary()));
+        Assert.True(enableV2 ? jit.Counters.V2TraceHits > 0 : jit.Counters.TraceHits > 0);
+        Assert.Equal(0x1000u, jit.State.ProgramCounter);
+        jit.State.StatusRegister |= M68kCpuState.Trace;
+        jit.ExecuteInstruction();
+        Assert.Equal(0x5000u, jit.State.ProgramCounter);
+        Assert.Equal(0x7FFAu, jit.State.A[7]);
+        Assert.Equal(9, jit.State.LastExceptionVector);
+        Assert.Equal(0x1002u, jit.State.LastExceptionStackedProgramCounter);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void CompiledJsrWritesReturnAddressLowWordBeforeHighWord(bool enableV2)
     {
         const uint code = 0x1000;

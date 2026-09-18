@@ -44,8 +44,9 @@ public sealed class M68kDivideTests
 
 		Assert.Equal(0x57CF_E913u, cpu.State.D[3]);
 		Assert.Equal(M68kCpuState.Trace | M68kCpuState.Extend |
-			M68kCpuState.Negative | M68kCpuState.Overflow, cpu.State.StatusRegister);
-		Assert.Equal(0x1002u, cpu.State.ProgramCounter);
+			M68kCpuState.Negative | M68kCpuState.Overflow, bus.ReadWord(0x2FFA));
+		Assert.Equal(0x1002u, bus.ReadLong(0x2FFC));
+		Assert.Equal(9, cpu.State.LastExceptionVector);
 	}
 
 	[Fact]
@@ -66,7 +67,8 @@ public sealed class M68kDivideTests
 
 		Assert.Equal(0xD83B_1E26u, cpu.State.D[5]);
 		Assert.Equal(M68kCpuState.Trace | 0x0100 |
-			M68kCpuState.Negative | M68kCpuState.Overflow, cpu.State.StatusRegister);
-		Assert.Equal(0x1002u, cpu.State.ProgramCounter);
+			M68kCpuState.Negative | M68kCpuState.Overflow, bus.ReadWord(0x2FFA));
+		Assert.Equal(0x1002u, bus.ReadLong(0x2FFC));
+		Assert.Equal(9, cpu.State.LastExceptionVector);
 	}
 }

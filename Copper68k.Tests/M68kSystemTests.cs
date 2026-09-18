@@ -59,7 +59,9 @@ public sealed class M68kSystemTests
 
 		cpu.ExecuteInstruction();
 
-		Assert.Equal(0xA515, cpu.State.StatusRegister);
+		Assert.Equal(0xA515, bus.ReadWord(0x2FFA)); // post-MOVE SR saved by trace
+		Assert.Equal(0x2515, cpu.State.StatusRegister);
+		Assert.Equal(9, cpu.State.LastExceptionVector);
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));

@@ -1155,6 +1155,9 @@ namespace Copper68k
             bool allowV2TraceHandoff = true)
         {
             _pendingFallbackReason = M68kJitFallbackReason.Unknown;
+            // Architectural tracing requires an exception after each instruction.
+            if ((State.StatusRegister & M68kCpuState.Trace) != 0)
+                return 0;
             if (_requiresExactM68000PipelineFallback)
             {
                 _pendingFallbackReason = M68kJitFallbackReason.ExactM68000Pipeline;

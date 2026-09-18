@@ -2296,6 +2296,7 @@ namespace Copper68k
         private readonly M68000FixedPlanRunInstruction[]? _fixedPlanRunInstructions;
         private byte _deferredCpuBusBatchAdmissionRetryInstructions;
         private uint _activeInstructionProgramCounter;
+        private bool _instructionTracePending;
         private uint _dataAccessStackedProgramCounter;
         private ushort? _addressErrorInstructionWord;
         private bool? _addressErrorIsWriteOverride;
@@ -2899,6 +2900,7 @@ namespace Copper68k
             }
 
             return _deferredCpuInstructionTiming != null &&
+                (State.StatusRegister & M68kCpuState.Trace) == 0 &&
                 maxInstructions > 1 &&
                 !State.Halted &&
                 !State.Stopped &&
@@ -3381,7 +3383,8 @@ namespace Copper68k
             out int executedInstructions)
         {
             executedInstructions = 0;
-            if (maxInstructions <= 1 ||
+            if ((State.StatusRegister & M68kCpuState.Trace) != 0 ||
+                maxInstructions <= 1 ||
                 !targetCycle.HasValue ||
                 _hasPendingPrefetch ||
                 _prefetchCount == 0 ||
@@ -5289,7 +5292,8 @@ namespace Copper68k
             bool conservativeLoopOnly = false)
         {
             executedInstructions = 0;
-            if (maxInstructions <= 1 ||
+            if ((State.StatusRegister & M68kCpuState.Trace) != 0 ||
+                maxInstructions <= 1 ||
                 !targetCycle.HasValue ||
                 _instructionFrequency.Enabled)
             {
@@ -9119,6 +9123,7 @@ namespace Copper68k
             State.LastOpcode = 0;
             State.LastInstructionProgramCounter = 0;
             State.RecordException(-1, 0, 0);
+            _instructionTracePending = false;
             _instructionInterruptSampleCycle = long.MinValue;
             _lastInterruptSampleCycle = long.MinValue;
             RegisterDeferredInterruptSamples();
@@ -14297,6 +14302,8 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void BeginInstructionCycleFloor(long startCycle)
         {
+            // MC68000 UM 6.3.8: sample before executing, not from the resulting SR.
+            _instructionTracePending = (State.StatusRegister & M68kCpuState.Trace) != 0;
             // Reaching the next instruction proves that any previous DBcc
             // transition was consumed normally rather than by an interrupt.
             _exceptionEntryNotBeforeCycle = 0;
@@ -14453,6 +14460,10 @@ namespace Copper68k
             ResolveDeferredInterruptSamples();
             _lastInterruptSample = _instructionInterruptSample;
             RegisterDeferredInterruptSamples();
+            if (_instructionTracePending)
+            {
+                return CompleteTraceException(startCycle);
+            }
             if (_instructionRetirementTrace is { InstructionRetirementTracingEnabled: true })
             {
                 var trace = new M68kInstructionRetirementTrace(
@@ -14464,6 +14475,18 @@ namespace Copper68k
             }
 
             return (int)(State.Cycles - startCycle);
+        }
+
+        private int CompleteTraceException(long instructionStartCycle)
+        {
+            // The instruction (including any group-2 trap) has retired. Start
+            // the separate 34-clock exception entry, but publish one retirement
+            // and one host instruction boundary for the entire operation.
+            BeginInstructionCycleFloor(State.Cycles);
+            _instructionTracePending = false;
+            State.Stopped = false;
+            RaiseException(9, State.ProgramCounter, 34);
+            return CompleteInstruction(instructionStartCycle);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -14492,6 +14515,10 @@ namespace Copper68k
 
         protected void RaiseException(int vector, uint stackedProgramCounter, int cycles)
         {
+            // Only completed instruction traps are followed by trace. Illegal,
+            // privilege, unimplemented and format faults abort the instruction.
+            if (vector is not (5 or 6 or 7 or >= 32 and <= 47))
+                _instructionTracePending = false;
             FlushDeferredCpuTimingBoundary();
 
             var savedStatusRegister = State.StatusRegister;
@@ -14535,6 +14562,7 @@ namespace Copper68k
             M68kBusAccessKind accessKind,
             bool useDataAccessStackedProgramCounter = false)
         {
+            _instructionTracePending = false;
             if (TryHandleModelSpecificAddressError(
                 faultAddress,
                 isWrite,
