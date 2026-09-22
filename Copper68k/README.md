@@ -19,7 +19,9 @@ Copper68k currently targets `.NET 10`.
 
 ## Development version
 
-`1.4.1-locality.1` is an unpublished development version. It retains the trace
+`1.4.1-locality.1` is distributed as a
+[GitHub development prerelease](https://github.com/ilehtoranta/CopperMod/releases/tag/copper68k-1.4.1-locality.1),
+not on NuGet.org. It retains the trace
 exception fixes from `1.4.1-trace.1` and keeps three prefetch helpers out of common
 interpreter dispatch frames to reduce unconditional stack initialization.
 CPU semantics, bus ordering and the public API are unchanged.
@@ -30,7 +32,9 @@ passed all three retained workloads; native Lemmings gained 26.47% paired FPS on
 the recorded Ryzen 5 5600X host. This is not a universal workload or host guarantee.
 See the [complete validation record](https://github.com/ilehtoranta/CopperScreen/blob/main/docs/engine/CPU_PREFETCH_LOCALITY_2026-09-22.md)
 for exact binaries, confidence bounds and unavailable coverage. CopperScreen's
-production pin remains `1.4.1-trace.1` until development-package integration.
+production engine, runner and desktop pin this version through its verified
+development-package bootstrap. The package retains its original build-time
+metadata and bytes; existing published versions are unchanged.
 
 ## Quick Start
 
