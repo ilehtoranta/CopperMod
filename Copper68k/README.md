@@ -17,6 +17,21 @@ dotnet add package Copper68k
 
 Copper68k currently targets `.NET 10`.
 
+## Development version
+
+`1.4.1-locality.1` is an unpublished development version. It retains the trace
+exception fixes from `1.4.1-trace.1` and keeps three prefetch helpers out of common
+interpreter dispatch frames to reduce unconditional stack initialization.
+CPU semantics, bus ordering and the public API are unchanged.
+
+The source change was validated in CopperScreen with CPU and chipset tests,
+native replays and its six-pair performance gate. The isolated benchmark candidate
+passed all three retained workloads; native Lemmings gained 26.47% paired FPS on
+the recorded Ryzen 5 5600X host. This is not a universal workload or host guarantee.
+See the [complete validation record](https://github.com/ilehtoranta/CopperScreen/blob/main/docs/engine/CPU_PREFETCH_LOCALITY_2026-09-22.md)
+for exact binaries, confidence bounds and unavailable coverage. CopperScreen's
+production pin remains `1.4.1-trace.1` until development-package integration.
+
 ## Quick Start
 
 Implement `IM68kBus`, create a core through `M68kCoreFactory`, reset it with an

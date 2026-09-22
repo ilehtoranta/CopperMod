@@ -12992,7 +12992,7 @@ namespace Copper68k
             return value;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private long FullPrefetch(uint address)
         {
             if (_hasPendingPrefetch &&
@@ -13035,7 +13035,7 @@ namespace Copper68k
         private long TopUpPrefetchOne()
             => TopUpPrefetchOne(out _);
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private long TopUpPrefetchOne(out long requestedCycle)
             => TopUpPrefetchOne(
                 out requestedCycle,
@@ -13154,7 +13154,7 @@ namespace Copper68k
                 LastInterruptSampleCycle: _lastInterruptSampleCycle);
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private void TopUpPrefetchAtRetirement()
         {
             if ((State.ProgramCounter & 1) != 0)
