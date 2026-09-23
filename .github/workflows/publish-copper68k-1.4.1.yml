@@ -1,0 +1,67 @@
+name: Publish Copper68k 1.4.1
+
+on:
+  push:
+    tags:
+      - copper68k-v1.4.1
+
+permissions: {}
+
+concurrency:
+  group: nuget-copper68k-1.4.1
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run Copper68k CPU tests
+        run: dotnet test Copper68k.Tests\Copper68k.Tests.csproj --configuration Release
+
+      - name: Build and validate Copper68k 1.4.1 packages
+        shell: pwsh
+        run: .\scripts\nuget\pack-copper68k.ps1 -Configuration Release -Version 1.4.1 -SkipTests
+
+      - name: Exchange GitHub identity for a temporary NuGet API key
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Publish Copper68k 1.4.1 and symbols
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: |
+          $package = "artifacts/packages/Copper68k.1.4.1.nupkg"
+          $symbols = "artifacts/packages/Copper68k.1.4.1.snupkg"
+          if (-not (Test-Path -LiteralPath $package)) {
+            throw "Validated NuGet package is missing."
+          }
+          if (-not (Test-Path -LiteralPath $symbols)) {
+            throw "Validated NuGet symbol package is missing."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:NUGET_API_KEY)) {
+            throw "NuGet Trusted Publishing did not provide a temporary API key."
+          }
+
+          & dotnet nuget push $package --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --no-symbols --skip-duplicate
+          if ($LASTEXITCODE -ne 0) {
+            throw "Publishing the Copper68k package failed."
+          }
+          & dotnet nuget push $symbols --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          if ($LASTEXITCODE -ne 0) {
+            throw "Publishing the Copper68k symbol package failed."
+          }
