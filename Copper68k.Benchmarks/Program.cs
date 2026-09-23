@@ -237,6 +237,13 @@ static BenchmarkBackend[] CreateBackends()
     [
         new BenchmarkBackend("InterpreterM68000", bus => M68kCoreFactory.Default.Create(M68kCpuModel.M68000, bus)),
         new BenchmarkBackend(
+            "InterpreterM68000BusPrefetch",
+            bus => new M68kInterpreter(
+                bus,
+                new M68kCpuState(),
+                enableInstructionFetchWindow: false),
+            IncludeByDefault: false),
+        new BenchmarkBackend(
             "InterpreterM68000Scalar",
             bus => new M68kInterpreter(
                 bus,

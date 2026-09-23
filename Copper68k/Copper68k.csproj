@@ -9,8 +9,8 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <PackageVersion>1.4.1-locality.1</PackageVersion>
-    <PackageReleaseNotes>Unpublished development build: retains the trace-exception fixes and reduces common interpreter stack initialization by keeping full-prefetch, extension-prefetch and retirement-prefetch helpers out of line. No CPU semantics, bus ordering or public API changes.</PackageReleaseNotes>
+    <PackageVersion>1.4.1</PackageVersion>
+    <PackageReleaseNotes>Stable 1.4.1 release. Retains the 68000 trace-exception correction and reduces interpreter stack initialization with out-of-line prefetch helpers. Improves fixed-batch instruction-prefetch throughput by extracting the general bus-prefetch path and avoids deferred interrupt-sample resolution when no deferred-timing provider is present. No public API or emulated bus-order changes. CPU validation: 1,499 tests passed; six optional external conformance suites were not run.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

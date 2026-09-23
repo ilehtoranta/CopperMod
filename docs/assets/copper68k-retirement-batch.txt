@@ -1,0 +1,19 @@
+pair	variant	workload	backend	repeat	instructions	ms	instr/sec	mips	cycles	native-cycles	allocated bytes	checksum	compiled traces	fallback instr	pure trace instr	bus trace instr	zero-wait reads	zero-wait writes
+1	baseline	branch-self-loop	InterpreterM68000	1	50000000	61.962	806948797	806.949	500000000	0	0	0xA4B82B0E	0	0	0	0	0	0
+1	baseline	register-hot-loop	InterpreterM68000	1	50000000	177.123	282290186	282.290	374999990	0	0	0xA7088C3E	0	0	0	0	0	0
+1	baseline	memory-transform-loop	InterpreterM68000	1	50000000	3291.827	15189135	15.189	624998566	0	0	0x456284CB	0	0	0	0	0	0
+1	candidate	branch-self-loop	InterpreterM68000	1	50000000	62.217	803644044	803.644	500000000	0	0	0xA4B82B0E	0	0	0	0	0	0
+1	candidate	register-hot-loop	InterpreterM68000	1	50000000	179.397	278711150	278.711	374999990	0	0	0xA7088C3E	0	0	0	0	0	0
+1	candidate	memory-transform-loop	InterpreterM68000	1	50000000	3207.631	15587826	15.588	624998566	0	0	0x456284CB	0	0	0	0	0	0
+2	candidate	branch-self-loop	InterpreterM68000	1	50000000	61.829	808679394	808.679	500000000	0	0	0xA4B82B0E	0	0	0	0	0	0
+2	candidate	register-hot-loop	InterpreterM68000	1	50000000	172.356	290096904	290.097	374999990	0	0	0xA7088C3E	0	0	0	0	0	0
+2	candidate	memory-transform-loop	InterpreterM68000	1	50000000	3310.129	15105151	15.105	624998566	0	0	0x456284CB	0	0	0	0	0	0
+2	baseline	branch-self-loop	InterpreterM68000	1	50000000	59.528	839938046	839.938	500000000	0	0	0xA4B82B0E	0	0	0	0	0	0
+2	baseline	register-hot-loop	InterpreterM68000	1	50000000	174.547	286456125	286.456	374999990	0	0	0xA7088C3E	0	0	0	0	0	0
+2	baseline	memory-transform-loop	InterpreterM68000	1	50000000	3359.035	14885229	14.885	624998566	0	0	0x456284CB	0	0	0	0	0	0
+3	baseline	branch-self-loop	InterpreterM68000	1	50000000	60.298	829212149	829.212	500000000	0	0	0xA4B82B0E	0	0	0	0	0	0
+3	baseline	register-hot-loop	InterpreterM68000	1	50000000	176.661	283027786	283.028	374999990	0	0	0xA7088C3E	0	0	0	0	0	0
+3	baseline	memory-transform-loop	InterpreterM68000	1	50000000	3319.796	15061169	15.061	624998566	0	0	0x456284CB	0	0	0	0	0	0
+3	candidate	branch-self-loop	InterpreterM68000	1	50000000	60.083	832186303	832.186	500000000	0	0	0xA4B82B0E	0	0	0	0	0	0
+3	candidate	register-hot-loop	InterpreterM68000	1	50000000	183.103	273069901	273.070	374999990	0	0	0xA7088C3E	0	0	0	0	0	0
+3	candidate	memory-transform-loop	InterpreterM68000	1	50000000	3240.545	15429503	15.430	624998566	0	0	0x456284CB	0	0	0	0	0	0

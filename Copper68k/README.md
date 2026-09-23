@@ -17,24 +17,22 @@ dotnet add package Copper68k
 
 Copper68k currently targets `.NET 10`.
 
-## Development version
+## Version 1.4.1
 
-`1.4.1-locality.1` is distributed as a
-[GitHub development prerelease](https://github.com/ilehtoranta/CopperMod/releases/tag/copper68k-1.4.1-locality.1),
-not on NuGet.org. It retains the trace
-exception fixes from `1.4.1-trace.1` and keeps three prefetch helpers out of common
-interpreter dispatch frames to reduce unconditional stack initialization.
-CPU semantics, bus ordering and the public API are unchanged.
+Copper68k 1.4.1 is the stable NuGet release. It retains the 68000 trace-exception
+correction and prefetch-locality improvements from the `1.4.1-locality.1`
+development build. It further reduces interpreter stack initialization in cached
+fixed-batch execution and avoids deferred interrupt-sample resolution when no
+deferred-timing provider is present. The public API and emulated bus ordering are
+unchanged.
 
-The source change was validated in CopperScreen with CPU and chipset tests,
-native replays and its six-pair performance gate. The isolated benchmark candidate
-passed all three retained workloads; native Lemmings gained 26.47% paired FPS on
-the recorded Ryzen 5 5600X host. This is not a universal workload or host guarantee.
-See the [complete validation record](https://github.com/ilehtoranta/CopperScreen/blob/main/docs/engine/CPU_PREFETCH_LOCALITY_2026-09-22.md)
-for exact binaries, confidence bounds and unavailable coverage. CopperScreen's
-production engine, runner and desktop pin this version through its verified
-development-package bootstrap. The package retains its original build-time
-metadata and bytes; existing published versions are unchanged.
+The combined candidate passed all 1,499 regular Copper68k tests and all three
+retained CopperScreen performance workloads on the recorded Ryzen 5 5600X host.
+The one-sided 95% upper regression bound is below 1% for each workload; native
+Lemmings gains 2.76% paired FPS. Six optional external conformance suites were not
+run because their external datasets or generators are opt-in. See the
+[complete benchmark and validation record](https://github.com/ilehtoranta/CopperScreen/blob/main/docs/engine/CPU_BATCH_PREFETCH_2026-09-23.md)
+for exact binaries, confidence bounds and coverage details.
 
 ## Quick Start
 

@@ -6281,6 +6281,25 @@ namespace Copper68k
                 return directValue;
             }
 
+            return ReadFixedBatchBusPrefetchWord(
+                ref context,
+                busAddress,
+                requestedCycle,
+                out completedCycle,
+                out deferredEligible);
+        }
+
+        // The cached-run path above reads from an admitted fetch window. Keep
+        // general bus publication and tracing temporaries out of its loop.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private ushort ReadFixedBatchBusPrefetchWord(
+            ref M68000FixedBatchContext context,
+            uint busAddress,
+            long requestedCycle,
+            out long completedCycle,
+            out bool deferredEligible)
+        {
+            var cycle = requestedCycle;
             var value = ReadInstructionFetchWord(busAddress, ref cycle, out deferredEligible);
             var timing = GetM68000BusAccessTiming(
                 busAddress,
@@ -14403,14 +14422,36 @@ namespace Copper68k
             return sample.ResolveDeferredFetch(resolved);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ResolveDeferredInterruptSamples()
+        {
+            // Without a deferred timing bus, resolution leaves both samples
+            // unchanged. Keep its struct temporaries out of hot caller frames.
+            if (_deferredCpuInstructionTiming != null)
+            {
+                ResolveDeferredInterruptSamplesCore();
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void ResolveDeferredInterruptSamplesCore()
         {
             _lastInterruptSample = ResolveDeferredInterruptSample(_lastInterruptSample);
             _instructionInterruptSample = ResolveDeferredInterruptSample(_instructionInterruptSample);
             RegisterDeferredInterruptSamples();
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ResolveDeferredInterruptSamples(ref M68000FixedBatchContext context)
+        {
+            if (_deferredCpuInstructionTiming != null)
+            {
+                ResolveDeferredInterruptSamplesCore(ref context);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void ResolveDeferredInterruptSamplesCore(ref M68000FixedBatchContext context)
         {
             context.LastInterruptSample = ResolveDeferredInterruptSample(context.LastInterruptSample);
             context.InstructionInterruptSample = ResolveDeferredInterruptSample(context.InstructionInterruptSample);
