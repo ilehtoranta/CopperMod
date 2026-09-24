@@ -28,6 +28,10 @@ Copper68k CPU tests, creates and validates the Release `.nupkg` and `.snupkg`,
 then publishes both to NuGet.org. The tag is intentionally not created by the
 workflow or by ordinary source pushes.
 
+If the initial workflow run fails before upload, correct the missing setup and
+push `copper68k-v1.4.1-retry-1` at the corrected workflow commit. This is the
+single reserved retry trigger; keep the original release tag intact.
+
 The workflow uses `--skip-duplicate` so a retry after a partial upload can
 finish the remaining package upload. NuGet package versions are immutable; a
 retry never replaces an already published package.
