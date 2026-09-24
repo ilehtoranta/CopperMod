@@ -15,22 +15,21 @@ and create a policy with these values:
 - Environment: leave empty; the workflow does not use a GitHub environment
 - Scope: allow publishing new versions of the `Copper68k` package
 
-In GitHub repository **Settings → Secrets and variables → Actions**, add the
-repository secret `NUGET_USER` with the NuGet.org profile username (not the
-email address). This is the account name supplied to NuGet's login action; it
-is not an API key.
+The workflow supplies the public NuGet.org profile name `ilehtoranta` to the
+login action. It is the account name shown on the existing CopperDisk package
+owner profile, not an email address or credential; no GitHub secret is needed.
 
 ## Copper68k 1.4.1 release
 
-After the policy and `NUGET_USER` secret are configured, push the exact tag
+After the policy is configured, push the exact tag
 `copper68k-v1.4.1` at the reviewed release commit. The workflow runs the
 Copper68k CPU tests, creates and validates the Release `.nupkg` and `.snupkg`,
 then publishes both to NuGet.org. The tag is intentionally not created by the
 workflow or by ordinary source pushes.
 
 If a workflow run fails before upload, correct the missing setup and push the
-next explicit retry tag (`copper68k-v1.4.1-retry-1` or
-`copper68k-v1.4.1-retry-2`) at the corrected workflow commit. Keep all earlier
+next explicit retry tag (`copper68k-v1.4.1-retry-1` through
+`copper68k-v1.4.1-retry-3`) at the corrected workflow commit. Keep all earlier
 tags intact.
 
 The workflow uses `--skip-duplicate` so a retry after a partial upload can
