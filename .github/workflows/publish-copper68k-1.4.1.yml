@@ -5,6 +5,7 @@ on:
     tags:
       - copper68k-v1.4.1
       - copper68k-v1.4.1-retry-1
+      - copper68k-v1.4.1-retry-2
 
 permissions: {}
 
