@@ -17,7 +17,16 @@ dotnet add package Copper68k
 
 Copper68k currently targets `.NET 10`.
 
-## Development version 1.4.2-ocs020.51
+## Development version 1.4.2-ocs020.52
+
+The advanced interpreter now distinguishes absolute and PC-relative memory
+sources from immediate values for `MOVE.L <ea>,(An)`. The old decoder mask could
+copy an address as instruction bytes, corrupting later execution. Its 30-case
+regression includes 24 memory-source failures under the old mask and six passing
+immediate controls. Additional memory moves, arithmetic, logical/bit operations,
+shifts and PC-relative jumps cover the newly reached Lotus III continuation path.
+Tests check width, flags, signed/scaled addresses and ordered side effects when
+source and destination address registers alias.
 
 The 020 profiles now permit Chip RAM instruction caching. A Chip RAM code write
 retains the cached instruction until guest invalidation, as documented by
@@ -42,11 +51,14 @@ explicitly. Operand-shape timing remains a bounded execution policy; it does not
 certify a particular accelerator card or the sequence-dependent timings in
 [MC68020UM section 8](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf).
 This is an unpublished development version, not a stable release. Native
-Kickstart boot is covered; complete game compatibility, FPU/MMU behavior and
+Kickstart boot and bounded Lotus III driving-demo/menu progression are covered;
+complete game compatibility, player-controlled racing, FPU/MMU behavior and
 physical timing conformance remain outside this slice.
 
-The candidate passes 1,688 regular CPU tests, including 184 expansion cases.
-Six optional external conformance suites were unavailable and skipped.
+The candidate passes 3,107 regular CPU tests, including 1,419 continuation cases
+across 020, EC020 and the shared 030 executor. The earlier 184 expansion cases
+and Chip RAM cache checks remain included. Six optional external conformance
+tests were unavailable and skipped.
 
 ## Stable version 1.4.1
 

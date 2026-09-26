@@ -315,6 +315,7 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.JsrPcBriefIndexed => ("JSR (d8,PC,Xn)", 11, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAddressIndirect => ("JMP (An)", 4, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAddressDisplacement => ("JMP (d16,An)", 6, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
+			M68kInstructionTimingKey.JmpPcDisplacement => ("JMP (d16,PC)", 6, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpBriefIndexed => ("JMP (d8,An,Xn)", 8, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAbsoluteLong => ("JMP (xxx).L", 6, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAbsoluteWord => ("JMP (xxx).W", 6, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
