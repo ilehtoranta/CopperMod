@@ -221,7 +221,13 @@ namespace Copper68k
         }
 
         internal bool IsInstructionCacheableAddress(uint address)
-            => IsInstructionCacheableTarget(ClassifyTarget(address));
+        {
+            var target = ClassifyTarget(address);
+            // Amiga Chip RAM permits instruction caching, unlike device registers.
+            // Keep the 030/040 profiles' existing policy outside this 020 correction.
+            return (Model == M68kAcceleratorModel.M68020 && target == M68020MemoryTarget.ChipRam) ||
+                IsInstructionCacheableTarget(target);
+        }
 
         internal static bool IsInstructionCacheableTarget(M68020MemoryTarget target)
             => target is

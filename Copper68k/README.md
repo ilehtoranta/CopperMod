@@ -17,7 +17,15 @@ dotnet add package Copper68k
 
 Copper68k currently targets `.NET 10`.
 
-## Development version 1.4.2-ocs020.50
+## Development version 1.4.2-ocs020.51
+
+The 020 profiles now permit Chip RAM instruction caching. A Chip RAM code write
+retains the cached instruction until guest invalidation, as documented by
+[Commodore's CacheClearE autodoc](https://www.theflatnet.de/pub/cbm/amiga/amigadev.elowar.com/read/ADCD_2.1/Includes_and_Autodocs_2._guide/node059D.html).
+Custom/CIA instruction fetches remain uncached; 030/040 profile policies are
+unchanged. Four enabled/disabled-cache regression cases cover both 020 variants.
+A standalone Chip RAM self-modification ROM agrees with WinUAE's stale-code/flush
+behavior. Cache-line fetch timing remains approximate and is not certified here.
 
 This candidate extends the shared advanced interpreter for experimental OCS
 68EC020/68020 integration. EC020 now advertises host code reads only when the
@@ -37,7 +45,7 @@ This is an unpublished development version, not a stable release. Native
 Kickstart boot is covered; complete game compatibility, FPU/MMU behavior and
 physical timing conformance remain outside this slice.
 
-The candidate passes 1,683 regular CPU tests, including 184 new expansion cases.
+The candidate passes 1,688 regular CPU tests, including 184 expansion cases.
 Six optional external conformance suites were unavailable and skipped.
 
 ## Stable version 1.4.1

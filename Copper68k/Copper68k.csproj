@@ -9,9 +9,9 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.4.2-ocs020.50</Version>
-    <PackageVersion>1.4.2-ocs020.50</PackageVersion>
-    <PackageReleaseNotes>Development candidate for experimental OCS 68EC020/68020 integration. Forward optional EC020 host code-read capability only when supplied by the host. Extend advanced interpreter operand forms used during Kickstart 1.3 and Lotus III startup, including MOVE, arithmetic, condition-code, bit and rotate-through-extend operations. Preserve the 68000 execution path and existing 68040 fallback. Instruction timing remains a bounded execution policy, not hardware certification. This source version is unpublished until explicitly released.</PackageReleaseNotes>
+    <Version>1.4.2-ocs020.51</Version>
+    <PackageVersion>1.4.2-ocs020.51</PackageVersion>
+    <PackageReleaseNotes>Development candidate for experimental OCS 68EC020/68020 integration. Correct Chip RAM instruction caching on 020 profiles: cached guest instructions remain stale until guest invalidation. Preserve device cache inhibition and the existing 68000/030/040 policies. Retain the operand coverage and optional EC020 code-reader fixes from .50. Instruction timing remains a bounded execution policy, not hardware certification. This source version is unpublished until explicitly released.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
