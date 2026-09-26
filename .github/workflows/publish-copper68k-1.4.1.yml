@@ -1,17 +1,17 @@
-name: Publish Copper68k 1.4.1
+name: Publish Copper68k approved tags
 
 on:
   push:
     tags:
-      - copper68k-v1.4.1
-      - copper68k-v1.4.1-retry-1
-      - copper68k-v1.4.1-retry-2
-      - copper68k-v1.4.1-retry-3
+      - copper68k-v1.4.2-ocs020.52
+      - copper68k-v1.4.2-ocs020.52-retry-1
+      - copper68k-v1.4.2-ocs020.52-retry-2
+      - copper68k-v1.4.2-ocs020.52-retry-3
 
 permissions: {}
 
 concurrency:
-  group: nuget-copper68k-1.4.1
+  group: nuget-copper68k-publish
   cancel-in-progress: false
 
 jobs:
@@ -30,12 +30,24 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Select immutable package version for this release tag
+        id: package
+        shell: pwsh
+        run: |
+          $version = switch -Regex ($env:GITHUB_REF_NAME) {
+            '^copper68k-v1\.4\.2-ocs020\.52(?:-retry-[1-3])?$' { '1.4.2-ocs020.52'; break }
+            default { throw "Unrecognized Copper68k release tag: $env:GITHUB_REF_NAME" }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
       - name: Run Copper68k CPU tests
         run: dotnet test Copper68k.Tests\Copper68k.Tests.csproj --configuration Release
 
-      - name: Build and validate Copper68k 1.4.1 packages
+      - name: Build and validate Copper68k packages
         shell: pwsh
-        run: .\scripts\nuget\pack-copper68k.ps1 -Configuration Release -Version 1.4.1 -SkipTests
+        env:
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+        run: .\scripts\nuget\pack-copper68k.ps1 -Configuration Release -Version $env:PACKAGE_VERSION -SkipTests
 
       - name: Exchange GitHub identity for a temporary NuGet API key
         uses: NuGet/login@v1
@@ -43,13 +55,14 @@ jobs:
         with:
           user: ilehtoranta
 
-      - name: Publish Copper68k 1.4.1 and symbols
+      - name: Publish Copper68k package and symbols
         shell: pwsh
         env:
           NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
         run: |
-          $package = "artifacts/packages/Copper68k.1.4.1.nupkg"
-          $symbols = "artifacts/packages/Copper68k.1.4.1.snupkg"
+          $package = "artifacts/packages/Copper68k.$env:PACKAGE_VERSION.nupkg"
+          $symbols = "artifacts/packages/Copper68k.$env:PACKAGE_VERSION.snupkg"
           if (-not (Test-Path -LiteralPath $package)) {
             throw "Validated NuGet package is missing."
           }

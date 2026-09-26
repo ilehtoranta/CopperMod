@@ -11,7 +11,7 @@
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
     <Version>1.4.2-ocs020.52</Version>
     <PackageVersion>1.4.2-ocs020.52</PackageVersion>
-    <PackageReleaseNotes>Development candidate for experimental OCS 68EC020/68020 integration. Correct extended memory-source MOVE.L decoding and add tested operand forms reached after the Lotus III disk-two prompt. Retain the Chip RAM instruction-cache correction from .51 and optional EC020 code-reader fixes from .50. Preserve 68000 execution and existing 030/040 cache policies. Instruction timing remains a bounded execution policy, not hardware certification. This source version is unpublished until explicitly released.</PackageReleaseNotes>
+    <PackageReleaseNotes>Experimental OCS 68EC020/68020 prerelease. Correct extended memory-source MOVE.L decoding and add tested operand forms reached after the Lotus III disk-two prompt. Retain the Chip RAM instruction-cache correction from .51 and optional EC020 code-reader fixes from .50. Preserve 68000 execution and existing 030/040 cache policies. Instruction timing remains a bounded execution policy, not hardware certification. Full game compatibility and physical accelerator timing are not certified.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
