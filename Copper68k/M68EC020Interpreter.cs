@@ -8,9 +8,8 @@ using System.Runtime.CompilerServices;
 
 namespace Copper68k
 {
-    internal sealed class M68EC020AddressMaskedBus :
+    internal class M68EC020AddressMaskedBus :
         IM68kBus,
-        IM68kCodeReader,
         IM68kFastMemoryBus,
         IM68kPhysicalAddressMap
     {
@@ -27,6 +26,13 @@ namespace Copper68k
             _fastMemoryBus = bus as IM68kFastMemoryBus;
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
         }
+
+        internal static M68EC020AddressMaskedBus Create(IM68kBus bus)
+            => bus is IM68kCodeReader ? new CodeReadableBus(bus) : new M68EC020AddressMaskedBus(bus);
+
+        // A wrapper must not invent optional host capabilities. In particular,
+        // cache line capture must use the normal timed path for IM68kBus-only hosts.
+        private sealed class CodeReadableBus(IM68kBus bus) : M68EC020AddressMaskedBus(bus), IM68kCodeReader;
 
         public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
             => _bus.ReadByte(Mask(address), ref cycle, accessKind);
@@ -100,7 +106,7 @@ namespace Copper68k
         }
 
         internal M68EC020Interpreter(IM68kBus bus, M68020CpuProfile profile)
-            : base(new M68EC020AddressMaskedBus(bus), profile, new M68kCpuState(), opcodeKinds: M68020OpcodeDispatchTable.M68020Kinds)
+            : base(M68EC020AddressMaskedBus.Create(bus), profile, new M68kCpuState(), opcodeKinds: M68020OpcodeDispatchTable.M68020Kinds)
         {
         }
     }

@@ -17,7 +17,30 @@ dotnet add package Copper68k
 
 Copper68k currently targets `.NET 10`.
 
-## Version 1.4.1
+## Development version 1.4.2-ocs020.50
+
+This candidate extends the shared advanced interpreter for experimental OCS
+68EC020/68020 integration. EC020 now advertises host code reads only when the
+underlying bus supplies that optional capability. Added operand forms cover
+MOVE, arithmetic/logical, condition-code, bit, MOVEM and rotate-through-extend
+operations exercised by Kickstart 1.3 and Lotus III startup. Regression cases
+cover operand width, flags, signed/scaled addressing, register aliasing, stack
+updates and optional code-reader behavior.
+
+The 68000 implementation is unchanged; new advanced forms retain the 68040's
+existing fallback. The 68030 shares advanced execution code, but this work does
+not establish native 68030 host support. Missing advanced forms still fail
+explicitly. Operand-shape timing remains a bounded execution policy; it does not
+certify a particular accelerator card or the sequence-dependent timings in
+[MC68020UM section 8](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf).
+This is an unpublished development version, not a stable release. Native
+Kickstart boot is covered; complete game compatibility, FPU/MMU behavior and
+physical timing conformance remain outside this slice.
+
+The candidate passes 1,683 regular CPU tests, including 184 new expansion cases.
+Six optional external conformance suites were unavailable and skipped.
+
+## Stable version 1.4.1
 
 Copper68k 1.4.1 is the stable NuGet release. It retains the 68000 trace-exception
 correction and prefetch-locality improvements from the `1.4.1-locality.1`
