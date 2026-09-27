@@ -55,6 +55,7 @@ namespace Copper68k
         LeaAddressDisplacement,
         LeaPcDisplacement,
         LeaBriefIndexed,
+        LeaPcBriefIndexed,
         MoveImmediateToStatusRegister,
         MoveByteImmediateToAbsoluteLong,
         MoveByteImmediateToAddressIndirect,
@@ -820,6 +821,10 @@ namespace Copper68k
             if ((opcode & 0xF1F8) == 0x41F0)
             {
                 return M68020OpcodeKind.LeaBriefIndexed;
+            }
+            if ((opcode & 0xF1FF) == 0x41FB)
+            {
+                return M68020OpcodeKind.LeaPcBriefIndexed;
             }
 
             if (opcode == 0x46FC)
@@ -5050,6 +5055,10 @@ namespace Copper68k
                 case M68020OpcodeKind.LeaBriefIndexed:
                     ExecuteLeaBriefIndexed(opcode);
                     return true;
+                case M68020OpcodeKind.LeaPcBriefIndexed:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteLeaPcBriefIndexed(opcode);
+                    return true;
 
                 case M68020OpcodeKind.MoveImmediateToStatusRegister:
                     ExecuteMoveImmediateToStatusRegister();
@@ -8393,6 +8402,17 @@ namespace Copper68k
             var baseRegister = opcode & 7;
             var extension = FetchWord();
             State.A[destinationRegister] = CalculateBriefIndexedAddress(baseRegister, extension, opcode);
+            CompleteTiming(M68kInstructionTimingKey.LeaBriefIndexed);
+        }
+
+        private void ExecuteLeaPcBriefIndexed(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var extensionAddress = State.ProgramCounter;
+            var extension = FetchWord();
+            WriteGeneralRegister(true, (opcode >> 9) & 7,
+                CalculateBriefIndexedAddress(extensionAddress, extension, opcode));
             CompleteTiming(M68kInstructionTimingKey.LeaBriefIndexed);
         }
 

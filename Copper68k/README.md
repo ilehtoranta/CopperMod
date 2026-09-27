@@ -1,5 +1,12 @@
 # Copper68k
 
+Development `1.4.2-ocs020.53` adds PC-relative brief-indexed `LEA` for the
+020/EC020 Autoconfig boot path. The shared 030 executor receives the same operand
+form; this does not enable another host CPU. Signed indexes, scale, PC base,
+register aliasing and unchanged flags have focused coverage. Full index
+extensions on this path remain unsupported; 040 keeps its existing fallback.
+Instruction timing uses the existing bounded indexed-LEA policy.
+
 Copper68k is a reusable C# Motorola 68000-family CPU emulation core extracted
 from CopperScreen and CopperMod. It provides interpreter backends for MC68000,
 MC68010, 68EC020, MC68020, MC68030, and MC68040-style execution behind a small
