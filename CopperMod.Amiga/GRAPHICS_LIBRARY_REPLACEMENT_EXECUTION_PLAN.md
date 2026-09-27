@@ -1,9 +1,9 @@
 # graphics.library Replacement Execution Plan
 
-## Current continuation checkpoint — 2026-09-28 / 1098
+## Current continuation checkpoint — 2026-09-28 / 1099
 
 The overall goal remains ACTIVE; continue directly without another user
-prompt. G249-G345 match unpatched Kickstart V40.63 across nested Simple-layer
+prompt. G249-G346 match unpatched Kickstart V40.63 across nested Simple-layer
 deletion, caller-Region clipping, deferred refresh and update completion.
 Deleting the middle and top in either order accumulates the full newly exposed
 area without changing caller clipping. Complete refresh after either deletion
@@ -201,10 +201,16 @@ transfer in either stack order and both update-completion orders. G343 and G344
 continue the same transfer at `(2,23)/(16,38)` and `(2,24)/(16,39)`.
 G345 translates to `(2,25)` and `(16,40)` with the same two-pixel transfer in
 either stack order and both update-completion orders.
+G346 translates to `(2,26)` and `(16,41)` with the same two-pixel transfer in
+either stack order and both update-completion orders. Its focused differential
+passes 16/16; the ROM-backed layer boot suite passes 194/194. Continue with
+G347 at `(2,27)` and `(16,42)`, retaining the one-row overlap, both scroll
+offsets, dual-update Region replacement, incomplete-update retry and
+independent completion-order matrix.
 CyberGraphX remains excluded; full Kickstart 3.1 compatibility and native ROM
 cutover remain unqualified.
 
-### Completed G249-G345 — nested deletion through dual-endpoint damage ClipBlit
+### Completed G249-G346 — nested deletion through dual-endpoint damage ClipBlit
 
 - G249: deleting the middle layer while the top remains exposes only the
   middle-layer area not still covered by the top; lower DamageList excludes
@@ -472,14 +478,17 @@ cutover remain unqualified.
 - G345: translating both origins to source `(2,25)` and destination `(16,40)`
   preserves the one-row overlap and two-pixel transfer in either stack order;
   both update-completion orders and poisoned-register variants match native.
+- G346: translating both origins to source `(2,26)` and destination `(16,41)`
+  preserves the one-row overlap and two-pixel transfer in either stack order;
+  both update-completion orders and poisoned-register variants match native.
 
-### G249-G345 validation evidence
+### G249-G346 validation evidence
 
 - Combined native V40.63 / CopperStart layer movement, ordering, nested
   deletion, ClipBlit, refresh and active-update Region replacement selection:
   the complete `KickstartRomLayersClipBlitRefreshTests.cs` selection passed
   801/801 with zero skips across nine fresh-process batches (204 methods).
-  G342-G345 focused native differentials each passed 16/16. The complete
+  G342-G346 focused native differentials each passed 16/16. The complete
   through-G341 selection is 801/801; later cells are individually covered.
 - `CopperStartLayersBootTests`: 194/194 passed, zero skips.
 - The main test project compiled with project references disabled; existing

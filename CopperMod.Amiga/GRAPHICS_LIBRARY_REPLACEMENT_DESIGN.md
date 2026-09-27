@@ -1,9 +1,9 @@
 # graphics.library Replacement Design
 
-## Live continuation routing — 2026-09-27 / 1097
+## Live continuation routing — 2026-09-28 / 1099
 
-[Checkpoint 1097](GRAPHICS_LIBRARY_REPLACEMENT_EXECUTION_PLAN.md#current-continuation-checkpoint--2026-09-27--1097)
-is authoritative. G249-G344 match native V40.63 through nested deletion,
+[Checkpoint 1099](GRAPHICS_LIBRARY_REPLACEMENT_EXECUTION_PLAN.md#current-continuation-checkpoint--2026-09-28--1099)
+is authoritative. G249-G346 match native V40.63 through nested deletion,
 caller-Region projection and refresh. Callback comparisons use renderable
 bounds; ClipRect traversal order and hidden-node topology are not public hook
 guarantees. G272/G273 restore a caller Region during BeginUpdate and verify
@@ -162,11 +162,12 @@ origins to `(2,18)` and `(16,33)`; its focused matrix passes 16/16 and the boot
 suite passes 194/194. G339 translates both origins to `(2,19)` and `(16,34)`;
 its focused matrix passes 16/16, with the boot suite at 194/194. G340
 The complete Layers differential selection through G341 (204 methods) passed
-801/801 with zero skips in nine fresh-process batches. G342-G344 focused
-matrices each pass 16/16, with the ROM-backed boot suite at 194/194. Next: G345
-translates both origins to `(2,25)` and `(16,40)`, retaining the one-row
-overlap, scrolling, active Region replacement, retry and independent damage
-retirement.
+801/801 with zero skips in nine fresh-process batches. G342-G346 focused
+matrices each pass 16/16, with the ROM-backed boot suite at 194/194. G345 and
+G346 translate both origins to `(2,25)/(16,40)` and `(2,26)/(16,41)` while
+retaining the two-pixel overlap, scrolling, active Region replacement, retry
+and independent damage retirement. Next: G347 translates to `(2,27)` and
+`(16,42)`.
 Continue autonomously without another resume prompt. CyberGraphX remains
 excluded; full Kickstart 3.1 compatibility and native ROM cutover remain
 unqualified.

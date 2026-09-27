@@ -253,11 +253,11 @@ to `(2,19)` and `(16,34)`; its focused matrix passes 16/16 and the boot suite
 passes 194/194. G340 translates both origins to `(2,20)` and `(16,35)`; its
 focused matrix passes 16/16 and the boot suite passes 194/194. The complete
 Layers differential selection through G341 (204 methods) passed 801/801 with
-zero skips across nine fresh-process batches. G342-G344 translate both origins
-through `(2,24)` and `(16,39)`; each focused matrix passes 16/16 and the boot
-suite passes 194/194. Next: G345 translates both origins to `(2,25)` and
-`(16,40)`, retaining the one-row overlap, scroll, dual-Region replacement
-retry and independent update-completion matrix. CyberGraphX is excluded.
+zero skips across nine fresh-process batches. G342-G346 translate both origins
+through `(2,26)` and `(16,41)`; each focused matrix passes 16/16 and the boot
+suite passes 194/194. G345/G346 retain the one-row overlap, scroll,
+dual-Region replacement retry and independent update-completion matrix. Next:
+G347 translates both origins to `(2,27)` and `(16,42)`. CyberGraphX is excluded.
 
 ## Latest native drawing unit
 

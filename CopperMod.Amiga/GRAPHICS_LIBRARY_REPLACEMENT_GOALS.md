@@ -1,9 +1,9 @@
 # graphics.library replacement goals
 
-## Resume routing — 2026-09-27 / 1097
+## Resume routing — 2026-09-28 / 1099
 
-Continue from [checkpoint 1097](GRAPHICS_LIBRARY_REPLACEMENT_EXECUTION_PLAN.md#current-continuation-checkpoint--2026-09-27--1097),
-the sole live route. G249-G344 match native V40.63 across nested deletion,
+Continue from [checkpoint 1099](GRAPHICS_LIBRARY_REPLACEMENT_EXECUTION_PLAN.md#current-continuation-checkpoint--2026-09-28--1099),
+the sole live route. G249-G346 match native V40.63 across nested deletion,
 caller-Region projection, accumulated damage and refresh. G272 restores a
 caller Region during BeginUpdate: active ClipRects and DoHookClipRects are
 limited to pending damage, while DamageList remains unchanged; incomplete
@@ -156,13 +156,15 @@ boot suite passes 194/194. G326 translates both origins to `(2,6)` and
 order. The expanded differential passes 561/561 with zero skips and the boot
 suite passes 194/194. The complete Layers differential selection through G341
 (204 methods) passed 801/801 with zero skips across nine fresh-process batches.
-G342-G344 focused differentials each pass 16/16, and the ROM-backed boot suite
+G342-G346 focused differentials each pass 16/16, and the ROM-backed boot suite
 passes 194/194. The earlier single-process attempt's seven memory-exhaustion
-failures were cleared by the batched run. Continue at G345 by translating both
-origins to `(2,25)` and `(16,40)`, retaining the one-row overlap, both scroll
-offsets, dual-update Region
-replacement, and independent completion-order matrix. CyberGraphX stays excluded; full Kickstart 3.1
-compatibility and native cutover remain unqualified.
+failures were cleared by the batched run. G345 translates both origins to
+`(2,25)` and `(16,40)`; G346 translates them to `(2,26)` and `(16,41)`. Each
+preserves the two-pixel one-row overlap across both scroll offsets, dual-update
+Region replacement, incomplete-update retry, both stack orders and independent
+completion order. Continue at G347 with origins `(2,27)` and `(16,42)`.
+CyberGraphX stays excluded; full Kickstart 3.1 compatibility and native cutover
+remain unqualified.
 Continue autonomously without another resume prompt.
 
 ## Historical resume routing — 2026-09-27 / 1029
