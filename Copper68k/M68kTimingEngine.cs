@@ -12,7 +12,8 @@ namespace Copper68k
     {
         M68020,
         M68030,
-        M68040
+        M68040,
+        M68060
     }
 
     [Flags]
@@ -928,7 +929,7 @@ namespace Copper68k
                     : M68020TimingModel.GetPlan(M68kInstructionTimingKey.BranchByteTaken);
             _nativeCyclesPerMachineCycle = profile.NativeCyclesPerMachineCycle;
             InstructionCache = new M68kInstructionCache();
-            DataCache = profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040
+            DataCache = profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040 or M68kAcceleratorModel.M68060
                 ? new M68kInstructionCache()
                 : null;
         }
@@ -989,7 +990,17 @@ namespace Copper68k
 
         public void ApplyCacheControl(uint cacheControlRegister, uint cacheAddressRegister)
         {
-            if (_profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040)
+            if (_profile.Model is M68kAcceleratorModel.M68040 or M68kAcceleratorModel.M68060)
+            {
+                // MC68040UM 2.2.2.5. Invalidation uses CINV/CPUSH, not 030 CACR bits.
+                var is060 = _profile.Model == M68kAcceleratorModel.M68060;
+                InstructionCache.ApplyControl((cacheControlRegister & 0x8000) != 0,
+                    is060 && (cacheControlRegister & 0x4000) != 0, false, false, 0);
+                DataCache?.ApplyControl((cacheControlRegister & 0x8000_0000) != 0,
+                    is060 && (cacheControlRegister & 0x4000_0000) != 0, false, false, 0);
+                return;
+            }
+            if (_profile.Model == M68kAcceleratorModel.M68030)
             {
                 InstructionCache.ApplyControl(
                     enabled: (cacheControlRegister & 0x0000_0001) != 0,

@@ -4848,7 +4848,9 @@ namespace Copper68k
             _instructionPipe.Reset(address);
         }
 
-        public void RequestInterrupt(int level, uint vectorAddress)
+        protected void DiscardInstructionPrefetch() => _instructionPipe.Reset(State.ProgramCounter);
+
+        public virtual void RequestInterrupt(int level, uint vectorAddress)
         {
             if (level <= 0)
             {
@@ -12562,6 +12564,14 @@ namespace Copper68k
                 throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile);
             }
 
+            if (_profile.Model == M68kAcceleratorModel.M68060 && (extension & 0x0400) != 0)
+            {
+                // MC68060UM C.2: neither 64-bit multiply nor 64-bit dividend
+                // is implemented. Trap before reading or updating the operand EA.
+                RaiseFormat0Exception(61, State.LastInstructionProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                return;
+            }
+
             var mode = (opcode >> 3) & 7;
             var register = opcode & 7;
             var source = ReadLongDataSource(mode, register, opcode);
@@ -12868,6 +12878,11 @@ namespace Copper68k
             var size = DecodeCasSize(opcode);
             var address = CalculateBitFieldBaseAddress((opcode >> 3) & 7, opcode & 7, opcode);
             var compareRegister = extension & 7;
+            if (_profile.Model == M68kAcceleratorModel.M68060 && (address & ((uint)size - 1)) != 0)
+            {
+                RaiseFormat0Exception(61, State.LastInstructionProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                return;
+            }
             var updateRegister = (extension >> 6) & 7;
             var destination = ReadSized(address, size);
             var compare = State.D[compareRegister] & M68kCpuState.Mask(size);
@@ -16146,6 +16161,48 @@ namespace Copper68k
             _ = address;
             _ = instructionPc;
             return false;
+        }
+
+        // M68000PRM 6-3 and 6-8. Data writes are currently write-through in the
+        // bounded cache policy, so CPUSH has no deferred dirty bytes to emit.
+        protected bool TryExecuteCacheMaintenance(ushort opcode)
+        {
+            if ((opcode & 0xFF00) != 0xF400) return false;
+            BeginInstruction(opcode);
+            var pc = State.ProgramCounter;
+            _ = FetchWord();
+            var scope = (opcode >> 3) & 3;
+            if (scope == 0)
+            {
+                RaiseFormat0Exception(4, pc, M68kInstructionTimingKey.IllegalInstruction);
+                return true;
+            }
+            if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
+            {
+                RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation);
+                return true;
+            }
+            var caches = (opcode >> 6) & 3;
+            var length = scope == 1 ? 16u : (State.M68040Mmu.TranslationControl & 0x4000) != 0 ? 8192u : 4096u;
+            var address = State.A[opcode & 7] & ~(length - 1);
+            if ((caches & 2) != 0)
+            {
+                Invalidate(_timing.InstructionCache);
+                _instructionPipe.Reset(State.ProgramCounter);
+                if (_hotBlocks is not null) Array.Clear(_hotBlocks);
+            }
+            var retainData = _profile.Model == M68kAcceleratorModel.M68060 &&
+                (opcode & 0x20) != 0 && (State.CacheControlRegister & 0x1000_0000) != 0;
+            if (!retainData && (caches & 1) != 0 && _timing.DataCache is { } dataCache) Invalidate(dataCache);
+            CompleteTiming(M68kInstructionTimingKey.Nop); // Approximate fixed instruction policy.
+            return true;
+
+            void Invalidate(M68kInstructionCache cache)
+            {
+                if (scope == 3) cache.Clear();
+                else for (uint offset = 0; offset < length; offset += (uint)cache.LineSize)
+                    cache.ClearEntry(address + offset);
+            }
         }
 
         protected virtual bool TryReadControlRegister(int register, uint instructionPc, out uint value)

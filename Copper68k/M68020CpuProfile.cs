@@ -160,6 +160,13 @@ namespace Copper68k
             fastNonChipMemoryAccess: true,
             fastCiaAPortAAccess: true);
 
+        // An explicit eight-clock, fixed-instruction policy, not a 50/60 MHz
+        // accelerator card or a model of superscalar issue and cache geometry.
+        internal static M68020CpuProfile Ocs68060Accelerator8x { get; } = new(
+            "Ocs68060_8x_ExperimentalInteger", M68kAcceleratorModel.M68060, 8,
+            new List<M68020BusTimingRule>(Ocs68040Accelerator25Mhz.BusTiming).ToArray(),
+            fixedInstructionNativeCycles: 1);
+
         internal string Name { get; }
 
         internal M68kAcceleratorModel Model { get; }
@@ -168,6 +175,7 @@ namespace Copper68k
         {
             M68kAcceleratorModel.M68030 => "MC68030",
             M68kAcceleratorModel.M68040 => "MC68040",
+            M68kAcceleratorModel.M68060 => "MC68060",
             _ => "MC68020"
         };
 
@@ -224,8 +232,7 @@ namespace Copper68k
         {
             var target = ClassifyTarget(address);
             // Amiga Chip RAM permits instruction caching, unlike device registers.
-            // Keep the 030/040 profiles' existing policy outside this 020 correction.
-            return (Model == M68kAcceleratorModel.M68020 && target == M68020MemoryTarget.ChipRam) ||
+            return target == M68020MemoryTarget.ChipRam ||
                 IsInstructionCacheableTarget(target);
         }
 

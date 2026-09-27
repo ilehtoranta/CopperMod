@@ -63,7 +63,11 @@ namespace Copper68k
         /// <summary>
         /// Motorola MC68040-compatible execution.
         /// </summary>
-        M68040 = 3
+        M68040 = 3,
+
+        /// <summary>Experimental MC68060 integer execution. FPU arithmetic and enabled MMU
+        /// operation remain explicitly unsupported.</summary>
+        M68060 = 4
     }
 
     /// <summary>
@@ -1204,6 +1208,7 @@ namespace Copper68k
                 M68kCpuModel.M68EC020 => new M68EC020Interpreter(bus),
                 M68kCpuModel.M68030 => new M68030Interpreter(bus),
                 M68kCpuModel.M68040 => new M68040Interpreter(bus),
+                M68kCpuModel.M68060 => new M68060Interpreter(bus),
                 _ => throw new M68kEmulationException($"The requested M68k CPU model is not implemented: {model}.")
             };
         }
@@ -1372,6 +1377,7 @@ namespace Copper68k
             SupervisorStackPointer = source.SupervisorStackPointer;
             MasterStackPointer = source.MasterStackPointer;
             M68020StackModeEnabled = source.M68020StackModeEnabled;
+            M68060StackModeEnabled = source.M68060StackModeEnabled;
             _statusRegister = source._statusRegister;
             ProgramCounter = source.ProgramCounter;
             VectorBaseRegister = source.VectorBaseRegister;
@@ -1379,6 +1385,8 @@ namespace Copper68k
             DestinationFunctionCode = source.DestinationFunctionCode;
             CacheControlRegister = source.CacheControlRegister;
             CacheAddressRegister = source.CacheAddressRegister;
+            M68060ProcessorConfiguration = source.M68060ProcessorConfiguration;
+            M68060BusControl = source.M68060BusControl;
             Cycles = source.Cycles;
             NativeCycles = source.NativeCycles;
             Halted = source.Halted;
@@ -1401,6 +1409,7 @@ namespace Copper68k
             SupervisorStackPointer = source.SupervisorStackPointer;
             MasterStackPointer = source.MasterStackPointer;
             M68020StackModeEnabled = source.M68020StackModeEnabled;
+            M68060StackModeEnabled = source.M68060StackModeEnabled;
             _statusRegister = source._statusRegister;
             ProgramCounter = source.ProgramCounter;
             VectorBaseRegister = source.VectorBaseRegister;
@@ -1478,6 +1487,9 @@ namespace Copper68k
         internal M68040FpuState M68040Fpu { get; } = new M68040FpuState();
 
         internal M68040MmuState M68040Mmu { get; } = new M68040MmuState();
+
+        internal uint M68060ProcessorConfiguration { get; set; } = 0x0430_0000;
+        internal uint M68060BusControl { get; set; }
 
         /// <summary>
         /// Gets or sets the elapsed 68k machine-cycle count.
@@ -1591,9 +1603,17 @@ namespace Copper68k
         }
 
         internal bool M68020StackModeEnabled { get; private set; }
+        internal bool M68060StackModeEnabled { get; private set; }
+
+        internal void EnableM68060StackMode()
+        {
+            DisableM68020StackMode();
+            M68060StackModeEnabled = true;
+        }
 
         internal void EnableM68020StackMode()
         {
+            M68060StackModeEnabled = false;
             M68020StackModeEnabled = true;
             SetStatusRegister(_statusRegister);
         }
@@ -1763,7 +1783,8 @@ namespace Copper68k
                 return;
             }
 
-            value &= M68000StatusRegisterMask;
+            // MC68060UM 3.2.2.2 / 11.1.2: M is software state, not a stack selector.
+            value &= M68060StackModeEnabled ? M68020StatusRegisterMask : M68000StatusRegisterMask;
             var wasSupervisor = (_statusRegister & Supervisor) != 0;
             var isSupervisor = (value & Supervisor) != 0;
             if (wasSupervisor != isSupervisor)

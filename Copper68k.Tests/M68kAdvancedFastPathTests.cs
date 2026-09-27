@@ -322,7 +322,7 @@ public sealed class M68kAdvancedFastPathTests
 				0x4E71,
 				0x60FE
 			],
-			state => state.D[0] = 1,
+			state => state.D[0] = 0x8000,
 			instructionCount: 4,
 			profile: M68020CpuProfile.Ocs68040Accelerator25Mhz,
 			codeBase: CacheableCodeBase);

@@ -9,9 +9,9 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.4.2-ocs020.54</Version>
-    <PackageVersion>1.4.2-ocs020.54</PackageVersion>
-    <PackageReleaseNotes>Development candidate: support indexed JSR/JMP and the additional MOVE/MOVEA, ADD/ADDA/SUBA, ANDI, NOT, CMPI and MOVEM operand forms reached by Kickstart 1.3 CopperHDF boot and native Fast RAM allocation/file I/O on 68020/68EC020. Cover signed and scaled addressing, PC extension bases, flags, stack alignment and register aliasing. Full index extensions remain explicitly unsupported on these advanced paths; 68040 retains its existing fallback. Timing remains a bounded accelerator policy, not hardware certification.</PackageReleaseNotes>
+    <Version>1.4.2-ocs020.55</Version>
+    <PackageVersion>1.4.2-ocs020.55</PackageVersion>
+    <PackageReleaseNotes>Development: correct 040 CACR and cache maintenance, extend Chip RAM instruction caching to 030/040, and add a distinct integer-focused 68060 diagnostic profile with PCR, single supervisor stack, removed-integer exceptions and 12-byte FPU state frames. The 060 requires OS support beyond Kickstart 1.3; FPU arithmetic and enabled MMU execution remain unavailable. Timing and cache organization remain approximate.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

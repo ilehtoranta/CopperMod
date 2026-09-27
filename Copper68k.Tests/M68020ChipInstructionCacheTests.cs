@@ -11,8 +11,10 @@ public sealed class M68020ChipInstructionCacheTests
     [Theory]
     [InlineData(M68kCpuModel.M68020, 1u, 1u)]
     [InlineData(M68kCpuModel.M68EC020, 1u, 1u)]
+    [InlineData(M68kCpuModel.M68030, 1u, 1u)]
     [InlineData(M68kCpuModel.M68020, 0u, 7u)]
     [InlineData(M68kCpuModel.M68EC020, 0u, 7u)]
+    [InlineData(M68kCpuModel.M68030, 0u, 7u)]
     public void ChipCodeWritesBecomeVisibleAccordingToGuestCacheControl(
         M68kCpuModel model, uint control, uint beforeFlush)
     {

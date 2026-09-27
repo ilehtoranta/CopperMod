@@ -1,5 +1,36 @@
 # Copper68k
 
+Development `1.4.2-ocs020.55` prepares experimental OCS 030/040 integration and
+adds a distinct, integer-focused MC68060 diagnostic core. The 060 has its own
+PCR identity, single supervisor stack with software M bit, removed-control-register
+exceptions, vector-61 removed-integer traps, aligned CAS boundary, and eight-native-
+clock approximate fixed timing policy. It is **not a complete 68060 implementation**:
+FPU arithmetic, enabled MMU/transparent translation, BUSCR operation, full indexed
+addressing and full exception/trace conformance remain unavailable or incomplete.
+FPU control-register transfers and NULL/IDLE 12-byte state frames are implemented;
+unsupported FPU forms stop explicitly. No JIT is provided for the 060.
+
+The 040 now uses its documented CACR enable bits (15/31), with CINV/CPUSH
+line/page/all maintenance and privilege/encoding checks. Chip RAM permits
+instruction caching on 030/040 as well as 020. Cache capacity/associativity,
+copyback data, physical cache-fill timing and superscalar dispatch remain bounded
+policies, not hardware certification. The 000/020 execution profiles are preserved.
+
+**Native Kickstart 1.3 cannot boot this 060 profile.** Its initial task FPU frame
+is four bytes; MC68060UM requires twelve even for NULL. The correctly sized restore
+consumes the following saved context and sends the task to address zero. A newer
+OS and 060-aware task/FPU support are required before desktop availability. The
+030 and 040 native paths are validated separately by the CopperScreen consumer.
+This is an unpublished development package; source commits do not authorize release.
+
+Architectural sources: [MC68060UM](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+sections 3.2.2, 8.2.4, 11.1.2, C.2 and appendix D; [MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+section 2.2.2.5; [M68000PRM](https://www.nxp.com/docs/en/reference-manual/M68000PRM.pdf)
+CINV/CPUSH. Remaining features must be implemented from these contracts, without
+substituting 040 FPU frames or 68881 NULL frames to make old software boot.
+
+## Preceding prerelease 1.4.2-ocs020.54
+
 Prerelease `1.4.2-ocs020.54` fixes indexed `JSR` and 13 further operand forms
 reached by Kickstart 1.3 CopperHDF startup and native Fast RAM allocation/file I/O.
 The added forms cover `JMP`, `MOVE`, `MOVEA`, `ADD`, `ADDA`, `SUBA`, `ANDI`, `NOT`,

@@ -2575,6 +2575,8 @@ namespace Copper68k
 
         protected override bool TryExecuteModelSpecificInstruction(ushort opcode)
         {
+            if (TryExecuteCacheMaintenance(opcode)) return true;
+
             if ((opcode & 0xFF00) == 0x0E00 && (opcode & 0x00C0) != 0x00C0)
             {
                 if ((State.StatusRegister & M68kCpuState.Supervisor) != 0)
@@ -2684,6 +2686,8 @@ namespace Copper68k
         {
             switch (register)
             {
+                case 0x002:
+                    return base.TryWriteControlRegister(register, value & 0x8000_8000u, instructionPc);
                 case 0x003:
                     State.M68040Mmu.TranslationControl = value;
                     State.M68040Mmu.Flush();
