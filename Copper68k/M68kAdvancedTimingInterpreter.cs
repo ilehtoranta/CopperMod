@@ -4831,6 +4831,7 @@ namespace Copper68k
             State.LastInstructionProgramCounter = 0;
             State.RecordException(-1, 0, 0);
             _timing.Reset();
+            _timedBus.ResetInstructionFetchBuffer();
             _instructionPipe.Reset(programCounter);
             if (_hotBlocks is not null)
             {
@@ -16188,6 +16189,7 @@ namespace Copper68k
             if ((caches & 2) != 0)
             {
                 Invalidate(_timing.InstructionCache);
+                _timedBus.ResetInstructionFetchBuffer();
                 _instructionPipe.Reset(State.ProgramCounter);
                 if (_hotBlocks is not null) Array.Clear(_hotBlocks);
             }
@@ -16248,6 +16250,7 @@ namespace Copper68k
                     return true;
                 case 0x002:
                     State.CacheControlRegister = value;
+                    _timedBus.ResetInstructionFetchBuffer();
                     _timing.ApplyCacheControl(State.CacheControlRegister, State.CacheAddressRegister);
                     return true;
                 case 0x801:

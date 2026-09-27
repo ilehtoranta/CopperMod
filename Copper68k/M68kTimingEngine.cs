@@ -1396,6 +1396,15 @@ namespace Copper68k
         private readonly IM68kBus? _m68040PhysicalBus;
         private readonly bool _directUncachedInstructionFetch;
         private readonly bool _hasInstructionFetchWaitStates;
+        private readonly bool _useM68040UncachedHalfLine;
+        private readonly IM68kStablePhysicalAddressMap? _physicalAddressMap;
+        private uint _fetchHalfLineAddress;
+        private uint _fetchFirstLong;
+        private uint _fetchSecondLong;
+        private int _fetchValidLongs;
+        private uint _fetchMmuGeneration;
+        private uint _fetchMapGeneration;
+        private bool _fetchSupervisor;
 
         public M68kTimedBusAdapter(
             IM68kBus bus,
@@ -1412,6 +1421,9 @@ namespace Copper68k
             _m68040LogicalBus = bus as M68040LogicalBus;
             _m68040PhysicalBus = _m68040LogicalBus?.PhysicalBus;
             _directUncachedInstructionFetch = !profile.FastInstructionFetch;
+            _useM68040UncachedHalfLine =
+                profile.Model == M68kAcceleratorModel.M68040 && !profile.FastInstructionFetch;
+            _physicalAddressMap = _m68040PhysicalBus as IM68kStablePhysicalAddressMap;
             for (var i = 0; i < profile.BusTiming.Count; i++)
             {
                 if (profile.BusTiming[i].WaitStates != 0)
@@ -1431,11 +1443,18 @@ namespace Copper68k
         {
             if (!_directUncachedInstructionFetch || _timing.InstructionCache.Enabled)
             {
+                ResetInstructionFetchBuffer();
                 return ReadInstructionFetchWord(
                     address,
                     out cacheHit,
                     out requiresSynchronization,
                     out completedMachineCycle);
+            }
+
+            if (_useM68040UncachedHalfLine)
+            {
+                return ReadM68040UncachedInstructionWord(
+                    address, out cacheHit, out requiresSynchronization, out completedMachineCycle);
             }
 
             cacheHit = false;
@@ -1458,6 +1477,73 @@ namespace Copper68k
 
             _timing.RecordPostedBusCompletion(cycle);
             requiresSynchronization = true;
+            completedMachineCycle = cycle;
+            return value;
+        }
+
+        internal void ResetInstructionFetchBuffer() => _fetchValidLongs = 0;
+
+        private ushort ReadM68040UncachedInstructionWord(
+            uint address,
+            out bool cacheHit,
+            out bool requiresSynchronization,
+            out long completedMachineCycle)
+        {
+            // MC68040UM table 7-3 and following paragraph: instruction transfers are
+            // aligned longwords, starting at the eight-byte half-line boundary.
+            // The host bus splits each longword if its physical port is 16-bit.
+            var halfLine = address & ~7u;
+            var supervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
+            var mmuGeneration = _state.M68040Mmu.Generation;
+            var mapGeneration = _physicalAddressMap?.CpuPhysicalAddressMapGeneration ?? 0;
+            if (_fetchHalfLineAddress != halfLine || _fetchSupervisor != supervisor ||
+                _fetchMmuGeneration != mmuGeneration || _fetchMapGeneration != mapGeneration)
+            {
+                _fetchValidLongs = 0;
+            }
+
+            cacheHit = false; // The holding register is independent of CACR.IE.
+            requiresSynchronization = false;
+            completedMachineCycle = _state.Cycles;
+            if (_fetchValidLongs == 0)
+            {
+                _fetchFirstLong = ReadM68040InstructionLong(halfLine, out completedMachineCycle);
+                _fetchHalfLineAddress = halfLine;
+                _fetchSupervisor = supervisor;
+                _fetchMmuGeneration = mmuGeneration;
+                _fetchMapGeneration = mapGeneration;
+                _fetchValidLongs = 1;
+                requiresSynchronization = true;
+            }
+            if ((address & 4) != 0 && _fetchValidLongs == 1)
+            {
+                _fetchSecondLong = ReadM68040InstructionLong(halfLine + 4, out completedMachineCycle);
+                _fetchValidLongs = 2;
+                requiresSynchronization = true;
+            }
+
+            var data = (address & 4) == 0 ? _fetchFirstLong : _fetchSecondLong;
+            var word = (ushort)(data >> ((address & 2) == 0 ? 16 : 0));
+            // MC68040UM 4.2 guarantees retention for loops within the first six
+            // bytes. Retire at the fourth word in this demand-driven frontend;
+            // speculative next-half-line traffic and pipeline overlap are not
+            // modeled here. Do not turn this into an eight-byte instruction cache.
+            if ((address & 7) == 6) _fetchValidLongs = 0;
+            return word;
+        }
+
+        private uint ReadM68040InstructionLong(uint address, out long completedMachineCycle)
+        {
+            var cycle = GetBusRequestMachineCycle();
+            var value = _m68040LogicalBus is { } logicalBus &&
+                logicalBus.CanUseDirectIdentityAccess(address, byteCount: 4)
+                    ? _m68040PhysicalBus!.ReadLong(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch)
+                    : _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+            if (_hasInstructionFetchWaitStates)
+            {
+                AddProfileWaitStates(address, M68020BusWidth.Long, ref cycle);
+            }
+            _timing.RecordPostedBusCompletion(cycle);
             completedMachineCycle = cycle;
             return value;
         }

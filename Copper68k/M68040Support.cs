@@ -2509,7 +2509,10 @@ namespace Copper68k
                 State,
                 _instructionFrequency,
                 enableOpcodePlan: false,
-                useM68020BriefIndexedAddressing: true);
+                useM68020BriefIndexedAddressing: true)
+            {
+                ExternalInstructionWordReader = profile.FastInstructionFetch ? null : FetchWord
+            };
         }
 
         public override int ExecuteInstruction()
@@ -2551,6 +2554,8 @@ namespace Copper68k
             // FF00 token from a retired gateway is no longer executable code.
             _observedPhysicalAddressMapGeneration = generation;
             _timing.InstructionCache.Reset();
+            _timedBus.ResetInstructionFetchBuffer();
+            DiscardInstructionPrefetch();
         }
 
         public override void Reset(uint programCounter, uint stackPointer)
@@ -2625,7 +2630,9 @@ namespace Copper68k
                 if (_profile.FixedInstructionNativeCycles is int fixedCycles)
                 {
                     State.Cycles = startCycles;
-                    State.NativeCycles = startNativeCycles;
+                    // Native time advanced by the 040 fetch frontend must survive
+                    // replacement of the fallback's 68000 instruction-cycle policy.
+                    State.NativeCycles = Math.Max(startNativeCycles, State.NativeCycles);
                     _timing.CompleteInstruction(M68kInstructionPlan.CreateFlat(
                         M68kInstructionTimingKey.Nop,
                         "fixed JIT fallback",

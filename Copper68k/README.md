@@ -1,6 +1,23 @@
 # Copper68k
 
-Development `1.4.2-ocs020.55` prepares experimental OCS 030/040 integration and
+Development `1.4.2-ocs020.56` corrects uncached instruction fetching in the OCS
+040 interpreter. Aligned longword reads start at the eight-byte half-line base,
+including when execution starts in the second longword. The holding register
+retains loops in the first six bytes even with CACR.IE clear. Integer fallback
+execution now uses the same frontend rather than a separate 68000 prefetch queue.
+Reset, instruction-cache maintenance, privilege/translation changes and host
+mapping generations prevent reuse of stale context. Guest data writes alone do
+not invalidate held instructions. JIT max-speed fetching is unchanged.
+
+This is a **demand-driven approximation**, not a complete 040 pipeline: consuming
+the fourth word retires the half-line; speculative next-half-line transfers,
+deferred prefetch faults, pipeline overlap and accurate instruction costs remain
+unimplemented. These limits are not a Lotus-specific delay or compatibility rule.
+The architectural fetch/retention expectations come from MC68040UM section 4.2
+and the paragraph after table 7-3. Timings in chapter 10 require a separate BCLK
+pipeline model; the current fixed one-native-cycle policy does not implement it.
+
+Preceding development `1.4.2-ocs020.55` prepares experimental OCS 030/040 integration and
 adds a distinct, integer-focused MC68060 diagnostic core. The 060 has its own
 PCR identity, single supervisor stack with software M bit, removed-control-register
 exceptions, vector-61 removed-integer traps, aligned CAS boundary, and eight-native-

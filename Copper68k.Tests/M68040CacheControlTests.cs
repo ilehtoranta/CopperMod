@@ -18,6 +18,7 @@ public sealed class M68040CacheControlTests
         var bus = new ZeroWaitCodeBus();
         WriteWords(bus, 0xC01000, 0x4E7B, 0x0002);
         WriteWords(bus, 0xC01180, 0x7201);
+        WriteWords(bus, 0xC01200, 0x7400);
         using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68040, bus);
         cpu.Reset(0xC01000, 0xC03000);
         cpu.State.D[0] = control;
@@ -26,6 +27,10 @@ public sealed class M68040CacheControlTests
         cpu.ExecuteInstruction();
         Assert.Equal(1u, cpu.State.D[1]);
         bus.WriteWord(0xC01180, 0x7207);
+        // Evict the uncached half-line holding register. CACR.IE controls the
+        // instruction cache, not this independently retained fetch buffer (UM 4.2).
+        cpu.State.ProgramCounter = 0xC01200;
+        cpu.ExecuteInstruction();
         cpu.State.ProgramCounter = 0xC01180;
         cpu.ExecuteInstruction();
         Assert.Equal(afterWrite, cpu.State.D[1]);

@@ -2496,6 +2496,10 @@ namespace Copper68k
 
         public M68kCpuState State { get; }
 
+        // The 040 reuses integer semantics, but owns instruction fetching.
+        // Leave null for every normal 68000/010 and JIT fallback instance.
+        internal Func<ushort>? ExternalInstructionWordReader { private get; init; }
+
         internal bool InstructionFrequencyEnabled
         {
             get => _instructionFrequency.Enabled;
@@ -12601,6 +12605,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ushort FetchOpcodeWord()
         {
+            if (ExternalInstructionWordReader is { } reader) return reader();
             var address = State.ProgramCounter;
             if (_prefetchCount == 0 || _prefetchAddress != address)
             {
@@ -12613,6 +12618,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected ushort FetchWord()
         {
+            if (ExternalInstructionWordReader is { } reader) return reader();
             var address = State.ProgramCounter;
             if (_prefetchCount == 0 || _prefetchAddress != address)
             {
@@ -13095,6 +13101,11 @@ namespace Copper68k
             bool addressPhaseAlreadyIssued = false,
             long issuedAddressPhaseEarliestCycle = 0)
         {
+            if (ExternalInstructionWordReader is not null)
+            {
+                requestedCycle = State.Cycles;
+                return State.Cycles;
+            }
             if (_prefetchCount >= 2)
             {
                 requestedCycle = _prefetchCompletedCycle1;
@@ -13197,6 +13208,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.NoInlining)]
         private void TopUpPrefetchAtRetirement()
         {
+            if (ExternalInstructionWordReader is not null) return;
             if ((State.ProgramCounter & 1) != 0)
             {
                 return;
@@ -14554,6 +14566,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void TopUpPrefetch()
         {
+            if (ExternalInstructionWordReader is not null) return;
             if ((State.ProgramCounter & 1) != 0)
             {
                 return;

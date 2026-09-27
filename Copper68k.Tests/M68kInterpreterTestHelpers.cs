@@ -49,7 +49,7 @@ internal sealed class ZeroWaitCodeBus : IM68kBus, IM68kCodeReader
 	public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
 	{
 		_ = cycle;
-		_ = accessKind;
+		if (accessKind == M68kBusAccessKind.CpuInstructionFetch) InstructionFetchWords += 2;
 		return ReadLong(address);
 	}
 

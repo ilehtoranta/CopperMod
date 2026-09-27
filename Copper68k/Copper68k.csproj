@@ -9,9 +9,9 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.4.2-ocs020.55</Version>
-    <PackageVersion>1.4.2-ocs020.55</PackageVersion>
-    <PackageReleaseNotes>Development: correct 040 CACR and cache maintenance, extend Chip RAM instruction caching to 030/040, and add a distinct integer-focused 68060 diagnostic profile with PCR, single supervisor stack, removed-integer exceptions and 12-byte FPU state frames. The 060 requires OS support beyond Kickstart 1.3; FPU arithmetic and enabled MMU execution remain unavailable. Timing and cache organization remain approximate.</PackageReleaseNotes>
+    <Version>1.4.2-ocs020.56</Version>
+    <PackageVersion>1.4.2-ocs020.56</PackageVersion>
+    <PackageReleaseNotes>Development: correct demand-driven uncached 040 instruction transfers to aligned longwords starting at a half-line boundary, retain short loops independently of CACR, and route integer fallback fetches through the 040 frontend. Reset, cache maintenance and translation/host-map changes invalidate held code. Full speculative prefetch, pipeline overlap, cache geometry and instruction timings remain approximate. Includes the preceding experimental 030/040 and diagnostic integer-focused 060 work.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

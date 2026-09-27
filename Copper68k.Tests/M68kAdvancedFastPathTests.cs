@@ -240,6 +240,11 @@ public sealed class M68kAdvancedFastPathTests
 		Assert.Equal(ExtF80Math.FromInt32(10), cpu.State.M68040Fpu.FP[1]);
 
 		bus.WriteWord(CodeBase + 2, 0x00A8); // FSUB.X FP0,FP1
+		// Leave the half-line so its uncached holding register is replaced.
+		// The decoded hot block must then use the newly fetched extension.
+		WriteWords(bus, CodeBase + 0x40, 0x7400);
+		cpu.State.ProgramCounter = CodeBase + 0x40;
+		cpu.ExecuteInstruction();
 		cpu.State.ProgramCounter = CodeBase;
 		cpu.State.M68040Fpu.FP[1] = ExtF80Math.FromInt32(8);
 
