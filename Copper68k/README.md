@@ -1,6 +1,6 @@
 # Copper68k
 
-Development `1.4.2-ocs020.54` fixes indexed `JSR` and 13 further operand forms
+Prerelease `1.4.2-ocs020.54` fixes indexed `JSR` and 13 further operand forms
 reached by Kickstart 1.3 CopperHDF startup and native Fast RAM allocation/file I/O.
 The added forms cover `JMP`, `MOVE`, `MOVEA`, `ADD`, `ADDA`, `SUBA`, `ANDI`, `NOT`,
 `CMPI` and `MOVEM`. Focused cases check signed/scaled indexes, extension-word PC
@@ -8,7 +8,7 @@ bases (including MOVEM's preceding register mask), stack aliasing/alignment,
 widths, flags and preserved surrounding memory. The shared 030 executor receives
 these forms; 040 retains its fallback. Full index extensions remain explicitly
 unsupported on these paths. The operand-shape timing policy remains approximate.
-This is a local, unpublished candidate; no additional host CPU is enabled.
+This prerelease is approved for publication; no additional host CPU is enabled.
 
 The suite passes 3,395 cases, including 189 new HDF/indexed-control cases. Against
 the preceding `.53` binary, 162 of those new cases reproduce the missing forms;
