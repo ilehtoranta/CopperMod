@@ -203,6 +203,7 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.MovemLongRegistersToAbsoluteLong or
 			M68kInstructionTimingKey.MovemLongAddressIndirectToRegisters or
 			M68kInstructionTimingKey.MovemLongAddressDisplacementToRegisters or
+			M68kInstructionTimingKey.MovemLongPcDisplacementToRegisters or
 			M68kInstructionTimingKey.MovemLongPostIncrementToRegisters;
 
 	private static bool IsM68040OnlyTimingKey(M68kInstructionTimingKey key)
@@ -312,6 +313,7 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.JsrAbsoluteLong => ("JSR (xxx).L", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JsrAbsoluteWord => ("JSR (xxx).W", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JsrAddressDisplacement => ("JSR (d16,An)", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
+			M68kInstructionTimingKey.JsrBriefIndexed => ("JSR (d8,An,Xn)", 11, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JsrPcBriefIndexed => ("JSR (d8,PC,Xn)", 11, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAddressIndirect => ("JMP (An)", 4, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAddressDisplacement => ("JMP (d16,An)", 6, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),

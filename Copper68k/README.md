@@ -1,6 +1,22 @@
 # Copper68k
 
-Development `1.4.2-ocs020.53` adds PC-relative brief-indexed `LEA` for the
+Development `1.4.2-ocs020.54` fixes indexed `JSR` and 13 further operand forms
+reached by Kickstart 1.3 CopperHDF startup and native Fast RAM allocation/file I/O.
+The added forms cover `JMP`, `MOVE`, `MOVEA`, `ADD`, `ADDA`, `SUBA`, `ANDI`, `NOT`,
+`CMPI` and `MOVEM`. Focused cases check signed/scaled indexes, extension-word PC
+bases (including MOVEM's preceding register mask), stack aliasing/alignment,
+widths, flags and preserved surrounding memory. The shared 030 executor receives
+these forms; 040 retains its fallback. Full index extensions remain explicitly
+unsupported on these paths. The operand-shape timing policy remains approximate.
+This is a local, unpublished candidate; no additional host CPU is enabled.
+
+The suite passes 3,395 cases, including 189 new HDF/indexed-control cases. Against
+the preceding `.53` binary, 162 of those new cases reproduce the missing forms;
+27 fallback/full-extension controls pass. Six optional external conformance
+cases are unavailable. Architectural expectations follow the instruction and
+effective-address definitions in [M68000PRM](https://www.nxp.com/docs/en/reference-manual/M68000PRM.pdf).
+
+The preceding `1.4.2-ocs020.53` adds PC-relative brief-indexed `LEA` for the
 020/EC020 Autoconfig boot path. The shared 030 executor receives the same operand
 form; this does not enable another host CPU. Signed indexes, scale, PC base,
 register aliasing and unchanged flags have focused coverage. Full index
