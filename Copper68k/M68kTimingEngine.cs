@@ -12,7 +12,8 @@ namespace Copper68k
     {
         M68020,
         M68030,
-        M68040
+        M68040,
+        M68060
     }
 
     [Flags]
@@ -69,7 +70,10 @@ namespace Copper68k
         TstWordData,
         TstWordAbsoluteLong,
         TstByteAbsoluteLong,
+        TstWordAddressIndirect,
         TstByteAddressIndirect,
+        TstWordPostIncrement,
+        TstLongPostIncrement,
         TstBytePostIncrement,
         TstByteAddressDisplacement,
         TstByteBriefIndexed,
@@ -84,6 +88,7 @@ namespace Copper68k
         NegWordData,
         NotByteData,
         NotByteAddressDisplacement,
+        NotLongAddressDisplacement,
         NotWordData,
         NotLongData,
         ClrDataLong,
@@ -94,14 +99,19 @@ namespace Copper68k
         ClrLongAbsoluteLong,
         ClrLongAbsoluteWord,
         ClrByteAddressIndirect,
+        ClrWordAddressIndirect,
         ClrBytePostIncrement,
         ClrByteAddressDisplacement,
         ClrByteAbsoluteLong,
         ClrWordAddressDisplacement,
         ClrWordPostIncrement,
         ClrWordPredecrement,
+        ClrBytePredecrement,
         ClrLongPostIncrement,
         ClrLongPredecrement,
+        ClrByteBriefIndexed,
+        ClrWordBriefIndexed,
+        ClrLongBriefIndexed,
         LeaAbsoluteLong,
         LeaAddressIndirect,
         LeaAddressDisplacement,
@@ -109,6 +119,7 @@ namespace Copper68k
         MoveByteImmediateToAbsoluteLong,
         MoveWordImmediateToAbsoluteLong,
         MoveWordImmediateToAddressIndirect,
+        MoveWordImmediateToBriefIndexed,
         MoveLongImmediateToAbsoluteLong,
         MoveLongImmediateToAddressIndirect,
         MoveLongImmediateToAddressDisplacement,
@@ -134,6 +145,11 @@ namespace Copper68k
         MoveLongAddressToPostIncrement,
         MoveLongAddressIndirectToData,
         MoveLongPredecrementToData,
+        MoveBytePredecrementToData,
+        MoveWordPredecrementToData,
+        MoveBytePredecrementToPredecrement,
+        MoveWordPredecrementToPredecrement,
+        MoveLongPredecrementToPredecrement,
         MoveLongAddressIndirectToAddress,
         MoveLongPostIncrementToData,
         MoveLongPostIncrementToAddress,
@@ -144,21 +160,45 @@ namespace Copper68k
         MoveLongAddressDisplacementToAddressDisplacement,
         MoveLongPcDisplacementToAddressDisplacement,
         MoveLongAddressDisplacementToBriefIndexed,
+        MoveByteAddressDisplacementToBriefIndexed,
+        MoveByteAddressDisplacementToPostIncrement,
+        MoveWordAddressDisplacementToPostIncrement,
         MoveLongAddressDisplacementToPostIncrement,
         MoveLongBriefIndexedToData,
         MoveLongBriefIndexedToAddress,
         MoveLongBriefIndexedToAddressDisplacement,
         MoveLongBriefIndexedToBriefIndexed,
+        MoveByteBriefIndexedToBriefIndexed,
+        MoveWordBriefIndexedToBriefIndexed,
+        MoveByteBriefIndexedToPostIncrement,
+        MoveWordBriefIndexedToPostIncrement,
+        MoveLongBriefIndexedToPostIncrement,
+        MoveByteBriefIndexedToAbsoluteLong,
+        MoveWordBriefIndexedToAbsoluteLong,
+        MoveLongBriefIndexedToAbsoluteLong,
         MoveLongBriefIndexedToPredecrement,
         MoveLongAddressIndirectToAddressIndirect,
         MoveLongAddressIndirectToPostIncrement,
+        MoveByteAddressIndirectToBriefIndexed,
+        MoveWordAddressIndirectToBriefIndexed,
+        MoveLongAddressIndirectToBriefIndexed,
+        MoveByteAddressIndirectToPostIncrement,
+        MoveWordAddressIndirectToPostIncrement,
         MoveLongAbsoluteWordToData,
+        MoveByteAbsoluteWordToAbsoluteWord,
+        MoveWordAbsoluteWordToAbsoluteWord,
+        MoveLongAbsoluteWordToAbsoluteWord,
+        MoveByteAbsoluteWordToData,
+        MoveWordAbsoluteWordToData,
         MoveLongAbsoluteWordToAddress,
         MoveLongAbsoluteLongToData,
         MoveLongAbsoluteLongToAddress,
         MoveLongAbsoluteLongToPredecrement,
         MoveLongAbsoluteWordToAbsoluteLong,
         MoveLongAbsoluteWordToAddressDisplacement,
+        MoveByteAbsoluteWordToAddressDisplacement,
+        MoveByteAbsoluteLongToAddressDisplacement,
+        MoveWordAbsoluteWordToAddressDisplacement,
         MoveLongAbsoluteLongToAddressDisplacement,
         MoveLongDataToAbsoluteLong,
         MoveLongAddressToAbsoluteLong,
@@ -190,8 +230,28 @@ namespace Copper68k
         MoveWordAbsoluteLongToData,
         MoveWordAbsoluteLongToAddress,
         MoveWordAddressIndirectToAddress,
+        MoveWordAddressDisplacementToAddress,
+        MoveWordPcBriefIndexedToAddress,
         MoveWordAddressDisplacementToData,
         MoveWordAddressDisplacementToAddressIndirect,
+        MoveWordAddressIndirectToAddressIndirect,
+        MoveLongAbsoluteWordToAddressIndirect,
+        MoveLongAbsoluteLongToAddressIndirect,
+        MoveLongPcDisplacementToAddressIndirect,
+        MoveLongPcBriefIndexedToAddressIndirect,
+        MoveBytePredecrementToAddressDisplacement,
+        MoveWordPredecrementToAddressDisplacement,
+        MoveLongPredecrementToAddressDisplacement,
+        MoveBytePredecrementToPostIncrement,
+        MoveWordPredecrementToPostIncrement,
+        MoveLongPredecrementToPostIncrement,
+        MoveByteBriefIndexedToAddressIndirect,
+        MoveWordBriefIndexedToAddressIndirect,
+        MoveLongBriefIndexedToAddressIndirect,
+        MoveBytePostIncrementToAddressIndirect,
+        MoveWordPostIncrementToAddressIndirect,
+        MoveLongPostIncrementToAddressIndirect,
+        MoveByteAddressDisplacementToAddressIndirect,
         MoveWordAddressIndirectToAddressDisplacement,
         MoveWordBriefIndexedToData,
         MoveWordBriefIndexedToAddressDisplacement,
@@ -200,20 +260,27 @@ namespace Copper68k
         MoveWordPostIncrementToAddress,
         MoveWordPostIncrementToPostIncrement,
         MoveWordDataToPostIncrement,
+        MoveBytePostIncrementToAddressDisplacement,
         MoveWordPostIncrementToAddressDisplacement,
         MoveWordImmediateToData,
         MoveWordDataToData,
         MoveWordAddressToData,
         MoveWordDataToAddress,
         MoveWordDataToAddressIndirect,
+        MoveWordAddressToAddressIndirect,
         MoveWordImmediateToAddressDisplacement,
         MoveWordImmediateToPredecrement,
+        MoveWordImmediateToPostIncrement,
+        MoveBytePostIncrementToAbsoluteLong,
+        MoveWordPostIncrementToAbsoluteLong,
+        MoveLongPostIncrementToAbsoluteLong,
         MoveWordDataToPredecrement,
         MoveWordDataToAddressDisplacement,
         MoveWordDataToBriefIndexed,
         MoveWordAddressToAddressDisplacement,
         MoveWordAddressDisplacementToAddressDisplacement,
         MoveWordAddressDisplacementToAbsoluteLong,
+        MoveByteAddressDisplacementToAbsoluteLong,
         MoveWordPcDisplacementToAddressDisplacement,
         MoveWordDataToAbsoluteLong,
         MoveWordAbsoluteLongToAbsoluteLong,
@@ -221,6 +288,7 @@ namespace Copper68k
         MoveWordAbsoluteLongToPredecrement,
         MoveWordPostIncrementToPredecrement,
         MoveWordAddressDisplacementToPredecrement,
+        MoveByteAddressDisplacementToPredecrement,
         ImmediateLogicalByteToAbsoluteLong,
         OriWordImmediateToAddressDisplacement,
         OriLongImmediateToAddressDisplacement,
@@ -228,6 +296,7 @@ namespace Copper68k
         AddiByteImmediateToData,
         AddiByteImmediateToAddressIndirect,
         AddiByteImmediateToAddressDisplacement,
+        AddiWordImmediateToAddressDisplacement,
         AddiWordImmediateToData,
         AddiLongImmediateToData,
         AddiLongImmediateToAddressDisplacement,
@@ -235,12 +304,32 @@ namespace Copper68k
         SubiByteImmediateToData,
         SubiWordImmediateToData,
         SubiByteImmediateToAddressDisplacement,
+        SubiLongImmediateToAddressDisplacement,
+        SubiWordImmediateToAddressDisplacement,
         SubiLongImmediateToData,
         SubByteDataToData,
         SubByteAddressDisplacementToData,
         SubByteDataToAddressDisplacement,
+        SubWordDataToAddressDisplacement,
         SubWordDataToData,
+        NegByteAddressDisplacement,
+        NegWordAddressDisplacement,
+        NegLongAddressDisplacement,
+        CmpByteBriefIndexedToData,
+        CmpWordBriefIndexedToData,
+        CmpLongBriefIndexedToData,
+        SubByteBriefIndexedToData,
+        SubWordBriefIndexedToData,
+        SubLongBriefIndexedToData,
+        SubByteDataToAddressIndirect,
+        SubWordDataToAddressIndirect,
+        SubLongDataToAddressIndirect,
+        SubBytePostIncrementToData,
+        SubWordPostIncrementToData,
+        SubLongPostIncrementToData,
         SubWordAddressIndirectToData,
+        SubByteAddressIndirectToData,
+        SubLongAddressIndirectToData,
         SubWordAddressDisplacementToData,
         SubWordDataToPostIncrement,
         SubLongDataToData,
@@ -250,16 +339,23 @@ namespace Copper68k
         SubLongDataToAddressDisplacement,
         AddByteDataToData,
         AddWordDataToData,
+        AddByteAddressIndirectToData,
         AddWordAddressIndirectToData,
         AddWordPredecrementToData,
         AddWordPostIncrementToData,
+        AddByteAddressDisplacementToData,
         AddWordAddressDisplacementToData,
         AddWordImmediateToData,
         AddByteImmediateToData,
         AddLongDataToData,
         AddLongDataToAddressIndirect,
+        AddByteDataToPostIncrement,
+        AddWordDataToPostIncrement,
+        AddLongDataToPostIncrement,
         AddLongDataToAbsoluteLong,
         AddLongAddressIndirectToData,
+        AddByteBriefIndexedToData,
+        AddWordBriefIndexedToData,
         AddLongBriefIndexedToData,
         AddLongAbsoluteLongToData,
         AddLongAddressToData,
@@ -268,14 +364,22 @@ namespace Copper68k
         AddxLongDataToData,
         SubxLongDataToData,
         AddLongPostIncrementToData,
+        AddBytePostIncrementToData,
         AddLongAddressDisplacementToData,
+        AddLongPcDisplacementToData,
         AddLongImmediateToData,
+        AddByteDataToAddressDisplacement,
         AddWordDataToAddressDisplacement,
         AddLongDataToAddressDisplacement,
+        AddByteDataToBriefIndexed,
+        AddWordDataToBriefIndexed,
+        AddLongDataToBriefIndexed,
         AddaWordImmediateToAddress,
         AddaWordDataToAddress,
+        AddaWordAddressToAddress,
         AddaWordAddressDisplacementToAddress,
         AddaWordBriefIndexedToAddress,
+        AddaLongBriefIndexedToAddress,
         AddaLongImmediateToAddress,
         AddaLongDataToAddress,
         AddaLongAddressToAddress,
@@ -288,15 +392,26 @@ namespace Copper68k
         AddqWordAddressDisplacement,
         AddqLongAddressDisplacement,
         AddqLongAbsoluteLong,
+        SubqByteAbsoluteLong,
+        SubqWordAbsoluteLong,
+        SubqLongAbsoluteLong,
+        SubaWordPostIncrementToAddress,
+        SubaLongPostIncrementToAddress,
         SubaLongImmediateToAddress,
         SubaLongDataToAddress,
+        SubqWordAddress,
         SubqLongAddress,
         SubqLongAddressIndirect,
+        AddqWordAddressIndirect,
+        SubqByteAddressIndirect,
+        SubqWordAddressIndirect,
         SubqLongAddressDisplacement,
         SubqByteAddressDisplacement,
         SubqWordAddressDisplacement,
         SubaLongAddressToAddress,
         SubaLongAddressDisplacementToAddress,
+        SubaLongPcDisplacementToAddress,
+        SubaWordAddressDisplacementToAddress,
         SubaWordImmediateToAddress,
         SubaWordDataToAddress,
         DivuWordEffectiveAddressToData,
@@ -322,8 +437,26 @@ namespace Copper68k
         NbcdByteAbsoluteWord,
         NbcdByteAbsoluteLong,
         OriWordImmediateToData,
+        OriLongImmediateToData,
+        AndiLongImmediateToData,
+        EoriByteImmediateToData,
         OrByteDataToData,
         OrWordDataToData,
+        AndByteBriefIndexedToData,
+        AndWordBriefIndexedToData,
+        AndLongBriefIndexedToData,
+        AndiByteImmediateToPostIncrement,
+        AndiWordImmediateToPostIncrement,
+        AndiLongImmediateToPostIncrement,
+        AndByteDataToPostIncrement,
+        AndWordDataToPostIncrement,
+        AndLongDataToPostIncrement,
+        OrByteDataToAbsoluteLong,
+        OrWordDataToAbsoluteLong,
+        OrLongDataToAbsoluteLong,
+        OrByteDataToPostIncrement,
+        OrWordDataToPostIncrement,
+        OrLongDataToPostIncrement,
         OrWordDataToAddressIndirect,
         OrWordDataToAddressDisplacement,
         OrByteAddressDisplacementToData,
@@ -334,6 +467,9 @@ namespace Copper68k
         AndByteDataToData,
         AndByteAddressDisplacementToData,
         AndByteDataToAddressDisplacement,
+        AndByteDataToAddressIndirect,
+        AndWordDataToAddressIndirect,
+        AndLongDataToAddressIndirect,
         AndWordDataToData,
         AndWordAddressDisplacementToData,
         AndWordDataToAddressDisplacement,
@@ -345,6 +481,7 @@ namespace Copper68k
         AndiByteImmediateToAddressIndirect,
         AndiByteImmediateToAddressDisplacement,
         AndiWordImmediateToAddressDisplacement,
+        AndiLongImmediateToAddressDisplacement,
         AndByteImmediateToData,
         AndWordImmediateToData,
         AndLongImmediateToData,
@@ -360,18 +497,24 @@ namespace Copper68k
         EorLongDataToData,
         EorByteDataToAddressDisplacement,
         EorWordDataToData,
+        EorByteDataToData,
         CmpiLongImmediateToData,
         CmpiLongImmediateToPostIncrement,
         CmpiLongImmediateToAddressIndirect,
         CmpiLongImmediateToAddressDisplacement,
+        CmpiByteImmediateToBriefIndexed,
+        CmpiWordImmediateToBriefIndexed,
+        CmpiLongImmediateToBriefIndexed,
         CmpiLongImmediateToAbsoluteLong,
         CmpiLongImmediateToAbsoluteWord,
         CmpiByteImmediateToData,
         CmpiByteImmediateToAddressIndirect,
         CmpiByteImmediateToAddressDisplacement,
+        CmpiByteImmediateToPredecrement,
         CmpiWordImmediateToData,
         CmpiWordImmediateToAddressIndirect,
         CmpiWordImmediateToAddressDisplacement,
+        CmpiByteImmediateToAbsoluteLong,
         CmpiWordImmediateToAbsoluteLong,
         CmpaWordImmediateToAddress,
         CmpaWordDataToAddress,
@@ -407,7 +550,13 @@ namespace Copper68k
         SwapData,
         LsrByteImmediateData,
         LsrWordRegisterData,
+        AsrByteRegisterData,
+        AsrWordRegisterData,
+        AslWordRegisterData,
+        LslByteRegisterData,
+        LsrByteRegisterData,
         LsrWordAddressDisplacement,
+        AsrByteImmediateData,
         AsrLongImmediateData,
         AsrLongRegisterData,
         AsrWordImmediateData,
@@ -423,16 +572,38 @@ namespace Copper68k
         LslByteImmediateData,
         LslWordImmediateData,
         RorByteImmediateData,
+        RorByteRegisterData,
+        RoxrByteImmediateData,
+        RoxrWordImmediateData,
+        RoxrLongImmediateData,
+        RoxlByteImmediateData,
+        RoxlWordImmediateData,
+        RoxlLongImmediateData,
+        RoxrByteRegisterData,
+        RoxrWordRegisterData,
+        RoxrLongRegisterData,
+        RoxlByteRegisterData,
+        RoxlWordRegisterData,
+        RoxlLongRegisterData,
+        RorWordRegisterData,
+        RorLongRegisterData,
+        RolByteRegisterData,
+        RolWordRegisterData,
+        RolLongRegisterData,
         RorWordImmediateData,
         RorLongImmediateData,
         RolWordImmediateData,
         RolLongImmediateData,
         JsrAddressIndirect,
         JsrAbsoluteLong,
+        JsrAbsoluteWord,
+        JmpAbsoluteWord,
         JsrAddressDisplacement,
+        JsrBriefIndexed,
         JsrPcBriefIndexed,
         JmpAddressIndirect,
         JmpAddressDisplacement,
+        JmpPcDisplacement,
         JmpBriefIndexed,
         JmpAbsoluteLong,
         PeaAddressDisplacement,
@@ -450,7 +621,9 @@ namespace Copper68k
         MovemLongRegistersToBriefIndexed,
         MovemLongAddressIndirectToRegisters,
         MovemLongAddressDisplacementToRegisters,
+        MovemLongPcDisplacementToRegisters,
         MovemLongPostIncrementToRegisters,
+        MovemWordPostIncrementToRegisters,
         OriByteImmediateToData,
         OriByteImmediateToAddressIndirect,
         OriByteImmediateToAddressDisplacement,
@@ -471,12 +644,29 @@ namespace Copper68k
         BsetDynamicData,
         BtstDynamicData,
         BtstByteDynamicAddressDisplacement,
+        BchgByteDynamicBriefIndexed,
+        BclrByteDynamicBriefIndexed,
+        BsetByteDynamicBriefIndexed,
         BtstByteDynamicBriefIndexed,
         BtstByteDynamicAbsoluteLong,
+        BsetByteImmediateAddressIndirect,
+        BclrByteImmediateAddressIndirect,
+        NotByteAbsoluteWord,
+        NotWordAbsoluteWord,
+        NotLongAbsoluteWord,
+        BchgByteDynamicAbsoluteLong,
+        BclrByteDynamicAbsoluteLong,
+        BsetByteDynamicAbsoluteLong,
         BchgByteDynamicAddressIndirect,
         BclrDynamicData,
         SccData,
         SccAbsoluteLong,
+        SccAbsoluteWord,
+        SccAddressIndirect,
+        SccPostIncrement,
+        SccPredecrement,
+        SccAddressDisplacement,
+        SccBriefIndexed,
         BranchByteTaken,
         BranchByteNotTaken,
         BsrByte,
@@ -492,6 +682,8 @@ namespace Copper68k
         TstLongData,
         MoveLongDataToPredecrement,
         MoveLongAddressToPredecrement,
+        MoveByteAddressIndirectToPredecrement,
+        MoveWordAddressIndirectToPredecrement,
         MoveLongAddressIndirectToPredecrement,
         MoveLongPostIncrementToPredecrement,
         MoveLongAddressIndirectToAddressDisplacement,
@@ -737,7 +929,7 @@ namespace Copper68k
                     : M68020TimingModel.GetPlan(M68kInstructionTimingKey.BranchByteTaken);
             _nativeCyclesPerMachineCycle = profile.NativeCyclesPerMachineCycle;
             InstructionCache = new M68kInstructionCache();
-            DataCache = profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040
+            DataCache = profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040 or M68kAcceleratorModel.M68060
                 ? new M68kInstructionCache()
                 : null;
         }
@@ -798,7 +990,17 @@ namespace Copper68k
 
         public void ApplyCacheControl(uint cacheControlRegister, uint cacheAddressRegister)
         {
-            if (_profile.Model is M68kAcceleratorModel.M68030 or M68kAcceleratorModel.M68040)
+            if (_profile.Model is M68kAcceleratorModel.M68040 or M68kAcceleratorModel.M68060)
+            {
+                // MC68040UM 2.2.2.5. Invalidation uses CINV/CPUSH, not 030 CACR bits.
+                var is060 = _profile.Model == M68kAcceleratorModel.M68060;
+                InstructionCache.ApplyControl((cacheControlRegister & 0x8000) != 0,
+                    is060 && (cacheControlRegister & 0x4000) != 0, false, false, 0);
+                DataCache?.ApplyControl((cacheControlRegister & 0x8000_0000) != 0,
+                    is060 && (cacheControlRegister & 0x4000_0000) != 0, false, false, 0);
+                return;
+            }
+            if (_profile.Model == M68kAcceleratorModel.M68030)
             {
                 InstructionCache.ApplyControl(
                     enabled: (cacheControlRegister & 0x0000_0001) != 0,
@@ -1194,6 +1396,15 @@ namespace Copper68k
         private readonly IM68kBus? _m68040PhysicalBus;
         private readonly bool _directUncachedInstructionFetch;
         private readonly bool _hasInstructionFetchWaitStates;
+        private readonly bool _useM68040UncachedHalfLine;
+        private readonly IM68kStablePhysicalAddressMap? _physicalAddressMap;
+        private uint _fetchHalfLineAddress;
+        private uint _fetchFirstLong;
+        private uint _fetchSecondLong;
+        private int _fetchValidLongs;
+        private uint _fetchMmuGeneration;
+        private uint _fetchMapGeneration;
+        private bool _fetchSupervisor;
 
         public M68kTimedBusAdapter(
             IM68kBus bus,
@@ -1210,6 +1421,9 @@ namespace Copper68k
             _m68040LogicalBus = bus as M68040LogicalBus;
             _m68040PhysicalBus = _m68040LogicalBus?.PhysicalBus;
             _directUncachedInstructionFetch = !profile.FastInstructionFetch;
+            _useM68040UncachedHalfLine =
+                profile.Model == M68kAcceleratorModel.M68040 && !profile.FastInstructionFetch;
+            _physicalAddressMap = _m68040PhysicalBus as IM68kStablePhysicalAddressMap;
             for (var i = 0; i < profile.BusTiming.Count; i++)
             {
                 if (profile.BusTiming[i].WaitStates != 0)
@@ -1229,11 +1443,18 @@ namespace Copper68k
         {
             if (!_directUncachedInstructionFetch || _timing.InstructionCache.Enabled)
             {
+                ResetInstructionFetchBuffer();
                 return ReadInstructionFetchWord(
                     address,
                     out cacheHit,
                     out requiresSynchronization,
                     out completedMachineCycle);
+            }
+
+            if (_useM68040UncachedHalfLine)
+            {
+                return ReadM68040UncachedInstructionWord(
+                    address, out cacheHit, out requiresSynchronization, out completedMachineCycle);
             }
 
             cacheHit = false;
@@ -1256,6 +1477,73 @@ namespace Copper68k
 
             _timing.RecordPostedBusCompletion(cycle);
             requiresSynchronization = true;
+            completedMachineCycle = cycle;
+            return value;
+        }
+
+        internal void ResetInstructionFetchBuffer() => _fetchValidLongs = 0;
+
+        private ushort ReadM68040UncachedInstructionWord(
+            uint address,
+            out bool cacheHit,
+            out bool requiresSynchronization,
+            out long completedMachineCycle)
+        {
+            // MC68040UM table 7-3 and following paragraph: instruction transfers are
+            // aligned longwords, starting at the eight-byte half-line boundary.
+            // The host bus splits each longword if its physical port is 16-bit.
+            var halfLine = address & ~7u;
+            var supervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
+            var mmuGeneration = _state.M68040Mmu.Generation;
+            var mapGeneration = _physicalAddressMap?.CpuPhysicalAddressMapGeneration ?? 0;
+            if (_fetchHalfLineAddress != halfLine || _fetchSupervisor != supervisor ||
+                _fetchMmuGeneration != mmuGeneration || _fetchMapGeneration != mapGeneration)
+            {
+                _fetchValidLongs = 0;
+            }
+
+            cacheHit = false; // The holding register is independent of CACR.IE.
+            requiresSynchronization = false;
+            completedMachineCycle = _state.Cycles;
+            if (_fetchValidLongs == 0)
+            {
+                _fetchFirstLong = ReadM68040InstructionLong(halfLine, out completedMachineCycle);
+                _fetchHalfLineAddress = halfLine;
+                _fetchSupervisor = supervisor;
+                _fetchMmuGeneration = mmuGeneration;
+                _fetchMapGeneration = mapGeneration;
+                _fetchValidLongs = 1;
+                requiresSynchronization = true;
+            }
+            if ((address & 4) != 0 && _fetchValidLongs == 1)
+            {
+                _fetchSecondLong = ReadM68040InstructionLong(halfLine + 4, out completedMachineCycle);
+                _fetchValidLongs = 2;
+                requiresSynchronization = true;
+            }
+
+            var data = (address & 4) == 0 ? _fetchFirstLong : _fetchSecondLong;
+            var word = (ushort)(data >> ((address & 2) == 0 ? 16 : 0));
+            // MC68040UM 4.2 guarantees retention for loops within the first six
+            // bytes. Retire at the fourth word in this demand-driven frontend;
+            // speculative next-half-line traffic and pipeline overlap are not
+            // modeled here. Do not turn this into an eight-byte instruction cache.
+            if ((address & 7) == 6) _fetchValidLongs = 0;
+            return word;
+        }
+
+        private uint ReadM68040InstructionLong(uint address, out long completedMachineCycle)
+        {
+            var cycle = GetBusRequestMachineCycle();
+            var value = _m68040LogicalBus is { } logicalBus &&
+                logicalBus.CanUseDirectIdentityAccess(address, byteCount: 4)
+                    ? _m68040PhysicalBus!.ReadLong(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch)
+                    : _bus.ReadLong(address, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+            if (_hasInstructionFetchWaitStates)
+            {
+                AddProfileWaitStates(address, M68020BusWidth.Long, ref cycle);
+            }
+            _timing.RecordPostedBusCompletion(cycle);
             completedMachineCycle = cycle;
             return value;
         }

@@ -63,7 +63,8 @@ public sealed class M68kBcdTests
 
 		Assert.Equal(0xCB74u, cpu.State.A[5]);
 		Assert.Equal(0x8E4E, bus.ReadWord(0xCB74));
-		Assert.Equal(0x8308, cpu.State.StatusRegister);
+		Assert.Equal(0x8308, bus.ReadWord(0x7FFA)); // post-ABCD SR saved by trace
+		Assert.Equal(9, cpu.State.LastExceptionVector);
 	}
 
 	[Fact]

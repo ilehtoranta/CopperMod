@@ -110,7 +110,9 @@ public sealed class M68kLogicalTests
 
 		cpu.ExecuteInstruction();
 
-		Assert.Equal(0x061B, cpu.State.StatusRegister);
-		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		Assert.Equal(0x061B, bus.ReadWord(0x2FFA)); // T was set at instruction entry
+		Assert.Equal(0x1004u, bus.ReadLong(0x2FFC));
+		Assert.Equal(0x261B, cpu.State.StatusRegister);
+		Assert.Equal(9, cpu.State.LastExceptionVector);
 	}
 }

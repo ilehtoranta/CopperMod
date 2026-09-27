@@ -168,7 +168,7 @@ namespace Copper68k
                 return new(M68kTimingOperandForm.PcDisplacement, label);
             }
 
-            if (label == "(d8,An,Xn)")
+            if (label is "(d8,An,Xn)" or "(d8,PC,Xn)")
             {
                 return new(M68kTimingOperandForm.BriefIndexed, label);
             }
@@ -303,6 +303,7 @@ namespace Copper68k
             var effectiveAddressCycles = key switch
             {
                 M68kInstructionTimingKey.MovemLongRegistersToAddressDisplacement or
+                M68kInstructionTimingKey.MovemLongPcDisplacementToRegisters or
                 M68kInstructionTimingKey.MovemLongAddressDisplacementToRegisters => 2,
                 M68kInstructionTimingKey.MovemLongRegistersToBriefIndexed => 4,
                 _ => 0,
@@ -409,10 +410,14 @@ namespace Copper68k
                 M68kInstructionTimingKey.SwapData or
                 M68kInstructionTimingKey.JsrAddressIndirect or
                 M68kInstructionTimingKey.JsrAbsoluteLong or
+                M68kInstructionTimingKey.JsrAbsoluteWord or
+                M68kInstructionTimingKey.JmpAbsoluteWord or
                 M68kInstructionTimingKey.JsrAddressDisplacement or
+                M68kInstructionTimingKey.JsrBriefIndexed or
                 M68kInstructionTimingKey.JsrPcBriefIndexed or
                 M68kInstructionTimingKey.JmpAddressIndirect or
                 M68kInstructionTimingKey.JmpAddressDisplacement or
+                M68kInstructionTimingKey.JmpPcDisplacement or
                 M68kInstructionTimingKey.JmpBriefIndexed or
                 M68kInstructionTimingKey.JmpAbsoluteLong or
                 M68kInstructionTimingKey.PeaAddressDisplacement or
@@ -447,10 +452,14 @@ namespace Copper68k
                 M68kInstructionTimingKey.SwapData => "SWAP Dn",
                 M68kInstructionTimingKey.JsrAddressIndirect => "JSR (An)",
                 M68kInstructionTimingKey.JsrAbsoluteLong => "JSR (xxx).L",
+                M68kInstructionTimingKey.JsrAbsoluteWord => "JSR (xxx).W",
+                M68kInstructionTimingKey.JmpAbsoluteWord => "JMP (xxx).W",
                 M68kInstructionTimingKey.JsrAddressDisplacement => "JSR (d16,An)",
+                M68kInstructionTimingKey.JsrBriefIndexed => "JSR (d8,An,Xn)",
                 M68kInstructionTimingKey.JsrPcBriefIndexed => "JSR (d8,PC,Xn)",
                 M68kInstructionTimingKey.JmpAddressIndirect => "JMP (An)",
                 M68kInstructionTimingKey.JmpAddressDisplacement => "JMP (d16,An)",
+                M68kInstructionTimingKey.JmpPcDisplacement => "JMP (d16,PC)",
                 M68kInstructionTimingKey.JmpBriefIndexed => "JMP (d8,An,Xn)",
                 M68kInstructionTimingKey.JmpAbsoluteLong => "JMP (xxx).L",
                 M68kInstructionTimingKey.PeaAddressDisplacement => "PEA (d16,An)",
@@ -502,10 +511,14 @@ namespace Copper68k
                 M68kInstructionTimingKey.Rts => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
                 M68kInstructionTimingKey.JsrAddressIndirect => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
                 M68kInstructionTimingKey.JsrAbsoluteLong => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
+                M68kInstructionTimingKey.JsrAbsoluteWord => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
+                M68kInstructionTimingKey.JmpAbsoluteWord => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
                 M68kInstructionTimingKey.JsrAddressDisplacement => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
+                M68kInstructionTimingKey.JsrBriefIndexed => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
                 M68kInstructionTimingKey.JsrPcBriefIndexed => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
                 M68kInstructionTimingKey.JmpAddressIndirect => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
                 M68kInstructionTimingKey.JmpAddressDisplacement => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
+                M68kInstructionTimingKey.JmpPcDisplacement => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
                 M68kInstructionTimingKey.JmpBriefIndexed => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
                 M68kInstructionTimingKey.JmpAbsoluteLong => M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch,
                 _ => M68kTimingBarrier.None
@@ -547,6 +560,31 @@ namespace Copper68k
                 M68kInstructionTimingKey.AddqLongAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.AddiLongImmediateToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.AddLongDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.NegByteAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.NegWordAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.NegLongAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubByteDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubWordDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubLongDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubqByteAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubqWordAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubqLongAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AndiByteImmediateToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AndiWordImmediateToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AndiLongImmediateToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AndByteDataToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AndWordDataToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AndLongDataToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.OrByteDataToAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.OrWordDataToAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.OrLongDataToAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.OrByteDataToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.OrWordDataToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.OrLongDataToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AddByteDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AddByteDataToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AddWordDataToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AddLongDataToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.SubqByteAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.SubqWordAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.SubqLongAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
@@ -556,11 +594,36 @@ namespace Copper68k
                 M68kInstructionTimingKey.OriLongImmediateToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.OriWordImmediateToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.AndByteDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AndByteDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AddiWordImmediateToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AddByteDataToBriefIndexed => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AddWordDataToBriefIndexed => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AddLongDataToBriefIndexed => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubiLongImmediateToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubiWordImmediateToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubWordDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.BchgByteDynamicBriefIndexed => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.BclrByteDynamicBriefIndexed => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.BsetByteDynamicBriefIndexed => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.BchgByteDynamicAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.BclrByteDynamicAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.BsetByteDynamicAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.BsetByteImmediateAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.BclrByteImmediateAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.NotByteAbsoluteWord => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.NotWordAbsoluteWord => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.NotLongAbsoluteWord => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AddqWordAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubqByteAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubqWordAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AndWordDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AndLongDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.AndWordDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.AndLongDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.AndiByteImmediateToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.AndiByteImmediateToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.AndiWordImmediateToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AndiLongImmediateToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.OriByteImmediateToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.OriByteImmediateToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.OrByteDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
@@ -570,6 +633,7 @@ namespace Copper68k
                 M68kInstructionTimingKey.OrLongDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.OrLongDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.NotByteAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.NotLongAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.LsrWordAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.EorLongDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.EorByteDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
@@ -607,6 +671,12 @@ namespace Copper68k
                 M68kInstructionTimingKey.DbccExpired => "DBcc expired",
                 M68kInstructionTimingKey.SccData => "Scc Dn",
                 M68kInstructionTimingKey.SccAbsoluteLong => "Scc (xxx).L",
+                M68kInstructionTimingKey.SccAbsoluteWord => "Scc (xxx).W",
+                M68kInstructionTimingKey.SccAddressIndirect => "Scc (An)",
+                M68kInstructionTimingKey.SccPostIncrement => "Scc (An)+",
+                M68kInstructionTimingKey.SccPredecrement => "Scc -(An)",
+                M68kInstructionTimingKey.SccAddressDisplacement => "Scc (d16,An)",
+                M68kInstructionTimingKey.SccBriefIndexed => "Scc (d8,An,Xn)",
                 M68kInstructionTimingKey.ExgDataData => "EXG Dn,Dn",
                 M68kInstructionTimingKey.ExgDataAddress => "EXG Dn,An",
                 M68kInstructionTimingKey.ExgAddressAddress => "EXG An,An",
@@ -618,8 +688,15 @@ namespace Copper68k
                 M68kInstructionTimingKey.AddqWordAddressDisplacement => "ADDQ.W #<data>,(d16,An)",
                 M68kInstructionTimingKey.AddqLongAddressDisplacement => "ADDQ.L #<data>,(d16,An)",
                 M68kInstructionTimingKey.AddqLongAbsoluteLong => "ADDQ.L #<data>,(xxx).L",
+                M68kInstructionTimingKey.SubqWordAddress => "SUBQ.W #<data>,An",
                 M68kInstructionTimingKey.SubqLongAddress => "SUBQ.L #<data>,An",
+                M68kInstructionTimingKey.SubqByteAbsoluteLong => "SUBQ.B #<data>,(xxx).L",
+                M68kInstructionTimingKey.SubqWordAbsoluteLong => "SUBQ.W #<data>,(xxx).L",
+                M68kInstructionTimingKey.SubqLongAbsoluteLong => "SUBQ.L #<data>,(xxx).L",
                 M68kInstructionTimingKey.SubqLongAddressIndirect => "SUBQ.L #<data>,(An)",
+                M68kInstructionTimingKey.SubqByteAddressIndirect => "SUBQ.B #<data>,(An)",
+                M68kInstructionTimingKey.SubqWordAddressIndirect => "SUBQ.W #<data>,(An)",
+                M68kInstructionTimingKey.AddqWordAddressIndirect => "ADDQ.W #<data>,(An)",
                 M68kInstructionTimingKey.SubqLongAddressDisplacement => "SUBQ.L #<data>,(d16,An)",
                 M68kInstructionTimingKey.SubqByteAddressDisplacement => "SUBQ.B #<data>,(d16,An)",
                 M68kInstructionTimingKey.SubqWordAddressDisplacement => "SUBQ.W #<data>,(d16,An)",
@@ -1017,6 +1094,7 @@ namespace Copper68k
                 "Predecrement" => "-(An)",
                 "AddressDisplacement" => "(d16,An)",
                 "PcDisplacement" => "(d16,PC)",
+                "PcBriefIndexed" => "(d8,PC,Xn)",
                 "BriefIndexed" => "(d8,An,Xn)",
                 "AbsoluteWord" => "(xxx).W",
                 "AbsoluteLong" => "(xxx).L",
@@ -1277,7 +1355,8 @@ namespace Copper68k
                 M68kTimingOperation.Multiply => CalculateMultiplyCycles(descriptor),
                 M68kTimingOperation.Divide => CalculateDivideCycles(descriptor),
                 M68kTimingOperation.Jump => CalculateJumpCycles(descriptor),
-                M68kTimingOperation.JumpSubroutine => descriptor.LegacyKey == M68kInstructionTimingKey.JsrPcBriefIndexed ? 11 : 7,
+                M68kTimingOperation.JumpSubroutine => descriptor.LegacyKey is
+                    M68kInstructionTimingKey.JsrBriefIndexed or M68kInstructionTimingKey.JsrPcBriefIndexed ? 11 : 7,
                 M68kTimingOperation.PushEffectiveAddress => descriptor.LegacyKey switch
                 {
                     M68kInstructionTimingKey.PeaAddressIndirect => 5,
@@ -1353,8 +1432,17 @@ namespace Copper68k
 
         private static int CalculateArithmeticCycles(M68kTimingDescriptor descriptor)
         {
+            // Same bounded unary-memory policy as NOT at a displacement EA.
+            if (descriptor.LegacyKey is M68kInstructionTimingKey.NegByteAddressDisplacement or
+                M68kInstructionTimingKey.NegWordAddressDisplacement or
+                M68kInstructionTimingKey.NegLongAddressDisplacement)
+            {
+                return 8;
+            }
+
             if (descriptor.LegacyKey is M68kInstructionTimingKey.AddqWordAddress or
                 M68kInstructionTimingKey.AddqLongAddress or
+                M68kInstructionTimingKey.SubqWordAddress or
                 M68kInstructionTimingKey.SubqLongAddress)
             {
                 return 2;
@@ -1555,6 +1643,7 @@ namespace Copper68k
                 M68kTimingOperandForm.PcDisplacement => 6,
                 M68kTimingOperandForm.BriefIndexed => 8,
                 M68kTimingOperandForm.AbsoluteLong => 6,
+                M68kTimingOperandForm.AbsoluteWord => 6,
                 _ => throw Unsupported(descriptor)
             };
 
@@ -1591,6 +1680,12 @@ namespace Copper68k
             return descriptor.Destination.Form switch
             {
                 M68kTimingOperandForm.DataRegister => 4,
+                M68kTimingOperandForm.AddressIndirect => 6,
+                M68kTimingOperandForm.PostIncrement => 6,
+                M68kTimingOperandForm.Predecrement => 8,
+                M68kTimingOperandForm.AddressDisplacement => 8,
+                M68kTimingOperandForm.BriefIndexed => 10,
+                M68kTimingOperandForm.AbsoluteWord => 8,
                 M68kTimingOperandForm.AbsoluteLong => 10,
                 _ => throw Unsupported(descriptor)
             };
@@ -1607,10 +1702,16 @@ namespace Copper68k
             {
                 M68kTimingOperandForm.AddressIndirect when descriptor.LegacyKey.ToString().StartsWith("Btst", StringComparison.Ordinal) => 6,
                 M68kTimingOperandForm.AddressIndirect when descriptor.LegacyKey.ToString().StartsWith("Bchg", StringComparison.Ordinal) => 6,
+                M68kTimingOperandForm.AddressIndirect when descriptor.LegacyKey.ToString().StartsWith("Bclr", StringComparison.Ordinal) => 6,
+                M68kTimingOperandForm.AddressIndirect when descriptor.LegacyKey.ToString().StartsWith("Bset", StringComparison.Ordinal) => 6,
                 M68kTimingOperandForm.PostIncrement when descriptor.LegacyKey.ToString().StartsWith("Btst", StringComparison.Ordinal) => 6,
                 M68kTimingOperandForm.AbsoluteLong => descriptor.LegacyKey.ToString().StartsWith("Btst", StringComparison.Ordinal) ? 10 : 12,
                 M68kTimingOperandForm.AddressDisplacement when descriptor.LegacyKey.ToString().StartsWith("Btst", StringComparison.Ordinal) => 8,
                 M68kTimingOperandForm.BriefIndexed when descriptor.LegacyKey.ToString().StartsWith("Btst", StringComparison.Ordinal) => 10,
+                // Keep the bounded displacement policy plus its two-clock index cost.
+                M68kTimingOperandForm.BriefIndexed when descriptor.LegacyKey.ToString().StartsWith("Bchg", StringComparison.Ordinal) => 12,
+                M68kTimingOperandForm.BriefIndexed when descriptor.LegacyKey.ToString().StartsWith("Bclr", StringComparison.Ordinal) => 12,
+                M68kTimingOperandForm.BriefIndexed when descriptor.LegacyKey.ToString().StartsWith("Bset", StringComparison.Ordinal) => 10,
                 M68kTimingOperandForm.AddressDisplacement when descriptor.LegacyKey.ToString().StartsWith("Bchg", StringComparison.Ordinal) => 10,
                 M68kTimingOperandForm.AddressDisplacement when descriptor.LegacyKey.ToString().StartsWith("Bclr", StringComparison.Ordinal) => 10,
                 M68kTimingOperandForm.AddressDisplacement when descriptor.LegacyKey.ToString().StartsWith("Bset", StringComparison.Ordinal) =>
@@ -1719,6 +1820,7 @@ namespace Copper68k
                 M68kTimingOperandForm.PostIncrement => 6,
                 M68kTimingOperandForm.Predecrement => 7,
                 M68kTimingOperandForm.AddressDisplacement => size == M68kOperandSize.Long ? 7 : 6,
+                M68kTimingOperandForm.PcDisplacement => size == M68kOperandSize.Long ? 7 : 6,
                 M68kTimingOperandForm.BriefIndexed => 8,
                 M68kTimingOperandForm.AbsoluteLong => size == M68kOperandSize.Long ? 8 : 7,
                 _ => throw Unsupported(descriptor)
@@ -1746,6 +1848,7 @@ namespace Copper68k
                 M68kTimingOperandForm.PostIncrement => 6,
                 M68kTimingOperandForm.Predecrement => 7,
                 M68kTimingOperandForm.AddressDisplacement => 6,
+                M68kTimingOperandForm.BriefIndexed => 8,
                 M68kTimingOperandForm.AbsoluteLong => 6,
                 _ => throw Unsupported(descriptor)
             };
@@ -1761,6 +1864,10 @@ namespace Copper68k
                 M68kTimingOperandForm.AddressIndirect => size == M68kOperandSize.Long ? 10 : 6,
                 M68kTimingOperandForm.PostIncrement => size == M68kOperandSize.Long ? 10 : 6,
                 M68kTimingOperandForm.AddressDisplacement => size == M68kOperandSize.Long ? 13 : 9,
+                // Bounded operand-shape policy: displacement work plus index
+                // calculation. Actual bus waits remain host-owned; this is not
+                // a universal hardware instruction duration (MC68020UM sec. 8).
+                M68kTimingOperandForm.BriefIndexed => size == M68kOperandSize.Long ? 15 : 11,
                 M68kTimingOperandForm.AbsoluteLong => size == M68kOperandSize.Long ? 15 : 11,
                 _ => throw Unsupported(descriptor)
             };
@@ -1789,7 +1896,10 @@ namespace Copper68k
             {
                 M68kTimingOperandForm.AddressIndirect => 6,
                 M68kTimingOperandForm.PostIncrement => size == M68kOperandSize.Long ? 10 : 8,
+                M68kTimingOperandForm.Predecrement => size == M68kOperandSize.Long ? 11 : 9,
                 M68kTimingOperandForm.AddressDisplacement => size == M68kOperandSize.Long ? 9 : 8,
+                // Same bounded index-calculation policy as memory arithmetic.
+                M68kTimingOperandForm.BriefIndexed => size == M68kOperandSize.Long ? 11 : 10,
                 M68kTimingOperandForm.AbsoluteWord => size == M68kOperandSize.Long ? 8 : 6,
                 M68kTimingOperandForm.AbsoluteLong => size == M68kOperandSize.Long ? 10 : 8,
                 _ => throw Unsupported(descriptor)
@@ -1803,7 +1913,7 @@ namespace Copper68k
         {
             return destination switch
             {
-                M68kTimingOperandForm.AddressIndirect => size == M68kOperandSize.Long ? 8 : 6,
+                M68kTimingOperandForm.AddressIndirect or M68kTimingOperandForm.PostIncrement => size == M68kOperandSize.Long ? 8 : 6,
                 M68kTimingOperandForm.AddressDisplacement => size == M68kOperandSize.Long ? 10 : 8,
                 M68kTimingOperandForm.AbsoluteLong => size == M68kOperandSize.Long ? 12 : 10,
                 _ => throw Unsupported(descriptor)
@@ -1905,6 +2015,7 @@ namespace Copper68k
             {
                 M68kTimingOperandForm.AddressIndirect => 4,
                 M68kTimingOperandForm.PostIncrement => 4,
+                M68kTimingOperandForm.Predecrement => 5,
                 M68kTimingOperandForm.AddressDisplacement => 6,
                 M68kTimingOperandForm.PcDisplacement => 6,
                 M68kTimingOperandForm.BriefIndexed => 6,
@@ -1926,6 +2037,7 @@ namespace Copper68k
                 M68kTimingOperandForm.AddressDisplacement => 4,
                 M68kTimingOperandForm.BriefIndexed => 6,
                 M68kTimingOperandForm.AbsoluteLong => 4,
+                M68kTimingOperandForm.AbsoluteWord => 4,
                 _ => throw Unsupported(descriptor)
             };
         }
@@ -1945,6 +2057,7 @@ namespace Copper68k
                 M68kTimingOperandForm.PostIncrement => size == M68kOperandSize.Long ? 6 : 4,
                 M68kTimingOperandForm.Predecrement => size == M68kOperandSize.Long ? 6 : 4,
                 M68kTimingOperandForm.AddressDisplacement => size == M68kOperandSize.Long ? 8 : 6,
+                M68kTimingOperandForm.BriefIndexed => size == M68kOperandSize.Long ? 10 : 8,
                 M68kTimingOperandForm.AbsoluteWord => size == M68kOperandSize.Long ? 8 : 6,
                 M68kTimingOperandForm.AbsoluteLong => size == M68kOperandSize.Long ? 8 : 6,
                 _ => throw Unsupported(descriptor)

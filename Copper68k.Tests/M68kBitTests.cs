@@ -17,8 +17,9 @@ public sealed class M68kBitTests
 
 		cpu.ExecuteInstruction();
 
-		Assert.Equal(0x8610, cpu.State.StatusRegister);
-		Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+		Assert.Equal(0x8610, bus.ReadWord(0x7FFA)); // post-BTST SR saved by trace
+		Assert.Equal(0x1004u, bus.ReadLong(0x7FFC));
+		Assert.Equal(9, cpu.State.LastExceptionVector);
 	}
 
 	[Fact]

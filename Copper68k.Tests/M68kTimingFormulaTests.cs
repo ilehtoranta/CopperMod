@@ -196,12 +196,14 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.MovemWordRegistersToPredecrement or
 			M68kInstructionTimingKey.MovemWordRegistersToAddressDisplacement or
 			M68kInstructionTimingKey.MovemWordAddressDisplacementToRegisters or
+			M68kInstructionTimingKey.MovemWordPostIncrementToRegisters or
 			M68kInstructionTimingKey.MovemLongRegistersToAddressIndirect or
 			M68kInstructionTimingKey.MovemLongRegistersToAddressDisplacement or
 			M68kInstructionTimingKey.MovemLongRegistersToBriefIndexed or
 			M68kInstructionTimingKey.MovemLongRegistersToAbsoluteLong or
 			M68kInstructionTimingKey.MovemLongAddressIndirectToRegisters or
 			M68kInstructionTimingKey.MovemLongAddressDisplacementToRegisters or
+			M68kInstructionTimingKey.MovemLongPcDisplacementToRegisters or
 			M68kInstructionTimingKey.MovemLongPostIncrementToRegisters;
 
 	private static bool IsM68040OnlyTimingKey(M68kInstructionTimingKey key)
@@ -309,12 +311,16 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.SwapData => ("SWAP Dn", 4, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.JsrAddressIndirect => ("JSR (An)", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JsrAbsoluteLong => ("JSR (xxx).L", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
+			M68kInstructionTimingKey.JsrAbsoluteWord => ("JSR (xxx).W", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JsrAddressDisplacement => ("JSR (d16,An)", 7, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
+			M68kInstructionTimingKey.JsrBriefIndexed => ("JSR (d8,An,Xn)", 11, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JsrPcBriefIndexed => ("JSR (d8,PC,Xn)", 11, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAddressIndirect => ("JMP (An)", 4, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAddressDisplacement => ("JMP (d16,An)", 6, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
+			M68kInstructionTimingKey.JmpPcDisplacement => ("JMP (d16,PC)", 6, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpBriefIndexed => ("JMP (d8,An,Xn)", 8, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.JmpAbsoluteLong => ("JMP (xxx).L", 6, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
+			M68kInstructionTimingKey.JmpAbsoluteWord => ("JMP (xxx).W", 6, M68kTimingBarrier.FlushPipeline | M68kTimingBarrier.Branch),
 			M68kInstructionTimingKey.PeaAddressDisplacement => ("PEA (d16,An)", 7, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.PeaAddressIndirect => ("PEA (An)", 5, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.PeaBriefIndexed => ("PEA (d8,An,Xn)", 9, M68kTimingBarrier.None),
