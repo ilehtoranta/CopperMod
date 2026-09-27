@@ -43,3 +43,8 @@ reusing the `1.5.0` retry tags.
 The workflow uses `--skip-duplicate` so a retry after a partial upload can
 finish the remaining package upload. NuGet package versions are immutable; a
 retry never replaces an already published package.
+
+The normal packing gate runs the CPU suite and the retained AHX consumer suite.
+The pre-extraction `CopperMod.Amiga.Tests` project still depends on removed
+CopperStart components and is not the active consumer gate. CopperScreen owns
+its separate engine, host and native-media validation against the public package.
