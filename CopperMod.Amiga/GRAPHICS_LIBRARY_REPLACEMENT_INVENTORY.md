@@ -254,10 +254,62 @@ passes 194/194. G340 translates both origins to `(2,20)` and `(16,35)`; its
 focused matrix passes 16/16 and the boot suite passes 194/194. The complete
 Layers differential selection through G341 (204 methods) passed 801/801 with
 zero skips across nine fresh-process batches. G342-G346 translate both origins
-through `(2,26)` and `(16,41)`; each focused matrix passes 16/16 and the boot
-suite passes 194/194. G345/G346 retain the one-row overlap, scroll,
+through `(2,26)` and `(16,41)`; each focused matrix passes 16/16. G347/G348 at
+`(2,27)/(16,42)` and `(2,28)/(16,43)` pass 32/32 combined; G349/G350 at
+`(2,29)/(16,44)` and `(2,30)/(16,45)` pass 32/32 combined. G351/G352 at
+`(2,31)/(16,46)` and `(2,32)/(16,47)` pass 32/32 combined. G353/G354 at
+`(2,33)/(16,48)` and `(2,34)/(16,49)` pass 32/32 combined. G355/G356 at
+`(2,35)/(16,50)` and `(2,36)/(16,51)` pass 32/32 combined. G357/G358 at
+`(2,37)/(16,52)` and `(2,38)/(16,53)` pass 32/32 combined. G359/G360 at
+`(2,39)/(16,54)` and `(2,40)/(16,55)` pass 32/32 combined. G361/G362 at
+`(2,41)/(16,56)` and `(2,42)/(16,57)` pass 32/32 combined. G363/G364 at
+`(2,43)/(16,58)` and `(2,44)/(16,59)` pass 32/32 combined. G365/G366 at
+`(2,45)/(16,60)` and `(2,46)/(16,61)`, plus G367/G368 at `(2,47)/(16,62)` and
+`(2,48)/(16,63)`, pass 32/32 combined. G369/G370 at `(2,49)/(16,64)` and
+`(2,50)/(16,65)` also pass 32/32 combined. G371/G372 at `(2,51)/(16,66)` and
+`(2,52)/(16,67)` pass 32/32 combined. G373/G374 at `(2,53)/(16,68)` and
+`(2,54)/(16,69)` also pass 32/32 combined. G375/G376 at `(2,55)/(16,70)` and
+`(2,56)/(16,71)` pass 32/32 combined. G377/G378 at `(2,57)/(16,72)` and
+`(2,58)/(16,73)` also pass 32/32 combined. G379/G380 at `(2,59)/(16,74)` and
+`(2,60)/(16,75)` also pass 32/32 combined. G381/G382 at `(2,61)/(16,76)` and
+`(2,62)/(16,77)` also pass 32/32 combined. G383/G384 at `(2,63)/(16,78)` and
+`(2,64)/(16,79)` also pass 32/32 combined. G385/G386 at `(2,65)/(16,80)` and
+`(2,66)/(16,81)` also pass 32/32 combined. G387/G388 at `(2,67)/(16,82)` and
+`(2,68)/(16,83)` also pass 32/32 combined. G389/G390 at `(2,69)/(16,84)` and
+`(2,70)/(16,85)` also pass 32/32 combined. G391/G392 at `(2,71)/(16,86)` and
+`(2,72)/(16,87)` also pass 32/32 combined. G393/G394 at `(2,73)/(16,88)` and
+`(2,74)/(16,89)` also pass 32/32 combined. G395/G396 at `(2,75)/(16,90)` and
+`(2,76)/(16,91)` also pass 32/32 combined. G397/G398 at `(2,77)/(16,92)` and
+`(2,78)/(16,93)` also pass 32/32 combined. G399/G400 at `(2,79)/(16,94)` and
+`(2,80)/(16,95)` also pass 32/32 combined. G401/G402 at `(2,81)/(16,96)` and
+`(2,82)/(16,97)` also pass 32/32 combined. G403/G404 at `(2,83)/(16,98)` and
+`(2,84)/(16,99)` also pass 32/32 combined. G405/G406 at `(2,85)/(16,100)` and
+`(2,86)/(16,101)` also pass 32/32 combined. G407/G408 at `(2,87)/(16,102)` and
+`(2,88)/(16,103)` also pass 32/32 combined. G409/G410 at `(2,89)/(16,104)` and
+`(2,90)/(16,105)` also pass 32/32 combined. G411/G412 at `(2,91)/(16,106)` and
+`(2,92)/(16,107)` also pass 32/32 combined. G413/G414 at `(2,93)/(16,108)` and
+`(2,94)/(16,109)` also pass 32/32 combined. G415/G416 at `(2,95)/(16,110)` and
+`(2,96)/(16,111)` also pass 32/32 combined. G417/G418 at `(2,97)/(16,112)` and
+`(2,98)/(16,113)` also pass 32/32 combined. G419/G420 at `(2,99)/(16,114)` and
+`(2,100)/(16,115)` also pass 32/32 combined. G421/G422 at `(2,101)/(16,116)`
+and `(2,102)/(16,117)` also pass 32/32 combined. G423/G424 at
+`(2,103)/(16,118)` and `(2,104)/(16,119)` also pass 32/32 combined. G425/G426
+at `(2,105)/(16,120)` and `(2,106)/(16,121)` also pass 32/32 combined. G427/G428
+at `(2,107)/(16,122)` and `(2,108)/(16,123)` also pass 32/32 combined. G429/G430
+at `(2,109)/(16,124)` and `(2,110)/(16,125)` also pass 32/32 combined. G431/G432
+at `(2,111)/(16,126)` and `(2,112)/(16,127)` also pass 32/32 combined. G433/G434
+at `(2,113)/(16,128)` and `(2,114)/(16,129)` also pass 32/32 combined. G435/G436
+at `(2,115)/(16,130)` and `(2,116)/(16,131)` also pass 32/32 combined. G437/G438
+at `(2,117)/(16,132)` and `(2,118)/(16,133)`, G439/G440 at
+`(2,119)/(16,134)` and `(2,120)/(16,135)`, G441/G442 at
+`(2,121)/(16,136)` and `(2,122)/(16,137)`, G443/G444 at
+`(2,123)/(16,138)` and `(2,124)/(16,139)`, and G445/G446 at
+`(2,125)/(16,140)` and `(2,126)/(16,141)` also pass 32/32 combined per pair.
+The boot suite passes 194/194. G345-G446 retain the one-row overlap, scroll,
 dual-Region replacement retry and independent update-completion matrix. Next:
-G347 translates both origins to `(2,27)` and `(16,42)`. CyberGraphX is excluded.
+G447/G448 translate both origins to `(2,127)/(16,142)` and
+`(2,128)/(16,143)`.
+CyberGraphX is excluded.
 
 ## Latest native drawing unit
 

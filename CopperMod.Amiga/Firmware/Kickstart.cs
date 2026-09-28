@@ -82,6 +82,7 @@ namespace CopperMod.Amiga.Firmware
             Action<M68kCpuState> nullCallback,
             Action<M68kCpuState> ok,
             Action<M68kCpuState> openLibrary,
+            Action<M68kCpuState> closeLibrary,
             Action<M68kCpuState> allocMem,
             Action<M68kCpuState> allocMemAndStore,
             Action<M68kCpuState> freeMem,
@@ -99,6 +100,7 @@ namespace CopperMod.Amiga.Firmware
             NullCallback = nullCallback ?? throw new ArgumentNullException(nameof(nullCallback));
             Ok = ok ?? throw new ArgumentNullException(nameof(ok));
             OpenLibrary = openLibrary ?? throw new ArgumentNullException(nameof(openLibrary));
+            CloseLibrary = closeLibrary ?? throw new ArgumentNullException(nameof(closeLibrary));
             AllocMem = allocMem ?? throw new ArgumentNullException(nameof(allocMem));
             AllocMemAndStore = allocMemAndStore ?? throw new ArgumentNullException(nameof(allocMemAndStore));
             FreeMem = freeMem ?? throw new ArgumentNullException(nameof(freeMem));
@@ -120,6 +122,8 @@ namespace CopperMod.Amiga.Firmware
         public Action<M68kCpuState> Ok { get; }
 
         public Action<M68kCpuState> OpenLibrary { get; }
+
+        public Action<M68kCpuState> CloseLibrary { get; }
 
         public Action<M68kCpuState> AllocMem { get; }
 
@@ -157,6 +161,13 @@ namespace CopperMod.Amiga.Firmware
         public const uint IconLibraryBase = 0x00F7_0000;
         public const uint WorkbenchLibraryBase = 0x00F8_8000;
         public const uint GraphicsLibraryBase = 0x00F9_0000;
+        // Host-shim data prefix for the public GfxBase fields.  Native ROM
+        // images own their resident image; this envelope is only the
+        // CopperStart host path's guest-visible library state.
+        // Keep the host envelope through GfxBase->ChipRevBits0 (0xEC), while
+        // retaining the graphics.library name at its historical 0xA0 offset.
+        public const int GraphicsLibraryImageSize = GraphicsLibraryImageLayout.MinimumImageSize;
+        public const int GraphicsLibraryNameOffset = GraphicsLibraryImageLayout.DefaultNameOffset;
         public const uint IntuitionLibraryBase = 0x00FA_0000;
         public const uint ExpansionLibraryBase = 0x00FB_0000;
         public const uint MiscResourceBase = 0x00FC_0000;
@@ -189,11 +200,25 @@ namespace CopperMod.Amiga.Firmware
         }
 
         public void InstallHostShim(AmigaBus bus, KickstartTrapTable traps)
+            => InstallHostShim(bus, traps, installDosLibraryCallbacks: true);
+
+        internal void InstallHostShim(AmigaBus bus, KickstartTrapTable traps,
+            bool installDosLibraryCallbacks)
         {
             ArgumentNullException.ThrowIfNull(bus);
             ArgumentNullException.ThrowIfNull(traps);
 
             bus.MapReadOnlyMemory(AmigaKickstartRomFont.BaseAddress, AmigaKickstartRomFont.CreateTopazCompatibleFont());
+            var graphicsImage = GraphicsLibraryImageLayout.CreateGuestImage(
+                GraphicsLibraryBase,
+                GraphicsLibraryImageSize,
+                reportedNegativeSize: 0,
+                reportedPositiveSize: 0x007C,
+                version: 40,
+                revision: 68,
+                name: "graphics.library",
+                idString: "graphics.library 40.68");
+            bus.MapWritableMemory(GraphicsLibraryBase, graphicsImage);
             bus.WriteLong(0, ExecStructAddress);
             bus.WriteLong(4, ExecLibraryBase);
             if (traps.OkCallbackAddress != 0)
@@ -202,7 +227,10 @@ namespace CopperMod.Amiga.Firmware
             }
 
             RegisterExecLibrary(bus, traps);
-            RegisterDosLibrary(bus, traps);
+            if (installDosLibraryCallbacks)
+            {
+                RegisterDosLibrary(bus, traps);
+            }
             RegisterCiaResource(bus, traps);
             RegisterMiscResource(bus, traps);
             RegisterReqLibrary(bus, traps);
@@ -236,7 +264,7 @@ namespace CopperMod.Amiga.Firmware
         {
             RegisterLibraryCallback(bus, ExecLibraryBase, -408, traps.OpenLibrary);
             RegisterLibraryCallback(bus, ExecLibraryBase, -498, traps.OpenLibrary);
-            RegisterLibraryCallback(bus, ExecLibraryBase, -414, traps.Ok);
+            RegisterLibraryCallback(bus, ExecLibraryBase, -414, traps.CloseLibrary);
             RegisterLibraryCallback(bus, ExecLibraryBase, -198, traps.AllocMem);
             RegisterLibraryCallback(bus, ExecLibraryBase, -210, traps.FreeMem);
             RegisterLibraryCallback(bus, ExecLibraryBase, -180, traps.CauseInterrupt);

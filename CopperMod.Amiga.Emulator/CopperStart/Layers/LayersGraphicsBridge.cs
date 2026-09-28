@@ -294,9 +294,24 @@ internal sealed partial class LayersHostServices
         _lastRasterProviderPrimaryGuardDepthForTest = primaryGuardDepth;
         _lastRasterProviderSecondaryGuardDepthForTest = secondaryGuardDepth;
 
+        var providerRegisters = registers;
+        var clipBlit = graphicsLvo == (short)GraphicsLvo.ClipBlit;
+        if (clipBlit)
+        {
+            // The public ClipBlit ABI takes six signed WORDs and an unsigned
+            // BYTE minterm. Decode only after admission, in the provider copy:
+            // RasterCore must keep the original full registers for wait/retry.
+            providerRegisters.D0 = unchecked((uint)(short)registers.D0);
+            providerRegisters.D1 = unchecked((uint)(short)registers.D1);
+            providerRegisters.D2 = unchecked((uint)(short)registers.D2);
+            providerRegisters.D3 = unchecked((uint)(short)registers.D3);
+            providerRegisters.D4 = unchecked((uint)(short)registers.D4);
+            providerRegisters.D5 = unchecked((uint)(short)registers.D5);
+            providerRegisters.D6 = unchecked((byte)registers.D6);
+        }
         var executed = provider.TryExecuteLayeredRaster(
             graphicsLvo,
-            ref registers,
+            ref providerRegisters,
             new GraphicsValidatedLayerEndpoint(
                 _rasterPrimaryRastPort,
                 layer.Raw,
@@ -311,6 +326,19 @@ internal sealed partial class LayersHostServices
                     secondaryFirstSuperClipRect.Raw));
         if (executed)
         {
+            if (clipBlit)
+            {
+                // Parameter decoding must not leak into the caller's saved
+                // registers. D0 remains the private provider result here;
+                // the outer host boundary already normalizes this VOID LVO.
+                providerRegisters.D1 = registers.D1;
+                providerRegisters.D2 = registers.D2;
+                providerRegisters.D3 = registers.D3;
+                providerRegisters.D4 = registers.D4;
+                providerRegisters.D5 = registers.D5;
+                providerRegisters.D6 = registers.D6;
+            }
+            registers = providerRegisters;
             ArmRasterRetireLinkReadFaultForTest(layer);
             TraceLayeredRasterProviderOperationForTest(graphicsLvo);
         }

@@ -8,6 +8,7 @@ internal sealed partial class LayersHostServices
 {
     private int _testMemoryFailOrdinal;
     private int _testMemoryAllocationCount;
+    private int _testMemoryFreeCount;
     private int _testBitMapFailOrdinal;
     private int _testBitMapAllocationCount;
     private bool _failNextOpaqueFreeForTest;
@@ -41,6 +42,7 @@ internal sealed partial class LayersHostServices
                 if (owner._testMemoryFailOrdinal != 0)
                     throw new InvalidOperationException("A Layers memory fault scope is already active.");
                 owner._testMemoryAllocationCount = 0;
+                owner._testMemoryFreeCount = 0;
                 owner._testMemoryFailOrdinal = failOrdinal == 0 ? -1 : failOrdinal;
             }
         }
@@ -48,6 +50,7 @@ internal sealed partial class LayersHostServices
         internal int Count => _bitMap
             ? _owner._testBitMapAllocationCount
             : _owner._testMemoryAllocationCount;
+        internal int FreeCount => _bitMap ? 0 : _owner._testMemoryFreeCount;
 
         public void Dispose()
         {
@@ -63,6 +66,7 @@ internal sealed partial class LayersHostServices
             {
                 _owner._testMemoryFailOrdinal = 0;
                 _owner._testMemoryAllocationCount = 0;
+                _owner._testMemoryFreeCount = 0;
             }
         }
     }

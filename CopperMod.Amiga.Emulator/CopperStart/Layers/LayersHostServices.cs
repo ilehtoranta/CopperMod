@@ -103,7 +103,7 @@ internal sealed partial class LayersHostServices :
     private readonly Func<uint> _getCurrentTask;
     private readonly Func<M68kCpuState, uint, bool> _suspendTask;
     private readonly Action<uint> _wakeTask;
-    private readonly Action<M68kCpuState, uint, uint> _startGuestSubroutine;
+    private readonly Action<string> _diagnose;
     private readonly List<(uint Address, uint Token)> _gateways = new();
     private readonly Dictionary<uint, PendingWait> _pendingWaits = new();
     // Opaque retained plans are guest allocations, but their release extent
@@ -137,7 +137,8 @@ internal sealed partial class LayersHostServices :
     {
         LayersVector,
         GraphicsCompanion,
-        Raster
+        Raster,
+        CallbackReturn
     }
 
     private readonly record struct PendingWait(
@@ -147,14 +148,6 @@ internal sealed partial class LayersHostServices :
         PendingWaitKind Kind,
         uint PrimaryRastPort,
         uint SecondaryRastPort);
-
-    private readonly record struct PendingCallback(
-        short Lvo,
-        uint Token,
-        PortableLayers.LayersRegisterFrame Frame)
-    {
-        public bool IsActive => Token != 0;
-    }
 
     private readonly record struct OpaqueAllocationEntry(
         uint Allocation,
@@ -174,7 +167,7 @@ internal sealed partial class LayersHostServices :
         Func<uint> getCurrentTask,
         Func<M68kCpuState, uint, bool> suspendTask,
         Action<uint> wakeTask,
-        Action<M68kCpuState, uint, uint> startGuestSubroutine)
+        Action<string> diagnose)
     {
         _memory = memory ?? throw new ArgumentNullException(nameof(memory));
         _graphics = graphics ?? throw new ArgumentNullException(nameof(graphics));
@@ -186,7 +179,7 @@ internal sealed partial class LayersHostServices :
         _getCurrentTask = getCurrentTask ?? throw new ArgumentNullException(nameof(getCurrentTask));
         _suspendTask = suspendTask ?? throw new ArgumentNullException(nameof(suspendTask));
         _wakeTask = wakeTask ?? throw new ArgumentNullException(nameof(wakeTask));
-        _startGuestSubroutine = startGuestSubroutine ?? throw new ArgumentNullException(nameof(startGuestSubroutine));
+        _diagnose = diagnose ?? throw new ArgumentNullException(nameof(diagnose));
     }
 
     private M68kCpuState ResetProviderGraphicsState()
@@ -210,6 +203,50 @@ internal sealed partial class LayersHostServices :
     internal int OpaqueAllocationCapacityForTest => MaximumOpaqueAllocations;
     internal int PendingWaitCountForTest => _pendingWaits.Count;
     internal PortableLayers.LayersAbiProfile Profile { get; private set; }
+
+    /// <summary>
+    /// Reads actor ownership during the caller's atomic host gateway. The
+    /// expected library comes from that caller's independently validated Exec
+    /// LibraryList; null means it has proved that no Layers library is present.
+    /// Failed-reset or partially installed ownership cannot claim that absence.
+    /// The snapshot is diagnostic and never transfers a callback or lock actor.
+    /// </summary>
+    internal bool TryReadActorRestrictions(
+        APTR expectedExecBase,
+        APTR expectedLibrary,
+        APTR actor,
+        out PortableLayers.LayersActorSnapshot snapshot)
+    {
+        snapshot = default;
+        if (expectedExecBase.IsNull || actor.IsNull || (actor.Raw & 1) != 0 ||
+            actor.Raw > uint.MaxValue - (global::Amiga.Task.Size - 1) ||
+            !_memory.IsMapped(actor.Raw, checked((int)global::Amiga.Task.Size)) ||
+            _getExecBase() != expectedExecBase.Raw || _getCurrentTask() != actor.Raw)
+            return false;
+        if (!_active)
+        {
+            if (expectedLibrary.IsNotNull || _root != 0 || _libraryBase != 0 ||
+                _allocation != 0 || _linked || _gateways.Count != 0 ||
+                _pendingCallback.IsActive || _pendingWaits.Count != 0)
+                return false;
+            snapshot = new PortableLayers.LayersActorSnapshot { Actor = actor };
+            return true;
+        }
+        if (!_linked || _root == 0 || expectedLibrary.IsNull ||
+            expectedLibrary.Raw != _libraryBase)
+            return false;
+        var platform = CreatePlatform();
+        return PortableLayers.LayersActorContextCore.TryRead(
+            ref platform,
+            new PortableLayers.LayersActorAuthority
+            {
+                Root = APTR.FromPointer(_root),
+                LibraryBase = APTR.FromPointer(_libraryBase),
+                ExecBase = expectedExecBase,
+            },
+            actor,
+            out snapshot);
+    }
 
     internal uint AllocateOpaqueForTest(uint byteSize)
     {
@@ -419,7 +456,14 @@ internal sealed partial class LayersHostServices :
             PendingWaitKind.Raster,
             primaryRastPort,
             secondaryRastPort);
-        return true;
+        // A valid Layers endpoint is only claimed when RasterCore reaches a
+        // provider-owned completion (or parks the task/starts a callback).
+        // A provider decline restores the incoming frame and must remain
+        // transparent to the native/provider fallback owner. Returning true
+        // here would swallow that decline at GraphicsServices.InvokeGateway
+        // and turn a fallback opportunity into a silent no-op.
+        return result.Disposition !=
+            PortableLayers.LayersGatewayDisposition.Declined;
     }
 
     private bool TryResolveGatewayRasterEndpoints(
@@ -541,8 +585,16 @@ internal sealed partial class LayersHostServices :
     {
         ArgumentNullException.ThrowIfNull(state);
         var task = _getCurrentTask();
-        if (task == 0 || !_pendingWaits.Remove(task, out var pending) || !_active)
-            return M68kHostGatewayResult.Completed;
+        if (task == 0 || !_pendingWaits.TryGetValue(task, out var pending) || !_active)
+            return _pendingCallback.IsActive
+                ? FaultCallbackReturn(state, task == _pendingCallback.Identity.Actor.Raw
+                    ? LayersCallbackReturnFault.InvalidBoundary : LayersCallbackReturnFault.WrongActor)
+                : M68kHostGatewayResult.Completed;
+        if (pending.Kind == PendingWaitKind.CallbackReturn)
+            return ContinueCallbackWait(state, pending);
+        // A resumed initial vector can prepare its first Hook before a locked
+        // wrapper fails. Keep the original wait owner until completion or
+        // successful activation, just as for an already observed Hook return.
 
         // The blocked-task gateway is a second host call layered on top of
         // the original graphics/layers vector.  A completed resume must
@@ -615,6 +667,11 @@ internal sealed partial class LayersHostServices :
             pending.Kind,
             pending.PrimaryRastPort,
             pending.SecondaryRastPort);
+        if (LastCallbackReturnFault == LayersCallbackReturnFault.None &&
+            (completed == M68kHostGatewayResult.Completed ||
+                (result.Disposition == PortableLayers.LayersGatewayDisposition.InvokeGuestCallback &&
+                    _pendingCallback.IsActive && _pendingCallback.Phase == CallbackPhase.Armed)))
+            _pendingWaits.Remove(task);
         if (completed == M68kHostGatewayResult.Completed &&
             result.Disposition ==
                 PortableLayers.LayersGatewayDisposition.Completed &&
@@ -629,43 +686,15 @@ internal sealed partial class LayersHostServices :
     internal M68kHostGatewayResult ContinueHook(M68kCpuState state)
     {
         ArgumentNullException.ThrowIfNull(state);
-        if (!_active || !_pendingCallback.IsActive)
-            return M68kHostGatewayResult.Completed;
-
-        // ContinueHook is itself executing inside the six-byte continuation
-        // gateway.  A completed portable resume must leave this gateway's
-        // post-token PC intact so the CPU performs its normal stack return.
-        // Applying the original Layers vector PC here would fall through into
-        // the neighboring vector after the last callback.
-        var continuationReturnProgramCounter = state.ProgramCounter;
-        var pending = _pendingCallback;
-        _pendingCallback = default;
-        var frame = pending.Frame;
-        var platform = CreatePlatform(state);
-        _dispatchState = state;
-        _dispatchLvo = pending.Lvo;
-        _dispatchOriginalFrame = pending.Frame;
-        var result = PortableLayers.LayersVectorRouter.Dispatch(
-            ref platform,
-            APTR.FromPointer(_root),
-            pending.Lvo,
-            ref frame,
-            pending.Token,
-            callbackSucceeded: true);
-        _dispatchState = null;
-        var completed = CompletePortableDispatch(
-            state,
-            pending.Lvo,
-            pending.Frame,
-            frame,
-            result,
-            PendingWaitKind.LayersVector);
-        if (result.Disposition ==
-            PortableLayers.LayersGatewayDisposition.Completed)
-        {
-            state.ProgramCounter = continuationReturnProgramCounter;
-        }
-        return completed;
+        var fault = ValidateCallbackReturn(state, HookContinuationAddress,
+            CallbackPhase.Armed, requirePendingOwner: true);
+        if (fault != LayersCallbackReturnFault.None)
+            return FaultCallbackReturn(state, fault);
+        // Observation does not consume the envelope or move the stack. The
+        // owning portable Resume must acknowledge acceptance first; topology
+        // acquisition may legitimately park before that point.
+        _pendingCallback = _pendingCallback with { Phase = CallbackPhase.ReturnObserved };
+        return DispatchCallbackReturn(state, _pendingCallback.Token);
     }
 
     public void Reset()
@@ -690,7 +719,12 @@ internal sealed partial class LayersHostServices :
         _providerSnapshotValues.TrimExcess();
         _providerNestedSnapshotAddresses.TrimExcess();
         _providerNestedSnapshotValues.TrimExcess();
-        _pendingCallback = default;
+        if (lifecycleComplete)
+        {
+            _pendingCallback = default;
+            _nextCallback = default;
+            LastCallbackReturnFault = LayersCallbackReturnFault.None;
+        }
         ResetRasterProviderEvidenceForTest();
 
         foreach (var task in _pendingWaits.Keys)
@@ -805,6 +839,18 @@ internal sealed partial class LayersHostServices :
         uint primaryRastPort = 0,
         uint secondaryRastPort = 0)
     {
+        // BeginGuestHook only prepared an envelope. If the surrounding owner
+        // cannot finish releasing its topology guard, its result may say
+        // Completed without cancelling that envelope. Do not apply a frame,
+        // synthesize an RTS or replace a wait while this issued owner survives.
+        // An already Armed Hook may legitimately call another Layers vector;
+        // the guard is deliberately limited to the unactivated Prepared phase.
+        if (_pendingCallback.IsActive && _pendingCallback.Phase == CallbackPhase.Prepared &&
+            (kind != PendingWaitKind.LayersVector || _pendingCallback.Lvo != lvo ||
+                _pendingCallback.Identity.Actor.Raw != _getCurrentTask() ||
+                result.Disposition != PortableLayers.LayersGatewayDisposition.InvokeGuestCallback ||
+                result.ContinuationToken != _pendingCallback.Token))
+            return FaultCallbackReturn(state, LayersCallbackReturnFault.UnexpectedDispatch);
         var graphicsCompanion = kind == PendingWaitKind.GraphicsCompanion;
         switch (result.Disposition)
         {
@@ -866,7 +912,7 @@ internal sealed partial class LayersHostServices :
                 return M68kHostGatewayResult.BlockCurrentTask;
             }
             case PortableLayers.LayersGatewayDisposition.InvokeGuestCallback:
-                return M68kHostGatewayResult.Completed;
+                return ActivatePreparedCallback(state, result.ContinuationToken);
             default:
                 Apply(state, original);
                 return M68kHostGatewayResult.Completed;
@@ -1200,7 +1246,11 @@ internal sealed partial class LayersHostServices :
         public void Free(APTR address, uint byteSize)
         {
             if (address.IsNotNull && byteSize <= int.MaxValue)
+            {
+                if (_owner._testMemoryFailOrdinal != 0)
+                    _owner._testMemoryFreeCount++;
                 _owner._free(address.Raw, checked((int)byteSize));
+            }
         }
 
         public APTR AllocateOpaque(
@@ -1479,29 +1529,17 @@ internal sealed partial class LayersHostServices :
             APTR target,
             APTR message,
             uint continuationToken)
-        {
-            if (_state is null || continuationToken == 0 ||
-                !IsMapped(hook, Hook.Size))
-                return false;
-            var entry = ReadUInt32(hook, checked((int)MinNode.Size));
-            if (entry == 0 || _owner._pendingCallback.IsActive)
-                return false;
-            _owner._pendingCallback = new PendingCallback(
-                _owner._dispatchLvo,
-                continuationToken,
-                _owner._dispatchOriginalFrame);
-            _state.A[0] = hook.Raw;
-            _state.A[1] = message.Raw;
-            _state.A[2] = target.Raw;
-            _owner._startGuestSubroutine(_state, entry, HookContinuationAddress);
-            return _state.ProgramCounter == entry ||
-                _state.ProgramCounter == entry + 6 ||
-                _state.ProgramCounter == HookContinuationAddress;
-        }
+            => _state is not null && _owner.PrepareCallback(
+                _state, hook, target, message, continuationToken);
 
         public void CancelGuestHook(uint continuationToken)
         {
-            if (_owner._pendingCallback.Token == continuationToken)
+            if (_owner._nextCallback.Token == continuationToken)
+                _owner._nextCallback = default;
+            // During a return dispatch this cancellation belongs to an owner
+            // Resume/rollback. Keep the old envelope until its receipt arrives.
+            if (!_owner._dispatchingCallbackReturn &&
+                _owner._pendingCallback.Token == continuationToken)
                 _owner._pendingCallback = default;
         }
     }
