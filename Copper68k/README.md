@@ -1,5 +1,34 @@
 # Copper68k
 
+## Mainline release 1.5.1
+
+`1.5.1` adds `M68kCoreFactory.Default.CreateA1200Ec020(bus)`, an explicit
+experimental PAL A1200 68EC020 profile using two native clocks per motherboard
+clock. Its operand timing rules distinguish long Chip/ROM transfers and byte
+CIA/Gayle accesses. The supplied bus remains responsible for actual transfer
+widths, contention and the canonical clock. The existing `Create(M68EC020, bus)`
+continues to select the OCS accelerator profile.
+
+Native A1200 Kickstart 3.0 and DOS/graphics startup reached missing integer
+operand forms. The shared executor now implements ADD.W An,Dn; SUB.B/W #imm,Dn;
+MOVE.B/W d16(PC),Dn; MOVEM.W d16(PC),registers; BTST Dn,(An); AND.B/W/L (An),Dn;
+CMPI.B/W #imm,(An)+; MOVEA.L -(An),Am; SUBA.W/L (An),Am; immediate indexed
+BTST/BCHG/BCLR/BSET; TST.W indexed; ADDQ/SUBQ.W indexed; CMPA.W d16(An),Am;
+ADD.B/W Dn,(An); BCHG/BCLR Dn,d16(An); and ANDI.W/L #imm,(An).
+Focused tests cover operand widths, sign extension, PC extension bases, stack
+stride/aliasing, modulo-eight bit selection, CCR preservation, surrounding
+registers and timing admission. The complete CPU suite passes 3,522 cases;
+six optional external corpus cases are unavailable in the ordinary run.
+
+The instruction semantics follow [Motorola's M68000PRM](https://www.nxp.com/docs/en/reference-manual/M68000PRM.pdf).
+Costs retain the existing approximate operand-shape policy; indexed word quick
+arithmetic uses the displacement cost plus the existing two-clock indexed-EA
+increment. These tests and native boot are not physical timing certification.
+AGA display/DMA and motherboard execution belong to CopperScreen. Its initial
+native eight-plane PAL screen uses all 256 RGB24 colours; full AGA games,
+enhanced sprites, dual playfields and HAM8 require separate consumer coverage.
+Publication of this mainline version was explicitly authorized on 2026-10-01.
+
 ## Mainline release 1.5.0
 
 `1.5.0` brings the preceding OCS CPU development series into `main` and the

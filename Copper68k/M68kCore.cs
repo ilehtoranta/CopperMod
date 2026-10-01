@@ -1197,6 +1197,17 @@ namespace Copper68k
                 enableOpcodePlan,
                 opcodePlanDispatch ?? M68000OpcodePlanDispatch);
 
+        /// <summary>
+        /// Creates an experimental PAL A1200 68EC020 core at two native clocks per
+        /// motherboard clock, with long Chip/ROM and byte CIA/Gayle timing rules.
+        /// The host owns physical bus arbitration; this profile does not certify
+        /// cache, pipeline or complete motherboard timing against real hardware.
+        /// </summary>
+        /// <param name="bus">The host A1200 bus and canonical motherboard clock.</param>
+        /// <returns>A new 24-bit 68EC020 interpreter.</returns>
+        public IM68kCore CreateA1200Ec020(IM68kBus bus)
+            => new M68EC020Interpreter(bus, M68020CpuProfile.A1200Ec02014Mhz);
+
         /// <inheritdoc />
         public IM68kCore Create(M68kCpuModel model, IM68kBus bus)
         {
