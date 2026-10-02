@@ -19,6 +19,7 @@ namespace Copper68k
         MoveStatusRegisterToData,
         MoveDataToStatusRegister,
         MovePostIncrementToStatusRegister,
+        AndPostIncrementToData,
         MoveFromCcr,
         MoveImmediateToCcr,
         Movep,
@@ -717,6 +718,11 @@ namespace Copper68k
             if ((opcode & 0xFFF8) == 0x46D8)
             {
                 return M68020OpcodeKind.MovePostIncrementToStatusRegister;
+            }
+
+            if ((opcode & 0xF138) == 0xC018 && ((opcode >> 6) & 3) != 3)
+            {
+                return M68020OpcodeKind.AndPostIncrementToData;
             }
 
             if ((opcode & 0xFFC0) == 0x42C0)
@@ -5347,6 +5353,10 @@ namespace Copper68k
 
                 case M68020OpcodeKind.MovePostIncrementToStatusRegister:
                     ExecuteMovePostIncrementToStatusRegister(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AndPostIncrementToData:
+                    ExecuteAndPostIncrementToData(opcode);
                     return true;
 
                 case M68020OpcodeKind.MoveFromCcr:
@@ -15197,6 +15207,25 @@ namespace Copper68k
                 (false, M68kOperandSize.Byte) => M68kInstructionTimingKey.OrByteDataToPostIncrement,
                 (false, M68kOperandSize.Word) => M68kInstructionTimingKey.OrWordDataToPostIncrement,
                 _ => M68kInstructionTimingKey.OrLongDataToPostIncrement
+            });
+        }
+
+        private void ExecuteAndPostIncrementToData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var size = ((opcode >> 6) & 3) switch { 0 => M68kOperandSize.Byte, 1 => M68kOperandSize.Word, _ => M68kOperandSize.Long };
+            var source = opcode & 7;
+            var address = State.A[source];
+            var value = ReadSized(address, size) & State.D[(opcode >> 9) & 7];
+            WriteGeneralRegister(true, source, unchecked(address + M68kIntegerSemantics.AddressIncrement(source, size)));
+            WriteDataRegisterSized((opcode >> 9) & 7, value, size);
+            SetMoveFlags(value, size);
+            CompleteTiming(size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.AndBytePostIncrementToData,
+                M68kOperandSize.Word => M68kInstructionTimingKey.AndWordPostIncrementToData,
+                _ => M68kInstructionTimingKey.AndLongPostIncrementToData
             });
         }
 

@@ -8,6 +8,35 @@ public sealed class M68020GameContinuationTests
     private const uint Code = 0xF80000;
 
     [Theory]
+    [InlineData(0xC218, 0xABCD128Fu, 0xABCD1280u, 1)]
+    [InlineData(0xC21F, 0xABCD128Fu, 0xABCD1280u, 2)]
+    [InlineData(0xC258, 0xABCD8000u, 0xABCD8000u, 2)]
+    [InlineData(0xC25F, 0xABCD8000u, 0xABCD8000u, 2)]
+    [InlineData(0xC298, 0xFFFFFFFFu, 0x80012345u, 4)]
+    [InlineData(0xC29F, 0xFFFFFFFFu, 0x80012345u, 4)]
+    public void AndPostIncrementReadsSizedSourceAndPreservesUpperRegisterAndMemory(ushort opcode, uint before, uint after, uint stride)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, opcode); bus.WriteLong(0x3000, 0x80012345);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.D[1] = before; cpu.State.A[opcode & 7] = 0x3000; cpu.State.StatusRegister = 0x201F;
+        cpu.ExecuteInstruction();
+        Assert.Equal(after, cpu.State.D[1]); Assert.Equal(0x3000u + stride, cpu.State.A[opcode & 7]);
+        Assert.Equal(0x18, cpu.State.StatusRegister & 31); Assert.Equal(0x80012345u, bus.ReadLong(0x3000));
+        Assert.Equal(Code + 2, cpu.State.ProgramCounter);
+        if ((opcode & 7) == 7) Assert.Equal(0x3000u + stride, cpu.State.InterruptStackPointer);
+    }
+
+    [Fact]
+    public void AndPostIncrementSetsZeroFromTheOperandWidthAndRetainsExtend()
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, 0xC218); bus.WriteLong(0x3000, 0x7FA55A12);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.A[0] = 0x3000; cpu.State.D[1] = 0xFFFFFF80; cpu.State.StatusRegister = 0x201F;
+        cpu.ExecuteInstruction(); Assert.Equal(0xFFFFFF00u, cpu.State.D[1]);
+        Assert.Equal(0x14, cpu.State.StatusRegister & 31); Assert.Equal(0x3001u, cpu.State.A[0]);
+    }
+
+    [Theory]
     [InlineData(M68kCpuModel.M68020)] [InlineData(M68kCpuModel.M68EC020)]
     [InlineData(M68kCpuModel.M68030)] [InlineData(M68kCpuModel.M68040)] [InlineData(M68kCpuModel.M68060)]
     public void StatusPopRetainsSharedAdvancedCoreStackSemantics(M68kCpuModel model)
