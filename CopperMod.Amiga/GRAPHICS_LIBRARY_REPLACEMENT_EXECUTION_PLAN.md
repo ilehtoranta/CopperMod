@@ -1,9 +1,9 @@
 # graphics.library Replacement Execution Plan
 
-## Current continuation checkpoint — 2026-09-28 / 1099
+## Current continuation checkpoint — 2026-09-28 / 1149
 
-The overall goal remains ACTIVE; continue directly without another user
-prompt. G249-G346 match unpatched Kickstart V40.63 across nested Simple-layer
+The goal is resumed; continue directly without another user prompt. G249-G446
+match unpatched Kickstart V40.63 across nested Simple-layer
 deletion, caller-Region clipping, deferred refresh and update completion.
 Deleting the middle and top in either order accumulates the full newly exposed
 area without changing caller clipping. Complete refresh after either deletion
@@ -204,13 +204,65 @@ either stack order and both update-completion orders.
 G346 translates to `(2,26)` and `(16,41)` with the same two-pixel transfer in
 either stack order and both update-completion orders. Its focused differential
 passes 16/16; the ROM-backed layer boot suite passes 194/194. Continue with
-G347 at `(2,27)` and `(16,42)`, retaining the one-row overlap, both scroll
-offsets, dual-update Region replacement, incomplete-update retry and
+G347/G348 at `(2,27)/(16,42)` and `(2,28)/(16,43)` pass 32/32 combined.
+G349/G350 at `(2,29)/(16,44)` and `(2,30)/(16,45)` pass 32/32 combined.
+G351/G352 at `(2,31)/(16,46)` and `(2,32)/(16,47)` pass 32/32 combined.
+G353/G354 at `(2,33)/(16,48)` and `(2,34)/(16,49)` pass 32/32 combined.
+G355/G356 at `(2,35)/(16,50)` and `(2,36)/(16,51)` pass 32/32 combined.
+G357/G358 at `(2,37)/(16,52)` and `(2,38)/(16,53)` pass 32/32 combined.
+G359/G360 at `(2,39)/(16,54)` and `(2,40)/(16,55)` pass 32/32 combined.
+G361/G362 at `(2,41)/(16,56)` and `(2,42)/(16,57)` pass 32/32 combined.
+G363/G364 at `(2,43)/(16,58)` and `(2,44)/(16,59)` pass 32/32 combined.
+G365/G366 at `(2,45)/(16,60)` and `(2,46)/(16,61)` and G367/G368 at
+`(2,47)/(16,62)` and `(2,48)/(16,63)` each pass 32/32 combined; every origin
+retains the two-pixel transfer across the full stack/update matrix. G369/G370
+at `(2,49)/(16,64)` and `(2,50)/(16,65)` also pass 32/32 combined. G371/G372
+at `(2,51)/(16,66)` and `(2,52)/(16,67)` pass 32/32 combined. G373/G374 at
+`(2,53)/(16,68)` and `(2,54)/(16,69)` also pass 32/32 combined. G375/G376 at
+`(2,55)/(16,70)` and `(2,56)/(16,71)` pass 32/32 combined. G377/G378 at
+`(2,57)/(16,72)` and `(2,58)/(16,73)` also pass 32/32 combined. G379/G380 at
+`(2,59)/(16,74)` and `(2,60)/(16,75)` also pass 32/32 combined. G381/G382 at
+`(2,61)/(16,76)` and `(2,62)/(16,77)` pass 32/32 combined. G383/G384 at
+`(2,63)/(16,78)` and `(2,64)/(16,79)` also pass 32/32 combined. G385/G386 at
+`(2,65)/(16,80)` and `(2,66)/(16,81)` pass 32/32 combined. G387/G388 at
+`(2,67)/(16,82)` and `(2,68)/(16,83)` also pass 32/32 combined. G389/G390 at
+`(2,69)/(16,84)` and `(2,70)/(16,85)` also pass 32/32 combined. G391/G392 at
+`(2,71)/(16,86)` and `(2,72)/(16,87)` pass 32/32 combined. G393/G394 at
+`(2,73)/(16,88)` and `(2,74)/(16,89)` also pass 32/32 combined. G395/G396 at
+`(2,75)/(16,90)` and `(2,76)/(16,91)` pass 32/32 combined. G397/G398 at
+`(2,77)/(16,92)` and `(2,78)/(16,93)` also pass 32/32 combined. G399/G400 at
+`(2,79)/(16,94)` and `(2,80)/(16,95)` pass 32/32 combined. G401/G402 at
+`(2,81)/(16,96)` and `(2,82)/(16,97)` pass 32/32 combined. G403/G404 at
+`(2,83)/(16,98)` and `(2,84)/(16,99)` also pass 32/32 combined. G405/G406 at
+`(2,85)/(16,100)` and `(2,86)/(16,101)` pass 32/32 combined. G407/G408 at
+`(2,87)/(16,102)` and `(2,88)/(16,103)` pass 32/32 combined. G409/G410 at
+`(2,89)/(16,104)` and `(2,90)/(16,105)` pass 32/32 combined. G411/G412 at
+`(2,91)/(16,106)` and `(2,92)/(16,107)` pass 32/32 combined. G413/G414 at
+`(2,93)/(16,108)` and `(2,94)/(16,109)` pass 32/32 combined. G415/G416 at
+`(2,95)/(16,110)` and `(2,96)/(16,111)` pass 32/32 combined. G417/G418 at
+`(2,97)/(16,112)` and `(2,98)/(16,113)` pass 32/32 combined. G419/G420 at
+`(2,99)/(16,114)` and `(2,100)/(16,115)` pass 32/32 combined. G421/G422 at
+`(2,101)/(16,116)` and `(2,102)/(16,117)` pass 32/32 combined. G423/G424 at
+`(2,103)/(16,118)` and `(2,104)/(16,119)` pass 32/32 combined. G425/G426 at
+`(2,105)/(16,120)` and `(2,106)/(16,121)` pass 32/32 combined. G427/G428 at
+`(2,107)/(16,122)` and `(2,108)/(16,123)` pass 32/32 combined. G429/G430 at
+`(2,109)/(16,124)` and `(2,110)/(16,125)` pass 32/32 combined. G431/G432 at
+`(2,111)/(16,126)` and `(2,112)/(16,127)` pass 32/32 combined. G433/G434 at
+`(2,113)/(16,128)` and `(2,114)/(16,129)` pass 32/32 combined. G435/G436 at
+`(2,115)/(16,130)` and `(2,116)/(16,131)` pass 32/32 combined. G437/G438 at
+`(2,117)/(16,132)` and `(2,118)/(16,133)` pass 32/32 combined. G439/G440 at
+`(2,119)/(16,134)` and `(2,120)/(16,135)`, G441/G442 at
+`(2,121)/(16,136)` and `(2,122)/(16,137)`, G443/G444 at
+`(2,123)/(16,138)` and `(2,124)/(16,139)`, and G445/G446 at
+`(2,125)/(16,140)` and `(2,126)/(16,141)` also pass 32/32 combined. The
+ROM-backed layer boot suite passes 194/194. Continue with G447/G448 at
+`(2,127)/(16,142)` and `(2,128)/(16,143)`, retaining the one-row overlap, both
+scroll offsets, dual-update Region replacement, incomplete-update retry and
 independent completion-order matrix.
 CyberGraphX remains excluded; full Kickstart 3.1 compatibility and native ROM
 cutover remain unqualified.
 
-### Completed G249-G346 — nested deletion through dual-endpoint damage ClipBlit
+### Completed G249-G446 — nested deletion through dual-endpoint damage ClipBlit
 
 - G249: deleting the middle layer while the top remains exposes only the
   middle-layer area not still covered by the top; lower DamageList excludes
@@ -481,15 +533,182 @@ cutover remain unqualified.
 - G346: translating both origins to source `(2,26)` and destination `(16,41)`
   preserves the one-row overlap and two-pixel transfer in either stack order;
   both update-completion orders and poisoned-register variants match native.
+- G347-G348: translating both origins to `(2,27)/(16,42)` and
+  `(2,28)/(16,43)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G349-G350: translating both origins to `(2,29)/(16,44)` and
+  `(2,30)/(16,45)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G351-G352: translating both origins to `(2,31)/(16,46)` and
+  `(2,32)/(16,47)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G353-G354: translating both origins to `(2,33)/(16,48)` and
+  `(2,34)/(16,49)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G355-G356: translating both origins to `(2,35)/(16,50)` and
+  `(2,36)/(16,51)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G357-G358: translating both origins to `(2,37)/(16,52)` and
+  `(2,38)/(16,53)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G359-G360: translating both origins to `(2,39)/(16,54)` and
+  `(2,40)/(16,55)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G361-G362: translating both origins to `(2,41)/(16,56)` and
+  `(2,42)/(16,57)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G363-G364: translating both origins to `(2,43)/(16,58)` and
+  `(2,44)/(16,59)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G365-G366: translating both origins to `(2,45)/(16,60)` and
+  `(2,46)/(16,61)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G367-G368: translating both origins to `(2,47)/(16,62)` and
+  `(2,48)/(16,63)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G369-G370: translating both origins to `(2,49)/(16,64)` and
+  `(2,50)/(16,65)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G371-G372: translating both origins to `(2,51)/(16,66)` and
+  `(2,52)/(16,67)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G373-G374: translating both origins to `(2,53)/(16,68)` and
+  `(2,54)/(16,69)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G375-G376: translating both origins to `(2,55)/(16,70)` and
+  `(2,56)/(16,71)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G377-G378: translating both origins to `(2,57)/(16,72)` and
+  `(2,58)/(16,73)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G379-G380: translating both origins to `(2,59)/(16,74)` and
+  `(2,60)/(16,75)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G381-G382: translating both origins to `(2,61)/(16,76)` and
+  `(2,62)/(16,77)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G383-G384: translating both origins to `(2,63)/(16,78)` and
+  `(2,64)/(16,79)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G385-G386: translating both origins to `(2,65)/(16,80)` and
+  `(2,66)/(16,81)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G387-G388: translating both origins to `(2,67)/(16,82)` and
+  `(2,68)/(16,83)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G389-G390: translating both origins to `(2,69)/(16,84)` and
+  `(2,70)/(16,85)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G391-G392: translating both origins to `(2,71)/(16,86)` and
+  `(2,72)/(16,87)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G393-G394: translating both origins to `(2,73)/(16,88)` and
+  `(2,74)/(16,89)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G395-G396: translating both origins to `(2,75)/(16,90)` and
+  `(2,76)/(16,91)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G397-G398: translating both origins to `(2,77)/(16,92)` and
+  `(2,78)/(16,93)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G399-G400: translating both origins to `(2,79)/(16,94)` and
+  `(2,80)/(16,95)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G401-G402: translating both origins to `(2,81)/(16,96)` and
+  `(2,82)/(16,97)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G403-G404: translating both origins to `(2,83)/(16,98)` and
+  `(2,84)/(16,99)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G405-G406: translating both origins to `(2,85)/(16,100)` and
+  `(2,86)/(16,101)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G407-G408: translating both origins to `(2,87)/(16,102)` and
+  `(2,88)/(16,103)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G409-G410: translating both origins to `(2,89)/(16,104)` and
+  `(2,90)/(16,105)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G411-G412: translating both origins to `(2,91)/(16,106)` and
+  `(2,92)/(16,107)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G413-G414: translating both origins to `(2,93)/(16,108)` and
+  `(2,94)/(16,109)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G415-G416: translating both origins to `(2,95)/(16,110)` and
+  `(2,96)/(16,111)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G417-G418: translating both origins to `(2,97)/(16,112)` and
+  `(2,98)/(16,113)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G419-G420: translating both origins to `(2,99)/(16,114)` and
+  `(2,100)/(16,115)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G421-G422: translating both origins to `(2,101)/(16,116)` and
+  `(2,102)/(16,117)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G423-G424: translating both origins to `(2,103)/(16,118)` and
+  `(2,104)/(16,119)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G425-G426: translating both origins to `(2,105)/(16,120)` and
+  `(2,106)/(16,121)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G427-G428: translating both origins to `(2,107)/(16,122)` and
+  `(2,108)/(16,123)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G429-G430: translating both origins to `(2,109)/(16,124)` and
+  `(2,110)/(16,125)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G431-G432: translating both origins to `(2,111)/(16,126)` and
+  `(2,112)/(16,127)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G433-G434: translating both origins to `(2,113)/(16,128)` and
+  `(2,114)/(16,129)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G435-G436: translating both origins to `(2,115)/(16,130)` and
+  `(2,116)/(16,131)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G437-G438: translating both origins to `(2,117)/(16,132)` and
+  `(2,118)/(16,133)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G439-G440: translating both origins to `(2,119)/(16,134)` and
+  `(2,120)/(16,135)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G441-G442: translating both origins to `(2,121)/(16,136)` and
+  `(2,122)/(16,137)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G443-G444: translating both origins to `(2,123)/(16,138)` and
+  `(2,124)/(16,139)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
+- G445-G446: translating both origins to `(2,125)/(16,140)` and
+  `(2,126)/(16,141)` preserves the two-pixel overlap through both stack orders,
+  both update-completion orders and poisoned-register variants.
 
-### G249-G346 validation evidence
+### G249-G446 validation evidence
 
 - Combined native V40.63 / CopperStart layer movement, ordering, nested
   deletion, ClipBlit, refresh and active-update Region replacement selection:
-  the complete `KickstartRomLayersClipBlitRefreshTests.cs` selection passed
+  the through-G400 `KickstartRomLayersClipBlitRefreshTests.cs` sweep passed
   801/801 with zero skips across nine fresh-process batches (204 methods).
-  G342-G346 focused native differentials each passed 16/16. The complete
-  through-G341 selection is 801/801; later cells are individually covered.
+  G342-G346 focused native differentials each passed 16/16; G347-G348,
+  G349-G350, G351-G352, G353-G354, G355-G356, G357-G358, G359-G360,
+  G361-G362, G363-G364, G365-G366, G367-G368, G369-G370, G371-G372 and
+  G373-G374, G375-G376, G377-G378, G379-G380, G381-G382, G383-G384,
+  G385-G386, G387-G388, G389-G390, G391-G392, G393-G394, G395-G396,
+  G397-G398 and G399-G400 each passed 32/32 combined (16 cases per origin).
+  The additional G401-G402 focused matrix passed 32/32 combined (16 cases per
+  origin); G403-G404, G405-G406 and G407-G408 also passed 32/32 combined
+  (16 cases per origin); G409-G410 and G411-G412 also passed 32/32 combined
+  (16 cases per origin); G413-G414 and G415-G416 also passed 32/32 combined
+  (16 cases per origin); G417-G418 and G419-G420 also passed 32/32 combined
+  (16 cases per origin); G421-G422, G423-G424, G425-G426 and G427-G428 also
+  passed 32/32 combined (16 cases per origin); G429-G430 and G431-G432 also
+  passed 32/32 combined (16 cases per origin); G433-G434 and G435-G436 also
+  passed 32/32 combined (16 cases per origin); G437-G438 and G439-G440 also
+   passed 32/32 combined (16 cases per origin); G441-G442, G443-G444 and
+   G445-G446 also passed 32/32 each (16 cases per origin).
+  The complete through-G341 selection is 801/801; later cells are focused
+  coverage.
 - `CopperStartLayersBootTests`: 194/194 passed, zero skips.
 - The main test project compiled with project references disabled; existing
   NU1902 and xUnit2013 warnings remain.
@@ -504,10 +723,10 @@ cutover remain unqualified.
 - The separate CopperStart Exec test project remains unable to compile because
   of the unrelated `DosResidentRegistryCoreTests.Manage` overload error.
 
-### Next bounded acceptance unit — G346
+### Next bounded acceptance unit — G401
 
-Translate the source origin from `(2,25)` to `(2,26)` and destination from
-`(16,40)` to `(16,41)`, preserving the one-row shared-layer overlap. Keep both
+Translate the source origin from `(2,80)` to `(2,81)` and destination from
+`(16,95)` to `(16,96)`, preserving the one-row shared-layer overlap. Keep both
 nonzero scroll shifts, the dual-Region replacement retry and both completion
 orders fixed. First determine the native transferred-pixel count, then compare
 the transformed active intersection, caller-Region ownership and independent

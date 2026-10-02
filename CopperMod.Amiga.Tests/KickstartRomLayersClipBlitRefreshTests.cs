@@ -87,6 +87,95 @@ public sealed partial class KickstartRomLayersDifferentialTests
         Assert.Equal(expected, actual);
     }
 
+    private void TraceTranslatedOneRowOverlapRetryAtOrigins(
+        int sourceOriginY,
+        int destinationOriginY,
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: sourceOriginY,
+                destinationOriginX: 16,
+                destinationOriginY: destinationOriginY,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    private void AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(
+        int sourceOriginY,
+        int destinationOriginY,
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at this origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: sourceOriginY,
+                destinationOriginX: 16,
+                destinationOriginY: destinationOriginY,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: sourceOriginY,
+                destinationOriginX: 16,
+                destinationOriginY: destinationOriginY,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -12422,6 +12511,4726 @@ public sealed partial class KickstartRomLayersDifferentialTests
         }
         finally { copperStart.Machine.Dispose(); }
     }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentyThirdOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 27,
+                destinationOriginX: 16, destinationOriginY: 42,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentyThirdOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the twenty-third origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 27,
+                destinationOriginX: 16, destinationOriginY: 42,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 27,
+                destinationOriginX: 16, destinationOriginY: 42,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentyFourthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 28,
+                destinationOriginX: 16, destinationOriginY: 43,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentyFourthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the twenty-fourth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 28,
+                destinationOriginX: 16, destinationOriginY: 43,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 28,
+                destinationOriginX: 16, destinationOriginY: 43,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentyFifthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 29,
+                destinationOriginX: 16, destinationOriginY: 44,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentyFifthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the twenty-fifth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 29,
+                destinationOriginX: 16, destinationOriginY: 44,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 29,
+                destinationOriginX: 16, destinationOriginY: 44,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentySixthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 30,
+                destinationOriginX: 16, destinationOriginY: 45,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentySixthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the twenty-sixth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 30,
+                destinationOriginX: 16, destinationOriginY: 45,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 30,
+                destinationOriginX: 16, destinationOriginY: 45,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentySeventhOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 31,
+                destinationOriginX: 16, destinationOriginY: 46,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentySeventhOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the twenty-seventh origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 31,
+                destinationOriginX: 16, destinationOriginY: 46,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 31,
+                destinationOriginX: 16, destinationOriginY: 46,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentyEighthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 32,
+                destinationOriginX: 16, destinationOriginY: 47,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentyEighthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the twenty-eighth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 32,
+                destinationOriginX: 16, destinationOriginY: 47,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 32,
+                destinationOriginX: 16, destinationOriginY: 47,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentyNinthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 33,
+                destinationOriginX: 16, destinationOriginY: 48,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtTwentyNinthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the twenty-ninth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 33,
+                destinationOriginX: 16, destinationOriginY: 48,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 33,
+                destinationOriginX: 16, destinationOriginY: 48,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtiethOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 34,
+                destinationOriginX: 16, destinationOriginY: 49,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtiethOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the thirtieth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 34,
+                destinationOriginX: 16, destinationOriginY: 49,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 34,
+                destinationOriginX: 16, destinationOriginY: 49,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyFirstOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 35,
+                destinationOriginX: 16, destinationOriginY: 50,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyFirstOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the thirty-first origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 35,
+                destinationOriginX: 16, destinationOriginY: 50,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 35,
+                destinationOriginX: 16, destinationOriginY: 50,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtySecondOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 36,
+                destinationOriginX: 16, destinationOriginY: 51,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtySecondOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the thirty-second origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 36,
+                destinationOriginX: 16, destinationOriginY: 51,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 36,
+                destinationOriginX: 16, destinationOriginY: 51,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyThirdOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 37,
+                destinationOriginX: 16, destinationOriginY: 52,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyThirdOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the thirty-third origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 37,
+                destinationOriginX: 16, destinationOriginY: 52,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 37,
+                destinationOriginX: 16, destinationOriginY: 52,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyFourthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 38,
+                destinationOriginX: 16, destinationOriginY: 53,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyFourthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the thirty-fourth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 38,
+                destinationOriginX: 16, destinationOriginY: 53,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 38,
+                destinationOriginX: 16, destinationOriginY: 53,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyFifthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 39,
+                destinationOriginX: 16, destinationOriginY: 54,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyFifthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the thirty-fifth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 39,
+                destinationOriginX: 16, destinationOriginY: 54,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 39,
+                destinationOriginX: 16, destinationOriginY: 54,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtySixthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 40,
+                destinationOriginX: 16, destinationOriginY: 55,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtySixthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the thirty-sixth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 40,
+                destinationOriginX: 16, destinationOriginY: 55,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 40,
+                destinationOriginX: 16, destinationOriginY: 55,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtySeventhOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 41,
+                destinationOriginX: 16, destinationOriginY: 56,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtySeventhOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the thirty-seventh origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 41,
+                destinationOriginX: 16, destinationOriginY: 56,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 41,
+                destinationOriginX: 16, destinationOriginY: 56,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyEighthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 42,
+                destinationOriginX: 16, destinationOriginY: 57,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyEighthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the thirty-eighth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 42,
+                destinationOriginX: 16, destinationOriginY: 57,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 42,
+                destinationOriginX: 16, destinationOriginY: 57,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyNinthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 43,
+                destinationOriginX: 16, destinationOriginY: 58,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtThirtyNinthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the thirty-ninth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 43,
+                destinationOriginX: 16, destinationOriginY: 58,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 43,
+                destinationOriginX: 16, destinationOriginY: 58,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortiethOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 44,
+                destinationOriginX: 16, destinationOriginY: 59,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortiethOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the fortieth origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 44,
+                destinationOriginX: 16, destinationOriginY: 59,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 44,
+                destinationOriginX: 16, destinationOriginY: 59,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyFirstOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 45,
+                destinationOriginX: 16, destinationOriginY: 60,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyFirstOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the forty-first origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 45,
+                destinationOriginX: 16, destinationOriginY: 60,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 45,
+                destinationOriginX: 16, destinationOriginY: 60,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortySecondOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        var context = CreateCopperStartOracle();
+        try
+        {
+            _ = TraceClipBlitDuringDualDamageRefresh(context,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 46,
+                destinationOriginX: 16, destinationOriginY: 61,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { context.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortySecondOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination)
+    {
+        if (!TryLoadConfiguredRom(out var rom))
+        {
+            _output.WriteLine("Native scrolled ClipBlit retry with translated one-row overlap at the forty-second origin NOT EXECUTED: configure " +
+                RomPathVariable + " and " + RomVersionVariable + "=3.1.");
+            return;
+        }
+        Assert.Equal((ushort)63, BigEndian.ReadUInt16(rom, 14, "revision"));
+        string[] expected;
+        var native = CreateNativeOracle(rom, instrumentGraphics: false);
+        try
+        {
+            expected = TraceClipBlitDuringDualDamageRefresh(native,
+                poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 46,
+                destinationOriginX: 16, destinationOriginY: 61,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1);
+        }
+        finally { native.Machine.Dispose(); }
+        var copperStart = CreateCopperStartOracle();
+        try
+        {
+            Assert.Equal(expected, TraceClipBlitDuringDualDamageRefresh(
+                copperStart, poisonUnusedRegisterBits, applyScroll: true,
+                applyCallerClipRegions: true,
+                sourceOriginX: 2, sourceOriginY: 46,
+                destinationOriginX: 16, destinationOriginY: 61,
+                shareLayerInfo: true, sourceLayerOnTop: sourceLayerOnTop,
+                disconnectedDamage: true, disjointCallerClipRegions: true,
+                replaceCallerRegionsDuringUpdate: true,
+                incompleteEndUpdate: true,
+                retryAfterIncompleteEndUpdate: true,
+                sourceCompletesBeforeDestination:
+                    sourceCompletesBeforeDestination,
+                expectedTransferredPixelsOverride: 2,
+                destinationScrollXOverride: -2,
+                destinationScrollYOverride: 1));
+        }
+        finally { copperStart.Machine.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyThirdOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(47, 62,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyThirdOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(47, 62,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyFourthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(48, 63,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyFourthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(48, 63,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyFifthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(49, 64,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyFifthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(49, 64,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortySixthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(50, 65,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortySixthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(50, 65,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortySeventhOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(51, 66,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortySeventhOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(51, 66,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyEighthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(52, 67,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyEighthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(52, 67,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyNinthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(53, 68,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFortyNinthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(53, 68,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftiethOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(54, 69,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftiethOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(54, 69,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyFirstOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(55, 70,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyFirstOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(55, 70,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftySecondOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(56, 71,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftySecondOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(56, 71,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyThirdOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(57, 72,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyThirdOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(57, 72,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyFourthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(58, 73,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyFourthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(58, 73,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyFifthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(59, 74,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyFifthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(59, 74,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftySixthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(60, 75,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftySixthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(60, 75,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftySeventhOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(61, 76,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftySeventhOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(61, 76,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyEighthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(62, 77,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyEighthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(62, 77,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyNinthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(63, 78,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtFiftyNinthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(63, 78,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtiethOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(64, 79,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtiethOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(64, 79,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyFirstOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(65, 80,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyFirstOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(65, 80,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtySecondOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(66, 81,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtySecondOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(66, 81,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyThirdOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(67, 82,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyThirdOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(67, 82,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyFourthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(68, 83,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyFourthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(68, 83,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyFifthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(69, 84,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyFifthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(69, 84,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtySixthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(70, 85,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtySixthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(70, 85,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtySeventhOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(71, 86,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtySeventhOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(71, 86,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyEighthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(72, 87,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyEighthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(72, 87,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyNinthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(73, 88,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSixtyNinthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(73, 88,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventiethOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(74, 89,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventiethOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(74, 89,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyFirstOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(75, 90,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyFirstOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(75, 90,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventySecondOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(76, 91,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventySecondOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(76, 91,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyThirdOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(77, 92,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyThirdOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(77, 92,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyFourthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(78, 93,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyFourthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(78, 93,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyFifthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(79, 94,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyFifthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(79, 94,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventySixthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(80, 95,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventySixthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(80, 95,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventySeventhOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(81, 96,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventySeventhOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(81, 96,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyEighthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(82, 97,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyEighthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(82, 97,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyNinthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(83, 98,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtSeventyNinthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(83, 98,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightiethOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(84, 99,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightiethOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(84, 99,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyFirstOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(85, 100,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyFirstOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(85, 100,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightySecondOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(86, 101,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightySecondOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(86, 101,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyThirdOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(87, 102,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyThirdOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(87, 102,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyFourthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(88, 103,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyFourthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(88, 103,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyFifthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(89, 104,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyFifthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(89, 104,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightySixthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(90, 105,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightySixthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(90, 105,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightySeventhOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(91, 106,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightySeventhOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(91, 106,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyEighthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(92, 107,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyEighthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(92, 107,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyNinthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(93, 108,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtEightyNinthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(93, 108,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetiethOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(94, 109,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetiethOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(94, 109,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyFirstOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(95, 110,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyFirstOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(95, 110,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetySecondOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(96, 111,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetySecondOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(96, 111,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyThirdOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(97, 112,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyThirdOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(97, 112,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyFourthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(98, 113,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyFourthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(98, 113,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyFifthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(99, 114,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyFifthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(99, 114,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetySixthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(100, 115,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetySixthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(100, 115,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetySeventhOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(101, 116,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetySeventhOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(101, 116,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyEighthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(102, 117,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyEighthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(102, 117,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyNinthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(103, 118,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtNinetyNinthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(103, 118,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(104, 119,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(104, 119,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredFirstOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(105, 120,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredFirstOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(105, 120,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredSecondOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(106, 121,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredSecondOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(106, 121,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredThirdOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(107, 122,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredThirdOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(107, 122,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredFourthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(108, 123,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredFourthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(108, 123,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredFifthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(109, 124,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredFifthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(109, 124,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredSixthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(110, 125,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredSixthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(110, 125,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredSeventhOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(111, 126,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredSeventhOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(111, 126,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredEighthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(112, 127,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredEighthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(112, 127,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredNinthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(113, 128,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredNinthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(113, 128,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredTenthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(114, 129,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredTenthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(114, 129,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredEleventhOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(115, 130,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredEleventhOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(115, 130,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredTwelfthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(116, 131,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredTwelfthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(116, 131,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredThirteenthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(117, 132,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredThirteenthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(117, 132,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredFourteenthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(118, 133,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredFourteenthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(118, 133,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredFifteenthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(119, 134,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredFifteenthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(119, 134,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredSixteenthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(120, 135,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredSixteenthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(120, 135,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredSeventeenthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(121, 136,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredSeventeenthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(121, 136,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredEighteenthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(122, 137,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredEighteenthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(122, 137,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredNineteenthOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(123, 138,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredNineteenthOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(123, 138,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredTwentiethOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(124, 139,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredTwentiethOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(124, 139,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredTwentyFirstOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(125, 140,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredTwentyFirstOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(125, 140,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void CopperStartScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredTwentySecondOriginPreservesBothOwners(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        TraceTranslatedOneRowOverlapRetryAtOrigins(126, 141,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void ScrolledClipBlitRetryWithTranslatedOneRowOverlapAtOneHundredTwentySecondOriginMatchesNativeV4063(
+        bool poisonUnusedRegisterBits,
+        bool sourceLayerOnTop,
+        bool sourceCompletesBeforeDestination) =>
+        AssertTranslatedOneRowOverlapRetryMatchesNativeV4063(126, 141,
+            poisonUnusedRegisterBits, sourceLayerOnTop,
+            sourceCompletesBeforeDestination);
 
     [Theory]
     [InlineData(false)]

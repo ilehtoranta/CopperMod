@@ -1,9 +1,9 @@
 # graphics.library Replacement Design
 
-## Live continuation routing — 2026-09-28 / 1099
+## Live continuation routing — 2026-09-28 / 1149
 
-[Checkpoint 1099](GRAPHICS_LIBRARY_REPLACEMENT_EXECUTION_PLAN.md#current-continuation-checkpoint--2026-09-28--1099)
-is authoritative. G249-G346 match native V40.63 through nested deletion,
+[Checkpoint 1149](GRAPHICS_LIBRARY_REPLACEMENT_EXECUTION_PLAN.md#current-continuation-checkpoint--2026-09-28--1149)
+is authoritative. G249-G446 match native V40.63 through nested deletion,
 caller-Region projection and refresh. Callback comparisons use renderable
 bounds; ClipRect traversal order and hidden-node topology are not public hook
 guarantees. G272/G273 restore a caller Region during BeginUpdate and verify
@@ -163,11 +163,37 @@ suite passes 194/194. G339 translates both origins to `(2,19)` and `(16,34)`;
 its focused matrix passes 16/16, with the boot suite at 194/194. G340
 The complete Layers differential selection through G341 (204 methods) passed
 801/801 with zero skips in nine fresh-process batches. G342-G346 focused
-matrices each pass 16/16, with the ROM-backed boot suite at 194/194. G345 and
-G346 translate both origins to `(2,25)/(16,40)` and `(2,26)/(16,41)` while
-retaining the two-pixel overlap, scrolling, active Region replacement, retry
-and independent damage retirement. Next: G347 translates to `(2,27)` and
-`(16,42)`.
+matrices each pass 16/16; G347-G348, G349-G350, G351-G352, G353-G354,
+G355-G356, G357-G358, G359-G360, G361-G362, G363-G364, G365-G366, G367-G368,
+G369-G370, G371-G372, G373-G374, G375-G376, G377-G378, G379-G380, G381-G382,
+G383-G384, G385-G386, G387-G388, G389-G390, G391-G392, G393-G394, G395-G396,
+G397-G398 and G399-G400 each pass 32/32 combined (16 per origin). G401-G402
+pass 32/32 combined at `(2,81)/(16,96)` and `(2,82)/(16,97)`; G403-G404 also
+pass 32/32 at `(2,83)/(16,98)` and `(2,84)/(16,99)`; G405-G406 pass 32/32 at
+`(2,85)/(16,100)` and `(2,86)/(16,101)`; G407-G408 pass 32/32 at
+`(2,87)/(16,102)` and `(2,88)/(16,103)`; G409-G410 pass 32/32 at
+`(2,89)/(16,104)` and `(2,90)/(16,105)`; G411-G412 pass 32/32 at
+`(2,91)/(16,106)` and `(2,92)/(16,107)`; G413-G414 pass 32/32 at
+`(2,93)/(16,108)` and `(2,94)/(16,109)`; G415-G416 pass 32/32 at
+`(2,95)/(16,110)` and `(2,96)/(16,111)`; G417-G418 pass 32/32 at
+`(2,97)/(16,112)` and `(2,98)/(16,113)`; G419-G420 pass 32/32 at
+`(2,99)/(16,114)` and `(2,100)/(16,115)`; G421-G422 pass 32/32 at
+`(2,101)/(16,116)` and `(2,102)/(16,117)`; G423-G424 pass 32/32 at
+`(2,103)/(16,118)` and `(2,104)/(16,119)`; G425-G426 pass 32/32 at
+`(2,105)/(16,120)` and `(2,106)/(16,121)`; G427-G428 pass 32/32 at
+`(2,107)/(16,122)` and `(2,108)/(16,123)`; G429-G430 pass 32/32 at
+`(2,109)/(16,124)` and `(2,110)/(16,125)`; G431-G432 pass 32/32 at
+`(2,111)/(16,126)` and `(2,112)/(16,127)`; G433-G434 pass 32/32 at
+`(2,113)/(16,128)` and `(2,114)/(16,129)`; G435-G436 pass 32/32 at
+`(2,115)/(16,130)` and `(2,116)/(16,131)`; G437-G438 pass 32/32 at
+`(2,117)/(16,132)` and `(2,118)/(16,133)`; G439-G440 pass 32/32 at
+`(2,119)/(16,134)` and `(2,120)/(16,135)`; G441-G442 pass 32/32 at
+`(2,121)/(16,136)` and `(2,122)/(16,137)`; G443-G444 pass 32/32 at
+`(2,123)/(16,138)` and `(2,124)/(16,139)`; G445-G446 pass 32/32 at
+`(2,125)/(16,140)` and `(2,126)/(16,141)`. The ROM-backed boot suite passes
+194/194. G345-G446 retain the two-pixel overlap, scrolling, active Region
+replacement, retry and independent damage retirement. Next: G447-G448 use
+`(2,127)/(16,142)` and `(2,128)/(16,143)`.
 Continue autonomously without another resume prompt. CyberGraphX remains
 excluded; full Kickstart 3.1 compatibility and native ROM cutover remain
 unqualified.

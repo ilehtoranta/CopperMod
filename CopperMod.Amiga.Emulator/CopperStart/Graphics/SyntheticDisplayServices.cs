@@ -16,6 +16,9 @@ namespace CopperMod.Amiga.CopperStart.Graphics;
 /// </summary>
 internal sealed class SyntheticDisplayServices
 {
+    private const byte BitmapFlagInterleaved = 1 << 2;
+    private const byte BitmapFlagStandard = 1 << 3;
+
     private readonly HostGuestMemory _memory;
     private readonly SyntheticUiDisplayState _state;
     private readonly Func<char, ulong> _glyph;
@@ -27,25 +30,58 @@ internal sealed class SyntheticDisplayServices
         _glyph = glyph ?? throw new ArgumentNullException(nameof(glyph));
     }
 
+    /// <summary>
+    /// Physical bytes occupied by one plane row.  An interleaved BitMap
+    /// publishes an aggregate row stride in its header, but each plane still
+    /// contributes this many bytes to that row.
+    /// </summary>
     public int BytesPerRow => Math.Max(2, ((_state.ScreenWidth + 15) / 16) * 2);
-    public int PlaneSize => BytesPerRow * _state.ScreenHeight;
+
+    public int PlaneSize => checked(BytesPerRow * _state.ScreenHeight);
+
+    private int RowStride => _state.ScreenInterleaved
+        ? checked(BytesPerRow * _state.ScreenDepth)
+        : BytesPerRow;
 
     public void WriteBitMap(uint bitMapAddress, int bytesPerRowOffset, int rowsOffset, int depthOffset, int planesOffset)
     {
         if (bitMapAddress == 0 || _state.PlaneAddress == 0) return;
-        Clear(bitMapAddress, planesOffset + 6 * 4);
-        _memory.WriteWord(bitMapAddress + (uint)bytesPerRowOffset, (ushort)BytesPerRow);
+        // BitMap carries eight plane pointers. Clear the complete public
+        // envelope so an AGA depth-eight reopen cannot retain old pointers.
+        Clear(bitMapAddress, planesOffset + 8 * 4);
+        var publishedBytesPerRow = _state.ScreenInterleaved
+            ? checked(BytesPerRow * _state.ScreenDepth)
+            : BytesPerRow;
+        _memory.WriteWord(bitMapAddress + (uint)bytesPerRowOffset, (ushort)publishedBytesPerRow);
         _memory.WriteWord(bitMapAddress + (uint)rowsOffset, (ushort)_state.ScreenHeight);
+        // SA_Interleaved is a standard-planar allocation request.  The
+        // synthetic backing store is one contiguous chip block, so expose
+        // the same row-interleaved plane starts that native BitMap readers
+        // expect. RTG surfaces use a separate provider path and never reach
+        // this writer.
+        _memory.WriteByte(
+            bitMapAddress + (uint)(planesOffset - 4),
+            (byte)(BitmapFlagStandard |
+                (_state.ScreenInterleaved ? BitmapFlagInterleaved : 0)));
         _memory.WriteByte(bitMapAddress + (uint)depthOffset, (byte)_state.ScreenDepth);
         for (var plane = 0; plane < _state.ScreenDepth; plane++)
         {
-            _memory.WriteLong(bitMapAddress + (uint)planesOffset + (uint)(plane * 4), _state.PlaneAddress + (uint)(plane * PlaneSize));
+            var planeOffset = _state.ScreenInterleaved
+                ? checked(plane * BytesPerRow)
+                : checked(plane * PlaneSize);
+            _memory.WriteLong(
+                bitMapAddress + (uint)planesOffset + (uint)(plane * 4),
+                _state.PlaneAddress + (uint)planeOffset);
         }
     }
 
     public void RenderTitle(string title, int titleHeight)
     {
-        ClearBackingStore();
+        // Updating a Screen title must not erase application pixels below the
+        // title bar.  The old host shim cleared the complete backing store on
+        // every SetWindowTitles call, which made the synthetic screen diverge
+        // from Intuition's title-only redraw contract.
+        FillRect(0, 0, _state.ScreenWidth, titleHeight, 0);
         FillRect(0, 0, _state.ScreenWidth, titleHeight, 1);
         DrawText(title, 8, 6, 2);
     }
@@ -85,11 +121,14 @@ internal sealed class SyntheticDisplayServices
     public void WritePixel(int x, int y, int color)
     {
         if (_state.PlaneAddress == 0 || x < 0 || x >= _state.ScreenWidth || y < 0 || y >= _state.ScreenHeight) return;
-        var byteOffset = (y * BytesPerRow) + (x >> 3);
+        var byteOffset = (y * RowStride) + (x >> 3);
         var mask = (byte)(0x80 >> (x & 7));
         for (var plane = 0; plane < _state.ScreenDepth; plane++)
         {
-            var address = _state.PlaneAddress + (uint)(plane * PlaneSize + byteOffset);
+            var planeOffset = _state.ScreenInterleaved
+                ? checked(plane * BytesPerRow)
+                : checked(plane * PlaneSize);
+            var address = _state.PlaneAddress + (uint)(planeOffset + byteOffset);
             var value = _memory.ReadByte(address);
             value = ((color >> plane) & 1) != 0 ? (byte)(value | mask) : (byte)(value & (byte)~mask);
             _memory.WriteByte(address, value);

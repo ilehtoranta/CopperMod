@@ -11,6 +11,12 @@ internal sealed class CopperStartIntuitionContext
     // Screens. This is host-side bookkeeping only: guest Screen/View links
     // remain authoritative for the actual graphics-library lifecycle.
     private readonly HashSet<uint> _preparedScreenResources = new();
+    // OpenScreen/OpenScreenTagList and CloseScreen may arrive through
+    // different host/provider entry points. Serialize only this optional
+    // handoff ledger so a concurrent request cannot duplicate preparation or
+    // retire one committed chain twice; guest structure ownership remains with
+    // the callbacks and graphics-side registries.
+    private readonly object _screenResourceSync = new();
     public CopperStartIntuitionContext(
         Action<int> logCall, Action<uint> configureScreen, Action<uint> configureWindow,
         Action<M68kCpuState> closeScreen,
@@ -155,42 +161,50 @@ internal sealed class CopperStartIntuitionContext
 
     internal bool TryPrepareScreenResources(uint screen, out bool prepared)
     {
-        prepared = false;
-        if (PrepareScreenResources is null)
-            return true;
-
-        // The synthetic host may legitimately rediscover the same live
-        // Screen while an earlier open handoff still owns its graphics-side
-        // View/ViewPort/RasInfo chain.  That is not a second resource
-        // transfer: rerunning the provider and finalizing it again could
-        // duplicate palette/bitmap ownership or turn one later CloseScreen
-        // into two retirements.  Report successful admission, but leave the
-        // request unprepared so the caller does not issue a second commit.
-        if (_preparedScreenResources.Contains(screen))
-            return true;
-
-        if (!PrepareScreenResources(screen))
+        lock (_screenResourceSync)
         {
-            // A provider may have made provisional host allocations before it
-            // declines the handoff. Its false finalization remains the
-            // request-local cleanup hook, but never becomes a committed owner.
-            FinalizeScreenResources?.Invoke(screen, false);
-            return false;
-        }
+            prepared = false;
+            if (PrepareScreenResources is null)
+                return true;
 
-        _preparedScreenResources.Add(screen);
-        prepared = true;
-        return true;
+            // The synthetic host may legitimately rediscover the same live
+            // Screen while an earlier open handoff still owns its graphics-side
+            // View/ViewPort/RasInfo chain. That is not a second resource
+            // transfer: rerunning the provider and finalizing it again could
+            // duplicate palette/bitmap ownership or turn one later
+            // CloseScreen into two retirements. Report successful admission,
+            // but leave the request unprepared so the caller does not issue a
+            // second commit.
+            if (_preparedScreenResources.Contains(screen))
+                return true;
+
+            if (!PrepareScreenResources(screen))
+            {
+                // A provider may have made provisional host allocations before
+                // it declines the handoff. Its false finalization remains the
+                // request-local cleanup hook, but never becomes a committed
+                // owner.
+                FinalizeScreenResources?.Invoke(screen, false);
+                return false;
+            }
+
+            _preparedScreenResources.Add(screen);
+            prepared = true;
+            return true;
+        }
     }
 
     internal void FinalizePreparedScreenResources(uint screen, bool succeeded)
     {
-        if (screen == 0 || !_preparedScreenResources.Contains(screen))
-            return;
+        lock (_screenResourceSync)
+        {
+            if (screen == 0 || !_preparedScreenResources.Contains(screen))
+                return;
 
-        FinalizeScreenResources?.Invoke(screen, succeeded);
-        if (!succeeded)
-            _preparedScreenResources.Remove(screen);
+            FinalizeScreenResources?.Invoke(screen, succeeded);
+            if (!succeeded)
+                _preparedScreenResources.Remove(screen);
+        }
     }
 
     /// <summary>
