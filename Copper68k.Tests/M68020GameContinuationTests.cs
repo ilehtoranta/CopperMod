@@ -8,6 +8,36 @@ public sealed class M68020GameContinuationTests
     private const uint Code = 0xF80000;
 
     [Fact]
+    public void AddaWordPcIndexedUsesExtensionBaseAndSignExtendedSourceWithoutChangingCcr()
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, 0xD6FB, 0x2440); bus.WriteLong(Code + 0x3A, 0xFFFC1234);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.D[2] = 0x1234FFFE; cpu.State.A[3] = 2; cpu.State.StatusRegister = 0x201F;
+        cpu.ExecuteInstruction(); Assert.Equal(0xFFFFFFFEu, cpu.State.A[3]); Assert.Equal(0x201F, cpu.State.StatusRegister);
+        Assert.Equal(Code + 4, cpu.State.ProgramCounter); Assert.Equal(0xFFFC1234u, bus.ReadLong(Code + 0x3A));
+    }
+
+    [Fact]
+    public void AddaLongPcIndexedLatchesAnIndexBeforeUpdatingTheSameDestination()
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, 0xD7FB, 0xB820); bus.WriteLong(Code + 0x1022, 3);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.A[3] = 0x1000; cpu.State.StatusRegister = 0x201F; cpu.ExecuteInstruction();
+        Assert.Equal(0x1003u, cpu.State.A[3]); Assert.Equal(0x201F, cpu.State.StatusRegister);
+        Assert.Equal(Code + 4, cpu.State.ProgramCounter);
+    }
+
+    [Fact]
+    public void AddaWordPcIndexedSynchronizesAnAliasedStackIndexAndDestination()
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, 0xDEFB, 0xF210); bus.WriteWord(Code + 0xA012, 0xFFF0);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.StatusRegister = 0x201F; cpu.ExecuteInstruction();
+        Assert.Equal(0x4FF0u, cpu.State.A[7]); Assert.Equal(0x4FF0u, cpu.State.InterruptStackPointer);
+        Assert.Equal(0x201F, cpu.State.StatusRegister);
+    }
+
+    [Fact]
     public void AbsoluteLongToIndexedMoveRetainsTheFullDestinationUnsupportedBoundary()
     {
         var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, 0x23B9, 0x0000, 0x3000, 0x0170, 0x0000, 0x0004);

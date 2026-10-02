@@ -37,6 +37,9 @@ MOVE.B/W/L absolute-long to brief indexed memory, NEG.B/W/L absolute-long,
 CMPA.W/L absolute-long, TST.B/W/L PC displacement and MOVE.B/L PC displacement
 to absolute-long memory. CMPA sign-extends word sources and preserves X and An;
 NEG retains sized memory writes and the explicit read-modify-write barrier.
+PC brief indexed ADDA.W/L reads the operand from the extension-word base,
+sign-extends word sources and leaves CCR unchanged, including aliased An/A7
+indexes and destinations.
 The new memory-to-indexed MOVE route retains its full-destination unsupported
 boundary and the existing 040 fallback policy.
 
@@ -47,7 +50,7 @@ MOVEM tests retain the 000/010 ignored-tail read and a separate 040 fallback
 control while validating the new native indirect route. Timing-plan admission
 and read-modify-write barriers remain explicit. Costs retain the existing
 approximate operand-shape policy; these results do not certify physical timing.
-The complete CPU suite passes 4,040 cases, with six optional external corpus
+The complete CPU suite passes 4,043 cases, with six optional external corpus
 cases unavailable. The retained AHX consumer suite passes all 18 cases.
 
 The supplied UFO crack intro runs and accepts its normal mouse-click exit.

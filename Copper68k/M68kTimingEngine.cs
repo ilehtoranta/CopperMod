@@ -443,6 +443,8 @@ namespace Copper68k
         AddaWordAddressToAddress,
         AddaWordAddressDisplacementToAddress,
         AddaWordBriefIndexedToAddress,
+        AddaWordPcBriefIndexedToAddress,
+        AddaLongPcBriefIndexedToAddress,
         AddaLongBriefIndexedToAddress,
         AddaLongImmediateToAddress,
         AddaLongDataToAddress,

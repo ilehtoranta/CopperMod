@@ -368,6 +368,7 @@ namespace Copper68k
         AddaWordAddressToAddress,
         AddaWordAddressDisplacementToAddress,
         AddaWordBriefIndexedToAddress,
+        AddaPcBriefIndexedToAddress,
         AddaLongBriefIndexedToAddress,
         AddaLongImmediateToAddress,
         AddaLongDataToAddress,
@@ -750,6 +751,10 @@ namespace Copper68k
             if (opcode is 0x13FA or 0x23FA)
             {
                 return M68020OpcodeKind.MoveSizedPcDisplacementToAbsoluteLong;
+            }
+            if ((opcode & 0xF1FF) is 0xD0FB or 0xD1FB)
+            {
+                return M68020OpcodeKind.AddaPcBriefIndexedToAddress;
             }
 
             if ((opcode & 0xFFC0) == 0x42C0)
@@ -5404,6 +5409,10 @@ namespace Copper68k
                     return true;
                 case M68020OpcodeKind.MoveSizedPcDisplacementToAbsoluteLong:
                     ExecuteMoveSizedPcDisplacementToAbsoluteLong(opcode);
+                    return true;
+                case M68020OpcodeKind.AddaPcBriefIndexedToAddress:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteAddaPcBriefIndexedToAddress(opcode);
                     return true;
 
                 case M68020OpcodeKind.MoveFromCcr:
@@ -13328,6 +13337,21 @@ namespace Copper68k
             var source = unchecked((uint)(int)(short)State.D[dataRegister]);
             WriteGeneralRegister(true, addressRegister, State.A[addressRegister] + source);
             CompleteTiming(M68kInstructionTimingKey.AddaWordDataToAddress);
+        }
+
+        private void ExecuteAddaPcBriefIndexedToAddress(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var baseAddress = State.ProgramCounter;
+            var extension = FetchWord();
+            var address = CalculateBriefIndexedAddress(baseAddress, extension, opcode);
+            var word = (opcode & 0x0100) == 0;
+            var source = word ? unchecked((uint)(int)(short)ReadWord(address)) : ReadLong(address);
+            var destination = (opcode >> 9) & 7;
+            WriteGeneralRegister(true, destination, unchecked(State.A[destination] + source));
+            CompleteTiming(word ? M68kInstructionTimingKey.AddaWordPcBriefIndexedToAddress
+                : M68kInstructionTimingKey.AddaLongPcBriefIndexedToAddress);
         }
 
         private void ExecuteAddaWordAddressDisplacementToAddress(ushort opcode)
