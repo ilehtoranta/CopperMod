@@ -9,9 +9,9 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.5.1</Version>
-    <PackageVersion>1.5.1</PackageVersion>
-    <PackageReleaseNotes>Adds an explicit experimental PAL A1200 68EC020 factory with long Chip/ROM and byte CIA/Gayle timing rules, plus integer operand forms reached by native A1200 Kickstart 3.0 and DOS/graphics startup. The host owns motherboard arbitration. Default OCS profiles remain unchanged. Pipeline, cache and instruction timing are approximate; AGA chipset execution belongs to the CopperScreen consumer. See the README for scope and validation.</PackageReleaseNotes>
+    <Version>1.5.2</Version>
+    <PackageVersion>1.5.2</PackageVersion>
+    <PackageReleaseNotes>Adds CMPM.W/L and integer operand forms reached by native stock A1200 replays of UFO and Alien Breed 3D II, including sized arithmetic, logical and MOVE forms, SUBX.B/W, and MOVEM.W indirect. Focused tests cover widths, signed and scaled PC indexes, aliasing, stack stride and condition codes. Full-format indexed addressing remains explicitly unsupported and neither title has validated gameplay. Advanced CPU timing retains the approximate operand-shape policy. This source version is a development candidate until explicitly released.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

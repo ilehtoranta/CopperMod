@@ -1,5 +1,37 @@
 # Copper68k
 
+## Mainline development candidate 1.5.2
+
+This source version is unpublished and requires explicit release authorization.
+Native stock PAL A1200 replays of supplied UFO: Enemy Unknown and Alien Breed
+3D II: The Killing Grounds media exposed missing integer operand forms in the
+shared advanced executor. The changes implement CMPM.W/L, sized PC-relative
+ADD/SUB, PC-indexed AND.B/W, absolute-long AND/ADD.B/W, ADDA.W/L indirect,
+postincrement and absolute-long, MOVEM.W indirect, CLR.W absolute-long,
+NOT.B/W/L indirect/postincrement/absolute-long, TST.L absolute-long,
+ADDI.B/W absolute-long and ADDI.W/L indirect, ADDQ.W absolute-long,
+dynamic BCLR/BSET indirect, SUBX.B/W register, and the reached MOVE.W/L forms.
+
+Regression tests cover signed/scaled brief indexes and extension-word PC bases,
+operand widths, sign extension, source/destination aliasing, A7 byte stride,
+sticky SUBX zero, extend/borrow/overflow, surrounding memory and CCR preservation.
+MOVEM tests retain the 000/010 ignored-tail read and a separate 040 fallback
+control while validating the new native indirect route. Timing-plan admission
+and read-modify-write barriers remain explicit. Costs retain the existing
+approximate operand-shape policy; these results do not certify physical timing.
+The complete CPU suite passes 3,652 cases, with six optional external corpus
+cases unavailable. The retained AHX consumer suite passes all 18 cases.
+
+The supplied UFO crack intro runs and accepts its normal mouse-click exit.
+UFO then stops at full-format memory-indirect `MOVE.L` (`$2034/$0162`), which
+remains explicitly unsupported. Alien Breed 3D II reaches a further missing
+`SUB.L (xxx).L,Dn` form. Neither title has verified gameplay or complete AGA
+compatibility. The unchanged application still pins published `1.5.1`; the
+candidate is tested through an isolated runtime/package, never a sibling
+project reference. Architectural expectations follow
+[Motorola's programmer reference](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+and [MC68020UM](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf).
+
 ## Mainline release 1.5.1
 
 `1.5.1` adds `M68kCoreFactory.Default.CreateA1200Ec020(bus)`, an explicit

@@ -551,6 +551,22 @@ namespace Copper68k
         private static M68kTimingBarrier GetOperandShapeBarriers(M68kInstructionTimingKey key)
             => key switch
             {
+                M68kInstructionTimingKey.NotByteAbsoluteLong or
+                M68kInstructionTimingKey.NotWordAbsoluteLong or
+                M68kInstructionTimingKey.NotLongAbsoluteLong or
+                M68kInstructionTimingKey.NotByteAddressIndirect or
+                M68kInstructionTimingKey.NotWordAddressIndirect or
+                M68kInstructionTimingKey.NotLongAddressIndirect or
+                M68kInstructionTimingKey.NotBytePostIncrement or
+                M68kInstructionTimingKey.NotWordPostIncrement or
+                M68kInstructionTimingKey.NotLongPostIncrement or
+                M68kInstructionTimingKey.AddqWordAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.AddiByteImmediateToAbsoluteLong or
+                M68kInstructionTimingKey.AddiWordImmediateToAbsoluteLong or
+                M68kInstructionTimingKey.AddiWordImmediateToAddressIndirect or
+                M68kInstructionTimingKey.AddiLongImmediateToAddressIndirect or
+                M68kInstructionTimingKey.BsetDynamicAddressIndirect or
+                M68kInstructionTimingKey.BclrDynamicAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.ImmediateWordToStatusRegister => M68kTimingBarrier.SynchronizeBus,
                 M68kInstructionTimingKey.MoveWordDataToStatusRegister => M68kTimingBarrier.SynchronizeBus,
                 M68kInstructionTimingKey.AddqLongAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
@@ -700,6 +716,7 @@ namespace Copper68k
                 M68kInstructionTimingKey.SubqWordBriefIndexed => "SUBQ.W #<data>,(d8,An,Xn)",
                 M68kInstructionTimingKey.AddqLongAddressDisplacement => "ADDQ.L #<data>,(d16,An)",
                 M68kInstructionTimingKey.AddqLongAbsoluteLong => "ADDQ.L #<data>,(xxx).L",
+                M68kInstructionTimingKey.AddqWordAbsoluteLong => "ADDQ.W #<data>,(xxx).L",
                 M68kInstructionTimingKey.SubqWordAddress => "SUBQ.W #<data>,An",
                 M68kInstructionTimingKey.SubqLongAddress => "SUBQ.L #<data>,An",
                 M68kInstructionTimingKey.SubqByteAbsoluteLong => "SUBQ.B #<data>,(xxx).L",
@@ -713,6 +730,8 @@ namespace Copper68k
                 M68kInstructionTimingKey.SubqByteAddressDisplacement => "SUBQ.B #<data>,(d16,An)",
                 M68kInstructionTimingKey.SubqWordAddressDisplacement => "SUBQ.W #<data>,(d16,An)",
                 M68kInstructionTimingKey.CmpmBytePostIncrement => "CMPM.B (An)+,(An)+",
+                M68kInstructionTimingKey.CmpmWordPostIncrement => "CMPM.W (An)+,(An)+",
+                M68kInstructionTimingKey.CmpmLongPostIncrement => "CMPM.L (An)+,(An)+",
                 _ => string.Empty
             };
 
@@ -1522,7 +1541,8 @@ namespace Copper68k
 
         private static int CalculateCompareCycles(M68kTimingDescriptor descriptor)
         {
-            if (descriptor.LegacyKey == M68kInstructionTimingKey.CmpmBytePostIncrement)
+            if (descriptor.LegacyKey is M68kInstructionTimingKey.CmpmBytePostIncrement or
+                M68kInstructionTimingKey.CmpmWordPostIncrement or M68kInstructionTimingKey.CmpmLongPostIncrement)
             {
                 return 9;
             }

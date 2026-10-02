@@ -6,33 +6,35 @@ namespace Copper68k.Tests;
 public sealed class M68kMovemModelIsolationTests
 {
 	[Theory]
-	[InlineData(M68kCpuModel.M68000, true)]
-	[InlineData(M68kCpuModel.M68010, true)]
-	[InlineData(M68kCpuModel.M68040, false)]
+	[InlineData(M68kCpuModel.M68000, true, false)]
+	[InlineData(M68kCpuModel.M68010, true, false)]
+	[InlineData(M68kCpuModel.M68040, false, false)]
+	[InlineData(M68kCpuModel.M68000, true, true)]
+	[InlineData(M68kCpuModel.M68010, true, true)]
+	[InlineData(M68kCpuModel.M68040, false, true)]
 	public void MovemWordIgnoredReadIsExcludedFromM68040ApproximateFallback(
 		M68kCpuModel model,
-		bool expectsIgnoredRead)
+		bool expectsIgnoredRead,
+		bool absoluteWord)
 	{
 		const uint codeAddress = 0x1000;
 		const uint sourceAddress = 0x2000;
 		const uint stackAddress = 0x6000;
-		const ushort opcode = 0x4C90; // MOVEM.W (A0),D0
+		var opcode = absoluteWord ? (ushort)0x4CB8 : (ushort)0x4C90; // MOVEM.W (xxx).W/(A0),D0
 		const ushort status = M68kCpuState.ResetStatusRegister |
 			M68kCpuState.Extend | M68kCpuState.Zero |
 			M68kCpuState.Overflow | M68kCpuState.Carry;
 		var bus = new WordReadRecordingBus();
 		bus.StoreWord(codeAddress, opcode);
 		bus.StoreWord(codeAddress + 2, 0x0001);
-		bus.StoreWord(codeAddress + 4, 0x4E71);
+		bus.StoreWord(codeAddress + 4, absoluteWord ? (ushort)sourceAddress : (ushort)0x4E71);
 		bus.StoreWord(codeAddress + 6, 0x4E71);
 		bus.StoreWord(sourceAddress, 0x8001);
 		bus.StoreWord(sourceAddress + 2, 0x1234);
 
-		// Unlike the native MOVEM.L (An)+ path, this word-indirect form has
-		// no advanced/fast dispatch kind. Successful 040 execution therefore
-		// exercises its shared integer fallback, where the 000/010 tail must
-		// remain disabled. Fail explicitly if this ceases to test that route.
-		Assert.Equal(M68020OpcodeKind.Unsupported,
+		// Keep an explicit integer-fallback control alongside the newly native
+		// word-indirect path. Neither 040 route may perform the 000/010 tail read.
+		Assert.Equal(absoluteWord ? M68020OpcodeKind.Unsupported : M68020OpcodeKind.MovemWordAddressIndirectToRegisters,
 			M68020OpcodeDispatchTable.M68040Kinds[opcode]);
 		using IM68kCore cpu = model == M68kCpuModel.M68040
 			? new M68040Interpreter(bus, M68020CpuProfile.Ocs68040JitMaxSpeed)
@@ -70,7 +72,7 @@ public sealed class M68kMovemModelIsolationTests
 		Assert.Equal(expectsIgnoredRead, bus.Reads.Any(read => read.Address == sourceAddress + 2));
 		Assert.Equal(expectedDataRegisters, cpu.State.D);
 		Assert.Equal(expectedAddressRegisters, cpu.State.A);
-		Assert.Equal(codeAddress + 4, cpu.State.ProgramCounter);
+		Assert.Equal(codeAddress + (absoluteWord ? 6u : 4u), cpu.State.ProgramCounter);
 		Assert.Equal(opcode, cpu.State.LastOpcode);
 		Assert.Equal(status, cpu.State.StatusRegister);
 		Assert.False(cpu.State.Halted);

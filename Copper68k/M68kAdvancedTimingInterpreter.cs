@@ -27,6 +27,7 @@ namespace Copper68k
         ClrLongAddressIndirect,
         ClrLongAddressDisplacement,
         ClrLongAbsoluteLong,
+        ClrWordAbsoluteLong,
         ClrLongAbsoluteWord,
         NegxLongData,
         NegByteData,
@@ -168,6 +169,13 @@ namespace Copper68k
         MoveLongAddressToAbsoluteWord,
         MoveLongAddressToAbsoluteLong,
         MoveLongAddressIndirectToAbsoluteLong,
+        MoveWordAddressIndirectToAbsoluteLong,
+        MoveWordAbsoluteLongToPostIncrement,
+        MoveWordAddressToPostIncrement,
+        MoveWordPcDisplacementToAbsoluteLong,
+        MoveWordPcBriefIndexedToAddressDisplacement,
+        MoveWordAddressDisplacementToBriefIndexed,
+        MoveLongAbsoluteLongToAbsoluteLong,
         MoveLongAddressDisplacementToAbsoluteLong,
         MoveByteDataToData,
         MoveByteAddressIndirectToData,
@@ -230,12 +238,16 @@ namespace Copper68k
         OriWordImmediateToAddressIndirect,
         AddiByteImmediateToData,
         AddiByteImmediateToAddressIndirect,
+        AddiWordImmediateToAddressIndirect,
+        AddiLongImmediateToAddressIndirect,
         AddiByteImmediateToAddressDisplacement,
         AddiWordImmediateToAddressDisplacement,
         AddiWordImmediateToData,
         AddiLongImmediateToData,
         AddiLongImmediateToAddressDisplacement,
         AddiLongImmediateToAbsoluteLong,
+        AddiSmallImmediateToAbsoluteLong,
+        BitDynamicAddressIndirect,
         SubiByteImmediateToData,
         SubiWordImmediateToData,
         SubiByteImmediateToAddressDisplacement,
@@ -286,11 +298,19 @@ namespace Copper68k
         AddxByteDataToData,
         AddxWordDataToData,
         AddxLongDataToData,
+        SubxByteDataToData,
+        SubxWordDataToData,
         SubxLongDataToData,
         AddLongPostIncrementToData,
         AddBytePostIncrementToData,
         AddLongAddressDisplacementToData,
         AddLongPcDisplacementToData,
+        AddSmallPcDisplacementToData,
+        AddSmallAbsoluteLongToData,
+        AddPcBriefIndexedToData,
+        SubPcBriefIndexedToData,
+        AddqWordAbsoluteLong,
+        SubPcDisplacementToData,
         AddLongImmediateToData,
         AddByteDataToAddressDisplacement,
         AddWordDataToAddressDisplacement,
@@ -302,6 +322,10 @@ namespace Copper68k
         BitModifyDynamicBriefIndexed,
         BitImmediateIndirect,
         NotAbsoluteWord,
+        NotAbsoluteLong,
+        NotAddressIndirect,
+        NotPostIncrement,
+        TstLongAbsoluteLong,
         AddqWordData,
         AddqLongData,
         AddqWordAddress,
@@ -335,6 +359,9 @@ namespace Copper68k
         AddaLongDataToAddress,
         AddaLongAddressToAddress,
         AddaLongAddressDisplacementToAddress,
+        AddaPostIncrementToAddress,
+        AddaAddressIndirectToAddress,
+        AddaAbsoluteLongToAddress,
         SubaPostIncrementToAddress,
         SubaAddressIndirectToAddress,
         SubaLongImmediateToAddress,
@@ -380,6 +407,8 @@ namespace Copper68k
         OrDataToAbsoluteLong,
         OrDataToPostIncrement,
         AndBriefIndexedToData,
+        AndPcBriefIndexedToData,
+        AndSmallAbsoluteLongToData,
         AndDataToPostIncrement,
         AndiImmediateToPostIncrement,
         OrWordDataToAddressIndirect,
@@ -526,6 +555,8 @@ namespace Copper68k
         CmpWordPostIncrementToData,
         CmpWordAddressDisplacementToData,
         CmpmBytePostIncrement,
+        CmpmWordPostIncrement,
+        CmpmLongPostIncrement,
         CmpiLongImmediateToAbsoluteLong,
         CmpiLongImmediateToAbsoluteWord,
         Nop,
@@ -566,6 +597,7 @@ namespace Copper68k
         MovemWordRegistersToAddressDisplacement,
         MovemWordAddressDisplacementToRegisters,
         MovemWordPcDisplacementToRegisters,
+        MovemWordAddressIndirectToRegisters,
         MovemLongRegistersToAddressIndirect,
         MovemLongRegistersToAddressDisplacement,
         MovemLongRegistersToBriefIndexed,
@@ -1765,6 +1797,16 @@ namespace Copper68k
                 return M68020OpcodeKind.AddiByteImmediateToAddressIndirect;
             }
 
+            if ((opcode & 0xFFF8) == 0x0650)
+            {
+                return M68020OpcodeKind.AddiWordImmediateToAddressIndirect;
+            }
+
+            if ((opcode & 0xFFF8) == 0x0690)
+            {
+                return M68020OpcodeKind.AddiLongImmediateToAddressIndirect;
+            }
+
             if ((opcode & 0xFFF8) == 0x0668)
             {
                 return M68020OpcodeKind.AddiWordImmediateToAddressDisplacement;
@@ -2033,6 +2075,16 @@ namespace Copper68k
             if ((opcode & 0xF1F8) == 0x9180)
             {
                 return M68020OpcodeKind.SubxLongDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x9100)
+            {
+                return M68020OpcodeKind.SubxByteDataToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x9140)
+            {
+                return M68020OpcodeKind.SubxWordDataToData;
             }
 
             if ((opcode & 0xF1F8) == 0xD100)
@@ -3177,9 +3229,149 @@ namespace Copper68k
                 return M68020OpcodeKind.CmpWordAddressDisplacementToData;
             }
 
+            if ((opcode & 0xF0F8) == 0xD0D8)
+            {
+                return M68020OpcodeKind.AddaPostIncrementToAddress;
+            }
+
+            if ((opcode & 0xFFF8) == 0x33D0)
+            {
+                return M68020OpcodeKind.MoveWordAddressIndirectToAbsoluteLong;
+            }
+
+            if ((opcode & 0xF1FF) == 0x30F9)
+            {
+                return M68020OpcodeKind.MoveWordAbsoluteLongToPostIncrement;
+            }
+
+            if (opcode == 0x33FA)
+            {
+                return M68020OpcodeKind.MoveWordPcDisplacementToAbsoluteLong;
+            }
+
+            if (opcode == 0x23F9)
+            {
+                return M68020OpcodeKind.MoveLongAbsoluteLongToAbsoluteLong;
+            }
+
+            if ((opcode & 0xF1FF) == 0x317B)
+            {
+                return M68020OpcodeKind.MoveWordPcBriefIndexedToAddressDisplacement;
+            }
+
+            if ((opcode & 0xF1F8) == 0x31A8)
+            {
+                return M68020OpcodeKind.MoveWordAddressDisplacementToBriefIndexed;
+            }
+
+            if ((opcode & 0xF1FF) == 0xD039 || (opcode & 0xF1FF) == 0xD079)
+            {
+                return M68020OpcodeKind.AddSmallAbsoluteLongToData;
+            }
+
+            if ((opcode & 0xF1F8) == 0x30C8)
+            {
+                return M68020OpcodeKind.MoveWordAddressToPostIncrement;
+            }
+
+            if (opcode == 0x0639 || opcode == 0x0679)
+            {
+                return M68020OpcodeKind.AddiSmallImmediateToAbsoluteLong;
+            }
+
+            if ((opcode & 0xF1F8) == 0x01D0 || (opcode & 0xF1F8) == 0x0190)
+            {
+                return M68020OpcodeKind.BitDynamicAddressIndirect;
+            }
+
+            if ((opcode & 0xFFF8) == 0x4C90)
+            {
+                return M68020OpcodeKind.MovemWordAddressIndirectToRegisters;
+            }
+
+            if (opcode == 0x4279)
+            {
+                return M68020OpcodeKind.ClrWordAbsoluteLong;
+            }
+
+            if ((opcode & 0xFF3F) == 0x4639 && ((opcode >> 6) & 3) != 3)
+            {
+                return M68020OpcodeKind.NotAbsoluteLong;
+            }
+
+            if ((opcode & 0xFF38) == 0x4610 && ((opcode >> 6) & 3) != 3)
+            {
+                return M68020OpcodeKind.NotAddressIndirect;
+            }
+
+            if ((opcode & 0xFF38) == 0x4618 && ((opcode >> 6) & 3) != 3)
+            {
+                return M68020OpcodeKind.NotPostIncrement;
+            }
+
+            if (opcode == 0x4AB9)
+            {
+                return M68020OpcodeKind.TstLongAbsoluteLong;
+            }
+
+            if ((opcode & 0xF0F8) == 0xD0D0)
+            {
+                return M68020OpcodeKind.AddaAddressIndirectToAddress;
+            }
+
+            if ((opcode & 0xF0FF) == 0xD0F9)
+            {
+                return M68020OpcodeKind.AddaAbsoluteLongToAddress;
+            }
+
+            if ((opcode & 0xF1FF) == 0xD03A || (opcode & 0xF1FF) == 0xD07A)
+            {
+                return M68020OpcodeKind.AddSmallPcDisplacementToData;
+            }
+
+            if ((opcode & 0xF13F) == 0x903A && ((opcode >> 6) & 3) != 3)
+            {
+                return M68020OpcodeKind.SubPcDisplacementToData;
+            }
+
+            if ((opcode & 0xF13F) == 0xD03B && ((opcode >> 6) & 3) != 3)
+            {
+                return M68020OpcodeKind.AddPcBriefIndexedToData;
+            }
+
+            if ((opcode & 0xF13F) == 0x903B && ((opcode >> 6) & 3) != 3)
+            {
+                return M68020OpcodeKind.SubPcBriefIndexedToData;
+            }
+
+            if ((opcode & 0xF1FF) == 0x5079)
+            {
+                return M68020OpcodeKind.AddqWordAbsoluteLong;
+            }
+
+            if ((opcode & 0xF1FF) == 0xC03B || (opcode & 0xF1FF) == 0xC07B)
+            {
+                return M68020OpcodeKind.AndPcBriefIndexedToData;
+            }
+
+            if ((opcode & 0xF1FF) == 0xC039 || (opcode & 0xF1FF) == 0xC079)
+            {
+                return M68020OpcodeKind.AndSmallAbsoluteLongToData;
+            }
+
             if ((opcode & 0xF1F8) == 0xB108)
             {
                 return M68020OpcodeKind.CmpmBytePostIncrement;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB148)
+            {
+                return M68020OpcodeKind.CmpmWordPostIncrement;
+            }
+
+            if ((opcode & 0xF1F8) == 0xB188)
+            {
+                return M68020OpcodeKind.CmpmLongPostIncrement;
             }
 
             if (opcode == 0x0CB9)
@@ -5957,7 +6149,9 @@ namespace Copper68k
                     return true;
 
                 case M68020OpcodeKind.AddiByteImmediateToAddressIndirect:
-                    ExecuteAddiByteImmediateToAddressIndirect(opcode);
+                case M68020OpcodeKind.AddiWordImmediateToAddressIndirect:
+                case M68020OpcodeKind.AddiLongImmediateToAddressIndirect:
+                    ExecuteAddiImmediateToAddressIndirect(opcode);
                     return true;
 
                 case M68020OpcodeKind.AddiWordImmediateToAddressDisplacement:
@@ -6189,8 +6383,10 @@ namespace Copper68k
                     ExecuteAddxLongDataToData(opcode);
                     return true;
 
+                case M68020OpcodeKind.SubxByteDataToData:
+                case M68020OpcodeKind.SubxWordDataToData:
                 case M68020OpcodeKind.SubxLongDataToData:
-                    ExecuteSubxLongDataToData(opcode);
+                    ExecuteSubxDataToData(opcode);
                     return true;
 
                 case M68020OpcodeKind.AddxByteDataToData:
@@ -7179,7 +7375,112 @@ namespace Copper68k
                     return true;
 
                 case M68020OpcodeKind.CmpmBytePostIncrement:
-                    ExecuteCmpmBytePostIncrement(opcode);
+                    ExecuteCmpmPostIncrement(opcode, M68kOperandSize.Byte, M68kInstructionTimingKey.CmpmBytePostIncrement);
+                    return true;
+
+                case M68020OpcodeKind.AndPcBriefIndexedToData:
+                    ExecuteAndPcBriefIndexedToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.ClrWordAbsoluteLong:
+                    ExecuteClrWordAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AndSmallAbsoluteLongToData:
+                    ExecuteAndSmallAbsoluteLongToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.NotAbsoluteLong:
+                    ExecuteNotMemory(opcode, addressIndirect: false);
+                    return true;
+
+                case M68020OpcodeKind.NotAddressIndirect:
+                case M68020OpcodeKind.NotPostIncrement:
+                    ExecuteNotMemory(opcode, addressIndirect: true);
+                    return true;
+
+                case M68020OpcodeKind.TstLongAbsoluteLong:
+                    ExecuteTstLongAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddaPostIncrementToAddress:
+                    ExecuteAddaIndirectToAddress(opcode, postIncrement: true);
+                    return true;
+
+                case M68020OpcodeKind.AddaAddressIndirectToAddress:
+                    ExecuteAddaIndirectToAddress(opcode, postIncrement: false);
+                    return true;
+
+                case M68020OpcodeKind.AddaAbsoluteLongToAddress:
+                    ExecuteAddaAbsoluteLongToAddress(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordAddressIndirectToAbsoluteLong:
+                    ExecuteMoveWordAddressIndirectToAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordAbsoluteLongToPostIncrement:
+                    ExecuteMoveWordAbsoluteLongToPostIncrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordPcDisplacementToAbsoluteLong:
+                    ExecuteMoveWordPcDisplacementToAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordAddressToPostIncrement:
+                    ExecuteMoveWordAddressToPostIncrement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveLongAbsoluteLongToAbsoluteLong:
+                    ExecuteMoveLongAbsoluteLongToAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordPcBriefIndexedToAddressDisplacement:
+                    ExecuteMoveWordPcBriefIndexedToAddressDisplacement(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MoveWordAddressDisplacementToBriefIndexed:
+                    ExecuteMoveWordAddressDisplacementToBriefIndexed(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddSmallAbsoluteLongToData:
+                    ExecuteAddSmallAbsoluteLongToData(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddiSmallImmediateToAbsoluteLong:
+                    ExecuteAddiSmallImmediateToAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.BitDynamicAddressIndirect:
+                    ExecuteBitDynamicAddressIndirect(opcode);
+                    return true;
+
+                case M68020OpcodeKind.AddSmallPcDisplacementToData:
+                    ExecuteArithmeticPcDisplacementToData(opcode, subtract: false);
+                    return true;
+
+                case M68020OpcodeKind.SubPcDisplacementToData:
+                    ExecuteArithmeticPcDisplacementToData(opcode, subtract: true);
+                    return true;
+
+                case M68020OpcodeKind.AddPcBriefIndexedToData:
+                    ExecuteArithmeticPcDisplacementToData(opcode, subtract: false, indexed: true);
+                    return true;
+
+                case M68020OpcodeKind.SubPcBriefIndexedToData:
+                    ExecuteArithmeticPcDisplacementToData(opcode, subtract: true, indexed: true);
+                    return true;
+
+                case M68020OpcodeKind.AddqWordAbsoluteLong:
+                    ExecuteAddqWordAbsoluteLong(opcode);
+                    return true;
+
+                case M68020OpcodeKind.CmpmWordPostIncrement:
+                    ExecuteCmpmPostIncrement(opcode, M68kOperandSize.Word, M68kInstructionTimingKey.CmpmWordPostIncrement);
+                    return true;
+
+                case M68020OpcodeKind.CmpmLongPostIncrement:
+                    ExecuteCmpmPostIncrement(opcode, M68kOperandSize.Long, M68kInstructionTimingKey.CmpmLongPostIncrement);
                     return true;
 
                 case M68020OpcodeKind.CmpiLongImmediateToAbsoluteLong:
@@ -7386,6 +7687,7 @@ namespace Copper68k
 
                 case M68020OpcodeKind.MovemWordPcDisplacementToRegisters:
                 case M68020OpcodeKind.MovemWordAddressDisplacementToRegisters:
+                case M68020OpcodeKind.MovemWordAddressIndirectToRegisters:
                     ExecuteMovemWordAddressDisplacementToRegisters(opcode);
                     return true;
 
@@ -8447,8 +8749,9 @@ namespace Copper68k
             _ = FetchWord();
             var mask = FetchWord();
             var pcRelative = opcode == 0x4CBA;
+            var indirect = (opcode & 0xFFF8) == 0x4C90;
             var baseAddress = pcRelative ? State.ProgramCounter : State.A[opcode & 7];
-            var displacement = unchecked((int)(short)FetchWord());
+            var displacement = indirect ? 0 : unchecked((int)(short)FetchWord());
             var address = unchecked((uint)(baseAddress + displacement));
 
             for (var register = 0; register < 8; register++)
@@ -8470,10 +8773,10 @@ namespace Copper68k
             }
 
             CompleteMovemWordTiming(
-                M68kInstructionTimingKey.MovemWordAddressDisplacementToRegisters,
-                pcRelative ? "MOVEM.W (d16,PC),<list>" : "MOVEM.W (d16,An),<list>",
+                indirect ? M68kInstructionTimingKey.MovemWordAddressIndirectToRegisters : M68kInstructionTimingKey.MovemWordAddressDisplacementToRegisters,
+                indirect ? "MOVEM.W (An),<list>" : pcRelative ? "MOVEM.W (d16,PC),<list>" : "MOVEM.W (d16,An),<list>",
                 CountSetBits(mask),
-                effectiveAddressCycles: 2,
+                effectiveAddressCycles: indirect ? 0 : 2,
                 memoryToRegister: true);
         }
 
@@ -11122,18 +11425,30 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.SubiByteImmediateToAddressDisplacement);
         }
 
-        private void ExecuteAddiByteImmediateToAddressIndirect(ushort opcode)
+        private void ExecuteAddiImmediateToAddressIndirect(ushort opcode)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
             var addressRegister = opcode & 7;
-            var source = (byte)FetchWord();
+            var size = ((opcode >> 6) & 3) switch
+            {
+                0 => M68kOperandSize.Byte,
+                1 => M68kOperandSize.Word,
+                _ => M68kOperandSize.Long
+            };
+            var source = size == M68kOperandSize.Long ? FetchLong() : FetchWord();
+            source &= M68kCpuState.Mask(size);
             var address = State.A[addressRegister];
-            var destination = ReadByte(address);
-            var result = (byte)(destination + source);
-            WriteByte(address, result);
-            SetAddFlags(destination, source, result, M68kOperandSize.Byte);
-            CompleteTiming(M68kInstructionTimingKey.AddiByteImmediateToAddressIndirect);
+            var destination = ReadSized(address, size);
+            var result = unchecked(destination + source) & M68kCpuState.Mask(size);
+            WriteSized(address, result, size);
+            SetAddFlags(destination, source, result, size);
+            CompleteTiming(size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.AddiByteImmediateToAddressIndirect,
+                M68kOperandSize.Word => M68kInstructionTimingKey.AddiWordImmediateToAddressIndirect,
+                _ => M68kInstructionTimingKey.AddiLongImmediateToAddressIndirect
+            });
         }
 
         private void ExecuteAddiWordImmediateToAddressDisplacement(ushort opcode)
@@ -12259,19 +12574,31 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.AddxLongDataToData);
         }
 
-        private void ExecuteSubxLongDataToData(ushort opcode)
+        private void ExecuteSubxDataToData(ushort opcode)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
             var destinationRegister = (opcode >> 9) & 7;
             var sourceRegister = opcode & 7;
-            var destination = State.D[destinationRegister];
-            var source = State.D[sourceRegister];
+            var size = ((opcode >> 6) & 3) switch
+            {
+                0 => M68kOperandSize.Byte,
+                1 => M68kOperandSize.Word,
+                _ => M68kOperandSize.Long
+            };
+            var mask = M68kCpuState.Mask(size);
+            var destination = State.D[destinationRegister] & mask;
+            var source = State.D[sourceRegister] & mask;
             var extend = State.GetFlag(M68kCpuState.Extend) ? 1u : 0u;
-            var result = unchecked(destination - source - extend);
-            State.D[destinationRegister] = result;
-            SetSubxFlags(destination, source, result, M68kOperandSize.Long);
-            CompleteTiming(M68kInstructionTimingKey.SubxLongDataToData);
+            var result = unchecked(destination - source - extend) & mask;
+            WriteDataRegisterSized(destinationRegister, result, size);
+            SetSubxFlags(destination, source, result, size);
+            CompleteTiming(size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.SubxByteDataToData,
+                M68kOperandSize.Word => M68kInstructionTimingKey.SubxWordDataToData,
+                _ => M68kInstructionTimingKey.SubxLongDataToData
+            });
         }
 
         private void ExecuteAddxByteDataToData(ushort opcode)
@@ -14192,6 +14519,293 @@ namespace Copper68k
                 M68kOperandSize.Word => M68kInstructionTimingKey.AndWordBriefIndexedToData,
                 _ => M68kInstructionTimingKey.AndLongBriefIndexedToData
             });
+        }
+
+        private void ExecuteMoveWordPcBriefIndexedToAddressDisplacement(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var baseAddress = State.ProgramCounter;
+            var sourceExtension = FetchWord();
+            var value = ReadWord(CalculateBriefIndexedAddress(baseAddress, sourceExtension, opcode));
+            var displacement = unchecked((short)FetchWord());
+            var destination = unchecked((uint)(State.A[(opcode >> 9) & 7] + displacement));
+            WriteWord(destination, value);
+            SetMoveFlags(value, M68kOperandSize.Word);
+            CompleteTiming(M68kInstructionTimingKey.MoveWordPcBriefIndexedToAddressDisplacement);
+        }
+
+        private void ExecuteMoveWordAddressDisplacementToBriefIndexed(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var displacement = unchecked((short)FetchWord());
+            var value = ReadWord(unchecked((uint)(State.A[opcode & 7] + displacement)));
+            var extension = FetchWord();
+            WriteWord(CalculateBriefIndexedAddress((opcode >> 9) & 7, extension, opcode), value);
+            SetMoveFlags(value, M68kOperandSize.Word);
+            CompleteTiming(M68kInstructionTimingKey.MoveWordAddressDisplacementToBriefIndexed);
+        }
+
+        private void ExecuteAddSmallAbsoluteLongToData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var size = (opcode & 0x40) == 0 ? M68kOperandSize.Byte : M68kOperandSize.Word;
+            var address = FetchLong();
+            var register = (opcode >> 9) & 7;
+            var destination = size == M68kOperandSize.Byte ? (byte)State.D[register] : (ushort)State.D[register];
+            var source = ReadSized(address, size);
+            var result = unchecked(destination + source);
+            WriteDataRegisterSized(register, result, size);
+            SetAddFlags(destination, source, result, size);
+            CompleteTiming(size == M68kOperandSize.Byte ? M68kInstructionTimingKey.AddByteAbsoluteLongToData : M68kInstructionTimingKey.AddWordAbsoluteLongToData);
+        }
+
+        private void ExecuteAddiSmallImmediateToAbsoluteLong(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var size = (opcode & 0x40) == 0 ? M68kOperandSize.Byte : M68kOperandSize.Word;
+            var immediate = FetchWord();
+            var source = size == M68kOperandSize.Byte ? (byte)immediate : immediate;
+            var address = FetchLong();
+            var destination = ReadSized(address, size);
+            var result = unchecked(destination + source);
+            WriteSized(address, result, size);
+            SetAddFlags(destination, source, result, size);
+            CompleteTiming(size == M68kOperandSize.Byte ? M68kInstructionTimingKey.AddiByteImmediateToAbsoluteLong : M68kInstructionTimingKey.AddiWordImmediateToAbsoluteLong);
+        }
+
+        private void ExecuteBitDynamicAddressIndirect(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var address = State.A[opcode & 7];
+            var value = ReadByte(address);
+            var mask = 1 << (int)(State.D[(opcode >> 9) & 7] & 7);
+            State.SetFlag(M68kCpuState.Zero, (value & mask) == 0);
+            var set = (opcode & 0x40) != 0;
+            WriteByte(address, (byte)(set ? value | mask : value & ~mask));
+            CompleteTiming(set ? M68kInstructionTimingKey.BsetDynamicAddressIndirect : M68kInstructionTimingKey.BclrDynamicAddressIndirect);
+        }
+
+        private void ExecuteMoveLongAbsoluteLongToAbsoluteLong(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var source = FetchLong();
+            var value = ReadLong(source);
+            var destination = FetchLong();
+            WriteLong(destination, value);
+            SetMoveFlags(value, M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongAbsoluteLongToAbsoluteLong);
+        }
+
+        private void ExecuteMoveWordAddressToPostIncrement(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var value = (ushort)State.A[opcode & 7];
+            var register = (opcode >> 9) & 7;
+            var destination = State.A[register];
+            WriteWord(destination, value);
+            State.A[register] = unchecked(destination + 2);
+            SetMoveFlags(value, M68kOperandSize.Word);
+            CompleteTiming(M68kInstructionTimingKey.MoveWordAddressToPostIncrement);
+        }
+
+        private void ExecuteMoveWordPcDisplacementToAbsoluteLong(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var baseAddress = State.ProgramCounter;
+            var displacement = unchecked((short)FetchWord());
+            var value = ReadWord(unchecked((uint)(baseAddress + displacement)));
+            var destination = FetchLong();
+            WriteWord(destination, value);
+            SetMoveFlags(value, M68kOperandSize.Word);
+            CompleteTiming(M68kInstructionTimingKey.MoveWordPcDisplacementToAbsoluteLong);
+        }
+
+        private void ExecuteMoveWordAddressIndirectToAbsoluteLong(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var value = ReadWord(State.A[opcode & 7]);
+            var address = FetchLong();
+            WriteWord(address, value);
+            SetMoveFlags(value, M68kOperandSize.Word);
+            CompleteTiming(M68kInstructionTimingKey.MoveWordAddressIndirectToAbsoluteLong);
+        }
+
+        private void ExecuteMoveWordAbsoluteLongToPostIncrement(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var source = FetchLong();
+            var value = ReadWord(source);
+            var register = (opcode >> 9) & 7;
+            var destination = State.A[register];
+            WriteWord(destination, value);
+            State.A[register] = unchecked(destination + 2);
+            SetMoveFlags(value, M68kOperandSize.Word);
+            CompleteTiming(M68kInstructionTimingKey.MoveWordAbsoluteLongToPostIncrement);
+        }
+
+        private void ExecuteAndSmallAbsoluteLongToData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var size = (opcode & 0x40) == 0 ? M68kOperandSize.Byte : M68kOperandSize.Word;
+            var address = FetchLong();
+            var register = (opcode >> 9) & 7;
+            var result = State.D[register] & ReadSized(address, size);
+            WriteDataRegisterSized(register, result, size);
+            SetMoveFlags(result, size);
+            CompleteTiming(size == M68kOperandSize.Byte ? M68kInstructionTimingKey.AndByteAbsoluteLongToData : M68kInstructionTimingKey.AndWordAbsoluteLongToData);
+        }
+
+        private void ExecuteClrWordAbsoluteLong(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var address = FetchLong();
+            WriteWord(address, 0);
+            SetMoveFlags(0, M68kOperandSize.Word);
+            CompleteTiming(M68kInstructionTimingKey.ClrWordAbsoluteLong);
+        }
+
+        private void ExecuteTstLongAbsoluteLong(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var address = FetchLong();
+            SetMoveFlags(ReadLong(address), M68kOperandSize.Long);
+            CompleteTiming(M68kInstructionTimingKey.TstLongAbsoluteLong);
+        }
+
+        private void ExecuteNotMemory(ushort opcode, bool addressIndirect)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var size = ((opcode >> 6) & 3) switch { 0 => M68kOperandSize.Byte, 1 => M68kOperandSize.Word, _ => M68kOperandSize.Long };
+            var address = addressIndirect ? State.A[opcode & 7] : FetchLong();
+            var result = ~ReadSized(address, size);
+            WriteSized(address, result, size);
+            SetMoveFlags(result, size);
+            var postIncrement = (opcode & 0x38) == 0x18;
+            if (postIncrement) State.A[opcode & 7] = unchecked(address +
+                (size == M68kOperandSize.Byte && (opcode & 7) == 7 ? 2u : (uint)size));
+            CompleteTiming(postIncrement ? size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.NotBytePostIncrement,
+                M68kOperandSize.Word => M68kInstructionTimingKey.NotWordPostIncrement,
+                _ => M68kInstructionTimingKey.NotLongPostIncrement
+            } : addressIndirect ? size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.NotByteAddressIndirect,
+                M68kOperandSize.Word => M68kInstructionTimingKey.NotWordAddressIndirect,
+                _ => M68kInstructionTimingKey.NotLongAddressIndirect
+            } : size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.NotByteAbsoluteLong,
+                M68kOperandSize.Word => M68kInstructionTimingKey.NotWordAbsoluteLong,
+                _ => M68kInstructionTimingKey.NotLongAbsoluteLong
+            });
+        }
+
+        private void ExecuteAndPcBriefIndexedToData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var size = (opcode & 0x40) == 0 ? M68kOperandSize.Byte : M68kOperandSize.Word;
+            var register = (opcode >> 9) & 7;
+            var extensionAddress = State.ProgramCounter;
+            var extension = FetchWord();
+            var source = ReadSized(CalculateBriefIndexedAddress(extensionAddress, extension, opcode), size);
+            var result = State.D[register] & source;
+            WriteDataRegisterSized(register, result, size);
+            SetMoveFlags(result, size);
+            CompleteTiming(size == M68kOperandSize.Byte ?
+                M68kInstructionTimingKey.AndBytePcBriefIndexedToData : M68kInstructionTimingKey.AndWordPcBriefIndexedToData);
+        }
+
+        private void ExecuteAddqWordAbsoluteLong(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var address = FetchLong();
+            var source = (uint)((opcode >> 9) & 7);
+            if (source == 0) source = 8;
+            var destination = ReadWord(address);
+            var result = unchecked(destination + source);
+            WriteWord(address, (ushort)result);
+            SetAddFlags(destination, source, result, M68kOperandSize.Word);
+            CompleteTiming(M68kInstructionTimingKey.AddqWordAbsoluteLong);
+        }
+
+        private void ExecuteArithmeticPcDisplacementToData(ushort opcode, bool subtract, bool indexed = false)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var size = ((opcode >> 6) & 3) switch { 0 => M68kOperandSize.Byte, 1 => M68kOperandSize.Word, _ => M68kOperandSize.Long };
+            var register = (opcode >> 9) & 7;
+            var extensionAddress = State.ProgramCounter;
+            var extension = FetchWord();
+            var address = indexed ? CalculateBriefIndexedAddress(extensionAddress, extension, opcode) :
+                unchecked((uint)(extensionAddress + (short)extension));
+            var source = ReadSized(address, size);
+            var destination = size switch { M68kOperandSize.Byte => (byte)State.D[register], M68kOperandSize.Word => (ushort)State.D[register], _ => State.D[register] };
+            var result = subtract ? unchecked(destination - source) : unchecked(destination + source);
+            WriteDataRegisterSized(register, result, size);
+            if (subtract) SetSubtractFlags(destination, source, result, size);
+            else SetAddFlags(destination, source, result, size);
+            CompleteTiming(indexed ? (subtract ? size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.SubBytePcBriefIndexedToData,
+                M68kOperandSize.Word => M68kInstructionTimingKey.SubWordPcBriefIndexedToData,
+                _ => M68kInstructionTimingKey.SubLongPcBriefIndexedToData
+            } : size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.AddBytePcBriefIndexedToData,
+                M68kOperandSize.Word => M68kInstructionTimingKey.AddWordPcBriefIndexedToData,
+                _ => M68kInstructionTimingKey.AddLongPcBriefIndexedToData
+            }) : subtract ? size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.SubBytePcDisplacementToData,
+                M68kOperandSize.Word => M68kInstructionTimingKey.SubWordPcDisplacementToData,
+                _ => M68kInstructionTimingKey.SubLongPcDisplacementToData
+            } : (size == M68kOperandSize.Byte ? M68kInstructionTimingKey.AddBytePcDisplacementToData : M68kInstructionTimingKey.AddWordPcDisplacementToData));
+        }
+
+        private void ExecuteAddaAbsoluteLongToAddress(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var size = (opcode & 0x100) == 0 ? M68kOperandSize.Word : M68kOperandSize.Long;
+            var value = ReadSized(FetchLong(), size);
+            var source = size == M68kOperandSize.Word ? unchecked((uint)(int)(short)value) : value;
+            var destination = (opcode >> 9) & 7;
+            WriteGeneralRegister(true, destination, unchecked(State.A[destination] + source));
+            CompleteTiming(size == M68kOperandSize.Word ?
+                M68kInstructionTimingKey.AddaWordAbsoluteLongToAddress : M68kInstructionTimingKey.AddaLongAbsoluteLongToAddress);
+        }
+
+        private void ExecuteAddaIndirectToAddress(ushort opcode, bool postIncrement)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var size = (opcode & 0x100) == 0 ? M68kOperandSize.Word : M68kOperandSize.Long;
+            var sourceRegister = opcode & 7;
+            var value = ReadSized(State.A[sourceRegister], size);
+            if (postIncrement) State.A[sourceRegister] = unchecked(State.A[sourceRegister] + (uint)size);
+            var source = size == M68kOperandSize.Word ? unchecked((uint)(int)(short)value) : value;
+            var destination = (opcode >> 9) & 7;
+            WriteGeneralRegister(true, destination, unchecked(State.A[destination] + source));
+            CompleteTiming(postIncrement ? (size == M68kOperandSize.Word ?
+                M68kInstructionTimingKey.AddaWordPostIncrementToAddress : M68kInstructionTimingKey.AddaLongPostIncrementToAddress) :
+                (size == M68kOperandSize.Word ? M68kInstructionTimingKey.AddaWordAddressIndirectToAddress : M68kInstructionTimingKey.AddaLongAddressIndirectToAddress));
         }
 
         private void ExecuteAndiImmediateToPostIncrement(ushort opcode)
@@ -16306,18 +16920,20 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.CmpWordAddressDisplacementToData);
         }
 
-        private void ExecuteCmpmBytePostIncrement(ushort opcode)
+        private void ExecuteCmpmPostIncrement(ushort opcode, M68kOperandSize size, M68kInstructionTimingKey timingKey)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
             var sourceRegister = opcode & 7;
             var destinationRegister = (opcode >> 9) & 7;
-            var source = ReadByte(State.A[sourceRegister]);
-            State.A[sourceRegister] = unchecked(State.A[sourceRegister] + (sourceRegister == 7 ? 2u : 1u));
-            var destination = ReadByte(State.A[destinationRegister]);
-            State.A[destinationRegister] = unchecked(State.A[destinationRegister] + (destinationRegister == 7 ? 2u : 1u));
-            SetCompareFlags(destination, source, M68kOperandSize.Byte);
-            CompleteTiming(M68kInstructionTimingKey.CmpmBytePostIncrement);
+            var source = ReadSized(State.A[sourceRegister], size);
+            State.A[sourceRegister] = unchecked(State.A[sourceRegister] +
+                (size == M68kOperandSize.Byte && sourceRegister == 7 ? 2u : (uint)size));
+            var destination = ReadSized(State.A[destinationRegister], size);
+            State.A[destinationRegister] = unchecked(State.A[destinationRegister] +
+                (size == M68kOperandSize.Byte && destinationRegister == 7 ? 2u : (uint)size));
+            SetCompareFlags(destination, source, size);
+            CompleteTiming(timingKey);
         }
 
         private void ExecuteWordBranch(ushort opcode)
