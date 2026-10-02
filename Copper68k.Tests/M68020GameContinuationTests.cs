@@ -8,6 +8,86 @@ public sealed class M68020GameContinuationTests
     private const uint Code = 0xF80000;
 
     [Theory]
+    [InlineData(M68kCpuModel.M68020)] [InlineData(M68kCpuModel.M68EC020)]
+    [InlineData(M68kCpuModel.M68030)] [InlineData(M68kCpuModel.M68040)] [InlineData(M68kCpuModel.M68060)]
+    public void StatusPopRetainsSharedAdvancedCoreStackSemantics(M68kCpuModel model)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, 0x46DF); bus.WriteWord(0x6000, 0x0014);
+        using var cpu = M68kCoreFactory.Default.Create(model, bus); cpu.Reset(Code, 0x6000);
+        cpu.State.SetUserStackPointer(0x5000); cpu.ExecuteInstruction();
+        Assert.Equal(0x0014, cpu.State.StatusRegister); Assert.Equal(0x5000u, cpu.State.A[7]);
+        Assert.Equal(0x6002u, cpu.State.InterruptStackPointer); Assert.Equal(Code + 2, cpu.State.ProgramCounter);
+    }
+
+    [Theory]
+    [InlineData(0)] [InlineData(1)] [InlineData(2)] [InlineData(3)] [InlineData(4)] [InlineData(5)] [InlineData(6)]
+    public void PostIncrementToStatusReadsWordBeforeApplyingTheFullStatus(int register)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, (ushort)(0x46D8 | register));
+        bus.WriteLong(0x3000, 0x251BA55A);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.A[register] = 0x3000; cpu.ExecuteInstruction();
+        Assert.Equal(0x251B, cpu.State.StatusRegister); Assert.Equal(0x3002u, cpu.State.A[register]);
+        Assert.Equal(0x5000u, cpu.State.A[7]); Assert.Equal(Code + 2, cpu.State.ProgramCounter);
+        Assert.Equal(0x251BA55Au, bus.ReadLong(0x3000)); Assert.Equal(12, cpu.State.NativeCycles);
+    }
+
+    [Theory]
+    [InlineData(0x201F, 0x0014, 0x5000u)] [InlineData(0x201F, 0x3014, 0x7000u)]
+    [InlineData(0x301F, 0x2014, 0x6000u)] [InlineData(0x301F, 0x0014, 0x5000u)]
+    [InlineData(0x201F, 0x2014, 0x6002u)]
+    public void StatusPopIncrementsTheOldStackBeforeSwitchingBanks(ushort before, ushort after, uint active)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, 0x46DF);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x6000);
+        cpu.State.SetUserStackPointer(0x5000); cpu.State.SetMasterStackPointer(0x7000);
+        cpu.State.StatusRegister = before; var oldStack = cpu.State.A[7]; bus.WriteWord(oldStack, after);
+        cpu.ExecuteInstruction();
+        Assert.Equal(after, cpu.State.StatusRegister); Assert.Equal(active, cpu.State.A[7]);
+        Assert.Equal((before & 0x1000) == 0 ? 0x6002u : 0x6000u, cpu.State.InterruptStackPointer);
+        Assert.Equal((before & 0x1000) != 0 ? 0x7002u : 0x7000u, cpu.State.MasterStackPointer);
+        Assert.Equal(0x5000u, cpu.State.UserStackPointer); Assert.Equal(Code + 2, cpu.State.ProgramCounter);
+    }
+
+    [Theory]
+    [InlineData(0)] [InlineData(7)]
+    public void UserModeStatusPopRaisesPrivilegeBeforeReadingOrIncrementingSource(int source)
+    {
+        var bus = new StatusReadBus(); WriteWords(bus.Memory, Code, (ushort)(0x46D8 | source));
+        bus.Memory.WriteLong(8 * 4, 0x2000);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x6000);
+        cpu.State.SetUserStackPointer(0x5000); cpu.State.StatusRegister = 0x0014;
+        cpu.State.A[0] = 0x3000; cpu.ExecuteInstruction();
+        Assert.Equal(0x2000u, cpu.State.ProgramCounter); Assert.Equal(0x3000u, cpu.State.A[0]);
+        Assert.Equal(0x5000u, cpu.State.UserStackPointer); Assert.Equal(0x5FF8u, cpu.State.A[7]);
+        Assert.Equal(Code, bus.Memory.ReadLong(0x5FFA)); Assert.False(bus.SourceRead);
+    }
+
+    [Fact]
+    public void StatusPopTimingRetainsTheBusSynchronizationBarrier()
+    {
+        var plan = M68kTimingFormula.CreatePlan(M68020TimingModel.GetDescriptor(M68kInstructionTimingKey.MoveWordPostIncrementToStatusRegister));
+        Assert.Equal(12, plan.NativeCycles); Assert.Equal(M68kTimingBarrier.SynchronizeBus, plan.Barriers);
+    }
+
+    private sealed class StatusReadBus : IM68kBus, IM68kCodeReader
+    {
+        public ZeroWaitCodeBus Memory { get; } = new();
+        public bool SourceRead { get; private set; }
+        public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind kind)
+        { if (address is 0x3000 or 0x5000 && kind == M68kBusAccessKind.CpuDataRead) SourceRead = true; return Memory.ReadByte(address, ref cycle, kind); }
+        public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind kind)
+        { if (address is 0x3000 or 0x5000 && kind == M68kBusAccessKind.CpuDataRead) SourceRead = true; return Memory.ReadWord(address, ref cycle, kind); }
+        public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind kind)
+        { if (address is 0x3000 or 0x5000 && kind == M68kBusAccessKind.CpuDataRead) SourceRead = true; return Memory.ReadLong(address, ref cycle, kind); }
+        public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind kind) => Memory.WriteByte(address, value, ref cycle, kind);
+        public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind kind) => Memory.WriteWord(address, value, ref cycle, kind);
+        public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind kind) => Memory.WriteLong(address, value, ref cycle, kind);
+        public ushort ReadHostWord(uint address) => Memory.ReadWord(address);
+        public void ResetExternalDevices(long cycle) => Memory.ResetExternalDevices(cycle);
+    }
+
+    [Theory]
     [InlineData(0x9339, 0x00001234u, 0xFF001234u, 0x19)]
     [InlineData(0x9379, 0x80001234u, 0x7FFF1234u, 0x02)]
     [InlineData(0x93B9, 0u, uint.MaxValue, 0x19)]

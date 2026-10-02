@@ -18,6 +18,7 @@ namespace Copper68k
         MoveStatusRegisterToAddressIndirect,
         MoveStatusRegisterToData,
         MoveDataToStatusRegister,
+        MovePostIncrementToStatusRegister,
         MoveFromCcr,
         MoveImmediateToCcr,
         Movep,
@@ -711,6 +712,11 @@ namespace Copper68k
             if ((opcode & 0xFFF8) == 0x46C0)
             {
                 return M68020OpcodeKind.MoveDataToStatusRegister;
+            }
+
+            if ((opcode & 0xFFF8) == 0x46D8)
+            {
+                return M68020OpcodeKind.MovePostIncrementToStatusRegister;
             }
 
             if ((opcode & 0xFFC0) == 0x42C0)
@@ -5337,6 +5343,10 @@ namespace Copper68k
 
                 case M68020OpcodeKind.MoveDataToStatusRegister:
                     ExecuteMoveDataToStatusRegister(opcode);
+                    return true;
+
+                case M68020OpcodeKind.MovePostIncrementToStatusRegister:
+                    ExecuteMovePostIncrementToStatusRegister(opcode);
                     return true;
 
                 case M68020OpcodeKind.MoveFromCcr:
@@ -14538,6 +14548,25 @@ namespace Copper68k
 
             State.StatusRegister = (ushort)State.D[opcode & 7];
             CompleteTiming(M68kInstructionTimingKey.MoveWordDataToStatusRegister);
+        }
+
+        private void ExecuteMovePostIncrementToStatusRegister(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
+            {
+                RaiseFormat0Exception(8, State.LastInstructionProgramCounter, M68kInstructionTimingKey.PrivilegeViolation);
+                return;
+            }
+
+            var source = opcode & 7;
+            var address = State.A[source];
+            var value = ReadWord(address);
+            // Retire the increment in the old stack bank before SR selects another one.
+            WriteGeneralRegister(true, source, unchecked(address + 2));
+            State.StatusRegister = value;
+            CompleteTiming(M68kInstructionTimingKey.MoveWordPostIncrementToStatusRegister);
         }
 
         private void WriteWordDestination(int mode, int register, ushort value, ushort opcode)

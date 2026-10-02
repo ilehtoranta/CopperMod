@@ -574,7 +574,8 @@ namespace Copper68k
                 M68kInstructionTimingKey.BsetDynamicAddressIndirect or
                 M68kInstructionTimingKey.BclrDynamicAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.ImmediateWordToStatusRegister => M68kTimingBarrier.SynchronizeBus,
-                M68kInstructionTimingKey.MoveWordDataToStatusRegister => M68kTimingBarrier.SynchronizeBus,
+                M68kInstructionTimingKey.MoveWordDataToStatusRegister or
+                M68kInstructionTimingKey.MoveWordPostIncrementToStatusRegister => M68kTimingBarrier.SynchronizeBus,
                 M68kInstructionTimingKey.AddqLongAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.BchgByteImmediatePostIncrement or M68kInstructionTimingKey.BclrByteImmediatePostIncrement or
                 M68kInstructionTimingKey.BsetByteImmediatePostIncrement => M68kTimingBarrier.ReadModifyWrite,
@@ -1451,6 +1452,12 @@ namespace Copper68k
             if (destination == M68kTimingOperandForm.StatusRegister && source == M68kTimingOperandForm.DataRegister)
             {
                 return 8;
+            }
+
+            if (destination == M68kTimingOperandForm.StatusRegister && source == M68kTimingOperandForm.PostIncrement)
+            {
+                // MC68020UM 8.2.7 cache-case MOVE to SR (8) plus 8.2.1 fetch EA (4).
+                return 12;
             }
 
             if (IsMemory(destination))

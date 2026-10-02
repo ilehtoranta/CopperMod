@@ -133,6 +133,7 @@ namespace Copper68k
         MoveWordStatusRegisterToAddressIndirect,
         MoveWordStatusRegisterToData,
         MoveWordDataToStatusRegister,
+        MoveWordPostIncrementToStatusRegister,
         MoveLongDataToData,
         MoveLongDataToAddress,
         MoveLongDataToAddressIndirect,
