@@ -81,10 +81,10 @@ public sealed class SidCycleTraceTests
 		var shift = Frame(trace, cycle: 18, voice: 0);
 		Assert.False(clockRise.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
 		Assert.False(phase1.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
-		Assert.Equal(0x7FFFF8u, phase1.NoiseShiftRegister);
+		Assert.Equal(0x7FFFFEu, phase1.NoiseShiftRegister);
 		Assert.True(shift.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
-		Assert.Equal(0x7FFFF8u, shift.NoiseShiftRegisterBefore);
-		Assert.Equal(NextNoise(0x7FFFF8u), shift.NoiseShiftRegister);
+		Assert.Equal(0x7FFFFEu, shift.NoiseShiftRegisterBefore);
+		Assert.Equal(NextNoise(0x7FFFFEu), shift.NoiseShiftRegister);
 	}
 
 	[Fact]
@@ -139,17 +139,17 @@ public sealed class SidCycleTraceTests
 		chip.Write(0x06, 0xF0);
 		chip.Write(0x04, 0x11);
 
-		chip.Render(9);
+		chip.Render(12);
 
-		var beforeStep = Frame(trace, cycle: 8, voice: 0);
-		var step = Frame(trace, cycle: 9, voice: 0);
+		var beforeStep = Frame(trace, cycle: 11, voice: 0);
+		var step = Frame(trace, cycle: 12, voice: 0);
 		Assert.False(beforeStep.Events.HasFlag(SidCycleTraceEvents.EnvelopeStep));
 		Assert.Equal(0, beforeStep.EnvelopeCounter);
-		Assert.Equal(8, beforeStep.RateCounter);
+		Assert.Equal(2, beforeStep.RateCounter);
 		Assert.True(step.Events.HasFlag(SidCycleTraceEvents.EnvelopeStep));
 		Assert.Equal(0, step.EnvelopeCounterBefore);
 		Assert.Equal(1, step.EnvelopeCounter);
-		Assert.Equal(0, step.RateCounter);
+		Assert.Equal(3, step.RateCounter);
 	}
 
 	[Fact]
@@ -164,15 +164,15 @@ public sealed class SidCycleTraceTests
 		Assert.Equal(5, chip.DebugState.Voices[0].RateCounter);
 
 		chip.Write(0x04, 0x11);
-		chip.Render(4);
+		chip.Render(7);
 
 		var gate = Frame(trace, cycle: 6, voice: 0);
-		var step = Frame(trace, cycle: 9, voice: 0);
+		var step = Frame(trace, cycle: 12, voice: 0);
 		Assert.True(gate.Events.HasFlag(SidCycleTraceEvents.GateRising));
 		Assert.Equal(6, gate.RateCounter);
 		Assert.DoesNotContain(
 			trace.Frames,
-			frame => frame.VoiceIndex == 0 && frame.Cycle is >= 6 and < 9 && frame.Events.HasFlag(SidCycleTraceEvents.EnvelopeStep));
+			frame => frame.VoiceIndex == 0 && frame.Cycle is >= 6 and < 12 && frame.Events.HasFlag(SidCycleTraceEvents.EnvelopeStep));
 		Assert.True(step.Events.HasFlag(SidCycleTraceEvents.EnvelopeStep));
 		Assert.Equal(1, step.EnvelopeCounter);
 	}
@@ -186,12 +186,12 @@ public sealed class SidCycleTraceTests
 		chip.Write(0x05, 0x00);
 		chip.Write(0x06, 0x00);
 		chip.Write(0x04, 0x11);
-		chip.Render(1);
+		chip.Render(2);
 		chip.Write(0x04, 0x10);
-		chip.Render(269);
+		chip.Render(10);
 
-		var release = Frame(trace, cycle: 2, voice: 0);
-		var wrap = Frame(trace, cycle: 270, voice: 0);
+		var release = Frame(trace, cycle: 3, voice: 0);
+		var wrap = Frame(trace, cycle: 12, voice: 0);
 		Assert.True(release.Events.HasFlag(SidCycleTraceEvents.GateFalling));
 		Assert.True(wrap.Events.HasFlag(SidCycleTraceEvents.EnvelopeStep));
 		Assert.Equal(0, wrap.EnvelopeCounterBefore);

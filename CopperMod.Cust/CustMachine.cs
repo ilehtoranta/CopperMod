@@ -490,7 +490,6 @@ namespace CopperMod.Cust
                      HostNullCallback,
                      HostOk,
                      HostOpenLibrary,
-                     HostOk,
                      HostAllocMem,
                     HostAllocAndStore,
                     HostFreeMem,

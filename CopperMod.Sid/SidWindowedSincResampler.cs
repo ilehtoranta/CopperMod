@@ -29,9 +29,11 @@ namespace CopperMod.Sid
         private const double PassbandNyquistFraction = 0.92;
         private const int MinTaps = 15;
         private const int MaxTaps = 16383;
+        private const int PhaseIntervals = 64;
 
         private readonly int _clockRate;
         private double[] _coefficients = Array.Empty<double>();
+        private double[] _phaseCoefficients = Array.Empty<double>();
         private double[] _ring = Array.Empty<double>();
         private int _ringMask;
         private int _head;
@@ -96,16 +98,24 @@ namespace CopperMod.Sid
         /// band-limited value (delayed by GroupDelayCycles cycles).
         /// </summary>
         [HotPath]
-        public double Read()
+        public double Read(double fractionalCycle = 0)
         {
-            var coeff = _coefficients;
+            if (!double.IsFinite(fractionalCycle) || fractionalCycle < -0.5 || fractionalCycle > 0.5)
+                throw new ArgumentOutOfRangeException(nameof(fractionalCycle));
+            var position = (fractionalCycle + 0.5) * PhaseIntervals;
+            var phase = Math.Min((int)position, PhaseIntervals - 1);
+            var blend = position - phase;
+            var coeff = _phaseCoefficients;
+            var first = phase * _taps;
+            var second = first + _taps;
             var ring = _ring;
             var mask = _ringMask;
             var index = (_head - 1) & mask;
             var sum = 0.0;
-            for (var j = 0; j < coeff.Length; j++)
+            for (var j = 0; j < _taps; j++)
             {
-                sum += coeff[j] * ring[index];
+                var tap = coeff[first + j] + blend * (coeff[second + j] - coeff[first + j]);
+                sum += tap * ring[index];
                 index = (index - 1) & mask;
             }
 
@@ -166,6 +176,27 @@ namespace CopperMod.Sid
 
             _coefficients = coeff;
             _taps = taps;
+
+            // Delayed, causal interpolation: even a positive fractional phase is
+            // far behind the newest input because of the FIR's group delay.
+            _phaseCoefficients = new double[(PhaseIntervals + 1) * taps];
+            for (var phase = 0; phase <= PhaseIntervals; ++phase)
+            {
+                var fraction = (double)phase / PhaseIntervals - 0.5;
+                var offset = phase * taps;
+                var phaseSum = 0.0;
+                for (var n = 0; n < taps; ++n)
+                {
+                    var x = n - center + fraction;
+                    var sinc = x == 0 ? omegaC / Math.PI : Math.Sin(omegaC * x) / (Math.PI * x);
+                    var r = x / center;
+                    var window = Math.Abs(r) > 1 ? 0 : BesselI0(beta * Math.Sqrt(1 - r * r)) / i0Beta;
+                    var tap = sinc * window;
+                    _phaseCoefficients[offset + n] = tap;
+                    phaseSum += tap;
+                }
+                for (var n = 0; n < taps; ++n) _phaseCoefficients[offset + n] /= phaseSum;
+            }
 
             var ringSize = 1;
             while (ringSize < taps)

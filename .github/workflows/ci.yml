@@ -5,8 +5,45 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      require_sid_accuracy:
+        description: Run the required external SID evidence gate
+        type: boolean
+        default: false
 
 jobs:
+  sid-accuracy:
+    if: github.event_name == 'workflow_dispatch' && inputs.require_sid_accuracy
+    runs-on: [self-hosted, Windows, sid-evidence]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Require physical captures and pinned external reference
+        shell: pwsh
+        run: ./scripts/test-sid-accuracy.ps1 -EvidenceRoot $env:SID_HARDWARE_EVIDENCE_ROOT
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sid-accuracy-results
+          path: artifacts/sid-accuracy
+
+  sid-core:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Test SID digital timing and sampling
+        run: dotnet test CopperMod.Sid.Core.Tests/CopperMod.Sid.Core.Tests.csproj --configuration Release --logger "trx;LogFileName=sid-core.trx" --results-directory artifacts/sid-core
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sid-core-results
+          path: artifacts/sid-core
+
   build-and-test:
     runs-on: windows-latest
 

@@ -103,9 +103,9 @@ public sealed class SidWaveformPipelineTests
 		var frame = Frame(trace, cycle: 256, voice: 1);
 		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.SyncReset));
 		Assert.True(frame.SyncSourceMsb);
-		Assert.True(frame.RingModInverted);
-		Assert.False(frame.TriangleInverted);
-		Assert.Equal(0u, frame.WaveformDac);
+        Assert.False(frame.RingModInverted);
+        Assert.True(frame.TriangleInverted);
+        Assert.Equal(0xFFEu, frame.WaveformDac);
 	}
 
 	[Fact]
@@ -137,10 +137,10 @@ public sealed class SidWaveformPipelineTests
 
 		var frame = Frame(trace, cycle: 256, voice: 1);
 		Assert.True(frame.SyncSourceMsb);
-		Assert.True(frame.RingModInverted);
-		Assert.True(frame.TriangleInverted);
-		Assert.Equal(0u, frame.Accumulator);
-		Assert.Equal(0xFFEu, frame.WaveformDac);
+        Assert.False(frame.RingModInverted);
+        Assert.False(frame.TriangleInverted);
+        Assert.Equal(0u, frame.Accumulator);
+        Assert.Equal(0u, frame.WaveformDac);
 	}
 
 	[Fact]
@@ -308,11 +308,11 @@ public sealed class SidWaveformPipelineTests
 		var phase1 = Frame(trace, cycle: 17, voice: 0);
 		var frame = Frame(trace, cycle: 18, voice: 0);
 		Assert.False(phase1.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
-		Assert.Equal(ExpectedNoiseDac(0x7FFFF8u), phase1.WaveformDac);
+		Assert.Equal(ExpectedNoiseDac(0x7FFFFEu), phase1.WaveformDac);
 		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
 		Assert.True(frame.NoiseUsesPostShiftRegister);
-		Assert.Equal(0x7FFFF8u, frame.NoiseShiftRegisterBefore);
-		Assert.Equal(NextNoise(0x7FFFF8u), frame.NoiseShiftRegister);
+		Assert.Equal(0x7FFFFEu, frame.NoiseShiftRegisterBefore);
+		Assert.Equal(NextNoise(0x7FFFFEu), frame.NoiseShiftRegister);
 		Assert.Equal(ExpectedNoiseDac(frame.NoiseShiftRegister), frame.WaveformDac);
 	}
 
@@ -327,7 +327,7 @@ public sealed class SidWaveformPipelineTests
 		var frame = Frame(trace, cycle: 1, voice: 0);
 		Assert.Equal(0xA0, frame.Waveform);
 		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
-		Assert.Equal(0x2ED768u, frame.NoiseShiftRegister);
+		Assert.Equal(0x6BB5DAu, frame.NoiseShiftRegister);
 		Assert.Equal(0u, frame.NoiseDac);
 		Assert.Equal(0u, frame.WaveformDac);
 		Assert.True(frame.NoiseUsesPostShiftRegister);
@@ -480,7 +480,7 @@ public sealed class SidWaveformPipelineTests
 
 		var frame = Frame(trace, cycle: 1, voice: 0);
 		Assert.True(frame.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
-		Assert.NotEqual(0x7FFFF8u, frame.NoiseShiftRegister);
+		Assert.NotEqual(0x7FFFFEu, frame.NoiseShiftRegister);
 	}
 
 	[Fact]
@@ -567,14 +567,14 @@ public sealed class SidWaveformPipelineTests
 	private static uint ExpectedNoiseDac(uint value)
 	{
 		var dac = 0u;
-		dac |= ((value >> 22) & 1u) << 11;
-		dac |= ((value >> 20) & 1u) << 10;
-		dac |= ((value >> 16) & 1u) << 9;
-		dac |= ((value >> 13) & 1u) << 8;
-		dac |= ((value >> 11) & 1u) << 7;
-		dac |= ((value >> 7) & 1u) << 6;
-		dac |= ((value >> 4) & 1u) << 5;
-		dac |= ((value >> 2) & 1u) << 4;
+		dac |= ((value >> 20) & 1u) << 11;
+		dac |= ((value >> 18) & 1u) << 10;
+		dac |= ((value >> 14) & 1u) << 9;
+		dac |= ((value >> 11) & 1u) << 8;
+		dac |= ((value >> 9) & 1u) << 7;
+		dac |= ((value >> 5) & 1u) << 6;
+		dac |= ((value >> 2) & 1u) << 5;
+		dac |= ((value >> 0) & 1u) << 4;
 		return dac;
 	}
 

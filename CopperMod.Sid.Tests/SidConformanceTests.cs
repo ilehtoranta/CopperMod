@@ -100,10 +100,10 @@ public sealed class SidConformanceTests
 		}
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CONFORMANCE_ORACLE_TESTS", "SIDPLAYFP_ORACLE_TESTS")]
 	public void OptionalSidConformanceFixturesCompareAgainstSidPlayFp()
 	{
-		if (Environment.GetEnvironmentVariable(OracleEnvironmentVariable) != "1" &&
+		if (!SidEvidenceFactAttribute.Required && Environment.GetEnvironmentVariable(OracleEnvironmentVariable) != "1" &&
 			Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1")
 		{
 			return;

@@ -93,17 +93,17 @@ public sealed class SidPlayFpWaveformOracleTests
 	private static readonly double WeakSpotRenderSeconds = WeakSpotSegments.Sum(segment => segment.Frames) / (double)SegmentRate;
 	private static readonly double AdsrRestartRenderSeconds = WeakSpotAdsrFrames / (double)SegmentRate;
 
-	[Fact]
+	[SidEvidenceFact("SIDPLAYFP_ORACLE_TESTS")]
 	public void OptionalGeneratedWaveformFixtureMatchesSidPlayFpOracle()
 		=> RunGeneratedWaveformOracle(SidChipModel.Mos6581, "SIDPLAYFP_ORACLE_TESTS");
 
-	[Fact]
+	[SidEvidenceFact("SIDPLAYFP_8580_ORACLE_TESTS")]
 	public void OptionalGeneratedMos8580WaveformFixtureMatchesSidPlayFpOracle()
 		=> RunGeneratedWaveformOracle(SidChipModel.Mos8580, "SIDPLAYFP_8580_ORACLE_TESTS");
 
 	private static void RunGeneratedWaveformOracle(SidChipModel model, string enableEnvironmentVariable)
 	{
-		if (Environment.GetEnvironmentVariable(enableEnvironmentVariable) != "1")
+		if (!SidEvidenceFactAttribute.Required && (Environment.GetEnvironmentVariable(enableEnvironmentVariable) != "1"))
 		{
 			return;
 		}
@@ -139,7 +139,8 @@ public sealed class SidPlayFpWaveformOracleTests
 				? MeasurePureWaveformLevelNormalization(reference.Samples, candidateRaw, candidatePlayer)
 				: 1.0;
 			WriteOptionalReport(model, reference.Samples, candidateRaw, candidatePlayer, levelNormalization);
-			for (var i = 0; i < Segments.Length; i++)
+			// Exercise every segment even if an earlier waveform differs from the oracle.
+			Assert.All(Enumerable.Range(0, Segments.Length), i =>
 			{
 				AssertSegmentMatches(
 					model,
@@ -148,7 +149,7 @@ public sealed class SidPlayFpWaveformOracleTests
 					reference.Samples,
 					Segments[i].Kind == OracleSegmentKind.NoiseCombined ? candidateRaw : candidatePlayer,
 					levelNormalization);
-			}
+			});
 		}
 		finally
 		{
@@ -156,10 +157,10 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 	}
 
-	[Fact]
+	[SidEvidenceFact("SIDPLAYFP_ORACLE_TESTS")]
 	public void OptionalGeneratedWeakSpotFixtureMatchesSidPlayFpOracle()
 	{
-		if (Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1")
+		if (!SidEvidenceFactAttribute.Required && (Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1"))
 		{
 			return;
 		}
@@ -206,11 +207,11 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 	}
 
-	[Fact]
+	[SidEvidenceFact("SIDPLAYFP_ORACLE_TESTS", "SIDPLAYFP_ADSR_RESTART_ORACLE_TESTS")]
 	public void OptionalGeneratedAdsrRestartFixtureMatchesSidPlayFpOracle()
 	{
-		if (Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1" &&
-			Environment.GetEnvironmentVariable("SIDPLAYFP_ADSR_RESTART_ORACLE_TESTS") != "1")
+		if (!SidEvidenceFactAttribute.Required && (Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1" &&
+			Environment.GetEnvironmentVariable("SIDPLAYFP_ADSR_RESTART_ORACLE_TESTS") != "1"))
 		{
 			return;
 		}
@@ -265,11 +266,11 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 	}
 
-	[Fact]
+	[SidEvidenceFact("SIDPLAYFP_ORACLE_TESTS", "SIDPLAYFP_RESET_TRANSIENT_TESTS")]
 	public void OptionalGeneratedResetTransientFixtureReportsSidPlayFpComparison()
 	{
-		if (Environment.GetEnvironmentVariable("SIDPLAYFP_RESET_TRANSIENT_TESTS") != "1" &&
-			Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1")
+		if (!SidEvidenceFactAttribute.Required && (Environment.GetEnvironmentVariable("SIDPLAYFP_RESET_TRANSIENT_TESTS") != "1" &&
+			Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1"))
 		{
 			return;
 		}
@@ -310,11 +311,11 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 	}
 
-	[Fact]
+	[SidEvidenceFact("SIDPLAYFP_ORACLE_TESTS", "SIDPLAYFP_SINE_ORACLE_TESTS")]
 	public void OptionalGeneratedD418SineFixtureReportsSidPlayFpComparison()
 	{
-		if (Environment.GetEnvironmentVariable("SIDPLAYFP_SINE_ORACLE_TESTS") != "1" &&
-			Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1")
+		if (!SidEvidenceFactAttribute.Required && (Environment.GetEnvironmentVariable("SIDPLAYFP_SINE_ORACLE_TESTS") != "1" &&
+			Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1"))
 		{
 			return;
 		}
@@ -376,11 +377,11 @@ public sealed class SidPlayFpWaveformOracleTests
 		}
 	}
 
-	[Fact]
+	[SidEvidenceFact("SIDPLAYFP_ORACLE_TESTS", "SIDPLAYFP_POLARITY_PROBE_TESTS")]
 	public void OptionalGeneratedPolarityProbeReportsSidPlayFpConvention()
 	{
-		if (Environment.GetEnvironmentVariable("SIDPLAYFP_POLARITY_PROBE_TESTS") != "1" &&
-			Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1")
+		if (!SidEvidenceFactAttribute.Required && (Environment.GetEnvironmentVariable("SIDPLAYFP_POLARITY_PROBE_TESTS") != "1" &&
+			Environment.GetEnvironmentVariable("SIDPLAYFP_ORACLE_TESTS") != "1"))
 		{
 			return;
 		}
@@ -446,7 +447,7 @@ public sealed class SidPlayFpWaveformOracleTests
 		path = Path.GetFullPath(path);
 		Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
 		var builder = new StringBuilder();
-		builder.AppendLine("segment,kind,candidate_stream,offset,ref_mean,cand_mean,ref_ac,cand_ac,ac_ratio,normalized_ac_ratio,corr");
+		builder.AppendLine("segment,kind,candidate_stream,offset,ref_mean,cand_mean,ref_ac,cand_ac,ac_ratio,normalized_ac_ratio,corr,ref_noise_flatness,cand_noise_flatness,noise_spectrum_similarity");
 		for (var i = 0; i < Segments.Length; i++)
 		{
 			var segment = Segments[i];
@@ -471,8 +472,15 @@ public sealed class SidPlayFpWaveformOracleTests
 				.Append(candidateAc.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
 				.Append(ratio.ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
 				.Append((ratio / levelNormalization).ToString("0.000000", CultureInfo.InvariantCulture)).Append(',')
-				.Append(correlation.ToString("0.000000", CultureInfo.InvariantCulture))
-				.AppendLine();
+				.Append(correlation.ToString("0.000000", CultureInfo.InvariantCulture));
+			if (segment.Kind == OracleSegmentKind.Noise)
+			{
+				builder.Append(',').Append(SpectralFlatness(reference, start, length).ToString("0.000000", CultureInfo.InvariantCulture))
+					.Append(',').Append(SpectralFlatness(candidate, start + offset, length).ToString("0.000000", CultureInfo.InvariantCulture))
+					.Append(',').Append(NormalizedNoiseSpectrumSimilarity(reference, candidate, start, start + offset, length).ToString("0.000000", CultureInfo.InvariantCulture));
+			}
+			else builder.Append(",,,");
+			builder.AppendLine();
 		}
 
 		File.WriteAllText(path, builder.ToString());

@@ -20,6 +20,7 @@ namespace CopperMod.Sid
         private TimeSpan _position;
         private SidSampleClock? _sampleClock;
         private long[] _sampleTargetCycles = Array.Empty<long>();
+        private double[] _sampleFractions = Array.Empty<double>();
         private int _currentSubSongIndex;
         private bool _channelWaveformCaptureEnabled;
         private SidEmulationProfile _sidEmulationProfile = SidEmulationProfile.Balanced;
@@ -238,6 +239,7 @@ namespace CopperMod.Sid
             EnsureSampleTargetCapacity(frames);
             var sampleTargetCycles = _sampleTargetCycles.AsSpan(0, frames);
             _ = sampleClock.FillSampleTargets(_machine.Cycle, tickCycles, sampleTargetCycles);
+            sampleClock.FillSampleFractions(_sampleFractions.AsSpan(0, frames));
             var slice = destination.Slice(0, samples);
             if (ChannelWaveformCaptureEnabled)
             {
@@ -363,6 +365,7 @@ namespace CopperMod.Sid
 
             var capacity = Math.Max(frames, Math.Max(1, _sampleTargetCycles.Length * 2));
             _sampleTargetCycles = new long[capacity];
+            _sampleFractions = new double[capacity];
         }
 
         [HotPath]
@@ -372,7 +375,7 @@ namespace CopperMod.Sid
             ReadOnlySpan<long> sampleTargetCycles,
             long tickCycles)
         {
-            _machine.RenderFrame(destination, options, sampleTargetCycles, tickCycles);
+            _machine.RenderFrame(destination, options, sampleTargetCycles, tickCycles, _sampleFractions.AsSpan(0, sampleTargetCycles.Length));
         }
 
         internal static bool UsesCiaTiming(SidModule module, int subSongIndex)

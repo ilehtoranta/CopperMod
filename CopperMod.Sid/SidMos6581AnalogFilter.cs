@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace CopperMod.Sid
 {
@@ -252,7 +253,6 @@ namespace CopperMod.Sid
     {
         public const int CutoffTableSize = 2048;
         private const int OpAmpTableSize = 4096;
-        private const int VcrSignalBins = 16;
         private const double Vdd = 12.18;
         private const double ThermalVoltage = 26.0e-3;
         private const double WorkingPoint = 4.54;
@@ -304,7 +304,8 @@ namespace CopperMod.Sid
         private readonly double[] _opAmpTransfer;
         private readonly double[] _opAmpReverse;
         private readonly double[] _cutoffControlVoltage;
-        private readonly double[,] _vcrConductanceScale;
+        private readonly VcrCurve[] _vcrConductanceScale;
+        private sealed record VcrCurve(double[] Positions, double[] Values);
         private readonly double[] _mixerGain;
         private readonly double[,] _resonanceDampingScale;
         private readonly double[,] _resonanceOutputScale;
@@ -404,11 +405,26 @@ namespace CopperMod.Sid
 
         public double MapVcrConductanceScale(int cutoffRegister, double signalDelta)
         {
-            var binPosition = Math.Abs(signalDelta) * ((VcrSignalBins - 1) / 1.8);
-            var bin = binPosition >= VcrSignalBins - 1
-                ? VcrSignalBins - 1
-                : (int)(binPosition + 0.5);
-            return _vcrConductanceScale[Math.Clamp(cutoffRegister, 0, CutoffTableSize - 1), bin];
+            var curve = _vcrConductanceScale[Math.Clamp(cutoffRegister, 0, CutoffTableSize - 1)];
+            var delta = Math.Min(Math.Abs(signalDelta), 1.8);
+            var index = Array.BinarySearch(curve.Positions, delta);
+            if (index >= 0) return curve.Values[index];
+            var upper = ~index;
+            var lower = upper - 1;
+            var blend = (delta - curve.Positions[lower]) / (curve.Positions[upper] - curve.Positions[lower]);
+            return curve.Values[lower] + blend * (curve.Values[upper] - curve.Values[lower]);
+        }
+
+        // Cold diagnostic reference for bounding lookup discretization error.
+        // This checks the numerical approximation, not the physical circuit fit.
+        internal double EvaluateVcrConductanceScale(int cutoffRegister, double signalDelta)
+        {
+            var circuit = _parameters.CutoffCircuit;
+            var control = MapCutoffControlVoltage(cutoffRegister);
+            var referenceDelta = circuit.ProbeVoltageDelta;
+            var reference = Math.Max(1e-18, EstimateVcrConductance(WorkingPoint + referenceDelta, WorkingPoint - referenceDelta, control, circuit));
+            var delta = referenceDelta + _parameters.VcrSignalModulation * Math.Min(Math.Abs(signalDelta) / 1.8, 1);
+            return Math.Clamp(EstimateVcrConductance(WorkingPoint + delta, WorkingPoint - delta, control, circuit) / reference, 0.35, 1.35);
         }
 
         public double MapMixerGain(int routedVoiceCount)
@@ -611,23 +627,46 @@ namespace CopperMod.Sid
             return conductance / (2.0 * Math.PI);
         }
 
-        private static double[,] BuildVcrConductanceScaleTable(double[] controlVoltage, SidMos6581AnalogParameters parameters)
+        private static VcrCurve[] BuildVcrConductanceScaleTable(double[] controlVoltage, SidMos6581AnalogParameters parameters)
         {
+            // A uniform grid misses the steep subthreshold knee at low cutoff.
+            // Refine against the circuit equation at configuration time instead.
+            var table = new VcrCurve[CutoffTableSize];
             var circuit = parameters.CutoffCircuit;
-            var table = new double[CutoffTableSize, VcrSignalBins];
-            for (var cutoff = 0; cutoff < CutoffTableSize; cutoff++)
+            for (var cutoff = 0; cutoff < table.Length; ++cutoff)
             {
+                var control = controlVoltage[cutoff];
                 var referenceDelta = circuit.ProbeVoltageDelta;
-                var reference = EstimateVcrConductance(WorkingPoint + referenceDelta, WorkingPoint - referenceDelta, controlVoltage[cutoff], circuit);
-                reference = Math.Max(reference, 1.0e-18);
-                for (var bin = 0; bin < VcrSignalBins; bin++)
+                var reference = Math.Max(1e-18, EstimateVcrConductance(WorkingPoint + referenceDelta, WorkingPoint - referenceDelta, control, circuit));
+                double Evaluate(double x)
                 {
-                    var delta = referenceDelta + (parameters.VcrSignalModulation * bin / (VcrSignalBins - 1));
-                    var conductance = EstimateVcrConductance(WorkingPoint + delta, WorkingPoint - delta, controlVoltage[cutoff], circuit);
-                    table[cutoff, bin] = Math.Clamp(conductance / reference, 0.35, 1.35);
+                    var delta = referenceDelta + parameters.VcrSignalModulation * x / 1.8;
+                    return Math.Clamp(EstimateVcrConductance(WorkingPoint + delta, WorkingPoint - delta, control, circuit) / reference, 0.35, 1.35);
                 }
+                var positions = new List<double> { 0 };
+                var values = new List<double> { Evaluate(0) };
+                void Refine(double left, double right, double a, double b, int depth)
+                {
+                    var middle = (left + right) * 0.5;
+                    var m = Evaluate(middle);
+                    var error = Math.Max(Math.Abs(m - (a + b) * 0.5),
+                        Math.Max(Math.Abs(Evaluate((left + middle) * 0.5) - (a * 0.75 + b * 0.25)),
+                                 Math.Abs(Evaluate((middle + right) * 0.5) - (a * 0.25 + b * 0.75))));
+                    if (error > 1e-5 && depth < 20)
+                    {
+                        Refine(left, middle, a, m, depth + 1);
+                        Refine(middle, right, m, b, depth + 1);
+                    }
+                    else { positions.Add(right); values.Add(b); }
+                }
+                for (var interval = 0; interval < 16; ++interval)
+                {
+                    var left = interval * 1.8 / 16;
+                    var right = (interval + 1) * 1.8 / 16;
+                    Refine(left, right, Evaluate(left), Evaluate(right), 0);
+                }
+                table[cutoff] = new VcrCurve(positions.ToArray(), values.ToArray());
             }
-
             return table;
         }
 
@@ -824,7 +863,9 @@ namespace CopperMod.Sid
         private static double EkvCurrentTerm(double voltage)
         {
             var exponent = Math.Clamp(voltage / (2.0 * ThermalVoltage), -60.0, 60.0);
-            var term = Math.Log(1.0 + Math.Exp(exponent));
+            // Preserve subthreshold current when 1 + exp(x) rounds to 1.
+            var exp = Math.Exp(exponent);
+            var term = exponent < -18 ? exp * (1 - 0.5 * exp) : Math.Log(1.0 + exp);
             return term * term;
         }
 

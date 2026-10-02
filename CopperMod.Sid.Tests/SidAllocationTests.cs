@@ -1,4 +1,5 @@
 using CopperMod.Abstractions;
+using CopperMod.TestSupport;
 
 namespace CopperMod.Sid.Tests;
 
@@ -10,13 +11,14 @@ public sealed class SidAllocationTests
 	private const int MeasuredTicks = 24;
 	private const int MaxFramesPerTick = 4096;
 
-	public static TheoryData<string, int, string[]> Workloads { get; } = new()
+	public static TheoryData<string, int, string> Workloads { get; } = new()
 	{
-		{ "Commando", 0, new[] { "TestTunes", "SID", "Tough", "Commando.sid" } },
-		{ "Great Giana Sisters subtune 5", 4, new[] { "TestTunes", "SID", "Tough", "Great_Giana_Sisters.sid" } },
-		{ "Spijkerhoek", 0, new[] { "TestTunes", "SID", "Tough", "Spijkerhoek.sid" } },
-		{ "Flimbo intro", 0, new[] { "TestTunes", "SID", "Tough", "Flimbos_Quest_intro.sid" } },
-		{ "Tetris RSID", 0, new[] { "TestTunes", "SID", "Wally Beben", "Tetris.sid" } },
+		{ "Commando", 0, SidCorpusFixtures.Commando },
+		{ "Great Giana Sisters subtune 5", 4, SidCorpusFixtures.GreatGianaSisters },
+		{ "Spijkerhoek (Edwin van Santen)", 0, SidCorpusFixtures.SpijkerhoekVanSanten },
+		{ "Spijkerhoek (Rodney Balai)", 0, SidCorpusFixtures.SpijkerhoekBalai },
+		{ "Flimbo intro", 0, SidCorpusFixtures.FlimbosQuestIntro },
+		{ "Tetris RSID", 0, SidCorpusFixtures.Tetris },
 	};
 
 	[Theory]
@@ -50,24 +52,17 @@ public sealed class SidAllocationTests
 		Assert.Equal(0, allocated);
 	}
 
-	[Theory]
+	[SidEvidenceTheory("SID_CORPUS_TESTS")]
 	[MemberData(nameof(Workloads))]
-	public void RenderTickAllocatesZeroBytesAfterWarmup(string name, int subSongIndex, string[] pathParts)
+	public void RenderTickAllocatesZeroBytesAfterWarmup(string name, int subSongIndex, string corpusPath)
 	{
-		var path = FindWorkspaceFile(pathParts);
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(corpusPath);
 
-		var song = new SidFormat().Load(File.ReadAllBytes(path));
+		using var song = new SidFormat().Load(File.ReadAllBytes(path));
 		if (subSongIndex != 0)
 		{
 			var selector = (IModuleSubSongSelector)song;
-			if (subSongIndex >= selector.SubSongCount)
-			{
-				return;
-			}
+			Assert.True(subSongIndex < selector.SubSongCount, "SID corpus fixture has too few subtunes.");
 
 			selector.SelectSubSong(subSongIndex);
 		}
@@ -105,23 +100,4 @@ public sealed class SidAllocationTests
 		_ = song.RenderTick(buffer.AsSpan(0, samples), options);
 	}
 
-	private static string FindWorkspaceFile(params string[] parts)
-	{
-		var directory = new DirectoryInfo(AppContext.BaseDirectory);
-		while (directory != null)
-		{
-			var segments = new string[parts.Length + 1];
-			segments[0] = directory.FullName;
-			Array.Copy(parts, 0, segments, 1, parts.Length);
-			var candidate = Path.Combine(segments);
-			if (File.Exists(candidate))
-			{
-				return candidate;
-			}
-
-			directory = directory.Parent;
-		}
-
-		return Path.Combine(parts);
-	}
 }

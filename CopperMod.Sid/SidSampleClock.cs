@@ -113,6 +113,21 @@ namespace CopperMod.Sid
             return SidIntegerMath.MulDivRoundNearest(sampleIndex, CpuCyclesPerSecond, SampleRate);
         }
 
+        // Keep the rational remainder before converting to floating point. Taking
+        // the difference of two large doubles loses phase during long playback.
+        public double GetSampleFractionalCycle(long sampleIndex)
+        {
+            var cycle = GetSampleTargetCycle(sampleIndex);
+            var remainder = (Int128)sampleIndex * CpuCyclesPerSecond - (Int128)cycle * SampleRate;
+            return (double)remainder / SampleRate;
+        }
+
+        public void FillSampleFractions(Span<double> fractions)
+        {
+            for (var i = 0; i < fractions.Length; ++i)
+                fractions[i] = GetSampleFractionalCycle(_nextSampleIndex + i);
+        }
+
         public long CountSamplesThroughCycle(long cycle)
         {
             if (cycle < 0)

@@ -33,10 +33,6 @@ dotnet run --project CopperMod -c Release -- "path/to/tune.sid"
 Without a filename, the player tries the default MED test tune if it is available
 locally.
 
-**Current source-build limitation:** the Cust backend has a known
-`KickstartTrapTable` constructor mismatch. The player build is blocked until
-that shared API mismatch is repaired.
-
 ## Export audio
 
 `CopperMod.Tools` renders supported modules without opening the player:

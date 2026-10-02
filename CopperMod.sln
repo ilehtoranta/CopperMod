@@ -71,6 +71,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.EaglePlayer.Tests
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Amiga.Layers.Benchmarks", "CopperMod.Amiga.Layers.Benchmarks\CopperMod.Amiga.Layers.Benchmarks.csproj", "{4A8E705B-7DC9-4B91-8D57-13C11E7B8EE4}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CopperMod.Sid.Core.Tests", "CopperMod.Sid.Core.Tests\CopperMod.Sid.Core.Tests.csproj", "{84405800-A352-4895-B7B8-5A3BDECA1904}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -489,6 +491,18 @@ Global
 		{4A8E705B-7DC9-4B91-8D57-13C11E7B8EE4}.Release|x64.Build.0 = Release|Any CPU
 		{4A8E705B-7DC9-4B91-8D57-13C11E7B8EE4}.Release|x86.ActiveCfg = Release|Any CPU
 		{4A8E705B-7DC9-4B91-8D57-13C11E7B8EE4}.Release|x86.Build.0 = Release|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Debug|x64.Build.0 = Debug|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Debug|x86.Build.0 = Debug|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Release|Any CPU.Build.0 = Release|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Release|x64.ActiveCfg = Release|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Release|x64.Build.0 = Release|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Release|x86.ActiveCfg = Release|Any CPU
+		{84405800-A352-4895-B7B8-5A3BDECA1904}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

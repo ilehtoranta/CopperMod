@@ -213,16 +213,7 @@ namespace CopperMod.Sid
                 return false;
             }
 
-            if (Trace != null)
-            {
-                if (cycle > _lastCycle)
-                {
-                    AdvanceTo(cycle);
-                }
-
-                value = Chips[chipIndex].Read(register, cycle);
-                return true;
-            }
+            if (Trace != null && cycle > _lastCycle) AdvanceTo(cycle);
 
             AdvanceRegisterObservableTo(cycle, GetRegisterReadAdvanceKind(register));
             value = _registerChips[chipIndex].Read(register, cycle);
@@ -266,19 +257,15 @@ namespace CopperMod.Sid
         }
 
         [HotPath]
-        public float RenderSample(long cycle)
+        public float RenderSample(long cycle, double fractionalCycle = 0)
         {
             AdvanceTo(cycle);
-            if (_sampleCycles == 0)
-            {
-                AccumulateOneCycle(_lastCycle + 1);
-            }
 
             // Real audio output is band-limited by the windowed-sinc resampler. Analysis
             // consumers opt into the raw full-rate average (see UseUnfilteredOutput), since
             // they inspect the signal envelope and must not be reshaped or delayed by the
             // anti-aliasing filter.
-            var sample = UseUnfilteredOutput ? _sampleAccumulator / _sampleCycles : _resampler.Read();
+            var sample = UseUnfilteredOutput ? (_sampleCycles == 0 ? 0 : _sampleAccumulator / _sampleCycles) : _resampler.Read(fractionalCycle);
             CaptureChannelSample();
             DiscardAccumulatedOutput();
             return (float)Math.Clamp(sample, -1.0, 1.0);
@@ -357,6 +344,7 @@ namespace CopperMod.Sid
         private void AdvanceRegisterObservableTo(long targetCycle, SidRegisterReadAdvanceKind kind)
         {
             targetCycle = Math.Max(0, targetCycle);
+            AdvanceRegisterBusWritesTo(targetCycle);
             if (kind == SidRegisterReadAdvanceKind.Digital)
             {
                 AdvanceRegisterDigitalTo(targetCycle);
@@ -372,7 +360,7 @@ namespace CopperMod.Sid
         [HotPath]
         private void AdvanceRegisterBusWritesTo(long targetCycle)
         {
-            if (targetCycle <= _registerBusLastCycle)
+            if (targetCycle < _registerBusLastCycle)
             {
                 return;
             }
@@ -390,7 +378,7 @@ namespace CopperMod.Sid
         [HotPath]
         private void AdvanceRegisterDigitalTo(long targetCycle)
         {
-            if (targetCycle <= _registerLastCycle)
+            if (targetCycle < _registerLastCycle)
             {
                 return;
             }
@@ -400,7 +388,7 @@ namespace CopperMod.Sid
             {
                 var write = _pendingWrites[_registerPendingWriteIndex++];
                 AdvanceRegisterChips(write.Cycle - _registerLastCycle);
-                _registerChips[write.ChipIndex].Write(write.Register, write.Value, write.Cycle);
+                _registerChips[write.ChipIndex].Write(write.Register, write.Value, write.Cycle, driveBus: false);
             }
 
             AdvanceRegisterChips(targetCycle - _registerLastCycle);
@@ -494,9 +482,10 @@ namespace CopperMod.Sid
                 return;
             }
 
+            AdvanceRegisterBusWritesTo(_lastCycle);
             for (var i = 0; i < Chips.Length; i++)
             {
-                _registerChips[i].CopyStateFrom(Chips[i]);
+                _registerChips[i].CopyStateFrom(Chips[i], copyBus: false);
             }
 
             _registerLastCycle = _lastCycle;
