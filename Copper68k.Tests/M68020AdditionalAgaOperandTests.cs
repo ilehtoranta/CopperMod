@@ -8,6 +8,30 @@ public sealed class M68020AdditionalAgaOperandTests
     private const uint Code = 0xF80000;
 
     [Theory]
+    [InlineData(M68kCpuModel.M68EC020, 0xE702, 0x0C, 0x60, 0x00)]
+    [InlineData(M68kCpuModel.M68EC020, 0xE302, 0x40, 0x80, 0x0A)]
+    [InlineData(M68kCpuModel.M68EC020, 0xE702, 0x40, 0x00, 0x06)]
+    [InlineData(M68kCpuModel.M68EC020, 0xE102, 0x01, 0x00, 0x17)]
+    [InlineData(M68kCpuModel.M68020, 0xE702, 0x0C, 0x60, 0x00)]
+    [InlineData(M68kCpuModel.M68030, 0xE702, 0x0C, 0x60, 0x00)]
+    [InlineData(M68kCpuModel.M68040, 0xE702, 0x0C, 0x60, 0x00)]
+    public void AslByteImmediateRetainsUpperBitsLastCarryAndIntermediateOverflow(M68kCpuModel model, ushort opcode, int source, int expected, int flags)
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, Code, opcode);
+        using var cpu = model == M68kCpuModel.M68EC020
+            ? M68kCoreFactory.Default.CreateA1200Ec020(bus)
+            : M68kCoreFactory.Default.Create(model, bus);
+        cpu.Reset(Code, 0x4000);
+        cpu.State.D[2] = 0xABCD1200u | (uint)source;
+        cpu.State.StatusRegister = 0x201F;
+        cpu.ExecuteInstruction();
+        Assert.Equal(0xABCD1200u | (uint)expected, cpu.State.D[2]);
+        Assert.Equal(flags, cpu.State.StatusRegister & 31);
+        Assert.Equal(Code + 2, cpu.State.ProgramCounter);
+    }
+
+    [Theory]
     [InlineData(0x5239, 0x7FA55AA5u, 0x80A55AA5u, 0x0A)]
     [InlineData(0x5239, 0xFFA55AA5u, 0x00A55AA5u, 0x15)]
     [InlineData(0x5039, 0xF8A55AA5u, 0x00A55AA5u, 0x15)]

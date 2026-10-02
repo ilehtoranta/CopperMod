@@ -336,6 +336,7 @@ namespace Copper68k
         AddiImmediateToPostIncrement,
         OrByteOrWordAddressIndirectToData,
         AddqByteAbsoluteLong,
+        AslByteImmediateData,
         MoveAbsoluteWordToPostIncrement,
         MoveByteOrWordAbsoluteLongToAddressIndirect,
         MovePostIncrementToAbsoluteWord,
@@ -1124,6 +1125,10 @@ namespace Copper68k
             if ((opcode & 0xF1FF) == 0x5039)
             {
                 return M68020OpcodeKind.AddqByteAbsoluteLong;
+            }
+            if ((opcode & 0xF1F8) == 0xE100)
+            {
+                return M68020OpcodeKind.AslByteImmediateData;
             }
             if ((opcode & 0xF1FF) is 0x10F8 or 0x20F8 or 0x30F8)
             {
@@ -6669,6 +6674,10 @@ namespace Copper68k
                 case M68020OpcodeKind.AddqByteAbsoluteLong:
                     if (_profile.Model == M68kAcceleratorModel.M68040) return false;
                     ExecuteAddqByteAbsoluteLong(opcode);
+                    return true;
+                case M68020OpcodeKind.AslByteImmediateData:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteAslByteImmediateData(opcode);
                     return true;
                 case M68020OpcodeKind.MoveAbsoluteWordToPostIncrement:
                     if (_profile.Model == M68kAcceleratorModel.M68040) return false;
@@ -16725,6 +16734,24 @@ namespace Copper68k
             }
 
             CompleteTiming(M68kInstructionTimingKey.AslLongRegisterData);
+        }
+
+        private void ExecuteAslByteImmediateData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var register = opcode & 7;
+            var count = (opcode >> 9) & 7;
+            if (count == 0) count = 8;
+            var shifted = M68kIntegerSemantics.Shift(
+                State.D[register], count, M68kOperandSize.Byte,
+                type: 0, left: true, State.GetFlag(M68kCpuState.Extend));
+            WriteDataRegisterByte(register, (byte)shifted.Value);
+            State.SetNegativeZero(shifted.Value, M68kOperandSize.Byte);
+            State.SetFlag(M68kCpuState.Overflow, shifted.Overflow);
+            State.SetFlag(M68kCpuState.Carry, shifted.Carry);
+            State.SetFlag(M68kCpuState.Extend, shifted.Extend);
+            CompleteTiming(M68kInstructionTimingKey.AslByteImmediateData);
         }
 
         private void ExecuteAslByteRegisterData(ushort opcode)

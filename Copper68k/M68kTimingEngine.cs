@@ -854,7 +854,8 @@ namespace Copper68k
         AddiLongImmediateToPostIncrement,
         OrByteAddressIndirectToData,
         OrWordAddressIndirectToData,
-        AddqByteAbsoluteLong
+        AddqByteAbsoluteLong,
+        AslByteImmediateData
     }
 
     internal readonly record struct M68kInstructionPlan(
