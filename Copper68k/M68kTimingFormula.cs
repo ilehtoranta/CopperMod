@@ -597,6 +597,9 @@ namespace Copper68k
                 M68kInstructionTimingKey.NegByteAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.NegWordAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.NegLongAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.NegByteAbsoluteLong or
+                M68kInstructionTimingKey.NegWordAbsoluteLong or
+                M68kInstructionTimingKey.NegLongAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.SubByteDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.SubWordDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.SubLongDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
@@ -1490,10 +1493,13 @@ namespace Copper68k
 
         private static int CalculateArithmeticCycles(M68kTimingDescriptor descriptor)
         {
-            // Same bounded unary-memory policy as NOT at a displacement EA.
+            // Same bounded unary-memory policy as NOT at displacement/absolute-long EAs.
             if (descriptor.LegacyKey is M68kInstructionTimingKey.NegByteAddressDisplacement or
                 M68kInstructionTimingKey.NegWordAddressDisplacement or
-                M68kInstructionTimingKey.NegLongAddressDisplacement)
+                M68kInstructionTimingKey.NegLongAddressDisplacement or
+                M68kInstructionTimingKey.NegByteAbsoluteLong or
+                M68kInstructionTimingKey.NegWordAbsoluteLong or
+                M68kInstructionTimingKey.NegLongAbsoluteLong)
             {
                 return 8;
             }
@@ -2142,6 +2148,7 @@ namespace Copper68k
                 M68kTimingOperandForm.PostIncrement => 6,
                 M68kTimingOperandForm.Predecrement => 7,
                 M68kTimingOperandForm.AddressDisplacement => 6,
+                M68kTimingOperandForm.PcDisplacement => 6,
                 M68kTimingOperandForm.BriefIndexed => 8,
                 M68kTimingOperandForm.AbsoluteLong => 8,
                 _ => throw Unsupported(descriptor)

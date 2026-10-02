@@ -7,6 +7,141 @@ public sealed class M68020GameContinuationTests
 {
     private const uint Code = 0xF80000;
 
+    [Fact]
+    public void AbsoluteLongToIndexedMoveRetainsTheFullDestinationUnsupportedBoundary()
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, 0x23B9, 0x0000, 0x3000, 0x0170, 0x0000, 0x0004);
+        bus.WriteLong(0x3000, 0x11223344); bus.WriteLong(0x4004, 0x55667788);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.A[1] = 0x4000; cpu.State.StatusRegister = 0x201F;
+        Assert.Throws<UnsupportedM68kTimingException>(() => cpu.ExecuteInstruction());
+        Assert.Equal(0x55667788u, bus.ReadLong(0x4004)); Assert.Equal(0x11223344u, bus.ReadLong(0x3000));
+        Assert.Equal(Code + 8, cpu.State.ProgramCounter); Assert.Equal(0x201F, cpu.State.StatusRegister);
+    }
+
+    [Theory]
+    [InlineData(0x13FA, 0x80EEEEEEu)]
+    [InlineData(0x33FA, 0x8001EEEEu)]
+    [InlineData(0x23FA, 0x80017FA5u)]
+    public void MovePcDisplacementToAbsoluteLongConsumesSourceBeforeDestinationAndPreservesOtherBytes(ushort opcode, uint expected)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, opcode, 0xFFF0, 0x0000, 0x3000);
+        bus.WriteLong(Code - 14, 0x80017FA5); bus.WriteLong(0x3000, 0xEEEEEEEE); bus.WriteLong(0x3004, 0x11223344);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.StatusRegister = 0x201F; cpu.ExecuteInstruction();
+        Assert.Equal(expected, bus.ReadLong(0x3000)); Assert.Equal(0x11223344u, bus.ReadLong(0x3004));
+        Assert.Equal(0x80017FA5u, bus.ReadLong(Code - 14)); Assert.Equal(0x18, cpu.State.StatusRegister & 31);
+        Assert.Equal(Code + 8, cpu.State.ProgramCounter); Assert.Equal(0x5000u, cpu.State.A[7]);
+    }
+
+    [Theory]
+    [InlineData(0x4A3A, 0x0014, 0x80017FA5u, 0x18)]
+    [InlineData(0x4A3A, 0xFFF0, 0x00807FA5u, 0x14)]
+    [InlineData(0x4A7A, 0xFFF0, 0x80017FA5u, 0x18)]
+    [InlineData(0x4A7A, 0x0014, 0x0000FFFFu, 0x14)]
+    [InlineData(0x4ABA, 0xFFF0, 0x7FFFFFFFu, 0x10)]
+    [InlineData(0x4ABA, 0x0014, 0x00000000u, 0x14)]
+    public void TstPcDisplacementUsesExtensionAddressSignedDisplacementAndOperandWidth(ushort opcode, ushort displacement, uint memory, int flags)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, opcode, displacement);
+        var source = unchecked((uint)(Code + 2 + (short)displacement)); bus.WriteLong(source, memory);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.D[0] = 0x11223344; cpu.State.StatusRegister = 0x201F; cpu.ExecuteInstruction();
+        Assert.Equal(flags, cpu.State.StatusRegister & 31); Assert.Equal(0x11223344u, cpu.State.D[0]);
+        Assert.Equal(memory, bus.ReadLong(source)); Assert.Equal(Code + 4, cpu.State.ProgramCounter);
+        Assert.Equal(0x5000u, cpu.State.A[7]);
+    }
+
+    [Theory]
+    [InlineData(0xB0F9, 0xFFFE1234u, 0x00000000u, 0x11)]
+    [InlineData(0xB0F9, 0x0001FFFFu, 0x00010000u, 0x10)]
+    [InlineData(0xB0F9, 0xFFFF1234u, 0xFFFFFFFFu, 0x14)]
+    [InlineData(0xB0F9, 0xFFFF1234u, 0x7FFFFFFFu, 0x1B)]
+    [InlineData(0xB1F9, 0xFFFFFFFFu, 0x7FFFFFFFu, 0x1B)]
+    [InlineData(0xB1F9, 0x00000001u, 0x00000000u, 0x19)]
+    [InlineData(0xB1F9, 0x00010200u, 0x00010200u, 0x14)]
+    [InlineData(0xB1F9, 0x00000001u, 0x00000002u, 0x10)]
+    public void CmpaAbsoluteLongSignExtendsWordsAndComparesWithoutChangingAddressOrExtend(ushort opcode, uint memory, uint address, int flags)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, opcode, 0x0000, 0x3000); bus.WriteLong(0x3000, memory);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.A[0] = address; cpu.State.StatusRegister = 0x201F; cpu.ExecuteInstruction();
+        Assert.Equal(address, cpu.State.A[0]); Assert.Equal(flags, cpu.State.StatusRegister & 31);
+        Assert.Equal(memory, bus.ReadLong(0x3000)); Assert.Equal(Code + 6, cpu.State.ProgramCounter);
+    }
+
+    [Fact]
+    public void AbsoluteLongNegationRetainsTheUnaryMemoryPolicyAndBarrier()
+    {
+        foreach (var key in new[] { M68kInstructionTimingKey.NegByteAbsoluteLong,
+            M68kInstructionTimingKey.NegWordAbsoluteLong, M68kInstructionTimingKey.NegLongAbsoluteLong })
+        {
+            var plan = M68kTimingFormula.CreatePlan(M68020TimingModel.GetDescriptor(key));
+            Assert.Equal(8, plan.NativeCycles); Assert.Equal(M68kTimingBarrier.ReadModifyWrite, plan.Barriers);
+        }
+    }
+
+    [Theory]
+    [InlineData(0x4439, 0x01020304u, 0xFF020304u, 0x19)]
+    [InlineData(0x4439, 0x00020304u, 0x00020304u, 0x04)]
+    [InlineData(0x4439, 0x80020304u, 0x80020304u, 0x1B)]
+    [InlineData(0x4439, 0xFF020304u, 0x01020304u, 0x11)]
+    [InlineData(0x4479, 0x00011234u, 0xFFFF1234u, 0x19)]
+    [InlineData(0x4479, 0x00001234u, 0x00001234u, 0x04)]
+    [InlineData(0x4479, 0x80001234u, 0x80001234u, 0x1B)]
+    [InlineData(0x4479, 0xFFFF1234u, 0x00011234u, 0x11)]
+    [InlineData(0x44B9, 0x00000001u, 0xFFFFFFFFu, 0x19)]
+    [InlineData(0x44B9, 0x00000000u, 0x00000000u, 0x04)]
+    [InlineData(0x44B9, 0x80000000u, 0x80000000u, 0x1B)]
+    [InlineData(0x44B9, 0xFFFFFFFFu, 0x00000001u, 0x11)]
+    public void NegAbsoluteLongUsesSizedReadModifyWriteAndArithmeticFlags(ushort opcode, uint before, uint after, int flags)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, opcode, 0x0000, 0x3000);
+        bus.WriteLong(0x2FFC, 0x11223344); bus.WriteLong(0x3000, before); bus.WriteLong(0x3004, 0x55667788);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.StatusRegister = 0x201F; cpu.ExecuteInstruction();
+        Assert.Equal(after, bus.ReadLong(0x3000)); Assert.Equal(flags, cpu.State.StatusRegister & 31);
+        Assert.Equal(0x11223344u, bus.ReadLong(0x2FFC)); Assert.Equal(0x55667788u, bus.ReadLong(0x3004));
+        Assert.Equal(Code + 6, cpu.State.ProgramCounter); Assert.Equal(0x5000u, cpu.State.A[7]);
+    }
+
+    [Theory]
+    [InlineData(0x13B9, 0x80EEEEEEu)]
+    [InlineData(0x33B9, 0x8001EEEEu)]
+    [InlineData(0x23B9, 0x80017FA5u)]
+    public void MoveAbsoluteLongToBriefIndexedUsesSignedScaledIndexAndSizedStore(ushort opcode, uint expected)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, opcode, 0x0000, 0x3000, 0x2604);
+        bus.WriteLong(0x3000, 0x80017FA5); bus.WriteLong(0x3FF8, 0xEEEEEEEE);
+        bus.WriteLong(0x3FFC, 0xEEEEEEEE); bus.WriteLong(0x4000, 0xEEEEEEEE);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.A[1] = 0x4000; cpu.State.D[2] = 0x1234FFFF; cpu.State.StatusRegister = 0x201F;
+        cpu.ExecuteInstruction();
+        Assert.Equal(expected, bus.ReadLong(0x3FFC)); Assert.Equal(0xEEEEEEEEu, bus.ReadLong(0x3FF8));
+        Assert.Equal(0xEEEEEEEEu, bus.ReadLong(0x4000)); Assert.Equal(0x80017FA5u, bus.ReadLong(0x3000));
+        Assert.Equal(0x18, cpu.State.StatusRegister & 31); Assert.Equal(Code + 8, cpu.State.ProgramCounter);
+        Assert.Equal(0x4000u, cpu.State.A[1]); Assert.Equal(0x1234FFFFu, cpu.State.D[2]);
+    }
+
+    [Theory]
+    [InlineData(0x8039, 0x80017FA5u, 0x12345601u, 0x12345681u, 0x18)]
+    [InlineData(0x8279, 0x80017FA5u, 0x12340100u, 0x12348101u, 0x18)]
+    [InlineData(0x8039, 0x007FA55Au, 0x12345600u, 0x12345600u, 0x14)]
+    [InlineData(0x8279, 0x00007FA5u, 0x12340000u, 0x12340000u, 0x14)]
+    [InlineData(0x8039, 0x01FF7FA5u, 0x12345602u, 0x12345603u, 0x10)]
+    [InlineData(0x8279, 0x01007F00u, 0x12340010u, 0x12340110u, 0x10)]
+    public void OrAbsoluteLongReadsOnlyTheOperandWidthAndPreservesExtendAndSource(ushort opcode, uint memory, uint before, uint after, int flags)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, opcode, 0x0000, 0x3000);
+        bus.WriteLong(0x3000, memory);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        var destination = (opcode >> 9) & 7; cpu.State.D[destination] = before; cpu.State.StatusRegister = 0x201F;
+        cpu.ExecuteInstruction();
+        Assert.Equal(after, cpu.State.D[destination]); Assert.Equal(flags, cpu.State.StatusRegister & 31);
+        Assert.Equal(memory, bus.ReadLong(0x3000)); Assert.Equal(Code + 6, cpu.State.ProgramCounter);
+        Assert.Equal(0x5000u, cpu.State.A[7]);
+    }
+
     [Theory]
     [InlineData(0xC218, 0xABCD128Fu, 0xABCD1280u, 1)]
     [InlineData(0xC21F, 0xABCD128Fu, 0xABCD1280u, 2)]
