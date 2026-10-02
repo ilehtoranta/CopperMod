@@ -63,7 +63,11 @@ namespace Copper68k
         /// <summary>
         /// Motorola MC68040-compatible execution.
         /// </summary>
-        M68040 = 3
+        M68040 = 3,
+
+        /// <summary>Experimental MC68060 integer execution. FPU arithmetic and enabled MMU
+        /// operation remain explicitly unsupported.</summary>
+        M68060 = 4
     }
 
     /// <summary>
@@ -1193,6 +1197,17 @@ namespace Copper68k
                 enableOpcodePlan,
                 opcodePlanDispatch ?? M68000OpcodePlanDispatch);
 
+        /// <summary>
+        /// Creates an experimental PAL A1200 68EC020 core at two native clocks per
+        /// motherboard clock, with long Chip/ROM and byte CIA/Gayle timing rules.
+        /// The host owns physical bus arbitration; this profile does not certify
+        /// cache, pipeline or complete motherboard timing against real hardware.
+        /// </summary>
+        /// <param name="bus">The host A1200 bus and canonical motherboard clock.</param>
+        /// <returns>A new 24-bit 68EC020 interpreter.</returns>
+        public IM68kCore CreateA1200Ec020(IM68kBus bus)
+            => new M68EC020Interpreter(bus, M68020CpuProfile.A1200Ec02014Mhz);
+
         /// <inheritdoc />
         public IM68kCore Create(M68kCpuModel model, IM68kBus bus)
         {
@@ -1204,6 +1219,7 @@ namespace Copper68k
                 M68kCpuModel.M68EC020 => new M68EC020Interpreter(bus),
                 M68kCpuModel.M68030 => new M68030Interpreter(bus),
                 M68kCpuModel.M68040 => new M68040Interpreter(bus),
+                M68kCpuModel.M68060 => new M68060Interpreter(bus),
                 _ => throw new M68kEmulationException($"The requested M68k CPU model is not implemented: {model}.")
             };
         }
@@ -1372,6 +1388,7 @@ namespace Copper68k
             SupervisorStackPointer = source.SupervisorStackPointer;
             MasterStackPointer = source.MasterStackPointer;
             M68020StackModeEnabled = source.M68020StackModeEnabled;
+            M68060StackModeEnabled = source.M68060StackModeEnabled;
             _statusRegister = source._statusRegister;
             ProgramCounter = source.ProgramCounter;
             VectorBaseRegister = source.VectorBaseRegister;
@@ -1379,6 +1396,8 @@ namespace Copper68k
             DestinationFunctionCode = source.DestinationFunctionCode;
             CacheControlRegister = source.CacheControlRegister;
             CacheAddressRegister = source.CacheAddressRegister;
+            M68060ProcessorConfiguration = source.M68060ProcessorConfiguration;
+            M68060BusControl = source.M68060BusControl;
             Cycles = source.Cycles;
             NativeCycles = source.NativeCycles;
             Halted = source.Halted;
@@ -1401,6 +1420,7 @@ namespace Copper68k
             SupervisorStackPointer = source.SupervisorStackPointer;
             MasterStackPointer = source.MasterStackPointer;
             M68020StackModeEnabled = source.M68020StackModeEnabled;
+            M68060StackModeEnabled = source.M68060StackModeEnabled;
             _statusRegister = source._statusRegister;
             ProgramCounter = source.ProgramCounter;
             VectorBaseRegister = source.VectorBaseRegister;
@@ -1478,6 +1498,9 @@ namespace Copper68k
         internal M68040FpuState M68040Fpu { get; } = new M68040FpuState();
 
         internal M68040MmuState M68040Mmu { get; } = new M68040MmuState();
+
+        internal uint M68060ProcessorConfiguration { get; set; } = 0x0430_0000;
+        internal uint M68060BusControl { get; set; }
 
         /// <summary>
         /// Gets or sets the elapsed 68k machine-cycle count.
@@ -1591,9 +1614,17 @@ namespace Copper68k
         }
 
         internal bool M68020StackModeEnabled { get; private set; }
+        internal bool M68060StackModeEnabled { get; private set; }
+
+        internal void EnableM68060StackMode()
+        {
+            DisableM68020StackMode();
+            M68060StackModeEnabled = true;
+        }
 
         internal void EnableM68020StackMode()
         {
+            M68060StackModeEnabled = false;
             M68020StackModeEnabled = true;
             SetStatusRegister(_statusRegister);
         }
@@ -1763,7 +1794,8 @@ namespace Copper68k
                 return;
             }
 
-            value &= M68000StatusRegisterMask;
+            // MC68060UM 3.2.2.2 / 11.1.2: M is software state, not a stack selector.
+            value &= M68060StackModeEnabled ? M68020StatusRegisterMask : M68000StatusRegisterMask;
             var wasSupervisor = (_statusRegister & Supervisor) != 0;
             var isSupervisor = (value & Supervisor) != 0;
             if (wasSupervisor != isSupervisor)
@@ -2474,6 +2506,10 @@ namespace Copper68k
         }
 
         public M68kCpuState State { get; }
+
+        // The 040 reuses integer semantics, but owns instruction fetching.
+        // Leave null for every normal 68000/010 and JIT fallback instance.
+        internal Func<ushort>? ExternalInstructionWordReader { private get; init; }
 
         internal bool InstructionFrequencyEnabled
         {
@@ -12580,6 +12616,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ushort FetchOpcodeWord()
         {
+            if (ExternalInstructionWordReader is { } reader) return reader();
             var address = State.ProgramCounter;
             if (_prefetchCount == 0 || _prefetchAddress != address)
             {
@@ -12592,6 +12629,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected ushort FetchWord()
         {
+            if (ExternalInstructionWordReader is { } reader) return reader();
             var address = State.ProgramCounter;
             if (_prefetchCount == 0 || _prefetchAddress != address)
             {
@@ -13074,6 +13112,11 @@ namespace Copper68k
             bool addressPhaseAlreadyIssued = false,
             long issuedAddressPhaseEarliestCycle = 0)
         {
+            if (ExternalInstructionWordReader is not null)
+            {
+                requestedCycle = State.Cycles;
+                return State.Cycles;
+            }
             if (_prefetchCount >= 2)
             {
                 requestedCycle = _prefetchCompletedCycle1;
@@ -13176,6 +13219,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.NoInlining)]
         private void TopUpPrefetchAtRetirement()
         {
+            if (ExternalInstructionWordReader is not null) return;
             if ((State.ProgramCounter & 1) != 0)
             {
                 return;
@@ -14533,6 +14577,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void TopUpPrefetch()
         {
+            if (ExternalInstructionWordReader is not null) return;
             if ((State.ProgramCounter & 1) != 0)
             {
                 return;

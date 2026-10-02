@@ -1,136 +1,27 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="google-site-verification" content="CfXWjKh0M3_gUDMuwQEspuhz3ADtuhMzggYlm2iTULY">
-  <meta name="description" content="CopperScreen is an Amiga 500 PAL emulator and CopperMod spin-off.">
-  <title>CopperScreen</title>
+  <meta name="description" content="CopperMod is an open-source terminal music player for tracker and chip music, with reusable C# playback libraries and command-line audio export.">
+  <title>CopperMod — Tracker and chip music player</title>
+  <link rel="canonical" href="https://ilehtoranta.github.io/CopperMod/">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header class="site-header" aria-label="Site header">
-    <a class="brand" href="#top" aria-label="CopperScreen home">
-      <span class="brand-mark" aria-hidden="true">A</span>
-      <span>CopperScreen</span>
-    </a>
-    <nav aria-label="Page sections">
-      <a href="#status">Status</a>
-      <a href="#features">Hardware</a>
-      <a href="#downloads">Downloads</a>
-      <a href="#run">Run</a>
-      <a href="https://github.com/ilehtoranta/CopperMod">Repository</a>
-    </nav>
-  </header>
-
-  <main id="top">
-    <section class="hero" aria-labelledby="hero-title">
-      <img class="hero-image" src="assets/copperscreen-icon.png" alt="">
-      <div class="hero-copy">
-        <p class="eyebrow">Amiga 500 PAL emulator</p>
-        <h1 id="hero-title">CopperScreen</h1>
-        <p class="lede">
-          A work-in-progress C# emulator built alongside CopperMod, focused on
-          cycle-aware Amiga 500 behavior, custom chips, floppy loading, and the
-          tiny CopperStart Kickstart-compatible boot path.
-        </p>
-        <div class="hero-actions" aria-label="Primary links">
-          <a class="button primary" href="https://github.com/ilehtoranta/CopperMod/releases/download/copperscreen-v1.0.0/CopperScreen-1.0.0-win-x64-self-contained.zip">Download CopperScreen</a>
-          <a class="button" href="https://github.com/ilehtoranta/CopperMod">Main Repository</a>
-          <a class="button" href="#run">Run Locally</a>
-        </div>
-      </div>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header"><div class="wrap header-inner"><a class="brand" href="./"><span class="brand-mark" aria-hidden="true">CM</span>CopperMod</a><nav aria-label="Main navigation"><a href="#formats">Formats</a><a href="#downloads">Downloads</a><a href="#export">Export</a><a href="https://github.com/ilehtoranta/CopperMod">GitHub</a></nav></div></header>
+  <main id="main" class="wrap">
+    <section class="hero" aria-labelledby="title"><div><p class="eyebrow">Open-source music player</p><h1 id="title">CopperMod</h1><p class="intro">A terminal player for tracker and chip music, with reusable C# playback libraries and command-line audio export.</p><div class="actions"><a class="button primary" href="#downloads">Player downloads</a><a class="button" href="https://github.com/ilehtoranta/CopperMod">Source code</a></div></div>
+      <figure class="player-shot"><a href="assets/coppermod-arkanoid.png" aria-label="Open full-size CopperMod player screenshot"><img src="assets/coppermod-arkanoid.png" width="1115" height="799" alt="CopperMod playing the Arkanoid SID tune, showing playback controls and an orange waveform." fetchpriority="high"></a><figcaption>CopperMod playing the Arkanoid SID tune.</figcaption></figure>
     </section>
-
-    <section id="status" class="status-band" aria-labelledby="status-title">
-      <div>
-        <p class="eyebrow">Current shape</p>
-        <h2 id="status-title">Experimental, but already doing real Amiga work.</h2>
-      </div>
-      <p>
-        CopperScreen can boot ADF, ADZ, DMS, and IPF disk images, render OCS graphics,
-        play Paula audio, exercise CIA timing, and test either CopperStart or a
-        local Kickstart 1.3 ROM. Compatibility is still improving game by game.
-      </p>
-    </section>
-
-    <section id="features" class="feature-grid" aria-label="Hardware coverage">
-      <article>
-        <h2>OCS Custom Chips</h2>
-        <p>Copper, bitplanes, sprites, blitter, Paula audio, and disk DMA are tested through focused conformance matrices.</p>
-      </article>
-      <article>
-        <h2>CopperStart</h2>
-        <p>A compact Kickstart-like implementation targets the boot path needed by many disk images without bundling ROM files.</p>
-      </article>
-      <article>
-        <h2>Disk Images</h2>
-        <p>Standard and extended ADF, ADZ, DMS, ZIP-wrapped images, and managed IPF decoding feed the raw floppy-controller path for loader and protection testing.</p>
-      </article>
-      <article>
-        <h2>Profiles</h2>
-        <p>Vanilla and expanded A500 profiles switch between CopperStart and local real Kickstart 1.3 ROM experiments.</p>
-      </article>
-    </section>
-
-    <section id="downloads" class="download-section" aria-labelledby="downloads-title">
-      <div class="section-copy">
-        <p class="eyebrow">Downloads</p>
-        <h2 id="downloads-title">Release builds for the emulator and player.</h2>
-        <p>
-          Windows x64 self-contained builds include the runtime. Portable .NET
-          builds are smaller and require a local .NET 10 runtime.
-        </p>
-      </div>
-      <div class="download-grid">
-        <article class="product-card">
-          <img class="product-shot" src="assets/copperscreen-full-contact.png" alt="CopperScreen running the Full Contact intro screen">
-          <div class="product-copy">
-            <h3>CopperScreen</h3>
-            <p>Amiga 500 PAL emulator front-end for ADF, ADZ, DMS, IPF, and ZIP-wrapped disk images.</p>
-            <div class="download-actions" aria-label="CopperScreen downloads">
-              <a class="button primary" href="https://github.com/ilehtoranta/CopperMod/releases/download/copperscreen-v1.0.0/CopperScreen-1.0.0-win-x64-self-contained.zip">Windows x64</a>
-              <a class="button" href="https://github.com/ilehtoranta/CopperMod/releases/download/copperscreen-v1.0.0/CopperScreen-1.0.0-dotnet.zip">Portable .NET</a>
-              <a class="button" href="https://github.com/ilehtoranta/CopperMod/releases/tag/copperscreen-v1.0.0">Release Notes</a>
-            </div>
-          </div>
-        </article>
-        <article class="product-card">
-          <img class="product-shot" src="assets/coppermod-arkanoid.png" alt="CopperMod playing the Arkanoid SID tune">
-          <div class="product-copy">
-            <h3>CopperMod</h3>
-            <p>Terminal music player for MED, ProTracker MOD, SID/RSID, and Amiga CUST playback.</p>
-            <div class="download-actions" aria-label="CopperMod downloads">
-              <a class="button primary" href="https://github.com/ilehtoranta/CopperMod/releases/download/coppermod-v1.0.0/CopperMod-1.0.0-win-x64-self-contained.zip">Windows x64</a>
-              <a class="button" href="https://github.com/ilehtoranta/CopperMod/releases/download/coppermod-v1.0.0/CopperMod-1.0.0-dotnet.zip">Portable .NET</a>
-              <a class="button" href="https://github.com/ilehtoranta/CopperMod/releases/tag/coppermod-v1.0.0">Release Notes</a>
-            </div>
-          </div>
-        </article>
-      </div>
-    </section>
-
-    <section id="run" class="run-section" aria-labelledby="run-title">
-      <div>
-        <p class="eyebrow">Try it</p>
-        <h2 id="run-title">Run CopperScreen from the repository.</h2>
-        <p>
-          ROMs and commercial disk images are not included. Use your own legal
-          images when testing the emulator.
-        </p>
-      </div>
-      <pre><code>dotnet run --project .\CopperScreen -- "path\to\disk.adf"
-dotnet run --project .\CopperScreen -- "path\to\disk.dms"
-dotnet run --project .\CopperScreen -- --profile expanded-copperstart "path\to\disk.zip"</code></pre>
-    </section>
+    <section id="formats" class="section" aria-labelledby="formats-title"><h2 id="formats-title">Music formats</h2><p class="section-lede">Playback backends for Amiga tracker modules, custom players and C64 music.</p><dl class="formats"><div><dt>MED / OctaMED</dt><dd>MMD0–MMD3 parsing and Amiga-style playback.</dd></div><div><dt>ProTracker MOD</dt><dd>Four-channel tracker playback with Amiga-style sample output.</dd></div><div><dt>SID / RSID</dt><dd>C64/SID emulation with cycle-counted register scheduling.</dd></div><div><dt>Amiga CUST</dt><dd>Custom-player execution in an Amiga/Paula playback sandbox.</dd></div><div><dt>AHX0 / AHX1</dt><dd>Original 68000 replay integration in the source tree. Requires a locally supplied, hash-verified AHX 2.3d replay binary.</dd></div></dl><p class="note">Replay accuracy is a work in progress. Current development features may differ from the published release; check its release notes. Music and third-party replay binaries are not included.</p></section>
+    <section id="downloads" class="section split" aria-labelledby="download-title"><div><h2 id="download-title">Download CopperMod</h2><p class="section-lede">Published player release: 1.0.0.</p><p class="note">These downloads are the released player, not a build of the current development branch.</p></div><div class="downloads"><article><h3>Windows x64</h3><p>Self-contained package with the .NET runtime included.</p><a class="button primary" href="https://github.com/ilehtoranta/CopperMod/releases/download/coppermod-v1.0.0/CopperMod-1.0.0-win-x64-self-contained.zip">Download Windows ZIP</a></article><article><h3>Framework-dependent</h3><p>Requires .NET 10. Audio output depends on the host platform.</p><a class="button" href="https://github.com/ilehtoranta/CopperMod/releases/download/coppermod-v1.0.0/CopperMod-1.0.0-dotnet.zip">Download .NET ZIP</a></article><a href="https://github.com/ilehtoranta/CopperMod/releases/tag/coppermod-v1.0.0">Player release notes</a></div></section>
+    <section id="export" class="section split" aria-labelledby="export-title"><div><h2 id="export-title">Export audio</h2><p class="section-lede">Render a module to an audio file without opening the terminal player.</p><div class="link-list"><a href="https://github.com/ilehtoranta/CopperMod/blob/main/CopperMod.Tools/README.md">Export tool reference</a></div></div><div><pre><code>dotnet run --project CopperMod.Tools -- render "tune.mod" --out tune.wav --seconds 30</code></pre><p class="note">WAV uses 32-bit float samples. Raw PCM and MP3 output are also available; MP3 export uses Windows Media Foundation.</p></div></section>
+    <section id="development" class="section split" aria-labelledby="development-title"><div><h2 id="development-title">Build and development</h2><p class="section-lede">The player uses .NET 10, Terminal.Gui and NAudio.</p></div><div><pre><code>dotnet build CopperMod/CopperMod.csproj -c Release
+dotnet run --project CopperMod -c Release -- "path/to/tune.sid"</code></pre><p class="note">The current development branch has a known Cust backend constructor mismatch that blocks the player build. See the repository README for its status; the downloads above are separate published artifacts.</p><div class="link-list"><a href="https://github.com/ilehtoranta/CopperMod#build-and-run">Build instructions</a><a href="https://github.com/ilehtoranta/CopperMod/issues">Report an issue</a></div></div></section>
+    <section class="section" aria-labelledby="libraries-title"><h2 id="libraries-title">Playback libraries</h2><p class="section-lede">Use the backends independently in other .NET applications. Each renders audio in small slices through shared module-loading and rendering interfaces.</p><div class="libraries"><a href="https://www.nuget.org/packages/CopperMod.Med">CopperMod.Med</a><a href="https://www.nuget.org/packages/CopperMod.ProTracker">CopperMod.ProTracker</a><a href="https://www.nuget.org/packages/CopperMod.Sid">CopperMod.Sid</a><a href="https://www.nuget.org/packages/CopperMod.Cust">CopperMod.Cust</a><a href="https://www.nuget.org/packages/CopperMod.Abstractions">CopperMod.Abstractions</a></div></section>
   </main>
-
-  <footer>
-    <span>CopperScreen is part of the CopperMod repository.</span>
-    <span class="footer-links">
-      <a href="https://github.com/ilehtoranta/CopperMod">Main repository</a>
-      <a href="https://github.com/ilehtoranta/CopperMod/releases">All releases</a>
-    </span>
-  </footer>
+  <footer class="site-footer"><div class="wrap footer-inner"><p>CopperMod · Open source · MIT license</p><div class="link-list"><a href="https://github.com/ilehtoranta/CopperMod">GitHub</a><a href="https://github.com/ilehtoranta/CopperMod/blob/main/LICENSE">License</a></div></div></footer>
 </body>
 </html>

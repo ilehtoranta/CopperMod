@@ -11573,18 +11573,20 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(7u, cpu.State.D[1]);
 	}
 
-	[Fact]
-	public void EnabledInstructionCacheDoesNotCacheChipRamFetches()
+	[Theory]
+	[InlineData(0x00DFF000u)]
+	[InlineData(0x00BFE000u)]
+	public void EnabledInstructionCacheDoesNotCacheDeviceFetches(uint codeBase)
 	{
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(
 			bus,
-			CodeBase,
+			codeBase,
 			0x4E7B, 0x0002, // MOVEC D0,CACR
 			0x4E71, // NOP
 			0x4E71); // NOP, same 4-byte cache line as previous NOP
 		var cpu = new M68020Interpreter(bus, M68020CpuProfile.OcsAccelerator14Mhz);
-		cpu.Reset(CodeBase, 0x3000);
+		cpu.Reset(codeBase, 0x3000);
 		cpu.State.D[0] = 0x0000_0001;
 		cpu.ExecuteInstruction();
 		cpu.ExecuteInstruction();
