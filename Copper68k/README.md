@@ -45,6 +45,22 @@ preserving the upper data word and address register while setting XNZVC.
 The new memory-to-indexed MOVE route retains its full-destination unsupported
 boundary and the existing 040 fallback policy.
 
+Native 4th Dimension and Kick Off 3 startup adds CMP.B/W/L predecrement,
+MOVE.B/W/L absolute-word to postincrement and postincrement to absolute-word,
+MOVE.B/W absolute-long to address-indirect, EOR.B/W/L data to address-indirect,
+ADDI.B/W/L postincrement, OR.B/W address-indirect to data registers,
+and ADDQ.B absolute-long.
+Absolute-word addresses are sign-extended;
+postincrement and predecrement retain the A7 byte stride and active stack bank.
+The memory arithmetic plans retain explicit read-modify-write barriers. The
+new execution routes preserve the 040 integer fallback and its fetch buffer.
+Fifty-two focused cases cover these forms, shared 020/030/040 controls,
+operand widths, signed addresses, arithmetic flags, source preservation,
+memory aliases and stack strides. The original native stops and further
+continuation stops were reproduced before each implementation; the supplied
+demo now reaches effects with audio, and Kick Off 3 reaches its title and
+disk-2 prompt. Later milestones require separate native replay evidence.
+
 Regression tests cover signed/scaled brief indexes and extension-word PC bases,
 operand widths, sign extension, source/destination aliasing, A7 byte stride,
 sticky SUBX zero, extend/borrow/overflow, surrounding memory and CCR preservation.
@@ -52,7 +68,7 @@ MOVEM tests retain the 000/010 ignored-tail read and a separate 040 fallback
 control while validating the new native indirect route. Timing-plan admission
 and read-modify-write barriers remain explicit. Costs retain the existing
 approximate operand-shape policy; these results do not certify physical timing.
-The complete CPU suite passes 4,049 cases, with six optional external corpus
+The complete CPU suite passes 4,101 cases, with six optional external corpus
 cases unavailable. The retained AHX consumer suite passes all 18 cases.
 
 The supplied UFO crack intro runs and accepts its normal mouse-click exit.

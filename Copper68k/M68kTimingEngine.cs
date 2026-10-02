@@ -834,7 +834,27 @@ namespace Copper68k
         MoveLongPostIncrementToAddressDisplacement,
         MoveLongAddressDisplacementToPredecrement,
         MovemLongRegistersToAbsoluteLong,
-        MoveByteImmediateToPostIncrement
+        MoveByteImmediateToPostIncrement,
+        CmpBytePredecrementToData,
+        CmpWordPredecrementToData,
+        CmpLongPredecrementToData,
+        MoveByteAbsoluteWordToPostIncrement,
+        MoveWordAbsoluteWordToPostIncrement,
+        MoveLongAbsoluteWordToPostIncrement,
+        MoveByteAbsoluteLongToAddressIndirect,
+        MoveWordAbsoluteLongToAddressIndirect,
+        MoveBytePostIncrementToAbsoluteWord,
+        MoveWordPostIncrementToAbsoluteWord,
+        MoveLongPostIncrementToAbsoluteWord,
+        EorByteDataToAddressIndirect,
+        EorWordDataToAddressIndirect,
+        EorLongDataToAddressIndirect,
+        AddiByteImmediateToPostIncrement,
+        AddiWordImmediateToPostIncrement,
+        AddiLongImmediateToPostIncrement,
+        OrByteAddressIndirectToData,
+        OrWordAddressIndirectToData,
+        AddqByteAbsoluteLong
     }
 
     internal readonly record struct M68kInstructionPlan(
