@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using CopperMod.TestSupport;
 
 namespace CopperMod.Tools.Tests;
 
@@ -74,7 +75,7 @@ public sealed class RenderCommandIntegrationTests
 	public void RendersSidFixtureWithExplicitSecondsDespiteUnknownDuration()
 	{
 		using var temp = TemporaryDirectory.Create();
-		var input = FindWorkspaceFile("TestTunes", "SID", "Galway", "Arkanoid.sid");
+		var input = SidCorpusFixtures.Find(SidCorpusFixtures.Arkanoid);
 		var output = Path.Combine(temp.Path, "arkanoid.pcm");
 
 		var exitCode = Run("render", input, "--out", output, "--seconds", "0.25", "--overwrite");

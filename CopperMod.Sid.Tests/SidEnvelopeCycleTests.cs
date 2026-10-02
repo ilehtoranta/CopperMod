@@ -1,439 +1,166 @@
-using System.Reflection;
-
 namespace CopperMod.Sid.Tests;
 
+// Register-driven tests; no fabricated private latch combinations. Timing sources
+// and the deterministic reset convention are in docs/SID-timing-contract.md.
 public sealed class SidEnvelopeCycleTests
 {
-	private const int Attack = 0;
-	private const int Decay = 1;
-	private const int Sustain = 2;
-	private const int Release = 3;
-	private static readonly int[] RatePeriods =
-	[
-		9, 32, 63, 95, 149, 220, 267, 313,
-		392, 977, 1954, 3126, 3907, 11720, 19532, 31251
-	];
-
-	[Theory]
-	[InlineData(0)]
-	[InlineData(1)]
-	[InlineData(8)]
-	[InlineData(15)]
-	public void AttackRatePeriodStepsOnExactCycle(int attackNibble)
-	{
-		var chip = CreateVoice(attackDecay: (byte)(attackNibble << 4), sustainRelease: 0xF0, control: 0x11);
-		var period = RatePeriods[attackNibble];
-
-		chip.Render(period - 1);
-
-		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(period - 1, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Render(1);
-
-		Assert.Equal(1, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
-	}
-
-	[Fact]
-	public void AttackToDecayUsesDecayPeriodAfterCounterReachesMaximum()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x11);
-
-		chip.Render(RatePeriods[0] * 255);
-
-		Assert.Equal(0xFF, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Decay, chip.DebugState.Voices[0].EnvelopeState);
-		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Render(RatePeriods[0] - 1);
-
-		Assert.Equal(0xFF, chip.DebugState.Voices[0].EnvelopeCounter);
-
-		chip.Render(1);
-
-		Assert.Equal(0xFE, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Decay, chip.DebugState.Voices[0].EnvelopeState);
-	}
-
-	[Fact]
-	public void GateFallingDoesNotResetRateCounterBeforeReleaseStep()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x11);
-		chip.Render(RatePeriods[0] * 255);
-		chip.Render(4);
-
-		Assert.Equal(4, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Write(0x04, 0x10);
-		chip.Render(4);
-
-		Assert.Equal(0xFF, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(8, chip.DebugState.Voices[0].RateCounter);
-		Assert.Equal(Release, chip.DebugState.Voices[0].EnvelopeState);
-
-		chip.Render(1);
-
-		Assert.Equal(0xFE, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
-	}
-
-	[Fact]
-	public void GateRisingFromZeroHoldPreservesStaleRateCounterAndDelaysAttack()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x10);
-		SetEnvelope(chip, envelope: 0, state: Release, rateCounter: 20, zeroHold: true);
-
-		Assert.Equal(20, chip.DebugState.Voices[0].RateCounter);
-		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Release, chip.DebugState.Voices[0].EnvelopeState);
-
-		chip.Write(0x04, 0x11);
-		chip.Render(1);
-
-		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Attack, chip.DebugState.Voices[0].EnvelopeState);
-		Assert.Equal(21, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Render(32755);
-
-		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(RatePeriods[0] - 1, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Render(1);
-
-		Assert.Equal(1, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
-	}
-
-	[Fact]
-	public void FasterRateWriteWaitsForFifteenBitRateCounterWrap()
-	{
-		var chip = CreateVoice(attackDecay: 0xF0, sustainRelease: 0xF0, control: 0x11);
-		chip.Render(20);
-
-		Assert.Equal(20, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Write(0x05, 0x00);
-		chip.Render(32756);
-
-		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(8, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Render(1);
-
-		Assert.Equal(1, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
-	}
-
-	[Fact]
-	public void SustainHoldStillAdvancesRateCounter()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0xE0, control: 0x11);
-		RunToSustain(chip);
-
-		Assert.Equal(0xEE, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Sustain, chip.DebugState.Voices[0].EnvelopeState);
-		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Render(4);
-
-		Assert.Equal(0xEE, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(4, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Write(0x04, 0x10);
-		chip.Render(4);
-
-		Assert.Equal(0xEE, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(8, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Render(1);
-
-		Assert.Equal(0xED, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
-	}
-
-	[Fact]
-	public void LoweringSustainLevelRestartsDecayOnNextDecayMatch()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0xE0, control: 0x11);
-		RunToSustain(chip);
-
-		chip.Write(0x06, 0xD0);
-		chip.Render(RatePeriods[0] - 1);
-
-		Assert.Equal(0xEE, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(8, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Render(1);
-
-		Assert.Equal(0xED, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Decay, chip.DebugState.Voices[0].EnvelopeState);
-		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
-	}
-
-	[Fact]
-	public void ReleaseExponentialCounterChangesPeriodAtThresholds()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x10);
-		SetEnvelope(chip, envelope: 0x5E, state: Release);
-
-		chip.Render(RatePeriods[0]);
-
-		Assert.Equal(0x5D, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(0, chip.DebugState.Voices[0].ExponentialCounter);
-
-		chip.Render(RatePeriods[0]);
-
-		Assert.Equal(0x5D, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(1, chip.DebugState.Voices[0].ExponentialCounter);
-
-		chip.Render(RatePeriods[0]);
-
-		Assert.Equal(0x5C, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(0, chip.DebugState.Voices[0].ExponentialCounter);
-	}
-
-	[Fact]
-	public void NormalReleaseHoldsAtZeroWithoutWrap()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x10);
-		SetEnvelope(chip, envelope: 1, state: Release);
-
-		chip.Render(RatePeriods[0] * 31);
-
-		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
-
-		chip.Render(RatePeriods[0] * 4);
-
-		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Release, chip.DebugState.Voices[0].EnvelopeState);
-	}
-
-	[Fact]
-	public void ReleaseRateWriteCanClearZeroHoldAndWrapAfterAdsrDelay()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x0F, control: 0x10);
-		chip.Render(1);
-		SetEnvelope(chip, envelope: 0, state: Release, rateCounter: 20, zeroHold: true);
-
-		chip.Write(0x06, 0x00);
-		chip.Render(32756);
-
-		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(8, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Render(1);
-
-		Assert.Equal(0xFF, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
-	}
-
-	[Fact]
-	public void DecayRateWriteWaitsForRateCounterWrapWhenCounterAlreadyPassedNewPeriod()
-	{
-		var chip = CreateVoice(attackDecay: 0x0F, sustainRelease: 0x00, control: 0x10);
-		chip.Render(1);
-		SetEnvelope(chip, envelope: 0x80, state: Decay, rateCounter: 20);
-
-		chip.Write(0x05, 0x00);
-		chip.Render(32756);
-
-		Assert.Equal(0x80, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(8, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Render(1);
-
-		Assert.Equal(0x7F, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
-	}
-
-	[Fact]
-	public void ReleaseRateWriteDuringActiveReleaseUsesNewReleasePeriod()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x0F, control: 0x10);
-		SetEnvelope(chip, envelope: 0x80, state: Release, zeroHold: false);
-
-		chip.Write(0x06, 0x00);
-		chip.Render(RatePeriods[0] - 1);
-
-		Assert.Equal(0x80, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(RatePeriods[0] - 1, chip.DebugState.Voices[0].RateCounter);
-
-		chip.Render(1);
-
-		Assert.Equal(0x7F, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(0, chip.DebugState.Voices[0].RateCounter);
-	}
-
-	[Fact]
-	public void QuickGateFromZeroHoldWrapsDownAfterReleaseDividerExpires()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x10);
-		chip.Render(1);
-		SetEnvelope(chip, envelope: 0, state: Release, zeroHold: true);
-
-		chip.Write(0x04, 0x11);
-		chip.Render(1);
-		chip.Write(0x04, 0x10);
-		chip.Render((RatePeriods[0] * 30) - 2);
-
-		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Release, chip.DebugState.Voices[0].EnvelopeState);
-
-		chip.Render(RatePeriods[0]);
-
-		Assert.Equal(0xFF, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Release, chip.DebugState.Voices[0].EnvelopeState);
-	}
-
-	[Fact]
-	public void QuickGateFromMaximumHoldWrapsUpOnNextAttackStep()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x11);
-		chip.Render(1);
-		SetEnvelope(chip, envelope: 0xFF, state: Attack, zeroHold: false);
-
-		chip.Write(0x04, 0x10);
-		chip.Render(1);
-		chip.Write(0x04, 0x11);
-		chip.Render(RatePeriods[0] - 1);
-
-		Assert.Equal(0x00, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Attack, chip.DebugState.Voices[0].EnvelopeState);
-	}
-
-	[Fact]
-	public void RaisingSustainAboveCurrentEnvelopeDoesNotClampEnvelopeUpward()
-	{
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: 0x20, control: 0x11);
-		chip.Render(1);
-		SetEnvelope(chip, envelope: 0x22, state: Sustain, zeroHold: false);
-
-		chip.Write(0x06, 0x30);
-		chip.Render(RatePeriods[0] * 3);
-
-		Assert.Equal(0x22, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Decay, chip.DebugState.Voices[0].EnvelopeState);
-
-		chip.Render(RatePeriods[0]);
-
-		Assert.Equal(0x21, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Decay, chip.DebugState.Voices[0].EnvelopeState);
-	}
-
-	[Theory]
-	[InlineData(0)]
-	[InlineData(1)]
-	[InlineData(7)]
-	[InlineData(14)]
-	[InlineData(15)]
-	public void SustainComparatorStopsOnlyOnRepeatedNibbleTarget(int sustainNibble)
-	{
-		var target = sustainNibble * 0x11;
-		var chip = CreateVoice(attackDecay: 0x00, sustainRelease: (byte)(sustainNibble << 4), control: 0x11);
-		chip.Render(1);
-		SetEnvelope(chip, envelope: target, state: Decay, zeroHold: target == 0);
-
-		chip.Render(RatePeriods[0]);
-
-		Assert.Equal(target, chip.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(Sustain, chip.DebugState.Voices[0].EnvelopeState);
-	}
-
-	[Fact]
-	public void PendingEnvelopeDirectionStateIsCopied()
-	{
-		var source = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x11);
-		var copy = CreateVoice(attackDecay: 0x00, sustainRelease: 0x00, control: 0x10);
-		source.Render(1);
-		copy.Render(1);
-		SetEnvelope(source, envelope: 0xFF, state: Attack, zeroHold: false);
-		source.Write(0x04, 0x10);
-		source.Render(1);
-		source.Write(0x04, 0x11);
-
-		copy.CopyStateFrom(source);
-		source.Render(RatePeriods[0]);
-		copy.Render(RatePeriods[0]);
-
-		Assert.Equal(source.DebugState.Voices[0].EnvelopeCounter, copy.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(source.DebugState.Voices[0].EnvelopeState, copy.DebugState.Voices[0].EnvelopeState);
-		Assert.Equal(source.DebugState.Voices[0].RateCounter, copy.DebugState.Voices[0].RateCounter);
-	}
-
-	[Fact]
-	public void EnvelopeBugStateMatchesFastAndTracedPaths()
-	{
-		var fast = CreateVoice(attackDecay: 0x00, sustainRelease: 0x0F, control: 0x10);
-		var traced = CreateVoice(attackDecay: 0x00, sustainRelease: 0x0F, control: 0x10);
-		traced.Trace = new SidCycleTrace();
-		fast.Render(1);
-		traced.Render(1);
-		SetEnvelope(fast, envelope: 0, state: Release, rateCounter: 20, zeroHold: true);
-		SetEnvelope(traced, envelope: 0, state: Release, rateCounter: 20, zeroHold: true);
-
-		fast.Write(0x06, 0x00);
-		traced.Write(0x06, 0x00);
-		fast.Render(32757);
-		traced.Render(32757);
-
-		Assert.Equal(fast.DebugState.Voices[0].EnvelopeCounter, traced.DebugState.Voices[0].EnvelopeCounter);
-		Assert.Equal(fast.DebugState.Voices[0].RateCounter, traced.DebugState.Voices[0].RateCounter);
-		Assert.Equal(fast.DebugState.Voices[0].ExponentialCounter, traced.DebugState.Voices[0].ExponentialCounter);
-		Assert.Equal(fast.DebugState.Voices[0].EnvelopeState, traced.DebugState.Voices[0].EnvelopeState);
-	}
-
-	private static SidChip CreateVoice(byte attackDecay, byte sustainRelease, byte control)
-	{
-		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
-		chip.Write(0x05, attackDecay);
-		chip.Write(0x06, sustainRelease);
-		chip.Write(0x04, control);
-		return chip;
-	}
-
-	private static void RunToSustain(SidChip chip)
-	{
-		chip.Render((RatePeriods[0] * 255) + (RatePeriods[0] * 17));
-	}
-
-	private static void SetEnvelope(
-		SidChip chip,
-		int envelope,
-		int state,
-		int rateCounter = 0,
-		bool? zeroHold = null)
-	{
-		var voice = GetVoice(chip);
-		SetField(voice, "_envelopeCounter", envelope);
-		SetField(voice, "_envelopeState", state);
-		SetField(voice, "_rateCounter", rateCounter);
-		SetField(voice, "_exponentialCounter", 0);
-		SetField(voice, "_envelopeZeroHold", zeroHold ?? (state == Release && envelope == 0));
-		SetField(voice, "_envelopeMaxHold", state == Attack && envelope == 0xFF);
-		SetField(voice, "_envelopeCountingUp", state == Attack);
-		SetField(
-			voice,
-			"_envelopeCounterEnabled",
-			(state == Release && envelope == 0)
-				? !(zeroHold ?? true)
-				: !(state == Attack && envelope == 0xFF));
-		SetField(voice, "_envelopeDirectionChangePending", false);
-	}
-
-	private static SidVoice GetVoice(SidChip chip)
-	{
-		var voices = (SidVoice[])typeof(SidChip)
-			.GetField("_voices", BindingFlags.Instance | BindingFlags.NonPublic)!
-			.GetValue(chip)!;
-		return voices[0];
-	}
-
-	private static void SetField(SidVoice voice, string name, object value)
-	{
-		typeof(SidVoice)
-			.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-			.SetValue(voice, value);
-	}
+    private static readonly int[] Periods =
+        [9, 32, 63, 95, 149, 220, 267, 313, 392, 977, 1954, 3126, 3907, 11720, 19532, 31251];
+    public static IEnumerable<object[]> Rates => Enumerable.Range(0, 16).Select(i => new object[] { i });
+
+    [Theory, MemberData(nameof(Rates))]
+    public void AttackComparisonAndStepAreSeparateEvents(int rate)
+    {
+        var voice = new SidVoice();
+        voice.Write(5, (byte)(rate << 4)); voice.Write(6, 0xf0); voice.Write(4, 1);
+        Clock(voice, Periods[rate]);
+        Assert.Equal(0, voice.EnvelopeCounter);
+        Assert.True(voice.EnvelopeDebugState.RateResetPending);
+        Clock(voice, 2);
+        Assert.Equal(0, voice.EnvelopeCounter);
+        Clock(voice, 1);
+        Assert.Equal(1, voice.EnvelopeCounter);
+        Clock(voice, Periods[rate] - 1);
+        Assert.Equal(1, voice.EnvelopeCounter);
+        Clock(voice, 1);
+        Assert.Equal(2, voice.EnvelopeCounter);
+    }
+
+    [Fact]
+    public void GatePipelineEnablesAttackOnSecondClockWithoutResettingRate()
+    {
+        var voice = new SidVoice();
+        voice.Write(6, 0x0f); Clock(voice, 20); voice.Write(4, 1);
+        Clock(voice, 1);
+        Assert.Equal(3, voice.EnvelopeState);
+        Assert.False(voice.EnvelopeDebugState.CounterEnabled);
+        Clock(voice, 1);
+        Assert.Equal(0, voice.EnvelopeState);
+        Assert.True(voice.EnvelopeDebugState.CounterEnabled);
+        Assert.Equal(22, voice.RateCounter);
+    }
+
+    [Fact]
+    public void FasterRateWaitsForTheLfsrToReturnToItsComparator()
+    {
+        var voice = new SidVoice();
+        voice.Write(5, 0xf0); voice.Write(4, 1); Clock(voice, 20); voice.Write(5, 0);
+        // 32767 distinct LFSR states, comparison, reset, two step clocks.
+        Clock(voice, 32767 + 9 + 2 - 20);
+        Assert.Equal(0, voice.EnvelopeCounter);
+        Clock(voice, 1);
+        Assert.Equal(1, voice.EnvelopeCounter);
+    }
+
+    [Fact]
+    public void ReleaseWritesCannotUnlockZero()
+    {
+        var voice = new SidVoice();
+        for (var rate = 15; rate >= 0; --rate)
+        {
+            voice.Write(6, (byte)rate); Clock(voice, 32780);
+            Assert.Equal(0, voice.EnvelopeCounter);
+            Assert.False(voice.EnvelopeDebugState.CounterEnabled);
+        }
+    }
+
+    [Theory]
+    [InlineData(0)] [InlineData(1)] [InlineData(7)] [InlineData(14)] [InlineData(15)]
+    public void SustainStopsAtRepeatedNibbleAndReleaseReachesZero(int sustain)
+    {
+        var voice = new SidVoice();
+        voice.Write(6, (byte)(sustain << 4)); voice.Write(4, 1); Clock(voice, 40000);
+        Assert.Equal(sustain * 17, voice.EnvelopeCounter);
+        var phase = voice.RateCounter; Clock(voice, 1);
+        Assert.NotEqual(phase, voice.RateCounter);
+        voice.Write(4, 0); Clock(voice, 40000);
+        Assert.Equal(0, voice.EnvelopeCounter);
+        Clock(voice, 40000);
+        Assert.Equal(0, voice.EnvelopeCounter);
+    }
+
+    [Fact]
+    public void LoweringSustainResumesDecayAndRaisingItNeverRaisesEnvelope()
+    {
+        var voice = new SidVoice();
+        voice.Write(6, 0xe0); voice.Write(4, 1); Clock(voice, 10000);
+        Assert.Equal(0xee, voice.EnvelopeCounter);
+        voice.Write(6, 0xd0); Clock(voice, 10000);
+        Assert.Equal(0xdd, voice.EnvelopeCounter);
+        voice.Write(6, 0xf0); Clock(voice, 10000);
+        Assert.True(voice.EnvelopeCounter < 0xdd);
+    }
+
+    [Fact]
+    public void DividerIsLatchedAtThresholdsAndSurvivesRetrigger()
+    {
+        var voice = new SidVoice(); voice.Write(4, 1); Clock(voice, 2298);
+        Assert.Equal(255, voice.EnvelopeCounter);
+        Assert.Equal(0, voice.EnvelopeState);
+        Clock(voice, 3);
+        Assert.Equal(1, voice.EnvelopeState);
+        foreach (var (level, period) in new[] { (0x5d, 2), (0x36, 4), (0x1a, 8), (0x0e, 16), (6, 30) })
+        {
+            for (var i = 0; voice.EnvelopeCounter > level && i < 40000; ++i) Clock(voice, 1);
+            Assert.Equal(level, voice.EnvelopeCounter);
+            Clock(voice, 1);
+            Assert.Equal(period, voice.EnvelopeDebugState.DividerPeriod);
+        }
+        voice.Write(4, 0); Clock(voice, 3); voice.Write(4, 1);
+        for (var i = 0; voice.EnvelopeCounter < 8 && i < 40000; ++i) Clock(voice, 1);
+        Assert.Equal(8, voice.EnvelopeCounter);
+        Assert.Equal(30, voice.EnvelopeDebugState.DividerPeriod);
+    }
+
+    [Fact]
+    public void CompletedGateOnThenOffCanWrapZeroButOneClockGateCannot()
+    {
+        foreach (var gateClocks in new[] { 1, 2 })
+        {
+            var voice = new SidVoice(); voice.Write(4, 1); Clock(voice, gateClocks);
+            voice.Write(4, 0); Clock(voice, 12 - gateClocks);
+            Assert.Equal(gateClocks == 2 ? 255 : 0, voice.EnvelopeCounter);
+        }
+    }
+
+    [Fact]
+    public void EnvelopeReadLatchPrecedesTheStep()
+    {
+        var voice = new SidVoice(); voice.Write(4, 1); Clock(voice, 12);
+        Assert.Equal(1, voice.EnvelopeCounter); Assert.Equal(0, voice.ReadEnvelope());
+        Clock(voice, 1); Assert.Equal(1, voice.ReadEnvelope());
+    }
+
+    [Fact]
+    public void RetriggerAtMaximumWrapsAndFreezesUntilAnotherGateTransition()
+    {
+        var voice = new SidVoice(); voice.Write(4, 1); Clock(voice, 2298);
+        Assert.Equal(255, voice.EnvelopeCounter);
+        voice.Write(4, 0); Clock(voice, 2); voice.Write(4, 1); Clock(voice, 7);
+        Assert.Equal(0, voice.EnvelopeCounter);
+        Assert.False(voice.EnvelopeDebugState.CounterEnabled);
+        Clock(voice, 100);
+        Assert.Equal(0, voice.EnvelopeCounter);
+        voice.Write(4, 0); Clock(voice, 2); voice.Write(4, 1); Clock(voice, 30);
+        Assert.True(voice.EnvelopeCounter > 0);
+    }
+
+    [Theory]
+    [InlineData(1)] [InlineData(8)] [InlineData(9)] [InlineData(10)] [InlineData(11)]
+    [InlineData(2301)] [InlineData(2302)] [InlineData(2303)]
+    public void CopyPreservesEveryPendingEnvelopeEvent(int cycles)
+    {
+        var source = new SidVoice(); source.Write(4, 1); Clock(source, cycles);
+        var copy = new SidVoice(); copy.CopyStateFrom(source);
+        for (var i = 0; i < 1000; ++i)
+        {
+            Clock(source, 1); Clock(copy, 1);
+            Assert.Equal(source.EnvelopeDebugState, copy.EnvelopeDebugState);
+        }
+    }
+
+    private static void Clock(SidVoice voice, int cycles)
+    {
+        for (var i = 0; i < cycles; ++i) voice.ClockEnvelope();
+    }
 }

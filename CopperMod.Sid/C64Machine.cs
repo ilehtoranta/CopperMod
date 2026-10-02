@@ -356,18 +356,21 @@ namespace CopperMod.Sid
             Span<float> destination,
             AudioRenderOptionsAdapter options,
             ReadOnlySpan<long> sampleTargetCycles,
-            long cycleCount)
+            long cycleCount,
+            ReadOnlySpan<double> sampleFractions = default)
         {
             var frames = destination.Length / options.ChannelCount;
             if (frames != sampleTargetCycles.Length)
             {
                 throw new ArgumentException("Destination frame count must match the sample target cycle count.", nameof(destination));
             }
+            if (!sampleFractions.IsEmpty && sampleFractions.Length != frames)
+                throw new ArgumentException("Fractional sample positions must match the frame count.", nameof(sampleFractions));
 
             var tickCycles = Math.Max(1, cycleCount);
             if (_basicRunner != null)
             {
-                RenderBasicFrame(destination, options, sampleTargetCycles, tickCycles);
+                RenderBasicFrame(destination, options, sampleTargetCycles, tickCycles, sampleFractions);
                 return;
             }
 
@@ -395,7 +398,7 @@ namespace CopperMod.Sid
                         ref psidPlayPending);
                 }
 
-                var sample = MixDigitalOutputs(Sid.RenderSample(targetCycle));
+                var sample = MixDigitalOutputs(Sid.RenderSample(targetCycle, sampleFractions.IsEmpty ? 0 : sampleFractions[outputFrame]));
                 WriteOutputFrame(destination, options.ChannelCount, outputFrame, sample);
             }
 
@@ -422,7 +425,8 @@ namespace CopperMod.Sid
             Span<float> destination,
             AudioRenderOptionsAdapter options,
             ReadOnlySpan<long> sampleTargetCycles,
-            long tickCycles)
+            long tickCycles,
+            ReadOnlySpan<double> sampleFractions = default)
         {
             var frameStartCycle = Cpu.Cycles;
             var frameEndCycle = frameStartCycle + tickCycles;
@@ -437,7 +441,7 @@ namespace CopperMod.Sid
                     throw new ArgumentOutOfRangeException(nameof(sampleTargetCycles), targetCycle, "Sample target cycle cannot be after the rendered cycle range.");
                 }
 
-                var sample = MixDigitalOutputs(Sid.RenderSample(targetCycle));
+                var sample = MixDigitalOutputs(Sid.RenderSample(targetCycle, sampleFractions.IsEmpty ? 0 : sampleFractions[outputFrame]));
                 WriteOutputFrame(destination, options.ChannelCount, outputFrame, sample);
             }
         }

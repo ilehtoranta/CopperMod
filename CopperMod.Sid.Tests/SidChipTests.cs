@@ -486,7 +486,7 @@ public sealed class SidChipTests
 		Assert.Equal(0x21, chip.DebugState.Voices[0].Control);
 		Assert.Equal(0, chip.DebugState.Voices[0].EnvelopeCounter);
 
-		chip.Render(8);
+		chip.Render(11);
 
 		Assert.Equal(1, chip.DebugState.Voices[0].EnvelopeCounter);
 	}
@@ -585,31 +585,31 @@ public sealed class SidChipTests
 
 		chip.Render(16);
 
-		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(0x7FFFFEu, chip.DebugState.Voices[0].NoiseShiftRegister);
 
 		chip.Render(1);
 
-		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(0x7FFFFEu, chip.DebugState.Voices[0].NoiseShiftRegister);
 
 		chip.Render(1);
 
-		Assert.Equal(NextNoise(0x7FFFF8), chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(NextNoise(0x7FFFFE), chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
 	[Fact]
-	public void TestBitResetsNoiseShiftRegister()
+	public void ShortTestBitPreservesNoiseShiftRegister()
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 		chip.Write(0x00, 0x00);
 		chip.Write(0x01, 0x80);
 		chip.Render(18);
 
-		Assert.Equal(NextNoise(0x7FFFF8), chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(NextNoise(0x7FFFFE), chip.DebugState.Voices[0].NoiseShiftRegister);
 
 		chip.Write(0x04, 0x08);
 		chip.Render(1);
 
-		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(NextNoise(0x7FFFFE), chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
 	[Theory]
@@ -630,7 +630,7 @@ public sealed class SidChipTests
 
 		chip.Render(1);
 
-		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFF8), PulledLowNoiseBits(0x020u));
+		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFFE), PulledLowNoiseBits(0x020u));
 		Assert.Equal(expected, chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
@@ -642,12 +642,12 @@ public sealed class SidChipTests
 
 		chip.Render(1);
 
-		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(0x7FFFFEu, chip.DebugState.Voices[0].NoiseShiftRegister);
 
 		chip.Write(0x04, 0x80);
 		chip.Render(1);
 
-		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(NextNoise(0x7FFFFE), chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
 	[Fact]
@@ -662,13 +662,13 @@ public sealed class SidChipTests
 		var phase2 = Frame(trace, cycle: 18, voice: 0);
 		var phase1 = Frame(trace, cycle: 17, voice: 0);
 		var pulledLowBits = PulledLowNoiseBits(phase2.WaveformDac);
-		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFF8), pulledLowBits);
+		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFFE), pulledLowBits);
 
 		Assert.False(phase1.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
 		Assert.True(phase2.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
 		Assert.True(phase2.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
 		Assert.Equal(expected, chip.DebugState.Voices[0].NoiseShiftRegister);
-		Assert.NotEqual(NextNoise(0x7FFFF8), chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.NotEqual(NextNoise(0x7FFFFE), chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
 	[Fact]
@@ -683,7 +683,7 @@ public sealed class SidChipTests
 		chip.Render(1);
 
 		var phase2 = Frame(trace, cycle: 18, voice: 0);
-		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFF8), PulledLowNoiseBits(phase2.WaveformDac));
+		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFFE), PulledLowNoiseBits(phase2.WaveformDac));
 		Assert.True(phase2.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
 		Assert.True(phase2.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
 		Assert.Equal(expected, chip.DebugState.Voices[0].NoiseShiftRegister);
@@ -702,7 +702,7 @@ public sealed class SidChipTests
 
 		var phase2 = Frame(trace, cycle: 18, voice: 0);
 		var pulledLowBits = PulledLowNoiseBits(phase2.WaveformDac);
-		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFF8), pulledLowBits);
+		var expected = ClearNoiseDacBitsFromPulledLow(NextNoise(0x7FFFFE), pulledLowBits);
 
 		Assert.True(phase2.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
 		Assert.Equal(expected, chip.DebugState.Voices[0].NoiseShiftRegister);
@@ -722,7 +722,7 @@ public sealed class SidChipTests
 		var phase2 = Frame(trace, cycle: 18, voice: 0);
 		Assert.True(phase2.Events.HasFlag(SidCycleTraceEvents.NoiseShift));
 		Assert.False(phase2.Events.HasFlag(SidCycleTraceEvents.NoiseWriteback));
-		Assert.Equal(NextNoise(0x7FFFF8), chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(NextNoise(0x7FFFFE), chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
 	[Fact]
@@ -731,11 +731,11 @@ public sealed class SidChipTests
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 		chip.Write(0x04, 0x08);
 
-		chip.Render(SidVoice.NoiseTestAllOnesDelayCycles - 1);
+		chip.Render(49999);
 
-		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(0x7FFFFEu, chip.DebugState.Voices[0].NoiseShiftRegister);
 
-		chip.Render(1);
+		chip.Render(SidVoice.NoiseTestAllOnesDelayCycles - 49999);
 
 		Assert.Equal(0x7FFFFFu, chip.DebugState.Voices[0].NoiseShiftRegister);
 		Assert.Equal(0xFF0u, chip.DebugState.Voices[0].NoiseDac);
@@ -748,7 +748,7 @@ public sealed class SidChipTests
 
 		chip.Render(SidVoice.NoiseTestAllOnesDelayCycles * 2);
 
-		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(0x7FFFFEu, chip.DebugState.Voices[0].NoiseShiftRegister);
 		Assert.NotEqual(0x7FFFFFu, chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
@@ -764,23 +764,25 @@ public sealed class SidChipTests
 		chip.Write(0x04, 0x80);
 		chip.Render(18);
 
-		Assert.Equal(NextNoise(0x7FFFFF), chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(NextNoise(NextNoise(0x7FFFFF)), chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
 	[Fact]
-	public void Mos8580NoiseCombinedWithOtherWaveformsKeepsLegacyImmediateLock()
+	public void Mos8580NoiseCombinedWithOtherWaveformsWritesBackWithoutArtificialImmediateLock()
 	{
 		var chip = new SidChip(SidChipModel.Mos8580, 0xD400);
 		WriteVoice(chip, voice: 0, frequency: 0x8000, control: 0xA0);
 
 		chip.Render(1);
 
-		Assert.Equal(0u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		var afterWriteback = chip.DebugState.Voices[0].NoiseShiftRegister;
+		Assert.NotEqual(0u, afterWriteback);
+		Assert.NotEqual(0x7FFFFEu, afterWriteback);
 
 		chip.Write(0x04, 0x88);
 		chip.Render(1);
 
-		Assert.Equal(0x7FFFF8u, chip.DebugState.Voices[0].NoiseShiftRegister);
+		Assert.Equal(afterWriteback, chip.DebugState.Voices[0].NoiseShiftRegister);
 	}
 
 	[Fact]
@@ -800,7 +802,7 @@ public sealed class SidChipTests
 	{
 		var chip = new SidChip(SidChipModel.Mos6581, 0xD400);
 
-		Assert.Equal(ExpectedNoiseDac(0x7FFFF8), chip.DebugState.Voices[0].NoiseDac);
+		Assert.Equal(ExpectedNoiseDac(0x7FFFFE), chip.DebugState.Voices[0].NoiseDac);
 	}
 
 	[Fact]
@@ -1079,14 +1081,14 @@ public sealed class SidChipTests
 	private static uint ExpectedNoiseDac(uint value)
 	{
 		var dac = 0u;
-		dac |= ((value >> 22) & 1u) << 11;
-		dac |= ((value >> 20) & 1u) << 10;
-		dac |= ((value >> 16) & 1u) << 9;
-		dac |= ((value >> 13) & 1u) << 8;
-		dac |= ((value >> 11) & 1u) << 7;
-		dac |= ((value >> 7) & 1u) << 6;
-		dac |= ((value >> 4) & 1u) << 5;
-		dac |= ((value >> 2) & 1u) << 4;
+		dac |= ((value >> 20) & 1u) << 11;
+		dac |= ((value >> 18) & 1u) << 10;
+		dac |= ((value >> 14) & 1u) << 9;
+		dac |= ((value >> 11) & 1u) << 8;
+		dac |= ((value >> 9) & 1u) << 7;
+		dac |= ((value >> 5) & 1u) << 6;
+		dac |= ((value >> 2) & 1u) << 5;
+		dac |= ((value >> 0) & 1u) << 4;
 		return dac;
 	}
 
@@ -1099,42 +1101,42 @@ public sealed class SidChipTests
 	{
 		if ((pulledLowBits & (1u << 11)) != 0)
 		{
-			value &= ~(1u << 22);
+			value &= ~(1u << 20);
 		}
 
 		if ((pulledLowBits & (1u << 10)) != 0)
 		{
-			value &= ~(1u << 20);
+			value &= ~(1u << 18);
 		}
 
 		if ((pulledLowBits & (1u << 9)) != 0)
 		{
-			value &= ~(1u << 16);
+			value &= ~(1u << 14);
 		}
 
 		if ((pulledLowBits & (1u << 8)) != 0)
 		{
-			value &= ~(1u << 13);
+			value &= ~(1u << 11);
 		}
 
 		if ((pulledLowBits & (1u << 7)) != 0)
 		{
-			value &= ~(1u << 11);
+			value &= ~(1u << 9);
 		}
 
 		if ((pulledLowBits & (1u << 6)) != 0)
 		{
-			value &= ~(1u << 7);
+			value &= ~(1u << 5);
 		}
 
 		if ((pulledLowBits & (1u << 5)) != 0)
 		{
-			value &= ~(1u << 4);
+			value &= ~(1u << 2);
 		}
 
 		if ((pulledLowBits & (1u << 4)) != 0)
 		{
-			value &= ~(1u << 2);
+			value &= ~(1u << 0);
 		}
 
 		return value & 0x7FFFFF;

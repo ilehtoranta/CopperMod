@@ -1,0 +1,126 @@
+{
+  "schema": 1,
+  "recordedOn": "2026-09-26",
+  "collection": "HVSC v85",
+  "collectionSidFileCount": 61157,
+  "scope": "Selected compatibility regression inputs; not hardware reference captures or an exhaustive library render.",
+  "fixtures": [
+    {
+      "name": "Arkanoid",
+      "path": "MUSICIANS/G/Galway_Martin/Arkanoid.sid",
+      "sha256": "9a576463b6d9e46f35cf2c8fbf40b6b3915424b2207d7c44c73b36e6ce9bc1cd",
+      "format": "RSID",
+      "songs": 20,
+      "startSong": 1,
+      "author": "Martin Galway"
+    },
+    {
+      "name": "YieArKungFuII",
+      "path": "MUSICIANS/G/Galway_Martin/Yie_Ar_Kung_Fu_II.sid",
+      "sha256": "784ce50d92121e57554afd0036dde505b47148f3f200180519f70981c458b469",
+      "format": "PSID",
+      "songs": 7,
+      "startSong": 1,
+      "author": "Martin Galway"
+    },
+    {
+      "name": "GreenBeret",
+      "path": "MUSICIANS/G/Galway_Martin/Green_Beret.sid",
+      "sha256": "30a4d31f638ed90e6a600e94856c1a17af1fdb5e1e71cf75bfae8bc58275d8b0",
+      "format": "PSID",
+      "songs": 21,
+      "startSong": 1,
+      "author": "Martin Galway"
+    },
+    {
+      "name": "ShortCircuit",
+      "path": "MUSICIANS/G/Galway_Martin/Short_Circuit.sid",
+      "sha256": "72f8c083af0afe94895dccc12c6f21a041ac12133021c4a2039b191026a08d56",
+      "format": "PSID",
+      "songs": 5,
+      "startSong": 1,
+      "author": "Martin Galway"
+    },
+    {
+      "name": "Wizball",
+      "path": "MUSICIANS/G/Galway_Martin/Wizball.sid",
+      "sha256": "e1842011108cd30d7583fcc9e880ee3b26e276fb44e09cc359c86a60ea381aed",
+      "format": "PSID",
+      "songs": 9,
+      "startSong": 4,
+      "author": "Martin Galway"
+    },
+    {
+      "name": "GameOver",
+      "path": "MUSICIANS/G/Galway_Martin/Game_Over.sid",
+      "sha256": "8b29189c65f06dc6f07418739baba2a7ef162ff8cba60711e613f7319c8e4f82",
+      "format": "RSID",
+      "songs": 2,
+      "startSong": 1,
+      "author": "Martin Galway"
+    },
+    {
+      "name": "Commando",
+      "path": "MUSICIANS/H/Hubbard_Rob/Commando.sid",
+      "sha256": "5295378dacb06593a9c1853ce11a325ce885a16e26d56274d424e06492948de8",
+      "format": "PSID",
+      "songs": 19,
+      "startSong": 1,
+      "author": "Rob Hubbard"
+    },
+    {
+      "name": "GreatGianaSisters",
+      "path": "MUSICIANS/H/Huelsbeck_Chris/Great_Giana_Sisters.sid",
+      "sha256": "014764e6ee11df4b458c6b30e235ea639d702bd56766a87b5e90d4737558b1c8",
+      "format": "RSID",
+      "songs": 23,
+      "startSong": 1,
+      "author": "Chris Hülsbeck"
+    },
+    {
+      "name": "FlimbosQuestIntro",
+      "path": "MUSICIANS/O/Ouwehand_Reyn/Flimbos_Quest_intro.sid",
+      "sha256": "54e5150a6d88cf4e6cda8eadd6596c09014438b25cd9d82d6664788b11dca8cb",
+      "format": "PSID",
+      "songs": 2,
+      "startSong": 1,
+      "author": "Reyn Ouwehand"
+    },
+    {
+      "name": "Tetris",
+      "path": "MUSICIANS/B/Beben_Wally/Tetris.sid",
+      "sha256": "e7dce940e69f9b637bed0d8bb185518e115bf79098af18e6a8447c0239638dc7",
+      "format": "RSID",
+      "songs": 1,
+      "startSong": 1,
+      "author": "Wally Beben"
+    },
+    {
+      "name": "GIHero",
+      "path": "MUSICIANS/T/Tel_Jeroen/G_I_Hero.sid",
+      "sha256": "cfc8a602a35c082fa5e531857d08efd70a93a45c28259e0dc3102b4b59951880",
+      "format": "PSID",
+      "songs": 2,
+      "startSong": 1,
+      "author": "Jeroen Tel"
+    },
+    {
+      "name": "SpijkerhoekVanSanten",
+      "path": "MUSICIANS/0-9/20CC/van_Santen_Edwin/Spijkerhoek.sid",
+      "sha256": "0cefef0c933a0d93d4e3cffe02f3e4407cd64870270885c3d9b451d55535b1f9",
+      "format": "PSID",
+      "songs": 1,
+      "startSong": 1,
+      "author": "Edwin van Santen"
+    },
+    {
+      "name": "SpijkerhoekBalai",
+      "path": "MUSICIANS/A/Audial_Arts/Balai_Rodney/Spijkerhoek.sid",
+      "sha256": "e76eb548c79a3b9689a4cd92652760bfa56a360613d0e96749cbffd06a7264ca",
+      "format": "PSID",
+      "songs": 1,
+      "startSong": 1,
+      "author": "Rodney Balai"
+    }
+  ]
+}

@@ -53,6 +53,11 @@ namespace CopperMod.Sid
 
     internal readonly struct SidVoiceDebugState
     {
+        public SidEnvelopeGenerator EnvelopeTiming { get; init; }
+        public int NoiseShiftPhase { get; init; }
+        public uint NoiseShiftLatch { get; init; }
+        public bool NoiseReleasePending { get; init; }
+        public byte OscillatorReadLatch { get; init; }
         public SidVoiceDebugState(
             uint accumulator,
             uint noiseShiftRegister,

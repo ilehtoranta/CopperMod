@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Compile Include="../CopperMod.Sid.Tests/SidCorpusFixtures.cs" Link="SidCorpusFixtures.cs" />
   </ItemGroup>
 
   <ItemGroup>

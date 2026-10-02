@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" PrivateAssets="all" />
+    <ProjectReference Include="../CopperMod.Sid/CopperMod.Sid.csproj" />
+    <Using Include="Xunit" />
+    <!-- These sources also run in the full integration suite. Keep one copy. -->
+    <Compile Include="../CopperMod.Sid.Tests/SidChipTests.cs" Link="SidChipTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/SidEnvelopeCycleTests.cs" Link="SidEnvelopeCycleTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/SidWaveformPipelineTests.cs" Link="SidWaveformPipelineTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/SidNoiseReferenceTests.cs" Link="SidNoiseReferenceTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/SidReadbackTests.cs" Link="SidReadbackTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/SidCycleTraceTests.cs" Link="SidCycleTraceTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/SidAnalogTests.cs" Link="SidAnalogTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/SidFilterProfileTests.cs" Link="SidFilterProfileTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/SidFilterCharacterizationTests.cs" Link="SidFilterCharacterizationTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/SidResamplerTests.cs" Link="SidResamplerTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/SidSampleClockTests.cs" Link="SidSampleClockTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/C64MachineTests.cs" Link="C64MachineTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/SidFixtureBuilder.cs" Link="SidFixtureBuilder.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/Cia6526CycleTests.cs" Link="Cia6526CycleTests.cs" />
+    <Compile Include="../CopperMod.Sid.Tests/VicIICycleTests.cs" Link="VicIICycleTests.cs" />
+  </ItemGroup>
+</Project>

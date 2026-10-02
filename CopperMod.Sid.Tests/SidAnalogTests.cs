@@ -235,24 +235,23 @@ public sealed class SidAnalogTests
 		Assert.True(Math.Abs(lowerHalf - upperHalf) < 0.002, $"Expected 8580 DAC curve to stay near-linear, lower {lowerHalf:0.000}, upper {upperHalf:0.000}.");
 	}
 
-	[Fact]
-	public void Mos6581PurePulseTinyWidthsSettleTowardHighRail()
+	[Theory]
+	[InlineData(SidEmulationProfile.Balanced)]
+	[InlineData(SidEmulationProfile.ReferenceMeasured)]
+	public void StaticPulseDacDoesNotDependOnWidth(SidEmulationProfile profile)
 	{
-		var narrowLow = SidAnalog.ScalePulseWidthEdgeOutput(-1.0, 0x40, 0x001, SidChipModel.Mos6581);
-		var narrowHigh = SidAnalog.ScalePulseWidthEdgeOutput(1.0, 0x40, 0x001, SidChipModel.Mos6581);
-		var tinyLow = SidAnalog.ScalePulseWidthEdgeOutput(-1.0, 0x40, 0x010, SidChipModel.Mos6581);
-		var quarter = SidAnalog.ScalePulseWidthEdgeOutput(0.50, 0x40, 0x400, SidChipModel.Mos6581);
-		var square = SidAnalog.ScalePulseWidthEdgeOutput(0.50, 0x40, 0x800, SidChipModel.Mos6581);
-		var mos8580 = SidAnalog.ScalePulseWidthEdgeOutput(-1.0, 0x40, 0x001, SidChipModel.Mos8580);
-		var combined = SidAnalog.ScalePulseWidthEdgeOutput(-1.0, 0x50, 0x001, SidChipModel.Mos6581);
-
-		Assert.InRange(narrowLow, 0.71, 0.73);
-		Assert.Equal(1.0, narrowHigh, precision: 12);
-		Assert.InRange(tinyLow, 0.67, 0.69);
-		Assert.InRange(quarter, 0.46, 0.48);
-		Assert.Equal(0.50, square, precision: 12);
-		Assert.Equal(-1.0, mos8580, precision: 12);
-		Assert.Equal(-1.0, combined, precision: 12);
+		double? expected = null;
+		foreach (var width in new[] { 1, 16, 255, 256, 1024, 2048, 4095 })
+		{
+			var voice = new SidVoice();
+			voice.ConfigureEmulationProfile(profile);
+			voice.Write(4, 0x48); voice.ClockOscillator(); voice.ClockPulse();
+			voice.Write(2, (byte)width); voice.Write(3, (byte)(width >> 8)); voice.Write(4, 0x40);
+			voice.ClockPulse(); voice.ClockPulse();
+			voice.RenderOutput(null, SidChipModel.Mos6581, out var waveform);
+			expected ??= waveform;
+			Assert.Equal(expected.Value, waveform);
+		}
 	}
 
 	[Fact]

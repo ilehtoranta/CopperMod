@@ -52,6 +52,7 @@ namespace CopperMod.Sid
         private double _lastOutput;
         private byte _busValue;
         private long _busLastDrivenCycle;
+        private long _busDecayCycle;
         private long _cycle;
 
         public SidChip(
@@ -66,7 +67,7 @@ namespace CopperMod.Sid
             SidEmulationProfile = sidEmulationProfile;
             foreach (var voice in _voices)
             {
-                voice.ConfigureEmulationProfile(sidEmulationProfile);
+                voice.ConfigureEmulationProfile(sidEmulationProfile, Model);
             }
             _cpuCyclesPerSecond = cpuCyclesPerSecond > 0 ? cpuCyclesPerSecond : SidConstants.PalCpuCyclesPerSecond;
             _filterProfile = SidFilterProfileDefinition.Resolve(Model, filterProfile, SidEmulationProfile);
@@ -153,10 +154,11 @@ namespace CopperMod.Sid
             _lastOutput = 0;
             _busValue = 0;
             _busLastDrivenCycle = 0;
+            _busDecayCycle = 0;
             _cycle = 0;
         }
 
-        public void CopyStateFrom(SidChip source)
+        public void CopyStateFrom(SidChip source, bool copyBus = true)
         {
             ArgumentNullException.ThrowIfNull(source);
             Array.Copy(source._registers, _registers, _registers.Length);
@@ -192,8 +194,12 @@ namespace CopperMod.Sid
             _outputLowPassState = source._outputLowPassState;
             _analogOutputLowPassVoltage = source._analogOutputLowPassVoltage;
             _lastOutput = source._lastOutput;
-            _busValue = source._busValue;
-            _busLastDrivenCycle = source._busLastDrivenCycle;
+            if (copyBus)
+            {
+                _busValue = source._busValue;
+                _busLastDrivenCycle = source._busLastDrivenCycle;
+                _busDecayCycle = source._busDecayCycle;
+            }
             _cycle = source._cycle;
             if (_analog6581Filter != null && source._analog6581Filter != null)
             {
@@ -206,13 +212,13 @@ namespace CopperMod.Sid
             Write(register, value, _cycle);
         }
 
-        public void Write(byte register, byte value, long cycle)
+        public void Write(byte register, byte value, long cycle, bool driveBus = true)
         {
             register = (byte)(register & 0x1F);
             _registers[register] = value;
             _pendingRegisters[register] = value;
             _pendingRegisterBits |= 1u << register;
-            DriveOpenBus(value, cycle);
+            if (driveBus) DriveOpenBus(value, cycle);
         }
 
         public void WriteBusValueOnly(byte value)
@@ -239,10 +245,12 @@ namespace CopperMod.Sid
                 0x19 => (byte)0xFF,
                 0x1A => (byte)0xFF,
                 0x1B => _voices[2].ReadOscillator(_voices[1], Model),
-                0x1C => (byte)_voices[2].EnvelopeCounter,
+                0x1C => _voices[2].ReadEnvelope(),
                 _ => _busValue
             };
-            DriveOpenBus(value, cycle);
+            if (register is >= 0x19 and <= 0x1C) DriveOpenBus(value, cycle);
+            // Floating reads consume charge; they never recharge the data bus.
+            else _busDecayCycle = cycle + Math.Max(0, _busDecayCycle - cycle) / 2;
             return value;
         }
 
@@ -250,13 +258,14 @@ namespace CopperMod.Sid
         {
             _busValue = value;
             _busLastDrivenCycle = cycle;
+            _busDecayCycle = cycle + OpenBusDecayCycles;
         }
 
         private void ApplyOpenBusDecay(long cycle)
         {
             if (_busValue == 0 ||
                 cycle < _busLastDrivenCycle ||
-                cycle - _busLastDrivenCycle < OpenBusDecayCycles)
+                cycle < _busDecayCycle)
             {
                 return;
             }
@@ -707,7 +716,7 @@ namespace CopperMod.Sid
                 waveformTrace.TriangleInverted,
                 waveformTrace.NoiseUsesPostShiftRegister,
                 waveformOutput,
-                voiceOutput));
+                voiceOutput) { Timing = after });
         }
 
         [HotPath]

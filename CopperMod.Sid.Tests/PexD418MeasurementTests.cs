@@ -11,12 +11,13 @@ public sealed class PexD418MeasurementTests
 	private const double Mos6581EnvelopeFitThreshold = 0.010;
 	private const double Mos8580EnvelopeFitThreshold = 0.002;
 
-	[Fact]
+	[PexTablesFact]
 	public void MeasuredAmplitudeTableFilesMatchRuntimeConstantsWhenPresent()
 	{
 		var root = FindMeasurementRoot();
 		if (root == null)
 		{
+			Assert.Fail("Required Pex tables are missing.");
 			return;
 		}
 
@@ -30,10 +31,10 @@ public sealed class PexD418MeasurementTests
 			SidAnalog.Mos8580D418MeasuredAmplitude);
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_REAL_CAPTURE_TESTS", "SID_REAL_CAPTURE_TESTS_STRICT")]
 	public void OptionalPexRawWavCapturesRegenerateMeasuredD418AmplitudeShape()
 	{
-		if (Environment.GetEnvironmentVariable("SID_REAL_CAPTURE_TESTS") != "1")
+		if (!SidEvidenceFactAttribute.Required && Environment.GetEnvironmentVariable("SID_REAL_CAPTURE_TESTS_STRICT") != "1" && Environment.GetEnvironmentVariable("SID_REAL_CAPTURE_TESTS") != "1")
 		{
 			return;
 		}
@@ -41,7 +42,7 @@ public sealed class PexD418MeasurementTests
 		var root = FindMeasurementRoot();
 		if (root == null)
 		{
-			AssertNotStrict("Pex measurement folder was not found.");
+			MissingCapture("Pex measurement folder was not found.");
 			return;
 		}
 
@@ -57,10 +58,10 @@ public sealed class PexD418MeasurementTests
 			3404870));
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_REAL_CAPTURE_TESTS", "SID_REAL_CAPTURE_TESTS_STRICT")]
 	public void OptionalPexRawWavCapturesRegenerateMeasuredD418TransitionMatrices()
 	{
-		if (Environment.GetEnvironmentVariable("SID_REAL_CAPTURE_TESTS") != "1")
+		if (!SidEvidenceFactAttribute.Required && Environment.GetEnvironmentVariable("SID_REAL_CAPTURE_TESTS_STRICT") != "1" && Environment.GetEnvironmentVariable("SID_REAL_CAPTURE_TESTS") != "1")
 		{
 			return;
 		}
@@ -68,7 +69,7 @@ public sealed class PexD418MeasurementTests
 		var root = FindMeasurementRoot();
 		if (root == null)
 		{
-			AssertNotStrict("Pex measurement folder was not found.");
+			MissingCapture("Pex measurement folder was not found.");
 			return;
 		}
 
@@ -77,7 +78,7 @@ public sealed class PexD418MeasurementTests
 		{
 			if (!File.Exists(capture.Path))
 			{
-				AssertNotStrict("Pex capture WAV was not found: " + capture.Path);
+				MissingCapture("Pex capture WAV was not found: " + capture.Path);
 				return;
 			}
 		}
@@ -94,10 +95,10 @@ public sealed class PexD418MeasurementTests
 		Assert.Equal(SidD418TransitionMatrices.Mos8580TransientDecaySeconds, regenerated.Mos8580TransientDecaySeconds, precision: 12);
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_REAL_CAPTURE_TESTS", "SID_REAL_CAPTURE_TESTS_STRICT")]
 	public void OptionalPexRawWavReaderSupportsShort16BitReferenceFiles()
 	{
-		if (Environment.GetEnvironmentVariable("SID_REAL_CAPTURE_TESTS") != "1")
+		if (!SidEvidenceFactAttribute.Required && Environment.GetEnvironmentVariable("SID_REAL_CAPTURE_TESTS_STRICT") != "1" && Environment.GetEnvironmentVariable("SID_REAL_CAPTURE_TESTS") != "1")
 		{
 			return;
 		}
@@ -105,14 +106,14 @@ public sealed class PexD418MeasurementTests
 		var root = FindMeasurementRoot();
 		if (root == null)
 		{
-			AssertNotStrict("Pex measurement folder was not found.");
+			MissingCapture("Pex measurement folder was not found.");
 			return;
 		}
 
 		var path = Path.Combine(root, "thcm_testfiles", "Ref_C64-Short_8580_16bit_48kHz_mono_85gain.wav");
 		if (!File.Exists(path))
 		{
-			AssertNotStrict("Short 16-bit Pex reference WAV was not found.");
+			MissingCapture("Short 16-bit Pex reference WAV was not found.");
 			return;
 		}
 
@@ -127,6 +128,7 @@ public sealed class PexD418MeasurementTests
 	{
 		if (!File.Exists(path))
 		{
+			Assert.Fail("Required Pex amplitude table is missing: " + path);
 			return;
 		}
 
@@ -149,7 +151,7 @@ public sealed class PexD418MeasurementTests
 	{
 		if (!File.Exists(capture.Path))
 		{
-			AssertNotStrict("Pex capture WAV was not found: " + capture.Path);
+			MissingCapture("Pex capture WAV was not found: " + capture.Path);
 			return;
 		}
 
@@ -445,9 +447,12 @@ public sealed class PexD418MeasurementTests
 		return (samples[center - 1] + samples[center] + samples[center + 1]) / 3.0;
 	}
 
-	private static string? FindMeasurementRoot()
-	{
-		var directory = new DirectoryInfo(AppContext.BaseDirectory);
+    internal static string? FindMeasurementRoot()
+    {
+        var configured = Environment.GetEnvironmentVariable("SID_PEX_MEASUREMENT_ROOT");
+        if (!string.IsNullOrWhiteSpace(configured))
+            return Directory.Exists(configured) ? configured : null;
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
 		while (directory != null)
 		{
 			var candidate = Path.Combine(directory.FullName, "CopperMod.Sid", "Docs", MeasurementRootName);
@@ -462,13 +467,7 @@ public sealed class PexD418MeasurementTests
 		return null;
 	}
 
-	private static void AssertNotStrict(string message)
-	{
-		if (Environment.GetEnvironmentVariable("SID_REAL_CAPTURE_TESTS_STRICT") == "1")
-		{
-			Assert.Fail(message);
-		}
-	}
+	private static void MissingCapture(string message) => Assert.Fail(message);
 
 	private sealed record PexCapture(string Path, SidChipModel Model, int FirstValueIndex, int LastValueIndex);
 

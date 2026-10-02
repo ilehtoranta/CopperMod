@@ -398,8 +398,8 @@ public sealed class C64MachineTests
 
 		machine.RunCycles(12);
 
-		Assert.Equal(0x01, machine.Cpu.A);
-		Assert.Contains(trace.Frames, frame => frame.Cycle == 11 && frame.VoiceIndex == 2 && frame.EnvelopeCounter == 1);
+		Assert.Equal(0x00, machine.Cpu.A);
+		Assert.Contains(trace.Frames, frame => frame.Cycle == 12 && frame.VoiceIndex == 2 && frame.EnvelopeCounter == 1);
 		Assert.Equal(3, machine.Sid.Chips[0].DebugState.Voices[2].RateCounter);
 	}
 
@@ -443,8 +443,8 @@ public sealed class C64MachineTests
 		Assert.True(machine.Sid.TryWrite(0xD412, 0x20, 0));
 		var before = machine.Sid.CaptureTimingSnapshot();
 
-		Assert.Equal(0x56, machine.Read(0xD41B, cycleOffset: 4));
-		Assert.Equal(0x56, machine.Read(0xD41B, cycleOffset: 4));
+		Assert.Equal(0x57, machine.Read(0xD41B, cycleOffset: 4));
+		Assert.Equal(0x57, machine.Read(0xD41B, cycleOffset: 4));
 
 		var after = machine.Sid.CaptureTimingSnapshot();
 		Assert.Equal(before.AudioCycle, after.AudioCycle);

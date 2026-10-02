@@ -1,17 +1,19 @@
 using CopperMod.Abstractions;
+using CopperMod.TestSupport;
 using System.Text;
 
 namespace CopperMod.Sid.Tests;
 
 public sealed class SidRenderTests
 {
-	public static TheoryData<string, int, string[]> MixerFilterWorkloads { get; } = new()
+	public static TheoryData<string, int, string> MixerFilterWorkloads { get; } = new()
 	{
-		{ "Commando #1", 0, new[] { "TestTunes", "SID", "Tough", "Commando.sid" } },
-		{ "Great Giana Sisters #5", 4, new[] { "TestTunes", "SID", "Tough", "Great_Giana_Sisters.sid" } },
-		{ "Spijkerhoek #1", 0, new[] { "TestTunes", "SID", "Tough", "Spijkerhoek.sid" } },
-		{ "Flimbo intro #1", 0, new[] { "TestTunes", "SID", "Tough", "Flimbos_Quest_intro.sid" } },
-		{ "Tetris RSID #1", 0, new[] { "TestTunes", "SID", "Wally Beben", "Tetris.sid" } },
+		{ "Commando #1", 0, SidCorpusFixtures.Commando },
+		{ "Great Giana Sisters #5", 4, SidCorpusFixtures.GreatGianaSisters },
+		{ "Spijkerhoek (Edwin van Santen) #1", 0, SidCorpusFixtures.SpijkerhoekVanSanten },
+		{ "Spijkerhoek (Rodney Balai) #1", 0, SidCorpusFixtures.SpijkerhoekBalai },
+		{ "Flimbo intro #1", 0, SidCorpusFixtures.FlimbosQuestIntro },
+		{ "Tetris RSID #1", 0, SidCorpusFixtures.Tetris },
 	};
 
 	[Fact]
@@ -256,24 +258,18 @@ public sealed class SidRenderTests
 		Assert.Contains(song.SidWrites, write => write.Register == 0x01 && write.Value == 0x02);
 	}
 
-	[Theory]
+	[SidEvidenceTheory("SID_CORPUS_TESTS")]
 	[MemberData(nameof(MixerFilterWorkloads))]
-	public void RealMixerFilterWorkloadsRemainFiniteAndAudibleWhenPresent(string name, int subSongIndex, string[] pathParts)
+	public void RealMixerFilterWorkloadsRemainFiniteAndAudibleWhenPresent(string name, int subSongIndex, string corpusPath)
 	{
-		var path = FindWorkspaceFile(pathParts);
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(corpusPath);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = new SidFormat().Load(File.ReadAllBytes(path));
 		if (subSongIndex != 0)
 		{
 			var selector = (IModuleSubSongSelector)song;
-			if (subSongIndex >= selector.SubSongCount)
-			{
-				return;
-			}
+			Assert.True(subSongIndex < selector.SubSongCount, "SID corpus fixture has too few subtunes.");
 
 			selector.SelectSubSong(subSongIndex);
 		}
@@ -406,14 +402,11 @@ public sealed class SidRenderTests
 		Assert.Equal(239, song.GetCurrentTickFrameCount(options));
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealYieArKungFuIIFixtureUsesInitProgrammedCiaCadenceWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Galway", "Yie_Ar_Kung_Fu_II.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.YieArKungFuII);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 48000, channelCount: 1);
@@ -460,14 +453,11 @@ public sealed class SidRenderTests
 		Assert.False(rsid.TryGetLatestVideoFrame(out _));
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealArkanoidFixtureIsRecognizedWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Arkanoid.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.Arkanoid);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var data = File.ReadAllBytes(path);
 		var format = new SidFormat();
@@ -483,14 +473,11 @@ public sealed class SidRenderTests
 		Assert.True(song.Metadata.Tags.ContainsKey("ChipModel"));
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealArkanoidFixtureDrivesOscillatorVoicesWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Arkanoid.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.Arkanoid);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
@@ -504,14 +491,11 @@ public sealed class SidRenderTests
 		Assert.Contains(writes, write => IsControlRegister(write.Register) && (write.Value & 0xF0) != 0);
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealArkanoidFixtureProducesPulseWaveformAroundSevenSecondsWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Arkanoid.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.Arkanoid);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
@@ -531,14 +515,11 @@ public sealed class SidRenderTests
 		Assert.True(largestRange > 0.2f, $"Expected Arkanoid pulse voices near 7s to produce non-DC PCM, got range {largestRange:0.000}.");
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealGreenBeretFixtureDoesNotRunCpuGarbageAfterPsidPlayReturnsWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Green_Beret.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.GreenBeret);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
@@ -552,14 +533,11 @@ public sealed class SidRenderTests
 		Assert.True(lastBuffer.Max() - lastBuffer.Min() > 0.005f);
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealGreenBeretSubtuneOneIntroRemainsFiniteAndNonSilentWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Green_Beret.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.GreenBeret);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
@@ -578,21 +556,15 @@ public sealed class SidRenderTests
 		Assert.True(peakRms > 0.015, $"Expected Green Beret subtune 1 intro to remain audible, peak RMS was {peakRms:0.000}.");
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealGreenBeretSubtuneTenHardRestartSectionHasNoSilentFrameGapsWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Green_Beret.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.GreenBeret);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var selector = (IModuleSubSongSelector)song;
-		if (selector.SubSongCount <= 9)
-		{
-			return;
-		}
+        Assert.True(selector.SubSongCount > 9, "SID corpus fixture has too few subtunes.");
 
 		selector.SelectSubSong(9);
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
@@ -609,14 +581,11 @@ public sealed class SidRenderTests
 		Assert.True(quietestRms > 0.05, $"Expected Green Beret subtune 10 hard-restart frames to avoid near-silent gaps, quietest RMS was {quietestRms:0.000}.");
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealShortCircuitFixtureUsesCiaCadenceWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Short_Circuit.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.ShortCircuit);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
@@ -624,14 +593,11 @@ public sealed class SidRenderTests
 		Assert.Equal(687, song.GetCurrentTickFrameCount(options));
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealShortCircuitFixtureDoesNotClipResonantIntroWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Short_Circuit.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.ShortCircuit);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
@@ -642,14 +608,11 @@ public sealed class SidRenderTests
 		}
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealWizballDefaultTuneExercisesFilteredPulseWidthModulationWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Galway", "Wizball.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.Wizball);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var selector = (IModuleSubSongSelector)song;
@@ -673,14 +636,11 @@ public sealed class SidRenderTests
 		Assert.True(peakRms > 0.03, $"Expected Wizball filtered PWM title voice to remain audible, peak RMS was {peakRms:0.000}.");
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealGIHeroFixtureRendersFiniteAudibleOutputWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Jeroen Tel", "G_I_Hero.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.GIHero);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
@@ -706,14 +666,11 @@ public sealed class SidRenderTests
 		Assert.True(peakRms > 0.005, $"Expected G_I_Hero.sid to produce non-trivial RMS output, peak RMS was {peakRms:0.000}.");
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealTetrisRsidFixtureKeepsRasterInterruptPlaybackAliveWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Wally Beben", "Tetris.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.Tetris);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
@@ -759,14 +716,11 @@ public sealed class SidRenderTests
 		Assert.Contains(song.SidWrites, write => write.Register == 0x18 && write.Value == 0x0F);
 	}
 
-	[Fact]
+	[SidEvidenceFact("SID_CORPUS_TESTS")]
 	public void RealGameOverDigiSectionStaysFiniteAndAvoidsSharpAliasedJumpsWhenPresent()
 	{
-		var path = FindWorkspaceFile("TestTunes", "SID", "Galway", "Game_Over.sid");
-		if (!File.Exists(path))
-		{
-			return;
-		}
+		var path = SidCorpusFixtures.Find(SidCorpusFixtures.GameOver);
+		Assert.True(File.Exists(path), "Required SID corpus fixture is missing: " + path);
 
 		var song = (SidSong)new SidFormat().Load(File.ReadAllBytes(path));
 		var options = new AudioRenderOptions(sampleRate: 44100, channelCount: 2);
@@ -885,36 +839,6 @@ public sealed class SidRenderTests
 		return typeof(SidSong)
 			.GetField("_machine", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
 			.GetValue(song)!;
-	}
-
-	private static string FindWorkspaceFile(params string[] parts)
-	{
-		var directory = new DirectoryInfo(AppContext.BaseDirectory);
-		while (directory != null)
-		{
-			var candidate = Path.Combine(new[] { directory.FullName }.Concat(parts).ToArray());
-			if (File.Exists(candidate))
-			{
-				return candidate;
-			}
-
-			if (parts.Length > 0)
-			{
-				var searchRoot = Path.Combine(new[] { directory.FullName }.Concat(parts.Take(parts.Length - 1)).ToArray());
-				if (Directory.Exists(searchRoot))
-				{
-					var recursiveCandidate = Directory.EnumerateFiles(searchRoot, parts[^1], SearchOption.AllDirectories).FirstOrDefault();
-					if (recursiveCandidate != null)
-					{
-						return recursiveCandidate;
-					}
-				}
-			}
-
-			directory = directory.Parent;
-		}
-
-		return string.Join(Path.DirectorySeparatorChar, parts);
 	}
 
 	private static double Rms(IReadOnlyList<float> samples)

@@ -37,6 +37,7 @@ namespace CopperMod.Sid
 
     internal readonly struct SidCycleTraceFrame
     {
+        public SidVoiceDebugState Timing { get; init; }
         public SidCycleTraceFrame(
             long cycle,
             int chipIndex,

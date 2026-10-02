@@ -83,12 +83,12 @@ public sealed class PexD418ReplayCalibrationTests
 		_output = output;
 	}
 
-	[Theory]
+	[SidEvidenceTheory("SID_D418_REPLAY_CALIBRATION")]
 	[InlineData((int)SidChipModel.Mos6581)]
 	[InlineData((int)SidChipModel.Mos8580)]
 	public void OptionalContinuousPexReplayCalibrationProducesPhasePolarityFitReport(int modelValue)
 	{
-		if (!ContinuousCalibrationEnabled())
+		if (!SidEvidenceFactAttribute.Required && !ContinuousCalibrationEnabled())
 		{
 			return;
 		}
