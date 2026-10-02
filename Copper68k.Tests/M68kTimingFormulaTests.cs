@@ -192,7 +192,11 @@ public sealed class M68kTimingFormulaTests
 	}
 
 	private static bool IsDynamicTimingKey(M68kInstructionTimingKey key)
-		=> key is M68kInstructionTimingKey.MovemLongRegistersToPredecrement or
+		=> key is M68kInstructionTimingKey.FullIndexedMoveToRegister or
+			M68kInstructionTimingKey.FullIndexedMoveToMemory or M68kInstructionTimingKey.FullIndexedRegisterToMemory or
+			M68kInstructionTimingKey.FullIndexedClear or M68kInstructionTimingKey.FullIndexedLea or
+			M68kInstructionTimingKey.FullIndexedJump or M68kInstructionTimingKey.FullIndexedSubroutine or
+			M68kInstructionTimingKey.MovemLongRegistersToPredecrement or
 			M68kInstructionTimingKey.MovemWordRegistersToPredecrement or
 			M68kInstructionTimingKey.MovemWordRegistersToAddressDisplacement or
 			M68kInstructionTimingKey.MovemWordAddressDisplacementToRegisters or
@@ -203,6 +207,7 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.MovemLongRegistersToBriefIndexed or
 			M68kInstructionTimingKey.MovemLongRegistersToAbsoluteLong or
 			M68kInstructionTimingKey.MovemLongAddressIndirectToRegisters or
+			M68kInstructionTimingKey.MovemWordBriefIndexedToRegisters or M68kInstructionTimingKey.MovemLongBriefIndexedToRegisters or
 			M68kInstructionTimingKey.MovemLongAddressDisplacementToRegisters or
 			M68kInstructionTimingKey.MovemLongPcDisplacementToRegisters or
 			M68kInstructionTimingKey.MovemLongPostIncrementToRegisters;

@@ -77,14 +77,14 @@ public sealed class M68020NativeGameOperandTests
     }
 
     [Fact]
-    public void FullIndexedGameOperandStillStopsBeforeTheUnsupportedPointerRead()
+    public void FullIndexedGameOperandReadsPointerThenOuterDisplacedValue()
     {
         var bus = new ZeroWaitCodeBus(); WriteWords(bus, CodeBase, 0x2034, 0x0162, 0x02E0, 0x0018);
         bus.WriteLong(0x22E0, 0x3000); bus.WriteLong(0x3018, 0x12345678);
         using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
         cpu.Reset(CodeBase, 0x4000); cpu.State.A[4] = 0x2000; cpu.State.D[0] = uint.MaxValue;
-        Assert.Throws<UnsupportedM68kTimingException>(() => cpu.ExecuteInstruction());
-        Assert.Equal(CodeBase + 4, cpu.State.ProgramCounter); Assert.Equal(uint.MaxValue, cpu.State.D[0]);
+        cpu.ExecuteInstruction();
+        Assert.Equal(CodeBase + 8, cpu.State.ProgramCounter); Assert.Equal(0x12345678u, cpu.State.D[0]);
         Assert.Equal(0x2000u, cpu.State.A[4]);
     }
 

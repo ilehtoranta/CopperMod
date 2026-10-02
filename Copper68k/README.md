@@ -12,6 +12,22 @@ NOT.B/W/L indirect/postincrement/absolute-long, TST.L absolute-long,
 ADDI.B/W absolute-long and ADDI.W/L indirect, ADDQ.W absolute-long,
 dynamic BCLR/BSET indirect, SUBX.B/W register, and the reached MOVE.W/L forms.
 
+The continuation adds full-format indexed effective addresses to admitted MOVE,
+MOVEA, CLR, LEA, JMP and JSR forms. Base/index suppression, signed word/long displacements,
+scaled indexes, pre/post memory indirection and ordinary timed pointer reads are
+implemented. LEA and jumps resolve addresses without reading the final operand;
+JSR resolves aliased stack bases/indexes before pushing the complete return PC.
+MOVE sources cover An/PC indexed reads to Dn/An, postincrement and
+absolute-long destinations, plus long displacement destinations. Register stores
+cover Dn B/W/L and An long to indexed memory. Other full-indexed instruction and
+destination combinations remain explicitly unsupported; reserved extensions stop
+before consuming displacement words. The continuation also adds sized SUB/SUBA
+absolute-long, quick postincrement arithmetic, ORI/ANDI absolute-long, EORI
+displacement, SUBI absolute-long, immediate bit modification with postincrement,
+immediate BCHG registers, indexed MOVEM.W/L loads, and the further byte/word/long
+MOVE, ADD, SUB and CMP forms reached by the games. The new MOVEM load routes
+support An/PC brief indexes; full extensions retain the explicit unsupported boundary.
+
 Regression tests cover signed/scaled brief indexes and extension-word PC bases,
 operand widths, sign extension, source/destination aliasing, A7 byte stride,
 sticky SUBX zero, extend/borrow/overflow, surrounding memory and CCR preservation.
@@ -19,14 +35,15 @@ MOVEM tests retain the 000/010 ignored-tail read and a separate 040 fallback
 control while validating the new native indirect route. Timing-plan admission
 and read-modify-write barriers remain explicit. Costs retain the existing
 approximate operand-shape policy; these results do not certify physical timing.
-The complete CPU suite passes 3,652 cases, with six optional external corpus
+The complete CPU suite passes 3,932 cases, with six optional external corpus
 cases unavailable. The retained AHX consumer suite passes all 18 cases.
 
 The supplied UFO crack intro runs and accepts its normal mouse-click exit.
-UFO then stops at full-format memory-indirect `MOVE.L` (`$2034/$0162`), which
-remains explicitly unsupported. Alien Breed 3D II reaches a further missing
-`SUB.L (xxx).L,Dn` form. Neither title has verified gameplay or complete AGA
-compatibility. The unchanged application still pins published `1.5.1`; the
+UFO now responds to New Game and difficulty selection, reaching the Geoscape's
+first-base placement screen. Alien Breed 3D II reaches its explicit levels-disk
+request. Interactive gameplay verification is ongoing; complete AGA compatibility
+is not certified.
+The unchanged application still pins published `1.5.1`; the
 candidate is tested through an isolated runtime/package, never a sibling
 project reference. Architectural expectations follow
 [Motorola's programmer reference](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
