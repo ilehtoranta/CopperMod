@@ -7,6 +7,24 @@ public sealed class M68020GameContinuationTests
 {
     private const uint Code = 0xF80000;
 
+    [Theory]
+    [InlineData(0x904C, 0xDEAD001Cu, 0xFF00FF18u, 0xFF00FEFCu, 0x08)]
+    [InlineData(0x9248, 0xABCD0001u, 0xABCD8000u, 0xABCD7FFFu, 0x02)]
+    [InlineData(0x9248, 0xABCD8000u, 0xABCD7FFFu, 0xABCDFFFFu, 0x1B)]
+    [InlineData(0x9248, 0xABCD1234u, 0xABCD1234u, 0xABCD0000u, 0x04)]
+    [InlineData(0x9248, 0xABCD0001u, 0xABCD0000u, 0xABCDFFFFu, 0x19)]
+    [InlineData(0x904F, 0x00005000u, 0x12345001u, 0x12340001u, 0x00)]
+    public void SubWordAddressToDataUsesLowWordsAndPreservesTheAddressRegister(ushort opcode, uint address, uint before, uint after, int flags)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, opcode);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        var source = opcode & 7; var destination = (opcode >> 9) & 7;
+        cpu.State.A[source] = address; cpu.State.D[destination] = before; cpu.State.StatusRegister = 0x201F;
+        cpu.ExecuteInstruction(); Assert.Equal(after, cpu.State.D[destination]); Assert.Equal(address, cpu.State.A[source]);
+        Assert.Equal(flags, cpu.State.StatusRegister & 31); Assert.Equal(Code + 2, cpu.State.ProgramCounter);
+        if (source == 7) Assert.Equal(address, cpu.State.InterruptStackPointer);
+    }
+
     [Fact]
     public void AddaWordPcIndexedUsesExtensionBaseAndSignExtendedSourceWithoutChangingCcr()
     {

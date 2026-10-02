@@ -269,6 +269,7 @@ namespace Copper68k
         SubByteDataToAddressDisplacement,
         SubWordDataToAddressDisplacement,
         SubWordDataToData,
+        SubWordAddressToData,
         NegAddressDisplacement,
         CmpBriefIndexedToData,
         SubBriefIndexedToData,
@@ -755,6 +756,10 @@ namespace Copper68k
             if ((opcode & 0xF1FF) is 0xD0FB or 0xD1FB)
             {
                 return M68020OpcodeKind.AddaPcBriefIndexedToAddress;
+            }
+            if ((opcode & 0xF1F8) == 0x9048)
+            {
+                return M68020OpcodeKind.SubWordAddressToData;
             }
 
             if ((opcode & 0xFFC0) == 0x42C0)
@@ -5413,6 +5418,9 @@ namespace Copper68k
                 case M68020OpcodeKind.AddaPcBriefIndexedToAddress:
                     if (_profile.Model == M68kAcceleratorModel.M68040) return false;
                     ExecuteAddaPcBriefIndexedToAddress(opcode);
+                    return true;
+                case M68020OpcodeKind.SubWordAddressToData:
+                    ExecuteSubWordAddressToData(opcode);
                     return true;
 
                 case M68020OpcodeKind.MoveFromCcr:
@@ -12398,6 +12406,19 @@ namespace Copper68k
             WriteByte(address, result);
             SetSubtractFlags(destination, source, result, M68kOperandSize.Byte);
             CompleteTiming(M68kInstructionTimingKey.SubByteDataToAddressDisplacement);
+        }
+
+        private void ExecuteSubWordAddressToData(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var destinationRegister = (opcode >> 9) & 7;
+            var source = (ushort)State.A[opcode & 7];
+            var destination = (ushort)State.D[destinationRegister];
+            var result = (ushort)(destination - source);
+            WriteDataRegisterWord(destinationRegister, result);
+            SetSubtractFlags(destination, source, result, M68kOperandSize.Word);
+            CompleteTiming(M68kInstructionTimingKey.SubWordAddressToData);
         }
 
         private void ExecuteSubWordDataToData(ushort opcode)

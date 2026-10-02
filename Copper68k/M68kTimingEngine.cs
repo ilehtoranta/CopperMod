@@ -367,6 +367,7 @@ namespace Copper68k
         SubByteDataToAddressDisplacement,
         SubWordDataToAddressDisplacement,
         SubWordDataToData,
+        SubWordAddressToData,
         NegByteAddressDisplacement,
         NegWordAddressDisplacement,
         NegLongAddressDisplacement,
