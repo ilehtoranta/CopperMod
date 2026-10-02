@@ -57,13 +57,17 @@ cases unavailable. The retained AHX consumer suite passes all 18 cases.
 
 The supplied UFO crack intro runs and accepts its normal mouse-click exit.
 UFO now responds to New Game and difficulty selection, first-base placement and
-naming, and advances the Geoscape clock. Alien Breed 3D II accepts the requested
-levels-disk replacement, reaches its main menu and displays the first-level
-briefing. That continuation exposed a missing Kickstart status-pop form and a
-postincrement AND operand form, now implemented with privilege, stack-switching,
-width and condition-code regressions. Further interactive gameplay
-verification is ongoing; complete AGA compatibility
-is not certified.
+naming, advances the Geoscape clock and opens the interception menu. Both normal
+and scalar replays complete 22,000 fields with all 139 capture files identical.
+Alien Breed 3D II accepts the requested levels-disk replacement, reaches the
+first 3D level and responds to forward movement, right turning and firing; ammo
+decreases from 20 to 16. Both modes complete 72,000 fields with all 871 captures
+identical. Some completed Alien Breed rasters omit most of the viewport or HUD,
+so continuous visual stability remains open in the consumer's LWA-AGA-001 issue.
+These results verify bounded gameplay input, not complete AGA compatibility.
+The [consumer evidence](https://github.com/ilehtoranta/CopperScreen/blob/2a78c32/docs/engine/AGA_GAMEPLAY_2026-10-02.md)
+retains exact candidate, media, input and capture identities, earlier failures
+and the remaining visual limitation.
 The unchanged application still pins published `1.5.1`; the
 candidate is tested through an isolated runtime/package, never a sibling
 project reference. Architectural expectations follow
