@@ -26,19 +26,19 @@ public sealed class M68040MmuTests
 	}
 
 	[Fact]
-	public void CacheControlWithIllegalScopeRaisesLineF()
+	public void CacheControlWithIllegalScopeRaisesIllegalInstruction()
 	{
 		const uint handler = 0x2A00;
 		var bus = new Copper68kTestBus();
 		WriteWords(bus, CodeBase, 0xF481);
-		bus.WriteLong(11u * 4, handler);
+		bus.WriteLong(4u * 4, handler);
 		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
 		cpu.Reset(CodeBase, StackBase);
 		cpu.State.StatusRegister = 0;
 
 		cpu.ExecuteInstruction();
 
-		Assert.Equal(11, cpu.State.LastExceptionVector);
+		Assert.Equal(4, cpu.State.LastExceptionVector);
 		Assert.Equal(handler, cpu.State.ProgramCounter);
 		Assert.Equal(CodeBase, cpu.State.LastExceptionStackedProgramCounter);
 	}

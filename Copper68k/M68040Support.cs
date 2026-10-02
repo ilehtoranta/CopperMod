@@ -2509,7 +2509,10 @@ namespace Copper68k
                 State,
                 _instructionFrequency,
                 enableOpcodePlan: false,
-                useM68020BriefIndexedAddressing: true);
+                useM68020BriefIndexedAddressing: true)
+            {
+                ExternalInstructionWordReader = profile.FastInstructionFetch ? null : FetchWord
+            };
         }
 
         public override int ExecuteInstruction()
@@ -2551,6 +2554,8 @@ namespace Copper68k
             // FF00 token from a retired gateway is no longer executable code.
             _observedPhysicalAddressMapGeneration = generation;
             _timing.InstructionCache.Reset();
+            _timedBus.ResetInstructionFetchBuffer();
+            DiscardInstructionPrefetch();
         }
 
         public override void Reset(uint programCounter, uint stackPointer)
@@ -2575,6 +2580,8 @@ namespace Copper68k
 
         protected override bool TryExecuteModelSpecificInstruction(ushort opcode)
         {
+            if (TryExecuteCacheMaintenance(opcode)) return true;
+
             if ((opcode & 0xFF00) == 0x0E00 && (opcode & 0x00C0) != 0x00C0)
             {
                 if ((State.StatusRegister & M68kCpuState.Supervisor) != 0)
@@ -2623,7 +2630,9 @@ namespace Copper68k
                 if (_profile.FixedInstructionNativeCycles is int fixedCycles)
                 {
                     State.Cycles = startCycles;
-                    State.NativeCycles = startNativeCycles;
+                    // Native time advanced by the 040 fetch frontend must survive
+                    // replacement of the fallback's 68000 instruction-cycle policy.
+                    State.NativeCycles = Math.Max(startNativeCycles, State.NativeCycles);
                     _timing.CompleteInstruction(M68kInstructionPlan.CreateFlat(
                         M68kInstructionTimingKey.Nop,
                         "fixed JIT fallback",
@@ -2684,6 +2693,8 @@ namespace Copper68k
         {
             switch (register)
             {
+                case 0x002:
+                    return base.TryWriteControlRegister(register, value & 0x8000_8000u, instructionPc);
                 case 0x003:
                     State.M68040Mmu.TranslationControl = value;
                     State.M68040Mmu.Flush();
