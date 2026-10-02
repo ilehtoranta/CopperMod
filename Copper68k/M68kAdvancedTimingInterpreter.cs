@@ -595,6 +595,7 @@ namespace Copper68k
         PeaAddressDisplacement,
         PeaAddressIndirect,
         PeaBriefIndexed,
+        PeaPcBriefIndexed,
         PeaAbsoluteWord,
         PeaAbsoluteLong,
         PeaPcDisplacement,
@@ -3580,6 +3581,11 @@ namespace Copper68k
             if (opcode == 0x487A)
             {
                 return M68020OpcodeKind.PeaPcDisplacement;
+            }
+
+            if (opcode == 0x487B)
+            {
+                return M68020OpcodeKind.PeaPcBriefIndexed;
             }
 
             if ((opcode & 0xFFF8) == 0x4808)
@@ -7702,6 +7708,10 @@ namespace Copper68k
                     ExecutePeaBriefIndexed(opcode);
                     return true;
 
+                case M68020OpcodeKind.PeaPcBriefIndexed:
+                    ExecutePeaPcBriefIndexed(opcode);
+                    return true;
+
                 case M68020OpcodeKind.PeaAbsoluteWord:
                     ExecutePeaAbsoluteWord();
                     return true;
@@ -8251,8 +8261,20 @@ namespace Copper68k
             _ = FetchWord();
             var baseRegister = opcode & 7;
             var extension = FetchWord();
-            PushLong(CalculateBriefIndexedAddress(baseRegister, extension, opcode));
-            CompleteTiming(M68kInstructionTimingKey.PeaBriefIndexed);
+            PushLong(CalculateIndexedOperandAddress(State.A[baseRegister], extension, opcode));
+            CompleteIndexedCalculationTiming(M68kInstructionTimingKey.PeaBriefIndexed, extension,
+                M68kInstructionTimingKey.FullIndexedPea, "PEA <full-indexed>", operationCycles: 3);
+        }
+
+        private void ExecutePeaPcBriefIndexed(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var extensionAddress = State.ProgramCounter;
+            var extension = FetchWord();
+            PushLong(CalculateIndexedOperandAddress(extensionAddress, extension, opcode));
+            CompleteIndexedCalculationTiming(M68kInstructionTimingKey.PeaPcBriefIndexed, extension,
+                M68kInstructionTimingKey.FullIndexedPea, "PEA <full-indexed>", operationCycles: 3);
         }
 
         private void ExecutePeaAbsoluteWord()
@@ -18120,7 +18142,7 @@ namespace Copper68k
             M68kInstructionTimingKey fullKey, string label, int operationCycles, M68kTimingBarrier barriers = M68kTimingBarrier.None)
         {
             if ((extension & 0x100) == 0) { CompleteTiming(briefKey); return; }
-            // MC68020UM 8.2.3 calculate EA plus the 8.2.11 instruction cache-case cost.
+            // MC68020UM 8.2.3 calculate EA plus the instruction's cache-case cost (8.2.11/8.2.16).
             var baseSize = (extension >> 4) & 3;
             var indirect = extension & 7;
             var cycles = _profile.FixedInstructionNativeCycles ??

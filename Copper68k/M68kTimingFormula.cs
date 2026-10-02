@@ -424,6 +424,7 @@ namespace Copper68k
                 M68kInstructionTimingKey.PeaAddressDisplacement or
                 M68kInstructionTimingKey.PeaAddressIndirect or
                 M68kInstructionTimingKey.PeaBriefIndexed or
+                M68kInstructionTimingKey.PeaPcBriefIndexed or
                 M68kInstructionTimingKey.PeaAbsoluteWord or
                 M68kInstructionTimingKey.PeaAbsoluteLong or
                 M68kInstructionTimingKey.PeaPcDisplacement;
@@ -466,6 +467,7 @@ namespace Copper68k
                 M68kInstructionTimingKey.PeaAddressDisplacement => "PEA (d16,An)",
                 M68kInstructionTimingKey.PeaAddressIndirect => "PEA (An)",
                 M68kInstructionTimingKey.PeaBriefIndexed => "PEA (d8,An,Xn)",
+                M68kInstructionTimingKey.PeaPcBriefIndexed => "PEA (d8,PC,Xn)",
                 M68kInstructionTimingKey.PeaAbsoluteWord => "PEA (xxx).W",
                 M68kInstructionTimingKey.PeaAbsoluteLong => "PEA (xxx).L",
                 M68kInstructionTimingKey.PeaPcDisplacement => "PEA (d16,PC)",
@@ -1409,7 +1411,7 @@ namespace Copper68k
                 M68kTimingOperation.PushEffectiveAddress => descriptor.LegacyKey switch
                 {
                     M68kInstructionTimingKey.PeaAddressIndirect => 5,
-                    M68kInstructionTimingKey.PeaBriefIndexed => 9,
+                    M68kInstructionTimingKey.PeaBriefIndexed or M68kInstructionTimingKey.PeaPcBriefIndexed => 9,
                     _ => 7
                 },
                 M68kTimingOperation.Return => CalculateReturnCycles(descriptor),

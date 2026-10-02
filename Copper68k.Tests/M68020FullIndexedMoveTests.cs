@@ -7,6 +7,69 @@ public sealed class M68020FullIndexedMoveTests
 {
     private const uint Code = 0xF80000;
 
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public void FullPeaPushesCalculatedAddressWithoutReadingFinalOperand(int bd, int indirect, bool suppressIndex)
+    {
+        var bus = new RecordingBus();
+        var words = new List<ushort> { 0x4874, (ushort)(0x1100 | bd << 4 | indirect | (suppressIndex ? 0x40 : 0)) };
+        if (bd == 2) words.Add(0xFFFC);
+        if (bd == 3) words.AddRange([0xFFFF, 0xFFF8]);
+        var outer = (indirect & 3) >= 2 ? -16 : 0;
+        if ((indirect & 3) == 2) words.Add(0xFFF0);
+        if ((indirect & 3) == 3) words.AddRange([0xFFFF, 0xFFF0]);
+        WriteWords(bus.Memory, Code, words.ToArray());
+        var address = bd == 1 ? 0x2000u : bd == 2 ? 0x1FFCu : 0x1FF8u;
+        var index = suppressIndex ? 0u : 4u;
+        var target = address + index;
+        if (indirect != 0)
+        {
+            bus.Memory.WriteLong(address + (indirect < 4 ? index : 0), 0x3000);
+            target = unchecked((uint)(0x3000 + outer)) + (indirect >= 5 ? index : 0);
+        }
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.A[4] = 0x2000; cpu.State.D[1] = 4; cpu.State.StatusRegister = 0x201F;
+        bus.Reads.Clear(); cpu.ExecuteInstruction();
+        Assert.Equal(target, bus.Memory.ReadLong(0x4FFC)); Assert.Equal(0x2000u, cpu.State.A[4]);
+        Assert.Equal(0x4FFCu, cpu.State.A[7]); Assert.Equal(0x4FFCu, cpu.State.InterruptStackPointer);
+        Assert.Equal(0x201F, cpu.State.StatusRegister); Assert.Equal(Code + (uint)words.Count * 2, cpu.State.ProgramCounter);
+        Assert.DoesNotContain(target, bus.Reads);
+        if (indirect == 0) Assert.Empty(bus.Reads);
+        Assert.Equal(9 + (bd == 2 ? 2 : bd == 3 ? 6 : 0) +
+            (indirect == 0 ? 0 : 5 + ((indirect & 3) >= 2 ? 2 : 0)), cpu.State.NativeCycles);
+    }
+
+    [Theory]
+    [InlineData(0x0170, 0, 0x008A, 0xF8008Cu, 8, 15)]
+    [InlineData(0x0160, 0xFFF8, 0, 0xF7FFFAu, 6, 11)]
+    [InlineData(0x11B0, 0, 0x3000, 0x3004u, 8, 15)]
+    [InlineData(0x0161, 6, 0, 0x3000u, 6, 16)]
+    [InlineData(0xF8FE, 0, 0, 0xF85000u, 4, 9)]
+    [InlineData(0x10FE, 0, 0, 0xF80004u, 4, 9)]
+    public void PcPeaUsesExtensionBaseAndPreservesFlagsAndStack(ushort extension, ushort first, ushort second, uint target, int bytes, int cycles)
+    {
+        var bus = new RecordingBus(); WriteWords(bus.Memory, Code, 0x487B, extension, first, second);
+        bus.Memory.WriteLong(Code + 8, 0x3000);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.D[1] = 4; cpu.State.StatusRegister = 0x201F; bus.Reads.Clear(); cpu.ExecuteInstruction();
+        Assert.Equal(target, bus.Memory.ReadLong(0x4FFC)); Assert.Equal(Code + (uint)bytes, cpu.State.ProgramCounter);
+        Assert.Equal(0x201F, cpu.State.StatusRegister); Assert.Equal(0x4FFCu, cpu.State.A[7]);
+        Assert.Equal(cycles, cpu.State.NativeCycles); Assert.DoesNotContain(target, bus.Reads);
+        if ((extension & 7) == 0) Assert.Empty(bus.Reads);
+    }
+
+    [Theory]
+    [InlineData(0x4877, 0x0151, 0x5000u, 0x3000u)]
+    [InlineData(0x4870, 0xF915, 0x2000u, 0x8000u)]
+    public void FullPeaLatchesStackBaseAndIndexBeforePush(ushort opcode, ushort extension, uint pointer, uint target)
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, opcode, extension); bus.WriteLong(pointer, 0x3000);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+        cpu.State.A[0] = 0x2000; cpu.ExecuteInstruction();
+        Assert.Equal(target, bus.ReadLong(0x4FFC)); Assert.Equal(0x4FFCu, cpu.State.A[7]);
+        Assert.Equal(0x4FFCu, cpu.State.InterruptStackPointer);
+    }
+
     public static IEnumerable<object[]> JumpModes()
     {
         foreach (var mode in Modes())
@@ -292,9 +355,13 @@ public sealed class M68020FullIndexedMoveTests
     [InlineData(0x0154)] [InlineData(0x0155)] [InlineData(0x0156)] [InlineData(0x0157)]
     public void ReservedFullExtensionsStillStopExplicitly(ushort extension)
     {
-        var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, 0x2034, extension, 0x4E71);
-        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
-        Assert.Throws<UnsupportedM68kTimingException>(() => cpu.ExecuteInstruction()); Assert.Equal(Code + 4, cpu.State.ProgramCounter);
+        foreach (var opcode in new ushort[] { 0x2034, 0x4874, 0x487B })
+        {
+            var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, opcode, extension, 0x4E71);
+            using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
+            Assert.Throws<UnsupportedM68kTimingException>(() => cpu.ExecuteInstruction()); Assert.Equal(Code + 4, cpu.State.ProgramCounter);
+            Assert.Equal(0x5000u, cpu.State.A[7]);
+        }
     }
 
     [Theory]

@@ -194,7 +194,7 @@ public sealed class M68kTimingFormulaTests
 	private static bool IsDynamicTimingKey(M68kInstructionTimingKey key)
 		=> key is M68kInstructionTimingKey.FullIndexedMoveToRegister or
 			M68kInstructionTimingKey.FullIndexedMoveToMemory or M68kInstructionTimingKey.FullIndexedRegisterToMemory or
-			M68kInstructionTimingKey.FullIndexedClear or M68kInstructionTimingKey.FullIndexedLea or
+			M68kInstructionTimingKey.FullIndexedClear or M68kInstructionTimingKey.FullIndexedLea or M68kInstructionTimingKey.FullIndexedPea or
 			M68kInstructionTimingKey.FullIndexedJump or M68kInstructionTimingKey.FullIndexedSubroutine or
 			M68kInstructionTimingKey.MovemLongRegistersToPredecrement or
 			M68kInstructionTimingKey.MovemWordRegistersToPredecrement or
@@ -330,6 +330,7 @@ public sealed class M68kTimingFormulaTests
 			M68kInstructionTimingKey.PeaAddressDisplacement => ("PEA (d16,An)", 7, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.PeaAddressIndirect => ("PEA (An)", 5, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.PeaBriefIndexed => ("PEA (d8,An,Xn)", 9, M68kTimingBarrier.None),
+			M68kInstructionTimingKey.PeaPcBriefIndexed => ("PEA (d8,PC,Xn)", 9, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.PeaAbsoluteWord => ("PEA (xxx).W", 7, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.PeaAbsoluteLong => ("PEA (xxx).L", 7, M68kTimingBarrier.None),
 			M68kInstructionTimingKey.PeaPcDisplacement => ("PEA (d16,PC)", 7, M68kTimingBarrier.None),
