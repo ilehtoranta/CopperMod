@@ -6,6 +6,63 @@ namespace Copper68k.Tests;
 public sealed class M68020BrianOperandTests
 {
     [Theory]
+    [InlineData(M68kCpuModel.M68EC020, 0x8C30, 0x80001234u, 0xA5A50001u, 0xA5A50081u, 0x18)]
+    [InlineData(M68kCpuModel.M68EC020, 0x8C70, 0x80001234u, 0xA5A50001u, 0xA5A58001u, 0x18)]
+    [InlineData(M68kCpuModel.M68EC020, 0x8CB0, 0x80001234u, 1u, 0x80001235u, 0x18)]
+    [InlineData(M68kCpuModel.M68EC020, 0x8C70, 0x00001234u, 0xA5A50000u, 0xA5A50000u, 0x14)]
+    [InlineData(M68kCpuModel.M68020, 0x8C70, 0x80001234u, 0xA5A50001u, 0xA5A58001u, 0x18)]
+    [InlineData(M68kCpuModel.M68030, 0x8C30, 0x80001234u, 0xA5A50001u, 0xA5A50081u, 0x18)]
+    [InlineData(M68kCpuModel.M68040, 0x8C30, 0x80001234u, 0xA5A50001u, 0xA5A50081u, 0x18)]
+    [InlineData(M68kCpuModel.M68040, 0x8C70, 0x80001234u, 0xA5A50001u, 0xA5A58001u, 0x18)]
+    public void OrBriefIndexedRetainsScaledSignedIndexAndDestinationWidth(M68kCpuModel model, ushort opcode, uint source, uint destination, uint expected, int flags)
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, 0xF80000, opcode, 0x0430); // (48,A0,D0.W*4)
+        bus.WriteLong(0x2020, source);
+        using var cpu = model == M68kCpuModel.M68EC020
+            ? M68kCoreFactory.Default.CreateA1200Ec020(bus)
+            : M68kCoreFactory.Default.Create(model, bus);
+        cpu.Reset(0xF80000, 0x4000);
+        cpu.State.A[0] = 0x2000;
+        cpu.State.D[0] = 0x1234FFFC;
+        cpu.State.D[6] = destination;
+        cpu.State.StatusRegister = 0x201F;
+        cpu.ExecuteInstruction();
+        Assert.Equal(source, bus.ReadLong(0x2020));
+        Assert.Equal(expected, cpu.State.D[6]);
+        Assert.Equal(0x2000u, cpu.State.A[0]);
+        Assert.Equal(0x1234FFFCu, cpu.State.D[0]);
+        Assert.Equal(flags, cpu.State.StatusRegister & 31);
+        Assert.Equal(0xF80004u, cpu.State.ProgramCounter);
+    }
+
+    [Fact]
+    public void OrBriefIndexedResolvesAliasedDataIndexBeforeStore()
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, 0xF80000, 0x8070, 0x0004);
+        bus.WriteWord(0x2006, 0x8000);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(0xF80000, 0x4000);
+        cpu.State.A[0] = 0x2000;
+        cpu.State.D[0] = 2;
+        cpu.ExecuteInstruction();
+        Assert.Equal(0x8002u, cpu.State.D[0]);
+    }
+
+    [Fact]
+    public void OrFullIndexedRemainsExplicitlyUnsupported()
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, 0xF80000, 0x8C70, 0x0130, 0, 0x20);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(0xF80000, 0x4000);
+        cpu.State.D[6] = 0x12345678;
+        Assert.Throws<UnsupportedM68kTimingException>(() => cpu.ExecuteInstruction());
+        Assert.Equal(0x12345678u, cpu.State.D[6]);
+    }
+
+    [Theory]
     [InlineData((int)M68kInstructionTimingKey.EoriByteImmediateToAbsoluteLong)]
     [InlineData((int)M68kInstructionTimingKey.EoriWordImmediateToAbsoluteLong)]
     [InlineData((int)M68kInstructionTimingKey.EoriLongImmediateToAbsoluteLong)]

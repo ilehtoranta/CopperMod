@@ -125,6 +125,7 @@ namespace Copper68k
         MoveLongAddressToBriefIndexed,
         MoveWordAddressToBriefIndexed,
         OrByteOrWordPcBriefIndexedToData,
+        OrByteOrWordBriefIndexedToData,
         ClrByteOrWordAbsoluteWord,
         MovePcIndexedToAbsoluteWord,
         TstAbsoluteWord,
@@ -1378,6 +1379,10 @@ namespace Copper68k
             if ((opcode & 0xF1FF) is 0x803B or 0x807B)
             {
                 return M68020OpcodeKind.OrByteOrWordPcBriefIndexedToData;
+            }
+            if ((opcode & 0xF1F8) is 0x8030 or 0x8070)
+            {
+                return M68020OpcodeKind.OrByteOrWordBriefIndexedToData;
             }
 
             if (opcode is 0x4238 or 0x4278)
@@ -5959,7 +5964,11 @@ namespace Copper68k
 
                 case M68020OpcodeKind.OrByteOrWordPcBriefIndexedToData:
                     if (_profile.Model == M68kAcceleratorModel.M68040) return false;
-                    ExecuteOrByteOrWordPcBriefIndexedToData(opcode);
+                    ExecuteOrByteOrWordBriefIndexedToData(opcode, pcRelative: true);
+                    return true;
+                case M68020OpcodeKind.OrByteOrWordBriefIndexedToData:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteOrByteOrWordBriefIndexedToData(opcode, pcRelative: false);
                     return true;
 
                 case M68020OpcodeKind.ClrByteOrWordAbsoluteWord:
@@ -10284,20 +10293,22 @@ namespace Copper68k
             CompleteIndexedRegisterStoreTiming(M68kInstructionTimingKey.MoveWordAddressToBriefIndexed, extension);
         }
 
-        private void ExecuteOrByteOrWordPcBriefIndexedToData(ushort opcode)
+        private void ExecuteOrByteOrWordBriefIndexedToData(ushort opcode, bool pcRelative)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
-            var extensionAddress = State.ProgramCounter;
+            var sourceBase = pcRelative ? State.ProgramCounter : State.A[opcode & 7];
             var extension = FetchWord();
             var size = (opcode & 0x40) == 0 ? M68kOperandSize.Byte : M68kOperandSize.Word;
             var destination = (opcode >> 9) & 7;
-            var source = ReadSized(CalculateBriefIndexedAddress(extensionAddress, extension, opcode), size);
+            var source = ReadSized(CalculateBriefIndexedAddress(sourceBase, extension, opcode), size);
             var value = State.D[destination] | source;
             WriteDataRegisterSized(destination, value, size);
             SetMoveFlags(value, size);
-            CompleteTiming(size == M68kOperandSize.Byte ? M68kInstructionTimingKey.OrBytePcBriefIndexedToData :
-                M68kInstructionTimingKey.OrWordPcBriefIndexedToData);
+            CompleteTiming(pcRelative ? (size == M68kOperandSize.Byte ? M68kInstructionTimingKey.OrBytePcBriefIndexedToData :
+                M68kInstructionTimingKey.OrWordPcBriefIndexedToData) :
+                (size == M68kOperandSize.Byte ? M68kInstructionTimingKey.OrByteBriefIndexedToData :
+                M68kInstructionTimingKey.OrWordBriefIndexedToData));
         }
 
         private void ExecuteClrByteOrWordAbsoluteWord(ushort opcode)
