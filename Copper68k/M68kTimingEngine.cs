@@ -855,7 +855,24 @@ namespace Copper68k
         OrByteAddressIndirectToData,
         OrWordAddressIndirectToData,
         AddqByteAbsoluteLong,
-        AslByteImmediateData
+        AslByteImmediateData,
+        MoveWordAddressToBriefIndexed,
+        OrBytePcBriefIndexedToData,
+        OrWordPcBriefIndexedToData,
+        ClrByteAbsoluteWord,
+        ClrWordAbsoluteWord,
+        MoveBytePcBriefIndexedToAbsoluteWord,
+        MoveWordPcBriefIndexedToAbsoluteWord,
+        MoveLongPcBriefIndexedToAbsoluteWord,
+        TstByteAbsoluteWord,
+        TstWordAbsoluteWord,
+        TstLongAbsoluteWord,
+        MovemLongRegistersToAbsoluteWord,
+        SubqByteAbsoluteWord,
+        SubqWordAbsoluteWord,
+        SubqLongAbsoluteWord,
+        MoveByteImmediateToAbsoluteWord,
+        MoveWordImmediateToAbsoluteWord
     }
 
     internal readonly record struct M68kInstructionPlan(

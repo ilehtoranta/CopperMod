@@ -69,7 +69,20 @@ MOVEM tests retain the 000/010 ignored-tail read and a separate 040 fallback
 control while validating the new native indirect route. Timing-plan admission
 and read-modify-write barriers remain explicit. Costs retain the existing
 approximate operand-shape policy; these results do not certify physical timing.
-The complete CPU suite passes 4,108 cases, with six optional external corpus
+The Brian the Lion CD32 hard-disk rip adds MOVE.W An to indexed memory,
+OR.B/W PC brief indexed to data registers, CLR.B/W and TST.B/W/L absolute-word,
+MOVE.B/W/L PC indexed to absolute-word, MOVEM.L register lists to absolute-word,
+SUBQ.B/W/L absolute-word, and MOVE.B/W immediate to absolute-word. Indexed MOVE
+retains admitted full extensions and consumes the destination after all source
+displacements. Absolute-word addresses sign-extend; byte immediates ignore their
+unused high byte. MOVEM preserves CCR and registers, stores D0..D7 then A0..A7,
+and admits empty masks. SUBQ retains sized writes, encoded count eight, arithmetic
+flags and read-modify-write barriers. Fifty-seven focused cases cover these
+routes and the unchanged 040 fallback. Native unpacking and title progression
+work through an isolated candidate; the supplied hard-disk rip does not verify
+physical CD32 optical hardware or Akiko.
+
+The complete CPU suite passes 4,165 cases, with six optional external corpus
 cases unavailable. The retained AHX consumer suite passes all 18 cases.
 
 The supplied UFO crack intro runs and accepts its normal mouse-click exit.
