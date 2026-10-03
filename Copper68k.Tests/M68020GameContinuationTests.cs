@@ -56,15 +56,15 @@ public sealed class M68020GameContinuationTests
     }
 
     [Fact]
-    public void AbsoluteLongToIndexedMoveRetainsTheFullDestinationUnsupportedBoundary()
+    public void AbsoluteLongToFullIndexedMovePreservesSourceAndConsumesDestinationDisplacement()
     {
         var bus = new ZeroWaitCodeBus(); WriteWords(bus, Code, 0x23B9, 0x0000, 0x3000, 0x0170, 0x0000, 0x0004);
         bus.WriteLong(0x3000, 0x11223344); bus.WriteLong(0x4004, 0x55667788);
         using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus); cpu.Reset(Code, 0x5000);
         cpu.State.A[1] = 0x4000; cpu.State.StatusRegister = 0x201F;
-        Assert.Throws<UnsupportedM68kTimingException>(() => cpu.ExecuteInstruction());
-        Assert.Equal(0x55667788u, bus.ReadLong(0x4004)); Assert.Equal(0x11223344u, bus.ReadLong(0x3000));
-        Assert.Equal(Code + 8, cpu.State.ProgramCounter); Assert.Equal(0x201F, cpu.State.StatusRegister);
+        cpu.ExecuteInstruction();
+        Assert.Equal(0x11223344u, bus.ReadLong(0x4004)); Assert.Equal(0x11223344u, bus.ReadLong(0x3000));
+        Assert.Equal(Code + 12, cpu.State.ProgramCounter); Assert.Equal(0x2010, cpu.State.StatusRegister);
     }
 
     [Theory]

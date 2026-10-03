@@ -38,19 +38,39 @@ namespace Copper68k
             => _bus.ReadByte(Mask(address), ref cycle, accessKind);
 
         public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
-            => _bus.ReadWord(Mask(address), ref cycle, accessKind);
+        {
+            var physical = Mask(address);
+            if (physical != AddressMask) return _bus.ReadWord(physical, ref cycle, accessKind);
+            var high = _bus.ReadByte(physical, ref cycle, accessKind);
+            return (ushort)((high << 8) | _bus.ReadByte(0, ref cycle, accessKind));
+        }
 
         public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
-            => _bus.ReadLong(Mask(address), ref cycle, accessKind);
+        {
+            var physical = Mask(address);
+            if (physical <= AddressMask - 3) return _bus.ReadLong(physical, ref cycle, accessKind);
+            var high = ReadWord(physical, ref cycle, accessKind);
+            return ((uint)high << 16) | ReadWord(unchecked(physical + 2), ref cycle, accessKind);
+        }
 
         public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
             => _bus.WriteByte(Mask(address), value, ref cycle, accessKind);
 
         public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
-            => _bus.WriteWord(Mask(address), value, ref cycle, accessKind);
+        {
+            var physical = Mask(address);
+            if (physical != AddressMask) { _bus.WriteWord(physical, value, ref cycle, accessKind); return; }
+            _bus.WriteByte(physical, (byte)(value >> 8), ref cycle, accessKind);
+            _bus.WriteByte(0, (byte)value, ref cycle, accessKind);
+        }
 
         public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
-            => _bus.WriteLong(Mask(address), value, ref cycle, accessKind);
+        {
+            var physical = Mask(address);
+            if (physical <= AddressMask - 3) { _bus.WriteLong(physical, value, ref cycle, accessKind); return; }
+            WriteWord(physical, (ushort)(value >> 16), ref cycle, accessKind);
+            WriteWord(unchecked(physical + 2), (ushort)value, ref cycle, accessKind);
+        }
 
         public bool HasHostGateway(uint address) => _bus.HasHostGateway(Mask(address));
 
@@ -71,19 +91,21 @@ namespace Copper68k
             => _fastMemoryBus?.TryReadFastByte(Mask(address), accessKind, out value) ?? ReturnFalse(out value);
 
         public bool TryReadFastWord(uint address, M68kBusAccessKind accessKind, out ushort value)
-            => _fastMemoryBus?.TryReadFastWord(Mask(address), accessKind, out value) ?? ReturnFalse(out value);
+            => Mask(address) < AddressMask && _fastMemoryBus is not null
+                ? _fastMemoryBus.TryReadFastWord(Mask(address), accessKind, out value) : ReturnFalse(out value);
 
         public bool TryReadFastLong(uint address, M68kBusAccessKind accessKind, out uint value)
-            => _fastMemoryBus?.TryReadFastLong(Mask(address), accessKind, out value) ?? ReturnFalse(out value);
+            => Mask(address) <= AddressMask - 3 && _fastMemoryBus is not null
+                ? _fastMemoryBus.TryReadFastLong(Mask(address), accessKind, out value) : ReturnFalse(out value);
 
         public bool TryWriteFastByte(uint address, byte value, M68kBusAccessKind accessKind)
             => _fastMemoryBus?.TryWriteFastByte(Mask(address), value, accessKind) ?? false;
 
         public bool TryWriteFastWord(uint address, ushort value, M68kBusAccessKind accessKind)
-            => _fastMemoryBus?.TryWriteFastWord(Mask(address), value, accessKind) ?? false;
+            => Mask(address) < AddressMask && (_fastMemoryBus?.TryWriteFastWord(Mask(address), value, accessKind) ?? false);
 
         public bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind)
-            => _fastMemoryBus?.TryWriteFastLong(Mask(address), value, accessKind) ?? false;
+            => Mask(address) <= AddressMask - 3 && (_fastMemoryBus?.TryWriteFastLong(Mask(address), value, accessKind) ?? false);
 
         public bool IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind)
             => _physicalAddressMap?.IsCpuPhysicalAddressMapped(Mask(address), byteCount, accessKind) ?? false;

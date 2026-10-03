@@ -61,7 +61,20 @@ jobs:
         run: .\scripts\nuget\pack-copper68k.ps1
 
       - name: Test Copper68k
+        env:
+          COPPER68K_SYNTHETIC_REPORT_DIR: ${{ github.workspace }}/artifacts/synthetic-suite
         run: dotnet test Copper68k.Tests\Copper68k.Tests.csproj --configuration Release
+
+      - name: Require complete synthetic milestone coverage
+        shell: pwsh
+        run: ./scripts/test-copper68k-synthetic.ps1 -ValidateReportsOnly -OutputDirectory artifacts/synthetic-suite
+
+      - name: Upload synthetic architectural coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper68k-synthetic-coverage
+          path: artifacts/synthetic-suite
 
       - name: Test AHX shared Amiga dependency
         run: dotnet test CopperMod.Ahx.Tests\CopperMod.Ahx.Tests.csproj --configuration Release
