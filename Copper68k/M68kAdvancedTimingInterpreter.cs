@@ -532,6 +532,7 @@ namespace Copper68k
         LsrWordRegisterData,
         LsrByteRegisterData,
         LsrWordAddressDisplacement,
+        AsrWordAddressDisplacement,
         AsrByteImmediateData,
         AsrLongImmediateData,
         AsrLongRegisterData,
@@ -3229,6 +3230,10 @@ namespace Copper68k
             if ((opcode & 0xFFF8) == 0xE2E8)
             {
                 return M68020OpcodeKind.LsrWordAddressDisplacement;
+            }
+            if ((opcode & 0xFFF8) == 0xE0E8)
+            {
+                return M68020OpcodeKind.AsrWordAddressDisplacement;
             }
 
             if ((opcode & 0xFFF8) == 0x0C00)
@@ -7515,7 +7520,11 @@ namespace Copper68k
                     return true;
 
                 case M68020OpcodeKind.LsrWordAddressDisplacement:
-                    ExecuteLsrWordAddressDisplacement(opcode);
+                    ExecuteShiftRightWordAddressDisplacement(opcode, arithmetic: false);
+                    return true;
+                case M68020OpcodeKind.AsrWordAddressDisplacement:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteShiftRightWordAddressDisplacement(opcode, arithmetic: true);
                     return true;
 
                 case M68020OpcodeKind.AsrByteImmediateData:
@@ -14766,7 +14775,7 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.LsrByteImmediateData);
         }
 
-        private void ExecuteLsrWordAddressDisplacement(ushort opcode)
+        private void ExecuteShiftRightWordAddressDisplacement(ushort opcode, bool arithmetic)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
@@ -14775,13 +14784,13 @@ namespace Copper68k
             var address = unchecked((uint)(State.A[addressRegister] + displacement));
             var value = ReadWord(address);
             var carry = (value & 1) != 0;
-            var result = (ushort)(value >> 1);
+            var result = arithmetic ? unchecked((ushort)((short)value >> 1)) : (ushort)(value >> 1);
             WriteWord(address, result);
             State.SetNegativeZero(result, M68kOperandSize.Word);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, carry);
             State.SetFlag(M68kCpuState.Extend, carry);
-            CompleteTiming(M68kInstructionTimingKey.LsrWordAddressDisplacement);
+            CompleteTiming(arithmetic ? M68kInstructionTimingKey.AsrWordAddressDisplacement : M68kInstructionTimingKey.LsrWordAddressDisplacement);
         }
 
         private uint CalculateBitFieldBaseAddress(int mode, int register, ushort opcode)

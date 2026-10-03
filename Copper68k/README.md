@@ -80,18 +80,20 @@ opcode as part of a long address. Sized MOVE also admits address-displacement
 sources stored to absolute-word memory. Sized postincrement MOVE to brief
 indexed memory updates the source before calculating an aliased destination
 base or address-register index, and retains the A7 byte stride. Its full-format
-destination remains explicitly unsupported. Indexed MOVE retains admitted full
+destination remains explicitly unsupported. ASR.W displacement memory performs
+one signed word shift, retains surrounding memory and An, and updates XNZVC
+with the existing memory read-modify-write barrier. Indexed MOVE retains admitted full
 extensions and consumes the destination after all source
 displacements. Absolute-word addresses sign-extend; byte immediates ignore their
 unused high byte. MOVEM preserves CCR and registers, stores D0..D7 then A0..A7,
 and admits empty masks. SUBQ retains sized writes, encoded count eight, arithmetic
 flags and read-modify-write barriers. BTST uses byte bits modulo eight and
-changes only Z. One hundred thirty-four focused cases cover these
+changes only Z. One hundred forty-five focused cases cover these
 routes and the unchanged 040 fallback. Native unpacking and title progression
 work through an isolated candidate; the supplied hard-disk rip does not verify
 physical CD32 optical hardware or Akiko.
 
-The complete CPU suite passes 4,242 cases, with six optional external corpus
+The complete CPU suite passes 4,253 cases, with six optional external corpus
 cases unavailable. The retained AHX consumer suite passes all 18 cases.
 
 The supplied UFO crack intro runs and accepts its normal mouse-click exit.

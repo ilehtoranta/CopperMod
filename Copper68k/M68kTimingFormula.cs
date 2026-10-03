@@ -680,7 +680,8 @@ namespace Copper68k
                 M68kInstructionTimingKey.OrLongDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.NotByteAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.NotLongAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
-                M68kInstructionTimingKey.LsrWordAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.LsrWordAddressDisplacement or
+                M68kInstructionTimingKey.AsrWordAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.EorLongDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.EorByteDataToAddressIndirect or
                 M68kInstructionTimingKey.EorWordDataToAddressIndirect or
@@ -1820,7 +1821,7 @@ namespace Copper68k
 
         private static int CalculateShiftRotateCycles(M68kTimingDescriptor descriptor)
         {
-            if (descriptor.LegacyKey == M68kInstructionTimingKey.LsrWordAddressDisplacement &&
+            if (descriptor.LegacyKey is M68kInstructionTimingKey.LsrWordAddressDisplacement or M68kInstructionTimingKey.AsrWordAddressDisplacement &&
                 descriptor.Destination.Form == M68kTimingOperandForm.AddressDisplacement)
             {
                 return 8;
