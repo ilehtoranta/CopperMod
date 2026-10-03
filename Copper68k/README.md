@@ -45,6 +45,23 @@ preserving the upper data word and address register while setting XNZVC.
 The new memory-to-indexed MOVE route retains its full-destination unsupported
 boundary and the existing 040 fallback policy.
 
+Native 4th Dimension and Kick Off 3 startup adds CMP.B/W/L predecrement,
+MOVE.B/W/L absolute-word to postincrement and postincrement to absolute-word,
+MOVE.B/W absolute-long to address-indirect, EOR.B/W/L data to address-indirect,
+ADDI.B/W/L postincrement, OR.B/W address-indirect to data registers,
+ADDQ.B absolute-long, and ASL.B immediate shifts used after menu selection.
+Absolute-word addresses are sign-extended;
+postincrement and predecrement retain the A7 byte stride and active stack bank.
+The memory arithmetic plans retain explicit read-modify-write barriers. The
+new execution routes preserve the 040 integer fallback and its fetch buffer.
+Fifty-nine focused cases cover these forms, shared 020/030/040 controls,
+operand widths, signed addresses, arithmetic flags, source preservation,
+memory aliases, stack strides, immediate shift count eight and overflow from
+intermediate sign changes. The original native stops and further
+continuation stops were reproduced before each implementation; the supplied
+demo now reaches effects with audio, and Kick Off 3 reaches its title and
+disk-2 prompt. Later milestones require separate native replay evidence.
+
 Regression tests cover signed/scaled brief indexes and extension-word PC bases,
 operand widths, sign extension, source/destination aliasing, A7 byte stride,
 sticky SUBX zero, extend/borrow/overflow, surrounding memory and CCR preservation.
@@ -52,7 +69,31 @@ MOVEM tests retain the 000/010 ignored-tail read and a separate 040 fallback
 control while validating the new native indirect route. Timing-plan admission
 and read-modify-write barriers remain explicit. Costs retain the existing
 approximate operand-shape policy; these results do not certify physical timing.
-The complete CPU suite passes 4,049 cases, with six optional external corpus
+The Brian the Lion CD32 hard-disk rip adds MOVE.W An to indexed memory,
+OR.B/W PC/An brief indexed to data registers, CLR.B/W and TST.B/W/L absolute-word,
+MOVE.B/W/L PC indexed to absolute-word, MOVEM.L register lists to absolute-word,
+SUBQ.B/W/L absolute-word, MOVE.B/W immediate to absolute-word, EORI.B/W/L
+immediate to indirect/absolute-long memory, immediate BTST to absolute-word and SUBI.B/W/L
+immediate to indirect memory. Byte/word Dn stores distinguish absolute-word
+from absolute-long destinations: the old broad decode consumed the following
+opcode as part of a long address. Sized MOVE also admits address-displacement
+sources stored to absolute-word memory. Sized postincrement MOVE to brief
+indexed memory updates the source before calculating an aliased destination
+base or address-register index, and retains the A7 byte stride. Its full-format
+destination remains explicitly unsupported. ASR.W displacement memory performs
+one signed word shift, retains surrounding memory and An, and updates XNZVC
+with the existing memory read-modify-write barrier. Indexed MOVE retains admitted full
+extensions and consumes the destination after all source
+displacements. Absolute-word addresses sign-extend; byte immediates ignore their
+unused high byte. MOVEM preserves CCR and registers, stores D0..D7 then A0..A7,
+and admits empty masks. SUBQ retains sized writes, encoded count eight, arithmetic
+flags and read-modify-write barriers. BTST uses byte bits modulo eight and
+changes only Z. One hundred forty-five focused cases cover these
+routes and the unchanged 040 fallback. Native unpacking and title progression
+work through an isolated candidate; the supplied hard-disk rip does not verify
+physical CD32 optical hardware or Akiko.
+
+The complete CPU suite passes 4,253 cases, with six optional external corpus
 cases unavailable. The retained AHX consumer suite passes all 18 cases.
 
 The supplied UFO crack intro runs and accepts its normal mouse-click exit.
