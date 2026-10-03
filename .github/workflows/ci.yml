@@ -62,7 +62,7 @@ jobs:
 
       - name: Test Copper68k
         env:
-          COPPER68K_SYNTHETIC_REPORT_DIR: artifacts/synthetic-suite
+          COPPER68K_SYNTHETIC_REPORT_DIR: ${{ github.workspace }}/artifacts/synthetic-suite
         run: dotnet test Copper68k.Tests\Copper68k.Tests.csproj --configuration Release
 
       - name: Require complete synthetic milestone coverage
