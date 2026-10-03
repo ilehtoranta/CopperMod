@@ -477,6 +477,7 @@ namespace Copper68k
         ImmediateLogicalData,
         EoriImmediateToAddressDisplacement,
         EoriImmediateToAddressIndirect,
+        EoriImmediateToAbsoluteLong,
         BtstByteImmediateAbsoluteLong,
         BtstByteImmediateAbsoluteWord,
         BitImmediateBriefIndexed,
@@ -1186,6 +1187,10 @@ namespace Copper68k
             if ((opcode & 0xFF38) == 0x0A10 && (opcode & 0xC0) != 0xC0)
             {
                 return M68020OpcodeKind.EoriImmediateToAddressIndirect;
+            }
+            if (opcode is 0x0A39 or 0x0A79 or 0x0AB9)
+            {
+                return M68020OpcodeKind.EoriImmediateToAbsoluteLong;
             }
             if (opcode == 0x44FC)
             {
@@ -6917,6 +6922,10 @@ namespace Copper68k
                 case M68020OpcodeKind.EoriImmediateToAddressIndirect:
                     if (_profile.Model == M68kAcceleratorModel.M68040) return false;
                     ExecuteEoriImmediateToAddressMemory(opcode, displacement: false);
+                    return true;
+                case M68020OpcodeKind.EoriImmediateToAbsoluteLong:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteEoriImmediateToAddressMemory(opcode, displacement: false, absoluteLong: true);
                     return true;
                 case M68020OpcodeKind.QuickPostIncrement:
                     ExecuteQuickPostIncrement(opcode);
@@ -13006,17 +13015,22 @@ namespace Copper68k
             CompleteTiming(!subtract ? M68kInstructionTimingKey.AddqWordAddressIndirect : size == M68kOperandSize.Byte ? M68kInstructionTimingKey.SubqByteAddressIndirect : M68kInstructionTimingKey.SubqWordAddressIndirect);
         }
 
-        private void ExecuteEoriImmediateToAddressMemory(ushort opcode, bool displacement)
+        private void ExecuteEoriImmediateToAddressMemory(ushort opcode, bool displacement, bool absoluteLong = false)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
             var size = ((opcode >> 6) & 3) switch { 0 => M68kOperandSize.Byte, 1 => M68kOperandSize.Word, _ => M68kOperandSize.Long };
             var immediate = size == M68kOperandSize.Long ? FetchLong() : FetchWord();
             var offset = displacement ? unchecked((int)(short)FetchWord()) : 0;
-            var address = unchecked((uint)(State.A[opcode & 7] + offset));
+            var address = absoluteLong ? FetchLong() : unchecked((uint)(State.A[opcode & 7] + offset));
             var result = ReadSized(address, size) ^ immediate;
             WriteSized(address, result, size); SetMoveFlags(result, size);
-            CompleteTiming(displacement ? size switch
+            CompleteTiming(absoluteLong ? size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.EoriByteImmediateToAbsoluteLong,
+                M68kOperandSize.Word => M68kInstructionTimingKey.EoriWordImmediateToAbsoluteLong,
+                _ => M68kInstructionTimingKey.EoriLongImmediateToAbsoluteLong
+            } : displacement ? size switch
             {
                 M68kOperandSize.Byte => M68kInstructionTimingKey.EoriByteImmediateToAddressDisplacement,
                 M68kOperandSize.Word => M68kInstructionTimingKey.EoriWordImmediateToAddressDisplacement,

@@ -688,6 +688,9 @@ namespace Copper68k
                 M68kInstructionTimingKey.EoriByteImmediateToAddressIndirect or
                 M68kInstructionTimingKey.EoriWordImmediateToAddressIndirect or
                 M68kInstructionTimingKey.EoriLongImmediateToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.EoriByteImmediateToAbsoluteLong or
+                M68kInstructionTimingKey.EoriWordImmediateToAbsoluteLong or
+                M68kInstructionTimingKey.EoriLongImmediateToAbsoluteLong => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.AddiByteImmediateToPostIncrement or
                 M68kInstructionTimingKey.AddiWordImmediateToPostIncrement or
                 M68kInstructionTimingKey.AddiLongImmediateToPostIncrement => M68kTimingBarrier.ReadModifyWrite,

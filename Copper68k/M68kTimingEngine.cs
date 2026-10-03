@@ -884,7 +884,10 @@ namespace Copper68k
         MoveWordDataToAbsoluteWord,
         MoveByteAddressDisplacementToAbsoluteWord,
         MoveWordAddressDisplacementToAbsoluteWord,
-        MoveLongAddressDisplacementToAbsoluteWord
+        MoveLongAddressDisplacementToAbsoluteWord,
+        EoriByteImmediateToAbsoluteLong,
+        EoriWordImmediateToAbsoluteLong,
+        EoriLongImmediateToAbsoluteLong
     }
 
     internal readonly record struct M68kInstructionPlan(
