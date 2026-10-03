@@ -6,6 +6,36 @@ namespace Copper68k.Tests;
 public sealed class M68020BrianOperandTests
 {
     [Theory]
+    [InlineData(M68kCpuModel.M68EC020, 0x11EE, 0x80001234u, 0x80ADBEEFu, 0x18)]
+    [InlineData(M68kCpuModel.M68EC020, 0x31EE, 0x80001234u, 0x8000BEEFu, 0x18)]
+    [InlineData(M68kCpuModel.M68EC020, 0x21EE, 0x80001234u, 0x80001234u, 0x18)]
+    [InlineData(M68kCpuModel.M68EC020, 0x31EE, 0x00001234u, 0x0000BEEFu, 0x14)]
+    [InlineData(M68kCpuModel.M68020, 0x31EE, 0x80001234u, 0x8000BEEFu, 0x18)]
+    [InlineData(M68kCpuModel.M68030, 0x11EE, 0x80001234u, 0x80ADBEEFu, 0x18)]
+    [InlineData(M68kCpuModel.M68040, 0x31EE, 0x80001234u, 0x8000BEEFu, 0x18)]
+    public void MoveDisplacementToAbsoluteWordRetainsBothSignedAddressesAndWidth(M68kCpuModel model, ushort opcode, uint source, uint expected, int flags)
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, 0xF80000, opcode, 0xFFF0, 0x8000);
+        bus.WriteLong(0x2020, source);
+        bus.WriteLong(0xFF8000, 0xDEADBEEF);
+        bus.WriteLong(0x8000, 0x12345678);
+        using var cpu = model == M68kCpuModel.M68EC020
+            ? M68kCoreFactory.Default.CreateA1200Ec020(bus)
+            : M68kCoreFactory.Default.Create(model, bus);
+        cpu.Reset(0xF80000, 0x4000);
+        cpu.State.A[6] = 0x2030;
+        cpu.State.StatusRegister = 0x201F;
+        cpu.ExecuteInstruction();
+        Assert.Equal(source, bus.ReadLong(0x2020));
+        Assert.Equal(expected, bus.ReadLong(0xFF8000));
+        Assert.Equal(0x12345678u, bus.ReadLong(0x8000));
+        Assert.Equal(0x2030u, cpu.State.A[6]);
+        Assert.Equal(flags, cpu.State.StatusRegister & 31);
+        Assert.Equal(0xF80006u, cpu.State.ProgramCounter);
+    }
+
+    [Theory]
     [InlineData(M68kCpuModel.M68EC020, 0x11C0, 0x12348080u, 0x80ADBEEFu, 0x18)]
     [InlineData(M68kCpuModel.M68EC020, 0x31C0, 0x12348080u, 0x8080BEEFu, 0x18)]
     [InlineData(M68kCpuModel.M68EC020, 0x11C0, 0x12348000u, 0x00ADBEEFu, 0x14)]

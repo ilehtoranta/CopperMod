@@ -228,6 +228,7 @@ namespace Copper68k
         MoveWordAddressToAddressDisplacement,
         MoveWordAddressDisplacementToAddressDisplacement,
         MoveWordAddressDisplacementToAbsoluteLong,
+        MoveAddressDisplacementToAbsoluteWord,
         MoveByteAddressDisplacementToAbsoluteLong,
         MoveWordPcDisplacementToAddressDisplacement,
         MovePcDisplacementToData,
@@ -1856,6 +1857,10 @@ namespace Copper68k
             if ((opcode & 0xFFF8) == 0x33E8)
             {
                 return M68020OpcodeKind.MoveWordAddressDisplacementToAbsoluteLong;
+            }
+            if ((opcode & 0xFFF8) is 0x11E8 or 0x21E8 or 0x31E8)
+            {
+                return M68020OpcodeKind.MoveAddressDisplacementToAbsoluteWord;
             }
 
             if (opcode == 0x33F9)
@@ -6351,6 +6356,10 @@ namespace Copper68k
 
                 case M68020OpcodeKind.MoveWordAddressDisplacementToAbsoluteLong:
                     ExecuteMoveWordAddressDisplacementToAbsoluteLong(opcode);
+                    return true;
+                case M68020OpcodeKind.MoveAddressDisplacementToAbsoluteWord:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteMoveAddressDisplacementToAbsoluteWord(opcode);
                     return true;
 
                 case M68020OpcodeKind.MoveWordPcDisplacementToAddressDisplacement:
@@ -11574,6 +11583,25 @@ namespace Copper68k
             WriteByte(destinationAddress, value);
             SetMoveFlags(value, M68kOperandSize.Byte);
             CompleteTiming(M68kInstructionTimingKey.MoveByteAddressDisplacementToAbsoluteLong);
+        }
+
+        private void ExecuteMoveAddressDisplacementToAbsoluteWord(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var size = (opcode >> 12) switch { 1 => M68kOperandSize.Byte, 3 => M68kOperandSize.Word, _ => M68kOperandSize.Long };
+            var displacement = unchecked((int)(short)FetchWord());
+            var source = unchecked((uint)(State.A[opcode & 7] + displacement));
+            var destination = unchecked((uint)(int)(short)FetchWord());
+            var value = ReadSized(source, size);
+            WriteSized(destination, value, size);
+            SetMoveFlags(value, size);
+            CompleteTiming(size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.MoveByteAddressDisplacementToAbsoluteWord,
+                M68kOperandSize.Word => M68kInstructionTimingKey.MoveWordAddressDisplacementToAbsoluteWord,
+                _ => M68kInstructionTimingKey.MoveLongAddressDisplacementToAbsoluteWord
+            });
         }
 
         private void ExecuteMoveWordAddressDisplacementToAbsoluteLong(ushort opcode)
