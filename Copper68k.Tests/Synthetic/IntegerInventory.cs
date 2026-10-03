@@ -105,7 +105,7 @@ public sealed class SyntheticInventoryTests(ITestOutputHelper output)
                        outcome = spec.ArchitecturalOutcome(model), status = "untested", note = "Execution evidence is in named scenario batches; inventory membership is not a passing result." };
         var report = JsonSerializer.Serialize(new { schema = 1, families = IntegerInventory.All.Length, combinations = rows,
             models = ModelSpec.All.Select(m => new { m.Id, m.AddressBits, m.DataAlignment, m.IndexRules, m.StackRules, m.Diagnostic }),
-            excluded = new[] { "FPU arithmetic", "enabled MMU translation", "CPU32-only integer instructions", "physical pipeline/cache qualification", "OS compatibility" },
+            excluded = new[] { "FPU arithmetic", "enabled MMU translation", "CPU32-only integer instructions", "physical pipeline/cache qualification", "OS compatibility", "Decimal arithmetic results for non-BCD operands", "64-bit MUL with identical high/low registers (undefined result)" },
             reserved = "Full indexed BD=00, bit3=1, IIS=100, suppressed-index IIS=101..111: undefined/reserved; no architectural execution expectation." }, new JsonSerializerOptions { WriteIndented = true });
         var directory = Environment.GetEnvironmentVariable("COPPER68K_SYNTHETIC_REPORT_DIR");
         if (!string.IsNullOrWhiteSpace(directory)) { Directory.CreateDirectory(directory); File.WriteAllText(Path.Combine(directory, "integer-inventory.json"), report); }

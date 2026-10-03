@@ -51,7 +51,7 @@ internal partial class M68kAdvancedTimingInterpreter
         if (mode is 3 or 4) WriteGeneralRegister(true, baseRegister, address);
         var cycles = _profile.FixedInstructionNativeCycles ??
             8 + (load ? 4 : 0) + 2 * (int)((State.ProgramCounter - State.LastInstructionProgramCounter - 4) / 2) +
-            CountSetBits(mask) * (size == M68kOperandSize.Word ? 2 : 4) + _indexedTransferExtraCycles;
+            CountSetBits(mask) * (size == M68kOperandSize.Word ? 2 : 4) + _indexedOperandExtraCycles;
         CompleteTimingPlan(_profile.Model == M68kAcceleratorModel.M68030
             ? M68kInstructionPlan.CreateHeadTail(M68kInstructionTimingKey.GeneralMovem, "MOVEM general EA", cycles, 2, 0)
             : M68kInstructionPlan.CreateFlat(M68kInstructionTimingKey.GeneralMovem, "MOVEM general EA", cycles));

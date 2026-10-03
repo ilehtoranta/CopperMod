@@ -63,7 +63,12 @@ try {
             'move-register-overlap'=$(if ($model -in @('68000','68010')) {1801} else {2593});
             'move-address-boundary'=$(if ($model -in @('68000','68010')) {44} else {60});
             'transfer-registers'=17624; 'transfer-addresses'=$(if ($model -in @('68000','68010')) {8064} else {9252});
-            'transfer-movep'=3708; 'transfer-movem'=$(if ($model -in @('68000','68010')) {3196} else {3592})}
+            'transfer-movep'=3708; 'transfer-movem'=$(if ($model -in @('68000','68010')) {3196} else {3592});
+            'arithmetic-boundaries'=56448; 'arithmetic-addressing'=$(if ($model -in @('68000','68010')) {4667} else {8237});
+            'arithmetic-scenarios'=21072; 'arithmetic-extend'=25440;
+            'arithmetic-decimal'=$(if ($model -in @('68000','68010')) {111392} else {111458});
+            'arithmetic-muldiv-boundaries'=26904;
+            'arithmetic-muldiv-addressing'=$(if ($model -in @('68000','68010')) {5608} elseif ($model -eq '68060') {7208} else {7224})}
         foreach ($group in $expected.Keys) {
             $report = Get-Content -LiteralPath (Join-Path $output "$model-$group.json") -Raw | ConvertFrom-Json
             if ($report.logicalCases -ne $expected[$group] -or $report.counts.passing -ne $expected[$group] -or
@@ -75,6 +80,8 @@ try {
         foreach ($model in $Models) {
             $report = Get-Content -LiteralPath (Join-Path $output "$model-move-seeded-$Seed.json") -Raw | ConvertFrom-Json
             if ($report.logicalCases -ne $Samples -or $report.counts.passing -ne $Samples) { throw "Incomplete seeded audit: $model" }
+            $arithmetic = Get-Content -LiteralPath (Join-Path $output "$model-arithmetic-seeded-$Seed.json") -Raw | ConvertFrom-Json
+            if ($arithmetic.logicalCases -ne $Samples -or $arithmetic.counts.passing -ne $Samples) { throw "Incomplete seeded arithmetic audit: $model" }
         }
     }
     $references = @()
@@ -119,14 +126,14 @@ try {
         $references += 'WinUAE: available adapter is 68000 integer; generator supports other models, adapters/fixtures still need qualification'
     }
     $inventory = Get-Content -LiteralPath (Join-Path $output 'integer-inventory.json') -Raw | ConvertFrom-Json
-    foreach ($row in $inventory.combinations) { if ($row.Milestone -le 2) { $row.status = 'passing' } }
+    foreach ($row in $inventory.combinations) { if ($row.Milestone -le 3) { $row.status = 'passing' } }
     $inventory | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $output 'qualified-inventory.json')
-    @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=90; moveGate='passing'; transferGate='passing'; roadmapComplete=$false;
+    @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=146; moveGate='passing'; transferGate='passing'; arithmeticGate='passing'; roadmapComplete=$false;
         seeded=$(if ($Deep) {@{seed=$Seed; samplesPerModel=$Samples; models=$Models}} else {$null});
         externalReferences=$references; unavailableReferenceCoverage=$(if ($references.Count -eq 0) {'External audits not requested/executed'} else {'Other models remain unqualified by these adapters'});
         timing='Semantic gate; timing policy and physical qualification remain separate'} |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'summary.json')
-    Write-Host "Synthetic MOVE and transfer gates: $logicalCases logical cases; reports at $output"
+    Write-Host "Synthetic MOVE, transfer and arithmetic gates: $logicalCases logical cases; reports at $output"
 }
 finally {
     foreach ($name in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name]) }

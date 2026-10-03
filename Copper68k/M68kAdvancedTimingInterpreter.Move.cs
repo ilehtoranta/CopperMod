@@ -3,7 +3,7 @@ namespace Copper68k;
 
 internal partial class M68kAdvancedTimingInterpreter
 {
-    private int _indexedTransferExtraCycles;
+    private int _indexedOperandExtraCycles;
 
     private uint CalculateIndexedOperandAddress(int register, ushort extension, ushort opcode)
         => CalculateIndexedOperandAddress(State.A[register], extension, opcode);
@@ -56,7 +56,7 @@ internal partial class M68kAdvancedTimingInterpreter
         // routes keep their original plans; this is not physical timing certification.
         var cycles = _profile.FixedInstructionNativeCycles ?? 4 +
             MoveEaPolicyCycles(sourceMode, sourceRegister) +
-            MoveEaPolicyCycles(destinationMode, destinationRegister) + _indexedTransferExtraCycles;
+            MoveEaPolicyCycles(destinationMode, destinationRegister) + _indexedOperandExtraCycles;
         var plan = _profile.Model == M68kAcceleratorModel.M68030
             ? M68kInstructionPlan.CreateHeadTail(M68kInstructionTimingKey.GeneralMove, "MOVE/MOVEA general EA", cycles, 2, 0)
             : M68kInstructionPlan.CreateFlat(M68kInstructionTimingKey.GeneralMove, "MOVE/MOVEA general EA", cycles);

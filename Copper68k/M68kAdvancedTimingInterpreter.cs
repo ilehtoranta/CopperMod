@@ -4386,6 +4386,8 @@ namespace Copper68k
                 throw new UnsupportedM68kTimingException(0, State.ProgramCounter, _profile);
             }
 
+            if (TryExecutePackUnpack(opcode)) return;
+
             if (TryExecuteFastInstruction(opcode))
             {
                 return;
@@ -4396,10 +4398,18 @@ namespace Copper68k
                 return;
             }
 
+            // CMPI gained PC-relative destinations on 020+. The 040 fallback
+            // still uses the 000 instruction inventory, so admit this new form
+            // before it can raise an incorrect illegal-instruction exception.
+            if ((opcode & 0xff00) == 0x0c00 && ((opcode >> 6) & 3) != 3 &&
+                ((opcode >> 3) & 7) == 7 && (opcode & 7) is 2 or 3 && TryExecuteGeneralArithmetic(opcode)) return;
+
             if (TryExecuteApproximateInstruction(opcode))
             {
                 return;
             }
+
+            if (TryExecuteGeneralExtendMemory(opcode) || TryExecuteGeneralArithmetic(opcode)) return;
 
             if (TryExecuteGeneralMove(opcode) || TryExecuteGeneralMovem(opcode))
             {
@@ -8401,13 +8411,13 @@ namespace Copper68k
             var restoredStatus = ReadWord(framePointer);
             var restoredPc = ReadLong(framePointer + 2);
             var format = ReadWord(framePointer + 6);
-            if ((format & 0xF000) != Format0ExceptionFrame)
+            if ((format & 0xF000) != Format0ExceptionFrame && (format & 0xF000) != 0x2000)
             {
                 RaiseFormat0Exception(14, instructionPc, M68kInstructionTimingKey.FormatError);
                 return;
             }
 
-            State.SetActiveStackPointer(framePointer + 8);
+            State.SetActiveStackPointer(framePointer + ((format & 0xf000) == 0x2000 ? 12u : 8u));
             State.ProgramCounter = restoredPc;
             State.StatusRegister = restoredStatus;
             CompleteTiming(M68kInstructionTimingKey.Rte);
@@ -12557,7 +12567,7 @@ namespace Copper68k
                 source = 8;
             }
 
-            State.A[destinationRegister] = unchecked(State.A[destinationRegister] + source);
+            WriteGeneralRegister(true, destinationRegister, unchecked(State.A[destinationRegister] + source));
             CompleteTiming(M68kInstructionTimingKey.AddqWordAddress);
         }
 
@@ -12586,7 +12596,7 @@ namespace Copper68k
                 source = 8;
             }
 
-            State.A[destinationRegister] = unchecked(State.A[destinationRegister] + source);
+            WriteGeneralRegister(true, destinationRegister, unchecked(State.A[destinationRegister] + source));
             CompleteTiming(M68kInstructionTimingKey.AddqLongAddress);
         }
 
@@ -13053,7 +13063,7 @@ namespace Copper68k
                 source = 8;
             }
 
-            State.A[destinationRegister] = unchecked(State.A[destinationRegister] - source);
+            WriteGeneralRegister(true, destinationRegister, unchecked(State.A[destinationRegister] - source));
             CompleteTiming(M68kInstructionTimingKey.SubqLongAddress);
         }
 
@@ -13976,8 +13986,8 @@ namespace Copper68k
             _ = FetchWord();
             var destinationRegister = (opcode >> 9) & 7;
             var sourceRegister = opcode & 7;
-            State.A[destinationRegister] = unchecked(
-                State.A[destinationRegister] + State.A[sourceRegister]);
+            WriteGeneralRegister(true, destinationRegister, unchecked(
+                State.A[destinationRegister] + State.A[sourceRegister]));
             CompleteTiming(M68kInstructionTimingKey.AddaLongAddressToAddress);
         }
 
@@ -14049,7 +14059,7 @@ namespace Copper68k
             _ = FetchWord();
             var destinationRegister = (opcode >> 9) & 7;
             var sourceRegister = opcode & 7;
-            State.A[destinationRegister] -= State.A[sourceRegister];
+            WriteGeneralRegister(true, destinationRegister, unchecked(State.A[destinationRegister] - State.A[sourceRegister]));
             CompleteTiming(M68kInstructionTimingKey.SubaLongAddressToAddress);
         }
 
@@ -14095,7 +14105,7 @@ namespace Copper68k
             _ = FetchWord();
             var destinationRegister = (opcode >> 9) & 7;
             var source = unchecked((uint)(int)(short)FetchWord());
-            State.A[destinationRegister] -= source;
+            WriteGeneralRegister(true, destinationRegister, unchecked(State.A[destinationRegister] - source));
             CompleteTiming(M68kInstructionTimingKey.SubaWordImmediateToAddress);
         }
 
@@ -14144,6 +14154,7 @@ namespace Copper68k
             }
 
             ExecuteDivideLong(source, primaryDestination, secondaryDestination, signed, extendedResult);
+            if (source == 0) return; // Exception path has already completed its plan.
             CompleteTiming(signed ? M68kInstructionTimingKey.DivsLong : M68kInstructionTimingKey.DivuLong);
         }
 
@@ -14202,6 +14213,7 @@ namespace Copper68k
             bool signed,
             bool extendedDividend)
         {
+            State.SetFlag(M68kCpuState.Carry, false);
             if (source == 0)
             {
                 RaiseFormat0Exception(5, State.ProgramCounter, signed ? M68kInstructionTimingKey.DivsLong : M68kInstructionTimingKey.DivuLong);
@@ -14330,6 +14342,7 @@ namespace Copper68k
             var timingKey = signed
                 ? M68kInstructionTimingKey.DivsWordEffectiveAddressToData
                 : M68kInstructionTimingKey.DivuWordEffectiveAddressToData;
+            State.SetFlag(M68kCpuState.Carry, false);
             if (divisor == 0)
             {
                 RaiseFormat0Exception(5, State.ProgramCounter, timingKey);
@@ -14339,7 +14352,7 @@ namespace Copper68k
             if (signed)
             {
                 var signedDivisor = unchecked((short)divisor);
-                var signedDividend = unchecked((int)State.D[register]);
+                var signedDividend = (long)unchecked((int)State.D[register]);
                 var signedQuotient = signedDividend / signedDivisor;
                 var signedRemainder = signedDividend % signedDivisor;
                 if (signedQuotient < short.MinValue || signedQuotient > short.MaxValue)
@@ -15844,7 +15857,7 @@ namespace Copper68k
             var size = (opcode & 0x100) == 0 ? M68kOperandSize.Word : M68kOperandSize.Long;
             var sourceRegister = opcode & 7;
             var value = ReadSized(State.A[sourceRegister], size);
-            if (postIncrement) State.A[sourceRegister] = unchecked(State.A[sourceRegister] + (uint)size);
+            if (postIncrement) WriteGeneralRegister(true, sourceRegister, unchecked(State.A[sourceRegister] + (uint)size));
             var source = size == M68kOperandSize.Word ? unchecked((uint)(int)(short)value) : value;
             var destination = (opcode >> 9) & 7;
             WriteGeneralRegister(true, destination, unchecked(State.A[destination] + source));
@@ -16160,9 +16173,9 @@ namespace Copper68k
             {
                 var sourceAddress = State.A[sourceRegister] - (sourceRegister == 7 ? 2u : 1u);
                 WriteGeneralRegister(true, sourceRegister, sourceAddress);
+                source = ReadByte(sourceAddress);
                 var address = State.A[destinationRegister] - (destinationRegister == 7 ? 2u : 1u);
                 WriteGeneralRegister(true, destinationRegister, address);
-                source = ReadByte(State.A[sourceRegister]);
                 destinationAddress = State.A[destinationRegister];
                 destination = ReadByte(destinationAddress);
             }
@@ -17662,7 +17675,7 @@ namespace Copper68k
             var source = FetchWord() & (word ? 0xFFFFu : 0xFFu);
             var register = opcode & 7;
             var destination = ReadSized(State.A[register], size);
-            State.A[register] += word || register == 7 ? 2u : 1u;
+            WriteGeneralRegister(true, register, unchecked(State.A[register] + (word || register == 7 ? 2u : 1u)));
             SetCompareFlags(destination, source, size);
             CompleteTiming(word ? M68kInstructionTimingKey.CmpiWordImmediateToPostIncrement : M68kInstructionTimingKey.CmpiByteImmediateToPostIncrement);
         }
@@ -17674,7 +17687,7 @@ namespace Copper68k
             var source = FetchLong();
             var register = opcode & 7;
             var destination = ReadLong(State.A[register]);
-            State.A[register] += 4;
+            WriteGeneralRegister(true, register, unchecked(State.A[register] + 4));
             SetCompareFlags(destination, source, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.CmpiLongImmediateToPostIncrement);
         }
@@ -17822,7 +17835,7 @@ namespace Copper68k
             BeginInstruction(opcode);
             _ = FetchWord();
             var sourceRegister = opcode & 7;
-            State.A[sourceRegister] = unchecked(State.A[sourceRegister] - 4);
+            WriteGeneralRegister(true, sourceRegister, unchecked(State.A[sourceRegister] - 4));
             var source = ReadLong(State.A[sourceRegister]);
             var destination = State.A[(opcode >> 9) & 7];
             SetCompareFlags(destination, source, M68kOperandSize.Long);
@@ -17836,7 +17849,7 @@ namespace Copper68k
             var sourceRegister = opcode & 7;
             var sourceAddress = State.A[sourceRegister];
             var source = ReadLong(sourceAddress);
-            State.A[sourceRegister] = unchecked(sourceAddress + 4);
+            WriteGeneralRegister(true, sourceRegister, unchecked(sourceAddress + 4));
             var destination = State.A[(opcode >> 9) & 7];
             SetCompareFlags(destination, source, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.CmpaLongPostIncrementToAddress);
@@ -18033,7 +18046,7 @@ namespace Copper68k
             var destination = State.D[(opcode >> 9) & 7] & 0xFFFF;
             var sourceRegister = opcode & 7;
             var source = ReadWord(State.A[sourceRegister]);
-            State.A[sourceRegister] = unchecked(State.A[sourceRegister] + 2u);
+            WriteGeneralRegister(true, sourceRegister, unchecked(State.A[sourceRegister] + 2u));
             SetCompareFlags(destination, source, M68kOperandSize.Word);
             CompleteTiming(M68kInstructionTimingKey.CmpWordPostIncrementToData);
         }
@@ -18057,11 +18070,11 @@ namespace Copper68k
             var sourceRegister = opcode & 7;
             var destinationRegister = (opcode >> 9) & 7;
             var source = ReadSized(State.A[sourceRegister], size);
-            State.A[sourceRegister] = unchecked(State.A[sourceRegister] +
-                (size == M68kOperandSize.Byte && sourceRegister == 7 ? 2u : (uint)size));
+            WriteGeneralRegister(true, sourceRegister, unchecked(State.A[sourceRegister] +
+                (size == M68kOperandSize.Byte && sourceRegister == 7 ? 2u : (uint)size)));
             var destination = ReadSized(State.A[destinationRegister], size);
-            State.A[destinationRegister] = unchecked(State.A[destinationRegister] +
-                (size == M68kOperandSize.Byte && destinationRegister == 7 ? 2u : (uint)size));
+            WriteGeneralRegister(true, destinationRegister, unchecked(State.A[destinationRegister] +
+                (size == M68kOperandSize.Byte && destinationRegister == 7 ? 2u : (uint)size)));
             SetCompareFlags(destination, source, size);
             CompleteTiming(timingKey);
         }
@@ -18233,7 +18246,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected void BeginInstruction(ushort opcode)
         {
-            _indexedTransferExtraCycles = 0;
+            _indexedOperandExtraCycles = 0;
             State.LastInstructionProgramCounter = State.ProgramCounter;
             State.LastOpcode = opcode;
             if (_instructionFrequency.Enabled)
@@ -18244,10 +18257,13 @@ namespace Copper68k
 
         internal virtual void RaiseFormat0Exception(int vector, uint stackedProgramCounter, M68kInstructionTimingKey timingKey)
         {
+            // Zero divide is the format-2 exception in this integer slice;
+            // other callers retain their existing format-0 frame policy.
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Master);
-            PushWord((ushort)(Format0ExceptionFrame | ((vector * 4) & 0x0FFF)));
+            if (vector == 5) PushLong(State.LastInstructionProgramCounter);
+            PushWord((ushort)((vector == 5 ? 0x2000 : Format0ExceptionFrame) | ((vector * 4) & 0x0FFF)));
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + ((uint)vector * 4));
@@ -18566,8 +18582,8 @@ namespace Copper68k
         internal void CompleteTiming(M68kInstructionTimingKey key)
         {
             var plan = _timing.GetPlan(key);
-            if (_indexedTransferExtraCycles != 0)
-                plan = plan with { NativeCycles = _profile.FixedInstructionNativeCycles ?? plan.NativeCycles + _indexedTransferExtraCycles };
+            if (_indexedOperandExtraCycles != 0)
+                plan = plan with { NativeCycles = _profile.FixedInstructionNativeCycles ?? plan.NativeCycles + _indexedOperandExtraCycles };
             CompleteTimingPlan(plan);
         }
 
@@ -18591,6 +18607,8 @@ namespace Copper68k
                 name,
                 _profile.Model,
                 _profile.FixedInstructionNativeCycles);
+            if (_indexedOperandExtraCycles != 0)
+                plan = plan with { NativeCycles = _profile.FixedInstructionNativeCycles ?? plan.NativeCycles + _indexedOperandExtraCycles };
             CompleteTimingPlan(plan);
         }
 
@@ -18607,8 +18625,8 @@ namespace Copper68k
                 registerToMemory,
                 _profile.Model,
                 _profile.FixedInstructionNativeCycles);
-            if (_indexedTransferExtraCycles != 0)
-                plan = plan with { NativeCycles = _profile.FixedInstructionNativeCycles ?? plan.NativeCycles + _indexedTransferExtraCycles };
+            if (_indexedOperandExtraCycles != 0)
+                plan = plan with { NativeCycles = _profile.FixedInstructionNativeCycles ?? plan.NativeCycles + _indexedOperandExtraCycles };
             CompleteTimingPlan(plan);
         }
 
@@ -18620,7 +18638,7 @@ namespace Copper68k
             bool memoryToRegister = false)
         {
             var nativeCycles = _profile.FixedInstructionNativeCycles ??
-                8 + (memoryToRegister ? 4 : 0) + effectiveAddressCycles + (2 * registerCount) + _indexedTransferExtraCycles;
+                8 + (memoryToRegister ? 4 : 0) + effectiveAddressCycles + (2 * registerCount) + _indexedOperandExtraCycles;
             var plan = _profile.Model == M68kAcceleratorModel.M68030
                 ? M68kInstructionPlan.CreateHeadTail(
                     key,
@@ -18926,8 +18944,8 @@ namespace Copper68k
             if (baseSize == 0 || (extension & 8) != 0 || indirect == 4 || (suppressIndex && indirect >= 4))
                 throw new UnsupportedM68kTimingException(opcode, State.LastInstructionProgramCounter, _profile);
 
-            if ((opcode >> 12) is >= 1 and <= 3 || (opcode & 0xfb80) == 0x4880)
-                _indexedTransferExtraCycles += 4 + (baseSize == 2 ? 2 : baseSize == 3 ? 6 : 0) +
+            if ((opcode >> 12) is >= 1 and <= 3 || (opcode & 0xfb80) == 0x4880 || IsArithmeticIndexedInstruction(opcode))
+                _indexedOperandExtraCycles += 4 + (baseSize == 2 ? 2 : baseSize == 3 ? 6 : 0) +
                     (indirect == 0 ? 0 : 5 + ((indirect & 3) >= 2 ? 2 : 0));
 
             var index = suppressIndex ? 0u : M68kIntegerSemantics.CalculateM68020BriefIndexedIndexValue(extension, State.D, State.A);
@@ -19002,6 +19020,8 @@ namespace Copper68k
 
         private uint CalculateBriefIndexedAddress(uint baseAddress, ushort extension, ushort opcode)
         {
+            if ((extension & 0x100) != 0 && IsArithmeticIndexedInstruction(opcode))
+                return CalculateIndexedOperandAddress(baseAddress, extension, opcode);
             if (!M68kIntegerSemantics.TryCalculateM68020BriefIndexedAddress(
                 baseAddress,
                 extension,

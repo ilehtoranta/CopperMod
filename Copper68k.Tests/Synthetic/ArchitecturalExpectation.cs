@@ -5,13 +5,16 @@ internal sealed class ArchitecturalExpectation
     public uint[] D { get; init; } = new uint[8];
     public uint[] A { get; init; } = new uint[8];
     public Dictionary<uint, byte> Memory { get; init; } = [];
+    public Dictionary<uint, byte> MemoryMasks { get; } = [];
+    public HashSet<uint> ForbiddenOperandReads { get; } = [];
+    public int? ExpectedByteOperandAccesses { get; set; }
     public ushort Sr { get; set; }
-    public ushort DefinedSrMask { get; init; } = 0xffff;
+    public ushort DefinedSrMask { get; set; } = 0xffff;
     public uint Pc { get; set; }
     public bool Stopped { get; set; }
     public bool Halted { get; set; }
     public int? ExceptionVector { get; set; }
-    public uint? InactiveStackPointer { get; init; }
+    public uint? InactiveStackPointer { get; set; }
     public uint? MasterStackPointer { get; init; }
 
     public static ArchitecturalExpectation Capture(SyntheticMachine machine) => new()
@@ -42,8 +45,16 @@ internal sealed class ArchitecturalExpectation
         if (!supervisor && state.UserStackPointer != A[7]) return $"Active USP expected {A[7]:X8}, actual {state.UserStackPointer:X8}";
         if (InactiveStackPointer.HasValue && InactiveStackPointer != (supervisor ? state.UserStackPointer : state.SupervisorStackPointer)) return "Inactive stack pointer changed";
         if (MasterStackPointer.HasValue && MasterStackPointer != state.MasterStackPointer) return "Master stack pointer changed";
+        if (ForbiddenOperandReads.Count != 0 || ExpectedByteOperandAccesses.HasValue)
+        {
+            var operandAccesses = machine.Bus.Accesses.Where(a => a.Kind is Copper68k.M68kBusAccessKind.CpuDataRead or Copper68k.M68kBusAccessKind.CpuDataWrite).ToArray();
+            if (operandAccesses.Any(a => !a.Write && Enumerable.Range(0, a.Width).Any(offset => ForbiddenOperandReads.Contains(machine.Model.Physical(unchecked(a.Address + (uint)offset))))))
+                return "Unavailable instruction read its operand before trapping";
+            if (ExpectedByteOperandAccesses.HasValue && (operandAccesses.Length != ExpectedByteOperandAccesses || operandAccesses.Any(a => a.Width != 1)))
+                return "PACK/UNPK must transfer the specified bytes separately";
+        }
         foreach (var address in Memory.Keys.Concat(machine.Bus.Memory.Keys).Distinct())
-            if (Memory.GetValueOrDefault(address) != machine.Bus.Peek(address))
+            if ((Memory.GetValueOrDefault(address) & MemoryMasks.GetValueOrDefault(address, (byte)255)) != (machine.Bus.Peek(address) & MemoryMasks.GetValueOrDefault(address, (byte)255)))
                 return $"Memory {address:X8}: expected {Memory.GetValueOrDefault(address):X2}, actual {machine.Bus.Peek(address):X2}";
         return null;
     }

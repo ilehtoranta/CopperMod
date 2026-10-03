@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -30,6 +30,42 @@ $mutations = @(
             State.SetFlag(M68kCpuState.Zero, false);
 '@; group='MoveValueAndConditionCodeBoundaries'}
 )
+$arithmetic = 'Copper68k/M68kAdvancedTimingInterpreter.Arithmetic.cs'
+$mutations += @(
+    @{name='arithmetic-overflow'; file=$advanced; before=@'
+            var arithmetic = M68kIntegerSemantics.CalculateAddFlags(destination, source, result, size);
+            State.SetNegativeZero(result, size);
+            State.SetFlag(M68kCpuState.Overflow, arithmetic.Overflow);
+'@; after=@'
+            var arithmetic = M68kIntegerSemantics.CalculateAddFlags(destination, source, result, size);
+            State.SetNegativeZero(result, size);
+            State.SetFlag(M68kCpuState.Overflow, false);
+'@; group='ArithmeticBoundariesAndAllConditionCodes'; milestone=3},
+    @{name='extend-sticky-zero'; file=$arithmetic; before='        result &= M68kCpuState.Mask(size);'; after='        // Mutant: untruncated result before sticky-zero flags.'; group='ExtendComparisonAndAliases'; milestone=3},
+    @{name='decimal-alias-order'; file=$advanced; before=@'
+                source = ReadByte(sourceAddress);
+                var address = State.A[destinationRegister] - (destinationRegister == 7 ? 2u : 1u);
+                WriteGeneralRegister(true, destinationRegister, address);
+                destinationAddress = State.A[destinationRegister];
+'@; after=@'
+                var address = State.A[destinationRegister] - (destinationRegister == 7 ? 2u : 1u);
+                WriteGeneralRegister(true, destinationRegister, address);
+                source = ReadByte(State.A[sourceRegister]);
+                destinationAddress = State.A[destinationRegister];
+'@; group='DecimalAndPacking'; milestone=3},
+    @{name='pack-a7-stride'; file=$arithmetic; before=@'
+    private byte ReadPredecrementByte(int register)
+    {
+        var address = unchecked(State.A[register] - (register == 7 ? 2u : 1u));
+'@; after=@'
+    private byte ReadPredecrementByte(int register)
+    {
+        var address = unchecked(State.A[register] - 1u);
+'@; group='DecimalAndPacking'; milestone=3},
+    @{name='060-divide-frame'; file='Copper68k/M68060Interpreter.cs'; before='            if (vector == 5) PushLong(State.LastInstructionProgramCounter);'; after='            // Mutant: missing format-2 instruction address.'; group='MultiplyDivideAddressingAndRegisterAliases'; milestone=3}
+)
+if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { $_.milestone -ne 3 }) }
+if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 $saved = @{}
 foreach ($mutation in $mutations) {
     $path = Join-Path $repo $mutation.file
@@ -51,7 +87,8 @@ try {
         [Environment]::SetEnvironmentVariable('COPPER68K_SYNTHETIC_REPORT_DIR', $directory)
         try {
             [IO.File]::WriteAllText($path, $text.Replace($before, $after), [Text.UTF8Encoding]::new($false))
-            & dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~SyntheticMoveTests.$($mutation.group)&DisplayName~68020" --logger "trx;LogFileName=mutation.trx" --results-directory $directory *> (Join-Path $directory 'run.log')
+            $model = $(if ($mutation.name -eq '060-divide-frame') { '68060' } else { '68020' })
+            & dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~$($mutation.group)&DisplayName~$model" --logger "trx;LogFileName=mutation.trx" --results-directory $directory *> (Join-Path $directory 'run.log')
             $exitCode = $LASTEXITCODE
             $batches = @(Get-ChildItem -LiteralPath $directory -Filter '*.json' | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json })
             $failures = @($batches | ForEach-Object { $_.failures })

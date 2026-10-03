@@ -16,15 +16,25 @@ internal static class SyntheticExecution
         return expected;
     }
 
-    public static void ExpectException(SyntheticMachine machine, ArchitecturalExpectation expected, int vector)
+    public static void ExpectException(SyntheticMachine machine, ArchitecturalExpectation expected, int vector, uint? savedProgramCounter = null)
     {
-        var frameSize = machine.Model.Model == M68kCpuModel.M68000 ? 6u : 8u;
+        var format2 = vector == 5 && machine.Model.FullIndex;
+        var frameSize = format2 ? 12u : machine.Model.Model == M68kCpuModel.M68000 ? 6u : 8u;
         var savedSr = expected.Sr;
-        var savedPc = SyntheticMachine.Code;
+        var savedPc = savedProgramCounter ?? SyntheticMachine.Code;
+        if ((savedSr & 0x2000) == 0)
+        {
+            var userStack = expected.A[7];
+            expected.A[7] = expected.InactiveStackPointer!.Value;
+            expected.InactiveStackPointer = userStack;
+        }
         expected.A[7] -= frameSize;
         expected.Write(expected.A[7], savedSr, 2, machine.Model);
         expected.Write(expected.A[7] + 2, savedPc, 4, machine.Model);
-        if (frameSize == 8) expected.Write(expected.A[7] + 6, (uint)vector * 4, 2, machine.Model);
+        expected.MemoryMasks[machine.Model.Physical(expected.A[7])] = (byte)(expected.DefinedSrMask >> 8);
+        expected.MemoryMasks[machine.Model.Physical(expected.A[7] + 1)] = (byte)expected.DefinedSrMask;
+        if (frameSize >= 8) expected.Write(expected.A[7] + 6, (format2 ? 0x2000u : 0) | (uint)vector * 4, 2, machine.Model);
+        if (format2) expected.Write(expected.A[7] + 8, SyntheticMachine.Code, 4, machine.Model);
         expected.Sr = (ushort)((savedSr | 0x2000) & ~0xc000);
         expected.Pc = 0x9000u + (uint)vector * 0x10;
         expected.ExceptionVector = vector;

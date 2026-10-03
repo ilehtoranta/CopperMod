@@ -265,6 +265,7 @@ namespace Copper68k
         FullIndexedMoveToRegister,
         GeneralMove,
         GeneralMovem,
+        GeneralArithmetic,
         FullIndexedMoveToMemory,
         FullIndexedRegisterToMemory,
         FullIndexedClear,

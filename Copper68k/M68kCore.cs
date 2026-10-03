@@ -9156,7 +9156,8 @@ namespace Copper68k
             ushort savedStatusRegister)
         {
             if (!_useM68020BriefIndexedAddressing) return false;
-            PushWord((ushort)((vector * 4) & 0x0fff));
+            if (vector == 5) PushLong(State.LastInstructionProgramCounter);
+            PushWord((ushort)((vector == 5 ? 0x2000 : 0) | ((vector * 4) & 0x0fff)));
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
             return true;
@@ -10268,6 +10269,7 @@ namespace Copper68k
                     if (UsesFormatWordExceptionFrames)
                     {
                         var format = PullWord();
+                        if (_useM68020BriefIndexedAddressing && (format & 0xf000) == 0x2000) _ = PullLong();
                         if (!IsSupportedRteFrameFormat(format))
                         {
                             RaiseException(14, instructionPc, 34);
@@ -11496,6 +11498,7 @@ namespace Copper68k
                 }
 
                 var divisor = sourceEa.Read() & 0xFFFF;
+                State.SetFlag(M68kCpuState.Carry, false);
                 if (divisor == 0)
                 {
                     RaiseException(5, State.ProgramCounter, 38);

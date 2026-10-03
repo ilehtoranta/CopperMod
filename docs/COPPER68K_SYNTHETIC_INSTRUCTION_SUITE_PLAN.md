@@ -19,7 +19,7 @@ model. A gap report alone does not complete it.**
 | --- | --- | --- |
 | 1. Framework and MOVE | Complete: semantic gate, 2026-10-04 | 631,184 deterministic cases across all eight profiles; zero mismatches, unsupported legal forms or untested required combinations. |
 | 2. Data transfer and address operations | Complete: semantic gate, 2026-10-04 | 270,240 deterministic cases for MOVEQ, MOVEM, MOVEP, LEA, PEA, EXG, EXT/EXTB and SWAP; unavailable forms raise their documented exceptions. |
-| 3. Arithmetic and comparison | Planned / untested | ADD/SUB variants, quick/immediate/address/extend forms, comparisons, multiply/divide, decimal/packing operations; overflow, borrow, carry, sticky zero, exceptional operands. |
+| 3. Arithmetic and comparison | Complete | ADD/SUB variants, quick/immediate/address/extend forms, comparisons, multiply/divide, decimal/packing operations; overflow, borrow, carry, sticky zero, exceptional operands. |
 | 4. Logical, bit and shift operations | Planned / untested | Logical/immediate/unary operations, bit manipulation, shifts/rotates, bitfields, atomic integer operations; preservation and memory effects. |
 | 5. Control and system operations | Planned / untested | Branches, conditions, calls/returns, stack frames, traps, privilege-sensitive transfers, STOP/RESET, model-specific integer/system instructions; exception frames, saved PC/SR, stack selection, interrupt/trace. |
 | 6. Reference qualification and consolidation | Planned | Independent reference audits across selected models, gap review, retire proven redundant tests; publish architectural combination coverage, not just xUnit counts. |
@@ -216,3 +216,102 @@ isolated CopperScreen `artifacts/synthetic-consumer-m1-m2/` checkout. Generated
 artifacts, package files, licensed ROMs/media and unrelated working changes are
 not committed. Milestones 3–6 remain open; this checkpoint does not claim the
 entire roadmap is complete.
+
+### Arithmetic and comparison checkpoint — 2026-10-04
+
+Milestone 3 adds **2,043,744 deterministic logical cases** in 56 model batches.
+The cumulative milestones 1–3 gate has **2,945,168 cases in 146 xUnit batches**.
+All seven models and the A1200 EC020 profile use the public CPU factory. The
+coverage command checks exact counts and promotes only milestones 1–3;
+milestones 4–6 remain explicitly untested.
+
+| Arithmetic group | 68000 / 68010, each | Other profiles, each |
+| --- | ---: | ---: |
+| ADD/SUB/CMP and quick/immediate/address boundaries, all CCR states | 56,448 | 56,448 |
+| Legal addressing forms, register fields and full indexed structures | 4,667 | 8,237 |
+| All quick counts, EA CCR states, user stacks, signed/scaled indexes, address boundaries and alignment | 21,072 | 21,072 |
+| ADDX/SUBX/CMPM, sticky zero and memory/register aliases | 25,440 | 25,440 |
+| ABCD/SBCD/NBCD and PACK/UNPK | 111,392 | 111,458 |
+| Word/long32/long64 signed and unsigned multiply/divide boundaries | 26,904 | 26,904 |
+| Multiply/divide addressing, register aliases, zero-divide frames and returns | 5,608 | 7,224; 68060: 7,208 |
+
+`ArithmeticSpecification` computes unsigned carry/borrow and signed overflow
+from mathematical ranges. Multiply/divide use arbitrary-precision expectations,
+including minimum signed dividends divided by -1, quotient overflow and signed
+remainders. Shared single-operand fixtures reuse the independent MOVE addressing
+fixtures, including extension-word PC bases and all 66 full-format structures.
+They guard surrounding memory and check exact next PC with a following NOP.
+
+Decimal tests exhaust every valid 00..99 source/destination pair with X/Z states.
+They mask architecturally undefined N/V, verify sticky zero, preserve partial
+registers and exercise every aliased register pair in memory. PACK/UNPK cover
+adjustment wrapping, early illegal-instruction outcomes, separate byte accesses
+and A7's two-byte stride. Non-BCD arithmetic results and identical high/low
+registers for 64-bit MUL remain explicitly undefined/excluded. Divide overflow
+masks undefined N/Z; divide-by-zero masks undefined N/Z/V but requires preserved X
+and cleared C. Undefined stacked SR bits are masked individually too.
+
+000/010 long instructions raise vector 4; 060 64-bit forms raise vector 61.
+Both preserve operand registers and avoid operand reads. Zero divide verifies
+the saved next PC, original instruction address in the 020+ format-2 frame,
+user/supervisor stack selection and a real RTE back to the following instruction.
+Alignment scenarios retain specialized detailed fault sequencing tests.
+
+Completed production corrections:
+
+- Add missing advanced arithmetic and predecrement-memory ADDX/SUBX routes only
+  after the existing routes decline before execution. Preserve existing 040
+  fallback plans; admit legal 020+ PC-relative CMPI before that fallback can
+  incorrectly raise a 000 illegal-instruction exception.
+- Resolve full indexed arithmetic, comparisons, multiplication/division and NBCD
+  in their already-selected routes. New indexed shapes add bounded approximate
+  policy costs; existing brief and fixed-cycle policies remain unchanged.
+- Use the architectural address-register writer for A7 arithmetic, comparisons,
+  source increments/decrements and CMPM aliases so the active stack bank agrees.
+- Read the ABCD/SBCD source before decrementing an aliased destination base.
+- Implement PACK/UNPK for 020+ with byte-by-byte memory operations and stack
+  strides, wrapping adjustment words and unchanged flags.
+- Truncate new memory extend results before computing sticky-zero flags.
+- Compute signed word division with a wider dividend so INT_MIN/-1 produces
+  architectural overflow instead of a host exception; clear defined divide C
+  on overflow/zero-divide paths, including 000/010.
+- Emit the format-2 zero-divide frame on 020/030/040/060 and consume it in RTE.
+  The long zero-divide path completes its exception timing plan once.
+
+Validation commands and evidence:
+
+- Full Release CPU suite: `dotnet test Copper68k.Tests/Copper68k.Tests.csproj
+  -c Release`; **4,400 passed, 7 skipped, 0 failed**. Optional external references
+  remain unavailable. The new seeded audit was separately enabled: seed 68020,
+  10,000 MOVE plus 10,000 arithmetic samples per profile, **160,000 total passing**.
+- `scripts/test-copper68k-synthetic.ps1 -ValidateReportsOnly -OutputDirectory
+  artifacts/m3-final` confirms every required count and zero mismatching,
+  unsupported or untested cases in the promoted gates.
+- The added separate-byte and forbidden-operand-read assertions pass in all
+  16 affected model batches. UNPK memory scenarios use distinct high/low bytes
+  to expose reversed write order, including every aliased register pair.
+- `scripts/test-copper68k-synthetic-mutations.ps1 -Scope Arithmetic` detects all
+  five new mutations: ADDQ.B overflow at 7F+1, memory ADDX.B sticky zero at FF+X,
+  ABCD with an aliased predecrement base, PACK using A7 and the 060 divide frame.
+  Source is restored and rebuilt. The six earlier MOVE proofs remain retained;
+  no old regression has been retired.
+- Retained AHX consumer: **18 passed**. Private package
+  `1.5.2-synthetic-dev.31`, SHA-256
+  `68e722e761cbf09ddc2394df139386ef9dbf81562240b808c44549c0b1a24d88`,
+  passes package/content validation and is **not published**.
+- CopperScreen consumes the private package in the detached `d9beae8` checkout
+  through its existing boundary-version override. Production Release build:
+  **0 warnings/errors**; host **149 passed, 6 optional media cases skipped**;
+  disk **74 passed**; isolated engine diagnostics **1,080 passed**, none skipped.
+  Root working changes and the pinned published dependency remain untouched.
+- Native 68000 Workbench 3.1 floppy replays at 0 and 2 MiB Fast RAM both pass
+  their pinned cycle, PC and framebuffer checks. Native A1200 EC020 eight-plane
+  boot and cold reopen passes its pinned RGB24/DOS proof checks. Input identities
+  remain the same as the first checkpoint; no ROM/media files are committed.
+
+Evidence directories: `artifacts/m3-final/`, `artifacts/m3-seeded/`,
+`artifacts/m3-bus-checks/`, `artifacts/m3-mutations-proof/`,
+`artifacts/m3-pack-byte-order-all/`, `artifacts/synthetic-private-feed-31/` and the isolated CopperScreen checkout's
+`artifacts/m3-validation/`. Semantic correctness, approximate timing policy and
+physical timing qualification remain separate; no new physical timing or OS
+compatibility qualification is claimed.
