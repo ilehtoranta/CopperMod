@@ -641,6 +641,9 @@ namespace Copper68k
                 M68kInstructionTimingKey.AddWordDataToBriefIndexed => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.AddLongDataToBriefIndexed => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.SubiLongImmediateToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.SubiByteImmediateToAddressIndirect or
+                M68kInstructionTimingKey.SubiWordImmediateToAddressIndirect or
+                M68kInstructionTimingKey.SubiLongImmediateToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.SubiWordImmediateToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.SubWordDataToAddressDisplacement => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.BchgByteDynamicBriefIndexed => M68kTimingBarrier.ReadModifyWrite,

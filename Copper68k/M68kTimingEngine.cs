@@ -876,7 +876,10 @@ namespace Copper68k
         EoriByteImmediateToAddressIndirect,
         EoriWordImmediateToAddressIndirect,
         EoriLongImmediateToAddressIndirect,
-        BtstByteImmediateAbsoluteWord
+        BtstByteImmediateAbsoluteWord,
+        SubiByteImmediateToAddressIndirect,
+        SubiWordImmediateToAddressIndirect,
+        SubiLongImmediateToAddressIndirect
     }
 
     internal readonly record struct M68kInstructionPlan(

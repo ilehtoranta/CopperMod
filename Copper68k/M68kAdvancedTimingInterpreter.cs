@@ -257,6 +257,7 @@ namespace Copper68k
         AddiByteImmediateToAddressIndirect,
         AddiWordImmediateToAddressIndirect,
         AddiLongImmediateToAddressIndirect,
+        SubiImmediateToAddressIndirect,
         AddiByteImmediateToAddressDisplacement,
         AddiWordImmediateToAddressDisplacement,
         AddiWordImmediateToData,
@@ -1984,6 +1985,10 @@ namespace Copper68k
             if ((opcode & 0xFFF8) == 0x0690)
             {
                 return M68020OpcodeKind.AddiLongImmediateToAddressIndirect;
+            }
+            if ((opcode & 0xFF38) == 0x0410 && (opcode & 0xC0) != 0xC0)
+            {
+                return M68020OpcodeKind.SubiImmediateToAddressIndirect;
             }
 
             if ((opcode & 0xFFF8) == 0x0668)
@@ -6446,7 +6451,11 @@ namespace Copper68k
                 case M68020OpcodeKind.AddiByteImmediateToAddressIndirect:
                 case M68020OpcodeKind.AddiWordImmediateToAddressIndirect:
                 case M68020OpcodeKind.AddiLongImmediateToAddressIndirect:
-                    ExecuteAddiImmediateToAddressIndirect(opcode);
+                    ExecuteImmediateArithmeticToAddressIndirect(opcode, subtract: false);
+                    return true;
+                case M68020OpcodeKind.SubiImmediateToAddressIndirect:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteImmediateArithmeticToAddressIndirect(opcode, subtract: true);
                     return true;
 
                 case M68020OpcodeKind.AddiWordImmediateToAddressDisplacement:
@@ -11989,7 +11998,7 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.SubiByteImmediateToAddressDisplacement);
         }
 
-        private void ExecuteAddiImmediateToAddressIndirect(ushort opcode)
+        private void ExecuteImmediateArithmeticToAddressIndirect(ushort opcode, bool subtract)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
@@ -12004,10 +12013,16 @@ namespace Copper68k
             source &= M68kCpuState.Mask(size);
             var address = State.A[addressRegister];
             var destination = ReadSized(address, size);
-            var result = unchecked(destination + source) & M68kCpuState.Mask(size);
+            var result = (subtract ? unchecked(destination - source) : unchecked(destination + source)) & M68kCpuState.Mask(size);
             WriteSized(address, result, size);
-            SetAddFlags(destination, source, result, size);
-            CompleteTiming(size switch
+            if (subtract) SetSubtractFlags(destination, source, result, size);
+            else SetAddFlags(destination, source, result, size);
+            CompleteTiming(subtract ? size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.SubiByteImmediateToAddressIndirect,
+                M68kOperandSize.Word => M68kInstructionTimingKey.SubiWordImmediateToAddressIndirect,
+                _ => M68kInstructionTimingKey.SubiLongImmediateToAddressIndirect
+            } : size switch
             {
                 M68kOperandSize.Byte => M68kInstructionTimingKey.AddiByteImmediateToAddressIndirect,
                 M68kOperandSize.Word => M68kInstructionTimingKey.AddiWordImmediateToAddressIndirect,
