@@ -3,6 +3,37 @@
 ## Mainline development candidate 1.5.2
 
 This source version is unpublished and requires explicit release authorization.
+
+The [synthetic instruction suite](../Copper68k.Tests/Synthetic/README.md) completes
+legal MOVE/MOVEA, transfer/address and arithmetic/comparison milestones across 68000, 68010,
+68EC020, 68020, 68030, 68040, 68060 and the A1200 EC020 profile. Its deterministic
+gate executes 2,945,168 logical cases, including every legal MOVE opcode word and
+full-format indexed structures. Later integer families remain explicitly
+untested in its roadmap inventory. Diagnostic 010/060 coverage does not qualify
+desktop readiness. Seven optional seeded or external cases remain unavailable in the ordinary run;
+see the suite plan for the current full-suite and consumer results.
+
+The suite fixes absolute-word decoding, remaining legal MOVE/MOVEM operand
+forms, EXG/MOVEM active-stack updates, MOVEM's 020+ predecrement base snapshot,
+040 full-index/address-width/alignment fallback rules and 24-bit transfer spans.
+Existing admitted forms retain their timing plans; new forms use the approximate
+operand-shape policy. Rejected 040 extensions never retry partial operand effects.
+Eleven mutation proofs detect historical and targeted arithmetic defect categories. No specialized cache,
+prefetch, bus-order, JIT or native replay regressions have been retired.
+
+Arithmetic covers ADD/SUB, quick/immediate/address/extend variants, comparisons,
+word and long signed/unsigned multiplication/division, decimal arithmetic and
+PACK/UNPK. Full indexed EAs and active stack writes are supported throughout the
+promoted families. Decimal aliases read the source before updating the destination;
+divide traps save the model-specific frame and return correctly through RTE.
+
+### Earlier native development slices
+
+The following records describe the pre-suite development slices. Their stated
+MOVE/MOVEM unsupported boundaries were subsequently completed by the synthetic
+milestones above; their native replay evidence and physical timing limitations
+remain historical results.
+
 Native stock PAL A1200 replays of supplied UFO: Enemy Unknown and Alien Breed
 3D II: The Killing Grounds media exposed missing integer operand forms in the
 shared advanced executor. The changes implement CMPM.W/L, sized PC-relative

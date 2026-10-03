@@ -122,13 +122,20 @@ public sealed class M68020BrianOperandTests
     }
 
     [Fact]
-    public void MovePostIncrementToFullIndexedRetainsExplicitUnsupportedBoundary()
+    public void MovePostIncrementToFullIndexedConsumesBothDisplacementWords()
     {
         var bus = new ZeroWaitCodeBus();
         WriteWords(bus, 0xF80000, 0x359B, 0x0130, 0, 0x20);
         using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
         cpu.Reset(0xF80000, 0x4000);
-        Assert.Throws<UnsupportedM68kTimingException>(() => cpu.ExecuteInstruction());
+        cpu.State.A[3] = 0x3000;
+        cpu.State.A[2] = 0x2000;
+        bus.WriteWord(0x3000, 0x8001);
+        cpu.ExecuteInstruction();
+        Assert.Equal(0x8001, bus.ReadWord(0x2020));
+        Assert.Equal(0x3002u, cpu.State.A[3]);
+        Assert.Equal(0xF80008u, cpu.State.ProgramCounter);
+        Assert.Equal(0x2708, cpu.State.StatusRegister);
     }
 
     [Theory]

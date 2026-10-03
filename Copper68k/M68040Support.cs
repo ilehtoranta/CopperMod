@@ -2621,7 +2621,7 @@ namespace Copper68k
                 return false;
             }
 
-            var checkpoint = M68040ApproximateFallbackCheckpoint.Capture(State);
+            var instructionPc = State.ProgramCounter;
             var startCycles = State.Cycles;
             var startNativeCycles = State.NativeCycles;
             try
@@ -2646,10 +2646,11 @@ namespace Copper68k
                 State.EnableM68020StackMode();
                 return true;
             }
-            catch (UnsupportedM68kOpcodeException)
+            catch (UnsupportedM68kOpcodeException ex)
             {
-                checkpoint.Restore(State);
-                return false;
+                // A decoder may reject an extension after reading an operand.
+                // Those bus effects cannot be rolled back by restoring registers.
+                throw new UnsupportedM68040InstructionException(opcode, instructionPc, _profile.Name, ex);
             }
         }
 

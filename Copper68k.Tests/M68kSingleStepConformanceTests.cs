@@ -67,6 +67,10 @@ public sealed class M68kSingleStepConformanceTests
 			}
 		}
 
+		if (executed == 0)
+		{
+			throw new XunitException("Selected SingleStepTests inputs contained no executable cases.");
+		}
 		_output.WriteLine($"Executed {executed} SingleStepTests/m68000 case(s) with {backend} backend.");
 	}
 
