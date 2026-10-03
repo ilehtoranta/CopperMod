@@ -6,6 +6,82 @@ namespace Copper68k.Tests;
 public sealed class M68020BrianOperandTests
 {
     [Theory]
+    [InlineData(M68kCpuModel.M68EC020, 0x159B, 0x80001234u, 0x80ADBEEFu, 1u, 0x18)]
+    [InlineData(M68kCpuModel.M68EC020, 0x359B, 0x80001234u, 0x8000BEEFu, 2u, 0x18)]
+    [InlineData(M68kCpuModel.M68EC020, 0x259B, 0x80001234u, 0x80001234u, 4u, 0x18)]
+    [InlineData(M68kCpuModel.M68EC020, 0x359B, 0x00001234u, 0x0000BEEFu, 2u, 0x14)]
+    [InlineData(M68kCpuModel.M68020, 0x359B, 0x80001234u, 0x8000BEEFu, 2u, 0x18)]
+    [InlineData(M68kCpuModel.M68030, 0x159B, 0x80001234u, 0x80ADBEEFu, 1u, 0x18)]
+    [InlineData(M68kCpuModel.M68040, 0x359B, 0x80001234u, 0x8000BEEFu, 2u, 0x18)]
+    public void MovePostIncrementToIndexedPreservesSourceAndSizedDestination(M68kCpuModel model, ushort opcode, uint source, uint expected, uint increment, int flags)
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, 0xF80000, opcode, 0x1430); // (48,A2,D1.W*4)
+        bus.WriteLong(0x3000, source);
+        bus.WriteLong(0x2020, 0xDEADBEEF);
+        using var cpu = model == M68kCpuModel.M68EC020
+            ? M68kCoreFactory.Default.CreateA1200Ec020(bus)
+            : M68kCoreFactory.Default.Create(model, bus);
+        cpu.Reset(0xF80000, 0x4000);
+        cpu.State.A[2] = 0x2000;
+        cpu.State.A[3] = 0x3000;
+        cpu.State.D[1] = 0x1234FFFC;
+        cpu.State.StatusRegister = 0x201F;
+        cpu.ExecuteInstruction();
+        Assert.Equal(source, bus.ReadLong(0x3000));
+        Assert.Equal(expected, bus.ReadLong(0x2020));
+        Assert.Equal(0x3000u + increment, cpu.State.A[3]);
+        Assert.Equal(0x2000u, cpu.State.A[2]);
+        Assert.Equal(0x1234FFFCu, cpu.State.D[1]);
+        Assert.Equal(flags, cpu.State.StatusRegister & 31);
+        Assert.Equal(0xF80004u, cpu.State.ProgramCounter);
+    }
+
+    [Theory]
+    [InlineData(0x379B, 0x1430, 0x3022u)] // updated A3 is destination base
+    [InlineData(0x359B, 0xB030, 0x5032u)] // updated A3 is destination index
+    public void MovePostIncrementUpdatesAliasedDestinationBaseOrIndexBeforeAddressCalculation(ushort opcode, ushort extension, uint destination)
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, 0xF80000, opcode, extension);
+        bus.WriteWord(0x3000, 0x8123);
+        bus.WriteLong(destination, 0xDEADBEEF);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(0xF80000, 0x4000);
+        cpu.State.A[2] = 0x2000;
+        cpu.State.A[3] = 0x3000;
+        cpu.State.D[1] = 0xFFFFFFFC;
+        cpu.ExecuteInstruction();
+        Assert.Equal(0x8123BEEFu, bus.ReadLong(destination));
+        Assert.Equal(0x3002u, cpu.State.A[3]);
+    }
+
+    [Fact]
+    public void MoveBytePostIncrementToIndexedUsesA7StackStride()
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, 0xF80000, 0x159F, 0x0004);
+        bus.WriteWord(0x4000, 0x80AB);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(0xF80000, 0x4000);
+        cpu.State.A[2] = 0x2000;
+        cpu.ExecuteInstruction();
+        Assert.Equal(0x8000, bus.ReadWord(0x2004));
+        Assert.Equal(0x4002u, cpu.State.A[7]);
+        Assert.Equal(0x4002u, cpu.State.SupervisorStackPointer);
+    }
+
+    [Fact]
+    public void MovePostIncrementToFullIndexedRetainsExplicitUnsupportedBoundary()
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, 0xF80000, 0x359B, 0x0130, 0, 0x20);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(0xF80000, 0x4000);
+        Assert.Throws<UnsupportedM68kTimingException>(() => cpu.ExecuteInstruction());
+    }
+
+    [Theory]
     [InlineData(M68kCpuModel.M68EC020, 0x8C30, 0x80001234u, 0xA5A50001u, 0xA5A50081u, 0x18)]
     [InlineData(M68kCpuModel.M68EC020, 0x8C70, 0x80001234u, 0xA5A50001u, 0xA5A58001u, 0x18)]
     [InlineData(M68kCpuModel.M68EC020, 0x8CB0, 0x80001234u, 1u, 0x80001235u, 0x18)]

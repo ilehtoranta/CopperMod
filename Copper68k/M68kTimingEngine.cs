@@ -889,7 +889,10 @@ namespace Copper68k
         EoriWordImmediateToAbsoluteLong,
         EoriLongImmediateToAbsoluteLong,
         OrByteBriefIndexedToData,
-        OrWordBriefIndexedToData
+        OrWordBriefIndexedToData,
+        MoveBytePostIncrementToBriefIndexed,
+        MoveWordPostIncrementToBriefIndexed,
+        MoveLongPostIncrementToBriefIndexed
     }
 
     internal readonly record struct M68kInstructionPlan(

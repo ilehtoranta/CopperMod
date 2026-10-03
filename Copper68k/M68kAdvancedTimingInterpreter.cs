@@ -78,6 +78,7 @@ namespace Copper68k
         MoveIndexedToAbsoluteLong,
         MoveIndirectToPostIncrement,
         MoveIndirectToIndexed,
+        MovePostIncrementToIndexed,
         MoveAbsoluteLongToIndexed,
         MovePredecrementToData,
         MovePredecrementToPredecrement,
@@ -1072,6 +1073,10 @@ namespace Copper68k
             if ((opcode & 0xF1F8) is 0x1190 or 0x3190 or 0x2190)
             {
                 return M68020OpcodeKind.MoveIndirectToIndexed;
+            }
+            if ((opcode & 0xF1F8) is 0x1198 or 0x3198 or 0x2198)
+            {
+                return M68020OpcodeKind.MovePostIncrementToIndexed;
             }
             if ((opcode & 0xF1FF) is 0x11B9 or 0x31B9 or 0x21B9)
             {
@@ -5795,6 +5800,10 @@ namespace Copper68k
                     if (_profile.Model == M68kAcceleratorModel.M68040) return false;
                     ExecuteMoveIndirectToIndexed(opcode);
                     return true;
+                case M68020OpcodeKind.MovePostIncrementToIndexed:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteMovePostIncrementToIndexed(opcode);
+                    return true;
                 case M68020OpcodeKind.MoveAbsoluteLongToIndexed:
                     if (_profile.Model == M68kAcceleratorModel.M68040) return false;
                     ExecuteMoveAbsoluteLongToIndexed(opcode);
@@ -9992,6 +10001,27 @@ namespace Copper68k
                 M68kOperandSize.Byte => M68kInstructionTimingKey.MoveByteAddressIndirectToBriefIndexed,
                 M68kOperandSize.Word => M68kInstructionTimingKey.MoveWordAddressIndirectToBriefIndexed,
                 _ => M68kInstructionTimingKey.MoveLongAddressIndirectToBriefIndexed
+            });
+        }
+
+        private void ExecuteMovePostIncrementToIndexed(ushort opcode)
+        {
+            BeginInstruction(opcode);
+            _ = FetchWord();
+            var size = (opcode >> 12) switch { 1 => M68kOperandSize.Byte, 3 => M68kOperandSize.Word, _ => M68kOperandSize.Long };
+            var source = opcode & 7;
+            var sourceAddress = State.A[source];
+            var value = ReadSized(sourceAddress, size);
+            WriteGeneralRegister(true, source, unchecked(sourceAddress + M68kIntegerSemantics.AddressIncrement(source, size)));
+            var extension = FetchWord();
+            var destination = CalculateBriefIndexedAddress((opcode >> 9) & 7, extension, opcode);
+            WriteSized(destination, value, size);
+            SetMoveFlags(value, size);
+            CompleteTiming(size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.MoveBytePostIncrementToBriefIndexed,
+                M68kOperandSize.Word => M68kInstructionTimingKey.MoveWordPostIncrementToBriefIndexed,
+                _ => M68kInstructionTimingKey.MoveLongPostIncrementToBriefIndexed
             });
         }
 
