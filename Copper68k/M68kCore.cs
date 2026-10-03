@@ -9129,7 +9129,7 @@ namespace Copper68k
             return null;
         }
 
-        protected virtual bool UsesFormatWordExceptionFrames => false;
+        protected virtual bool UsesFormatWordExceptionFrames => _useM68020BriefIndexedAddressing;
 
         protected virtual bool IsSupportedRteFrameFormat(ushort format)
         {
@@ -9155,10 +9155,11 @@ namespace Copper68k
             uint stackedProgramCounter,
             ushort savedStatusRegister)
         {
-            _ = vector;
-            _ = stackedProgramCounter;
-            _ = savedStatusRegister;
-            return false;
+            if (!_useM68020BriefIndexedAddressing) return false;
+            PushWord((ushort)((vector * 4) & 0x0fff));
+            PushLong(stackedProgramCounter);
+            PushWord(savedStatusRegister);
+            return true;
         }
 
         public void Reset(uint programCounter, uint stackPointer)
@@ -12107,6 +12108,8 @@ namespace Copper68k
                     var register = 15 - bit;
                     address -= (uint)size;
                     var value = register < 8 ? State.D[register] : State.A[register - 8];
+                    if (_useM68020BriefIndexedAddressing && register == reg + 8)
+                        value = unchecked(value - (uint)size);
                     AddInstructionCycles(12 + (predecrementTransferred * predecrementTransferCycles));
                     if (size == M68kOperandSize.Word)
                     {
@@ -12335,6 +12338,25 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private uint CalculateBriefIndexedAddress(uint baseAddress, ushort extension)
         {
+            // The 040 integer fallback retains its existing brief/68000-cycle
+            // policy. Full operands must be resolved before any operand
+            // access, never retried through another core after side effects.
+            if (_useM68020BriefIndexedAddressing && (extension & 0x100) != 0)
+            {
+                var bdSize = (extension >> 4) & 3;
+                var indirect = extension & 7;
+                var indexSuppressed = (extension & 0x40) != 0;
+                if (bdSize == 0 || (extension & 8) != 0 || indirect == 4 || (indexSuppressed && indirect >= 5))
+                    throw new UnsupportedM68kOpcodeException(State.LastOpcode, State.LastInstructionProgramCounter);
+                var index = indexSuppressed ? 0u : M68kIntegerSemantics.CalculateM68020BriefIndexedIndexValue(extension, State.D, State.A);
+                var bd = bdSize == 2 ? unchecked((uint)(int)(short)FetchWord()) : bdSize == 3 ? FetchLong() : 0u;
+                var odSize = indirect & 3;
+                var od = odSize == 2 ? unchecked((uint)(int)(short)FetchWord()) : odSize == 3 ? FetchLong() : 0u;
+                var address = unchecked(((extension & 0x80) != 0 ? 0u : baseAddress) + bd);
+                if (indirect == 0) return unchecked(address + index);
+                var pointer = ReadLong(unchecked(address + (indirect < 4 ? index : 0u)));
+                return unchecked(pointer + od + (indirect >= 5 ? index : 0u));
+            }
             if (_useM68020BriefIndexedAddressing &&
                 (extension & 0x0100) == 0 &&
                 M68kIntegerSemantics.TryCalculateM68020BriefIndexedAddress(
@@ -13803,8 +13825,8 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint GetCpuBusAddress(uint address)
-            => address & 0x00FF_FFFFu;
+        private uint GetCpuBusAddress(uint address)
+            => _useM68020BriefIndexedAddressing ? address : address & 0x00FF_FFFFu;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private byte ReadByte(uint address)
@@ -13833,7 +13855,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private ushort ReadWord(uint address)
         {
-            if ((address & 1) != 0)
+            if (!_useM68020BriefIndexedAddressing && (address & 1) != 0)
             {
                 ThrowOddAddressAccess(address, isWrite: false, _dataReadFaultAccessKind, useDataAccessStackedProgramCounter: true);
             }
@@ -13862,7 +13884,12 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         protected uint ReadLong(uint address)
         {
-            if ((address & 1) != 0)
+            if (!_useM68020BriefIndexedAddressing && GetCpuBusAddress(address) == 0x00fffffe)
+            {
+                var high = ReadWord(address);
+                return ((uint)high << 16) | ReadWord(unchecked(address + 2));
+            }
+            if (!_useM68020BriefIndexedAddressing && (address & 1) != 0)
             {
                 ThrowOddAddressAccess(address, isWrite: false, _dataReadFaultAccessKind, useDataAccessStackedProgramCounter: true);
             }
@@ -13944,7 +13971,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void WriteWord(uint address, ushort value)
         {
-            if ((address & 1) != 0)
+            if (!_useM68020BriefIndexedAddressing && (address & 1) != 0)
             {
                 ThrowOddAddressAccess(address, isWrite: true, M68kBusAccessKind.CpuDataWrite);
             }
@@ -13972,7 +13999,13 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void WriteLong(uint address, uint value)
         {
-            if ((address & 1) != 0)
+            if (!_useM68020BriefIndexedAddressing && GetCpuBusAddress(address) == 0x00fffffe)
+            {
+                WriteWord(address, (ushort)(value >> 16));
+                WriteWord(unchecked(address + 2), (ushort)value);
+                return;
+            }
+            if (!_useM68020BriefIndexedAddressing && (address & 1) != 0)
             {
                 ThrowOddAddressAccess(address, isWrite: true, M68kBusAccessKind.CpuDataWrite);
             }

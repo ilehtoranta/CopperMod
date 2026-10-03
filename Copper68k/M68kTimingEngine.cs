@@ -263,6 +263,8 @@ namespace Copper68k
         MoveWordPcBriefIndexedToAddress,
         MoveWordBriefIndexedToAddress,
         FullIndexedMoveToRegister,
+        GeneralMove,
+        GeneralMovem,
         FullIndexedMoveToMemory,
         FullIndexedRegisterToMemory,
         FullIndexedClear,

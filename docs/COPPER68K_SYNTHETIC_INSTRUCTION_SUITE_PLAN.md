@@ -17,8 +17,8 @@ model. A gap report alone does not complete it.**
 
 | Milestone | Status | Deliverable and completion gate |
 | --- | --- | --- |
-| 1. Framework and MOVE | In progress | Execute the legal data MOVE/MOVEA matrix on all seven models and A1200 EC020. Fix implementation and decode defects until every required case passes. |
-| 2. Data transfer and address operations | Planned / untested | MOVEQ, MOVEM, MOVEP, LEA, PEA, EXG, EXT, SWAP using shared fixtures; unavailable instructions produce documented architectural outcomes. |
+| 1. Framework and MOVE | Complete: semantic gate, 2026-10-04 | 631,184 deterministic cases across all eight profiles; zero mismatches, unsupported legal forms or untested required combinations. |
+| 2. Data transfer and address operations | Complete: semantic gate, 2026-10-04 | 270,240 deterministic cases for MOVEQ, MOVEM, MOVEP, LEA, PEA, EXG, EXT/EXTB and SWAP; unavailable forms raise their documented exceptions. |
 | 3. Arithmetic and comparison | Planned / untested | ADD/SUB variants, quick/immediate/address/extend forms, comparisons, multiply/divide, decimal/packing operations; overflow, borrow, carry, sticky zero, exceptional operands. |
 | 4. Logical, bit and shift operations | Planned / untested | Logical/immediate/unary operations, bit manipulation, shifts/rotates, bitfields, atomic integer operations; preservation and memory effects. |
 | 5. Control and system operations | Planned / untested | Branches, conditions, calls/returns, stack frames, traps, privilege-sensitive transfers, STOP/RESET, model-specific integer/system instructions; exception frames, saved PC/SR, stack selection, interrupt/trace. |
@@ -121,3 +121,98 @@ Record commands, logical case counts, failure discoveries, fixes, reference
 identities, replacement proofs and remaining required coverage here as work
 progresses. No milestone is complete merely because an inventory exists or a
 partial matrix passes.
+
+### First implementation checkpoint — 2026-10-04
+
+The [suite guide](../Copper68k.Tests/Synthetic/README.md) describes fixtures,
+coverage reports, the CI gate, seeded audits and mutation commands. The complete
+integer-family inventory includes later families as untested. All implementation
+helpers are internal to the test assembly; the package public API is unchanged.
+
+| Deterministic group | 68000 / 68010, each | Other six profiles, each |
+| --- | ---: | ---: |
+| Every legal MOVE/MOVEA opcode word | 9,726 | 9,726 |
+| MOVE value boundaries and all 32 CCR states | 58,368 | 58,368 |
+| MOVE extension/alias cases | 1,756 | 7,120 |
+| MOVE address-register signs, overlap and full stack/index aliases | 1,801 | 2,593 |
+| MOVE external address boundaries | 44 | 60 |
+| Invalid MOVE operand opwords | 2,562 | 2,562 |
+| MOVE alignment outcomes | 12 | 12 |
+| MOVEQ/EXT/EXTB/SWAP/EXG | 17,624 | 17,624 |
+| LEA/PEA | 8,064 | 9,252 |
+| MOVEP | 3,708 | 3,708 |
+| MOVEM | 3,196 | 3,592 |
+
+Total: **901,424 logical cases in 90 xUnit batches**, independently checked by
+`scripts/test-copper68k-synthetic.ps1 -ValidateReportsOnly`. All pass. A separate
+recorded seed 68020 adds **10,000 samples per profile / 80,000 total**, all passing.
+Full-format fixtures cover all 66 legal structural combinations; brief index
+cases include signed/scaled data/address indexes. Early processors ignore their
+reserved scale/format bits; reserved full encodings are explicitly excluded from
+architectural expectations. Alignment checks establish the vector outcome;
+detailed restart/fault-frame qualification remains specialized and milestone 5
+work.
+
+Discovered implementation defects and completed fixes:
+
+- An overly broad byte indirect-to-absolute-long decoder admitted absolute-word
+  opcodes and consumed the following instruction. Narrowed the decode mask.
+- Remaining legal advanced MOVE/MOVEA and MOVEM EA combinations lacked dispatch.
+  Added general routes only after an existing route declines before execution.
+- Existing MOVE routes needed full indexed resolution while preserving the order
+  of source effects and destination extensions. Extended those routes and retained
+  their existing brief timing plans.
+- A7 updates through MOVE, EXG and MOVEM could leave the active stack bank stale.
+  Writes now use the existing stack-aware register helper.
+- 020+ predecrement MOVEM stores the initial base minus one operand size when that
+  base is in the list; the prior implementation and one old test expected the
+  000/010 initial-base value. Corrected the snapshot and assertion.
+- The 040 integer fallback truncated addresses and rejected odd data accesses,
+  used a brief decoder for full LEA/MOVEM and lacked its format-0 exception header.
+  Corrected the fallback's already-selected 020 addressing mode.
+- Transfers spanning the 24-bit external boundary leaked into higher addresses.
+  Added wrapped slow transfers and rejected crossing fast spans before host access.
+- Restoring a 040 fallback register checkpoint could retry after source bus effects.
+  Rejection now propagates, with a dedicated one-read/one-increment regression.
+
+New shapes use bounded approximate timing plans. Existing admitted brief shapes,
+fixed-cycle profiles and bus ownership remain unchanged. This is semantic
+qualification, not physical timing certification.
+
+Validation at this checkpoint:
+
+- Full Copper68k Release suite: **4,344 passed, 7 skipped, 0 failed**. Six optional
+  external-reference tests and the opt-in seeded test are skipped in this ordinary
+  run; the seeded test was separately enabled and passed. External references were
+  not executed and remain unavailable coverage.
+- Retained AHX consumer: **18 passed**.
+- Private validated package `1.5.2-synthetic-dev.30`, SHA-256
+  `46efb356b81ca0d1566b8e544dce3aac5b1dab01096f2cd39f6a2ecc219ef51f`.
+  Not published. CopperScreen consumes this package through its boundary-version
+  override in a clean detached checkout of `d9beae8`; no sibling source reference
+  or root working-tree changes were introduced.
+- CopperScreen production Release build: **0 warnings/errors**; host **149 passed,
+  6 optional media entries skipped**; disk **74 passed**; isolated engine diagnostics
+  **1,080 passed**, no skipped tests.
+- Native 68000 Workbench 3.1 floppy replay: both 0 and 2 MiB Fast RAM cases pass,
+  retaining pinned final cycles, PC and framebuffer hash. Native A1200 EC020
+  eight-plane boot and cold reopen: passes with pinned RGB24/DOS proof checks.
+  An initial AGA selection was rejected by its input hash; the correct final
+  pristine fixture was selected and the independent AGA rerun passed.
+- All six targeted mutations were detected by executable synthetic cases; source
+  was restored and rebuilt. Proofs identify `11D0` absolute decode, `10B8` extension
+  length, `1230` signed index, `1098` alias order, `101F` A7 stride and `1200` flags.
+  No old regression has been retired. Two former full-MOVE unsupported assertions
+  now assert legal execution; the MOVEM snapshot assertion was corrected.
+- The audit command rejects a requested missing corpus and a valid selected
+  SingleStep file containing zero cases. WinUAE audit rows with zero executions
+  are untested and fail qualification. Reports distinguish
+  unrequested references from passing coverage and record input/source identities
+  when references are explicitly supplied.
+
+Local evidence is retained under `artifacts/full-m1-m2-final/`,
+`artifacts/synthetic-mutations-m1/`, `artifacts/synthetic-private-feed-30/` and the
+isolated CopperScreen `artifacts/synthetic-consumer-m1-m2/` checkout. Generated
+artifacts, package files, licensed ROMs/media and unrelated working changes are
+not committed. Milestones 3–6 remain open; this checkpoint does not claim the
+entire roadmap is complete.
