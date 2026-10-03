@@ -143,7 +143,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 				var result = tester.Run(corpusPath, opcode, cpuLevel, checkUndefinedSr, continueOnError);
 				rows.Add(new OpcodeAuditRow(
 					opcode,
-					result.Passed ? "pass" : "fail",
+					result.Passed ? (result.ExecutedCases > 0 ? "pass" : "untested") : "fail",
 					result.ExecutedCases,
 					result.UnmappedReads,
 					result.UnmappedWrites,
@@ -194,12 +194,12 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 			EscapeTsv(row.Detail))));
 		File.WriteAllLines(outputPath, lines);
 
-		var failures = rows.Where(row => row.Status != "pass").ToArray();
+		var failures = rows.Where(row => row.Status != "pass" || row.ExecutedCases <= 0).ToArray();
 		_output.WriteLine($"WinUAE opcode audit wrote {rows.Count} rows to '{outputPath}'.");
 		if (failures.Length != 0)
 		{
 			throw new XunitException(
-				$"WinUAE opcode audit found {failures.Length} failing directory(s). " +
+				$"WinUAE opcode audit found {failures.Length} failing or empty directory(s). " +
 				$"See '{outputPath}'. Failed opcodes: {string.Join(", ", failures.Select(row => row.Opcode))}.");
 		}
 	}

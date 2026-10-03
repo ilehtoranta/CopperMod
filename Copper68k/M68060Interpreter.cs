@@ -223,7 +223,8 @@ namespace Copper68k
             var sr = State.StatusRegister;
             State.RecordException(vector, pc, sr);
             State.StatusRegister = (ushort)((sr | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
-            PushWord((ushort)(vector * 4));
+            if (vector == 5) PushLong(State.LastInstructionProgramCounter);
+            PushWord((ushort)((vector == 5 ? 0x2000 : 0) | (vector * 4)));
             PushLong(pc);
             PushWord(sr);
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + (uint)vector * 4);

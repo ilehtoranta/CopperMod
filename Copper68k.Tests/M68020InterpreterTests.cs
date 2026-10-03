@@ -11265,7 +11265,7 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(27, cpu.State.Cycles);
 	}
 	[Fact]
-	public void MovemWordRegistersToPredecrementUsesReversedMaskAndOriginalAddressSnapshot()
+	public void MovemWordRegistersToPredecrementUsesReversedMaskAndModelSpecificBaseSnapshot()
 	{
 		var bus = new ZeroWaitCodeBus();
 		WriteWords(bus, CodeBase, 0x48A7, 0x8081); // MOVEM.W D0/A0/A7,-(A7)
@@ -11285,7 +11285,8 @@ public sealed class M68020InterpreterTests
 		Assert.Equal(0x0000_2FFAu, cpu.State.A[7]);
 		Assert.Equal((ushort)0xD001, bus.ReadWord(0x0000_2FFA));
 		Assert.Equal((ushort)0xA001, bus.ReadWord(0x0000_2FFC));
-		Assert.Equal((ushort)0x3000, bus.ReadWord(0x0000_2FFE));
+		Assert.Equal((ushort)0x2FFE, bus.ReadWord(0x0000_2FFE));
+		Assert.Equal(0x2FFAu, cpu.State.SupervisorStackPointer);
 		Assert.Equal(
 			M68kCpuState.Supervisor |
 			M68kCpuState.Extend |

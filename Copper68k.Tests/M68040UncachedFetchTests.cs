@@ -151,7 +151,9 @@ public sealed class M68040UncachedFetchTests
     public void IntegerFallbackUsesThe040FetchBuffer()
     {
         const ushort eor = 0xB110; // EOR.B D0,(A0), handled by the integer fallback.
-        Assert.Equal(M68020OpcodeKind.Unsupported, M68020OpcodeDispatchTable.M68040Kinds[eor]);
+        // The shared decoder admits the 020/030 form; the 040 executor still
+        // routes this kind through its integer fallback and fetch buffer.
+        Assert.Equal(M68020OpcodeKind.EorDataToAddressIndirect, M68020OpcodeDispatchTable.M68040Kinds[eor]);
         var bus = new FetchBus();
         bus.Memory.WriteWords(0x1000, eor, 0x60FC);
         using var cpu = new M68040Interpreter(bus);
