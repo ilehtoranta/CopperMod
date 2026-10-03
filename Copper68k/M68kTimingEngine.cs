@@ -879,7 +879,9 @@ namespace Copper68k
         BtstByteImmediateAbsoluteWord,
         SubiByteImmediateToAddressIndirect,
         SubiWordImmediateToAddressIndirect,
-        SubiLongImmediateToAddressIndirect
+        SubiLongImmediateToAddressIndirect,
+        MoveByteDataToAbsoluteWord,
+        MoveWordDataToAbsoluteWord
     }
 
     internal readonly record struct M68kInstructionPlan(

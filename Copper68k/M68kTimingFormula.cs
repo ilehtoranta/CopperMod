@@ -2060,6 +2060,7 @@ namespace Copper68k
                 M68kTimingOperandForm.Predecrement => 4,
                 M68kTimingOperandForm.AddressDisplacement => 6,
                 M68kTimingOperandForm.BriefIndexed => 8,
+                M68kTimingOperandForm.AbsoluteWord => 6,
                 M68kTimingOperandForm.AbsoluteLong => 6,
                 _ => throw Unsupported(descriptor)
             };

@@ -6,6 +6,55 @@ namespace Copper68k.Tests;
 public sealed class M68020BrianOperandTests
 {
     [Theory]
+    [InlineData(M68kCpuModel.M68EC020, 0x11C0, 0x12348080u, 0x80ADBEEFu, 0x18)]
+    [InlineData(M68kCpuModel.M68EC020, 0x31C0, 0x12348080u, 0x8080BEEFu, 0x18)]
+    [InlineData(M68kCpuModel.M68EC020, 0x11C0, 0x12348000u, 0x00ADBEEFu, 0x14)]
+    [InlineData(M68kCpuModel.M68EC020, 0x31C0, 0x12340000u, 0x0000BEEFu, 0x14)]
+    [InlineData(M68kCpuModel.M68020, 0x31C0, 0x12348080u, 0x8080BEEFu, 0x18)]
+    [InlineData(M68kCpuModel.M68030, 0x11C0, 0x12348080u, 0x80ADBEEFu, 0x18)]
+    [InlineData(M68kCpuModel.M68040, 0x11C0, 0x12348080u, 0x80ADBEEFu, 0x18)]
+    [InlineData(M68kCpuModel.M68040, 0x31C0, 0x12348080u, 0x8080BEEFu, 0x18)]
+    public void MoveDataToAbsoluteWordDoesNotConsumeFollowingLeaOpcode(M68kCpuModel model, ushort opcode, uint value, uint expected, int flags)
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, 0xF80000, opcode, 0x8000, 0x4DF9, 0x00DF, 0xF000);
+        bus.WriteLong(0xFF8000, 0xDEADBEEF);
+        using var cpu = model == M68kCpuModel.M68EC020
+            ? M68kCoreFactory.Default.CreateA1200Ec020(bus)
+            : M68kCoreFactory.Default.Create(model, bus);
+        cpu.Reset(0xF80000, 0x4000);
+        cpu.State.D[0] = value;
+        cpu.State.StatusRegister = 0x201F;
+        cpu.ExecuteInstruction();
+        Assert.Equal(expected, bus.ReadLong(0xFF8000));
+        Assert.Equal(value, cpu.State.D[0]);
+        Assert.Equal(flags, cpu.State.StatusRegister & 31);
+        Assert.Equal(0xF80004u, cpu.State.ProgramCounter);
+        cpu.ExecuteInstruction();
+        Assert.Equal(0xDFF000u, cpu.State.A[6]);
+        Assert.Equal(0xF8000Au, cpu.State.ProgramCounter);
+    }
+
+    [Theory]
+    [InlineData(0x13C0, 0x80ADBEEFu)]
+    [InlineData(0x33C0, 0x8080BEEFu)]
+    public void MoveDataToAbsoluteLongStillConsumesBothAddressWords(ushort opcode, uint expected)
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, 0xF80000, opcode, 0x0000, 0x2020, 0x4DF9, 0x00DF, 0xF000);
+        bus.WriteLong(0x2020, 0xDEADBEEF);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(0xF80000, 0x4000);
+        cpu.State.D[0] = 0x12348080;
+        cpu.ExecuteInstruction();
+        Assert.Equal(expected, bus.ReadLong(0x2020));
+        Assert.Equal(0xF80006u, cpu.State.ProgramCounter);
+        cpu.ExecuteInstruction();
+        Assert.Equal(0xDFF000u, cpu.State.A[6]);
+        Assert.Equal(0xF8000Cu, cpu.State.ProgramCounter);
+    }
+
+    [Theory]
     [InlineData((int)M68kInstructionTimingKey.SubiByteImmediateToAddressIndirect)]
     [InlineData((int)M68kInstructionTimingKey.SubiWordImmediateToAddressIndirect)]
     [InlineData((int)M68kInstructionTimingKey.SubiLongImmediateToAddressIndirect)]
