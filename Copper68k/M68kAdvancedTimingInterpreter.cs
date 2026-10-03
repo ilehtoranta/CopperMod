@@ -473,7 +473,9 @@ namespace Copper68k
         OriWordImmediateToData,
         ImmediateLogicalData,
         EoriImmediateToAddressDisplacement,
+        EoriImmediateToAddressIndirect,
         BtstByteImmediateAbsoluteLong,
+        BtstByteImmediateAbsoluteWord,
         BitImmediateBriefIndexed,
         BtstByteImmediateAddressIndirect,
         BtstByteImmediatePostIncrement,
@@ -1177,6 +1179,10 @@ namespace Copper68k
             if ((opcode & 0xFF38) == 0x0A28 && (opcode & 0xC0) != 0xC0)
             {
                 return M68020OpcodeKind.EoriImmediateToAddressDisplacement;
+            }
+            if ((opcode & 0xFF38) == 0x0A10 && (opcode & 0xC0) != 0xC0)
+            {
+                return M68020OpcodeKind.EoriImmediateToAddressIndirect;
             }
             if (opcode == 0x44FC)
             {
@@ -2854,6 +2860,10 @@ namespace Copper68k
             if (opcode == 0x0839)
             {
                 return M68020OpcodeKind.BtstByteImmediateAbsoluteLong;
+            }
+            if (opcode == 0x0838)
+            {
+                return M68020OpcodeKind.BtstByteImmediateAbsoluteWord;
             }
 
             if ((opcode & 0xFFF8) == 0x0810)
@@ -6875,7 +6885,11 @@ namespace Copper68k
                     ExecuteBitImmediatePostIncrement(opcode);
                     return true;
                 case M68020OpcodeKind.EoriImmediateToAddressDisplacement:
-                    ExecuteEoriImmediateToAddressDisplacement(opcode);
+                    ExecuteEoriImmediateToAddressMemory(opcode, displacement: true);
+                    return true;
+                case M68020OpcodeKind.EoriImmediateToAddressIndirect:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteEoriImmediateToAddressMemory(opcode, displacement: false);
                     return true;
                 case M68020OpcodeKind.QuickPostIncrement:
                     ExecuteQuickPostIncrement(opcode);
@@ -7248,7 +7262,11 @@ namespace Copper68k
                     return true;
 
                 case M68020OpcodeKind.BtstByteImmediateAbsoluteLong:
-                    ExecuteBtstByteImmediateAbsoluteLong();
+                    ExecuteBtstByteImmediateAbsolute(opcode, absoluteWord: false);
+                    return true;
+                case M68020OpcodeKind.BtstByteImmediateAbsoluteWord:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteBtstByteImmediateAbsolute(opcode, absoluteWord: true);
                     return true;
 
                 case M68020OpcodeKind.BtstByteImmediateAddressIndirect:
@@ -12923,21 +12941,26 @@ namespace Copper68k
             CompleteTiming(!subtract ? M68kInstructionTimingKey.AddqWordAddressIndirect : size == M68kOperandSize.Byte ? M68kInstructionTimingKey.SubqByteAddressIndirect : M68kInstructionTimingKey.SubqWordAddressIndirect);
         }
 
-        private void ExecuteEoriImmediateToAddressDisplacement(ushort opcode)
+        private void ExecuteEoriImmediateToAddressMemory(ushort opcode, bool displacement)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
             var size = ((opcode >> 6) & 3) switch { 0 => M68kOperandSize.Byte, 1 => M68kOperandSize.Word, _ => M68kOperandSize.Long };
             var immediate = size == M68kOperandSize.Long ? FetchLong() : FetchWord();
-            var displacement = unchecked((int)(short)FetchWord());
-            var address = unchecked((uint)(State.A[opcode & 7] + displacement));
+            var offset = displacement ? unchecked((int)(short)FetchWord()) : 0;
+            var address = unchecked((uint)(State.A[opcode & 7] + offset));
             var result = ReadSized(address, size) ^ immediate;
             WriteSized(address, result, size); SetMoveFlags(result, size);
-            CompleteTiming(size switch
+            CompleteTiming(displacement ? size switch
             {
                 M68kOperandSize.Byte => M68kInstructionTimingKey.EoriByteImmediateToAddressDisplacement,
                 M68kOperandSize.Word => M68kInstructionTimingKey.EoriWordImmediateToAddressDisplacement,
                 _ => M68kInstructionTimingKey.EoriLongImmediateToAddressDisplacement
+            } : size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.EoriByteImmediateToAddressIndirect,
+                M68kOperandSize.Word => M68kInstructionTimingKey.EoriWordImmediateToAddressIndirect,
+                _ => M68kInstructionTimingKey.EoriLongImmediateToAddressIndirect
             });
         }
 
@@ -16170,15 +16193,15 @@ namespace Copper68k
             });
         }
 
-        private void ExecuteBtstByteImmediateAbsoluteLong()
+        private void ExecuteBtstByteImmediateAbsolute(ushort opcode, bool absoluteWord)
         {
-            BeginInstruction(0x0839);
+            BeginInstruction(opcode);
             _ = FetchWord();
             var bit = FetchWord() & 7;
-            var address = FetchLong();
+            var address = absoluteWord ? unchecked((uint)(int)(short)FetchWord()) : FetchLong();
             var value = ReadByte(address);
             State.SetFlag(M68kCpuState.Zero, (value & (1 << bit)) == 0);
-            CompleteTiming(M68kInstructionTimingKey.BtstByteImmediateAbsoluteLong);
+            CompleteTiming(absoluteWord ? M68kInstructionTimingKey.BtstByteImmediateAbsoluteWord : M68kInstructionTimingKey.BtstByteImmediateAbsoluteLong);
         }
 
         private void ExecuteBtstByteImmediateAddressIndirect(ushort opcode)

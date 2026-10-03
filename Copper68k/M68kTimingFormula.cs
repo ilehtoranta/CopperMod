@@ -682,6 +682,9 @@ namespace Copper68k
                 M68kInstructionTimingKey.EorByteDataToAddressIndirect or
                 M68kInstructionTimingKey.EorWordDataToAddressIndirect or
                 M68kInstructionTimingKey.EorLongDataToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
+                M68kInstructionTimingKey.EoriByteImmediateToAddressIndirect or
+                M68kInstructionTimingKey.EoriWordImmediateToAddressIndirect or
+                M68kInstructionTimingKey.EoriLongImmediateToAddressIndirect => M68kTimingBarrier.ReadModifyWrite,
                 M68kInstructionTimingKey.AddiByteImmediateToPostIncrement or
                 M68kInstructionTimingKey.AddiWordImmediateToPostIncrement or
                 M68kInstructionTimingKey.AddiLongImmediateToPostIncrement => M68kTimingBarrier.ReadModifyWrite,
@@ -1793,6 +1796,7 @@ namespace Copper68k
                 M68kTimingOperandForm.AddressIndirect when descriptor.LegacyKey.ToString().StartsWith("Bclr", StringComparison.Ordinal) => 6,
                 M68kTimingOperandForm.AddressIndirect when descriptor.LegacyKey.ToString().StartsWith("Bset", StringComparison.Ordinal) => 6,
                 M68kTimingOperandForm.PostIncrement => 6,
+                M68kTimingOperandForm.AbsoluteWord when descriptor.LegacyKey == M68kInstructionTimingKey.BtstByteImmediateAbsoluteWord => 8,
                 M68kTimingOperandForm.AbsoluteLong => descriptor.LegacyKey.ToString().StartsWith("Btst", StringComparison.Ordinal) ? 10 : 12,
                 M68kTimingOperandForm.AddressDisplacement when descriptor.LegacyKey.ToString().StartsWith("Btst", StringComparison.Ordinal) => 8,
                 M68kTimingOperandForm.BriefIndexed when descriptor.LegacyKey.ToString().StartsWith("Btst", StringComparison.Ordinal) => 10,

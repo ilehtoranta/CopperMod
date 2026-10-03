@@ -72,12 +72,14 @@ approximate operand-shape policy; these results do not certify physical timing.
 The Brian the Lion CD32 hard-disk rip adds MOVE.W An to indexed memory,
 OR.B/W PC brief indexed to data registers, CLR.B/W and TST.B/W/L absolute-word,
 MOVE.B/W/L PC indexed to absolute-word, MOVEM.L register lists to absolute-word,
-SUBQ.B/W/L absolute-word, and MOVE.B/W immediate to absolute-word. Indexed MOVE
+SUBQ.B/W/L absolute-word, MOVE.B/W immediate to absolute-word, EORI.B/W/L
+immediate to indirect memory and immediate BTST to absolute-word. Indexed MOVE
 retains admitted full extensions and consumes the destination after all source
 displacements. Absolute-word addresses sign-extend; byte immediates ignore their
 unused high byte. MOVEM preserves CCR and registers, stores D0..D7 then A0..A7,
 and admits empty masks. SUBQ retains sized writes, encoded count eight, arithmetic
-flags and read-modify-write barriers. Fifty-seven focused cases cover these
+flags and read-modify-write barriers. BTST uses byte bits modulo eight and
+changes only Z. Seventy-four focused cases cover these
 routes and the unchanged 040 fallback. Native unpacking and title progression
 work through an isolated candidate; the supplied hard-disk rip does not verify
 physical CD32 optical hardware or Akiko.

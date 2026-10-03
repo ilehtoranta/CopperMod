@@ -872,7 +872,11 @@ namespace Copper68k
         SubqWordAbsoluteWord,
         SubqLongAbsoluteWord,
         MoveByteImmediateToAbsoluteWord,
-        MoveWordImmediateToAbsoluteWord
+        MoveWordImmediateToAbsoluteWord,
+        EoriByteImmediateToAddressIndirect,
+        EoriWordImmediateToAddressIndirect,
+        EoriLongImmediateToAddressIndirect,
+        BtstByteImmediateAbsoluteWord
     }
 
     internal readonly record struct M68kInstructionPlan(
