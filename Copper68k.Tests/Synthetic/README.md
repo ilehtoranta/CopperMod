@@ -174,6 +174,16 @@ ASL regression replacement proof. Run the consolidation mutations with
 Milestone 6 remains in progress; remaining implementation/reference gaps are
 listed explicitly in that document.
 
+The pinned SingleStepTests command now executes 312,500 68000 instruction-body
+cases in 125 files, with TAS/TRAPV explicit upstream exclusions. It records
+per-file hashes and case counts and rejects incomplete/mismatching requests:
+`./scripts/test-copper68k-synthetic.ps1 -SingleStepPath artifacts/reference-singlestep`.
+See the reference document for the pin, trace-boundary adaptation and the LINK A7
+disagreement that corrected both production behavior and a synthetic expectation.
+The existing stack gate distinguishes 040 early decrement from the other models;
+its logical count is unchanged. No new test retirement or hardware qualification
+is claimed.
+
 The 000 compiled-JIT alignment follow-up is retained in
 `M68000JitDirectZeroWaitTests`: 180 logical warm-cache scenarios in 15 ordinary
 xUnit batches. Instruction-boundary guards transfer word/long, stack and

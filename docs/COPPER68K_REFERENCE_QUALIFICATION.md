@@ -58,6 +58,66 @@ without software handlers, and the interrupt program's required MSP/format-1 pai
 
 ## Disagreement found and corrected
 
+### SingleStepTests boundary and LINK A7
+
+The existing binary adapter now audits the complete pinned
+[`SingleStepTests/m68000`](https://github.com/SingleStepTests/m68000/tree/64b253116a3de04aaac4346c43680960dc9b67e5)
+revision `64b253116a3de04aaac4346c43680960dc9b67e5`: 127 files, with TAS and
+TRAPV explicitly excluded according to the upstream README. The remaining
+125 files each contain 2,500 cases. This is a MAME microcoded software reference,
+not hardware captures. All register/stack banks, full architectural SR, converted
+PC and fixture final RAM are compared. Transaction/prefetch images and physical
+timing are not qualified by this semantic adapter. Fixture memory is sparse,
+with intentional 24-bit wrapping for the 68000, and cores use the public factory.
+
+The first run executed 312,500 cases and reported 120,553 disagreements. Inspection
+of NOP case 007 (`4E71`, initial/final SR `$8609`, unchanged SSP `$AE04C0`, only
+one ordinary prefetch transaction) establishes that the corpus ends before
+pending trace entry. Copper68k's ordinary `ExecuteInstruction` includes trace
+entry. The adapter therefore selects the existing internal interpreter trace
+switch without clearing/changing SR. This qualifies the instruction-body boundary;
+the ordinary synthetic trace group retains full API trace qualification. The
+script selects the interpreter explicitly; no JIT boundary audit is claimed.
+
+After boundary alignment, 312,174 cases passed and **326 LINK A7 cases** disagreed
+in the pushed value. The old synthetic expectation inferred alias sampling from
+the SP/An assignment shorthand in
+[M68000PM 4-111](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf).
+That shorthand alone is insufficient to distinguish overlapping registers on
+individual models. The prose describes pushing the specified register before
+loading the updated stack pointer. Pinned
+[WinUAE generator LINK code](https://github.com/tonioni/WinUAE/blob/5d22d33632646efc3f747f03e82d28353e52722e/gencpu.cpp#L7044)
+explicitly samples An before stack decrement except on 68040. Its source comment
+labels the sequence cycle-exact confirmed; this is corroborating software-source
+evidence, not an independently executed hardware test. The Musashi special-case
+code instead uses the decremented value on every model, so its self-checking
+program audit did not expose this distinction.
+
+The corrected synthetic stack expectation reproduced **3,840 mismatches** in
+seven profile batches; 040 remained passing. 000/010 now push the original An.
+Advanced word/long LINK does the same except for the preserved 040 early-decrement
+rule. Displacement fetching, writes, register updates and timing keys remain in
+their existing order. No instruction retry or public API change is introduced.
+All **312,500 external cases** and the **48,640 synthetic stack cases** pass after
+correction. No regression is retired by this slice.
+
+```powershell
+git clone https://github.com/SingleStepTests/m68000 artifacts/reference-singlestep
+git -C artifacts/reference-singlestep checkout 64b253116a3de04aaac4346c43680960dc9b67e5
+./scripts/test-copper68k-synthetic.ps1 -SingleStepPath artifacts/reference-singlestep
+```
+
+The command defaults to all upstream-verified files; `-SingleStepFilter MOVE`
+requests a recorded subset. It requires the pinned revision and all 127 unchanged
+inputs even for a subset, rejects an empty selection and checks 2,500 executed
+cases plus matching SHA-256 per selected file. The adapter emits
+`singlestep-model-audit.json`, including passing/mismatching case counts and up
+to 20 precise diagnostics per file. A mismatch fails after collecting the report;
+missing, malformed, empty or limited requested audits fail instead of passing.
+The existing generic input manifest supplies hashes for excluded files too.
+Other CPU models remain covered by the separate pinned Musashi program audit;
+SingleStepTests here supplies only 68000 fixtures.
+
 [MC68040UM section 8.2.6](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
 lists NOP, MOVES, CAS/CAS2, MOVE USP, MOVEC and cache/MMU serializers among T0
 events. The earlier suite used 020/030 flow rules for 040. New scenarios reproduced
@@ -202,8 +262,9 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
 
 ## Remaining qualification and implementation gaps
 
-- Existing SingleStepTests and WinUAE adapters remain available; no new external
-  corpus execution is claimed for them in this slice. WinUAE integer integration
+- SingleStepTests now has the pinned 312,500-case 68000 instruction-body audit
+  described above. WinUAE's executable adapter has no new fixture run in this
+  slice; the LINK source review is separate evidence. WinUAE integer integration
   currently selects 68000; multi-model native bridge/fixtures still need qualification.
 - Generated 010 word-MOVE/MOVEA format-8 images now have the scoped continuation
   gate below. Long transfers, other instruction families, foreign silicon images,
@@ -446,11 +507,11 @@ previous placeholder internal words and remain unqualified for continuation.
 | 28 | Marker `$C010` |
 | 30 | Suspended opcode |
 | 32 | Pending source read (0) or destination write (1) |
-| 34–37 | Next execution/extension PC at suspension |
-| 38–41 | Completed prefetch queue address |
+| 34â€“37 | Next execution/extension PC at suspension |
+| 38â€“41 | Completed prefetch queue address |
 | 42, 44 | Queue words 0 and 1 |
-| 46 | Queue count (0–2) |
-| 48–57 | Unused private words, zero |
+| 46 | Queue count (0â€“2) |
+| 48â€“57 | Unused private words, zero |
 
 Malformed marked images raise vector 14 below the intact old frame before popping.
 This additional validation is a private-image convention. Unmarked accepted-version
@@ -521,3 +582,41 @@ Consumer evidence: `artifacts/move-restart-validation/`,
 `artifacts/move-restart-production.binlog`; CPU package evidence:
 `artifacts/synthetic-private-feed-38/`. Long/non-MOVE/foreign frame restart and
 the other remaining qualification gaps above stay open.
+
+## Validation checkpoint: SingleStepTests and LINK alias sampling
+
+The full ordinary Release CPU suite passes **4,632 tests**, with eight optional/
+opt-in skips and zero failures. Report validation passes the unchanged
+**8,501,832 deterministic cases / 348 batches**. The corrected stack expectation
+detects 3,840 old-implementation mismatches across seven profiles; after correction
+all 48,640 stack scenarios pass. The pinned SingleStepTests audit executes all
+312,500 selected cases without mismatches or skips, with TAS/TRAPV explicit
+exclusions. The pinned Musashi audit executes 538 passing program/profile
+combinations and 86 explicit exclusions, without mismatches. AHX passes 18 tests.
+No new seeded run or regression retirement is claimed.
+
+Requested missing fixtures, empty binary fixtures, unmatched selections and case
+limits all execute a failing audit. Script requests with changed pinned inputs
+and unmatched filters are rejected before execution; changed inputs are restored in
+`finally`. The final input manifest matches the restored corpus. These negative
+checks do not qualify omitted references or physical timing.
+
+Private unpublished package `1.5.2-synthetic-dev.39` has SHA-256
+`625f4d4f30fc05c78af253f596d5ccf6f82b3674c603db6b10d4860293133e33`.
+Package/API validation passes. The isolated CopperScreen baseline `d9beae8`
+resolves exactly this version in production and separate diagnostic outputs.
+Release builds with zero warnings/errors; host 149, disk 74 and engine diagnostics
+1,080 pass. Six ordinary host/media skips remain unavailable coverage. Separate
+native Workbench 3.1 at 0/2 MiB Fast RAM and A1200 eight-plane hard-disk boot/reopen
+persistence execute all three cases without skips. These are correctness replays,
+not throughput or physical timing measurements. No package is published, and
+root working changes and the NuGet dependency boundary are preserved.
+
+CPU evidence: `artifacts/m6-singlestep-discovery/`,
+`artifacts/m6-singlestep-boundary/`, `artifacts/m6-link-before/`,
+`artifacts/m6-singlestep-fixed/`, `artifacts/m6-singlestep-rejections/`,
+`artifacts/m6-singlestep-final/`, `artifacts/m6-singlestep-ahx/` and
+`artifacts/synthetic-private-feed-39/`. Isolated consumer evidence:
+`artifacts/singlestep-validation/`, `artifacts/singlestep-diagnostic-tests/` and
+`artifacts/singlestep-production.binlog`. Milestone 6 remains open for the
+executable WinUAE/multi-model reference and restoration-protocol gaps above.

@@ -10569,7 +10569,8 @@ namespace Copper68k
             if ((opcode & 0xFFF8) == 0x4E50)
             {
                 var reg = opcode & 7;
-                PushLong(reg == 7 ? State.A[7] - 4 : State.A[reg]);
+                // 000/010 sample An before the stack decrement, including A7.
+                PushLong(State.A[reg]);
                 var displacement = unchecked((short)FetchWord());
                 SetAddressRegister(reg, State.A[7]);
                 State.SetActiveStackPointer((uint)(State.A[7] + displacement));

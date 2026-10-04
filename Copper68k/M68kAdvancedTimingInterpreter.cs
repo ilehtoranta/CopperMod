@@ -8721,7 +8721,7 @@ namespace Copper68k
             _ = FetchWord();
             var register = opcode & 7;
             var displacement = unchecked((int)FetchLong());
-            PushLong(register == 7 ? State.A[7] - 4 : State.A[register]);
+            PushLong(register == 7 && _profile.Model == M68kAcceleratorModel.M68040 ? State.A[7] - 4 : State.A[register]);
             State.A[register] = State.A[7];
             State.SetActiveStackPointer(State.A[7] + unchecked((uint)displacement));
             CompleteTiming(M68kInstructionTimingKey.LinkLong);
@@ -8733,7 +8733,7 @@ namespace Copper68k
             _ = FetchWord();
             var register = opcode & 7;
             var displacement = unchecked((short)FetchWord());
-            PushLong(register == 7 ? State.A[7] - 4 : State.A[register]);
+            PushLong(register == 7 && _profile.Model == M68kAcceleratorModel.M68040 ? State.A[7] - 4 : State.A[register]);
             State.A[register] = State.A[7];
             State.SetActiveStackPointer(State.A[7] + unchecked((uint)displacement));
             CompleteTiming(M68kInstructionTimingKey.LinkLong);

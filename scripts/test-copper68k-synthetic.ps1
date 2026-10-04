@@ -7,6 +7,7 @@ param(
     [string[]] $Models = @('68000', '68010', '68EC020', '68020', '68030', '68040', '68060', 'A1200'),
     [string] $OutputDirectory = 'artifacts/synthetic-suite',
     [string] $SingleStepPath,
+    [string] $SingleStepFilter = '',
     [string] $MusashiPath,
     [string] $WinUaePath,
     [string] $WinUaeLibrary,
@@ -124,15 +125,36 @@ try {
     $references = @()
     if ($SingleStepPath) {
         $resolved = Get-InputIdentity 'singlestep' $SingleStepPath '*.json.bin'
+        $pin = '64b253116a3de04aaac4346c43680960dc9b67e5'
+        $revision = (& git -C $resolved rev-parse HEAD).Trim()
+        if ($revision -ne $pin) { throw 'SingleStepTests source revision does not match adapter pin' }
+        & git -C $resolved diff --quiet HEAD -- .
+        if ($LASTEXITCODE -ne 0) { throw 'SingleStepTests inputs differ from the pinned source' }
+        $fixtures = $(if (Test-Path -LiteralPath (Join-Path $resolved 'v1')) { Join-Path $resolved 'v1' } else { $resolved })
+        $allFiles = @(Get-ChildItem -LiteralPath $fixtures -File -Filter '*.json.bin' | Sort-Object Name)
+        if ($allFiles.Count -ne 127) { throw 'Incomplete pinned SingleStepTests fixtures; expected 127 files' }
+        $selectedFiles = @($allFiles | Where-Object { $_.Name -notin @('TAS.json.bin', 'TRAPV.json.bin') -and
+            (!$SingleStepFilter -or $_.Name.Contains($SingleStepFilter, [StringComparison]::OrdinalIgnoreCase)) })
+        if ($selectedFiles.Count -eq 0) { throw 'Empty SingleStepTests audit selection' }
         Set-AuditEnvironment 'COPPER68K_RUN_M68000_SINGLESTEP' '1'
         Set-AuditEnvironment 'COPPER68K_M68000_SINGLESTEP_PATH' $resolved
-        Set-AuditEnvironment 'COPPER68K_M68000_SINGLESTEP_FILTER' 'MOVE'
+        Set-AuditEnvironment 'COPPER68K_M68000_SINGLESTEP_FILTER' $SingleStepFilter
         Set-AuditEnvironment 'COPPER68K_M68000_SINGLESTEP_LIMIT' '0'
         Set-AuditEnvironment 'COPPER68K_M68000_SINGLESTEP_BACKEND' 'interpreter'
         Set-AuditEnvironment 'COPPER68K_M68000_SINGLESTEP_VALIDATE_CYCLES' '0'
         Set-AuditEnvironment 'COPPER68K_M68000_SINGLESTEP_INCLUDE_UNVERIFIED' '0'
-        Invoke-Tests 'FullyQualifiedName~OfficialSingleStepCorpusMatchesInterpreterWhenEnabled' 'singlestep-move-68000'
-        $references += 'SingleStepTests: 68000 MOVE; MAME generated, documented caveats, semantic audit'
+        Set-AuditEnvironment 'COPPER68K_M68000_SINGLESTEP_AUDIT' '1'
+        Set-AuditEnvironment 'COPPER68K_M68000_SINGLESTEP_SOURCE_REVISION' $pin
+        Invoke-Tests 'FullyQualifiedName~OfficialSingleStepCorpusMatchesInterpreterWhenEnabled' 'singlestep-68000'
+        $audit = Get-Content -LiteralPath (Join-Path $output 'singlestep-model-audit.json') -Raw | ConvertFrom-Json
+        if ($audit.mismatching -ne 0 -or $audit.passing -ne 2500 * $selectedFiles.Count -or
+            $audit.rows.Count -ne $selectedFiles.Count -or $audit.sourceRevision -ne $pin) { throw 'Incomplete SingleStepTests audit' }
+        foreach ($file in $selectedFiles) {
+            $row = @($audit.rows | Where-Object File -CEQ $file.Name)
+            if ($row.Count -ne 1 -or $row[0].Passing -ne 2500 -or $row[0].Mismatching -ne 0 -or
+                $row[0].Sha256 -ne (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash) { throw "Incomplete SingleStepTests fixture: $($file.Name)" }
+        }
+        $references += "SingleStepTests: pinned 68000 semantic audit; $($audit.passing) cases in $($audit.rows.Count) files; filter '$SingleStepFilter'; MAME generated, documented boundary/caveats"
     }
     if ($MusashiPath) {
         $resolved = Get-InputIdentity 'musashi' $MusashiPath '*.bin'

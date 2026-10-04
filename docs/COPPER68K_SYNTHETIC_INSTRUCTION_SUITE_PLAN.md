@@ -595,3 +595,29 @@ Validation passes 4,632 ordinary CPU tests (eight optional/opt-in skips), all
 separate diagnostics 1,080 and all three native boot/persistence cases without
 native skips. The reference document records package identity, mutations, exact
 scope and remaining gaps; milestone 6 is not marked complete.
+
+The subsequent SingleStepTests qualification slice adds a pinned independent
+68000 instruction-body audit: 312,500 cases across 125 upstream-verified files,
+with TAS/TRAPV explicit exclusions. The adapter preserves SR while selecting the
+corpus's pre-trace boundary. Per-file counts/hashes and precise mismatches are
+recorded; incomplete, changed, empty or limited requests fail. The script defaults
+to all verified files and records any explicitly filtered subset.
+
+That audit exposed LINK A7 alias sampling, which the prior synthetic expectation
+also got wrong. Pinned WinUAE source corroborates sampling the original An on
+000/010/020/030/060 and the existing early-decrement behavior on 040. Corrected
+independent expectations reproduce 3,840 pre-fix failures in seven profiles;
+the corrected implementation passes all 312,500 reference cases and 48,640 stack
+scenarios. Existing extension/write/update order and timing keys are preserved.
+The deterministic logical count remains 8,501,832 in 348 batches. No regression
+is retired; WinUAE executable multi-model qualification and advanced restoration
+protocols remain open. Milestone 6 stays in progress; this is scoped software
+evidence, not exhaustive external coverage or physical hardware qualification.
+
+Validation of the LINK/reference slice passes 4,632 ordinary CPU tests (eight
+optional/opt-in skips), the unchanged 8,501,832-case gate, 312,500 pinned 68000
+reference cases, 538 pinned program/profile combinations (86 exclusions) and
+18 AHX tests. Private unpublished `1.5.2-synthetic-dev.39` passes isolated
+CopperScreen Release, host 149, disk 74, diagnostics 1,080 and all three native
+boot/persistence cases without native skips. The reference document records
+package identity, negative input checks, reproduced failures and scope.

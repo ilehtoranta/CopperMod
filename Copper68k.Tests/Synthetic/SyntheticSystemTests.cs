@@ -84,8 +84,10 @@ public sealed class SyntheticSystemTests(ITestOutputHelper output)
             {
                 var saved = expected.A[reg];
                 expected.A[7] -= 4;
-                // LINK A7 stores the decremented SP (M68000PM 4-111 operation ordering).
-                expected.Write(expected.A[7], reg == 7 ? expected.A[7] : saved, 4, machine.Model);
+                // The prose describes pushing the original An; the shorthand SP/An
+                // assignments do not specify alias sampling across processors.
+                // Pinned MAME fixtures and WinUAE distinguish 040's early decrement.
+                expected.Write(expected.A[7], reg == 7 && modelId == "68040" ? expected.A[7] : saved, 4, machine.Model);
                 expected.A[reg] = expected.A[7]; expected.A[7] = unchecked(expected.A[7] + (uint)displacement);
             }
             SyntheticExecution.Run(machine, expected, report, $"{modelId}/LINK/{width}/A{reg}/super={supervisor}/op={opcode:X4}/disp={displacement}/ccr={ccr:X2}");

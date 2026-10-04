@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Copper68k;
 using Xunit.Abstractions;
 using Xunit.Sdk;
@@ -39,6 +41,8 @@ public sealed class M68kSingleStepConformanceTests
 		var validateCycles = IsTruthy(Environment.GetEnvironmentVariable(ValidateCyclesVariable));
 		var limit = ParseLimit(Environment.GetEnvironmentVariable(LimitVariable)) ?? int.MaxValue;
 		var backend = ParseBackend(Environment.GetEnvironmentVariable(BackendVariable));
+		var audit = IsTruthy(Environment.GetEnvironmentVariable("COPPER68K_M68000_SINGLESTEP_AUDIT"));
+		if (audit && limit != int.MaxValue) throw new XunitException("A reference audit cannot use a case limit.");
 		var files = Directory.EnumerateFiles(corpusPath, "*.json.bin", SearchOption.TopDirectoryOnly)
 			.Where(path => includeUnverified || IsVerifiedCorpusFile(path))
 			.Where(path => string.IsNullOrWhiteSpace(filter) ||
@@ -52,12 +56,22 @@ public sealed class M68kSingleStepConformanceTests
 		}
 
 		var executed = 0;
+		var rows = new List<SingleStepAuditRow>();
 		foreach (var file in files)
 		{
-			var reader = new SingleStepBinaryReader(File.ReadAllBytes(file));
+			var bytes = File.ReadAllBytes(file);
+			var reader = new SingleStepBinaryReader(bytes);
+			var passed = 0;
+			var mismatched = 0;
+			var failures = new List<string>();
 			foreach (var test in reader.ReadTests())
 			{
-				RunCase(file, test, validateCycles, backend);
+				try { RunCase(file, test, validateCycles, backend); passed++; }
+				catch (XunitException ex) when (audit)
+				{
+					mismatched++;
+					if (failures.Count < 20) failures.Add(ex.Message);
+				}
 				executed++;
 				if (executed >= limit)
 				{
@@ -65,6 +79,8 @@ public sealed class M68kSingleStepConformanceTests
 					return;
 				}
 			}
+			if (passed + mismatched == 0) throw new XunitException($"Empty reference fixture: {file}");
+			rows.Add(new(Path.GetFileName(file), Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), passed, mismatched, failures));
 		}
 
 		if (executed == 0)
@@ -72,7 +88,27 @@ public sealed class M68kSingleStepConformanceTests
 			throw new XunitException("Selected SingleStepTests inputs contained no executable cases.");
 		}
 		_output.WriteLine($"Executed {executed} SingleStepTests/m68000 case(s) with {backend} backend.");
+		if (audit)
+		{
+			var output = Environment.GetEnvironmentVariable("COPPER68K_SYNTHETIC_REPORT_DIR");
+			if (string.IsNullOrWhiteSpace(output)) throw new XunitException("Reference audit requires a report directory.");
+			Directory.CreateDirectory(output);
+			var excluded = Directory.GetFiles(corpusPath, "*.json.bin")
+				.Where(path => !includeUnverified && !IsVerifiedCorpusFile(path))
+				.Select(Path.GetFileName).OrderBy(name => name, StringComparer.Ordinal).ToArray();
+			File.WriteAllText(Path.Combine(output, "singlestep-model-audit.json"), JsonSerializer.Serialize(new
+			{
+				schema = 1, reference = "SingleStepTests/m68000", model = "68000", backend = backend.ToString(),
+				sourceRevision = Environment.GetEnvironmentVariable("COPPER68K_M68000_SINGLESTEP_SOURCE_REVISION"),
+				filter, validateCycles, executed, passing = rows.Sum(r => r.Passing), mismatching = rows.Sum(r => r.Mismatching),
+				excluded, qualification = "MAME microcoded software reference; architectural state and fixture final RAM, not bus transactions or physical timing", rows
+			}, new JsonSerializerOptions { WriteIndented = true }));
+			Assert.True(rows.All(r => r.Mismatching == 0), string.Join(Environment.NewLine, rows.Where(r => r.Mismatching != 0)
+				.Select(r => $"{r.File}: {r.Mismatching} mismatches; {r.Failures[0]}")));
+		}
 	}
+
+	private sealed record SingleStepAuditRow(string File, string Sha256, int Passing, int Mismatching, List<string> Failures);
 
 	private static bool IsTruthy(string? value)
 		=> value is not null &&
@@ -189,12 +225,19 @@ public sealed class M68kSingleStepConformanceTests
 	}
 
 	private static IM68kCore CreateCore(IM68kBus bus, SingleStepBackend backend)
-		=> backend switch
+	{
+		var core = backend switch
 		{
-			SingleStepBackend.Interpreter => new M68kInterpreter(bus),
+			SingleStepBackend.Interpreter => M68kCoreFactory.Default.Create(M68kCpuModel.M68000, bus),
 			SingleStepBackend.Jit => M68kJitCore.CreateM68000(bus),
 			_ => throw new InvalidOperationException($"Invalid SingleStepTests/m68000 backend: {backend}.")
 		};
+		// The corpus ends before pending trace entry (e.g. NOP 007 retains T1,
+		// the original SSP and sequential PC). Keep SR intact while selecting
+		// that boundary; synthetic trace tests qualify the full API boundary.
+		if (core is M68kInterpreter interpreter) interpreter.ArchitecturalTraceEnabled = false;
+		return core;
+	}
 
 	private static void ApplyState(M68kCpuState state, SingleStepState expected)
 	{
@@ -291,13 +334,13 @@ public sealed class M68kSingleStepConformanceTests
 
 	private sealed class CorpusBus : IM68kBus, IM68kCodeReader
 	{
-		private readonly byte[] _memory = new byte[0x0100_0000];
+		private readonly Dictionary<int, byte> _memory = new();
 
 		public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
 		{
 			_ = cycle;
 			_ = accessKind;
-			return _memory[Offset(address)];
+			return _memory.GetValueOrDefault(Offset(address));
 		}
 
 		public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
@@ -358,7 +401,7 @@ public sealed class M68kSingleStepConformanceTests
 
 		public ushort ReadWord(uint address)
 		{
-			return (ushort)((_memory[Offset(address)] << 8) | _memory[Offset(address + 1)]);
+			return (ushort)((_memory.GetValueOrDefault(Offset(address)) << 8) | _memory.GetValueOrDefault(Offset(address + 1)));
 		}
 
 		public void WriteWord(uint address, ushort value)
