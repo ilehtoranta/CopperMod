@@ -548,3 +548,26 @@ unpublished `1.5.2-synthetic-dev.36` passes the isolated CopperScreen production
 build, host 149/disk 74/diagnostics 1,080 and all three native boot/persistence
 cases without native skips. The reference document records package identity,
 mutation evidence, retained timing policy and remaining qualification limits.
+
+The subsequent 010 format-8 structural slice adds 5,376 deterministic cases in
+three batches, bringing the semantic gate to 8,374,056 cases in 343 batches.
+Address errors now allocate 58 bytes, write the 26 information words and preserve
+the three reserved holes. RTE validates its private version before popping and
+probes the final word before loading the tail. The shared address-error guard
+also protects 010 frame construction and handler entry from recursive faults,
+with reset-only halt recovery. Existing MOVE side effects, saved-PC convention
+and exception timing policy are retained.
+
+Milestone 6 remains in progress: the structural frame uses placeholder input and
+internal state, and does not resume a suspended instruction or implement RR
+continuation. Version-zero acceptance is an emulator convention. RMW, physical
+prefetch/stack-cycle sequencing, external BERR and the other advanced restart
+formats remain unqualified. No regression is retired. The reference document
+records the bounded before-fix failures, scoped gate and validation evidence.
+
+Validation of the structural slice passes 4,624 ordinary CPU tests (eight optional/
+opt-in skips), the 8,374,056-case gate, 538 pinned independent program/profile
+combinations (86 explicit exclusions) and 18 AHX tests. Unpublished private package
+`1.5.2-synthetic-dev.37` passes isolated CopperScreen Release, host 149, disk 74 and
+separate diagnostics 1,080; all three native boot/persistence replays execute
+without skips. The reference document records its hash and evidence.

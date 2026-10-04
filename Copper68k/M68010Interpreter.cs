@@ -214,6 +214,23 @@ namespace Copper68k
         protected override bool IsSupportedRteFrameFormat(ushort format)
             => (format & 0xF000) is 0x0000 or 0x8000;
 
+        // MC68000UM 6.4: validate the version before changing SP, then probe
+        // the final word before loading the remaining information words.
+        // Version zero is this emulator's private convention. Opaque restart
+        // state and suspended-instruction continuation are not implemented.
+        protected override bool ValidateRteFrame(ushort format, uint framePointer)
+        {
+            if ((format & 0xF000) != 0x8000) return true;
+            if ((ReadWord(framePointer + 26) & 0x3C00) != 0) return false;
+            _ = ReadWord(framePointer + 56);
+            for (uint offset = 8; offset < 56; offset += 2)
+            {
+                if (offset is 14 or 18 or 22 or 26) continue;
+                _ = ReadWord(framePointer + offset);
+            }
+            return true;
+        }
+
         protected override bool TryHandleModelSpecificExceptionFrame(
             int vector,
             uint stackedProgramCounter,
@@ -229,16 +246,28 @@ namespace Copper68k
             uint faultAddress,
             bool isWrite,
             M68kBusAccessKind accessKind,
-            bool useDataAccessStackedProgramCounter)
+            bool useDataAccessStackedProgramCounter,
+            ushort dataOutput)
         {
-            _ = faultAddress;
-            _ = isWrite;
-            _ = accessKind;
             _ = useDataAccessStackedProgramCounter;
             var stackedProgramCounter = State.LastInstructionProgramCounter;
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(3, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
+            // Figure 6-8: 58 bytes, 26 information words, three unwritten
+            // reserved words. Zeroed internal/input buffers are placeholders;
+            // this structural frame does not encode resumable internal state.
+            for (var i = 0; i < 16; i++) PushWord(0);
+            PushWord(0); // instruction input buffer (unqualified)
+            State.SetActiveStackPointer(State.A[7] - 2); // reserved
+            PushWord(0); // data input buffer (unqualified)
+            State.SetActiveStackPointer(State.A[7] - 2); // reserved
+            PushWord(dataOutput);
+            State.SetActiveStackPointer(State.A[7] - 2); // reserved
+            PushLong(faultAddress);
+            var instruction = accessKind == M68kBusAccessKind.CpuInstructionFetch;
+            var functionCode = (instruction ? 2 : 1) | ((savedStatusRegister & M68kCpuState.Supervisor) != 0 ? 4 : 0);
+            PushWord((ushort)((instruction ? 0x2000 : 0x1000) | (isWrite ? 0 : 0x0100) | functionCode));
             PushWord(0x800C);
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);

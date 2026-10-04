@@ -117,7 +117,9 @@ A private double-fault latch prevents host subroutine/task entry from waking thi
 architectural halt. The supplied-PC/SP `Reset` API clears it. The existing host
 convention of explicitly setting `Halted` and subsequently entering a subroutine
 continues to work; that convention is separately tested. No public API was added.
-The 010 model hook and advanced compatibility mode retain their separate behavior.
+At this checkpoint the 010 model hook retained its separate behavior; the
+subsequent 010 structural slice extends the same entry guard to that hook.
+Advanced compatibility mode retains its separate behavior.
 
 `68000/system-double-fault` adds 640 public-factory cases across all CCRs,
 user/supervisor stacks and trace states: odd exception stacks, odd handler PCs,
@@ -307,6 +309,50 @@ separate compiled-JIT failure), `artifacts/double-fault-final/`,
 isolated consumer's `artifacts/double-fault-validation/` and
 `artifacts/double-fault-diagnostic-tests/`.
 
+### 010 format-8 structural follow-up
+
+[MC68000UM sections 6.3.9.2, 6.3.10 and 6.4, figures 6-8/6-9](https://www.nxp.com/docs/en/reference-manual/MC68000UM.pdf)
+specify a 58-byte address/bus-error frame, with 26 information words written and
+three reserved words left unwritten. The prior 010 address-error path allocated
+only eight bytes while labelling the frame format 8. RTE then skipped 58 bytes
+without reading or validating its internal version. Two bounded repros failed
+before this correction: incorrect frame allocation and an incompatible version
+accepted without vector 14.
+
+The 010 address-error path now allocates the complete frame, leaves offsets
+14/18/22 untouched, and records the logical fault address, scoped SSW read/write,
+instruction/data and function-code fields, and the faulting output word. The
+ordinary word/long MOVE reads/writes, MOVEA read, predecrement forms and JMP target
+fixtures distinguish logical 32-bit frame addresses from 24-bit physical transfers.
+The existing saved-PC convention, partial MOVE side effects and exception cycle
+policy are preserved; these are not new physical prefetch/timing qualification.
+No instruction is retried after operand effects.
+
+RTE validates version bits 10-13 of the first internal word at SP+26 before
+changing SP/SR. An incompatible version raises a format-error frame below the
+intact original. For accepted version zero it probes SP+56 before reading the
+remaining information words, skipping reserved holes, then performs the existing
+structural pop and stack selection. Version zero is an emulator-private convention,
+not a universal claim about hardware revisions. Zeroed input buffers and internal
+words are placeholders. RR-controlled cycle/instruction continuation, interrupted
+RMW semantics and physical prefetch buffer contents remain **unqualified**. This
+slice must not be interpreted as completion of format-8 restart support.
+
+The shared active-entry guard now also encloses the 010 hook. An odd supervisor
+stack or odd handler PC halts until the supplied-PC/SP reset API, preserving
+completed writes and rejecting interrupt/task/subroutine wakeups. The public bus
+API does not signal external BERR; tail-probe accessibility failures, double-BERR
+loading behavior and bus-error restart cannot be qualified by this fixture.
+
+The three new batches execute **5,376 cases**: `system-format8-entry` 1,024,
+`system-format8-rte` 4,096 and `system-format8-double-fault` 256. They cover all
+CCRs, both stacks and trace states for entry/halt, all 16 version fields, independent
+non-version bits, restored user/supervisor stacks, exact PC and a following MOVEQ
+sentinel. Common verification checks all registers, defined SR, execution state,
+memory and surroundings; the recording bus checks 26 information writes, reserved
+holes, rejected odd transfers and version/probe/tail read order. Placeholder values
+are tested as implementation conventions only. No old regression is retired.
+
 ## Validation checkpoint: 000 compiled JIT alignment
 
 The full ordinary CPU suite passes **4,619 tests**, with eight optional/opt-in
@@ -336,3 +382,33 @@ Evidence is in the CPU checkout's `artifacts/jit-address-error-before/`,
 the isolated consumer's `artifacts/jit-address-error-validation/`,
 `artifacts/jit-address-error-diagnostic-tests/` and
 `artifacts/jit-address-error-production.binlog`.
+
+## Validation checkpoint: 010 format-8 structure
+
+The full ordinary Release CPU suite passes **4,624 tests**, with eight optional/
+opt-in skips and zero failures. The final focused run passes 43 tests/batches.
+Deterministic report validation passes **8,374,056 logical cases in 343 batches**,
+including all 5,376 new structural cases. Previous reports missing the new groups
+are rejected. The requested pinned Musashi audit executes and passes 538 program/
+profile combinations with 86 explicit exclusions and no mismatches, from revision
+`72c1d74800f3087b45a0c1a7342601bbed898881`. AHX passes 18 tests. The two bounded
+before-fix regressions fail, then pass after correction. No new seeded run or
+regression retirement is claimed.
+
+Private package `1.5.2-synthetic-dev.37` has SHA-256
+`8c3fe8b434b5b9bef6ff57c5e8148739b560abcb6ebd93c49acb8dccf8de059a`.
+It remains unpublished. The isolated CopperScreen baseline `d9beae8` resolves
+this exact NuGet version in production and separate diagnostic outputs. Release
+build passes with zero warnings/errors; host 149, disk 74 and engine diagnostics
+1,080 pass. The ordinary host invocation has six optional/media skips; these are
+unavailable coverage. Separate native Workbench 3.1 at 0/2 MiB Fast RAM and
+A1200 eight-plane hard-disk boot/reopen persistence execute all three cases
+without skips. These are correctness replays, not throughput or physical timing
+qualification. Unrelated root working changes are preserved.
+
+Evidence: CPU `artifacts/format8-before/`, `artifacts/format8-focused/`,
+`artifacts/format8-final/`, `artifacts/format8-ahx/` and
+`artifacts/synthetic-private-feed-37/`; isolated consumer
+`artifacts/format8-validation/`, `artifacts/format8-diagnostic-tests/` and
+`artifacts/format8-production.binlog`. Full 010 suspended-instruction restart,
+external BERR and physical timing qualification remain open.

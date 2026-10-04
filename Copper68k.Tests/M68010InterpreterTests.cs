@@ -210,10 +210,10 @@ public sealed class M68010InterpreterTests
 		cpu.State.A[1] = 1;
 		cpu.ExecuteInstruction();
 		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
-		Assert.Equal(0x2FF8u, cpu.State.A[7]);
-		Assert.Equal(M68kCpuState.ResetStatusRegister, bus.ReadWord(0x2FF8));
-		Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
-		Assert.Equal(0x800Cu, bus.ReadWord(0x2FFE));
+		Assert.Equal(0x2FC6u, cpu.State.A[7]);
+		Assert.Equal(M68kCpuState.ResetStatusRegister, bus.ReadWord(0x2FC6));
+		Assert.Equal(CodeBase, bus.ReadLong(0x2FC8));
+		Assert.Equal(0x800Cu, bus.ReadWord(0x2FCC));
 	}
 
 	[Fact]

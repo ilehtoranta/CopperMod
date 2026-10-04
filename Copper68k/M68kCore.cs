@@ -2332,8 +2332,8 @@ namespace Copper68k
         private byte _deferredCpuBusBatchAdmissionRetryInstructions;
         private uint _activeInstructionProgramCounter;
         private bool _instructionTracePending;
-        private bool _processingM68000AddressError;
-        private bool _m68000DoubleFaultHalted;
+        private bool _processingM68000FamilyAddressError;
+        private bool _addressErrorDoubleFaultHalted;
         internal bool ArchitecturalTraceEnabled { get; set; } = true;
         private uint _dataAccessStackedProgramCounter;
         private ushort? _addressErrorInstructionWord;
@@ -9172,12 +9172,16 @@ namespace Copper68k
             return true;
         }
 
+        protected virtual bool ValidateRteFrame(ushort format, uint framePointer) => true;
+
         protected virtual bool TryHandleModelSpecificAddressError(
             uint faultAddress,
             bool isWrite,
             M68kBusAccessKind accessKind,
-            bool useDataAccessStackedProgramCounter)
+            bool useDataAccessStackedProgramCounter,
+            ushort dataOutput)
         {
+            _ = dataOutput;
             _ = faultAddress;
             _ = isWrite;
             _ = accessKind;
@@ -9201,8 +9205,8 @@ namespace Copper68k
         public void Reset(uint programCounter, uint stackPointer)
         {
             FlushDeferredCpuTimingBoundary();
-            _processingM68000AddressError = false;
-            _m68000DoubleFaultHalted = false;
+            _processingM68000FamilyAddressError = false;
+            _addressErrorDoubleFaultHalted = false;
             Array.Clear(State.D);
             Array.Clear(State.A);
             State.ProgramCounter = programCounter;
@@ -9227,7 +9231,7 @@ namespace Copper68k
         public void SwitchTaskContext(M68kCpuState next)
         {
             ArgumentNullException.ThrowIfNull(next);
-            if (_m68000DoubleFaultHalted) return;
+            if (_addressErrorDoubleFaultHalted) return;
             FlushDeferredCpuTimingBoundary();
             State.CopyTaskContextFrom(next);
             FlushPrefetch();
@@ -9262,7 +9266,7 @@ namespace Copper68k
         {
             // A host subroutine entry may resume an ordinary host-requested halt,
             // but a catastrophic group-0 fault requires a CPU reset.
-            if (_m68000DoubleFaultHalted) return;
+            if (_addressErrorDoubleFaultHalted) return;
             State.SetActiveStackPointer(stackPointer);
             PushLong(returnAddress);
             SetProgramCounterAndFlushPrefetch(address);
@@ -10346,7 +10350,7 @@ namespace Copper68k
                     if (UsesFormatWordExceptionFrames)
                     {
                         var format = ReadWord(framePointer + 6);
-                        if (!IsSupportedRteFrameFormat(format))
+                        if (!IsSupportedRteFrameFormat(format) || !ValidateRteFrame(format, framePointer))
                         { RaiseException(14, instructionPc, 34); return true; }
                         frameSize = (format & 0xF000) == 0x8000 ? 58u :
                             (format & 0xF000) == 0x2000 ? 12u : 8u;
@@ -13941,7 +13945,7 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private ushort ReadWord(uint address)
+        protected ushort ReadWord(uint address)
         {
             if (!_useM68020BriefIndexedAddressing && (address & 1) != 0)
             {
@@ -14061,7 +14065,7 @@ namespace Copper68k
         {
             if (!_useM68020BriefIndexedAddressing && (address & 1) != 0)
             {
-                ThrowOddAddressAccess(address, isWrite: true, M68kBusAccessKind.CpuDataWrite);
+                ThrowOddAddressAccess(address, isWrite: true, M68kBusAccessKind.CpuDataWrite, dataOutput: value);
             }
 
             var busAddress = GetCpuBusAddress(address);
@@ -14095,7 +14099,7 @@ namespace Copper68k
             }
             if (!_useM68020BriefIndexedAddressing && (address & 1) != 0)
             {
-                ThrowOddAddressAccess(address, isWrite: true, M68kBusAccessKind.CpuDataWrite);
+                ThrowOddAddressAccess(address, isWrite: true, M68kBusAccessKind.CpuDataWrite, dataOutput: (ushort)(value >> 16));
             }
 
             var busAddress = GetCpuBusAddress(address);
@@ -14130,14 +14134,15 @@ namespace Copper68k
             uint address,
             bool isWrite,
             M68kBusAccessKind accessKind,
-            bool useDataAccessStackedProgramCounter = false)
+            bool useDataAccessStackedProgramCounter = false,
+            ushort dataOutput = 0)
         {
             var faultCycle = BeginCpuBusAccessCycle();
             _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref faultCycle);
             State.Cycles = faultCycle;
             _cpuBusCycle = faultCycle;
             _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, faultCycle);
-            RaiseAddressError(address, isWrite, accessKind, useDataAccessStackedProgramCounter);
+            RaiseAddressError(address, isWrite, accessKind, useDataAccessStackedProgramCounter, dataOutput);
             throw M68kAddressErrorException.Instance;
         }
 
@@ -14767,27 +14772,31 @@ namespace Copper68k
             uint faultAddress,
             bool isWrite,
             M68kBusAccessKind accessKind,
-            bool useDataAccessStackedProgramCounter = false)
+            bool useDataAccessStackedProgramCounter = false,
+            ushort dataOutput = 0)
         {
             _instructionTracePending = false;
-            if (_processingM68000AddressError)
+            if (_processingM68000FamilyAddressError)
             {
-                HaltM68000DoubleFault();
+                HaltAddressErrorDoubleFault();
                 return;
             }
-            if (TryHandleModelSpecificAddressError(
-                faultAddress,
-                isWrite,
-                accessKind,
-                useDataAccessStackedProgramCounter))
-            {
-                AddInstructionCycles(AddressErrorExceptionCycles);
-                return;
-            }
-
-            _processingM68000AddressError = !_useM68020BriefIndexedAddressing;
+            _processingM68000FamilyAddressError = !_useM68020BriefIndexedAddressing;
             try
             {
+                if (TryHandleModelSpecificAddressError(
+                    faultAddress,
+                    isWrite,
+                    accessKind,
+                    useDataAccessStackedProgramCounter,
+                    dataOutput))
+                {
+                    if (_processingM68000FamilyAddressError && (State.ProgramCounter & 1) != 0)
+                        HaltAddressErrorDoubleFault();
+                    AddInstructionCycles(AddressErrorExceptionCycles);
+                    return;
+                }
+
                 var exceptionCycleBase = Math.Max(Math.Max(State.Cycles, _cpuRetireBusCycle), _instructionCycleFloor);
                 var savedStatusRegister = State.StatusRegister;
                 var instructionWord = _addressErrorInstructionWord ?? State.LastOpcode;
@@ -14806,18 +14815,18 @@ namespace Copper68k
                 SetProgramCounterAndFlushPrefetch(ReadLong(0x0000_000C));
                 // Handler entry is still part of group-0 exception processing.
                 // Detect its odd instruction address before another frame or fetch.
-                if (_processingM68000AddressError && (State.ProgramCounter & 1) != 0) HaltM68000DoubleFault();
+                if (_processingM68000FamilyAddressError && (State.ProgramCounter & 1) != 0) HaltAddressErrorDoubleFault();
                 AddInstructionCyclesFromBase(exceptionCycleBase, AddressErrorExceptionCycles);
             }
             finally
             {
-                _processingM68000AddressError = false;
+                _processingM68000FamilyAddressError = false;
             }
         }
 
-        private void HaltM68000DoubleFault()
+        private void HaltAddressErrorDoubleFault()
         {
-            _m68000DoubleFaultHalted = true;
+            _addressErrorDoubleFaultHalted = true;
             State.Halted = true;
             State.Stopped = false;
             _instructionTracePending = false;
