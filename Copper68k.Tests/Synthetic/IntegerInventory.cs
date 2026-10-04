@@ -7,6 +7,8 @@ internal sealed record InstructionSpec(string Family, int Milestone, string Size
 {
     public string ArchitecturalOutcome(ModelSpec model)
     {
+        if (Family is "MOVE16" or "CINV" or "CPUSH" && model.Id is not ("68040" or "68060")) return "line-F-vector-11";
+        if (Family == "LPSTOP" && model.Id != "68060") return "line-F-vector-11";
         if (Models == "010+" && model.Id == "68000") return "illegal-vector-4";
         if (Models == "020+" && !model.FullIndex) return "illegal-vector-4";
         if (Models == "020-only" && model.Id is not ("68020" or "68EC020" or "A1200")) return "illegal-vector-4";

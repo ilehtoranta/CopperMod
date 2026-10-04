@@ -27,11 +27,17 @@ internal sealed record ModelSpec(string Id, M68kCpuModel Model, int AddressBits,
 
 internal readonly record struct BusAccess(uint Address, int Width, bool Write, uint Value, M68kBusAccessKind Kind);
 
-internal sealed class SparseRecordingBus : IM68kBus
+internal sealed class SparseRecordingBus : IM68kBus, IM68kModuleAccessBus
 {
     public Dictionary<uint, byte> Memory { get; } = [];
     public List<BusAccess> Accesses { get; } = [];
-    public void Clear() { Memory.Clear(); Accesses.Clear(); }
+    public Dictionary<uint, uint> ModuleRegisters { get; } = [];
+    public bool ModuleResponder { get; set; }
+    public bool TryReadModuleByte(uint address, out byte value) { value = (byte)ModuleRegisters.GetValueOrDefault(address); return ModuleResponder; }
+    public bool TryWriteModuleByte(uint address, byte value) { if (ModuleResponder) ModuleRegisters[address] = value; return ModuleResponder; }
+    public bool TryWriteModuleLong(uint address, uint value) { if (ModuleResponder) ModuleRegisters[address] = value; return ModuleResponder; }
+    public int DeviceResets { get; private set; }
+    public void Clear() { Memory.Clear(); Accesses.Clear(); ModuleRegisters.Clear(); ModuleResponder = false; DeviceResets = 0; }
     public byte Peek(uint address) => Memory.GetValueOrDefault(address);
     public uint Peek(uint address, int width)
     {
@@ -60,7 +66,7 @@ internal sealed class SparseRecordingBus : IM68kBus
     public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind kind) => Write(address, value, 1, kind);
     public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind kind) => Write(address, value, 2, kind);
     public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind kind) => Write(address, value, 4, kind);
-    public void ResetExternalDevices(long cycle) { }
+    public void ResetExternalDevices(long cycle) { DeviceResets++; }
 }
 
 internal sealed class SyntheticMachine(ModelSpec model)

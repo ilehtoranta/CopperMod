@@ -193,8 +193,7 @@ namespace Copper68k
                     // cache capacity are outside the current execution policy.
                     return base.TryWriteControlRegister(register, value & 0xF880_E000u, pc);
                 case 0x008:
-                    if (value != 0) throw Unavailable("BUSCR bus control", State.LastOpcode);
-                    State.M68060BusControl = 0; return true;
+                    State.M68060BusControl = value & 0xF000_0000; return true;
                 case 0x800: State.SetUserStackPointer(value); return true;
                 case 0x808:
                     State.M68060ProcessorConfiguration = 0x0430_0000 | (value & 0x83); return true;
@@ -223,8 +222,8 @@ namespace Copper68k
             var sr = State.StatusRegister;
             State.RecordException(vector, pc, sr);
             State.StatusRegister = (ushort)((sr | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
-            if (vector == 5) PushLong(State.LastInstructionProgramCounter);
-            PushWord((ushort)((vector == 5 ? 0x2000 : 0) | (vector * 4)));
+            if (vector is 5 or 6 or 7 or 9) PushLong(State.LastInstructionProgramCounter);
+            PushWord((ushort)((vector is 5 or 6 or 7 or 9 ? 0x2000 : 0) | (vector * 4)));
             PushLong(pc);
             PushWord(sr);
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + (uint)vector * 4);
@@ -234,7 +233,7 @@ namespace Copper68k
 
         public override void RequestInterrupt(int level, uint vectorAddress)
         {
-            if (level <= 0 || level <= ((State.StatusRegister >> 8) & 7)) return;
+            if (level <= 0 || level != 7 && level <= ((State.StatusRegister >> 8) & 7)) return;
             var sr = State.StatusRegister;
             var pc = State.ProgramCounter;
             State.Stopped = false;

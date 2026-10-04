@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 
 namespace Copper68k
 {
-    internal class M68EC020AddressMaskedBus :
+    internal class M68EC020AddressMaskedBus : IM68kModuleAccessBus,
         IM68kBus,
         IM68kFastMemoryBus,
         IM68kPhysicalAddressMap
@@ -26,6 +26,16 @@ namespace Copper68k
             _fastMemoryBus = bus as IM68kFastMemoryBus;
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
         }
+
+        bool IM68kModuleAccessBus.TryReadModuleByte(uint address, out byte value)
+        {
+            if (_bus is IM68kModuleAccessBus module) return module.TryReadModuleByte(address, out value);
+            value = 0; return false;
+        }
+        bool IM68kModuleAccessBus.TryWriteModuleByte(uint address, byte value)
+            => _bus is IM68kModuleAccessBus module && module.TryWriteModuleByte(address, value);
+        bool IM68kModuleAccessBus.TryWriteModuleLong(uint address, uint value)
+            => _bus is IM68kModuleAccessBus module && module.TryWriteModuleLong(address, value);
 
         internal static M68EC020AddressMaskedBus Create(IM68kBus bus)
             => bus is IM68kCodeReader ? new CodeReadableBus(bus) : new M68EC020AddressMaskedBus(bus);

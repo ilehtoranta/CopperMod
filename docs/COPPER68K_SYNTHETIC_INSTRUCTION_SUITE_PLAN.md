@@ -20,8 +20,8 @@ model. A gap report alone does not complete it.**
 | 1. Framework and MOVE | Complete: semantic gate, 2026-10-04 | 631,184 deterministic cases across all eight profiles; zero mismatches, unsupported legal forms or untested required combinations. |
 | 2. Data transfer and address operations | Complete: semantic gate, 2026-10-04 | 270,240 deterministic cases for MOVEQ, MOVEM, MOVEP, LEA, PEA, EXG, EXT/EXTB and SWAP; unavailable forms raise their documented exceptions. |
 | 3. Arithmetic and comparison | Complete | ADD/SUB variants, quick/immediate/address/extend forms, comparisons, multiply/divide, decimal/packing operations; overflow, borrow, carry, sticky zero, exceptional operands. |
-| 4. Logical, bit and shift operations | Planned / untested | Logical/immediate/unary operations, bit manipulation, shifts/rotates, bitfields, atomic integer operations; preservation and memory effects. |
-| 5. Control and system operations | Planned / untested | Branches, conditions, calls/returns, stack frames, traps, privilege-sensitive transfers, STOP/RESET, model-specific integer/system instructions; exception frames, saved PC/SR, stack selection, interrupt/trace. |
+| 4. Logical, bit and shift operations | Complete: semantic gate, 2026-10-04 | Logical/immediate/unary operations, bit manipulation, shifts/rotates, bitfields, atomic integer operations; preservation and memory effects. |
+| 5. Control and system operations | Complete: scoped semantic gate, 2026-10-04 | Branches, conditions, calls/returns, stack frames, traps, privilege-sensitive transfers, STOP/RESET, model-specific integer/system instructions; exception frames, saved PC/SR, stack selection, interrupt/trace. |
 | 6. Reference qualification and consolidation | Planned | Independent reference audits across selected models, gap review, retire proven redundant tests; publish architectural combination coverage, not just xUnit counts. |
 
 For every promoted family, mismatches and emulator-level unsupported execution
@@ -315,3 +315,157 @@ Evidence directories: `artifacts/m3-final/`, `artifacts/m3-seeded/`,
 `artifacts/m3-validation/`. Semantic correctness, approximate timing policy and
 physical timing qualification remain separate; no new physical timing or OS
 compatibility qualification is claimed.
+
+## Milestones 4 and 5 implementation checkpoint — 2026-10-04
+
+The logical/bit/shift/atomic matrix adds **4,073,024 deterministic cases** in
+64 batches. Control/system adds **1,305,838 cases** in 128 batches. Together
+with milestones 1–3, the required semantic gate is **8,324,030 cases** in
+**338 xUnit batches** across all seven models and the A1200 EC020 profile.
+Every required named batch must exist with its exact count and zero mismatching,
+unsupported or untested cases before promotion. Architectural unavailable
+instructions execute their documented illegal, line-F or unimplemented-integer
+exceptions, rather than being counted as emulator gaps.
+
+| Milestone 4 group | 000/010 per profile | 020+ per profile |
+| --- | ---: | ---: |
+| Logical/unary value and CCR boundaries | 31,808 | 31,808 |
+| Logical/unary addressing | 6,660 | 9,944 |
+| Register/memory shifts and rotates | 130,560 | 131,088 |
+| Static/dynamic bit operations | 104,192 | 104,852 |
+| Bitfield widths, offsets, values and aliases | 155,136 | 155,136 |
+| Bitfield addressing and full extensions | 2,688 | 3,480 |
+| CAS sizes, comparisons, addressing and aliases | 36,975 | 37,371 |
+| CAS2 comparisons, register fields and aliases | 36,864 | 36,864 |
+
+Boolean and bit-by-bit shift expectations are independent of production helpers.
+Bitfields independently extract/insert every selected bit, including signed
+memory offsets, INT_MIN, wrapping register fields, width 32, dynamic offset/width
+aliases and original-offset BFFFO results. CAS/CAS2 check comparison precedence,
+partial registers, X preservation and selected read/write order and widths.
+040/060 failed CAS writeback and the 060 misalignment/removed-CAS2 outcomes are
+explicit. Overlapping CAS2 memory results are architecturally undefined/excluded.
+
+| Milestone 5 group | 000/010 per profile | 020+ per profile |
+| --- | ---: | ---: |
+| Branch conditions, displacements and subroutine stacks | 8,192 | 12,288 |
+| DBcc/Scc registers, addressing and CCR | 42,048 | 43,104 |
+| Conditional traps | 3,072 | 3,072 |
+| JMP/JSR addressing and stack aliases | 3,592 | 3,856 |
+| Traps, privilege, STOP/RESET and basic instructions | 1,728 | 1,728 |
+| SR/CCR/USP transfers and immediate status operations | 16,540 | 16,936 |
+| LINK/UNLK and ordinary returns | 6,080 | 6,080 |
+| CHK/CHK2/CMP2 bounds, registers and addressing | 11,828 | 12,488 |
+| MOVES register/memory transfers and privilege | 10,656 | 11,052 |
+| BKPT, cache instructions, five MOVE16 forms, LPSTOP | 13,120 | 13,120 |
+| MOVEC selectors, masks, general registers and privilege | 2,432 | 2,432 |
+| RTE frames and stack selection | 2,048 | 020/030/EC020/A1200: 1,888; 040: 2,016; 060: 2,048 |
+| Trace retirement and batch boundaries | 580 | 020/030/040/EC020/A1200: 1,160; 060: 580 |
+| Interrupt masks, STOP wakeup, VBR and master frames | 000: 224; 010: 226 | 020/030/040/EC020/A1200: 418; 060: 226 |
+| CALLM descriptors, frames, arguments and access requests | 10,832 | 020/EC020/A1200: 11,000; 030/040/060: 10,964 |
+| RTM frames, arguments, denied access and invalid options | 24,594 | 24,594 |
+
+System scenarios verify exact stacked PC/SR, privilege before operand effects,
+model-specific format-2 frames, inactive stack preservation, master interrupts
+with paired MSP/ISP frames and real RTE restoration. T1 traces completed
+instructions, T0 traces documented control flow on applicable models; completed
+traps and aborting exceptions are distinguished. Batch-boundary trace changes
+cannot bypass retirement through cached hot blocks. MOVE16 covers all five
+register/absolute forms, line alignment, aliases and one postincrement for a
+shared source/destination register. MOVEC exercises each model's selectors and
+reserved/read-as-zero masks while keeping MMU translation disabled.
+
+CALLM/RTM are implemented for 020/EC020/A1200, including inline/indirect argument
+options, all general-register selections, descriptor validation and type-1
+access-level requests. CPU-space access control uses an optional **internal**
+responder separate from ordinary RAM. Public flat buses have no responder and
+type-1 modules take a format error. The synthetic responder qualifies request
+and architectural state behavior; it does not introduce a public package API or
+qualify external module hardware timing. Reserved/unused frame fields are masked.
+
+Production corrections discovered by these matrices include:
+
+- Complete residual logical, bit, shift and system EA routes before approximate
+  fallback; admit legal full indexed forms in their selected execution paths.
+  Never retry an instruction after partial operand effects.
+- Synchronize A7 operand changes with its architectural stack bank; retain
+  source-before-destination effects and existing brief/fixed-cycle timing policy.
+- Clear bitfield V/C, avoid signed-offset overflow, preserve BFFFO's original
+  signed offset, implement CAS2 Dc1 failure precedence and failed atomic writeback.
+- Implement missing 010 status/RTD/MOVES behavior; apply advanced SR privilege and
+  alignment rules before 040's early-integer fallback.
+- Store decremented SP for LINK A7 and preserve the pulled value for UNLK A7.
+  CHK2 sets Z on either boundary; CMP2 compares an address register at full width
+  against sign-extended byte/word bounds.
+- Correct model-specific MOVEC availability, USP transfers, CACR reserved and
+  clear-command masks, 060 BUSCR state and synchronous exception handling.
+  Normal disabled-MMU memory transfers no longer erase 040 MMUSR.
+- Implement MOVE16's five forms, 060 LPSTOP and 020 CALLM/RTM. Replace permissive
+  historical MOVE16 extensions with the documented mandatory extension bit.
+- Preserve synchronous master state, clear master state for interrupts, recognize
+  directly requested level 7, emit documented trap/trace frames and consume
+  throwaway RTE frames across stack switches. Keep 060's absent T0 bit masked.
+
+### Qualification boundaries
+
+The promoted gate covers the named semantic scenarios above. It **does not**
+qualify faulted-instruction restart/internal-state restoration on 010 frame 8,
+020/030 frames 9/A/B, or 040 frame 7 pending exceptions/writebacks. These remain
+explicitly untested execution combinations in the qualified report; they are
+not classified as architecturally invalid or as passing RTE coverage. Existing
+cache, prefetch, bus ordering, detailed faults, JIT and native regressions remain
+retained. A nested early-model address fault on an invalid odd supervisor stack
+was observed during fixture development and remains an unresolved detailed-fault
+edge; valid instruction fixtures do not hide it as a passing fault qualification.
+
+BKPT tests the documented outcome without an external replacement device.
+Physical MOVES function-code bus spaces and LPSTOP CPU-space broadcast are
+unqualified by the current public bus boundary. Undefined MOVES self-base stored
+values, simultaneous T1/T0, reserved module frame fields and undefined atomic overlap
+results are excluded explicitly. FPU arithmetic, enabled MMU translation,
+physical cache/pipeline behavior and OS compatibility remain outside the roadmap.
+Diagnostic 010/060 results continue to be separate from desktop readiness.
+
+### Validation evidence
+
+- Full restored-source Release CPU suite: **4,592 passed, 7 optional skips,
+  0 failed**. Deep audit separately enabled: seed 68020, 10,000 cases per profile
+  in each of MOVE, arithmetic, logical and control, **320,000 passing cases**.
+  Both deterministic and deep report validation require every exact count and
+  zero mismatching/unsupported/untested required cases.
+- All **20 targeted mutations** are detected by executed semantic scenarios,
+  including all eleven retained MOVE/arithmetic proofs and nine new logical/system
+  proofs. Mutated source is restored in `finally` and rebuilt with zero warnings.
+  The CACR readback proof required adding clear-command bits to the input values;
+  its replacement case is `68020/MOVEC/L/R0/control=002/store=True/super=True`.
+  Proof SHA-256: `787210877e40827c651cbcaf077e0a5ccbc4b62a5d6211dea278ae82a1aef56d`.
+- Retained AHX tests: **18 passed**. Private package
+  `1.5.2-synthetic-dev.32` passes package/content validation; SHA-256
+  `1147b920e313219bc5d95ddb87735d7767d58a89fb146a28a060d38cbfb6fca9`.
+  It is **not published**; existing published versions remain immutable.
+- Isolated CopperScreen `d9beae8` checkout resolves this exact package through
+  `Copper68kBoundaryVersion`, preserving the existing NuGet dependency boundary.
+  Production Release build: **0 warnings/errors**; host **149 passed, 6 optional
+  media skips**; disk **74 passed**; separate engine diagnostics **1,080 passed**.
+- Native 68000 Workbench 3.1 floppy boot at 0 and 2 MiB Fast RAM: **2 passed**.
+  Native A1200 EC020 eight-plane boot and cold reopen: **1 passed**. The retained
+  cycle, PC, framebuffer, RGB24/DOS proof checks and pinned inputs are unchanged.
+  No ROM/media files are committed. These are deterministic integration replays,
+  not throughput or physical-timing acceptance measurements.
+- Specialized regressions are retained. Historical unsupported logical tests now
+  assert the completed instruction result; historical MOVE16 fixtures use the
+  documented extension bit, and the 040 invalid-MOVEC regression expects vector 4.
+  No regression has been retired without replacement proof.
+
+Evidence: `artifacts/m4-m5-final/`, `artifacts/m4-m5-seed-68020-fixed/`,
+`artifacts/m4-m5-mutation-proof-final/`, `artifacts/synthetic-private-feed-32/`,
+and the isolated consumer's `artifacts/m4-m5-validation/`. Reproduce with:
+
+```powershell
+./scripts/test-copper68k-synthetic.ps1
+./scripts/test-copper68k-synthetic.ps1 -Deep -Seed 68020 -Samples 10000
+./scripts/test-copper68k-synthetic-mutations.ps1
+```
+
+Cross-model independent external reference qualification and consolidation remain
+milestone 6. Package publication remains a separately authorized release action.

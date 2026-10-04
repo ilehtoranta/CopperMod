@@ -128,7 +128,6 @@ public sealed class M68060InterpreterTests
     [Theory]
     [InlineData(0x003, 0x8000u)]
     [InlineData(0x004, 0x8000u)]
-    [InlineData(0x008, 0x20000000u)]
     public void UnimplementedSystemFeaturesStopExplicitly(int control, uint value)
     {
         var bus = new Copper68kTestBus(0x10000);
@@ -136,6 +135,18 @@ public sealed class M68060InterpreterTests
         using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
         cpu.Reset(0x1000, 0x7000); cpu.State.D[0] = value;
         Assert.Throws<M68kEmulationException>(() => cpu.ExecuteInstruction());
+    }
+
+    [Fact]
+    public void BusControlEnableTransfersWithoutInventingExternalLockActivity()
+    {
+        var bus = new Copper68kTestBus(0x10000);
+        bus.WriteWords(0x1000, 0x4E7B, 0x0008, 0x4E7A, 0x1008);
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
+        cpu.Reset(0x1000, 0x7000); cpu.State.D[0] = 0x20000000;
+        cpu.ExecuteInstruction(); cpu.ExecuteInstruction();
+        Assert.Equal(0x20000000u, cpu.State.D[1]);
+        Assert.Equal(0x1008u, cpu.State.ProgramCounter);
     }
 
     [Theory]

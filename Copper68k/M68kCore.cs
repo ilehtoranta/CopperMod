@@ -1351,7 +1351,7 @@ namespace Copper68k
         /// </summary>
         public const ushort ResetStatusRegister = 0x2700;
         private const ushort M68000StatusRegisterMask = Trace | Supervisor | 0x0700 | ConditionCodeMask;
-        private const ushort M68020StatusRegisterMask = Trace | Master | Supervisor | 0x0700 | ConditionCodeMask;
+        private const ushort M68020StatusRegisterMask = Trace | 0x4000 | Master | Supervisor | 0x0700 | ConditionCodeMask;
         private const ushort ConditionCodeMask = Carry | Overflow | Zero | Negative | Extend;
 
         /// <summary>
@@ -1533,6 +1533,7 @@ namespace Copper68k
         public uint LastInstructionProgramCounter { get; set; }
 
         internal int LastExceptionVector { get; set; } = -1;
+        internal uint ExceptionSequence { get; private set; }
 
         internal int FirstExceptionVector { get; set; } = -1;
 
@@ -1601,6 +1602,8 @@ namespace Copper68k
                 FirstExceptionA7 = A[7];
             }
 
+            ExceptionSequence++;
+            if (M68060StackModeEnabled) M68060BusControl = (M68060BusControl & 0xA000_0000u) >> 1;
             LastExceptionVector = vector;
             LastExceptionStackedProgramCounter = stackedProgramCounter;
             LastExceptionStatusRegister = savedStatusRegister;
@@ -1795,7 +1798,7 @@ namespace Copper68k
             }
 
             // MC68060UM 3.2.2.2 / 11.1.2: M is software state, not a stack selector.
-            value &= M68060StackModeEnabled ? M68020StatusRegisterMask : M68000StatusRegisterMask;
+            value &= M68060StackModeEnabled ? (ushort)(M68020StatusRegisterMask & ~0x4000) : M68000StatusRegisterMask;
             var wasSupervisor = (_statusRegister & Supervisor) != 0;
             var isSupervisor = (value & Supervisor) != 0;
             if (wasSupervisor != isSupervisor)
@@ -2329,6 +2332,7 @@ namespace Copper68k
         private byte _deferredCpuBusBatchAdmissionRetryInstructions;
         private uint _activeInstructionProgramCounter;
         private bool _instructionTracePending;
+        internal bool ArchitecturalTraceEnabled { get; set; } = true;
         private uint _dataAccessStackedProgramCounter;
         private ushort? _addressErrorInstructionWord;
         private bool? _addressErrorIsWriteOverride;
@@ -9110,6 +9114,35 @@ namespace Copper68k
             };
         }
 
+        protected bool TryExecuteM68010StatusAndReturn(ushort opcode, uint instructionPc)
+        {
+            if (opcode == 0x4E74)
+            {
+                var displacement = unchecked((short)FetchWord());
+                State.ProgramCounter = PullLong();
+                State.SetActiveStackPointer(unchecked(State.A[7] + (uint)displacement));
+                AddInstructionCycles(16);
+                return true;
+            }
+            if ((opcode & 0xFFC0) == 0x40C0 && !State.GetFlag(M68kCpuState.Supervisor))
+            {
+                RaiseException(8, instructionPc, 34);
+                return true;
+            }
+            if ((opcode & 0xFFC0) != 0x42C0) return false;
+            var mode = (opcode >> 3) & 7;
+            var reg = opcode & 7;
+            if (!IsDataAlterableEffectiveAddress(mode, reg))
+            {
+                RaiseException(4, instructionPc, 34);
+                return true;
+            }
+            var ea = ResolveEa(mode, reg, M68kOperandSize.Word, write: true);
+            ea.Write((uint)(State.StatusRegister & 0x001F));
+            AddInstructionCycles(GetMoveFromSrCycles(mode, reg));
+            return true;
+        }
+
         protected virtual bool TryExecuteModelSpecificLine4(ushort opcode, uint instructionPc)
         {
             _ = opcode;
@@ -9156,8 +9189,8 @@ namespace Copper68k
             ushort savedStatusRegister)
         {
             if (!_useM68020BriefIndexedAddressing) return false;
-            if (vector == 5) PushLong(State.LastInstructionProgramCounter);
-            PushWord((ushort)((vector == 5 ? 0x2000 : 0) | ((vector * 4) & 0x0fff)));
+            if (vector is 5 or 6 or 7 or 9) PushLong(State.LastInstructionProgramCounter);
+            PushWord((ushort)((vector is 5 or 6 or 7 or 9 ? 0x2000 : 0) | ((vector * 4) & 0x0fff)));
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
             return true;
@@ -9237,7 +9270,7 @@ namespace Copper68k
             }
 
             var mask = (State.StatusRegister >> 8) & 0x07;
-            if (level <= mask)
+            if (level <= mask && level != 7)
             {
                 return;
             }
@@ -9274,6 +9307,7 @@ namespace Copper68k
                 : interruptStartCycle;
             _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, interruptStartCycle);
             var savedStatusRegister = State.StatusRegister;
+            State.RecordException((int)(vectorAddress / 4), State.ProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((savedStatusRegister & ~M68kCpuState.Trace & 0xF8FF) |
                 ((level & 7) << 8) |
                 M68kCpuState.Supervisor);
@@ -9860,8 +9894,33 @@ namespace Copper68k
             return true;
         }
 
+        protected virtual bool SupportsMoves => false;
+
         private bool DecodeLine0(ushort opcode, uint instructionPc)
         {
+            if ((opcode & 0xff00) == 0x0e00 && SupportsMoves)
+            {
+                var movesMode = (opcode >> 3) & 7; var movesReg = opcode & 7;
+                var field = (opcode >> 6) & 3;
+                if (field == 3 || movesMode < 2 || !IsDataAlterableEffectiveAddress(movesMode, movesReg))
+                { RaiseException(4, instructionPc, 34); return true; }
+                if (!State.GetFlag(M68kCpuState.Supervisor))
+                { RaiseException(8, instructionPc, 34); return true; }
+                var extension = FetchWord(); var general = (extension >> 12) & 7;
+                var addressRegister = (extension & 0x8000) != 0; var store = (extension & 0x800) != 0;
+                var movesSize = (M68kOperandSize)(1 << field);
+                var movesEa = ResolveEa(movesMode, movesReg, movesSize, addressOnly: true);
+                if (movesMode == 3) SetAddressRegister(movesReg, unchecked(movesEa.Address + AddressIncrement(movesReg, movesSize)));
+                if (store) movesEa.Write(addressRegister ? State.A[general] : State.D[general]);
+                else
+                {
+                    var value = movesEa.Read();
+                    if (addressRegister) SetAddressRegister(general, M68kCpuState.SignExtend(value, movesSize));
+                    else WriteDataRegister(general, value, movesSize);
+                }
+                AddInstructionCycles(12 + movesEa.EaCycles);
+                return true;
+            }
             if (DecodeImmediateToStatusRegister(opcode, instructionPc))
             {
                 return true;
@@ -10264,18 +10323,19 @@ namespace Copper68k
                         return true;
                     }
 
-                    var statusRegister = PullWord();
-                    var programCounter = PullLong();
+                    var framePointer = State.A[7];
+                    var statusRegister = ReadWord(framePointer);
+                    var programCounter = ReadLong(framePointer + 2);
+                    var frameSize = 6u;
                     if (UsesFormatWordExceptionFrames)
                     {
-                        var format = PullWord();
-                        if (_useM68020BriefIndexedAddressing && (format & 0xf000) == 0x2000) _ = PullLong();
+                        var format = ReadWord(framePointer + 6);
                         if (!IsSupportedRteFrameFormat(format))
-                        {
-                            RaiseException(14, instructionPc, 34);
-                            return true;
-                        }
+                        { RaiseException(14, instructionPc, 34); return true; }
+                        frameSize = (format & 0xF000) == 0x8000 ? 58u :
+                            (format & 0xF000) == 0x2000 ? 12u : 8u;
                     }
+                    State.SetActiveStackPointer(framePointer + frameSize);
 
                     State.StatusRegister = statusRegister;
                     AddInstructionCycles(20);
@@ -10355,6 +10415,12 @@ namespace Copper68k
                     return true;
                 }
 
+                if (_useM68020BriefIndexedAddressing && !State.GetFlag(M68kCpuState.Supervisor))
+                {
+                    RaiseException(8, instructionPc, 34);
+                    return true;
+                }
+
                 var ea = ResolveEa(mode, reg, M68kOperandSize.Word, write: true);
                 if (mode == 3 && (ea.Address & 1) != 0)
                 {
@@ -10431,7 +10497,7 @@ namespace Copper68k
             if ((opcode & 0xFFF8) == 0x4E50)
             {
                 var reg = opcode & 7;
-                PushLong(State.A[reg]);
+                PushLong(reg == 7 ? State.A[7] - 4 : State.A[reg]);
                 var displacement = unchecked((short)FetchWord());
                 SetAddressRegister(reg, State.A[7]);
                 State.SetActiveStackPointer((uint)(State.A[7] + displacement));
@@ -10739,6 +10805,9 @@ namespace Copper68k
 
             if ((opcode & 0xF0C0) == 0x50C0)
             {
+                // On 000/010 these later TRAPcc words are invalid Scc EAs.
+                // Reject before extension consumption or destination effects.
+                if (((opcode >> 3) & 7) == 7 && (opcode & 7) > 1) return false;
                 var condition = (opcode >> 8) & 0x0F;
                 var conditionEa = ResolveEa((opcode >> 3) & 7, opcode & 7, M68kOperandSize.Byte, write: true);
                 var conditionTrue = CheckCondition(condition);
@@ -14402,7 +14471,7 @@ namespace Copper68k
         private void BeginInstructionCycleFloor(long startCycle)
         {
             // MC68000 UM 6.3.8: sample before executing, not from the resulting SR.
-            _instructionTracePending = (State.StatusRegister & M68kCpuState.Trace) != 0;
+            _instructionTracePending = ArchitecturalTraceEnabled && (State.StatusRegister & M68kCpuState.Trace) != 0;
             // Reaching the next instruction proves that any previous DBcc
             // transition was consumed normally rather than by an interrupt.
             _exceptionEntryNotBeforeCycle = 0;

@@ -14,8 +14,9 @@ From the CopperMod root, run:
 ./scripts/test-copper68k-synthetic.ps1
 ```
 
-MOVE/MOVEA, transfer/address and arithmetic/comparison operations execute
-**2,945,168 logical cases** in **146 xUnit batches**, across seven models and the A1200 profile.
+Milestones 1–5 execute MOVE/MOVEA, transfer/address, arithmetic/comparison,
+logical/bit/shift/atomic and control/system operations in
+**8,324,030 logical cases** across **338 xUnit batches**, across seven models and the A1200 profile.
 Ordinary `dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release` includes
 these batches. CI additionally validates every required report and exact count;
 missing reports, mismatches, unsupported execution and empty groups fail the gate.
@@ -43,7 +44,7 @@ register encodings and preserved CCR bits.
 ./scripts/test-copper68k-synthetic.ps1 -Deep -Models 68000,68020 -Seed 123456 -Samples 20000
 ```
 
-Recorded xorshift32 seeds add MOVE and arithmetic samples without expanding the deterministic
+Recorded xorshift32 seeds add MOVE, arithmetic, logical and control samples without expanding the deterministic
 Cartesian product. Zero seeds, empty/unknown model selections and nonpositive
 sample counts are rejected. Each invocation uses a fresh report directory.
 
@@ -84,12 +85,17 @@ format-2 instruction address on 020+ and RTE in both stack modes.
 ```powershell
 ./scripts/test-copper68k-synthetic-mutations.ps1
 ./scripts/test-copper68k-synthetic-mutations.ps1 -Scope Arithmetic
+./scripts/test-copper68k-synthetic-mutations.ps1 -Scope Logical
+./scripts/test-copper68k-synthetic-mutations.ps1 -Scope Control
 ```
 
-Eleven isolated mutations prove detection of absolute-address decoding, extension
+Twenty isolated mutations prove detection of absolute-address decoding, extension
 length, signed indexes, source/destination alias order, A7 byte stride and MOVE
 flags, arithmetic overflow, extend sticky zero, decimal alias ordering, PACK A7
-stride and the 060 divide frame. The command restores source in `finally`, rebuilds it and records each
+stride and the 060 divide frame. Additional proofs cover bitfield V/C clearing,
+negative offsets, CAS2 alias precedence and 040 failed writeback, CHK2 boundary Z,
+CMP2 address width, RTE throwaway frames, MOVE16 postincrement and CACR command
+readback. The command restores source in `finally`, rebuilds it and records each
 mutation, precise failing replacement case and source hash. A compilation failure
 does not count as detection. Do not run it concurrently with a build or edit of
 the same production file.
@@ -99,3 +105,27 @@ unsupported boundary became legal execution were updated to assert the result.
 Cache, prefetch, detailed fault ordering, bus timing, JIT and native media tests
 remain separate. These semantic results preserve existing timing policy; they do
 not certify physical timing or OS compatibility.
+
+## Control and system qualification boundary
+
+Normal, throwaway and postinstruction RTE frames verify saved SR/PC, active and
+inactive stack banks, format errors and privilege ordering. Trace tests cover
+T1, T0 on applicable models, taken/untaken control flow, completed traps,
+aborting exceptions and trace changes at batch boundaries. Interrupt tests cover
+IPL, level 7, STOP wakeup, VBR and paired MSP/ISP frames with RTE restoration.
+MOVEC verifies model selectors and masks; MOVES covers memory and register effects.
+All five MOVE16 forms, cache-instruction privilege and LPSTOP are included.
+CALLM/RTM cover 020 module frames, both argument options and an isolated internal
+CPU-space access-control responder. An ordinary bus has no such responder and
+produces a format error for type-1 modules; ordinary RAM is never used as one.
+
+Detailed RTE bus-fault restart/internal-state restoration on 010/020/030,
+020/030 coprocessor midinstruction restoration and 040 access-fault pending
+exceptions/writebacks remain **untested by this synthetic matrix**. They are
+listed separately in report qualification boundaries rather than reported as
+invalid frame formats or passing coverage. External BKPT instruction replacement,
+physical MOVES function-code buses and LPSTOP CPU-space broadcast are also
+unavailable qualification. Cache/prefetch/fault/JIT/native suites remain retained;
+no physical pipeline/cache, FPU arithmetic, enabled MMU or OS qualification is
+claimed. Undefined CAS2 overlapping-memory results, MOVES storing its own updated
+address base, reserved module fields and simultaneous T1/T0 are excluded.

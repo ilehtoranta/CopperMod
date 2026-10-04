@@ -68,7 +68,31 @@ try {
             'arithmetic-scenarios'=21072; 'arithmetic-extend'=25440;
             'arithmetic-decimal'=$(if ($model -in @('68000','68010')) {111392} else {111458});
             'arithmetic-muldiv-boundaries'=26904;
-            'arithmetic-muldiv-addressing'=$(if ($model -in @('68000','68010')) {5608} elseif ($model -eq '68060') {7208} else {7224})}
+            'arithmetic-muldiv-addressing'=$(if ($model -in @('68000','68010')) {5608} elseif ($model -eq '68060') {7208} else {7224});
+            'control-branches'=$(if ($model -in @('68000','68010')) {8192} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {12288});
+            'control-conditions'=$(if ($model -in @('68000','68010')) {42048} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {43104});
+            'control-jumps'=$(if ($model -in @('68000','68010')) {3592} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {3856});
+            'control-trapcc'=3072;
+            'logical-addressing'=$(if ($model -in @('68000','68010')) {6660} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {9944});
+            'logical-bitfield-addressing'=$(if ($model -in @('68000','68010')) {2688} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {3480});
+            'logical-bitfield-values'=155136;
+            'logical-bits'=$(if ($model -in @('68000','68010')) {104192} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {104852});
+            'logical-boundaries'=31808;
+            'logical-cas'=$(if ($model -in @('68000','68010')) {36975} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {37371});
+            'logical-cas2'=36864;
+            'logical-shifts'=$(if ($model -in @('68000','68010')) {130560} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {131088});
+            'system-basic'=1728;
+            'system-bounds'=$(if ($model -in @('68000','68010')) {11828} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {12488});
+            'system-callm'=$(if ($model -in @('68000','68010')) {10832} elseif ($model -in @('68020','68EC020','A1200')) {11000} elseif ($model -in @('68030','68040','68060')) {10964});
+            'system-interrupt'=$(if ($model -in @('68000')) {224} elseif ($model -in @('68010','68060')) {226} elseif ($model -in @('68020','68030','68040','68EC020','A1200')) {418});
+            'system-model'=13120;
+            'system-movec'=2432;
+            'system-moves'=$(if ($model -in @('68000','68010')) {10656} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {11052});
+            'system-rte'=$(if ($model -in @('68000','68010','68060')) {2048} elseif ($model -in @('68020','68030','68EC020','A1200')) {1888} elseif ($model -in @('68040')) {2016});
+            'system-rtm'=24594;
+            'system-stack'=6080;
+            'system-status'=$(if ($model -in @('68000','68010')) {16540} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {16936});
+            'system-trace'=$(if ($model -in @('68000','68010','68060')) {580} elseif ($model -in @('68020','68030','68040','68EC020','A1200')) {1160})}
         foreach ($group in $expected.Keys) {
             $report = Get-Content -LiteralPath (Join-Path $output "$model-$group.json") -Raw | ConvertFrom-Json
             if ($report.logicalCases -ne $expected[$group] -or $report.counts.passing -ne $expected[$group] -or
@@ -78,10 +102,11 @@ try {
     }
     if ($Deep) {
         foreach ($model in $Models) {
-            $report = Get-Content -LiteralPath (Join-Path $output "$model-move-seeded-$Seed.json") -Raw | ConvertFrom-Json
-            if ($report.logicalCases -ne $Samples -or $report.counts.passing -ne $Samples) { throw "Incomplete seeded audit: $model" }
-            $arithmetic = Get-Content -LiteralPath (Join-Path $output "$model-arithmetic-seeded-$Seed.json") -Raw | ConvertFrom-Json
-            if ($arithmetic.logicalCases -ne $Samples -or $arithmetic.counts.passing -ne $Samples) { throw "Incomplete seeded arithmetic audit: $model" }
+            foreach ($group in @('move', 'arithmetic', 'logical', 'control')) {
+                $report = Get-Content -LiteralPath (Join-Path $output "$model-$group-seeded-$Seed.json") -Raw | ConvertFrom-Json
+                if ($report.logicalCases -ne $Samples -or $report.counts.passing -ne $Samples -or
+                    $report.counts.mismatching -ne 0 -or $report.counts.unsupported -ne 0 -or $report.counts.untested -ne 0) { throw "Incomplete seeded audit: $model/$group" }
+            }
         }
     }
     $references = @()
@@ -126,16 +151,22 @@ try {
         $references += 'WinUAE: available adapter is 68000 integer; generator supports other models, adapters/fixtures still need qualification'
     }
     $inventory = Get-Content -LiteralPath (Join-Path $output 'integer-inventory.json') -Raw | ConvertFrom-Json
-    foreach ($row in $inventory.combinations) { if ($row.Milestone -le 3) { $row.status = 'passing' } }
+    foreach ($row in $inventory.combinations) {
+        if ($row.Milestone -le 5) { $row.status = 'passing'; $row.note = 'Passing named semantic scenario batches; consult qualification boundaries for untested physical/internal protocols.' }
+    }
+    $inventory | Add-Member -NotePropertyName qualificationBoundaries -NotePropertyValue @('RTE fault restart/internal formats remain untested: 010 frame8 restart, 020/030 frames9/A/B, 040 frame7', 'BKPT external replacement responder is unavailable', 'MOVES physical function-code spaces and LPSTOP CPU-space broadcast are unqualified', 'CALLM/RTM type1 protocol uses an internal synthetic responder; normal public buses have none')
     $inventory | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $output 'qualified-inventory.json')
-    @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=146; moveGate='passing'; transferGate='passing'; arithmeticGate='passing'; roadmapComplete=$false;
+    @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=338; moveGate='passing'; transferGate='passing'; arithmeticGate='passing'; logicalGate='passing'; controlGate='passing'; roadmapComplete=$false;
         seeded=$(if ($Deep) {@{seed=$Seed; samplesPerModel=$Samples; models=$Models}} else {$null});
         externalReferences=$references; unavailableReferenceCoverage=$(if ($references.Count -eq 0) {'External audits not requested/executed'} else {'Other models remain unqualified by these adapters'});
+        unavailableSystemCoverage=@('RTE bus-fault internal restart on 010/020/030', '020/030 coprocessor midinstruction restoration', '040 access-fault pending trace/writeback restoration', 'External BKPT replacement responder', 'Physical MOVES function-code spaces and LPSTOP CPU-space broadcast');
         timing='Semantic gate; timing policy and physical qualification remain separate'} |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'summary.json')
-    Write-Host "Synthetic MOVE, transfer and arithmetic gates: $logicalCases logical cases; reports at $output"
+    Write-Host "Synthetic milestones 1-5 semantic gates: $logicalCases logical cases; reports at $output"
 }
 finally {
     foreach ($name in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name]) }
     Pop-Location
 }
+# Report-only validation does not execute a native command; clear an inherited native exit code.
+$global:LASTEXITCODE = 0

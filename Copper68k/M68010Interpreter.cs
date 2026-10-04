@@ -158,8 +158,11 @@ namespace Copper68k
         private static M68010AddressMaskedBus CreateBus(IM68kBus bus)
             => new(bus);
 
+        protected override bool SupportsMoves => true;
+
         protected override bool TryExecuteModelSpecificLine4(ushort opcode, uint instructionPc)
         {
+            if (TryExecuteM68010StatusAndReturn(opcode, instructionPc)) return true;
             if (opcode is not (0x4E7A or 0x4E7B))
             {
                 return false;
@@ -253,6 +256,9 @@ namespace Copper68k
                 case 0x001:
                     value = State.DestinationFunctionCode;
                     return true;
+                case 0x800:
+                    value = State.UserStackPointer;
+                    return true;
                 case 0x801:
                     value = State.VectorBaseRegister;
                     return true;
@@ -272,6 +278,9 @@ namespace Copper68k
                     return true;
                 case 0x001:
                     State.DestinationFunctionCode = value & 0x7;
+                    return true;
+                case 0x800:
+                    State.SetUserStackPointer(value);
                     return true;
                 case 0x801:
                     State.VectorBaseRegister = value;

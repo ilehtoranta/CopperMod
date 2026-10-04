@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -62,10 +62,39 @@ $mutations += @(
     {
         var address = unchecked(State.A[register] - 1u);
 '@; group='DecimalAndPacking'; milestone=3},
-    @{name='060-divide-frame'; file='Copper68k/M68060Interpreter.cs'; before='            if (vector == 5) PushLong(State.LastInstructionProgramCounter);'; after='            // Mutant: missing format-2 instruction address.'; group='MultiplyDivideAddressingAndRegisterAliases'; milestone=3}
+    @{name='060-divide-frame'; file='Copper68k/M68060Interpreter.cs'; before='            if (vector is 5 or 6 or 7 or 9) PushLong(State.LastInstructionProgramCounter);'; after='            // Mutant: missing format-2 instruction address.'; group='MultiplyDivideAddressingAndRegisterAliases'; milestone=3}
 )
-if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { $_.milestone -ne 3 }) }
+$mutations += @(
+    @{name='bitfield-clear-vc'; file=$advanced; before=@'
+            State.SetFlag(M68kCpuState.Zero, field == 0);
+            State.SetFlag(M68kCpuState.Overflow, false);
+            State.SetFlag(M68kCpuState.Carry, false);
+'@; after='            State.SetFlag(M68kCpuState.Zero, field == 0);'; group='BitFieldWidthsOffsetsFlagsAndRegisterAliases'; milestone=4},
+    @{name='bitfield-negative-offset'; file=$advanced; before=@'
+        private static int FloorDivideBy8(int value)
+            => value >> 3;
+'@; after=@'
+        private static int FloorDivideBy8(int value)
+            => value / 8;
+'@; group='BitFieldAddressingSignedOffsetsAndFullExtensions'; milestone=4},
+    @{name='cas2-dc1-precedence'; file=$advanced; before=@'
+                WriteDataRegisterSized(compareRegister2, destination2, size);
+                WriteDataRegisterSized(compareRegister1, destination1, size);
+'@; after=@'
+                WriteDataRegisterSized(compareRegister1, destination1, size);
+                WriteDataRegisterSized(compareRegister2, destination2, size);
+'@; group='Cas2ComparisonsRegisterFieldsAndAliases'; milestone=4},
+    @{name='040-cas2-failed-writeback'; file=$advanced; before='                if (_profile.Model == M68kAcceleratorModel.M68040) WriteSized(address1, destination1, size);'; after='                // Mutant: missing failed-CAS2 writeback.'; group='Cas2ComparisonsRegisterFieldsAndAliases'; milestone=4; model='68040'},
+    @{name='chk2-boundary-z'; file=$advanced; before='            State.SetFlag(M68kCpuState.Zero, value == lower || value == upper);'; after='            State.SetFlag(M68kCpuState.Zero, false);'; group='CheckBoundsValuesFlagsFormsAndRegisterAliases'; milestone=5},
+    @{name='cmp2-address-width'; file=$advanced; before='            var value = useAddressRegister ? unchecked((int)State.A[register]) : SignExtendForSize(State.D[register], size);'; after='            var value = SignExtendForSize(useAddressRegister ? State.A[register] : State.D[register], size);'; group='CheckBoundsValuesFlagsFormsAndRegisterAliases'; milestone=5},
+    @{name='rte-throwaway'; file=$advanced; before='                if (format == 1) continue; // Throwaway frame can select another stack.'; after='                // Mutant: accept throwaway as final frame.'; group='RteFramesPrivilegeStackSelectionAndInvalidFormats'; milestone=5},
+    @{name='move16-postincrement'; file='Copper68k/M68kAdvancedTimingInterpreter.System.cs'; before='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 16));'; after='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 4));'; group='Move16CacheInstructionsBreakpointsAndLowPowerStop'; milestone=5; model='68040'},
+    @{name='cacr-clear-readback'; file=$advanced; before='? value & ~0x0C0Cu : value; // Clear commands always read as zero.'; after='? value : value; // Mutant: clear commands read back set.'; group='MovecControlInventoryMasksPrivilegeAndAllGeneralRegisters'; milestone=5}
+)
+if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
+if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
+if ($Scope -eq 'Control') { $mutations = @($mutations | Where-Object { $_.milestone -eq 5 }) }
 $saved = @{}
 foreach ($mutation in $mutations) {
     $path = Join-Path $repo $mutation.file
@@ -87,7 +116,7 @@ try {
         [Environment]::SetEnvironmentVariable('COPPER68K_SYNTHETIC_REPORT_DIR', $directory)
         try {
             [IO.File]::WriteAllText($path, $text.Replace($before, $after), [Text.UTF8Encoding]::new($false))
-            $model = $(if ($mutation.name -eq '060-divide-frame') { '68060' } else { '68020' })
+            $model = $(if ($mutation.model) { $mutation.model } elseif ($mutation.name -eq '060-divide-frame') { '68060' } else { '68020' })
             & dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~$($mutation.group)&DisplayName~$model" --logger "trx;LogFileName=mutation.trx" --results-directory $directory *> (Join-Path $directory 'run.log')
             $exitCode = $LASTEXITCODE
             $batches = @(Get-ChildItem -LiteralPath $directory -Filter '*.json' | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json })

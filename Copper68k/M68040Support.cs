@@ -2120,11 +2120,6 @@ namespace Copper68k
 
             if (!mmu.Enabled)
             {
-                if (mmu.Status != 0)
-                {
-                    mmu.Status = 0;
-                }
-
                 return _allPhysicalAddressesMapped
                     ? address
                     : AcceptPhysicalAddress(address, byteCount, accessKind, write);
@@ -2513,6 +2508,7 @@ namespace Copper68k
             {
                 ExternalInstructionWordReader = profile.FastInstructionFetch ? null : FetchWord
             };
+            _approximateIntegerFallback.ArchitecturalTraceEnabled = false;
         }
 
         public override int ExecuteInstruction()
@@ -2601,11 +2597,6 @@ namespace Copper68k
                 return false;
             }
 
-            if (TryExecuteMove16(opcode))
-            {
-                return true;
-            }
-
             if (TryExecuteMmuInstruction(opcode))
             {
                 return true;
@@ -2682,8 +2673,9 @@ namespace Copper68k
                 case 0x807:
                     value = State.M68040Mmu.SupervisorRootPointer;
                     return true;
+                case 0x802:
                 case 0x808:
-                    value = RaiseLineFControlRegister(instructionPc);
+                    value = RaiseIllegalControlRegister(instructionPc);
                     return false;
                 default:
                     return base.TryReadControlRegister(register, instructionPc, out value);
@@ -2727,8 +2719,9 @@ namespace Copper68k
                     State.M68040Mmu.SupervisorRootPointer = value;
                     State.M68040Mmu.Flush();
                     return true;
+                case 0x802:
                 case 0x808:
-                    _ = RaiseLineFControlRegister(instructionPc);
+                    _ = RaiseIllegalControlRegister(instructionPc);
                     return false;
                 default:
                     return base.TryWriteControlRegister(register, value, instructionPc);
@@ -2739,34 +2732,6 @@ namespace Copper68k
         {
             RaiseFormat0Exception(VectorLineF, instructionPc, M68kInstructionTimingKey.LineFException);
             return 0;
-        }
-
-        private bool TryExecuteMove16(ushort opcode)
-        {
-            if ((opcode & 0xFFF8) != 0xF620)
-            {
-                return false;
-            }
-
-            BeginInstruction(opcode);
-            _ = FetchWord();
-            var sourceRegister = opcode & 7;
-            var extension = FetchWord();
-            var destinationRegister = (extension >> 12) & 7;
-            var source = State.A[sourceRegister] & 0xFFFF_FFF0u;
-            var destination = State.A[destinationRegister] & 0xFFFF_FFF0u;
-            for (var offset = 0u; offset < 16; offset += 4)
-            {
-                WriteLong(destination + offset, ReadLong(source + offset));
-            }
-
-            State.A[sourceRegister] += 16;
-            if (destinationRegister != sourceRegister)
-            {
-                State.A[destinationRegister] += 16;
-            }
-            CompleteTiming(M68kInstructionTimingKey.Movec);
-            return true;
         }
 
         private bool TryExecuteMmuInstruction(ushort opcode)
