@@ -71,7 +71,7 @@ public sealed class SyntheticModelSystemTests(ITestOutputHelper output)
                 if (store)
                 {
                     var source = general < 8 ? e.D[general] : e.A[general - 8];
-                    var masked = control switch { 0 or 1 => source & 7, 2 when modelId == "68060" => source & 0xf880e000, 2 when modelId == "68040" => source & 0x80008000, 2 => source & (modelId == "68030" ? 0x3313u : 3u), 8 => source & 0xf0000000, 0x808 => 0x04300000 | source & 0x83, 0x806 or 0x807 when modelId == "68060" => source & 0xfffffe00, _ => source };
+                    var masked = control switch { 0 or 1 => source & 7, 2 when modelId == "68060" => source & 0xf880e000, 2 when modelId == "68040" => source & 0x80008000, 2 => source & (modelId == "68030" ? 0x3313u : 3u), 3 when modelId == "68040" => source & 0xc000, 3 when modelId == "68060" => source & 0xfffe, 8 => source & 0xf0000000, 0x808 => 0x04300000 | source & 0x83, 0x806 or 0x807 when modelId == "68060" => source & 0xfffffe00, _ => source };
                     e.ControlChecks[$"control {control:X3}"] = (read, masked);
                     if (control == 0x800) e.InactiveStackPointer = masked;
                     if (control == 0x803) e.MasterStackPointer = masked;

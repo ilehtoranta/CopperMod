@@ -2655,7 +2655,10 @@ namespace Copper68k
             switch (register)
             {
                 case 0x003:
-                    value = State.M68040Mmu.TranslationControl;
+                    // MC68040UM 3.1.2: only E/P are implemented; reserved
+                    // bits read as zero. Keep private MMU state conventions
+                    // separate from the architectural MOVEC register image.
+                    value = State.M68040Mmu.TranslationControl & 0xC000;
                     return true;
                 case 0x004:
                     value = State.M68040Mmu.InstructionTransparentTranslation0;
@@ -2694,7 +2697,7 @@ namespace Copper68k
                 case 0x002:
                     return base.TryWriteControlRegister(register, value & 0x8000_8000u, instructionPc);
                 case 0x003:
-                    State.M68040Mmu.TranslationControl = value;
+                    State.M68040Mmu.TranslationControl = value & 0xC000;
                     State.M68040Mmu.Flush();
                     return true;
                 case 0x004:

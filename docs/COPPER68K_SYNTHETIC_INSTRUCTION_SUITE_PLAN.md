@@ -825,3 +825,30 @@ three native replays without skips. The reference document records exact
 manual/source caveats, pins, package/assembly identities, failed-before evidence
 and remaining requirements. No old test is retired or package published;
 milestone 6 remains in progress with the accepted scope intact.
+
+The translation-control follow-up corrects 040/060 MOVEC TC register images
+against their processor manuals. Reserved bits read zero; disabled writes are
+canonicalized to `0000C000` / `0000FFFE`. A 040 reserved high bit no longer
+activates the private MMU enable convention. This preserves private state and
+timing policies and does not qualify enabled MMU behavior. Corrected canonical
+expectations and the retained register-transfer regression accompany 145,280
+new cases in two `system-translation-control` batches. They cover boundaries,
+walking bits, general registers, every CCR, privilege, dependent readback,
+unchanged state and a following sentinel. Nonzero reserved-bit writes are
+explicit robustness/storage-policy cases; the defined zero-read rule is the
+architectural expectation. The new cases detect 45,312 mismatches before the
+fix, with 19,200 dependent phases untested until the prerequisite works; all
+pass afterward. Missing the new 040 report fails the complete gate.
+
+Full CPU validation passes 4,758 tests with ten optional skips. The report gate
+validates 9,468,296 logical cases in 452 reporting batches. Pinned external
+SingleStepTests/Musashi, AHX and the qualified 040/060 TRAP trace audit pass.
+The broad WinUAE audit still fails 48 mismatching and 13 unsupported groups;
+both MOVEC2 failures advance eight callbacks to the next ITT0 mask disagreement.
+Transparent-translation/root-pointer masks and stage-specific 010 format-error
+CCR/trace qualification remain open. The private unpublished .46 package
+validates the isolated CopperScreen Release build, host/disk/engine tests and
+three native replays. Exact source/input/package identities, failed-before
+proof, initial invalid invocations and remaining scope are recorded in the
+reference document. No package publication or regression retirement is added;
+milestone 6 remains in progress with its full accepted scope unchanged.

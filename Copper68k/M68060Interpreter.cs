@@ -195,7 +195,8 @@ namespace Copper68k
                 case 0x008: value = State.M68060BusControl; return true;
                 case 0x800: value = State.UserStackPointer; return true;
                 case 0x808: value = State.M68060ProcessorConfiguration; return true;
-                case 0x003: value = State.M68040Mmu.TranslationControl; return true;
+                // MC68060UM 4.1.2: bits 31-16 and bit 0 always read zero.
+                case 0x003: value = State.M68040Mmu.TranslationControl & 0xFFFE; return true;
                 case 0x004: value = State.M68040Mmu.InstructionTransparentTranslation0; return true;
                 case 0x005: value = State.M68040Mmu.InstructionTransparentTranslation1; return true;
                 case 0x006: value = State.M68040Mmu.DataTransparentTranslation0; return true;
@@ -223,7 +224,7 @@ namespace Copper68k
                     State.M68060ProcessorConfiguration = 0x0430_0000 | (value & 0x83); return true;
                 case 0x003:
                     if ((value & 0x8000) != 0) throw Unavailable("enabled MMU translation", State.LastOpcode);
-                    State.M68040Mmu.TranslationControl = value & 0xFFFF; return true;
+                    State.M68040Mmu.TranslationControl = value & 0xFFFE; return true;
                 case 0x004: case 0x005: case 0x006: case 0x007:
                     if ((value & 0x8000) != 0) throw Unavailable("enabled transparent translation", State.LastOpcode);
                     if (register == 4) State.M68040Mmu.InstructionTransparentTranslation0 = value;

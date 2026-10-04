@@ -18,13 +18,13 @@ public sealed class M68040MmuTests
 			0x4E7A, 0x1003); // MOVEC TC,D1
 		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
 		cpu.Reset(CodeBase, StackBase);
-		cpu.State.D[0] = 0x0000_1234;
+		cpu.State.D[0] = 0x0000_4000; // Implemented page-size bit; translation disabled.
 
 		cpu.ExecuteInstruction();
 		cpu.ExecuteInstruction();
 
-		Assert.Equal(0x0000_1234u, cpu.State.M68040Mmu.TranslationControl);
-		Assert.Equal(0x0000_1234u, cpu.State.D[1]);
+		Assert.Equal(0x0000_4000u, cpu.State.M68040Mmu.TranslationControl);
+		Assert.Equal(0x0000_4000u, cpu.State.D[1]);
 	}
 
 	[Fact]

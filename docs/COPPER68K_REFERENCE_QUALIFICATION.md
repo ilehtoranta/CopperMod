@@ -1209,3 +1209,99 @@ failed on a relative source-file path; the corrected generator preparation
 completes and preserves that failed attempt as historical evidence. No package
 publication, regression retirement, seeded, host-performance or physical audit
 is added. Milestone 6 remains in progress with its accepted scope unchanged.
+
+### Translation-control MOVEC register image — 2026-10-05
+
+The broad audit stopped in `MOVEC2` at callback 31 on both 040 and 060.
+040 wrote `FFFF7FFF` into TC without masking it, accidentally activating the
+private MMU state's high-bit enable convention and faulting before readback.
+060 returned `00007FFF`, including reserved bit zero, instead of `00007FFE`.
+[MC68040UM 3.1.2 / figure 3-4](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+defines the implemented E/P bits and zero reads for the remaining bits.
+[MC68060UM 4.1.2 / figure 4-4](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+defines zero reads for bits 31–16 and bit 0. Architectural MOVEC reads/writes
+now use fixed masks `0000C000` and `0000FFFE`, respectively. The existing private
+MMU state conventions and cache/ATC execution policy are retained; this does
+not qualify enabled MMU translation, ATC flushing or physical timing.
+
+The prior canonical MOVEC fixture also expected an unmasked 040 TC write.
+Its expectation is corrected; the retained MMU register-transfer regression
+now uses the implemented page-size bit with translation disabled. No test is
+retired. New independent `system-translation-control` batches contain
+**145,280 cases**, 72,640 per model. They exercise 38 deterministic write
+values (boundaries and walking bits), D0–D7/A0–A6, all 32 CCR states, privilege
+rejection without TC changes, dependent readback and a following sentinel.
+Another 35 internally supplied read values cover every general register,
+including A7, and verify reads have no register-state side effect. The retained
+canonical inventory covers the A7 write. Architectural E remains clear in the
+new inputs; the raw-state read cases also avoid the private enable bit.
+Nonzero writes to reserved bits are robustness samples and emulator storage
+canonicalization checks, not claims about a legal hardware programming
+sequence: both manuals require reserved bits to be written as zero. The
+independent read expectations enforce the documented zero-read behavior.
+
+Against production `8ffc8df`, these batches record **80,768 passing,
+45,312 mismatching, zero unsupported and 19,200 untested dependent phases**.
+All 145,280 pass after the correction. A failed write never causes a partial
+instruction retry or a claimed readback pass. The ordinary report gate requires
+both new batches with their exact counts and rejects omission of the 040 report.
+
+The current unchanged broad WinUAE inputs/bridge still fail, with **1,320
+passing, 48 mismatching, 13 unsupported and zero untested groups**. They execute
+11,311,153 callbacks, 1,500,881 frame assertions, 199,327 masked-SR cases and one
+terminal callback; all 32 controls pass. Both `MOVEC2` failures advance eight
+callbacks, from 31 to 39, and now stop at ITT0 (`FFFF6364` expected,
+`FFFF7FFF` actual). Transparent-translation and root-pointer register masks
+remain open; neither complete MOVEC-family qualification nor a green broad
+audit is claimed. An initial run used the older frame-only bridge, producing
+25 additional trace-record mismatches. That result is retained in
+`artifacts/m6-tc-winuae/`; the comparable current result is
+`artifacts/m6-tc-current-winuae/` using the earlier Basic manifest
+`37cd8ddae8b61ac60e3a49ba835362fbf80d418f48c2539338e6541c9d85e31f`
+and native library
+`75f0c11352d4a8c1e84f32a49a5347ae4cb5bd9128f1501a33d843e6f99cb057`.
+No inputs or comparison masks are altered to obtain this progress.
+
+Ordinary Release CPU validation passes **4,758 tests**, with ten optional
+skips and zero failures; the focused MOVEC/MMU gate passes 26 tests. The report
+gate validates **9,468,296 cases in 452 batches**, with `roadmapComplete=false`.
+Pinned SingleStepTests passes 312,500 cases in 125 files; pinned Musashi passes
+536 programs with 88 explicit exclusions. Input hashes, source pins and complete
+selection are rechecked by the report/reference script. The existing qualified
+040/060 TRAP trace audit passes 512 callbacks / 256 incoming-T1 cases / 512
+frames and all six controls against this CPU. AHX passes 18 tests.
+
+Private **unpublished** package `1.5.2-synthetic-dev.46` has SHA-256
+`d7ee51601e409f4f0663deda3d00667700d1bc5db881fb3ce47bd13e8972b110`;
+`artifacts/m6-tc-package.json` records both changed production sources and the
+tested CPU DLL identity
+`b39bae5cfe09e45c124ae9a705d4e33b014936234dc9e558e548174d30103e4f`.
+The isolated CopperScreen baseline `d9beae8` resolves that exact package in
+production and separate diagnostics. All four loaded DLLs match. Release build
+has zero warnings/errors; host 149, disk 74, engine 1,080 and three native
+Workbench/A1200 boot and disk-persistence replays pass. Six optional host/media
+skips remain unavailable coverage. The first host invocation used a nonexistent
+project path and did not execute tests; its corrected invocation passes.
+
+Evidence: `artifacts/m6-tc-before/`, `artifacts/m6-tc-focused/`,
+`artifacts/m6-tc-cpu/`, `artifacts/m6-tc-current-winuae/`,
+`artifacts/m6-tc-trace-reference/`, `artifacts/m6-tc-missing-report-all/`,
+`artifacts/m6-tc-ahx-results/` and `artifacts/synthetic-private-feed-46/`;
+consumer `artifacts/tc-validation/`, `artifacts/tc-diagnostic-tests/` and
+`artifacts/tc-production.binlog`. The initial missing-report probe lacked other
+models' reports and did not isolate the new gate; the final probe includes every
+other required batch and fails specifically for the missing 040 TC report.
+
+The 010 RTE investigation also distinguishes two unresolved observations.
+The Basic corpus fails on format-error N/Z/V changes, not incoming trace;
+the pinned generator explicitly derives these flags from the rejected format
+word. Current WinUAE source (`6ae6fb6b84bb9517e0245a80fc9bdca1a8580dde`,
+`newcpu.cpp`, `exception_check_trace`) and pinned generator `025b999` retain
+trace for a 010 format error. MC68000UM 6.3.8 describes instruction-forced
+exceptions preceding trace, while 6.4 calls version rejection an aborted RTE.
+Those passages do not establish every partial CCR/trace effect at every
+validation stage. No production or expectation change is made on this evidence
+alone. Stage-specific qualified fixtures or verified hardware evidence remain
+required. All earlier restoration, reference, adapter and consolidation gaps
+remain open. No release, regression retirement or physical audit is added;
+milestone 6 remains in progress with its full scope unchanged.

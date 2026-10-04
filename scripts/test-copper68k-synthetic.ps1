@@ -109,6 +109,7 @@ try {
             'system-status-invalid-operands'=2432;
             'system-trace'=$(if ($model -in @('68000','68010','68060')) {1284} elseif ($model -in @('68020','68030','68040','68EC020','A1200')) {2568})}
         if ($model -eq '68000') { $expected['system-double-fault'] = 640 }
+        if ($model -in @('68040','68060')) { $expected['system-translation-control'] = 72640 }
         if ($model -eq '68010') {
             $expected['system-format8-entry'] = 1024
             $expected['system-format8-rte'] = 4096
