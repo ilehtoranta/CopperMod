@@ -517,8 +517,8 @@ stacking or retries. Interrupts and host task/subroutine entry do not wake the
 latched double fault; the supplied-PC/SP reset API restores execution. Frame
 contents, failed-entry ordering and normal re-faulting handlers are checked.
 Warm classic/V2 JIT parity is scoped to the architectural-trace-forced interpreter
-bridge. Direct compiled odd accesses currently throw a host exception and need
-a separate correction before operand side effects. External BERR/reset-vector
+bridge. That slice exposed a separate compiled odd-access host exception; the
+subsequent JIT alignment correction below resolves it before operand effects. External BERR/reset-vector
 fault signaling is unavailable through the current public bus API. No general
 bus-error or physical timing qualification is claimed, and milestone 6 stays open.
 
@@ -528,3 +528,23 @@ and AHX. Isolated CopperScreen Release, host/disk and separate diagnostic checks
 pass with unpublished private package `1.5.2-synthetic-dev.35`; all three native
 boot/persistence replays execute without skips. The reference document records
 the package hash, qualified paths, separate JIT failure and evidence locations.
+
+The subsequent 000 compiled-JIT alignment slice adds instruction-boundary parity
+guards to classic, V2 bus/graph and V2 fast-read emission. Faulting instructions
+enter the accurate interpreter before any compiled operand effects; completed
+trace instructions write back normally. No partial instruction is retried.
+Word/long operands, brief indexed and constant/PC-relative forms, stack accesses,
+and JMP/JSR targets are covered; legal odd byte, MOVEP, LEA and PEA address values
+are retained. The warm-cache suite executes 180 logical scenarios in 15 batches,
+separate from the unchanged 8,368,680-case / 340-batch synthetic inventory.
+Removing the guards and separately removing MOVE destination guards both
+reproduce failures. No regression is retired, and milestone 6 remains open for
+the reference/restart-frame qualification gaps recorded in the reference document.
+
+Validation of the compiled-JIT slice passes 4,619 ordinary CPU tests (eight
+optional/opt-in skips), the unchanged deterministic gate, 538 pinned reference
+program/profile combinations (86 explicit exclusions) and 18 AHX tests. Private
+unpublished `1.5.2-synthetic-dev.36` passes the isolated CopperScreen production
+build, host 149/disk 74/diagnostics 1,080 and all three native boot/persistence
+cases without native skips. The reference document records package identity,
+mutation evidence, retained timing policy and remaining qualification limits.

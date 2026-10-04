@@ -157,3 +157,11 @@ ASL regression replacement proof. Run the consolidation mutations with
 `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope Consolidation`.
 Milestone 6 remains in progress; remaining implementation/reference gaps are
 listed explicitly in that document.
+
+The 000 compiled-JIT alignment follow-up is retained in
+`M68000JitDirectZeroWaitTests`: 180 logical warm-cache scenarios in 15 ordinary
+xUnit batches. Instruction-boundary guards transfer word/long, stack and
+JMP/JSR alignment faults to the accurate interpreter before operand effects.
+These JIT regressions are reported separately from the synthetic inventory;
+no cache/prefetch/bus-ordering regression is retired. See the reference
+qualification document for reproduced failures, guard-removal proofs and scope.

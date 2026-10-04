@@ -129,12 +129,50 @@ execution ordering; no physical timing claim is made for the halted edge.
 
 Warm classic/V2 JIT tests compare all registers, PC/SR, exception metadata,
 machine/native cycle policy and writes against scalar, kind-table and packed-plan
-interpreters through the **architectural-trace-forced fallback**. Direct compiled
-odd-access execution was also tried and exposed an independent host-exception
-gap, recorded below. It is not silently included as passing JIT coverage.
+interpreters through the **architectural-trace-forced fallback** at this first
+checkpoint. Direct compiled odd-access execution exposed a separate host-exception
+gap; the subsequent compiled-JIT alignment follow-up below corrects that path.
 The public bus API has no explicit external BERR/reset-vector fault signal;
 this gate qualifies address-error double faults, not general bus-error handling.
 All specialized regressions are retained.
+
+### 000 compiled JIT alignment follow-up
+
+The warm `3010 60FC` repro failed with both classic and V2 JIT before this
+correction: changing A0 from `$2000` to `$2001` with SR `$201F` exposed a host
+exception instead of vector 3. The new instruction-boundary IL guards inspect
+only address parity, before consuming instruction fetches, updating registers,
+changing flags or accessing the bus. A failing guard returns completed trace
+instructions and writes back their state; the accurate interpreter executes the
+faulting instruction once. No compiled instruction is caught and retried.
+
+The guards apply only to the 68000 plan. They cover word/long memory operand
+forms, displacement and unscaled brief indexes, absolute and PC-relative
+addresses, stack accesses for PEA/BSR/JSR/RTS, and JMP/JSR target alignment.
+Even word/long address increments preserve parity across operand aliases. Byte
+operands, MOVEP's byte transfers and LEA's computed address remain legal at odd
+addresses; PEA checks its stack rather than its pushed address value. The
+low-level alignment assertions remain as defensive checks.
+
+`M68000JitDirectZeroWaitTests` executes **180 logical warm-cache scenarios in
+15 xUnit batches**: 132 operand/prefix/dispatch-mode combinations, ten cold
+absolute/PC-relative graph exits, eight odd-stack cases, four odd JMP/JSR target
+cases, two legal odd-byte/address loops and 24 double-fault/trace/dispatch
+combinations. This includes the earlier trace-only comparisons, now extended to
+trace-disabled compiled execution. Fixed instruction encodings and fault
+addresses supply independent assertions; architectural registers, exception
+metadata, all frame words, completed writes and memory are compared with the
+interpreter. Retained pipeline tests own IR/prefetch ordering, including write
+faults whose IR already contains a successor opcode.
+
+Removing all guards reproduces seven failing batches, including a cold V2
+absolute access and odd V2 stack write. Removing MOVE destination guards
+separately reproduces three failing batches for compiled writes. These mutations
+are restored before the successful full run. No old regression is retired.
+This gate preserves existing machine/native cycle policies; it is not physical
+pipeline/timing qualification or exhaustive JIT exception-path qualification.
+External BERR/reset-vector signaling remains unavailable through the public bus
+API. Independent reference and advanced restart-frame gaps remain open.
 
 ## Consolidation proof
 
@@ -172,16 +210,12 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
   odd SSP. This is corrected by the address-error double-fault slice above. External
   BERR and reset-vector fault signaling remain unavailable through the current
   public bus API; no general bus-error qualification is claimed.
-- Compiled 000 JIT odd accesses throw a host emulation exception instead of
-  entering architectural address-error handling. The double-fault slice covers
-  the trace-forced interpreter bridge with a warm JIT cache, not this compiled
-  path. A future correction must guard before operand side effects; it must not
-  catch a partially executed instruction and retry it.
-  The recorded repro warms 400 instructions of `3010 60FC` at `$1000`, with
-  A0 initially `$2000`; then sets A0 to `$2001`, SR to `$201F`, and executes a
-  batch with classic or V2 JIT. Both throw before architectural fault entry.
-  The failed warm-JIT run is retained in
-  `artifacts/double-fault-focused/focused-jit.trx`.
+- Compiled 000 JIT word/long and stack alignment faults are corrected by the
+  instruction-boundary guards above. The original host-exception repro remains
+  in `artifacts/double-fault-focused/focused-jit.trx`; final warm-cache and
+  guard-removal evidence is under `artifacts/jit-address-error-focused/` and
+  `artifacts/jit-address-error-before/`. Other compiled exception/fetch paths
+  are not exhaustively qualified by this scoped gate.
 - 040 enabled-MMU selective/global flushing, real translation-table formats,
   descriptor updates and architectural MMUSR contents remain unqualified;
   the single-word decoder and disabled-MMU instruction gate are now corrected.
@@ -272,3 +306,33 @@ separate compiled-JIT failure), `artifacts/double-fault-final/`,
 `artifacts/double-fault-ahx/`, `artifacts/synthetic-private-feed-35/`, and the
 isolated consumer's `artifacts/double-fault-validation/` and
 `artifacts/double-fault-diagnostic-tests/`.
+
+## Validation checkpoint: 000 compiled JIT alignment
+
+The full ordinary CPU suite passes **4,619 tests**, with eight optional/opt-in
+skips and zero failures. All **8,368,680 synthetic cases in 340 batches** pass;
+the JIT-specific warm-cache gate separately passes **180 logical scenarios in
+15 batches**. The requested pinned Musashi audit executes without skips: 538
+program/profile combinations pass, with 86 explicit exclusions and zero
+mismatches (source `72c1d74800f3087b45a0c1a7342601bbed898881`). AHX passes 18 tests.
+The bounded warm-loop repro fails before correction; removing all guards detects
+seven failing batches and removing MOVE destination guards detects three.
+No new seeded audit or retirement of an existing regression is claimed.
+
+Private package `1.5.2-synthetic-dev.36` has SHA-256
+`96b16bd8bd2b9c865fe482501289456bcb8ca69a332b99552a80a649b995b6c5`.
+It is not published. The isolated CopperScreen consumer retains its pinned NuGet
+boundary and resolves this exact private version in both production and separate
+diagnostic outputs. Its Release production build has zero warnings/errors; host
+149, disk 74 and engine diagnostics 1,080 pass. The ordinary host invocation has
+six optional/media skips. The separate native Workbench 3.1 0/2 MiB Fast RAM and
+A1200 eight-plane hard-disk boot/reopen persistence invocation executes all three
+cases without skips. Native replay results are correctness evidence, not host
+throughput or physical timing qualification. Unrelated root changes are preserved.
+
+Evidence is in the CPU checkout's `artifacts/jit-address-error-before/`,
+`artifacts/jit-address-error-focused/`, `artifacts/jit-address-error-final/`,
+`artifacts/jit-address-error-ahx/` and `artifacts/synthetic-private-feed-36/`, and
+the isolated consumer's `artifacts/jit-address-error-validation/`,
+`artifacts/jit-address-error-diagnostic-tests/` and
+`artifacts/jit-address-error-production.binlog`.

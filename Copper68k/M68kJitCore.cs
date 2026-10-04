@@ -3265,12 +3265,14 @@ namespace Copper68k
                     plan.Root,
                     plan.TraceInstructions,
                     emitBoundaryCalls: true,
+                    guardM68000Alignment: plan.M68000MemoryHelpers,
                     pinM68000Registers: false);
             var pureCompiled = !compileV2Only && plan.PureCpuBatchEligible
                 ? Compile(
                     plan.Root,
                     plan.TraceInstructions,
                     emitBoundaryCalls: false,
+                    guardM68000Alignment: plan.M68000MemoryHelpers,
                     pinM68000Registers: plan.M68000MemoryHelpers)
                 : null;
             var v2Compiled = plan.V2Trace.IsEmpty
@@ -4077,6 +4079,7 @@ namespace Copper68k
             uint root,
             ReadOnlySpan<M68kDecodedInstruction> instructions,
             bool emitBoundaryCalls,
+            bool guardM68000Alignment,
             bool pinM68000Registers)
         {
             var method = new DynamicMethod(
@@ -4120,6 +4123,10 @@ namespace Copper68k
             for (var i = 0; i < instructions.Length; i++)
             {
                 var instruction = instructions[i];
+                if (guardM68000Alignment)
+                {
+                    M68kOperationEmitter.EmitM68000AlignmentGuard(il, instruction, emitContext, returnLabels[i]);
+                }
                 il.Emit(OpCodes.Ldarg_0);
                 il.Emit(OpCodes.Ldarg_1);
                 il.Emit(OpCodes.Ldc_I4, i);
@@ -6153,6 +6160,10 @@ namespace Copper68k
                     fastReadFailureEnabled,
                     fastReadFailureLabel);
                 context.EmitCanContinuePure(exit);
+                if (!useM68020BriefIndexedAddressing)
+                {
+                    context.EmitM68000AlignmentGuard(instruction, exit);
+                }
                 if (fastReadFailureEnabled)
                 {
                     context.EmitSaveFastReadFailureBookkeeping();
@@ -6280,6 +6291,10 @@ namespace Copper68k
                     var instruction = instructions[i];
                     il.MarkLabel(labels[i]);
                     context.EmitCanContinue(exit);
+                    if (useM68000MemoryHelpers)
+                    {
+                        context.EmitM68000AlignmentGuard(instruction, exit);
+                    }
                     context.EmitStartInstruction(instruction);
                     EmitV2Instruction(
                         il,
@@ -6327,6 +6342,10 @@ namespace Copper68k
                 foreach (var instruction in instructions)
                 {
                     context.EmitCanContinue(exit);
+                    if (useM68000MemoryHelpers)
+                    {
+                        context.EmitM68000AlignmentGuard(instruction, exit);
+                    }
                     context.EmitStartInstruction(instruction);
                     EmitV2Instruction(
                         il,
@@ -15873,6 +15892,14 @@ namespace Copper68k
                 _il.Emit(OpCodes.Ldloc, Executed);
                 _il.Emit(OpCodes.Brfalse, returnZero);
             }
+
+            public void EmitM68000AlignmentGuard(M68kDecodedInstruction instruction, Label exit)
+                => M68kJitAlignmentEmitter.Emit(
+                    _il,
+                    instruction,
+                    register => EmitLoadDataRegister(register, M68kOperandSize.Long),
+                    EmitLoadAddressRegister,
+                    exit);
 
             public void EmitStartInstruction(M68kDecodedInstruction instruction)
             {

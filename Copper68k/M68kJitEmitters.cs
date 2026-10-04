@@ -304,6 +304,18 @@ namespace Copper68k
             }
         }
 
+        public static void EmitM68000AlignmentGuard(
+            ILGenerator il,
+            M68kDecodedInstruction instruction,
+            TraceEmitContext context,
+            Label exit)
+            => M68kJitAlignmentEmitter.Emit(
+                il,
+                instruction,
+                register => EmitLoadDataRegister(il, context, register, M68kOperandSize.Long),
+                register => EmitLoadAddressRegister(il, context, register),
+                exit);
+
         public static M68kIlInstructionKind Emit(
             ILGenerator il,
             M68kDecodedInstruction instruction,
