@@ -717,3 +717,31 @@ isolated CopperScreen Release, host/disk/diagnostics and all three native replay
 AHX passes 18. A final targeted run validates the test-only exclusion adjustment
 with the production assembly unchanged. No package release or test retirement
 is included; milestone 6 remains in progress with its existing scope intact.
+
+The status-transfer/MOVES follow-up adds 77,824 assigned-invalid cases across all
+eight profiles, both stacks and all CCR inputs. The shared fixture proves vector
+4, exact frames, preserved state/memory and absence of operand effects, including
+valid MOVES load/store extensions. Unassigned encodings and legal CAS.L neighbors
+remain separate. These cases detect 4,000 mismatches and 49,344 unsupported
+executions before correcting 010 MOVE-from-SR privilege priority and advanced
+status/MOVES legality dispatch. All new cases and the 48-batch affected gate pass.
+Successful execution ordering/timing policy are unchanged; no partial retry.
+
+The fresh full CPU run passes 4,692 tests with nine optional skips and zero
+failures. The deterministic gate validates 8,761,672 logical cases in 386
+reporting batches. Missing new reports and corrupt model/batch metadata fail.
+Batch counts are now derived from validated reports; the prior hardcoded .41
+summary overstated its 370 required reporting batches by two. Historical evidence
+remains unchanged, with this correction recorded in the reference document.
+
+WinUAE passes all 34,880 selected ILLEGAL callbacks on both 000 and 010. The
+complete external audit still fails with 60 mismatching and 15 unsupported groups,
+reaching later unary/multiply invalid operands. All 32 comparator controls pass.
+Fresh SingleStepTests retains 312,500 passes and Musashi retains 536 passes / 88
+explicit exclusions; AHX passes 18. The private unpublished .42 package validates
+the isolated CopperScreen NuGet boundary, Release build, host/disk/diagnostics and
+all three native boot/persistence replays. Source/package/DLL identities, exact
+before/after cases, exclusions and limitations are recorded in the reference
+document. No release, regression retirement, seeded or physical qualification is
+added. Milestone 6 remains in progress for the existing integer/reference and
+restoration requirements.

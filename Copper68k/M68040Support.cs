@@ -2581,7 +2581,9 @@ namespace Copper68k
         {
             if (TryExecuteCacheMaintenance(opcode)) return true;
 
-            if ((opcode & 0xFF00) == 0x0E00 && (opcode & 0x00C0) != 0x00C0)
+            if ((opcode & 0xFF00) == 0x0E00 && (opcode & 0x00C0) != 0x00C0 &&
+                ((opcode >> 3) & 7) >= 2 &&
+                (((opcode >> 3) & 7) != 7 || (opcode & 7) <= 1))
             {
                 if ((State.StatusRegister & M68kCpuState.Supervisor) != 0)
                 {

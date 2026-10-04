@@ -9126,10 +9126,20 @@ namespace Copper68k
                 AddInstructionCycles(16);
                 return true;
             }
-            if ((opcode & 0xFFC0) == 0x40C0 && !State.GetFlag(M68kCpuState.Supervisor))
+            if ((opcode & 0xFFC0) == 0x40C0)
             {
-                RaiseException(8, instructionPc, 34);
-                return true;
+                // An illegal operand never becomes a privileged instruction.
+                // Validate the 010 destination before testing supervisor state.
+                if (!IsDataAlterableEffectiveAddress((opcode >> 3) & 7, opcode & 7))
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+                if (!State.GetFlag(M68kCpuState.Supervisor))
+                {
+                    RaiseException(8, instructionPc, 34);
+                    return true;
+                }
             }
             if ((opcode & 0xFFC0) != 0x42C0) return false;
             var mode = (opcode >> 3) & 7;

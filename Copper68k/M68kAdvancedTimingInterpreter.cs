@@ -734,6 +734,18 @@ namespace Copper68k
                 return M68020OpcodeKind.ImmediateLogicalToStatusRegister;
             }
 
+            // Status transfers and MOVES have assigned illegal operand words.
+            // Decode legality before privilege checks or general-system fallback.
+            var systemMode = (opcode >> 3) & 7;
+            var systemRegister = opcode & 7;
+            if ((opcode & 0xFFC0) is 0x40C0 or 0x42C0 or 0x44C0 or 0x46C0 &&
+                (systemMode == 1 || systemMode == 7 &&
+                    systemRegister > ((opcode & 0xFFC0) is 0x40C0 or 0x42C0 ? 1 : 4)))
+                return M68020OpcodeKind.IllegalInstruction;
+            if ((opcode & 0xFF00) == 0x0E00 && ((opcode >> 6) & 3) < 3 &&
+                (systemMode < 2 || systemMode == 7 && systemRegister > 1))
+                return M68020OpcodeKind.IllegalInstruction;
+
             if ((opcode & 0xFFF8) == 0x40D0)
             {
                 return M68020OpcodeKind.MoveStatusRegisterToAddressIndirect;

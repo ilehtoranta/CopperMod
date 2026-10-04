@@ -869,3 +869,85 @@ The full CPU run preceded the test-only Musashi exclusion adjustment; the final
 17-batch targeted run validates that adjustment and all new matrix cases, with
 the production assembly unchanged. No package publication, old-test retirement,
 seeded run or hardware qualification is added. Milestone 6 remains in progress.
+
+## Assigned illegal status-transfer and MOVES operands — 2026-10-05
+
+The pinned ILLEGAL directory next exposed `40C8` (MOVE SR,A0) on 010 and
+`0E00` (MOVES.B D0) on advanced profiles. M68000PM 4-122/124/125 and 6-18/20
+exclude address-register operands for status transfers; from-SR/CCR also exclude
+PC-relative/immediate destinations. Section 6-25 requires memory-alterable
+MOVES operands. The pinned decoder's assigned opcode tables and generated cases
+corroborate vector 4 for these illegal forms, even in user state. Legal privileged
+forms still raise vector 8 in user state.
+
+`system-status-invalid-operands` enumerates 38 assigned illegal words per profile:
+11 each for MOVE from SR/CCR, eight each for MOVE to SR/CCR. Both stacks and all
+32 CCR inputs give 19,456 cases across the eight profiles. The MOVES matrix
+enumerates 57 B/W/L words with Dn, An and PC-relative/immediate operands, using
+valid D0 load and store extensions, both stacks and all CCR inputs: 58,368 cases.
+The shared canary fixture verifies registers, PC, defined SR, stack selection,
+complete exception frames, preserved memory and absence of operand accesses.
+Normal opcode prefetch is permitted. Unassigned mode-7 registers are outside
+these matrices; MOVES size 3 is separate CAS.L encoding. Fixed reference examples
+exclude legal status/MOVES neighbors, which remain in their existing gates.
+
+Before correction, the 010 status matrix has 352 mismatches. The 040 status
+matrix has 704 unsupported executions, with 3,648 MOVES user-state mismatches.
+The five other advanced profiles each have 2,432 unsupported status cases and
+7,296 unsupported MOVES cases. Together, the new matrices detect **4,000
+mismatches and 49,344 unsupported executions** in 77,824 cases. Their corrected
+results are all passing, alongside the 48-batch affected legal/invalid gate.
+
+The 010 path now validates MOVE-from-SR destinations before checking privilege.
+Advanced dispatch classifies illegal status/MOVES operands through the existing
+vector-4 path before effects. The 040 model-specific MOVES privilege path admits
+only legal memory operands, so it cannot intercept illegal forms. Successful
+execution ordering and the existing timing policy are preserved. No instruction
+is caught and retried, and no package API changes.
+
+Ordinary Release CPU validation passes **4,692 tests**, with nine optional/opt-in
+skips and zero failures. The deterministic report gate validates **8,761,672
+logical cases in 386 reporting batches**. Missing either new group, incorrect
+report model identity and incorrect batch count are independently rejected.
+The summary now derives batch totals from validated reports instead of a
+hardcoded constant. The prior .41 checkpoint's summary stated 372 batches; its
+required logical-case reports actually number 370. This fresh run adds 16.
+Historical reports are retained unchanged; nonreporting checks and opt-in audits
+are separate from the logical-case batch count.
+
+Fresh pinned SingleStepTests retains 312,500 passes in 125 files, with the same
+TAS/TRAPV exclusions. Musashi retains 536 passes and 88 explicit exclusions
+across eight profiles. AHX passes 18 tests. The WinUAE audit now passes all
+**34,880** selected ILLEGAL callbacks on both 000 and 010. It still fails with
+**1,306 passing / 60 mismatching / 15 unsupported / zero untested groups** over
+11,242,795 callbacks, including 1,479,919 frame assertions and 199,327 masked-SR
+cases. All 32 comparator controls pass. It reaches later `4008` (NEGX.B A0)
+failures on EC020/020/030/060/A1200, and `4C08` (long multiply from A0) on 040.
+These assigned invalid forms need broader unary/multiply operand qualification.
+Reference saved-PC, adapter stack mapping and internal restoration gaps remain
+open. No WinUAE family is excluded; totals include partial failing groups.
+
+Private **unpublished** NuGet `1.5.2-synthetic-dev.42` has SHA-256
+`553e3baa9d201e57b5bcbdacf469f051b359c74e23e096357944310e79258e08`.
+`artifacts/m6-invalid-system-package.json` records source/package/assembly
+identities built before commit. The isolated CopperScreen baseline `d9beae8`
+resolves this exact NuGet package in production and separate diagnostics; both
+loaded CPU DLLs match the tested assembly. Release build has zero warnings/errors;
+host 149, disk 74, separate diagnostics 1,080 and all three requested native
+Workbench/A1200 boot/persistence cases pass. Six optional host/media skips are
+unavailable coverage; no requested native case is skipped. This is correctness
+evidence, not throughput or physical timing qualification.
+
+Evidence: `artifacts/m6-invalid-system-before/`,
+`artifacts/m6-invalid-system-after/`, `artifacts/m6-invalid-system-cpu/`,
+`artifacts/m6-invalid-system-references/`, `artifacts/m6-invalid-system-winuae/`,
+`artifacts/m6-invalid-system-guard-missing-status/`,
+`artifacts/m6-invalid-system-guard-missing-moves/`,
+`artifacts/m6-invalid-system-guard-wrong-model/`,
+`artifacts/m6-invalid-system-guard-wrong-batches/`,
+`artifacts/m6-invalid-system-ahx-results/`, `artifacts/synthetic-private-feed-42/`;
+isolated consumer `artifacts/invalid-system-validation/`,
+`artifacts/invalid-system-diagnostic-tests/`,
+`artifacts/invalid-system-production.binlog`. No old test is retired, no package
+is published and no new seeded or physical audit is claimed. Milestone 6 remains
+in progress with the accepted scope unchanged.

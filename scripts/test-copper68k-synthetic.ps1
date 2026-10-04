@@ -58,6 +58,7 @@ try {
     Set-AuditEnvironment 'COPPER68K_SYNTHETIC_MODELS' ($Models -join ',')
     if (-not $ValidateReportsOnly) { Invoke-Tests $(if ($Deep) { 'Suite=Synthetic|Suite=SyntheticDeep' } else { 'Suite=Synthetic' }) 'deterministic' }
     $logicalCases = 0
+    $logicalBatches = 0
     foreach ($model in $knownModels) {
         $expected = @{'move-opcodes'=9726; 'move-values-ccr'=58368; 'move-invalid-operands'=2562; 'move-alignment'=12;
             'move-extensions-aliases'=$(if ($model -in @('68000','68010')) {1756} else {7120});
@@ -92,10 +93,12 @@ try {
             'system-model'=13120;
             'system-movec'=2432;
             'system-moves'=$(if ($model -in @('68000','68010')) {10656} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {11052});
+            'system-moves-invalid-operands'=7296;
             'system-rte'=$(if ($model -in @('68000','68010','68060')) {2048} elseif ($model -in @('68020','68030','68EC020','A1200')) {1888} elseif ($model -in @('68040')) {2016});
             'system-rtm'=24594;
             'system-stack'=6080;
             'system-status'=$(if ($model -in @('68000','68010')) {16540} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {16936});
+            'system-status-invalid-operands'=2432;
             'system-trace'=$(if ($model -in @('68000','68010','68060')) {1284} elseif ($model -in @('68020','68030','68040','68EC020','A1200')) {2568})}
         if ($model -eq '68000') { $expected['system-double-fault'] = 640 }
         if ($model -eq '68010') {
@@ -111,9 +114,11 @@ try {
         if ($model -eq '68040') { $expected['system-mmu-disabled'] = 34850 }
         foreach ($group in $expected.Keys) {
             $report = Get-Content -LiteralPath (Join-Path $output "$model-$group.json") -Raw | ConvertFrom-Json
-            if ($report.logicalCases -ne $expected[$group] -or $report.counts.passing -ne $expected[$group] -or
+            if ($report.schema -ne 1 -or $report.model -cne $model -or $report.group -cne $group -or
+                $report.xunitBatches -ne 1 -or $report.logicalCases -ne $expected[$group] -or $report.counts.passing -ne $expected[$group] -or
                 $report.counts.mismatching -ne 0 -or $report.counts.unsupported -ne 0 -or $report.counts.untested -ne 0) { throw "Incomplete gate: $model/$group" }
             $logicalCases += $report.logicalCases
+            $logicalBatches += $report.xunitBatches
         }
     }
     if ($Deep) {
@@ -196,7 +201,7 @@ try {
     }
     $inventory | Add-Member -NotePropertyName qualificationBoundaries -NotePropertyValue @('RTE fault restart/internal formats remain untested: 010 long/non-MOVE/foreign frame8 restart, 020/030 frames9/A/B, 040 frame7', 'BKPT external replacement responder is unavailable', 'MOVES physical function-code spaces and LPSTOP CPU-space broadcast are unqualified', 'CALLM/RTM type1 protocol uses an internal synthetic responder; normal public buses have none')
     $inventory | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $output 'qualified-inventory.json')
-    @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=372; moveGate='passing'; transferGate='passing'; arithmeticGate='passing'; logicalGate='passing'; controlGate='passing'; m68040DisabledMmuInstructionGate='passing'; m68000AddressErrorDoubleFaultGate='passing'; m68010Format8StructureGate='passing'; m68010WordMoveRestartGate='passing'; roadmapComplete=$false;
+    @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=$logicalBatches; moveGate='passing'; transferGate='passing'; arithmeticGate='passing'; logicalGate='passing'; controlGate='passing'; m68040DisabledMmuInstructionGate='passing'; m68000AddressErrorDoubleFaultGate='passing'; m68010Format8StructureGate='passing'; m68010WordMoveRestartGate='passing'; roadmapComplete=$false;
         seeded=$(if ($Deep) {@{seed=$Seed; samplesPerModel=$Samples; models=$Models}} else {$null});
         externalReferences=$references; unavailableReferenceCoverage=$(if ($references.Count -eq 0) {'External audits not requested/executed'} else {'Software-reference coverage is scoped by the per-program exclusions; hardware and exhaustive external instruction-combination qualification remain unavailable'});
         m68040MmuInstructionScope=@{translationEnabled=$false; dfc=@(1,2,5,6); globalRegisterField='canonical zero'; undefined='Disabled PTEST MMUSR; DFC 0/3/4/7'; enabledMmu='Unqualified flat-table approximation; PFLUSH conservatively flushes all ATC entries'};

@@ -3,7 +3,7 @@ namespace Copper68k.Tests.Synthetic;
 internal static class InvalidOperandScenario
 {
     public static void Run(SyntheticMachine machine, CoverageBatch report, ushort opcode, string description,
-        bool supervisor, int ccr)
+        bool supervisor, int ccr, ushort extensionWord = 0x0011)
     {
         machine.Reset(ccr, supervisor);
         // Fixture initialization is separate from CPU accesses. Canaries detect
@@ -16,7 +16,7 @@ internal static class InvalidOperandScenario
             machine.Bus.Initialize(address, 0xa5, 1);
             forbidden.Add(address);
         }
-        var expected = SyntheticExecution.Prepare(machine, [opcode, 0x0011, 0x81a5, 0x4e71]);
+        var expected = SyntheticExecution.Prepare(machine, [opcode, extensionWord, 0x81a5, 0x4e71]);
         expected.ForbiddenOperandReads.UnionWith(forbidden);
         SyntheticExecution.ExpectException(machine, expected, 4);
         SyntheticExecution.Run(machine, expected, report,
