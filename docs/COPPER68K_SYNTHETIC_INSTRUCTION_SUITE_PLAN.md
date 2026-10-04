@@ -489,8 +489,12 @@ All specialized timing, prefetch, cache, fault, JIT and native tests remain.
 
 See [reference qualification and consolidation evidence](COPPER68K_REFERENCE_QUALIFICATION.md)
 for pins, exclusions, replacement identifiers and remaining implementation gaps.
-Milestone 6 is still in progress: internal RTE restart, double-fault halting,
-040 PFLUSH/PTEST decoding and broader external references remain open.
+Milestone 6 is still in progress: internal RTE restart, double-fault halting
+and broader external references remain open. The follow-up single-word 040
+PFLUSH/PTEST decoder and privilege correction adds 34,850 disabled-MMU cases,
+bringing the current deterministic gate to 8,368,040 cases in 339 batches.
+PTEST MMUSR is undefined with translation disabled; enabled-MMU operation and
+selective/global flushing remain outside this qualification.
 Package publication remains a separately authorized release action.
 
 Validation passes the full CPU suite (4,593 tests; six optional skips), the
@@ -498,3 +502,10 @@ deterministic/seeded report gates, AHX and isolated CopperScreen consumers using
 unpublished private package `1.5.2-synthetic-dev.33`. Native Workbench and A1200
 boot/persistence replays execute three cases without skips. Counts, package hash,
 evidence locations and qualification boundaries are in the reference document.
+
+The subsequent 040 decoder slice passes 4,601 ordinary CPU tests (eight opt-in
+or optional skips), all 8,368,040 deterministic cases, the pinned cross-model
+program audit and AHX. Isolated CopperScreen validation with unpublished
+`1.5.2-synthetic-dev.34` passes the Release build, host/disk tests, separate
+diagnostics and all three native boot/persistence cases. The reference document
+records the package hash, reproduced failures, scoped MMU limits and evidence.

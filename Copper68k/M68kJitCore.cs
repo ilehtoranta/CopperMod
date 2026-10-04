@@ -2605,7 +2605,7 @@ namespace Copper68k
                 return true;
             }
 
-            if ((opcode & 0xFFC0) == 0xF500 || (opcode & 0xFF00) == 0xF400)
+            if ((opcode & 0xFFE0) == 0xF500 || (opcode & 0xFFD8) == 0xF548 || (opcode & 0xFF00) == 0xF400)
             {
                 return true;
             }

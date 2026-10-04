@@ -16,11 +16,17 @@ From the CopperMod root, run:
 
 Milestones 1–5 execute MOVE/MOVEA, transfer/address, arithmetic/comparison,
 logical/bit/shift/atomic and control/system operations in
-**8,333,190 logical cases** across **338 xUnit batches**, across seven models and the A1200 profile.
+**8,368,040 logical cases** across **339 xUnit batches**, across seven models and the A1200 profile.
 Ordinary `dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release` includes
 these batches. CI additionally validates every required report and exact count;
 missing reports, mismatches, unsupported execution and empty groups fail the gate.
 The following instruction sentinel verifies extension consumption.
+
+The additional 040-only `system-mmu-disabled` group qualifies single-word
+PFLUSH/PTEST decoding, privilege, CCR preservation and trace behavior with
+translation disabled. MMUSR is undefined for disabled-MMU PTEST and is not
+asserted. Enabled MMU operation remains outside the integer-family gate;
+see the [qualification boundaries](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md).
 
 Reports contain per-scenario identifiers and counts for passing, mismatching,
 unsupported and untested outcomes. `integer-inventory.json` lists all integer
@@ -66,7 +72,8 @@ coverage. Cross-model external qualification remains milestone 6 work.
 
 Specifications use [M68000PM](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf),
 [MC68000UM](https://www.nxp.com/docs/en/reference-manual/MC68000UM.pdf),
-[MC68020UM](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf) and
+[MC68020UM](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf),
+[MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf), and
 [MC68060UM](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf).
 Arithmetic expectations use mathematical ranges and BigInteger multiplication/division,
 not production semantics. The matrix covers all sizes and legal EA forms, all 32

@@ -1781,6 +1781,9 @@ namespace Copper68k
             bool supervisor,
             Func<uint, uint> readPhysicalLong)
         {
+            // PTEST searches the tables again, rather than reusing a stale ATC
+            // entry for the selected user/supervisor and instruction/data space.
+            _atc.Remove(CreateAtcKey(logicalAddress & 0xFFFF_F000u, accessKind, supervisor));
             _ = TryTranslate(logicalAddress, accessKind, write, supervisor, readPhysicalLong, out _, out _);
         }
 
@@ -2736,29 +2739,48 @@ namespace Copper68k
 
         private bool TryExecuteMmuInstruction(ushort opcode)
         {
-            if ((opcode & 0xFFC0) == 0xF500)
+            if ((opcode & 0xFFE0) == 0xF500)
             {
                 BeginInstruction(opcode);
+                var instructionPc = State.ProgramCounter;
                 _ = FetchWord();
-                _ = FetchWord();
+                if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
+                {
+                    RaiseFormat0Exception(8, instructionPc, M68kInstructionTimingKey.PrivilegeViolation);
+                    return true;
+                }
+
+                // Preserve the existing conservative ATC invalidation policy.
+                // Selective/global-entry qualification belongs to enabled-MMU work.
                 State.M68040Mmu.Flush();
                 CompleteTiming(M68kInstructionTimingKey.Movec);
                 return true;
             }
 
-            if ((opcode & 0xFFC0) == 0xF548)
+            if ((opcode & 0xFFD8) == 0xF548)
             {
                 BeginInstruction(opcode);
+                var instructionPc = State.ProgramCounter;
                 _ = FetchWord();
-                var extension = FetchWord();
-                var write = (extension & 0x0200) != 0;
-                var address = State.A[opcode & 7];
-                State.M68040Mmu.Probe(
-                    address,
-                    M68kBusAccessKind.CpuDataRead,
-                    write,
-                    (State.StatusRegister & M68kCpuState.Supervisor) != 0,
-                    ReadPhysicalLong);
+                if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
+                {
+                    RaiseFormat0Exception(8, instructionPc, M68kInstructionTimingKey.PrivilegeViolation);
+                    return true;
+                }
+
+                // PTEST has no extension word. R/W is opcode bit 5; DFC,
+                // rather than the executing supervisor SR, selects the space.
+                // With TC.E clear there is no table search and MMUSR is undefined.
+                if (State.M68040Mmu.Enabled)
+                {
+                    var functionCode = State.DestinationFunctionCode & 7;
+                    State.M68040Mmu.Probe(
+                        State.A[opcode & 7],
+                        (functionCode & 3) == 2 ? M68kBusAccessKind.CpuInstructionFetch : M68kBusAccessKind.CpuDataRead,
+                        (opcode & 0x0020) == 0,
+                        (functionCode & 4) != 0,
+                        ReadPhysicalLong);
+                }
                 CompleteTiming(M68kInstructionTimingKey.Movec);
                 return true;
             }

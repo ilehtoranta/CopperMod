@@ -67,6 +67,36 @@ aborting exceptions and batch-boundary trace changes. TAS remains a negative cas
 the external branch-status list differs from the architectural T0 list.
 FPU tracing and enabled-MMU execution remain outside this roadmap.
 
+### 040 MMU instruction decoding follow-up
+
+PRM sections 6-35/6-36 and 6-70/6-71 specify single-word PFLUSH and PTEST
+encodings. The old PFLUSH consumed the following word, and the PTEST mask could
+never match. Neither decoder checked privilege. The new disabled-MMU matrix
+reproduced **34,850 mismatches** before the correction.
+
+The correction consumes only the opcode, checks privilege before ATC/probe
+effects, and decodes PTEST's read/write bit and DFC space from the documented
+fields. PTEST refreshes the selected cached translation before a table search.
+JIT fallback invalidation recognizes the same instruction masks, including PTEST.
+The existing instruction timing key/policy is preserved.
+
+The `68040/system-mmu-disabled` gate adds 34,850 cases in one batch: every
+address register for page flush/probe forms, canonical PFLUSHA/PFLUSHAN words,
+four defined DFC values, all 32 CCR values, user/supervisor execution and all
+T0/T1 combinations. Exact next PC, exception frames, untouched registers and
+memory, absence of operand reads and following MOVEQ sentinels are checked.
+[MC68040UM section 3.1.3](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+specifies no table search with TC.E clear and undefined PTEST results in this
+state. The matrix deliberately makes no MMUSR-value assertion.
+
+Focused enabled-MMU routing/ATC tests exercise the existing **flat-table
+approximation**, separately from architectural qualification. PFLUSH still
+conservatively flushes the entire ATC; selective page/global preservation,
+real table formats, descriptor updates and architectural MMUSR contents remain
+unqualified. Undefined DFC values and noncanonical global register fields are
+excluded from this scoped gate. No enabled-MMU family is promoted in the integer
+inventory, and no specialized regression is retired by this follow-up.
+
 ## Consolidation proof
 
 `M68kShiftTests.AslByteSetsOverflowWhenSignChanges` is replaced by
@@ -101,10 +131,9 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
   legal restoration protocols; this is an implementation gap, not invalid encoding.
 - Nested 000 address errors during exception stacking can recurse on an odd SSP.
   The eventual fix needs documented double-fault halt behavior and fault-bus tests.
-- 040 PFLUSH currently overconsumes an extension word; the PTEST mask comparison
-  is unreachable and its decoder also assumes an extension. Motorola's encodings
-  in PRM sections 6-35/6-71 are single-word instructions. These need a separate
-  correction, privilege checks and selected disabled-MMU semantic coverage.
+- 040 enabled-MMU selective/global flushing, real translation-table formats,
+  descriptor updates and architectural MMUSR contents remain unqualified;
+  the single-word decoder and disabled-MMU instruction gate are now corrected.
 - External BKPT replacement, physical MOVES function-code spaces, LPSTOP
   CPU-space broadcast and real CALLM/RTM access-control responses remain unqualified.
 - Exhaustive independent addressing references, hardware captures, physical
@@ -113,7 +142,7 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
 Milestone 6 remains open until the planned remaining reference work and review
 are completed. Published packages are immutable; publication is a separate release.
 
-## Validation checkpoint
+## Validation checkpoint: initial reference audit
 
 The full CPU suite passes 4,593 tests with six optional external-reference skips.
 The report gate passes all 8,333,190 deterministic cases in 338 batches, plus
@@ -136,3 +165,30 @@ Evidence: `artifacts/m6-final/`, `artifacts/m6-ahx/`,
 `artifacts/m6-mutation-proof-verified/`, `artifacts/m6-negative-inputs/`,
 `artifacts/synthetic-private-feed-33/`, and the isolated consumer's
 `artifacts/m6-validation/`.
+
+## Validation checkpoint: 040 MMU decoder follow-up
+
+The ordinary full CPU suite passes **4,601 tests**, with eight optional/opt-in
+checks skipped and no failures. The strengthened final focused run passes all
+17 batches/tests. Deterministic report validation passes **8,368,040 logical
+cases in 339 batches**, including all 34,850 new MMU cases. The pinned Musashi
+audit separately executes and passes 538 program/profile combinations, with
+86 explicit exclusions. AHX passes 18 tests. Previous reports lacking the new
+MMU group are rejected. The prior 320,000 seeded cases are historical evidence;
+this bounded follow-up does not claim a new seeded run.
+
+Private package `1.5.2-synthetic-dev.34` has SHA-256
+`b81870fadf4036d97ec5c2297990fa76e26bfc22add2473e9b381961bbf26bdf`.
+The isolated CopperScreen baseline `d9beae8` resolves that exact NuGet version
+and builds Release with zero warnings/errors. Host tests pass 149 cases with
+six optional/media skips; disk passes 74 and separate engine diagnostics pass
+1,080 without skips. Native Workbench 3.1 at 0/2 MiB Fast RAM and A1200
+eight-plane hard-disk boot/reopen persistence separately pass all three cases
+without skips. These are correctness replays, not performance qualification.
+The package remains unpublished; root CopperScreen working changes are preserved.
+
+Evidence: `artifacts/mmu-decode-before/` (including the failing matrix and
+missing-report rejection), `artifacts/mmu-decode-focused-final/`,
+`artifacts/mmu-decode-final/`, `artifacts/mmu-decode-ahx/`,
+`artifacts/synthetic-private-feed-34/`, and the isolated consumer's
+`artifacts/mmu-decode-validation/` and `artifacts/mmu-decode-diagnostic-tests/`.
