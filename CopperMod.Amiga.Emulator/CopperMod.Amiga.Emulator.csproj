@@ -1,5 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <Import Project="..\build\CopperStartIntegration.props" />
+  <Import Project="$(CopperStartHostSourceRoot)\CopperStart.CopperMod.projitems"
+          Condition="Exists('$(CopperStartHostSourceRoot)\CopperStart.CopperMod.projitems')" />
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
@@ -8,14 +12,14 @@
     <Title>CopperMod.Amiga.Emulator</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Full Amiga emulator host services, boot helpers, and disk media adapters layered on CopperMod.Amiga.</Description>
-    <PackageVersion>1.1.0</PackageVersion>
+    <PackageVersion>1.1.1-dev.1</PackageVersion>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>amiga;emulation;adf;ipf;scp;disk;boot</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Disk adapter pass with SCP loading, CopperDisk track-region mapping, preserved IPF/SCP feature flags, and coordinated CopperDisk 2.1.0 integration.</PackageReleaseNotes>
+    <PackageReleaseNotes>Development source ownership move: replacement-OS services and boot orchestration are maintained in CopperStart; emulator host contracts remain unchanged.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
     <IncludeSymbols>true</IncludeSymbols>
@@ -40,5 +44,10 @@
     <ProjectReference Include="..\CopperMod.Amiga.CyberGraphics\CopperMod.Amiga.CyberGraphics.csproj" />
     <ProjectReference Include="..\Copper68k\Copper68k.csproj" />
   </ItemGroup>
+
+  <Target Name="RequireCopperStartHostSources" BeforeTargets="PrepareForBuild"
+          Condition="!Exists('$(CopperStartHostSourceRoot)\CopperStart.CopperMod.projitems')">
+    <Error Text="CopperStart host sources are required. Check out CopperStart beside CopperMod or set CopperStartRoot to its absolute checkout path." />
+  </Target>
 
 </Project>

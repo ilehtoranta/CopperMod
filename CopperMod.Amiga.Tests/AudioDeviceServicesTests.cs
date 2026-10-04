@@ -1,4 +1,5 @@
 using Copper68k;
+using Amiga;
 using CopperMod.Amiga;
 using CopperMod.Amiga.Bus;
 using CopperMod.Amiga.CopperStart.Devices.Audio;
@@ -42,7 +43,7 @@ public sealed class AudioDeviceServicesTests
         bus.WriteByte(Choices, 3, 0); // prefer channels 0+1
         ConfigureAllocation(bus, FirstRequest, Choices, priority: 10);
         Assert.True(Invoke(bus, Device - 30, state));
-        var key = bus.ReadWord(FirstRequest + 0x28);
+        var key = bus.ReadWord(FirstRequest + IOAudioLayout.AllocationKey);
         Assert.NotEqual((ushort)0, key);
         Assert.Equal(3u, bus.ReadLong(FirstRequest + 0x18));
 
@@ -50,7 +51,7 @@ public sealed class AudioDeviceServicesTests
         bus.WriteByte(Choices + 1, 1, 0);
         ConfigureAllocation(bus, SecondRequest, Choices + 1, priority: 10, nowait: true);
         Assert.True(Invoke(bus, Device - 30, state));
-        Assert.Equal(0xF9, bus.ReadByte(SecondRequest + 0x1F));
+        Assert.Equal(unchecked((byte)(sbyte)AudioIoError.AllocationFailed), bus.ReadByte(SecondRequest + ExecLayout.IORequest.Error));
 
         ConfigureAllocation(bus, SecondRequest, Choices + 1, priority: 11);
         Assert.True(Invoke(bus, Device - 30, state));
@@ -71,8 +72,9 @@ public sealed class AudioDeviceServicesTests
         bus.WriteByte(Choices, 1, 0); ConfigureAllocation(bus, FirstRequest, Choices, priority: 1);
         Assert.True(Invoke(bus, Device - 30, state));
         bus.WriteByte(0x3A00, 0x10, 0); bus.WriteByte(0x3A01, 0xF0, 0);
-        bus.WriteWord(FirstRequest + 0x1C, 3); bus.WriteLong(FirstRequest + 0x2A, 0x3A00); bus.WriteLong(FirstRequest + 0x2E, 2);
-        bus.WriteWord(FirstRequest + 0x32, 10); bus.WriteWord(FirstRequest + 0x34, 64); bus.WriteWord(FirstRequest + 0x36, 2);
+        bus.WriteWord(FirstRequest + ExecLayout.IORequest.Command, (ushort)AudioCommand.Write);
+        bus.WriteLong(FirstRequest + IOAudioLayout.Data, 0x3A00); bus.WriteLong(FirstRequest + IOAudioLayout.Length, 2);
+        bus.WriteWord(FirstRequest + IOAudioLayout.Period, 10); bus.WriteWord(FirstRequest + IOAudioLayout.Volume, 64); bus.WriteWord(FirstRequest + IOAudioLayout.Cycles, 2);
         Assert.True(Invoke(bus, Device - 30, state));
         Assert.Empty(replies);
         var mixed = new float[2]; service.MixSample(1, mixed, 0, 2);
@@ -89,9 +91,9 @@ public sealed class AudioDeviceServicesTests
         bus.WriteWord(request + 0x1C, 32);
         bus.WriteByte(request + 0x1E, nowait ? (byte)0x40 : (byte)0, 0);
         bus.WriteByte(request + 9, unchecked((byte)priority), 0);
-        bus.WriteLong(request + 0x2A, choices);
-        bus.WriteLong(request + 0x2E, 1);
-        bus.WriteWord(request + 0x28, 0);
+        bus.WriteLong(request + IOAudioLayout.Data, choices);
+        bus.WriteLong(request + IOAudioLayout.Length, 1);
+        bus.WriteWord(request + IOAudioLayout.AllocationKey, 0);
     }
 
     private static void InitializeLiveAudioDevice(AmigaBus bus)

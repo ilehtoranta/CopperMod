@@ -17,12 +17,12 @@ public sealed class CopperStartLayersArchitectureTests
 
     private static readonly string[] LayersFacingSources =
     [
-        "CopperMod.Amiga.Emulator/CopperStart/Layers/LayersHostServices.cs",
-        "CopperMod.Amiga.Emulator/CopperStart/Layers/LayersHostCallbackBoundary.cs",
-        "CopperMod.Amiga.Emulator/CopperStart/Layers/LayersHostCallbackToken.cs",
-        "CopperMod.Amiga.Emulator/CopperStart/Layers/LayersGraphicsBridge.cs",
-        "CopperMod.Amiga.Emulator/CopperStart/Layers/LayersPixelTransactions.cs",
-        "CopperMod.Amiga.Emulator/CopperStart/Layers/LayersAllocationFaults.cs",
+        "CopperStart/Layers/LayersHostServices.cs",
+        "CopperStart/Layers/LayersHostCallbackBoundary.cs",
+        "CopperStart/Layers/LayersHostCallbackToken.cs",
+        "CopperStart/Layers/LayersGraphicsBridge.cs",
+        "CopperStart/Layers/LayersPixelTransactions.cs",
+        "CopperStart/Layers/LayersAllocationFaults.cs",
         "CopperMod.Amiga.Emulator/CyberGraphics/ClipRects.cs",
         "CopperMod.Amiga.Emulator/CyberGraphics/LayersRaster.cs",
         "CopperMod.Amiga.Emulator/CyberGraphics/ValidatedLayersRasterMemory.cs",
@@ -56,8 +56,11 @@ public sealed class CopperStartLayersArchitectureTests
         var root = FindRepositoryRoot();
         foreach (var relativePath in LayersFacingSources)
         {
-            var path = Path.Combine(root, relativePath.Replace('/',
-                Path.DirectorySeparatorChar));
+            const string movedPrefix = "CopperStart/";
+            var path = relativePath.StartsWith(movedPrefix, StringComparison.Ordinal)
+                ? Path.Combine(FindCopperStartHostSourceRoot(), "CopperStart",
+                    relativePath[movedPrefix.Length..].Replace('/', Path.DirectorySeparatorChar))
+                : Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
             Assert.True(File.Exists(path), $"Missing guarded source: {path}");
             var source = File.ReadAllText(path);
             foreach (var forbidden in ForbiddenPublicLayouts)
@@ -66,6 +69,13 @@ public sealed class CopperStartLayersArchitectureTests
             }
         }
     }
+
+    private static string FindCopperStartHostSourceRoot()
+        => typeof(CopperStartLayersArchitectureTests).Assembly
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
+            .Cast<System.Reflection.AssemblyMetadataAttribute>()
+            .Single(attribute => attribute.Key == "CopperStartHostSourceRoot").Value
+            ?? throw new DirectoryNotFoundException("CopperStart host source root is unavailable.");
 
     private static string FindRepositoryRoot()
     {
