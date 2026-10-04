@@ -68,6 +68,8 @@ public sealed partial class M68kMusashiConformanceTests
         if (directory == "mc68000")
         {
             if (KnownIncompatiblePrograms.TryGetValue(name, out var reason)) return reason;
+            if (!model.FullIndex && name == "move.bin")
+                return "Despite its directory, this program encodes 020-only PC-relative CMPI.B (0C3A) at offset 0x160; 000/010 correctly raise vector 4, and the fixture supplies no compatible handler. M68000PM 4-80.";
             if (model.Id == "68060" && name == "movep.bin") return "060 hardware raises vector 61; this program assumes hardware MOVEP execution without a software handler.";
         }
         else

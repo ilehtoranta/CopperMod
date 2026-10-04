@@ -784,3 +784,88 @@ Evidence: `artifacts/m6-invalid-logical-before/`,
 `artifacts/invalid-logical-production.binlog`.
 No package is published and no old test is retired. Milestone 6 remains in progress
 for the unresolved reference and restoration qualification requirements above.
+
+## Assigned illegal arithmetic and CAS operands — 2026-10-05
+
+The next pinned ILLEGAL failures were `0C3C` (CMPI.B with an immediate destination)
+on 000/010, `0408` (SUBI.B to A0) on the advanced profiles, and `0AC0` (CAS.B D0)
+on 040. Independent authority is M68000PM 4-10, 4-80 and 4-180 for immediate
+arithmetic and 4-67 for CAS. CMPI excludes An/immediate destinations and gains
+PC-relative forms on 020. CAS requires a memory-alterable destination; CAS2.W/.L
+use separate words. The pinned WinUAE decoder tables corroborate these rules.
+
+The new immediate-arithmetic matrix covers 99 assigned illegal words on 000/010
+and 93 on 020+, both stacks and all 32 CCR states (48,384 cases). The CAS matrix
+covers 54 words per profile under the same states (27,648 cases). Unassigned
+mode-7 registers and the byte-CAS2 word remain outside this added matrix, with
+legal word/long CAS2 retained in its existing gate. Fixed encoding controls protect
+legal neighbors. These families reuse `InvalidOperandScenario`, extracted from
+the preceding logical tests without changing that matrix's counts/expectations.
+It uses the common register/CCR/memory/exception verifier and canaries; none of
+its expectations call production decoders, EA, arithmetic or timing helpers.
+
+Before correction, immediate arithmetic reports 576 mismatches on each of 000/010
+and 5,952 unsupported executions on each of 020/EC020/030/060/A1200. Its existing
+040 fallback already passes. CAS reports 3,456 mismatches per advanced profile
+including 040; 000/010 already raise vector 4. This reproduces 21,888 mismatches
+and 29,760 unsupported executions in the 76,032 new cases.
+
+The corrected 000/010 plan inventory applies the legal destination constraint
+even when CMPI does not write memory. Advanced dispatch maps invalid immediate
+arithmetic and CAS EAs to the existing vector-4 path before operand effects.
+Legal 020+ PC-relative CMPI, memory CAS and CAS2 retain their existing execution
+and timing policy. No instruction is caught and retried. All new cases pass,
+alongside the 64-batch affected legal/invalid gate. The complete deterministic
+gate now validates **8,683,848 logical cases in 372 batches**; missing either new
+report group is explicitly rejected. Ordinary Release CPU validation passes
+**4,676 tests**, with nine optional/opt-in skips and zero failures.
+
+Fresh SingleStepTests retains 312,500 passing cases across 125 verified files,
+with TAS/TRAPV explicit exclusions. Musashi initially exposes a fixture caveat:
+`mc68000/move.bin` encodes 020-only PC-relative CMPI.B (`0C3A`) at offset `0x160`,
+against a nearby code operand. The source's local-label compare assembled to a
+PC-relative EA. M68000PM 4-80 and the pinned WinUAE table require vector 4 on
+000/010, but the program supplies no compatible handler. Its SHA-256 remains
+`6fd7762aabf3b57b54e9a7919ff1917dea1c52b6fc12723c0c468ae3fde6086e`.
+Those two program/profile rows are now explicitly excluded; the unchanged input
+remains required and runs on all six applicable profiles. Final Musashi coverage
+is **536 passing / 88 excluded / zero mismatching**, in 624 rows. The synthetic
+matrix qualifies the unavailable CMPI form's architectural trap instead of
+changing the CPU to execute it. Other program exclusions remain unchanged.
+
+The fresh WinUAE audit passes all **34,880** selected 000 ILLEGAL cases. Its total
+is **1,305 passing / 61 mismatching / 15 unsupported / zero untested groups**,
+over 11,180,443 callbacks, 1,417,565 frame checks and 199,327 masked-SR cases.
+All 32 comparator controls pass. It reaches later failures: `40C8` on 010 and
+`0E00` on advanced profiles, requiring status-transfer and MOVES legality/privilege
+ordering review. No WinUAE family is excluded to make this run pass. Generator
+saved-PC, adapter stack mapping and other reference/restore disagreements remain
+unresolved. Callback totals include partial groups, not exhaustive coverage.
+
+Private **unpublished** NuGet `1.5.2-synthetic-dev.41` has SHA-256
+`47bcfbc205a4d8de43b2955ff83bf43c4df293c51e0bf3914dfc8f753f5e856a`.
+The source/assembly snapshot is `artifacts/m6-invalid-arithmetic-package.json`;
+it records these changes built before commit. The isolated CopperScreen baseline
+`d9beae8` resolves the exact package through NuGet in production and separate
+diagnostic assets; both loaded DLLs match the tested CPU assembly hash. Release
+builds with zero warnings/errors; host 149, disk 74, diagnostics 1,080 and all
+three requested native Workbench/A1200 boot/persistence cases pass. Six optional
+host/media skips remain unavailable coverage; none of the three native cases
+is skipped. AHX also passes 18 tests. No throughput or physical timing claim.
+
+Evidence: `artifacts/m6-invalid-arithmetic-before/`,
+`artifacts/m6-invalid-arithmetic-after/`, `artifacts/m6-invalid-arithmetic-cpu/`,
+`artifacts/m6-invalid-arithmetic-winuae/`,
+`artifacts/m6-invalid-arithmetic-references/`,
+`artifacts/m6-invalid-arithmetic-reference-final/`,
+`artifacts/m6-invalid-arithmetic-missing-arithmetic-invalid-operands/`,
+`artifacts/m6-invalid-arithmetic-missing-logical-cas-invalid-operands/`,
+`artifacts/m6-invalid-arithmetic-ahx-results/`,
+`artifacts/synthetic-private-feed-41/`; isolated consumer
+`artifacts/invalid-arithmetic-validation/`,
+`artifacts/invalid-arithmetic-diagnostic-tests/` and
+`artifacts/invalid-arithmetic-production.binlog`.
+The full CPU run preceded the test-only Musashi exclusion adjustment; the final
+17-batch targeted run validates that adjustment and all new matrix cases, with
+the production assembly unchanged. No package publication, old-test retirement,
+seeded run or hardware qualification is added. Milestone 6 remains in progress.

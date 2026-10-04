@@ -16,7 +16,7 @@ From the CopperMod root, run:
 
 Milestones 1–5 execute MOVE/MOVEA, transfer/address, arithmetic/comparison,
 logical/bit/shift/atomic and control/system operations in
-**8,607,816 logical cases** across **356 xUnit batches**, across seven models and the A1200 profile.
+**8,683,848 logical cases** across **372 xUnit batches**, across seven models and the A1200 profile.
 Ordinary `dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release` includes
 these batches. CI additionally validates every required report and exact count;
 missing reports, mismatches, unsupported execution and empty groups fail the gate.
@@ -30,6 +30,13 @@ canaries. CCR/SR immediate forms, dynamic BTST's legal immediate source and MOVE
 encodings remain in their legal groups. Unassigned mode-7 registers 5..7 are
 outside this added matrix; their inclusion in a reference ILLEGAL directory does
 not by itself establish complete illegal-opcode qualification.
+
+The same test-internal `InvalidOperandScenario` now drives immediate-arithmetic
+and CAS invalid forms. `arithmetic-invalid-operands` covers 99 words on 000/010
+(6,336 cases per profile), or 93 on 020+ (5,952 cases), preserving legal
+PC-relative CMPI on 020+. `logical-cas-invalid-operands` covers 54 words and
+3,456 cases per profile. CAS2.W/.L have separate legal coverage; the unassigned
+byte-CAS2 word and unassigned EA registers are outside these added matrices.
 
 The additional 040-only `system-mmu-disabled` group qualifies single-word
 PFLUSH/PTEST decoding, privilege, CCR preservation and trace behavior with

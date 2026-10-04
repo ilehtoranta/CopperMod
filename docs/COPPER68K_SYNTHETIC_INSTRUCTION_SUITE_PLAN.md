@@ -692,3 +692,28 @@ Final validation of this slice passes 4,660 ordinary CPU tests with nine optiona
 skips and zero failures, all 8,607,816 deterministic cases, 18 AHX tests and the
 scoped external/consumer replays above. The private .40 package identity and source/
 assembly hashes are recorded. No seeded run or physical qualification is added.
+
+The next assigned-invalid follow-up adds 76,032 immediate-arithmetic/CAS cases
+across all eight profiles, using a shared test-internal invalid-operand fixture.
+CMPI's 020+ PC-relative forms and legal CAS2 words remain separate legal cases;
+unassigned encodings are labeled outside the new matrices. The matrix reproduces
+21,888 mismatches and 29,760 unsupported executions before correcting the 000/010
+CMPI plan constraint and advanced immediate/CAS legality dispatch. All new cases
+pass, with successful operand ordering/timing policy unchanged and no partial retry.
+The complete deterministic gate now has 8,683,848 logical cases in 372 batches,
+and missing either new report group fails. Ordinary CPU validation passes 4,676
+tests, with nine optional skips and zero failures.
+
+Fresh SingleStepTests passes all 312,500 selected cases. Musashi discovers that
+the `mc68000/move.bin` fixture itself contains a 020-only PC-relative CMPI and
+has no compatible vector-4 handler. Those 000/010 rows are explicitly excluded
+while the identical input executes on all six applicable profiles: 536 passing /
+88 excluded, with the synthetic matrix qualifying the architectural trap. The
+reference document records the source, exact word/offset/hash and manual rule.
+WinUAE passes 34,880 selected 000 ILLEGAL cases, but still reports 61 mismatching
+and 15 unsupported groups, now reaching status-transfer/MOVES invalid forms.
+All 32 comparator controls pass. The private unpublished .41 package validates
+isolated CopperScreen Release, host/disk/diagnostics and all three native replays;
+AHX passes 18. A final targeted run validates the test-only exclusion adjustment
+with the production assembly unchanged. No package release or test retirement
+is included; milestone 6 remains in progress with its existing scope intact.

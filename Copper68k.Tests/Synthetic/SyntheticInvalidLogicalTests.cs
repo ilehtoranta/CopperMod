@@ -28,23 +28,7 @@ public sealed class SyntheticInvalidLogicalTests(ITestOutputHelper output)
         foreach (var (opcode, family, form) in opcodes)
         foreach (var supervisor in new[] { false, true })
         for (var ccr = 0; ccr < 32; ccr++)
-        {
-            machine.Reset(ccr, supervisor);
-            // Detect a mistaken operand read/write as well as register changes.
-            var forbidden = new List<uint>();
-            for (var reg = 0; reg < 8; reg++)
-            for (var offset = -8; offset < 8; offset++)
-            {
-                var address = machine.Model.Physical(unchecked(machine.Core.State.A[reg] + (uint)offset));
-                machine.Bus.Initialize(address, 0xa5, 1);
-                forbidden.Add(address);
-            }
-            var expected = SyntheticExecution.Prepare(machine, [opcode, 0x0011, 0x81a5, 0x4e71]);
-            expected.ForbiddenOperandReads.UnionWith(forbidden);
-            SyntheticExecution.ExpectException(machine, expected, 4);
-            SyntheticExecution.Run(machine, expected, report,
-                $"{modelId}/{family}/invalid/{form}/op={opcode:X4}/super={supervisor}/ccr={ccr:X2}");
-        }
+            InvalidOperandScenario.Run(machine, report, opcode, $"{family}/invalid/{form}", supervisor, ccr);
         report.Complete(output);
     }
 

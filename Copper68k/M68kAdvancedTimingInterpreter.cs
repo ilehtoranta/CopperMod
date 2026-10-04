@@ -808,6 +808,12 @@ namespace Copper68k
                 (logicalMode == 1 || logicalMode == 7 && logicalRegister > 1))
                 return M68020OpcodeKind.IllegalInstruction;
 
+            if ((opcode & 0xFF00) is 0x0400 or 0x0600 or 0x0C00 &&
+                ((opcode >> 6) & 3) < 3 &&
+                (logicalMode == 1 || logicalMode == 7 &&
+                    logicalRegister > ((opcode & 0xFF00) == 0x0C00 ? 3 : 1)))
+                return M68020OpcodeKind.IllegalInstruction;
+
             if ((opcode & 0xFF00) == 0x0800 || (opcode & 0xF100) == 0x0100)
             {
                 var maximumRegister = ((opcode >> 6) & 3) == 0
@@ -2602,7 +2608,12 @@ namespace Copper68k
 
             if ((opcode & 0xFFC0) is 0x0AC0 or 0x0CC0 or 0x0EC0)
             {
-                return M68020OpcodeKind.Cas;
+                // CAS2.W/.L were handled above. CAS itself requires a memory
+                // alterable EA; never resolve a register or PC-relative form.
+                var mode = (opcode >> 3) & 7;
+                var register = opcode & 7;
+                return mode is >= 2 and <= 6 || mode == 7 && register <= 1
+                    ? M68020OpcodeKind.Cas : M68020OpcodeKind.IllegalInstruction;
             }
 
             if ((opcode & 0xF1C0) == 0x80C0)
