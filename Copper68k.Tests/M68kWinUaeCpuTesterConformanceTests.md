@@ -213,3 +213,12 @@ Both fail the gate. The current classifier records 62 mismatching and 15 unsuppo
 groups (77 total), with zero untested; frame/masked-case counts and all 32 controls
 are recorded separately from normal callbacks. Older bridges lacking these
 assertions are rejected. Source/adapter/CPU disagreements remain open.
+
+Integer callbacks also stop at an actual STOP/HALT boundary. The adapter does
+not wake execution or advance PC to a following sentinel. Additive schema-2
+`TerminalCases` row counts and the `terminalCases` total record these comparisons.
+The packing checkpoint observes one such callback: 060 STOP `4E72 0000` exposes
+a privilege/state disagreement against the pinned reference. It remains a
+failing result requiring model/reference qualification. FPU adapter behavior
+is unchanged. Current results and pinned-input caveats are recorded in
+[reference qualification](../docs/COPPER68K_REFERENCE_QUALIFICATION.md#packunpk-word-stride-and-terminal-reference-boundaries--2026-10-05).

@@ -65,9 +65,9 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
                 {
                     var result = tester.Run(path, opcode, fixture.CpuLevel, false, false, model);
                     rows.Add(new(id, opcode, result.Passed ? result.ExecutedCases > 0 ? "passing" : "untested" : tester.UnsupportedExecution ? "unsupported" : "mismatching",
-                        result.ExecutedCases, result.UnmappedReads, result.UnmappedWrites, tester.FrameChecks, tester.MaskedCases, result.Detail));
+                        result.ExecutedCases, result.UnmappedReads, result.UnmappedWrites, tester.FrameChecks, tester.MaskedCases, tester.TerminalCases, result.Detail));
                 }
-                catch (Exception ex) { rows.Add(new(id, opcode, "mismatching", 0, 0, 0, 0, 0, ex.Message)); }
+                catch (Exception ex) { rows.Add(new(id, opcode, "mismatching", 0, 0, 0, 0, 0, 0, ex.Message)); }
             }
             _output.WriteLine($"{id}: {rows.Count(r => r.Model == id && r.Status == "passing")} directories passed; {rows.Where(r => r.Model == id).Sum(r => (long)r.ExecutedCases)} callbacks executed.");
         }
@@ -83,7 +83,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
             passing = rows.Count(r => r.Status == "passing"), mismatching = rows.Count(r => r.Status == "mismatching"),
             unsupported = rows.Count(r => r.Status == "unsupported"),
             untested = rows.Count(r => r.Status == "untested"), executedCases = rows.Sum(r => (long)r.ExecutedCases),
-            exceptionFrames = rows.Sum(r => (long)r.ExceptionFrames), maskedSrCases = rows.Sum(r => (long)r.MaskedSrCases), probes, rows
+            exceptionFrames = rows.Sum(r => (long)r.ExceptionFrames), maskedSrCases = rows.Sum(r => (long)r.MaskedSrCases),
+            terminalCases = rows.Sum(r => (long)r.TerminalCases), probes, rows
         }, new JsonSerializerOptions { WriteIndented = true }));
         var failures = rows.Where(r => r.Status != "passing").ToArray();
         Assert.True(failures.Length == 0, string.Join(Environment.NewLine, failures.Select(r => $"{r.Model}/{r.Opcode}: {r.Detail}")));
@@ -148,6 +149,6 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
     internal sealed record WinUaeManifest(int Schema, string GeneratorCommit, string RunnerCommit, string NativeLibrarySha256, WinUaeProfile[] Profiles);
     internal sealed record WinUaeProfile(string Id, string CpuDirectory, byte CpuLevel, int AddressBits, string[] Opcodes, WinUaeInput[] Inputs);
     internal sealed record WinUaeInput(string Path, long Bytes, string Sha256);
-    private sealed record WinUaeModelRow(string Model, string Opcode, string Status, int ExecutedCases, int UnmappedReads, int UnmappedWrites, uint ExceptionFrames, uint MaskedSrCases, string Detail);
+    private sealed record WinUaeModelRow(string Model, string Opcode, string Status, int ExecutedCases, int UnmappedReads, int UnmappedWrites, uint ExceptionFrames, uint MaskedSrCases, int TerminalCases, string Detail);
     private sealed record WinUaeProbeRow(string Model, string Kind, bool Detected, int ExecutedCases, string Detail);
 }

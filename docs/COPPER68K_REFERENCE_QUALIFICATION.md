@@ -1031,3 +1031,82 @@ and `artifacts/synthetic-private-feed-43/`; isolated consumer
 retain their fixture mistakes as historical evidence, not corrected counts.
 No package publication, old-test retirement, seeded or physical audit is added.
 Milestone 6 remains in progress with its existing scope intact.
+
+## PACK/UNPK word stride and terminal reference boundaries — 2026-10-05
+
+PACK's unpacked source and UNPK's unpacked destination are contiguous words,
+including when addressed through A7. Only the packed byte operand uses A7's
+special two-byte stride. The original production code and synthetic fixture
+both incorrectly applied that byte stride to each half of the word, consuming
+four bytes and leaving a gap. Independent expectations now treat the word as
+one two-byte operand. M68000PM 4-156..158 and 4-195..197 define the operand
+diagrams and transformations; MC68020UM table 9-21 corroborates the word-side
+operand access. Pinned WinUAE PACK/UNPK code agrees. The pinned Musashi
+instruction source retains separate A7 byte decrements and is not corroborating
+evidence for this correction; its passing self-checking program audit does not
+contain a discriminating packing program.
+
+The new `arithmetic-packing-memory` group executes **89,728 cases in eight
+reporting batches**: 8,192 per 000/010 profile and 12,224 per advanced profile.
+Canonical cases exercise every source/destination register encoding, all CCR
+states and both stacks. Advanced cases add boundary values and adjustments,
+aliased bases, overlapping operands, odd addresses, negative high addresses
+and external-address wrapping. Surrounding canaries, complete register state,
+exact next PC and unchanged flags remain checked. Unavailable 000/010 packing
+instructions must enter vector 4. Fixed opcode examples independently check
+the fixture encoding.
+
+Against production `66d276e`, these revised expectations detect **14,208
+mismatches**, 2,368 per advanced profile, with zero unsupported or untested new
+cases. The corrected existing decimal fixture additionally detects 32 A7
+packing failures per advanced profile. All 16 affected batches pass after the
+production stride correction. Byte transfer order and the existing timing
+policy are preserved; physical bus width, intermediate A7 visibility and
+silicon timing are not qualified. No instruction is retried after operand
+effects, no public API changes and no old regression is retired.
+
+The WinUAE adapter now ends an integer callback when execution becomes stopped
+or halted. It compares actual state immediately, without waking the CPU,
+advancing PC to a sentinel or normalizing the result. Schema 2 adds
+`TerminalCases` to rows and `terminalCases` to totals. A fresh all-profile audit
+passes all **12 PACK/UNPK groups / 70,720 callbacks**. Its complete result is
+**1,320 passing, 48 mismatching, 13 unsupported and zero untested groups** over
+11,311,137 callbacks, 1,500,873 exception frames and 199,327 masked-SR cases;
+all 32 comparator controls pass. There is one terminal callback. The 060 STOP
+case `4E72 0000` now exposes a state disagreement rather than waiting 64 steps:
+Copper68k clears S and stops, while the pinned reference expects vector 8 and
+the old SR. The applicable model rule and saved-PC reference need qualification;
+this adapter change does not fix or hide that disagreement. No family is
+excluded and the requested discovery audit remains failing.
+
+Evidence: `artifacts/m6-packing-before/`, `artifacts/m6-packing-after/`,
+`artifacts/m6-packing-winuae/`, `artifacts/m6-terminal-winuae/` and
+`artifacts/m6-packing-final-winuae/`. Earlier runs retain their identities and
+counts. Milestone 6 remains in progress with its accepted scope intact.
+
+Final ordinary Release validation passes **4,748 CPU tests**, with nine optional
+skips and zero failures. Fresh SingleStepTests passes 312,500 cases in 125 files;
+Musashi passes 536 programs with 88 explicit exclusions; AHX passes 18 tests.
+Existing source pins and reference caveats apply unchanged. The deterministic
+report gate validates **9,272,520 logical cases in 442 reporting batches**.
+Omitting the new 000 packing report fails the selected-model gate.
+
+Private **unpublished** NuGet `1.5.2-synthetic-dev.44` has SHA-256
+`a4230a7efa4b1b8e0bd374862822483a9caea4e14e9925f3bfa2ab280b2771a2`.
+`artifacts/m6-packing-package.json` records source and assembly identities
+against `66d276e`. The isolated CopperScreen baseline `d9beae8` resolves the
+exact package in production and separate diagnostics. All four loaded CPU DLLs
+match SHA-256
+`9404ef080ea6c1f6ba44b933df3683b42b6aff6e163100b4bff896074915b8a0`.
+Release build has zero warnings/errors; host 149, disk 74 and engine diagnostics
+1,080 pass. Two native Workbench floppy boot profiles and one native A1200
+boot/disk-persistence replay pass. An additionally selected Workbench hard-disk
+theory is skipped without its HDF environment input; it is unavailable coverage,
+not a replay. Six optional host/media skips remain unavailable. No new seeded,
+physical timing or host-throughput qualification is claimed.
+
+Final evidence: `artifacts/m6-packing-cpu/`, `artifacts/m6-packing-references/`,
+`artifacts/m6-packing-guard-missing/`, `artifacts/m6-packing-ahx-results/`,
+`artifacts/synthetic-private-feed-44/`; isolated consumer
+`artifacts/packing-validation/`, `artifacts/packing-diagnostic-tests/` and
+`artifacts/packing-production.binlog`. No package is published.

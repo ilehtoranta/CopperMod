@@ -770,3 +770,32 @@ diagnostics and all three native boot/persistence replays. The reference documen
 records exact cases, source/package/assembly identities, preliminary fixture
 corrections and remaining gaps. No release or regression retirement is included;
 milestone 6 remains in progress.
+
+The packing checkpoint corrects the A7 stride of PACK's word source and UNPK's
+word destination. These are contiguous words; only the packed byte has A7's
+special stride. Revised independent expectations expose the original error in
+both production and the earlier fixture. The new `arithmetic-packing-memory`
+group adds 89,728 cases in eight reporting batches across all profiles, covering
+every memory register pair, both stacks, all CCR values, aliases, overlapping
+operands and advanced address/value boundaries. Against `66d276e` it detects
+14,208 mismatches; all new cases and existing decimal cases now pass. The report
+gate requires this group and rejects its omission. Successful byte transfer
+order and timing policy are preserved; physical bus qualification is separate.
+
+The pinned WinUAE audit now passes all 12 PACK/UNPK groups (70,720 callbacks).
+An integer callback ends at a real STOP/HALT boundary and compares actual state,
+without advancing PC to the sentinel. The resulting 060 STOP privilege/state
+disagreement remains open. The complete audit still fails with 48 mismatching
+and 13 unsupported groups; all 32 comparator controls pass. No family is
+excluded to make it green. The reference qualification document records the
+manual/source evidence, old fixture error, terminal counts and remaining gaps.
+No regression retirement or package publication is included. Milestone 6
+remains in progress with its accepted scope intact.
+
+Final validation passes 4,748 CPU tests with nine optional skips and zero
+failures, plus 9,272,520 deterministic logical cases in 442 reporting batches.
+Fresh SingleStepTests/Musashi and AHX checks pass. The private unpublished .44
+package validates the isolated CopperScreen Release build, host/disk/engine
+tests and three native Workbench/A1200 replays. An additionally selected
+Workbench hard-disk theory without its HDF input is unavailable coverage. Exact
+package, source, assembly and replay evidence is in the reference document.

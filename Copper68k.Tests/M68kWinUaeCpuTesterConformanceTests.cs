@@ -301,6 +301,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		private int _executedCases;
 		private int _unmappedReads;
 		private int _unmappedWrites;
+		private int _terminalCases;
 		private string _lastCaseSummary = "";
 		private byte _cpuLevel;
 		private ModelSpec? _integerProfile;
@@ -358,6 +359,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			_executedCases = 0;
 			_unmappedReads = 0;
 			_unmappedWrites = 0;
+			_terminalCases = 0;
 			_lastCaseSummary = "";
 			_cpuLevel = cpuLevel;
 			_integerProfile = integerProfile;
@@ -447,6 +449,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 
 		public uint FrameChecks => _frameChecks?.Invoke() ?? 0;
 		public uint MaskedCases => _maskedCases?.Invoke() ?? 0;
+		public int TerminalCases => _terminalCases;
 		public bool UnsupportedExecution => _callbackException?.InnerException is UnsupportedM68kTimingException;
 
 		public void Dispose()
@@ -518,6 +521,14 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 					}
 
 					registers.Cycles += (uint)cycles;
+					if (_integerProfile is not null && (cpu.State.Stopped || cpu.State.Halted))
+					{
+						// Compare the actual terminal instruction boundary. Do not
+						// wake the CPU or advance PC to a following harness sentinel.
+						_terminalCases++;
+						completed = true;
+						break;
+					}
 					var traceSetAfterInstruction = (cpu.State.StatusRegister & M68kCpuState.Trace) != 0;
 					if (_integerProfile is null && tracePending && !cpu.State.Stopped && !cpu.State.Halted)
 					{

@@ -72,6 +72,7 @@ try {
             'arithmetic-muldiv-word-invalid-operands'=16384;
             'arithmetic-muldiv-long-invalid-operands'=4096;
             'arithmetic-decimal'=$(if ($model -in @('68000','68010')) {111392} else {111458});
+            'arithmetic-packing-memory'=$(if ($model -in @('68000','68010')) {8192} else {12224});
             'arithmetic-muldiv-boundaries'=26904;
             'arithmetic-muldiv-addressing'=$(if ($model -in @('68000','68010')) {5608} elseif ($model -eq '68060') {7208} else {7224});
             'control-branches'=$(if ($model -in @('68000','68010')) {8192} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {12288});
