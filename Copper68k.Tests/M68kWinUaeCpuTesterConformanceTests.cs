@@ -302,6 +302,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		private int _unmappedReads;
 		private int _unmappedWrites;
 		private int _terminalCases;
+		private int _traceInputCases;
 		private string _lastCaseSummary = "";
 		private byte _cpuLevel;
 		private ModelSpec? _integerProfile;
@@ -360,6 +361,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			_unmappedReads = 0;
 			_unmappedWrites = 0;
 			_terminalCases = 0;
+			_traceInputCases = 0;
 			_lastCaseSummary = "";
 			_cpuLevel = cpuLevel;
 			_integerProfile = integerProfile;
@@ -450,6 +452,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		public uint FrameChecks => _frameChecks?.Invoke() ?? 0;
 		public uint MaskedCases => _maskedCases?.Invoke() ?? 0;
 		public int TerminalCases => _terminalCases;
+		public int TraceInputCases => _traceInputCases;
 		public bool UnsupportedExecution => _callbackException?.InnerException is UnsupportedM68kTimingException;
 
 		public void Dispose()
@@ -472,6 +475,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 				_ = userData;
 				var context = Marshal.PtrToStructure<NativeContext>(contextPtr);
 				var registers = Marshal.PtrToStructure<NativeRegisters>(registersPtr);
+				if ((registers.Sr & 0x8000) != 0) _traceInputCases++;
 				var bus = new NativeRangeBus(context, _addressingMask?.Invoke() ?? 0x00FF_FFFFu);
 				IM68kCore cpu = _integerProfile is not null
 					? (_integerProfile.A1200 ? M68kCoreFactory.Default.CreateA1200Ec020(bus) : M68kCoreFactory.Default.Create(_integerProfile.Model, bus))

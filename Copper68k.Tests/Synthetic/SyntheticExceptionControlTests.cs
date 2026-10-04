@@ -76,9 +76,11 @@ public sealed class SyntheticExceptionControlTests(ITestOutputHelper output)
             if (abort) SyntheticExecution.ExpectException(m, e, family == "ILLEGAL" ? 4 : 8);
             else
             {
-                if (family == "TRAP" || family == "TRAPV" && (ccr & 2) != 0)
+                var trap = family == "TRAP" || family == "TRAPV" && (ccr & 2) != 0;
+                if (trap)
                 { SyntheticExecution.ExpectException(m, e, family == "TRAP" ? 35 : 7, e.Pc); flow = true; }
-                if (trace == 0x8000 || flow || family == "NOP" && modelId == "68040") SyntheticExecution.ExpectException(m, e, 9, e.Pc);
+                if (!(trap && modelId is "68040" or "68060") &&
+                    (trace == 0x8000 || flow || family == "NOP" && modelId == "68040")) SyntheticExecution.ExpectException(m, e, 9, e.Pc);
             }
             SyntheticExecution.Run(m, e, report, $"{modelId}/trace-{family}/none/T={trace:X4}/super={supervisor}/op={words[0]:X4}/ccr={ccr:X2}", false);
         }

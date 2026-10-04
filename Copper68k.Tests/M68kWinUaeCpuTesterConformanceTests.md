@@ -222,3 +222,43 @@ a privilege/state disagreement against the pinned reference. It remains a
 failing result requiring model/reference qualification. FPU adapter behavior
 is unchanged. Current results and pinned-input caveats are recorded in
 [reference qualification](../docs/COPPER68K_REFERENCE_QUALIFICATION.md#packunpk-word-stride-and-terminal-reference-boundaries--2026-10-05).
+
+## Qualified TRAP trace preset for 040/060
+
+The separate `TraceTraps` preset adds incoming T1/S combinations and CCR 0/31
+for TRAP. It expects 256 callbacks, 128 with incoming T1 and 256 frame assertions
+per model. Register, defined-X and frame corruption controls must all fail.
+Missing/changed inputs, wrong model sets, unqualified source/patch/generator
+identities and incomplete counts fail the requested audit.
+
+The pinned generator incorrectly reports a pending trace after a synchronous
+trap on 040/060. [MC68040UM 8.3](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+and [MC68060UM 8.2.6/8.3](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+require suppression. The preparation script applies the one-line
+[trace-priority patch](../scripts/winuae/trace-priority.patch) to a separate
+source file, records source/patch/executable hashes and preserves the original
+checkout and all Basic inputs. The test verifies both exact manifested source
+bytes and its qualified normalized-text hash, so checkout line endings do not
+change the authority. This is an explicitly corrected software reference;
+unchanged upstream or physical hardware qualification is not claimed.
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 `
+  -GeneratorSource artifacts/reference-winuae-api `
+  -RunnerSource artifacts/reference-copperline `
+  -VcVars64 '<Visual Studio>/VC/Auxiliary/Build/vcvars64.bat' `
+  -Preset TraceTraps -OutputDirectory artifacts/winuae-trap-trace-inputs
+$env:COPPER68K_RUN_WINUAE_TRAP_TRACE_AUDIT = '1'
+$env:COPPER68K_WINUAE_TRAP_TRACE_PATH = (Resolve-Path artifacts/winuae-trap-trace-inputs).Path
+$env:COPPER68K_WINUAE_CPUTEST_LIBRARY = (Resolve-Path artifacts/winuae-trap-trace-inputs/m68k_cpu_tester.dll).Path
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = Join-Path (Get-Location).Path 'artifacts/winuae-trap-trace-report'
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release -p:Platform=AnyCPU `
+  --filter FullyQualifiedName~WinUaeTrapTracePriorityAcross040And060WhenEnabled
+# Remove these opt-in variables before running the ordinary suite.
+```
+
+`winuae-trap-trace-audit.json` records source/input/assembly identities and per-model
+results, traced callback counts, frames and controls. Other traced families and
+models, M-mode, fault combinations and advanced restart remain untested by this
+preset. The broad Basic discovery audit retains its separate failures; this
+focused preset cannot make it pass.

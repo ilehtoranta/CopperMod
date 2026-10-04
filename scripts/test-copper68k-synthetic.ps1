@@ -92,6 +92,7 @@ try {
             'logical-cas2'=36864;
             'logical-shifts'=$(if ($model -in @('68000','68010')) {130561} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {131089});
             'system-basic'=1728;
+            'system-trap-trace'=$(if ($model -eq '68040') {10368} elseif ($model -eq '68060') {8384} elseif ($model -in @('68000','68010')) {3968} else {5952});
             'system-chk-invalid-operands'=8192;
             'system-debug-instructions'=$(if ($model -eq '68060') {512} else {256});
             'system-bounds'=$(if ($model -in @('68000','68010')) {11828} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {12488});

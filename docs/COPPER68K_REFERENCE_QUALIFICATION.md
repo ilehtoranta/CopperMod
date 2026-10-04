@@ -1110,3 +1110,102 @@ Final evidence: `artifacts/m6-packing-cpu/`, `artifacts/m6-packing-references/`,
 `artifacts/synthetic-private-feed-44/`; isolated consumer
 `artifacts/packing-validation/`, `artifacts/packing-diagnostic-tests/` and
 `artifacts/packing-production.binlog`. No package is published.
+
+## Synchronous trap and trace priority — 2026-10-05
+
+The shared advanced core stacked a pending trace immediately after completed
+instruction traps on every advanced model. This is wrong for 040 and 060.
+[MC68040UM 8.3, 8-20](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+suppresses trace when a priority-3 synchronous exception wins;
+[MC68060UM 8.2.6/8.3, 8-11/8-18](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+also suppresses it. After RTE restores T1, the next executed instruction is
+traced. Earlier models retain their existing nested trace behavior. MC68020UM
+6.1.11 explicitly describes trap processing followed immediately by trace
+processing; its 6.1.4 wording about tracing after the trap handler's RTE is
+inconsistent with that multiple-exception description. The explicit priority
+example and WinUAE's model distinction corroborate the retained ordering.
+
+The new `system-trap-trace` group contains **50,496 cases in eight reporting
+batches**: 3,968 on 000/010, 5,952 on EC020/020/030/A1200, 10,368 on 040 and
+8,384 on 060. It covers all TRAP vectors, taken/untaken TRAPV, word/long divide
+by zero, word/long CHK negative/above-bound traps, and all three immediate
+lengths of true/false TRAPcc. Canonical fixtures use all initial CCRs and both
+user/supervisor stacks, with no trace, T1 and applicable T0. Unsupported old-model
+forms require vector 4. Defined flags, preserved registers/memory, complete
+frames and exact exception-entry counts are checked. 040/060 additionally
+execute RTE from real format-0/2 trap frames and resume a traced self-branch.
+M-mode, physical fault sequencing and advanced internal restart are not added
+to this group.
+
+Against `4a32a1f`, the revised group detects **8,224 mismatches**, with **5,888
+dependent return/resume cases untested** until correct entry works. There are
+zero emulator-unsupported cases. The corrected older trace fixture additionally
+detects 192 failures on 040 and 96 on 060. The production fix suppresses the
+second exception only on those models. It preserves the first frame, operand
+effects and existing timing plans; there is no instruction retry or public API
+change. All 16 synthetic batches pass after correction.
+
+The pinned WinUAE generator independently contains the same overgeneralized
+trace rule. Its unchanged Basic preset never enables incoming trace rounds,
+so its passing TRAP groups did not expose this. A separate `TraceTraps` preset
+applies the committed one-line [generator patch](../scripts/winuae/trace-priority.patch)
+to a copied source file. Original tracked sources and all existing Basic
+fixture identities remain unchanged. The corrected source, patch and compiler
+output have explicit hashes; normalized-text authority handles checkout line
+endings while exact manifested bytes must still match. This is a qualified
+correction to an independent software reference, not unchanged upstream or
+hardware evidence. The pinned newer local WinUAE `newcpu.cpp` revision
+`6ae6fb6b84bb9517e0245a80fc9bdca1a8580dde`, `exception_check_trace`, also retains
+pending instruction-trap trace only below 040.
+
+The qualified preset passes **512 TRAP callbacks / 512 frame assertions**,
+including **256 incoming-T1 callbacks**, across 040/060. It covers T1/S
+combinations and CCR 0/31; it does not claim all CCRs externally. All six
+register, defined-X and frame corruption controls pass. Temporarily removing
+the CPU correction makes both models fail at their first incoming-T1 callback
+(fifth callback per model), preserving eight earlier frame comparisons. Native
+diagnostics report expected TRAP vector 32 versus actual trace vector 9 and
+incorrect saved SR. Empty profile selection and changed fixture data are
+rejected before native execution. The requested audit also requires exact
+256/128/256 callback/trace/frame counts per model. Other traced families/models,
+extra trace/fault records and M-mode remain untested by this focused preset.
+Preparation and audit commands are in [WinUAE conformance](../Copper68k.Tests/M68kWinUaeCpuTesterConformanceTests.md#qualified-trap-trace-preset-for-040060).
+
+The unchanged broad Basic audit still fails: **1,320 passing, 48 mismatching,
+13 unsupported and zero untested groups** over 11,311,137 callbacks, with
+1,500,873 frames, 199,327 masked-SR cases and one terminal callback. All 32
+controls pass. The focused trace preset does not replace it or exclude families.
+STOP, saved-PC reference disagreements, reserved words, advanced restoration
+and the other previously recorded gaps remain open.
+
+Full ordinary Release CPU validation passes **4,756 tests**, with ten optional
+skips and zero failures. The final focused gate passes 23 tests, including the
+new trace audit and retained input-preflight checks. The deterministic gate
+validates **9,323,016 logical cases in 450 reporting batches** and rejects a
+missing new trace report. Fresh SingleStepTests passes 312,500 cases / 125 files,
+Musashi passes 536 programs with 88 exclusions and AHX passes 18 tests.
+Source pins, exclusions and physical-timing caveats apply unchanged.
+
+Private **unpublished** NuGet `1.5.2-synthetic-dev.45` has SHA-256
+`f44f0f2f8b4566dc3fabd4749aca585bb84807e3202fb4a25b30c0b91e004d47`.
+`artifacts/m6-trap-trace-package.json` records source/assembly identities against
+`4a32a1f`. The isolated CopperScreen `d9beae8` baseline resolves the exact package
+in production and separate diagnostics. All four loaded CPU DLLs match SHA-256
+`37e71d96a4cb26e4c2309197d56c846ee6a81d73b290362598cf7f3e6b7f7614`.
+Release build has zero warnings/errors; host 149, disk 74 and engine diagnostics
+1,080 pass. Three native Workbench/A1200 boot and A1200 disk-persistence replays
+pass with no skips. Six optional host/media skips remain unavailable coverage.
+
+Evidence: `artifacts/m6-trap-trace-before/`, `artifacts/m6-trap-trace-after/`,
+`artifacts/m6-trap-trace-qualified-inputs/`,
+`artifacts/m6-trap-trace-reference-before/`,
+`artifacts/m6-trap-trace-final-qualified/`, `artifacts/m6-trap-trace-cpu/`,
+`artifacts/m6-trap-trace-references/`, `artifacts/m6-trap-trace-basic-winuae/`,
+`artifacts/m6-trap-trace-guard-*/`, `artifacts/m6-trap-trace-ahx-results/` and
+`artifacts/synthetic-private-feed-45/`; consumer
+`artifacts/trap-trace-validation/`, `artifacts/trap-trace-diagnostic-tests/`
+and `artifacts/trap-trace-production.binlog`. The initial preparation attempt
+failed on a relative source-file path; the corrected generator preparation
+completes and preserves that failed attempt as historical evidence. No package
+publication, regression retirement, seeded, host-performance or physical audit
+is added. Milestone 6 remains in progress with its accepted scope unchanged.

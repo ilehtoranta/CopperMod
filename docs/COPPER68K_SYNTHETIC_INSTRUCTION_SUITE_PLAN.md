@@ -799,3 +799,29 @@ package validates the isolated CopperScreen Release build, host/disk/engine
 tests and three native Workbench/A1200 replays. An additionally selected
 Workbench hard-disk theory without its HDF input is unavailable coverage. Exact
 package, source, assembly and replay evidence is in the reference document.
+
+The next checkpoint qualifies synchronous trap/trace priority. 040/060 suppress
+the pending trace after a trap; RTE restores T1 and the following instruction
+is traced. Earlier models keep their nested trace behavior. The new
+`system-trap-trace` group adds 50,496 cases in eight batches, covering every
+TRAP vector, TRAPV, word/long divide-by-zero and CHK, all immediate TRAPcc forms,
+all CCRs, both stacks and applicable T1/T0. The corrected baseline detects
+8,224 mismatches with 5,888 dependent return cases untested until entry works;
+all cases now pass. Existing trace expectations are corrected on 040/060.
+
+A separately manifested WinUAE `TraceTraps` preset applies an explicit manual-
+qualified generator correction and passes 512 callbacks / frames, including
+256 incoming-T1 cases on 040/060. Removing the CPU fix makes both profiles fail
+their first T1 callback. Six corruption controls pass; empty profiles, changed
+inputs and omitted deterministic reports fail. Other traced reference families
+and models remain explicitly untested by this preset. The broad Basic audit
+still has 48 mismatching and 13 unsupported groups and remains required.
+
+Full CPU validation passes 4,756 tests with ten optional skips; the deterministic
+gate validates 9,323,016 logical cases in 450 reporting batches. Fresh external
+SingleStepTests/Musashi and AHX checks pass. The private unpublished .45 package
+validates the isolated CopperScreen Release build, host/disk/engine tests and
+three native replays without skips. The reference document records exact
+manual/source caveats, pins, package/assembly identities, failed-before evidence
+and remaining requirements. No old test is retired or package published;
+milestone 6 remains in progress with the accepted scope intact.

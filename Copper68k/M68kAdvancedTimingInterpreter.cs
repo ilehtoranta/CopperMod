@@ -4461,7 +4461,11 @@ namespace Copper68k
             // exception processing. STOP remains traceable and is handled below.
             if (State.Halted) return;
             var exception = State.ExceptionSequence != serial;
-            if (exception && State.LastExceptionVector is not (5 or 6 or 7 or >= 32 and <= 47)) return;
+            // MC68040UM 8.3 and MC68060UM 8.2.6/8.3: a synchronous
+            // exception suppresses the pending trace on 040/060. Earlier
+            // models stack a trace after a completed instruction trap.
+            if (exception && (_profile.Model is M68kAcceleratorModel.M68040 or M68kAcceleratorModel.M68060 ||
+                State.LastExceptionVector is not (5 or 6 or 7 or >= 32 and <= 47))) return;
             if ((trace & 0x8000) != 0 || flow || exception)
             {
                 State.Stopped = false;
