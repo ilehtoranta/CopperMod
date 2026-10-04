@@ -620,3 +620,42 @@ CPU evidence: `artifacts/m6-singlestep-discovery/`,
 `artifacts/singlestep-validation/`, `artifacts/singlestep-diagnostic-tests/` and
 `artifacts/singlestep-production.binlog`. Milestone 6 remains open for the
 executable WinUAE/multi-model reference and restoration-protocol gaps above.
+
+## WinUAE multi-model discovery checkpoint
+
+The opt-in integer audit now executes every selected profile using the public
+factory, preflights pinned binary input identities and requires a native NOP
+register-corruption probe to fail. The reproducible Windows preparation command
+and source revisions are in
+[WinUAE conformance](../Copper68k.Tests/M68kWinUaeCpuTesterConformanceTests.md#pinned-integer-audit-across-cpu-models-milestone-6-checkpoint).
+Native bridge fixes enable all requested CCR inputs/unchanged-register assertions,
+close leaked header streams and release per-directory allocations. No production
+CPU semantics, timing policy, package version or public API changes in this slice.
+
+The discovery run records 11,890,943 executed callbacks over 1,381 opcode/profile
+directories: 1,295 passing, 86 mismatching, zero empty executions. All eight NOP
+corruption probes are detected. Callback totals include partial executions in
+failing directories; they are not a count of qualified passing architectural
+combinations. Mismatches include instruction results, exception/undefined-flag
+expectations and callback rejection of encodings, and require independent triage.
+They are not yet classified as CPU defects. No mismatch is excluded to turn this
+run green. Milestone 6 remains in progress; the ordinary deterministic gate and
+previous consumer qualification remain separate evidence.
+
+Evidence: `artifacts/m6-winuae-models-discovery/` (CCR-zero false-success probe),
+`artifacts/m6-winuae-models-full/` (stdio exhaustion),
+`artifacts/m6-winuae-models-fixed/` (complete failing discovery),
+`artifacts/m6-winuae-prepared/` (tracked preparation script output),
+`artifacts/m6-winuae-checkpoint-audit/` and
+`artifacts/m6-winuae-checkpoint-tests/`. Inputs and native binaries are local
+artifacts, never committed. No release is published or old regression retired.
+
+The current ordinary Release CPU suite passes **4,638 tests**, with nine optional/
+opt-in skips and zero failures. This includes all six new input-validation
+regressions; the newly added external model audit is optional in ordinary CI.
+The fresh tracked preparation output reproduces the same 1,295 passing / 86
+mismatching groups and callback counts, with all eight corruption probes detected.
+A wrong source revision is rejected before creating output. PowerShell syntax and
+Git whitespace checks pass. Previous production/consumer evidence remains the
+`1.5.2-synthetic-dev.39` checkpoint; no new consumer replay or package is claimed
+for this test-only follow-up.

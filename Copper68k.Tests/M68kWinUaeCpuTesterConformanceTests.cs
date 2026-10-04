@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Copper68k;
+using Copper68k.Tests.Synthetic;
 using CopperFloat;
 using Xunit.Abstractions;
 using Xunit.Sdk;
@@ -11,7 +12,7 @@ namespace Copper68k.Tests;
 public sealed class WinUaeCpuTesterCollection;
 
 [Collection("WinUAE CPU tester")]
-public sealed class M68kWinUaeCpuTesterConformanceTests
+public sealed partial class M68kWinUaeCpuTesterConformanceTests
 {
 	private const string RunVariable = "COPPER68K_RUN_WINUAE_CPUTEST_M68000";
 	private const string RunM68040FpuVariable = "COPPER68K_RUN_WINUAE_CPUTEST_M68040_FPU";
@@ -291,6 +292,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 		private readonly NativeRunTests _runTests;
 		private readonly NativeLastOutput? _lastOutput;
 		private readonly NativeAddressingMask? _addressingMask;
+		private readonly NativeDestroy? _destroy;
 		private readonly NativeCallback _callback;
 		private Exception? _callbackException;
 		private int _executedCases;
@@ -298,6 +300,8 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 		private int _unmappedWrites;
 		private string _lastCaseSummary = "";
 		private byte _cpuLevel;
+		private ModelSpec? _integerProfile;
+		private bool _corruptResult;
 
 		private NativeTester(IntPtr library)
 		{
@@ -306,6 +310,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 			_runTests = GetDelegate<NativeRunTests>(library, "M68KTester_run_tests");
 			_lastOutput = TryGetDelegate<NativeLastOutput>(library, "M68KTester_last_output");
 			_addressingMask = TryGetDelegate<NativeAddressingMask>(library, "m68k_tester_addressing_mask");
+			_destroy = TryGetDelegate<NativeDestroy>(library, "M68KTester_destroy");
 			_callback = RunCopper68k;
 		}
 
@@ -332,7 +337,9 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 			string opcode,
 			byte cpuLevel,
 			bool checkUndefinedSr,
-			bool continueOnError)
+			bool continueOnError,
+			ModelSpec? integerProfile = null,
+			bool corruptResult = false)
 		{
 			_callbackException = null;
 			_executedCases = 0;
@@ -340,9 +347,14 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 			_unmappedWrites = 0;
 			_lastCaseSummary = "";
 			_cpuLevel = cpuLevel;
+			_integerProfile = integerProfile;
+			_corruptResult = corruptResult;
+			if (integerProfile is not null && (_destroy is null || _addressingMask is null || _lastOutput is null))
+				throw new XunitException("Multi-model integer audit requires the qualified native bridge exports (destroy, addressing mask and diagnostics).");
 
 			var corpusPathPtr = Marshal.StringToHGlobalAnsi(corpusPath);
 			var opcodePtr = Marshal.StringToHGlobalAnsi(opcode);
+			var nativeContext = IntPtr.Zero;
 			try
 			{
 				var settings = new NativeRunSettings
@@ -354,6 +366,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 				};
 
 				var result = _init(corpusPathPtr, ref settings);
+				nativeContext = result.Context;
 				if (result.Error != IntPtr.Zero)
 				{
 					throw new XunitException(Marshal.PtrToStringAnsi(result.Error) ?? "WinUAE cputest initialization failed.");
@@ -390,6 +403,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 			}
 			finally
 			{
+				if (nativeContext != IntPtr.Zero) _destroy?.Invoke(nativeContext);
 				Marshal.FreeHGlobal(opcodePtr);
 				Marshal.FreeHGlobal(corpusPathPtr);
 			}
@@ -433,7 +447,9 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 				var context = Marshal.PtrToStructure<NativeContext>(contextPtr);
 				var registers = Marshal.PtrToStructure<NativeRegisters>(registersPtr);
 				var bus = new NativeRangeBus(context, _addressingMask?.Invoke() ?? 0x00FF_FFFFu);
-				IM68kCore cpu = _cpuLevel == 4
+				IM68kCore cpu = _integerProfile is not null
+					? (_integerProfile.A1200 ? M68kCoreFactory.Default.CreateA1200Ec020(bus) : M68kCoreFactory.Default.Create(_integerProfile.Model, bus))
+					: _cpuLevel == 4
 					? new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz)
 					: new M68kInterpreter(bus);
 				_lastCaseSummary = FormatCaseSummary(context, registers, bus);
@@ -444,6 +460,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 				DeferredFpuException? deferredFpuException = null;
 				var deferredFpuExceptionObserved = false;
 				var executionTrace = "";
+				var completed = false;
 				for (var step = 0; step < MaxStepsPerCase; step++)
 				{
 					var instructionPc = cpu.State.ProgramCounter;
@@ -458,7 +475,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 						$"next=0x{cpu.State.ProgramCounter:X8},exc={cpu.State.LastExceptionVector},d4=0x{cpu.State.D[4]:X8}]";
 					if (cpu.State.LastExceptionVector >= 0)
 					{
-						if (deferredFpuException is null &&
+						if (_integerProfile is null && deferredFpuException is null &&
 							IsDeferredM68040FpuArithmeticException(cpu.State, bus, _cpuLevel))
 						{
 							deferredFpuException = DeferredFpuException.Capture(cpu.State);
@@ -473,14 +490,16 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 						}
 
 						deferredFpuException = null;
+						completed = true;
 						break;
 					}
 
 					registers.Cycles += (uint)cycles;
 					var traceSetAfterInstruction = (cpu.State.StatusRegister & M68kCpuState.Trace) != 0;
-					if (tracePending && !cpu.State.Stopped && !cpu.State.Halted)
+					if (_integerProfile is null && tracePending && !cpu.State.Stopped && !cpu.State.Halted)
 					{
 						RaiseHarnessTraceException(cpu.State, bus);
+						completed = true;
 						break;
 					}
 
@@ -488,19 +507,23 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 						(cpu.State.ProgramCounter == registers.EndPc ||
 						 (registers.BranchTarget != 0xFFFF_FFFFu && cpu.State.ProgramCounter == registers.BranchTarget)))
 					{
+						completed = true;
 						break;
 					}
 				}
+				if (_integerProfile is not null && !completed)
+					throw new XunitException($"Reference case did not reach its boundary within {MaxStepsPerCase} instructions: {executionTrace}");
 
 				deferredFpuException?.Restore(cpu.State);
 				_lastCaseSummary += $", trace={executionTrace}";
 
-				if (_cpuLevel == 4 && bus.UnmappedReads != 0 && !deferredFpuExceptionObserved)
+				if (_integerProfile is null && _cpuLevel == 4 && bus.UnmappedReads != 0 && !deferredFpuExceptionObserved)
 				{
 					RestoreUnobservableFpuRead(cpu.State, bus, registers);
 				}
 
 				CopyRegisters(cpu.State, bus, _cpuLevel, ref registers);
+				if (_corruptResult) registers.Regs[0] ^= 1;
 				Marshal.StructureToPtr(registers, registersPtr, fDeleteOld: false);
 				_unmappedReads += bus.UnmappedReads;
 				_unmappedWrites += bus.UnmappedWrites;
@@ -548,7 +571,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 			var state = cpu.State;
 			var supervisorMode = (registers.Sr & M68kCpuState.Supervisor) != 0;
 			var activeStackPointer = supervisorMode
-				? registers.Ssp
+				? cpuLevel >= 2 && cpuLevel != 5 && (registers.Sr & 0x1000) != 0 ? registers.Msp : registers.Ssp
 				: registers.Regs[15];
 
 			cpu.Reset(registers.Pc, registers.Ssp);
@@ -780,6 +803,9 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 
 		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 		private delegate uint NativeAddressingMask();
+
+		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+		private delegate void NativeDestroy(IntPtr context);
 
 		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 		private delegate void NativeCallback(IntPtr userData, IntPtr context, IntPtr registers);

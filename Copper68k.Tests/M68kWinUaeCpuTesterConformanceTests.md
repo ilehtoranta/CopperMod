@@ -5,8 +5,9 @@ MC68000 data through the Copper68k interpreter by using the host-side runner
 shape from Copperline's `crates/cputest-runner`.
 
 This runner is disabled by default and is a secondary discovery net.
-`SingleStepTests/m68000` remains the authority for Copper68k MC68000 semantics,
-especially for undefined CCR/SR bits and other model-specific leftovers.
+Processor documentation and verified hardware establish architectural expectations.
+SingleStepTests and WinUAE are independent software references; disagreements,
+especially involving undefined flags, need investigation before changing the CPU.
 
 Fetch Copperline and generate the external data outside tracked source files or
 at the default local path:
@@ -19,7 +20,9 @@ bash third_party/Copperline/crates/cputest-runner/tools/cputest-gen.sh third_par
 `cputest-gen.sh` pins `emoon/m68k_cpu_tester_api` at the commit Copperline's
 vendored runner came from, builds the WinUAE gencpu chain with `c++`, writes the
 generated data under `third_party/winuae-cputest/68000`, and uses
-`feature_flags_mode=1` so officially undefined flag bits are not verified.
+`feature_flags_mode=1` to reduce CCR input combinations for instructions which
+do not consume flags. Undefined output bits are masked separately by the native
+runner's `check_undefined_sr` setting and each fixture header.
 
 For MC68040 FPU fixtures, use current WinUAE generator sources or apply the
 upstream FScc effective-address fix before generating the corpus. Older pinned
@@ -90,3 +93,67 @@ The managed runner targets the native layout used by Copperline's vendored
 adds `exc010`, `endpc`, `branchtarget`, `cycles`, and
 `m68k_tester_addressing_mask()`, all of which are useful for the generated
 WinUAE sets.
+
+## Pinned integer audit across CPU models (milestone 6 checkpoint)
+
+The new opt-in `WinUaeIntegerFixturesAcrossSelectedModelsWhenEnabled` uses the
+public CPU factory for all seven models and the A1200 profile. A1200 executes
+its own core against the EC020 input set. The native runner is serialized and
+releases its per-directory allocations. The managed callback requires an actual
+instruction/exception boundary within 64 steps; it does not synthesize trace
+exceptions or apply the legacy FPU adapter's result adjustments.
+
+On Windows, prepare external fixtures with PowerShell 7 and an x64 MSVC installation. The script
+requires exact source revisions, rejects tracked source modifications and existing
+output directories, records compiler/native/generator identities and each binary
+input hash, and restores the compiler environment afterward. Generated files stay
+outside tracked source. The pinned generator initializes its xorshift state to 1
+per test set; the preset uses one Basic round and full extension addressing.
+
+```powershell
+git clone https://github.com/emoon/m68k_cpu_tester_api artifacts/reference-winuae-api
+git -C artifacts/reference-winuae-api checkout 025b999239800357e95065fe5b9a15ea5b300fa7
+git clone https://github.com/LinuxJedi/Copperline artifacts/reference-copperline
+git -C artifacts/reference-copperline checkout 7a83745d6c6159bc74ab0471578ffc8bc244e66e
+./scripts/prepare-copper68k-winuae.ps1 `
+  -GeneratorSource artifacts/reference-winuae-api `
+  -RunnerSource artifacts/reference-copperline `
+  -VcVars64 '<Visual Studio>/VC/Auxiliary/Build/vcvars64.bat' `
+  -OutputDirectory artifacts/winuae-model-inputs
+
+$env:COPPER68K_RUN_WINUAE_MODEL_AUDIT = '1'
+$env:COPPER68K_WINUAE_MODEL_PATH = (Resolve-Path artifacts/winuae-model-inputs).Path
+$env:COPPER68K_WINUAE_CPUTEST_LIBRARY = (Resolve-Path artifacts/winuae-model-inputs/m68k_cpu_tester.dll).Path
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = Join-Path (Get-Location).Path 'artifacts/winuae-model-report'
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release -p:Platform=AnyCPU `
+  --filter FullyQualifiedName~WinUaeIntegerFixturesAcrossSelectedModelsWhenEnabled
+# Remove these opt-in variables before running the ordinary suite.
+```
+
+`COPPER68K_SYNTHETIC_MODELS` optionally selects exact comma-separated profile IDs;
+missing, empty, duplicate or unknown selections fail. Preflight requires all
+expected opcode directories, memory images, sequential data files, matching model/
+address-width headers and unchanged manifested inputs. Six ordinary structural
+regressions cover changed input, missing memory, empty selection, missing sequence,
+incorrect address width and empty data. Structural placeholders never reach the
+native runner. Every selected profile must also fail a deliberately corrupted NOP
+register result before its audit proceeds.
+
+The bridge initializes the native CCR mask to `0xff` and honors undefined-SR
+checking. The upstream wrapper left the mask at zero, silently reducing execution
+to CCR-zero inputs and bypassing unchanged-register/SR assertions. The NOP corruption
+probe exposed that false-success path. The bridge also closes each opcode header;
+without that correction a long audit exhausted Windows stdio handles and aborted.
+The wrapper inherits Copperline's aggregate failure return and version-16 format
+support; the preparation script verifies unique patch anchors.
+
+`winuae-model-audit.json` records per-model/opcode directory results, callback
+counts, diagnostics, input identities and corruption probes. A mismatch or empty
+execution fails the requested audit. This checkpoint is discovery evidence: the
+Basic preset omits bus/address faults, trace/M rounds and advanced restart protocols.
+The pinned generator disables the high memory range in the 32-bit fixture headers;
+this run does not independently qualify high 32-bit operand addresses. Physical
+timing, cache, enabled MMU and FPU arithmetic remain outside this integer audit.
+Generator candidate counts and executed callback counts are separate quantities.
+The audit remains failing until reference/adapter/CPU disagreements are resolved;
+its presence does not mark milestone 6 complete.

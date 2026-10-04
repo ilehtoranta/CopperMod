@@ -191,3 +191,8 @@ JMP/JSR alignment faults to the accurate interpreter before operand effects.
 These JIT regressions are reported separately from the synthetic inventory;
 no cache/prefetch/bus-ordering regression is retired. See the reference
 qualification document for reproduced failures, guard-removal proofs and scope.
+
+The additional pinned Windows WinUAE model audit and preparation command are
+documented in [WinUAE conformance](../M68kWinUaeCpuTesterConformanceTests.md#pinned-integer-audit-across-cpu-models-milestone-6-checkpoint).
+It is an opt-in discovery gate that currently reports unresolved mismatches;
+it does not replace the deterministic synthetic gate or complete milestone 6.

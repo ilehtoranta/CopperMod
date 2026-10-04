@@ -621,3 +621,23 @@ reference cases, 538 pinned program/profile combinations (86 exclusions) and
 CopperScreen Release, host 149, disk 74, diagnostics 1,080 and all three native
 boot/persistence cases without native skips. The reference document records
 package identity, negative input checks, reproduced failures and scope.
+
+The subsequent WinUAE discovery checkpoint adds a reproducible pinned Windows
+fixture/bridge preparation command and an opt-in audit across all eight profiles.
+Preflight rejects missing, changed, empty or incompatible inputs; every model must
+fail a deliberate NOP register-corruption probe. The native bridge now enables
+CCR/unchanged-register assertions and closes leaked opcode-header streams.
+
+The complete discovery records 1,295 passing and 86 mismatching opcode/profile
+directories, with 11,890,943 callbacks and all eight corruption probes detected.
+These are discovery results, not completed qualification. Failing directories
+include partial executions; reference/adapter/CPU causes remain to be separated.
+The requested audit fails on any mismatch. No production CPU fix, package release
+or regression retirement is included. Milestone 6 remains in progress, including
+resolution of these disagreements and the previously recorded restoration gaps.
+
+Validation of this test-tooling checkpoint passes 4,638 ordinary CPU tests, with
+nine optional/opt-in skips and zero failures. Fresh fixture generation reproduces
+the failing audit counts above and all eight corruption probes. Source revision
+rejection, script syntax and whitespace checks pass. Earlier production/consumer
+validation remains separate; no new package or consumer replay is claimed.
