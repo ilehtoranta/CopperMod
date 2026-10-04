@@ -78,7 +78,7 @@ public sealed class SyntheticExceptionControlTests(ITestOutputHelper output)
             {
                 if (family == "TRAP" || family == "TRAPV" && (ccr & 2) != 0)
                 { SyntheticExecution.ExpectException(m, e, family == "TRAP" ? 35 : 7, e.Pc); flow = true; }
-                if (trace == 0x8000 || flow) SyntheticExecution.ExpectException(m, e, 9, e.Pc);
+                if (trace == 0x8000 || flow || family == "NOP" && modelId == "68040") SyntheticExecution.ExpectException(m, e, 9, e.Pc);
             }
             SyntheticExecution.Run(m, e, report, $"{modelId}/trace-{family}/none/T={trace:X4}/super={supervisor}/op={words[0]:X4}/ccr={ccr:X2}", false);
         }
@@ -88,7 +88,7 @@ public sealed class SyntheticExceptionControlTests(ITestOutputHelper output)
         {
             m.Reset(31); var e = SyntheticExecution.Prepare(m, selfBranch ? [0x60fe] : new ushort[] { 0x4e71, 0x60fc });
             e.Sr |= (ushort)trace;
-            var tracedAddress = selfBranch ? SyntheticMachine.Code : afterFirst || trace == 0x4000 ? SyntheticMachine.Code + 2 : SyntheticMachine.Code;
+            var tracedAddress = selfBranch ? SyntheticMachine.Code : afterFirst || trace == 0x4000 && modelId != "68040" ? SyntheticMachine.Code + 2 : SyntheticMachine.Code;
             var savedPc = tracedAddress == SyntheticMachine.Code && !selfBranch ? SyntheticMachine.Code + 2 : SyntheticMachine.Code;
             SyntheticExecution.ExpectException(m, e, 9, savedPc);
             if (m.Model.FullIndex) e.Write(e.A[7] + 8, tracedAddress, 4, m.Model);
@@ -97,7 +97,62 @@ public sealed class SyntheticExceptionControlTests(ITestOutputHelper output)
             var mismatch = e.Verify(m);
             report.Record($"{modelId}/trace-batch/none/T={trace:X4}/afterFirst={afterFirst}/selfBranch={selfBranch}", mismatch == null ? "passing" : "mismatching", mismatch);
         }
+        TraceSerializingIntegerInstructions(m, report);
         report.Complete(output);
+    }
+    private static void TraceSerializingIntegerInstructions(SyntheticMachine m, CoverageBatch report)
+    {
+        // MC68040UM 8.2.6 lists these integer serializers as T0 tracing events.
+        // TAS is deliberately absent: its external branch signal is not a T0 event.
+        // MC68020/030 retain normal-flow semantics for this set; 060 has no T0.
+        foreach (var trace in m.Model.FullIndex && m.Model.Id != "68060" ? new[] { 0x8000, 0x4000 } : new[] { 0x8000 })
+        foreach (var supervisor in new[] { false, true })
+        for (var ccr = 0; ccr < 32; ccr++)
+        foreach (var family in new[] { "NOP", "MOVES", "CAS", "CAS2", "MOVEfromUSP", "MOVEtoUSP", "MOVECfrom", "MOVECto", "CINV", "CPUSH", "TAS" })
+        {
+            m.Reset(ccr, supervisor);
+            m.Core.State.D[0] = 0x8000; m.Core.State.D[1] = 0x96c3;
+            m.Core.State.D[2] = 0x8000; m.Core.State.D[3] = 0x7fff;
+            m.InitializePhysical(0x4000, 0x8000, 2); m.InitializePhysical(0x4100, 0x7fff, 2);
+            ushort[] words = family switch
+            {
+                "NOP" => [0x4e71], "MOVES" => [0x0e50, 0], "CAS" => [0x0cd0, 0x0040],
+                "CAS2" => [0x0cfc, 0x8102, 0x9143], "MOVEfromUSP" => [0x4e69], "MOVEtoUSP" => [0x4e61],
+                "MOVECfrom" => [0x4e7a, 0x0001], "MOVECto" => [0x4e7b, 0x0001],
+                "CINV" => [0xf498], "CPUSH" => [0xf4b8], _ => [0x4ad0]
+            };
+            var e = SyntheticExecution.Prepare(m, words);
+            m.Core.State.SourceFunctionCode = 1; m.Core.State.DestinationFunctionCode = 5;
+            m.Core.State.StatusRegister |= (ushort)trace; e.Sr |= (ushort)trace;
+            var vector = family switch
+            {
+                "CAS" when !m.Model.FullIndex => 4,
+                "CAS2" when !m.Model.FullIndex => 4,
+                "CAS2" when m.Model.Id == "68060" => 61,
+                "MOVES" or "MOVECfrom" or "MOVECto" when m.Model.Id == "68000" => 4,
+                "CINV" or "CPUSH" when m.Model.Id is not ("68040" or "68060") => 11,
+                "MOVES" or "MOVEfromUSP" or "MOVEtoUSP" or "MOVECfrom" or "MOVECto" or "CINV" or "CPUSH" when !supervisor => 8,
+                _ => 0
+            };
+            if (vector != 0) SyntheticExecution.ExpectException(m, e, vector);
+            else
+            {
+                switch (family)
+                {
+                    case "CAS": e.Write(0x4000, e.D[1], 2, m.Model); e.Sr = (ushort)((e.Sr & 0xfff0) | 4); break;
+                    case "CAS2":
+                        e.Write(0x4000, e.D[4], 2, m.Model); e.Write(0x4100, e.D[5], 2, m.Model);
+                        e.Sr = (ushort)((e.Sr & 0xfff0) | 4); break;
+                    case "MOVEfromUSP": e.A[1] = 0x7800; break;
+                    case "MOVEtoUSP": e.InactiveStackPointer = e.A[1]; break;
+                    case "MOVECfrom": e.D[0] = 5; break;
+                    case "MOVECto": e.ControlChecks["DFC"] = (s => s.DestinationFunctionCode, e.D[0] & 7); break;
+                    case "TAS": e.Write(0x4000, 0x80, 1, m.Model); e.Sr = (ushort)((e.Sr & 0xfff0) | 8); break;
+                }
+                if (trace == 0x8000 || m.Model.Id == "68040" && family != "TAS") SyntheticExecution.ExpectException(m, e, 9, e.Pc);
+            }
+            SyntheticExecution.Run(m, e, report, $"{m.Model.Id}/trace-serializer-{family}/T={trace:X4}/super={supervisor}/ccr={ccr:X2}", false);
+        }
     }
     private sealed class TraceBoundary(M68kCpuState state, ushort trace, bool afterFirst) : IM68kInstructionBoundary
     {

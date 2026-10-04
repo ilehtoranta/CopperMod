@@ -4379,6 +4379,15 @@ namespace Copper68k
                     (traceOpcode & 0xFFC0) is 0x4E80 or 0x4EC0 or 0x46C0 ||
                     traceOpcode is 0x4E72 or 0x4E73 or 0x4E74 or 0x4E75 or 0x4E77 or 0x007C or 0x027C or 0x0A7C ||
                     (traceOpcode & 0xFFC0) == 0x06C0;
+                // MC68040UM 8.2.6: serializers also trigger T0 tracing on 040.
+                // This is distinct from the external branch-status list (which includes TAS).
+                if (_profile.Model == M68kAcceleratorModel.M68040)
+                    flow |= traceOpcode is 0x4E71 or 0x4E7A or 0x4E7B ||
+                        (traceOpcode & 0xFFF0) == 0x4E60 ||
+                        (traceOpcode & 0xFFC0) is 0x0AC0 or 0x0CC0 or 0x0EC0 ||
+                        (traceOpcode & 0xFF00) == 0x0E00 && (traceOpcode & 0x00C0) != 0x00C0 ||
+                        (traceOpcode & 0xFF20) is 0xF400 or 0xF420 ||
+                        (traceOpcode & 0xFFE0) == 0xF500 || (traceOpcode & 0xFFD8) == 0xF548;
             }
             ExecuteInstructionBody();
             var exception = State.ExceptionSequence != serial;

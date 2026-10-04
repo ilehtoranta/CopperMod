@@ -22,7 +22,7 @@ model. A gap report alone does not complete it.**
 | 3. Arithmetic and comparison | Complete | ADD/SUB variants, quick/immediate/address/extend forms, comparisons, multiply/divide, decimal/packing operations; overflow, borrow, carry, sticky zero, exceptional operands. |
 | 4. Logical, bit and shift operations | Complete: semantic gate, 2026-10-04 | Logical/immediate/unary operations, bit manipulation, shifts/rotates, bitfields, atomic integer operations; preservation and memory effects. |
 | 5. Control and system operations | Complete: scoped semantic gate, 2026-10-04 | Branches, conditions, calls/returns, stack frames, traps, privilege-sensitive transfers, STOP/RESET, model-specific integer/system instructions; exception frames, saved PC/SR, stack selection, interrupt/trace. |
-| 6. Reference qualification and consolidation | Planned | Independent reference audits across selected models, gap review, retire proven redundant tests; publish architectural combination coverage, not just xUnit counts. |
+| 6. Reference qualification and consolidation | In progress | Independent reference audits across selected models, gap review, retire proven redundant tests; publish architectural combination coverage, not just xUnit counts. |
 
 For every promoted family, mismatches and emulator-level unsupported execution
 fail its gate. Documented processor exceptions (for example unimplemented integer
@@ -316,11 +316,11 @@ Evidence directories: `artifacts/m3-final/`, `artifacts/m3-seeded/`,
 physical timing qualification remain separate; no new physical timing or OS
 compatibility qualification is claimed.
 
-## Milestones 4 and 5 implementation checkpoint — 2026-10-04
+## Milestones 4 and 5 implementation checkpoint â€” 2026-10-04
 
 The logical/bit/shift/atomic matrix adds **4,073,024 deterministic cases** in
 64 batches. Control/system adds **1,305,838 cases** in 128 batches. Together
-with milestones 1–3, the required semantic gate is **8,324,030 cases** in
+with milestones 1â€“3, the required semantic gate is **8,324,030 cases** in
 **338 xUnit batches** across all seven models and the A1200 EC020 profile.
 Every required named batch must exist with its exact count and zero mismatching,
 unsupported or untested cases before promotion. Architectural unavailable
@@ -469,3 +469,32 @@ and the isolated consumer's `artifacts/m4-m5-validation/`. Reproduce with:
 
 Cross-model independent external reference qualification and consolidation remain
 milestone 6. Package publication remains a separately authorized release action.
+
+## Milestone 6 progress: independent program audit and first consolidation
+
+The reused Musashi adapter now executes both pinned integer directories across
+all eight profiles: 538 program/profile combinations pass; 86 are explicitly
+excluded for processor availability or reviewed fixture assertions. Input
+SHA-256 identities, exclusions and execution counts are reported separately
+from architectural combination coverage. Missing or incomplete requested inputs
+fail the audit. The synthetic deterministic gate now has 8,333,190 logical
+cases in the same 338 batches, including additional trace scenarios and an
+original ASL defect input preserved across every profile.
+
+Motorola manual review corrected the 040 T0 serializer rule after reproducing
+481 mismatches. Two new isolated mutations detect the trace defect and 000 ASL
+overflow loss. The original ASL regression and its synthetic replacement both
+failed under the same mutation before retiring that pure semantic duplicate.
+All specialized timing, prefetch, cache, fault, JIT and native tests remain.
+
+See [reference qualification and consolidation evidence](COPPER68K_REFERENCE_QUALIFICATION.md)
+for pins, exclusions, replacement identifiers and remaining implementation gaps.
+Milestone 6 is still in progress: internal RTE restart, double-fault halting,
+040 PFLUSH/PTEST decoding and broader external references remain open.
+Package publication remains a separately authorized release action.
+
+Validation passes the full CPU suite (4,593 tests; six optional skips), the
+deterministic/seeded report gates, AHX and isolated CopperScreen consumers using
+unpublished private package `1.5.2-synthetic-dev.33`. Native Workbench and A1200
+boot/persistence replays execute three cases without skips. Counts, package hash,
+evidence locations and qualification boundaries are in the reference document.

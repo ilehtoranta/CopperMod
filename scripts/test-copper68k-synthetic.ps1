@@ -80,7 +80,7 @@ try {
             'logical-boundaries'=31808;
             'logical-cas'=$(if ($model -in @('68000','68010')) {36975} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {37371});
             'logical-cas2'=36864;
-            'logical-shifts'=$(if ($model -in @('68000','68010')) {130560} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {131088});
+            'logical-shifts'=$(if ($model -in @('68000','68010')) {130561} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {131089});
             'system-basic'=1728;
             'system-bounds'=$(if ($model -in @('68000','68010')) {11828} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {12488});
             'system-callm'=$(if ($model -in @('68000','68010')) {10832} elseif ($model -in @('68020','68EC020','A1200')) {11000} elseif ($model -in @('68030','68040','68060')) {10964});
@@ -92,7 +92,7 @@ try {
             'system-rtm'=24594;
             'system-stack'=6080;
             'system-status'=$(if ($model -in @('68000','68010')) {16540} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {16936});
-            'system-trace'=$(if ($model -in @('68000','68010','68060')) {580} elseif ($model -in @('68020','68030','68040','68EC020','A1200')) {1160})}
+            'system-trace'=$(if ($model -in @('68000','68010','68060')) {1284} elseif ($model -in @('68020','68030','68040','68EC020','A1200')) {2568})}
         foreach ($group in $expected.Keys) {
             $report = Get-Content -LiteralPath (Join-Path $output "$model-$group.json") -Raw | ConvertFrom-Json
             if ($report.logicalCases -ne $expected[$group] -or $report.counts.passing -ne $expected[$group] -or
@@ -126,15 +126,18 @@ try {
         $resolved = Get-InputIdentity 'musashi' $MusashiPath '*.bin'
         $revision = (& git -C $resolved rev-parse HEAD).Trim()
         if ($revision -ne '72c1d74800f3087b45a0c1a7342601bbed898881') { throw 'Musashi source revision does not match adapter pin' }
-        Set-AuditEnvironment 'COPPER68K_RUN_MUSASHI_M68000' '1'
-        Set-AuditEnvironment 'COPPER68K_MUSASHI_M68000_PATH' $resolved
-        Set-AuditEnvironment 'COPPER68K_MUSASHI_M68000_FILTER' 'move'
-        Set-AuditEnvironment 'COPPER68K_MUSASHI_M68000_LIMIT' '0'
-        Set-AuditEnvironment 'COPPER68K_MUSASHI_M68000_CPU_MODEL' '68000'
-        Set-AuditEnvironment 'COPPER68K_MUSASHI_M68000_BACKEND' 'interpreter'
-        Set-AuditEnvironment 'COPPER68K_MUSASHI_M68000_INCLUDE_KNOWN_INCOMPATIBLE' '0'
-        Invoke-Tests 'FullyQualifiedName~MusashiM68000ProgramsPassInterpreterWhenEnabled' 'musashi-move-68000'
-        $references += 'Musashi: pinned 68000 MOVE programs; secondary software oracle'
+        & git -C $resolved diff --quiet HEAD -- test
+        if ($LASTEXITCODE -ne 0) { throw 'Musashi reference inputs differ from the pinned source' }
+        if (-not (Test-Path -LiteralPath (Join-Path $resolved 'test/mc68000'))) { throw 'Musashi model audit requires the repository root, not one corpus subfolder' }
+        Set-AuditEnvironment 'COPPER68K_RUN_MUSASHI_MODEL_AUDIT' '1'
+        Set-AuditEnvironment 'COPPER68K_MUSASHI_MODEL_AUDIT_PATH' $resolved
+        Invoke-Tests 'FullyQualifiedName~MusashiIntegerProgramsAcrossSelectedModelsWhenEnabled' 'musashi-model-audit'
+        $audit = Get-Content -LiteralPath (Join-Path $output 'musashi-model-audit.json') -Raw | ConvertFrom-Json
+        if ($audit.mismatching -ne 0 -or $audit.passing -eq 0 -or $audit.rows.Count -ne 78 * $Models.Count) { throw 'Incomplete Musashi program audit' }
+        foreach ($model in $Models) {
+            if (@($audit.rows | Where-Object { $_.Model -ceq $model -and $_.Status -eq 'passing' }).Count -eq 0) { throw "Missing passing reference selection for $model" }
+        }
+        $references += "Musashi: pinned independent integer programs across $($Models -join ','); $($audit.passing) passed, $($audit.excluded) explicitly excluded; software assertions, not hardware qualification"
     }
     if ($WinUaePath) {
         $resolved = Get-InputIdentity 'winuae' $WinUaePath '*.gz'
@@ -158,7 +161,7 @@ try {
     $inventory | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $output 'qualified-inventory.json')
     @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=338; moveGate='passing'; transferGate='passing'; arithmeticGate='passing'; logicalGate='passing'; controlGate='passing'; roadmapComplete=$false;
         seeded=$(if ($Deep) {@{seed=$Seed; samplesPerModel=$Samples; models=$Models}} else {$null});
-        externalReferences=$references; unavailableReferenceCoverage=$(if ($references.Count -eq 0) {'External audits not requested/executed'} else {'Other models remain unqualified by these adapters'});
+        externalReferences=$references; unavailableReferenceCoverage=$(if ($references.Count -eq 0) {'External audits not requested/executed'} else {'Software-reference coverage is scoped by the per-program exclusions; hardware and exhaustive external instruction-combination qualification remain unavailable'});
         unavailableSystemCoverage=@('RTE bus-fault internal restart on 010/020/030', '020/030 coprocessor midinstruction restoration', '040 access-fault pending trace/writeback restoration', 'External BKPT replacement responder', 'Physical MOVES function-code spaces and LPSTOP CPU-space broadcast');
         timing='Semantic gate; timing policy and physical qualification remain separate'} |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'summary.json')

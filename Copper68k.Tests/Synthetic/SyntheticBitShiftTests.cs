@@ -29,6 +29,13 @@ public sealed class SyntheticBitShiftTests(ITestOutputHelper output)
         if (machine.Model.FullIndex)
         foreach (var family in LogicalSpecification.Shifts)
         foreach (var index in IndexFixture.FullStructures()) Shift(machine, report, family, 2, new(6, 0), 0x8001, 1, 31, false, index: index);
+        // Preserve the original ASL sign-change defect input while sharing expectations/verification.
+        machine.Reset(0, false); machine.Core.State.D[2] = 0x6891c884;
+        var historical = SyntheticExecution.Prepare(machine, [0xe302]);
+        var historicalResult = LogicalSpecification.Shift("ASL", 0x84, 1, 1, historical.Sr);
+        historical.D[2] = (historical.D[2] & 0xffffff00) | historicalResult.Value;
+        historical.Sr = historicalResult.Sr;
+        SyntheticExecution.Run(machine, historical, report, $"{modelId}/ASL/1/D2/historical-sign-change/op=E302/value=6891C884/count=1/ccr=00");
         report.Complete(output);
     }
 

@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -91,10 +91,27 @@ $mutations += @(
     @{name='move16-postincrement'; file='Copper68k/M68kAdvancedTimingInterpreter.System.cs'; before='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 16));'; after='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 4));'; group='Move16CacheInstructionsBreakpointsAndLowPowerStop'; milestone=5; model='68040'},
     @{name='cacr-clear-readback'; file=$advanced; before='? value & ~0x0C0Cu : value; // Clear commands always read as zero.'; after='? value : value; // Mutant: clear commands read back set.'; group='MovecControlInventoryMasksPrivilegeAndAllGeneralRegisters'; milestone=5}
 )
+$mutations += @(
+    @{name='000-asl-overflow'; file='Copper68k/M68kCore.cs'; before=@'
+            State.SetFlag(M68kCpuState.Overflow, shifted.Overflow);
+            return shifted.Value;
+'@; after=@'
+            State.SetFlag(M68kCpuState.Overflow, false);
+            return shifted.Value;
+'@; group='ShiftsCountsValuesAndFlags'; milestone=6; model='68000'; legacyTest='AslByteSetsOverflowWhenSignChanges'; legacyFile='Copper68k.Tests/M68kShiftTests.cs'},
+    @{name='040-t0-serializers'; file=$advanced; before=@'
+                if (_profile.Model == M68kAcceleratorModel.M68040)
+                    flow |= traceOpcode is 0x4E71 or 0x4E7A or 0x4E7B ||
+'@; after=@'
+                if (false)
+                    flow |= traceOpcode is 0x4E71 or 0x4E7A or 0x4E7B ||
+'@; group='TraceRetirementTakenAndUntakenFlowStopsAndAbortingFaults'; milestone=6; model='68040'}
+)
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
 if ($Scope -eq 'Control') { $mutations = @($mutations | Where-Object { $_.milestone -eq 5 }) }
+if ($Scope -eq 'Consolidation') { $mutations = @($mutations | Where-Object { $_.milestone -eq 6 }) }
 $saved = @{}
 foreach ($mutation in $mutations) {
     $path = Join-Path $repo $mutation.file
@@ -117,13 +134,20 @@ try {
         try {
             [IO.File]::WriteAllText($path, $text.Replace($before, $after), [Text.UTF8Encoding]::new($false))
             $model = $(if ($mutation.model) { $mutation.model } elseif ($mutation.name -eq '060-divide-frame') { '68060' } else { '68020' })
-            & dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --no-restore --filter "FullyQualifiedName~$($mutation.group)&DisplayName~$model" --logger "trx;LogFileName=mutation.trx" --results-directory $directory *> (Join-Path $directory 'run.log')
+            $filter = "FullyQualifiedName~$($mutation.group)&DisplayName~$model"
+            $legacyPresent = $mutation.legacyTest -and [IO.File]::ReadAllText((Join-Path $repo $mutation.legacyFile)).Contains("void $($mutation.legacyTest)(")
+            if ($legacyPresent) { $filter += "|FullyQualifiedName~$($mutation.legacyTest)" }
+            & dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --no-restore --filter $filter --logger "trx;LogFileName=mutation.trx" --results-directory $directory *> (Join-Path $directory 'run.log')
             $exitCode = $LASTEXITCODE
             $batches = @(Get-ChildItem -LiteralPath $directory -Filter '*.json' | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json })
             $failures = @($batches | ForEach-Object { $_.failures })
             if ($exitCode -eq 0 -or $batches.Count -eq 0 -or $failures.Count -eq 0) { throw "Mutation survived or failed without executable semantic evidence: $($mutation.name)" }
+            if ($legacyPresent) {
+                [xml]$legacyTrx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if (@($legacyTrx.TestRun.Results.UnitTestResult | Where-Object { $_.testName.EndsWith($mutation.legacyTest) -and $_.outcome -eq 'Failed' }).Count -ne 1) { throw 'Original regression did not detect the same mutation' }
+            }
             $results += @{mutation=$mutation.name; file=$mutation.file; sourceSha256=(Get-FileHash -LiteralPath $path).Hash;
-                detected=$true; replacementCase=$failures[0].id; diagnostic=$failures[0].reason}
+                detected=$true; replacementCase=$failures[0].id; diagnostic=$failures[0].reason; originalRegressionDetected=$legacyPresent}
             Write-Host "Detected $($mutation.name): $($failures[0].id)"
         }
         finally { [IO.File]::WriteAllBytes($path, $saved[$path]) }

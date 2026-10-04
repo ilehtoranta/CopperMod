@@ -14,9 +14,9 @@ From the CopperMod root, run:
 ./scripts/test-copper68k-synthetic.ps1
 ```
 
-Milestones 1–5 execute MOVE/MOVEA, transfer/address, arithmetic/comparison,
+Milestones 1â€“5 execute MOVE/MOVEA, transfer/address, arithmetic/comparison,
 logical/bit/shift/atomic and control/system operations in
-**8,324,030 logical cases** across **338 xUnit batches**, across seven models and the A1200 profile.
+**8,333,190 logical cases** across **338 xUnit batches**, across seven models and the A1200 profile.
 Ordinary `dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release` includes
 these batches. CI additionally validates every required report and exact count;
 missing reports, mismatches, unsupported execution and empty groups fail the gate.
@@ -89,7 +89,7 @@ format-2 instruction address on 020+ and RTE in both stack modes.
 ./scripts/test-copper68k-synthetic-mutations.ps1 -Scope Control
 ```
 
-Twenty isolated mutations prove detection of absolute-address decoding, extension
+Twenty-two isolated mutations prove detection of absolute-address decoding, extension
 length, signed indexes, source/destination alias order, A7 byte stride and MOVE
 flags, arithmetic overflow, extend sticky zero, decimal alias ordering, PACK A7
 stride and the 060 divide frame. Additional proofs cover bitfield V/C clearing,
@@ -129,3 +129,15 @@ unavailable qualification. Cache/prefetch/fault/JIT/native suites remain retaine
 no physical pipeline/cache, FPU arithmetic, enabled MMU or OS qualification is
 claimed. Undefined CAS2 overlapping-memory results, MOVES storing its own updated
 address base, reserved module fields and simultaneous T1/T0 are excluded.
+
+## Milestone 6 reference work
+
+The pinned Musashi command now audits all selected profiles across both integer
+program directories. It records passing/excluded programs and input identities;
+missing/incomplete fixtures and mismatches fail. See
+[reference qualification](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md)
+for the 538 passing programs, 86 explicit exclusions, 040 T0 correction and
+ASL regression replacement proof. Run the consolidation mutations with
+`./scripts/test-copper68k-synthetic-mutations.ps1 -Scope Consolidation`.
+Milestone 6 remains in progress; remaining implementation/reference gaps are
+listed explicitly in that document.
