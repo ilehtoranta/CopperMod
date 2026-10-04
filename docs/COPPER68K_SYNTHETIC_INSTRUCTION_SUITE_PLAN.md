@@ -489,8 +489,8 @@ All specialized timing, prefetch, cache, fault, JIT and native tests remain.
 
 See [reference qualification and consolidation evidence](COPPER68K_REFERENCE_QUALIFICATION.md)
 for pins, exclusions, replacement identifiers and remaining implementation gaps.
-Milestone 6 is still in progress: internal RTE restart, double-fault halting
-and broader external references remain open. The follow-up single-word 040
+Milestone 6 is still in progress: internal RTE restart and broader external
+references remain open. The follow-up single-word 040
 PFLUSH/PTEST decoder and privilege correction adds 34,850 disabled-MMU cases,
 bringing the current deterministic gate to 8,368,040 cases in 339 batches.
 PTEST MMUSR is undefined with translation disabled; enabled-MMU operation and
@@ -509,3 +509,22 @@ program audit and AHX. Isolated CopperScreen validation with unpublished
 `1.5.2-synthetic-dev.34` passes the Release build, host/disk tests, separate
 diagnostics and all three native boot/persistence cases. The reference document
 records the package hash, reproduced failures, scoped MMU limits and evidence.
+
+The subsequent 000 address-error double-fault slice adds 640 cases in one batch
+for a current deterministic gate of 8,368,680 cases in 340 batches. Nested
+address-error entry and odd error-handler addresses halt without recursive
+stacking or retries. Interrupts and host task/subroutine entry do not wake the
+latched double fault; the supplied-PC/SP reset API restores execution. Frame
+contents, failed-entry ordering and normal re-faulting handlers are checked.
+Warm classic/V2 JIT parity is scoped to the architectural-trace-forced interpreter
+bridge. Direct compiled odd accesses currently throw a host exception and need
+a separate correction before operand side effects. External BERR/reset-vector
+fault signaling is unavailable through the current public bus API. No general
+bus-error or physical timing qualification is claimed, and milestone 6 stays open.
+
+Validation of this slice passes 4,606 ordinary CPU tests (eight opt-in/optional
+skips), all 8,368,680 deterministic cases, the pinned cross-model program audit
+and AHX. Isolated CopperScreen Release, host/disk and separate diagnostic checks
+pass with unpublished private package `1.5.2-synthetic-dev.35`; all three native
+boot/persistence replays execute without skips. The reference document records
+the package hash, qualified paths, separate JIT failure and evidence locations.

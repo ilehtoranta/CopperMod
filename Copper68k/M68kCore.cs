@@ -2332,6 +2332,8 @@ namespace Copper68k
         private byte _deferredCpuBusBatchAdmissionRetryInstructions;
         private uint _activeInstructionProgramCounter;
         private bool _instructionTracePending;
+        private bool _processingM68000AddressError;
+        private bool _m68000DoubleFaultHalted;
         internal bool ArchitecturalTraceEnabled { get; set; } = true;
         private uint _dataAccessStackedProgramCounter;
         private ushort? _addressErrorInstructionWord;
@@ -9199,6 +9201,8 @@ namespace Copper68k
         public void Reset(uint programCounter, uint stackPointer)
         {
             FlushDeferredCpuTimingBoundary();
+            _processingM68000AddressError = false;
+            _m68000DoubleFaultHalted = false;
             Array.Clear(State.D);
             Array.Clear(State.A);
             State.ProgramCounter = programCounter;
@@ -9223,6 +9227,7 @@ namespace Copper68k
         public void SwitchTaskContext(M68kCpuState next)
         {
             ArgumentNullException.ThrowIfNull(next);
+            if (_m68000DoubleFaultHalted) return;
             FlushDeferredCpuTimingBoundary();
             State.CopyTaskContextFrom(next);
             FlushPrefetch();
@@ -9255,6 +9260,9 @@ namespace Copper68k
 
         public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
+            // A host subroutine entry may resume an ordinary host-requested halt,
+            // but a catastrophic group-0 fault requires a CPU reset.
+            if (_m68000DoubleFaultHalted) return;
             State.SetActiveStackPointer(stackPointer);
             PushLong(returnAddress);
             SetProgramCounterAndFlushPrefetch(address);
@@ -9264,7 +9272,7 @@ namespace Copper68k
 
         public void RequestInterrupt(int level, uint vectorAddress)
         {
-            if (level <= 0)
+            if (level <= 0 || State.Halted)
             {
                 return;
             }
@@ -9275,70 +9283,78 @@ namespace Copper68k
                 return;
             }
 
-            State.Stopped = false;
-            // Recognition has already enforced the MC68000 IPL setup window
-            // against the instruction's late poll. Exception entry begins at
-            // the live architectural/physical tail; do not charge setup twice.
-            // A taken Bcc may leave a successor beyond its opcode/IPL fence.
-            // Retain that chained transfer only once the first target word is
-            // physically ready; otherwise the accepted interrupt abandons it.
-            var hasCancellableBranchSuccessor =
-                _exceptionEntryNotBeforeCycle < _cpuRetireBusCycle;
-            var preserveStartedBranchSuccessor =
-                M68000BranchInterruptTransition.HasRetainedCompletedTargetWord(
-                    hasCancellableBranchSuccessor,
-                    _prefetchCount,
-                    _prefetchCompletedCycle0,
-                    State.Cycles);
-            var interruptFenceCycle =
-                M68000BranchInterruptTransition.GetExceptionEntryFence(
-                    preserveStartedBranchSuccessor,
-                    _exceptionEntryNotBeforeCycle,
-                    _prefetchCompletedCycle0);
-            var interruptStartCycle = Math.Max(
-                State.Cycles + _interruptEntryBranchTailAdjustmentCycles,
-                interruptFenceCycle);
-            _interruptEntryBranchTailAdjustmentCycles = 0;
-            _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref interruptStartCycle);
-            State.Cycles = interruptStartCycle;
-            _exceptionEntryNotBeforeCycle = 0;
-            _cpuBusCycle = preserveStartedBranchSuccessor
-                ? Math.Max(_cpuBusCycle, interruptStartCycle)
-                : interruptStartCycle;
-            _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, interruptStartCycle);
-            var savedStatusRegister = State.StatusRegister;
-            State.RecordException((int)(vectorAddress / 4), State.ProgramCounter, savedStatusRegister);
-            State.StatusRegister = (ushort)((savedStatusRegister & ~M68kCpuState.Trace & 0xF8FF) |
-                ((level & 7) << 8) |
-                M68kCpuState.Supervisor);
-
-            var stackedProgramCounter = State.ProgramCounter;
-            var frameFormatWord = GetInterruptFrameFormatWord(vectorAddress);
-            var stackPointer = State.A[7] - (frameFormatWord.HasValue ? 8u : 6u);
-            State.SetActiveStackPointer(stackPointer);
-
-            AdvanceInterruptInternalCycles(6);
-            WriteWord(stackPointer + 4, (ushort)stackedProgramCounter);
-            PerformInterruptAcknowledge(level);
-            AdvanceInterruptInternalCycles(4);
-            WriteWord(stackPointer, savedStatusRegister);
-            WriteWord(stackPointer + 2, (ushort)(stackedProgramCounter >> 16));
-            if (frameFormatWord.HasValue)
+            try
             {
-                WriteWord(stackPointer + 6, frameFormatWord.Value);
-            }
+                State.Stopped = false;
+                // Recognition has already enforced the MC68000 IPL setup window
+                // against the instruction's late poll. Exception entry begins at
+                // the live architectural/physical tail; do not charge setup twice.
+                // A taken Bcc may leave a successor beyond its opcode/IPL fence.
+                // Retain that chained transfer only once the first target word is
+                // physically ready; otherwise the accepted interrupt abandons it.
+                var hasCancellableBranchSuccessor =
+                    _exceptionEntryNotBeforeCycle < _cpuRetireBusCycle;
+                var preserveStartedBranchSuccessor =
+                    M68000BranchInterruptTransition.HasRetainedCompletedTargetWord(
+                        hasCancellableBranchSuccessor,
+                        _prefetchCount,
+                        _prefetchCompletedCycle0,
+                        State.Cycles);
+                var interruptFenceCycle =
+                    M68000BranchInterruptTransition.GetExceptionEntryFence(
+                        preserveStartedBranchSuccessor,
+                        _exceptionEntryNotBeforeCycle,
+                        _prefetchCompletedCycle0);
+                var interruptStartCycle = Math.Max(
+                    State.Cycles + _interruptEntryBranchTailAdjustmentCycles,
+                    interruptFenceCycle);
+                _interruptEntryBranchTailAdjustmentCycles = 0;
+                _deferredCpuInstructionTiming?.FlushDeferredCpuInstructionTiming(ref interruptStartCycle);
+                State.Cycles = interruptStartCycle;
+                _exceptionEntryNotBeforeCycle = 0;
+                _cpuBusCycle = preserveStartedBranchSuccessor
+                    ? Math.Max(_cpuBusCycle, interruptStartCycle)
+                    : interruptStartCycle;
+                _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, interruptStartCycle);
+                var savedStatusRegister = State.StatusRegister;
+                State.RecordException((int)(vectorAddress / 4), State.ProgramCounter, savedStatusRegister);
+                State.StatusRegister = (ushort)((savedStatusRegister & ~M68kCpuState.Trace & 0xF8FF) |
+                    ((level & 7) << 8) |
+                    M68kCpuState.Supervisor);
 
-            var target = ReadLong(GetInterruptVectorAddress(vectorAddress));
-            SetProgramCounterAndFlushPrefetch(target);
-            PrefetchInterruptTarget(target);
-            var completedCycle = interruptStartCycle + 44;
-            if (State.Cycles < completedCycle)
+                var stackedProgramCounter = State.ProgramCounter;
+                var frameFormatWord = GetInterruptFrameFormatWord(vectorAddress);
+                var stackPointer = State.A[7] - (frameFormatWord.HasValue ? 8u : 6u);
+                State.SetActiveStackPointer(stackPointer);
+
+                AdvanceInterruptInternalCycles(6);
+                WriteWord(stackPointer + 4, (ushort)stackedProgramCounter);
+                PerformInterruptAcknowledge(level);
+                AdvanceInterruptInternalCycles(4);
+                WriteWord(stackPointer, savedStatusRegister);
+                WriteWord(stackPointer + 2, (ushort)(stackedProgramCounter >> 16));
+                if (frameFormatWord.HasValue)
+                {
+                    WriteWord(stackPointer + 6, frameFormatWord.Value);
+                }
+
+                var target = ReadLong(GetInterruptVectorAddress(vectorAddress));
+                SetProgramCounterAndFlushPrefetch(target);
+                PrefetchInterruptTarget(target);
+                var completedCycle = interruptStartCycle + 44;
+                if (State.Cycles < completedCycle)
+                {
+                    State.Cycles = completedCycle;
+                }
+
+                _cpuBusCycle = Math.Max(_cpuBusCycle, State.Cycles);
+                _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, State.Cycles);
+            }
+            catch (M68kAddressErrorException)
             {
-                State.Cycles = completedCycle;
+                // Fault entry already completed or halted. Do not resume the
+                // interrupted exception sequence or expose an internal unwind.
             }
-
-            _cpuBusCycle = Math.Max(_cpuBusCycle, State.Cycles);
-            _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, State.Cycles);
         }
 
         void IM68kJitFallbackFetchSynchronization.SynchronizeInstructionFetch()
@@ -14754,6 +14770,11 @@ namespace Copper68k
             bool useDataAccessStackedProgramCounter = false)
         {
             _instructionTracePending = false;
+            if (_processingM68000AddressError)
+            {
+                HaltM68000DoubleFault();
+                return;
+            }
             if (TryHandleModelSpecificAddressError(
                 faultAddress,
                 isWrite,
@@ -14764,23 +14785,44 @@ namespace Copper68k
                 return;
             }
 
-            var exceptionCycleBase = Math.Max(Math.Max(State.Cycles, _cpuRetireBusCycle), _instructionCycleFloor);
-            var savedStatusRegister = State.StatusRegister;
-            var instructionWord = _addressErrorInstructionWord ?? State.LastOpcode;
-            var frameIsWrite = _addressErrorIsWriteOverride ?? isWrite;
-            var stackedProgramCounter = accessKind == M68kBusAccessKind.CpuInstructionFetch &&
-                !useDataAccessStackedProgramCounter
-                ? State.ProgramCounter
-                : _dataAccessStackedProgramCounter;
-            State.RecordException(3, stackedProgramCounter, savedStatusRegister);
-            State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
-            PushLong(stackedProgramCounter);
-            PushWord(savedStatusRegister);
-            PushWord(instructionWord);
-            PushLong(faultAddress);
-            PushWord(CreateBusErrorStatusWord(instructionWord, savedStatusRegister, frameIsWrite, accessKind));
-            SetProgramCounterAndFlushPrefetch(ReadLong(0x0000_000C));
-            AddInstructionCyclesFromBase(exceptionCycleBase, AddressErrorExceptionCycles);
+            _processingM68000AddressError = !_useM68020BriefIndexedAddressing;
+            try
+            {
+                var exceptionCycleBase = Math.Max(Math.Max(State.Cycles, _cpuRetireBusCycle), _instructionCycleFloor);
+                var savedStatusRegister = State.StatusRegister;
+                var instructionWord = _addressErrorInstructionWord ?? State.LastOpcode;
+                var frameIsWrite = _addressErrorIsWriteOverride ?? isWrite;
+                var stackedProgramCounter = accessKind == M68kBusAccessKind.CpuInstructionFetch &&
+                    !useDataAccessStackedProgramCounter
+                    ? State.ProgramCounter
+                    : _dataAccessStackedProgramCounter;
+                State.RecordException(3, stackedProgramCounter, savedStatusRegister);
+                State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
+                PushLong(stackedProgramCounter);
+                PushWord(savedStatusRegister);
+                PushWord(instructionWord);
+                PushLong(faultAddress);
+                PushWord(CreateBusErrorStatusWord(instructionWord, savedStatusRegister, frameIsWrite, accessKind));
+                SetProgramCounterAndFlushPrefetch(ReadLong(0x0000_000C));
+                // Handler entry is still part of group-0 exception processing.
+                // Detect its odd instruction address before another frame or fetch.
+                if (_processingM68000AddressError && (State.ProgramCounter & 1) != 0) HaltM68000DoubleFault();
+                AddInstructionCyclesFromBase(exceptionCycleBase, AddressErrorExceptionCycles);
+            }
+            finally
+            {
+                _processingM68000AddressError = false;
+            }
+        }
+
+        private void HaltM68000DoubleFault()
+        {
+            _m68000DoubleFaultHalted = true;
+            State.Halted = true;
+            State.Stopped = false;
+            _instructionTracePending = false;
+            FlushPrefetch();
+            _skipRetirePrefetchTopUp = true;
         }
 
         private static ushort CreateBusErrorStatusWord(

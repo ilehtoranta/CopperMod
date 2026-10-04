@@ -16,7 +16,7 @@ From the CopperMod root, run:
 
 Milestones 1–5 execute MOVE/MOVEA, transfer/address, arithmetic/comparison,
 logical/bit/shift/atomic and control/system operations in
-**8,368,040 logical cases** across **339 xUnit batches**, across seven models and the A1200 profile.
+**8,368,680 logical cases** across **340 xUnit batches**, across seven models and the A1200 profile.
 Ordinary `dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release` includes
 these batches. CI additionally validates every required report and exact count;
 missing reports, mismatches, unsupported execution and empty groups fail the gate.
@@ -27,6 +27,15 @@ PFLUSH/PTEST decoding, privilege, CCR preservation and trace behavior with
 translation disabled. MMUSR is undefined for disabled-MMU PTEST and is not
 asserted. Enabled MMU operation remains outside the integer-family gate;
 see the [qualification boundaries](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md).
+
+The 000-only `system-double-fault` group adds 640 cases for address-error
+entry, bad supervisor stacks, odd handler addresses, trap/interrupt entry,
+CCR/trace preservation, halted bus inactivity and reset recovery. It preserves
+the first frame and verifies that a fault in a successfully entered handler is
+a new exception. External BERR and reset-vector fault signaling are unavailable
+through the current public bus API. Compiled JIT odd-access dispatch remains a
+separate gap; the tested warm-JIT bridge uses architectural trace to force the
+established interpreter fallback.
 
 Reports contain per-scenario identifiers and counts for passing, mismatching,
 unsupported and untested outcomes. `integer-inventory.json` lists all integer

@@ -97,6 +97,45 @@ unqualified. Undefined DFC values and noncanonical global register fields are
 excluded from this scoped gate. No enabled-MMU family is promoted in the integer
 inventory, and no specialized regression is retired by this follow-up.
 
+### 000 address-error double-fault follow-up
+
+[MC68000UM sections 6.3.9.1 and 6.3.10](https://www.nxp.com/docs/en/reference-manual/MC68000UM.pdf)
+require halting when another bus/address error occurs while processing a group-0
+exception. Entry to its handler is part of that processing. A bounded odd-handler
+test reproduced `Halted=false` before the fix, without invoking the recursive
+odd-stack path in the old process.
+
+The 000 core now guards active address-error entry. A nested alignment fault
+halts instead of recursively stacking another frame. An odd handler target also
+halts before another frame or instruction fetch. Completed frame writes and
+operand effects are preserved; the guard neither rolls back nor retries an
+instruction. Halt abandons pending prefetch and trace work. Interrupts are ignored
+while halted, and an aborted interrupt stack sequence unwinds without continuing
+its writes or exposing the internal control-flow exception to the host.
+
+A private double-fault latch prevents host subroutine/task entry from waking this
+architectural halt. The supplied-PC/SP `Reset` API clears it. The existing host
+convention of explicitly setting `Halted` and subsequently entering a subroutine
+continues to work; that convention is separately tested. No public API was added.
+The 010 model hook and advanced compatibility mode retain their separate behavior.
+
+`68000/system-double-fault` adds 640 public-factory cases across all CCRs,
+user/supervisor stacks and trace states: odd exception stacks, odd handler PCs,
+trap/interrupt stacking, halted register/memory/bus inactivity and reset recovery.
+Positive scenarios check that an operand fault after a valid handler instruction
+begins creates a new exception normally. The first 14-byte frame is checked word
+by word. Partial stack-pointer changes on failed entry follow the retained
+execution ordering; no physical timing claim is made for the halted edge.
+
+Warm classic/V2 JIT tests compare all registers, PC/SR, exception metadata,
+machine/native cycle policy and writes against scalar, kind-table and packed-plan
+interpreters through the **architectural-trace-forced fallback**. Direct compiled
+odd-access execution was also tried and exposed an independent host-exception
+gap, recorded below. It is not silently included as passing JIT coverage.
+The public bus API has no explicit external BERR/reset-vector fault signal;
+this gate qualifies address-error double faults, not general bus-error handling.
+All specialized regressions are retained.
+
 ## Consolidation proof
 
 `M68kShiftTests.AslByteSetsOverflowWhenSignChanges` is replaced by
@@ -129,8 +168,20 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
 - RTE internal restart remains untested: 010 format 8, 020/030 formats 9/A/B,
   and 040 format 7. The current advanced decoder does not implement all these
   legal restoration protocols; this is an implementation gap, not invalid encoding.
-- Nested 000 address errors during exception stacking can recurse on an odd SSP.
-  The eventual fix needs documented double-fault halt behavior and fault-bus tests.
+- Nested 000 address errors during exception stacking previously recursed on an
+  odd SSP. This is corrected by the address-error double-fault slice above. External
+  BERR and reset-vector fault signaling remain unavailable through the current
+  public bus API; no general bus-error qualification is claimed.
+- Compiled 000 JIT odd accesses throw a host emulation exception instead of
+  entering architectural address-error handling. The double-fault slice covers
+  the trace-forced interpreter bridge with a warm JIT cache, not this compiled
+  path. A future correction must guard before operand side effects; it must not
+  catch a partially executed instruction and retry it.
+  The recorded repro warms 400 instructions of `3010 60FC` at `$1000`, with
+  A0 initially `$2000`; then sets A0 to `$2001`, SR to `$201F`, and executes a
+  batch with classic or V2 JIT. Both throw before architectural fault entry.
+  The failed warm-JIT run is retained in
+  `artifacts/double-fault-focused/focused-jit.trx`.
 - 040 enabled-MMU selective/global flushing, real translation-table formats,
   descriptor updates and architectural MMUSR contents remain unqualified;
   the single-word decoder and disabled-MMU instruction gate are now corrected.
@@ -192,3 +243,32 @@ missing-report rejection), `artifacts/mmu-decode-focused-final/`,
 `artifacts/mmu-decode-final/`, `artifacts/mmu-decode-ahx/`,
 `artifacts/synthetic-private-feed-34/`, and the isolated consumer's
 `artifacts/mmu-decode-validation/` and `artifacts/mmu-decode-diagnostic-tests/`.
+
+## Validation checkpoint: 000 address-error double faults
+
+The full ordinary CPU suite passes **4,606 tests**, with eight optional/opt-in
+skips and no failures. The final focused run passes eight tests/batches, including
+640 double-fault scenarios and warm classic/V2 trace-fallback comparisons against
+all three interpreter dispatch modes. Deterministic report validation passes
+**8,368,680 logical cases in 340 batches**. Reports missing the new fault group
+are rejected. The pinned Musashi audit separately passes 538 program/profile
+combinations with 86 explicit exclusions. AHX passes 18 tests. The earlier
+320,000 seeded cases remain historical evidence; no new seeded audit is claimed.
+
+Private package `1.5.2-synthetic-dev.35` has SHA-256
+`20d13f6435f78dbd04691ef8e12da600d644363cc9cd79b6a1eee39665b2a815`.
+The isolated CopperScreen baseline `d9beae8` resolves that exact NuGet version
+and builds Release with zero warnings/errors. Host tests pass 149 cases with six
+optional/media skips; disk passes 74 and separately built engine diagnostics pass
+1,080 without skips. Native Workbench 3.1 at 0/2 MiB Fast RAM and A1200
+eight-plane hard-disk boot/reopen persistence separately pass all three cases
+without skips. The package remains unpublished; root consumer changes are
+preserved. This is correctness and retained timing-policy evidence, not physical
+timing or throughput qualification.
+
+Evidence: `artifacts/double-fault-before/` (bounded failing handler test and
+missing-report rejection), `artifacts/double-fault-focused/` (including the
+separate compiled-JIT failure), `artifacts/double-fault-final/`,
+`artifacts/double-fault-ahx/`, `artifacts/synthetic-private-feed-35/`, and the
+isolated consumer's `artifacts/double-fault-validation/` and
+`artifacts/double-fault-diagnostic-tests/`.

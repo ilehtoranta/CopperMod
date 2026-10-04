@@ -7,6 +7,67 @@ public sealed class M68000JitDirectZeroWaitTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void WarmJitTraceFallbackDoubleFaultMatchesInterpreterAndRequiresReset(bool enableV2)
+    {
+        foreach (var dispatch in Enum.GetValues<M68kOpcodePlanDispatch>())
+        foreach (var oddStack in new[] { false, true })
+        {
+            var referenceBus = new DirectZeroWaitBus();
+            var jitBus = new DirectZeroWaitBus();
+            foreach (var bus in new[] { referenceBus, jitBus })
+            {
+                bus.WriteWords(0x1000, [0x3010, 0x60fc]); // MOVE.W (A0),D0; BRA.S start
+                bus.WriteWords(0x5000, [0x747b, 0x4e71]);
+                bus.WriteLongValue(3 * 4, oddStack ? 0x5000u : 0x5001u);
+                bus.WriteWords(0x2000, [0xcafe]);
+            }
+            var reference = new M68kInterpreter(referenceBus, dispatch);
+            using var jit = new M68kJitCore(jitBus, enableV2: enableV2);
+            reference.Reset(0x1000, 0x8000); jit.Reset(0x1000, 0x8000);
+            reference.State.A[0] = jit.State.A[0] = 0x2000;
+            Assert.Equal(400, reference.ExecuteInstructions(400, 500_000, new BatchBoundary()));
+            Assert.Equal(400, jit.ExecuteInstructions(400, 500_000, new BatchBoundary()));
+            Assert.True(enableV2 ? jit.Counters.V2TraceHits > 0 : jit.Counters.TraceHits > 0);
+            reference.State.A[0] = jit.State.A[0] = 0x2001;
+            // Architectural trace forces the established interpreter bridge.
+            // Compiled odd-access dispatch is a separate, unqualified path.
+            reference.State.StatusRegister = jit.State.StatusRegister = 0xa01f;
+            reference.State.SetActiveStackPointer(oddStack ? 0x8001u : 0x8000u);
+            jit.State.SetActiveStackPointer(oddStack ? 0x8001u : 0x8000u);
+
+            Assert.Equal(1, reference.ExecuteInstructions(20, reference.State.Cycles + 1000, new BatchBoundary()));
+            Assert.Equal(1, jit.ExecuteInstructions(20, jit.State.Cycles + 1000, new BatchBoundary()));
+            Assert.True(jit.State.Halted);
+            Assert.False(jit.State.Stopped);
+            Assert.Equal(reference.State.D, jit.State.D);
+            Assert.Equal(reference.State.A, jit.State.A);
+            Assert.Equal(reference.State.ProgramCounter, jit.State.ProgramCounter);
+            Assert.Equal(reference.State.StatusRegister, jit.State.StatusRegister);
+            Assert.Equal(reference.State.LastOpcode, jit.State.LastOpcode);
+            Assert.Equal(reference.State.LastExceptionVector, jit.State.LastExceptionVector);
+            Assert.Equal(reference.State.LastExceptionStackedProgramCounter, jit.State.LastExceptionStackedProgramCounter);
+            Assert.Equal(reference.State.LastExceptionStatusRegister, jit.State.LastExceptionStatusRegister);
+            Assert.Equal(reference.State.Cycles, jit.State.Cycles); // retained machine-cycle policy
+            Assert.Equal(reference.State.NativeCycles, jit.State.NativeCycles);
+            Assert.Equal(referenceBus.WordWrites, jitBus.WordWrites);
+            var stack = jit.State.A[7]; var pc = jit.State.ProgramCounter;
+            var reads = jitBus.DataReads; var writes = jitBus.WordWrites.Count;
+            jit.RequestInterrupt(7, 31 * 4);
+            jit.BeginSubroutine(0x5000, 0x8000, 0x6000);
+            jit.ExecuteInstruction();
+            Assert.True(jit.State.Halted);
+            Assert.Equal(stack, jit.State.A[7]); Assert.Equal(pc, jit.State.ProgramCounter);
+            Assert.Equal(reads, jitBus.DataReads); Assert.Equal(writes, jitBus.WordWrites.Count);
+            jit.Reset(0x5000, 0x8000);
+            jit.ExecuteInstruction();
+            Assert.False(jit.State.Halted);
+            Assert.Equal(123u, jit.State.D[2]);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void ArchitecturalTraceUsesInterpreterEvenWithAWarmCompiledLoop(bool enableV2)
     {
         var bus = new DirectZeroWaitBus();
