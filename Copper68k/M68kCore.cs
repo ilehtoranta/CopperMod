@@ -10016,15 +10016,6 @@ namespace Copper68k
                 var bitReg = opcode & 7;
                 if (!IsDataAlterableEffectiveAddress(bitMode, bitReg))
                 {
-                    if (bitMode == 7 && bitReg == 4 && operation == 0)
-                    {
-                        var immediateValue = FetchWord();
-                        var immediateMask = 1u << (int)(bit & 7);
-                        State.SetFlag(M68kCpuState.Zero, (immediateValue & immediateMask) == 0);
-                        AddInstructionCycles(8);
-                        return true;
-                    }
-
                     RaiseException(4, instructionPc, 34);
                     return true;
                 }
@@ -10992,15 +10983,6 @@ namespace Copper68k
             }
 
             var bit = FetchWord() & 31;
-            if (mode == 7 && reg == 4)
-            {
-                var immediateValue = FetchWord();
-                var immediateBit = bit & 7;
-                State.SetFlag(M68kCpuState.Zero, (immediateValue & (1u << immediateBit)) == 0);
-                AddInstructionCycles(8);
-                return true;
-            }
-
             if (mode == 7 && reg == 1)
             {
                 var address = FetchLong();
@@ -11026,7 +11008,7 @@ namespace Copper68k
             {
                 0 => true,
                 2 or 3 or 4 or 5 or 6 => true,
-                7 => reg <= 4,
+                7 => reg <= 3,
                 _ => false
             };
         }

@@ -798,6 +798,25 @@ namespace Copper68k
                 return M68020OpcodeKind.Movep;
             }
 
+            // M68000PM: these families have assigned illegal operand forms.
+            // Classify them before any operand fetch or fallback can have effects.
+            // CCR/SR forms were handled above; dynamic mode-1 words are MOVEP.
+            var logicalMode = (opcode >> 3) & 7;
+            var logicalRegister = opcode & 7;
+            if ((opcode & 0xFF00) is 0x0000 or 0x0200 or 0x0A00 &&
+                ((opcode >> 6) & 3) < 3 &&
+                (logicalMode == 1 || logicalMode == 7 && logicalRegister > 1))
+                return M68020OpcodeKind.IllegalInstruction;
+
+            if ((opcode & 0xFF00) == 0x0800 || (opcode & 0xF100) == 0x0100)
+            {
+                var maximumRegister = ((opcode >> 6) & 3) == 0
+                    ? (opcode & 0x100) != 0 ? 4 : 3
+                    : 1;
+                if (logicalMode == 1 || logicalMode == 7 && logicalRegister > maximumRegister)
+                    return M68020OpcodeKind.IllegalInstruction;
+            }
+
             if ((opcode & 0xF9C0) is 0x00C0 or 0x02C0 or 0x04C0)
             {
                 var mode = (opcode >> 3) & 7;

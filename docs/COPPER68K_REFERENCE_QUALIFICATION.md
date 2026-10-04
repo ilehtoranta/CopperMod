@@ -715,3 +715,72 @@ the explicit missing-validation-export diagnostic. The final classifier report i
 the stronger audit above. Preparation, PowerShell syntax and Git whitespace checks
 pass. This follow-up changes only test tooling/documentation; existing .39 consumer
 results remain prior evidence, without a new package or replay claim.
+
+## Assigned illegal logical operands — 2026-10-05
+
+The pinned ILLEGAL fixtures exposed opcode `083C` (static BTST with an immediate
+destination) and `0008` (ORI.B to A0). Independent authority is
+[M68000PM](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf), especially
+BTST 4-62/63 and the data-alterable tables for ANDI, EORI and ORI. Static BTST
+excludes an immediate destination; dynamic BTST permits it. The distinction also
+shows that the old `ImmediateBtstCanTestImmediateOperand` expectation was wrong.
+That regression is corrected and retained; it is not retired as redundant.
+
+The shared `logical-invalid-operands` matrix independently enumerates 207
+assigned illegal logical/bit opcode words per profile, covering both stacks and
+all 32 CCR states. Fixed encoding controls protect legal dynamic BTST, MOVEP and
+CCR/SR forms from accidental inclusion. Registers, CCR, memory canaries, operand
+reads, handler PC and saved SR/PC/frame contents are checked using the existing
+common verifier. Unassigned mode-7 registers 5..7 remain outside this new matrix.
+The legal addressing/bit/transfer gates separately protect legal neighboring
+encodings; the implementation preserves their execution and timing policy.
+
+Before correction, 000/010/040 each fail 64 static-BTST cases, while 020/EC020/030/
+060/A1200 each report 13,248 unsupported executions. The corrected matrix passes
+all **105,984 cases**. Advanced dispatch now maps assigned illegal forms to its
+existing vector-4 path before operand effects; the 000 decoder removes the
+incorrect static-immediate special case. No instruction is caught and retried.
+The 64-batch focused legal/invalid check also passes without skips. The expanded
+deterministic gate has **8,607,816 logical cases in 356 batches**. Missing the new
+report group is explicitly rejected.
+
+Final ordinary Release validation passes **4,660 CPU tests**, with nine optional/
+opt-in skips and zero failures. The first full run's only failure was the stale
+static-BTST expectation corrected above; the final complete run passes it. The
+package/source/assembly identity snapshot is
+`artifacts/m6-invalid-logical-package.json` (built from this checkpoint's working
+changes before commit); no published version is changed.
+
+Fresh pinned references pass 312,500 SingleStepTests cases in 125 verified files
+(TAS/TRAPV remain explicit exclusions) and 538 Musashi program/profile cases
+(86 explicit exclusions). WinUAE still fails: **1,304 passing / 62 mismatching /
+15 unsupported / zero untested groups**, over 11,136,661 callbacks, 1,373,785
+frame checks and 199,327 masked-SR cases. All 32 comparator controls pass.
+It now reaches later ILLEGAL fixtures: `0C3C` on 000/010, `0408` on advanced
+profiles and `0AC0` on 040. These require separate immediate-arithmetic/atomic
+encoding and adapter review. The unchanged group totals do not mean unchanged
+case coverage; the earlier failures are now passed before these later stops.
+The pinned saved-PC and stack-mapping disagreements remain unresolved.
+
+Private **unpublished** NuGet `1.5.2-synthetic-dev.40` has SHA-256
+`e83bfe8d1a87004b4ee671f8b43f82e4b0bd45cb30bf94eb574d264ffcefedd3`.
+The isolated CopperScreen baseline `d9beae8` resolves that exact version in
+production and separate diagnostic assets. Its loaded CPU assembly hashes match
+the tested CPU assembly. Release builds with zero warnings/errors; host 149,
+disk 74, diagnostics 1,080 and all three native Workbench/A1200 boot/persistence
+cases pass. Six optional host/media skips remain unavailable coverage; the
+three requested native cases execute without skips. AHX also passes 18 tests.
+These are correctness replays, not throughput/physical-timing qualification.
+
+Evidence: `artifacts/m6-invalid-logical-before/`,
+`artifacts/m6-invalid-logical-after/`, `artifacts/m6-invalid-logical-cpu/`,
+`artifacts/m6-invalid-logical-final/`, `artifacts/m6-invalid-logical-winuae/`,
+`artifacts/m6-invalid-logical-singlestep/`, `artifacts/m6-invalid-logical-musashi/`,
+`artifacts/m6-invalid-logical-missing-group/`,
+`artifacts/m6-invalid-logical-ahx-results/` and
+`artifacts/synthetic-private-feed-40/`; isolated consumer
+`artifacts/invalid-logical-validation/`,
+`artifacts/invalid-logical-diagnostic-tests/` and
+`artifacts/invalid-logical-production.binlog`.
+No package is published and no old test is retired. Milestone 6 remains in progress
+for the unresolved reference and restoration qualification requirements above.

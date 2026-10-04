@@ -23,18 +23,23 @@ public sealed class M68kBitTests
 	}
 
 	[Fact]
-	public void ImmediateBtstCanTestImmediateOperand()
+	public void ImmediateBtstCannotTestImmediateOperand()
 	{
 		var bus = new Copper68kTestBus();
 		bus.WriteWords(0x1000, 0x083C, 0x0007, 0x3FC2);
+		bus.WriteLong(16, 0x5000); // Illegal-instruction vector
 
 		var cpu = new M68kInterpreter(bus);
 		cpu.Reset(0x1000, 0x8000);
-		cpu.State.StatusRegister = 0x2700;
+		cpu.State.StatusRegister = 0x271B;
 
 		cpu.ExecuteInstruction();
 
-		Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
-		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
+		// M68000PM 4-63 excludes #data for static BTST. Dynamic BTST's
+		// different legal table (4-62) remains covered separately above.
+		Assert.Equal(4, cpu.State.LastExceptionVector);
+		Assert.Equal(0x5000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x271B, bus.ReadWord(0x7FFA));
+		Assert.Equal(0x1000u, bus.ReadLong(0x7FFC));
 	}
 }

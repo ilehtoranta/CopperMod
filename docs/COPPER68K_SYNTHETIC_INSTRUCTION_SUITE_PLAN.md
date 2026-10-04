@@ -666,3 +666,29 @@ Old frame-skipping bridges are rejected. Test-only changes preserve the producti
 CPU, timing policy, package/API and prior consumer evidence. No release or regression
 retirement is included. The reference document records the scoped evidence and
 remaining generator/adapter/CPU classification work.
+
+The assigned-invalid logical follow-up adds 105,984 public-factory cases
+(13,248 per profile): 207 independently encoded illegal ORI/ANDI/EORI and bit
+destination words, both stacks and all 32 CCR states. It distinguishes static
+BTST's illegal immediate destination from legal dynamic BTST, MOVEP and CCR/SR
+forms. Unassigned EA register encodings remain outside this added matrix.
+The expanded deterministic gate is 8,607,816 logical cases in 356 batches, with
+missing new reports rejected. Before correction, 000/010/040 each fail 64 cases;
+the other five profiles each report 13,248 unsupported executions. All new cases
+pass after correcting static BTST and advanced illegal-form dispatch. A stale
+regression expectation is corrected from M68000PM and retained.
+
+The fresh pinned references retain 312,500 passing SingleStepTests cases and
+538 Musashi program/profile passes with their explicit exclusions. WinUAE now
+gets past the original invalid encodings and reaches later immediate-arithmetic/
+atomic fixtures; 62 mismatching and 15 unsupported groups remain gate failures.
+All 32 comparator controls pass. Private unpublished .40 validates the isolated
+CopperScreen NuGet boundary, Release build, host/disk/engine diagnostics and all
+three native boot/persistence cases. No package release or test retirement is
+included. The reference document records pins, before/after counts, exact scope
+and remaining work. Milestone 6 remains in progress.
+
+Final validation of this slice passes 4,660 ordinary CPU tests with nine optional
+skips and zero failures, all 8,607,816 deterministic cases, 18 AHX tests and the
+scoped external/consumer replays above. The private .40 package identity and source/
+assembly hashes are recorded. No seeded run or physical qualification is added.

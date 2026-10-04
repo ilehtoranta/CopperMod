@@ -16,11 +16,20 @@ From the CopperMod root, run:
 
 Milestones 1–5 execute MOVE/MOVEA, transfer/address, arithmetic/comparison,
 logical/bit/shift/atomic and control/system operations in
-**8,501,832 logical cases** across **348 xUnit batches**, across seven models and the A1200 profile.
+**8,607,816 logical cases** across **356 xUnit batches**, across seven models and the A1200 profile.
 Ordinary `dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release` includes
 these batches. CI additionally validates every required report and exact count;
 missing reports, mismatches, unsupported execution and empty groups fail the gate.
 The following instruction sentinel verifies extension consumption.
+
+The `logical-invalid-operands` group covers 207 assigned illegal opcode words
+per profile: ORI/ANDI/EORI destinations and static/dynamic bit-operation
+destinations, across both stacks and all 32 CCR inputs (13,248 cases per profile).
+It checks preserved registers/CCR, saved fault PC/SR, exception frames and memory
+canaries. CCR/SR immediate forms, dynamic BTST's legal immediate source and MOVEP
+encodings remain in their legal groups. Unassigned mode-7 registers 5..7 are
+outside this added matrix; their inclusion in a reference ILLEGAL directory does
+not by itself establish complete illegal-opcode qualification.
 
 The additional 040-only `system-mmu-disabled` group qualifies single-word
 PFLUSH/PTEST decoding, privilege, CCR preservation and trace behavior with
