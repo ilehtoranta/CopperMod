@@ -69,6 +69,8 @@ try {
             'arithmetic-boundaries'=56448; 'arithmetic-addressing'=$(if ($model -in @('68000','68010')) {4667} else {8237});
             'arithmetic-scenarios'=21072; 'arithmetic-extend'=25440;
             'arithmetic-invalid-operands'=$(if ($model -in @('68000','68010')) {6336} else {5952});
+            'arithmetic-muldiv-word-invalid-operands'=16384;
+            'arithmetic-muldiv-long-invalid-operands'=4096;
             'arithmetic-decimal'=$(if ($model -in @('68000','68010')) {111392} else {111458});
             'arithmetic-muldiv-boundaries'=26904;
             'arithmetic-muldiv-addressing'=$(if ($model -in @('68000','68010')) {5608} elseif ($model -eq '68060') {7208} else {7224});
@@ -82,11 +84,15 @@ try {
             'logical-bits'=$(if ($model -in @('68000','68010')) {104192} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {104852});
             'logical-boundaries'=31808;
             'logical-invalid-operands'=13248;
+            'logical-unary-invalid-operands'=$(if ($model -in @('68000','68010')) {11968} elseif ($model -eq '68060') {9728} else {9856});
+            'logical-bitfield-invalid-operands'=13312;
             'logical-cas-invalid-operands'=3456;
             'logical-cas'=$(if ($model -in @('68000','68010')) {36975} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {37371});
             'logical-cas2'=36864;
             'logical-shifts'=$(if ($model -in @('68000','68010')) {130561} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {131089});
             'system-basic'=1728;
+            'system-chk-invalid-operands'=8192;
+            'system-debug-instructions'=$(if ($model -eq '68060') {512} else {256});
             'system-bounds'=$(if ($model -in @('68000','68010')) {11828} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {12488});
             'system-callm'=$(if ($model -in @('68000','68010')) {10832} elseif ($model -in @('68020','68EC020','A1200')) {11000} elseif ($model -in @('68030','68040','68060')) {10964});
             'system-interrupt'=$(if ($model -in @('68000')) {224} elseif ($model -in @('68010','68060')) {226} elseif ($model -in @('68020','68030','68040','68EC020','A1200')) {418});
@@ -199,7 +205,7 @@ try {
     foreach ($row in $inventory.combinations) {
         if ($row.Milestone -le 5) { $row.status = 'passing'; $row.note = 'Passing named semantic scenario batches; consult qualification boundaries for untested physical/internal protocols.' }
     }
-    $inventory | Add-Member -NotePropertyName qualificationBoundaries -NotePropertyValue @('RTE fault restart/internal formats remain untested: 010 long/non-MOVE/foreign frame8 restart, 020/030 frames9/A/B, 040 frame7', 'BKPT external replacement responder is unavailable', 'MOVES physical function-code spaces and LPSTOP CPU-space broadcast are unqualified', 'CALLM/RTM type1 protocol uses an internal synthetic responder; normal public buses have none')
+    $inventory | Add-Member -NotePropertyName qualificationBoundaries -NotePropertyValue @('RTE fault restart/internal formats remain untested: 010 long/non-MOVE/foreign frame8 restart, 020/030 frames9/A/B, 040 frame7', 'BKPT external replacement responder is unavailable', 'MOVES physical function-code spaces and LPSTOP CPU-space broadcast are unqualified', 'CALLM/RTM type1 protocol uses an internal synthetic responder; normal public buses have none', '060 HALT debug-port restart, PULSE PST pins and debug pipeline commands are unavailable')
     $inventory | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $output 'qualified-inventory.json')
     @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=$logicalBatches; moveGate='passing'; transferGate='passing'; arithmeticGate='passing'; logicalGate='passing'; controlGate='passing'; m68040DisabledMmuInstructionGate='passing'; m68000AddressErrorDoubleFaultGate='passing'; m68010Format8StructureGate='passing'; m68010WordMoveRestartGate='passing'; roadmapComplete=$false;
         seeded=$(if ($Deep) {@{seed=$Seed; samplesPerModel=$Samples; models=$Models}} else {$null});
@@ -207,7 +213,7 @@ try {
         m68040MmuInstructionScope=@{translationEnabled=$false; dfc=@(1,2,5,6); globalRegisterField='canonical zero'; undefined='Disabled PTEST MMUSR; DFC 0/3/4/7'; enabledMmu='Unqualified flat-table approximation; PFLUSH conservatively flushes all ATC entries'};
         m68010Format8Scope='58-byte address-error frame, reserved holes, version validation and tail probe, alignment double-fault halt/reset; marked private word-MOVE/MOVEA images resume their faulted cycle; other opaque restart/input state, long transfers, RMW and physical timing remain unqualified';
         m68000DoubleFaultScope='Address-error entry/handler faults; reset-only recovery; external BERR/reset-vector faults unavailable through the current public bus API';
-        unavailableSystemCoverage=@('010 long/non-MOVE/external bus-fault restart and 020/030 internal restart', '020/030 coprocessor midinstruction restoration', '040 access-fault pending trace/writeback restoration', 'External BKPT replacement responder', 'Physical MOVES function-code spaces and LPSTOP CPU-space broadcast');
+        unavailableSystemCoverage=@('010 long/non-MOVE/external bus-fault restart and 020/030 internal restart', '020/030 coprocessor midinstruction restoration', '040 access-fault pending trace/writeback restoration', 'External BKPT replacement responder', 'Physical MOVES function-code spaces and LPSTOP CPU-space broadcast', '060 HALT debug-port restart, PULSE PST pins and debug pipeline commands');
         timing='Semantic gate; timing policy and physical qualification remain separate'} |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'summary.json')
     Write-Host "Synthetic milestones 1-5 semantic gates: $logicalCases logical cases; reports at $output"

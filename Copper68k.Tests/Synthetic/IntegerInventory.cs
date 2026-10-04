@@ -89,6 +89,8 @@ internal static class IntegerInventory
         yield return new("MOVE16", 5, "16 bytes", "aligned line; model-defined register/absolute forms", "040+");
         foreach (var name in new[] { "CINV", "CPUSH" }) yield return new(name, 5, "line,page,all", "instruction/data/both caches, privileged", "040+");
         yield return new("LPSTOP", 5, "W", "immediate SR, privileged", "060");
+        yield return new("HALT", 5, "none", "privileged debug halt; interrupts cannot restart", "060");
+        yield return new("PULSE", 5, "none", "user/supervisor; integer state preserved; physical PST/debug commands unqualified", "060");
     }
 }
 
@@ -102,6 +104,8 @@ public sealed class SyntheticInventoryTests(ITestOutputHelper output)
         Assert.Contains(IntegerInventory.All, s => s.Family == "MOVEA");
         Assert.Contains(IntegerInventory.All, s => s.Family == "CALLM");
         Assert.Contains(IntegerInventory.All, s => s.Family == "LPSTOP");
+        Assert.Contains(IntegerInventory.All, s => s.Family == "HALT");
+        Assert.Contains(IntegerInventory.All, s => s.Family == "PULSE");
         var rows = from model in ModelSpec.All from spec in IntegerInventory.All
                    select new { model = model.Id, model.Diagnostic, instruction = spec.Family, spec.Sizes, spec.OperandForms, spec.Milestone,
                        outcome = spec.ArchitecturalOutcome(model), status = "untested", note = "Execution evidence is in named scenario batches; inventory membership is not a passing result." };

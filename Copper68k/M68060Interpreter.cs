@@ -10,6 +10,8 @@ namespace Copper68k
     // it must never silently acquire the MC68040's different architecture.
     internal sealed class M68060Interpreter : M68kAdvancedTimingInterpreter
     {
+        private bool _debugInstructionHalted;
+
         public M68060Interpreter(IM68kBus bus)
             : base(bus, M68020CpuProfile.Ocs68060Accelerator8x, new M68kCpuState(),
                 enableM68020StackMode: false, hasModelSpecificInstructions: true,
@@ -21,6 +23,7 @@ namespace Copper68k
         public override void Reset(uint programCounter, uint stackPointer)
         {
             base.Reset(programCounter, stackPointer);
+            _debugInstructionHalted = false;
             State.EnableM68060StackMode();
             State.M68060ProcessorConfiguration = 0x0430_0000; // First revision, ESS/DFP clear.
             State.M68060BusControl = 0;
@@ -28,6 +31,27 @@ namespace Copper68k
 
         protected override bool TryExecuteModelSpecificInstruction(ushort opcode)
         {
+            if (opcode is 0x4AC8 or 0x4ACC)
+            {
+                // MC68060UM 9.2.2: these reuse TAS mode-1 words on earlier
+                // processors. PULSE changes no integer state; physical PST and
+                // debug-port pipeline commands are outside this bus boundary.
+                BeginInstruction(opcode);
+                var pc = State.ProgramCounter;
+                _ = FetchWord();
+                if (opcode == 0x4AC8)
+                {
+                    if (!State.GetFlag(M68kCpuState.Supervisor))
+                    {
+                        RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation);
+                        return true;
+                    }
+                    _debugInstructionHalted = true;
+                    State.Halted = true;
+                }
+                CompleteTiming(M68kInstructionTimingKey.Nop);
+                return true;
+            }
             if (TryExecuteCacheMaintenance(opcode)) return true;
             if (opcode == 0x4E73) { Execute060Rte(); return true; }
             if ((opcode & 0xFFC0) is 0xF300 or 0xF340) return ExecuteFpuStateTransfer(opcode);
@@ -233,6 +257,7 @@ namespace Copper68k
 
         public override void RequestInterrupt(int level, uint vectorAddress)
         {
+            if (_debugInstructionHalted) return;
             if (level <= 0 || level != 7 && level <= ((State.StatusRegister >> 8) & 7)) return;
             var sr = State.StatusRegister;
             var pc = State.ProgramCounter;
@@ -245,6 +270,12 @@ namespace Copper68k
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + vectorAddress);
             DiscardInstructionPrefetch();
             CompleteTiming(M68kInstructionTimingKey.InterruptAcknowledge);
+        }
+
+        public override void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
+        {
+            if (_debugInstructionHalted) return;
+            base.BeginSubroutine(address, stackPointer, returnAddress);
         }
 
         private M68kEmulationException Unavailable(string feature, ushort opcode)

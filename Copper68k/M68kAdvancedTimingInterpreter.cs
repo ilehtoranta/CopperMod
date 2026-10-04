@@ -826,6 +826,21 @@ namespace Copper68k
                     logicalRegister > ((opcode & 0xFF00) == 0x0C00 ? 3 : 1)))
                 return M68020OpcodeKind.IllegalInstruction;
 
+            if ((opcode & 0xFF00) is 0x4000 or 0x4200 or 0x4400 or 0x4600 &&
+                ((opcode >> 6) & 3) < 3 &&
+                (logicalMode == 1 || logicalMode == 7 && logicalRegister > 1))
+                return M68020OpcodeKind.IllegalInstruction;
+            if ((opcode & 0xFFC0) == 0x4AC0 &&
+                (logicalMode == 1 || logicalMode == 7 && logicalRegister > 1))
+                return M68020OpcodeKind.IllegalInstruction;
+            // NBCD mode-1 words are legal LINK.L on 020+. TST admits PC/#data
+            // and word/long An sources here, but byte An remains illegal.
+            if ((opcode & 0xFFC0) == 0x4800 && logicalMode == 7 && logicalRegister > 1 ||
+                (opcode & 0xFFC0) == 0x4A00 && logicalMode == 1)
+                return M68020OpcodeKind.IllegalInstruction;
+            if ((opcode & 0xF140) == 0x4100 && logicalMode == 1)
+                return M68020OpcodeKind.IllegalInstruction;
+
             if ((opcode & 0xFF00) == 0x0800 || (opcode & 0xF100) == 0x0100)
             {
                 var maximumRegister = ((opcode >> 6) & 3) == 0
@@ -2610,7 +2625,12 @@ namespace Copper68k
 
             if ((opcode & 0xFFC0) is 0x4C00 or 0x4C40)
             {
-                return M68020OpcodeKind.LongMultiplyDivide;
+                // Reject illegal EAs before extension-selected operations,
+                // including the 060's unavailable 64-bit operation trap.
+                var mode = (opcode >> 3) & 7;
+                var register = opcode & 7;
+                return mode == 1 || mode == 7 && register > 4
+                    ? M68020OpcodeKind.IllegalInstruction : M68020OpcodeKind.LongMultiplyDivide;
             }
 
             if (opcode is 0x0CFC or 0x0EFC)
@@ -3146,7 +3166,12 @@ namespace Copper68k
 
             if ((opcode & 0xF8C0) == 0xE8C0)
             {
-                return M68020OpcodeKind.BitField;
+                var mode = (opcode >> 3) & 7;
+                var register = opcode & 7;
+                var operation = (opcode >> 8) & 7;
+                var maximumAbsolute = operation is 2 or 4 or 6 or 7 ? 1 : 3;
+                return mode is 0 or 2 or 5 or 6 || mode == 7 && register <= maximumAbsolute
+                    ? M68020OpcodeKind.BitField : M68020OpcodeKind.IllegalInstruction;
             }
 
             if ((opcode & 0xF1F8) == 0xE048)
@@ -4432,6 +4457,9 @@ namespace Copper68k
                         (traceOpcode & 0xFFE0) == 0xF500 || (traceOpcode & 0xFFD8) == 0xF548;
             }
             ExecuteInstructionBody();
+            // HALT synchronizes and holds the processor before any subsequent
+            // exception processing. STOP remains traceable and is handled below.
+            if (State.Halted) return;
             var exception = State.ExceptionSequence != serial;
             if (exception && State.LastExceptionVector is not (5 or 6 or 7 or >= 32 and <= 47)) return;
             if ((trace & 0x8000) != 0 || flow || exception)
@@ -5510,7 +5538,7 @@ namespace Copper68k
             }
         }
 
-        public void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
+        public virtual void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
             State.SetActiveStackPointer(stackPointer);
             PushLong(returnAddress);

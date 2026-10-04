@@ -745,3 +745,28 @@ before/after cases, exclusions and limitations are recorded in the reference
 document. No release, regression retirement, seeded or physical qualification is
 added. Milestone 6 remains in progress for the existing integer/reference and
 restoration requirements.
+
+The next reference follow-up adds 421,120 cases in 48 reporting batches for
+assigned illegal unary, word/long multiply/divide, CHK and bitfield operands,
+plus 060 HALT/PULSE privilege, trace and recovery behavior. The corrected
+baseline detects 5,120 mismatches and 189,440 unsupported executions, with
+256 HALT recovery edges explicitly untested until their prerequisite works.
+Legal LINK.L and HALT/PULSE aliases are separated from illegal NBCD/TAS forms;
+both debug instructions are added to the complete integer inventory. Advanced
+legality checks run before operand effects and unavailable-operation decisions.
+HALT blocks subsequent tracing and cannot be restarted by interrupts or host
+entry; STOP keeps its trace semantics. All 158 focused checks pass, including
+the new cases, legal bitfields and affected trace/STOP behavior. Physical debug
+signals, debug-port restart and pipeline commands remain unqualified.
+
+Final validation passes 4,740 CPU tests with nine optional skips and zero failures,
+and 9,182,792 deterministic logical cases in 434 reporting batches. Missing each
+new report fails the gate. Fresh SingleStepTests passes 312,500 selected cases,
+Musashi passes 536 programs with 88 exclusions and AHX passes 18 tests. WinUAE
+passes the selected HALT/PULSE cases but still fails with 60 mismatching and 13
+unsupported groups; all 32 comparator controls pass. The private unpublished
+.43 package validates the isolated CopperScreen Release build, host/disk/engine
+diagnostics and all three native boot/persistence replays. The reference document
+records exact cases, source/package/assembly identities, preliminary fixture
+corrections and remaining gaps. No release or regression retirement is included;
+milestone 6 remains in progress.

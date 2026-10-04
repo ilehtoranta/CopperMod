@@ -951,3 +951,83 @@ isolated consumer `artifacts/invalid-system-validation/`,
 `artifacts/invalid-system-production.binlog`. No old test is retired, no package
 is published and no new seeded or physical audit is claimed. Milestone 6 remains
 in progress with the accepted scope unchanged.
+
+## Unary, multiply/divide, CHK, bitfield and debug instructions — 2026-10-05
+
+The next pinned ILLEGAL cases expose NEGX.B An, long multiply/divide An,
+CHK An and illegal bitfield operands. M68000PM 4-31..52, 4-70,
+4-93..98, 4-111, 4-136..142 and 4-193 provide the independent EA rules.
+The new matrices cover all register encodings of these assigned invalid forms,
+both stacks and all 32 initial CCR values. Long multiply/divide uses four valid
+signed/unsigned and 32/64-bit extensions, proving that an invalid EA enters
+vector 4 before the 060 unavailable-operation decision. Bitfields distinguish
+read-only PC-relative sources from mutating destinations. The shared fixture
+checks complete frames, preserved registers/memory and absent operand effects.
+Unassigned mode-7 registers and reserved extension bits remain outside this
+assigned-operand slice; existing legal matrices remain required.
+
+Two aliases require positive qualification. NBCD mode-1 words are LINK.L on
+020+, and 060 TAS mode-1 words `4AC8`/`4ACC` are HALT/PULSE. Preliminary unary
+fixtures incorrectly classified these aliases; the corrected baseline excludes
+them and tests their legal behavior separately. These fixture errors are not
+CPU defects. MC68060UM 9.2.2 / 9-30 defines privileged HALT, no interrupt restart,
+and user-accessible PULSE. Both instructions now appear in the integer inventory.
+HALT holds the next PC with no subsequent trace entry; PULSE preserves integer
+state and follows ordinary T1 tracing. Reset recovers HALT; idle, interrupt and
+host-entry operations cannot wake it. Physical PST signals, debug-port restart,
+pipeline toggling and physical timing remain unavailable qualification.
+
+The six new groups contain **421,120 cases in 48 reporting batches**:
+unary 82,944; word multiply/divide 131,072; long multiply/divide 32,768;
+CHK 65,536; bitfield 106,496; debug instructions/recovery 2,304. The corrected
+baseline against production `424ad4e` records **226,304 passing, 5,120
+mismatching, 189,440 unsupported and 256 untested cases**. The untested recovery
+edges depend on HALT first executing successfully. Word multiply/divide already
+passes; it needs no production correction. Advanced dispatch now rejects the
+other assigned illegal operands before effects. The 060 handler intercepts its
+legal debug aliases before TAS legality checks. Post-instruction tracing cannot
+process a halted CPU; STOP retains its trace behavior. All 158 focused checks
+pass, including all new cases, legal bitfields and affected trace/STOP checks.
+Existing successful ordering and timing policy are preserved, with no partial
+instruction retry and no public package API change.
+
+Final ordinary Release validation passes **4,740 CPU tests**, with nine optional
+skips and zero failures. The report gate validates **9,182,792 logical cases in
+434 reporting batches**; deleting each of the six new 000 reports independently
+fails the selected-model report gate. Fresh SingleStepTests retains 312,500
+passes in 125 files and Musashi retains 536 passes / 88 explicit exclusions.
+AHX passes 18 tests. Existing input pins and exclusion caveats apply unchanged.
+
+The fresh WinUAE audit remains failing: **1,308 passing, 60 mismatching, 13
+unsupported and zero untested groups**, with 11,263,752 callbacks, 1,500,873
+frame assertions and 199,327 masked-SR cases. All 32 comparator controls pass.
+HALT and PULSE each pass their two selected callbacks, which alone do not qualify
+supervisor HALT/recovery or trace; the synthetic matrix supplies those cases.
+000/010 still pass all 34,880 selected ILLEGAL callbacks. Other advanced profiles
+now reach unassigned CHK word `413D`; 040 reaches `F300` FPU/ILLEGAL expectations.
+These, saved-PC reference caveats, adapter stack conventions and internal RTE
+restoration remain separate work. No family is excluded to make the audit pass.
+
+Private **unpublished** NuGet `1.5.2-synthetic-dev.43` has SHA-256
+`5f2e9252a598a9e2d803eacfae89597c566f916f11c9c62bc22d6c7d8645b2ad`.
+`artifacts/m6-invalid-integer-package.json` records production source and assembly
+identities against `424ad4e`. The isolated CopperScreen baseline `d9beae8`
+resolves this exact package for production and separate diagnostics. All four
+loaded consumer CPU DLLs match SHA-256
+`72078b2730ddebd29106a6614cb9cbb082ba476c7d133519a6503a9d23aedca7`.
+Release build has zero warnings/errors; host 149, disk 74 and separate engine
+diagnostics 1,080 pass. All three native Workbench/A1200 boot and disk-persistence
+cases pass without skips. Six optional host/media skips remain unavailable
+coverage. These checks qualify correctness, not throughput or physical timing.
+
+Evidence: `artifacts/m6-invalid-integer-qualified-baseline/`,
+`artifacts/m6-invalid-integer-final-focused/`, `artifacts/m6-invalid-integer-cpu/`,
+`artifacts/m6-invalid-integer-references/`, `artifacts/m6-invalid-integer-winuae/`,
+`artifacts/m6-invalid-integer-guard-*/`, `artifacts/m6-invalid-integer-ahx-results/`
+and `artifacts/synthetic-private-feed-43/`; isolated consumer
+`artifacts/invalid-integer-validation/`,
+`artifacts/invalid-integer-diagnostic-tests/` and
+`artifacts/invalid-integer-production.binlog`. Earlier preliminary unary runs
+retain their fixture mistakes as historical evidence, not corrected counts.
+No package publication, old-test retirement, seeded or physical audit is added.
+Milestone 6 remains in progress with its existing scope intact.
