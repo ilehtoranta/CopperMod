@@ -205,8 +205,9 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
 - Existing SingleStepTests and WinUAE adapters remain available; no new external
   corpus execution is claimed for them in this slice. WinUAE integer integration
   currently selects 68000; multi-model native bridge/fixtures still need qualification.
-- RTE internal restart remains untested: 010 format 8, 020/030 formats 9/A/B,
-  and 040 format 7. The current advanced decoder does not implement all these
+- Generated 010 word-MOVE/MOVEA format-8 images now have the scoped continuation
+  gate below. Long transfers, other instruction families, foreign silicon images,
+  external bus faults, 020/030 formats 9/A/B and 040 format 7 remain unqualified. The current advanced decoder does not implement all these
   legal restoration protocols; this is an implementation gap, not invalid encoding.
 - Nested 000 address errors during exception stacking previously recursed on an
   odd SSP. This is corrected by the address-error double-fault slice above. External
@@ -412,3 +413,111 @@ Evidence: CPU `artifacts/format8-before/`, `artifacts/format8-focused/`,
 `artifacts/format8-validation/`, `artifacts/format8-diagnostic-tests/` and
 `artifacts/format8-production.binlog`. Full 010 suspended-instruction restart,
 external BERR and physical timing qualification remain open.
+
+## 010 word-MOVE/MOVEA continuation
+
+[MC68000UM sections 6.3.9.2, 6.3.10 and 6.4](https://www.nxp.com/docs/en/reference-manual/MC68000UM.pdf)
+describe resuming the suspended bus cycle/instruction after RTE. With RR clear,
+the stacked fault address is used; correcting only the address register therefore
+still causes an address error. With RR set, software has supplied the read buffer
+image or completed the write. Re-decoding the instruction would incorrectly repeat
+completed source reads, increments and other effects. Three bounded tests exposed
+this distinction before the correction: both software-completed MOVE paths returned
+to the original opcode, and register-only correction did not refault during RTE.
+
+Generated word-MOVE/MOVEA address-error frames now serialize a private continuation
+in the internal information words. RTE loads/validates it while preserving the
+previous version/probe read order. It pops the complete frame, selects the restored
+stack, restores completed prefetch words, then continues at the pending word access.
+There is no instruction replay, transaction rollback or per-frame side table.
+A source fault continues with the supplied/rerun value and resolves only the still
+unresolved destination. A destination fault uses the saved output word and completes
+only the pending access/increment. A subsequent destination fault produces a fresh
+continuation without repeating the completed source. Restored T1 takes its trace
+exception after the suspended instruction completes.
+
+The following private image is **an emulator convention, not a silicon encoding**.
+Its version word is zero and marker is `$C010`; other generated families keep their
+previous placeholder internal words and remain unqualified for continuation.
+
+| Frame byte offset | Private word-MOVE contents |
+| --- | --- |
+| 26 | Version word, zero |
+| 28 | Marker `$C010` |
+| 30 | Suspended opcode |
+| 32 | Pending source read (0) or destination write (1) |
+| 34–37 | Next execution/extension PC at suspension |
+| 38–41 | Completed prefetch queue address |
+| 42, 44 | Queue words 0 and 1 |
+| 46 | Queue count (0–2) |
+| 48–57 | Unused private words, zero |
+
+Malformed marked images raise vector 14 below the intact old frame before popping.
+This additional validation is a private-image convention. Unmarked accepted-version
+images retain structural-only compatibility; they do not gain guessed silicon
+restart semantics. The existing saved-PC convention and successful nonfaulting
+instruction paths remain unchanged. RTE retains its existing 20-cycle policy;
+physical resumed-cycle/pipeline timing, asynchronous prefetch and interrupt-entry
+qualification are not established by this semantic gate. No public API changes.
+
+The new deterministic groups execute **127,776 logical cases in five batches**:
+source 62,208; destination 64,512; copied/nested/alias/prefetch/trace 640; user A7
+192; invalid private images 224. Addressing fixtures and mathematical register/
+flag expectations are independent of production helpers. Canonical selectors
+cover every word operand form with boundaries and all CCRs, both privilege modes
+and RR settings, source/destination extension ordering and 24-bit physical wrapping
+of logical high addresses. Additional cases cover MOVEA sign extension/flags,
+partial D-register preservation, A7 bank selection, aliased postincrements,
+serialized frame copies, multiple operand faults, buffered following code, trace,
+and rejection of malformed opcode/phase/PC/queue/version/private words.
+
+Common verification checks registers, PC/SR, memory/surroundings and stack banks.
+The recording bus checks that only the pending cycle reruns, that completed
+source accesses never repeat, and that software-completed cycles stay off the bus.
+Following MOVEQ sentinels expose extension/prefetch consumption errors. The older
+structural group masks the now-private continuation words; their contents and
+behavior have this dedicated gate. Disabling continuation reproduces all three
+bounded failures again, with sources restored and rebuilt afterward. No existing
+regression is retired.
+
+This is a bounded word-MOVE/MOVEA continuation implementation for emulator-generated
+images, not a full 010 restart milestone. Long transfers, non-MOVE families, real
+hardware internal-state encodings, RMW, external BERR, physical function-code
+spaces, MMU/FPU and physical timing remain outside this gate. Milestone 6 stays open.
+
+### Validation checkpoint: word-MOVE continuation
+
+The ordinary full Release CPU suite passes **4,632 tests**, with eight optional/
+opt-in skips and zero failures. All 127,776 new continuation cases pass in the
+full run. The three bounded regressions fail before correction and also fail
+when the continuation hook is disabled. That mutation is restored/rebuilt before
+final validation. Previous reports lacking the new groups are rejected. AHX
+passes 18 tests. No new seeded audit or regression retirement is claimed.
+
+CPU evidence is under `artifacts/move-restart-before/`,
+`artifacts/move-restart-focused/`, `artifacts/move-restart-mutation/`,
+`artifacts/move-restart-final/` and `artifacts/move-restart-ahx/`.
+
+Report validation passes **8,501,832 deterministic cases in 348 batches**. The
+requested pinned Musashi audit executes and passes 538 program/profile combinations
+with 86 explicit exclusions and zero mismatches, from revision
+`72c1d74800f3087b45a0c1a7342601bbed898881`. This software audit does not qualify
+010 restart against hardware; the new continuation cases use the manual and
+independent synthetic fixtures.
+
+Private unpublished package `1.5.2-synthetic-dev.38` has SHA-256
+`9b67e027a617dd66f2ba43bfcba959f3a5b09f7f6b430ad9af8efbc55cf3195c`.
+The isolated CopperScreen baseline `d9beae8` resolves exactly that NuGet version
+in production and separate diagnostic outputs. Release builds with zero warnings/
+errors; host 149, disk 74 and engine diagnostics 1,080 pass. Six ordinary host/
+media skips remain unavailable coverage. The separate native Workbench 3.1 at
+0/2 MiB Fast RAM and A1200 eight-plane hard-disk boot/reopen persistence execute
+all three cases without skips. These are correctness replays, not throughput
+or physical timing qualification. Root working changes and dependency boundaries
+are preserved; no package is published.
+
+Consumer evidence: `artifacts/move-restart-validation/`,
+`artifacts/move-restart-diagnostic-tests/` and
+`artifacts/move-restart-production.binlog`; CPU package evidence:
+`artifacts/synthetic-private-feed-38/`. Long/non-MOVE/foreign frame restart and
+the other remaining qualification gaps above stay open.

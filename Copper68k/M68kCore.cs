@@ -9172,6 +9172,57 @@ namespace Copper68k
             return true;
         }
 
+        protected virtual bool TryResumeRteFrame(ushort format, uint framePointer, ushort statusRegister, uint programCounter) => false;
+
+        protected ushort[]? CaptureM68010WordMoveResumeFrame(bool isWrite, M68kBusAccessKind accessKind, bool dataOperand)
+        {
+            if (!M68010WordMoveResumeFrame.IsOpcodeSupported(State.LastOpcode, isWrite) ||
+                (accessKind == M68kBusAccessKind.CpuInstructionFetch && !dataOperand)) return null;
+            var words = new ushort[16];
+            words[1] = M68010WordMoveResumeFrame.Marker;
+            words[2] = State.LastOpcode; words[3] = (ushort)(isWrite ? 1 : 0);
+            M68010WordMoveResumeFrame.Long(words, 4, State.ProgramCounter);
+            M68010WordMoveResumeFrame.Long(words, 6, _prefetchAddress);
+            words[8] = _prefetchWord0; words[9] = _prefetchWord1; words[10] = (ushort)_prefetchCount;
+            return words;
+        }
+
+        // Continue at the suspended word bus transfer, never at the instruction
+        // decoder. Source EA side effects and completed source reads stay committed.
+        protected void ResumeM68010WordMove(ushort[] words, uint instructionPc, uint faultAddress,
+            ushort specialStatus, ushort dataOutput, ushort dataInput, ushort instructionInput)
+        {
+            var opcode = words[2]; var writing = words[3] != 0;
+            State.LastOpcode = opcode; State.LastInstructionProgramCounter = instructionPc;
+            _activeInstructionProgramCounter = instructionPc;
+            State.ProgramCounter = M68010WordMoveResumeFrame.Long(words, 4);
+            FlushPrefetch();
+            _prefetchAddress = M68010WordMoveResumeFrame.Long(words, 6);
+            _prefetchWord0 = words[8]; _prefetchWord1 = words[9]; _prefetchCount = words[10];
+            _prefetchCompletedCycle0 = _prefetchCompletedCycle1 = State.Cycles;
+            _instructionTracePending = State.GetFlag(M68kCpuState.Trace);
+            var softwareCompleted = (specialStatus & 0x8000) != 0;
+            var destinationMode = (opcode >> 6) & 7; var destinationRegister = (opcode >> 9) & 7;
+            _dataAccessStackedProgramCounter = instructionPc;
+            if (writing)
+            {
+                if (!softwareCompleted) WriteWord(faultAddress, dataOutput);
+                if (destinationMode == 3) SetAddressRegister(destinationRegister, State.A[destinationRegister] + 2);
+                PrefetchFallthroughAfterMemoryWriteback();
+                return;
+            }
+
+            _dataReadFaultAccessKind = (specialStatus & 0x2000) != 0 ? M68kBusAccessKind.CpuInstructionFetch : M68kBusAccessKind.CpuDataRead;
+            var value = softwareCompleted ? (specialStatus & 0x1000) != 0 ? dataInput : instructionInput : ReadWord(faultAddress);
+            var memoryDestination = destinationMode >= 2;
+            if (!memoryDestination || destinationMode == 4) PrefetchFallthroughAfterMoveSourceRead();
+            var destination = ResolvePlannedEaWithoutPrefetchTopUp(destinationMode, destinationRegister, M68kOperandSize.Word, write: true);
+            if (destinationMode != 1) SetLogicFlags(value, M68kOperandSize.Word);
+            if (memoryDestination && MoveDestinationHasExtensionWord(destinationMode, destinationRegister)) PrefetchNextOpcodeBeforeMoveMemoryWriteback();
+            WritePlannedEaValue(in destination, value);
+            if (memoryDestination && destinationMode != 4) PrefetchFallthroughAfterMemoryWriteback();
+        }
+
         protected virtual bool ValidateRteFrame(ushort format, uint framePointer) => true;
 
         protected virtual bool TryHandleModelSpecificAddressError(
@@ -10352,6 +10403,7 @@ namespace Copper68k
                         var format = ReadWord(framePointer + 6);
                         if (!IsSupportedRteFrameFormat(format) || !ValidateRteFrame(format, framePointer))
                         { RaiseException(14, instructionPc, 34); return true; }
+                        if (TryResumeRteFrame(format, framePointer, statusRegister, programCounter)) return true;
                         frameSize = (format & 0xF000) == 0x8000 ? 58u :
                             (format & 0xF000) == 0x2000 ? 12u : 8u;
                     }

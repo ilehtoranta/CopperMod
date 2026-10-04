@@ -16,7 +16,7 @@ From the CopperMod root, run:
 
 Milestones 1–5 execute MOVE/MOVEA, transfer/address, arithmetic/comparison,
 logical/bit/shift/atomic and control/system operations in
-**8,374,056 logical cases** across **343 xUnit batches**, across seven models and the A1200 profile.
+**8,501,832 logical cases** across **348 xUnit batches**, across seven models and the A1200 profile.
 Ordinary `dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release` includes
 these batches. CI additionally validates every required report and exact count;
 missing reports, mismatches, unsupported execution and empty groups fail the gate.
@@ -41,9 +41,17 @@ The 010-only `system-format8-entry` (1,024 cases), `system-format8-rte`
 prerequisites: the 58-byte address-error frame, 26 word writes with reserved
 holes untouched, scoped read/write/fetch metadata, version rejection before
 popping, tail probing before remaining reads, stack selection and halt/reset
-recovery. Emulator version zero and zeroed input/internal buffers are private
-conventions. Suspended-instruction continuation, RR behavior, RMW/prefetch buffer
-semantics, external BERR and physical frame-cycle timing remain unqualified.
+recovery. Emulator version zero and internal images are private conventions.
+
+Five 010 `system-move-word-restart-*` groups add 127,776 cases for generated
+word-MOVE/MOVEA images: source faults 62,208; destination faults 64,512; copied/
+nested/alias/prefetch/trace edges 640; user A7 192; malformed private images 224.
+RR=0 retries only the stacked word cycle; RR=1 uses the input image or accepts
+a software-completed write. Earlier operand reads and register effects are never
+replayed. The private image contains continuation phase and completed prefetch
+words, so copied frames need no side table. Long transfers, non-MOVE families,
+foreign hardware internal images, RMW, external BERR and physical restart timing
+remain unqualified; this is not full format-8 restart qualification.
 
 Reports contain per-scenario identifiers and counts for passing, mismatching,
 unsupported and untested outcomes. `integer-inventory.json` lists all integer

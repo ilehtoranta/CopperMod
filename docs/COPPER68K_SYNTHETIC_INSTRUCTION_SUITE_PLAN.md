@@ -571,3 +571,27 @@ combinations (86 explicit exclusions) and 18 AHX tests. Unpublished private pack
 `1.5.2-synthetic-dev.37` passes isolated CopperScreen Release, host 149, disk 74 and
 separate diagnostics 1,080; all three native boot/persistence replays execute
 without skips. The reference document records its hash and evidence.
+
+The subsequent 010 word-MOVE/MOVEA continuation slice adds 127,776 cases in five
+batches, for a deterministic gate of 8,501,832 cases in 348 batches. Generated
+private format-8 images now retain the pending source/write phase, next PC and
+completed prefetch words. RTE resumes the stacked word cycle for RR=0, or uses
+software-supplied buffers/completed writes for RR=1. It never re-decodes the
+instruction or repeats earlier operand effects. Source/destination faults, copied
+and nested frames, aliases, A7, trace and malformed private images are checked.
+Disabling the continuation reproduces the three original bounded failures.
+
+The image is a private emulator encoding, not a hardware-internal layout.
+Long/non-MOVE transfers, foreign silicon frames, RMW, external BERR and physical
+restart timing remain unqualified. All normal successful paths retain their
+existing ordering/timing policy; no public API changes or test retirement.
+Milestone 6 remains in progress. The reference document records the private
+layout, exact coverage, architectural source and qualification boundaries.
+
+Validation passes 4,632 ordinary CPU tests (eight optional/opt-in skips), all
+8,501,832 deterministic cases, the requested 538 pinned program/profile audits
+(86 explicit exclusions) and 18 AHX tests. Private unpublished
+`1.5.2-synthetic-dev.38` passes isolated CopperScreen Release, host 149, disk 74,
+separate diagnostics 1,080 and all three native boot/persistence cases without
+native skips. The reference document records package identity, mutations, exact
+scope and remaining gaps; milestone 6 is not marked complete.

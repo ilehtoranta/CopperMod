@@ -98,6 +98,11 @@ try {
             $expected['system-format8-entry'] = 1024
             $expected['system-format8-rte'] = 4096
             $expected['system-format8-double-fault'] = 256
+            $expected['system-move-word-restart-source'] = 62208
+            $expected['system-move-word-restart-destination'] = 64512
+            $expected['system-move-word-restart-edges'] = 640
+            $expected['system-move-word-restart-a7'] = 192
+            $expected['system-move-word-restart-invalid'] = 224
         }
         if ($model -eq '68040') { $expected['system-mmu-disabled'] = 34850 }
         foreach ($group in $expected.Keys) {
@@ -164,15 +169,15 @@ try {
     foreach ($row in $inventory.combinations) {
         if ($row.Milestone -le 5) { $row.status = 'passing'; $row.note = 'Passing named semantic scenario batches; consult qualification boundaries for untested physical/internal protocols.' }
     }
-    $inventory | Add-Member -NotePropertyName qualificationBoundaries -NotePropertyValue @('RTE fault restart/internal formats remain untested: 010 frame8 restart, 020/030 frames9/A/B, 040 frame7', 'BKPT external replacement responder is unavailable', 'MOVES physical function-code spaces and LPSTOP CPU-space broadcast are unqualified', 'CALLM/RTM type1 protocol uses an internal synthetic responder; normal public buses have none')
+    $inventory | Add-Member -NotePropertyName qualificationBoundaries -NotePropertyValue @('RTE fault restart/internal formats remain untested: 010 long/non-MOVE/foreign frame8 restart, 020/030 frames9/A/B, 040 frame7', 'BKPT external replacement responder is unavailable', 'MOVES physical function-code spaces and LPSTOP CPU-space broadcast are unqualified', 'CALLM/RTM type1 protocol uses an internal synthetic responder; normal public buses have none')
     $inventory | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $output 'qualified-inventory.json')
-    @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=343; moveGate='passing'; transferGate='passing'; arithmeticGate='passing'; logicalGate='passing'; controlGate='passing'; m68040DisabledMmuInstructionGate='passing'; m68000AddressErrorDoubleFaultGate='passing'; m68010Format8StructureGate='passing'; roadmapComplete=$false;
+    @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=348; moveGate='passing'; transferGate='passing'; arithmeticGate='passing'; logicalGate='passing'; controlGate='passing'; m68040DisabledMmuInstructionGate='passing'; m68000AddressErrorDoubleFaultGate='passing'; m68010Format8StructureGate='passing'; m68010WordMoveRestartGate='passing'; roadmapComplete=$false;
         seeded=$(if ($Deep) {@{seed=$Seed; samplesPerModel=$Samples; models=$Models}} else {$null});
         externalReferences=$references; unavailableReferenceCoverage=$(if ($references.Count -eq 0) {'External audits not requested/executed'} else {'Software-reference coverage is scoped by the per-program exclusions; hardware and exhaustive external instruction-combination qualification remain unavailable'});
         m68040MmuInstructionScope=@{translationEnabled=$false; dfc=@(1,2,5,6); globalRegisterField='canonical zero'; undefined='Disabled PTEST MMUSR; DFC 0/3/4/7'; enabledMmu='Unqualified flat-table approximation; PFLUSH conservatively flushes all ATC entries'};
-        m68010Format8Scope='58-byte address-error frame, reserved holes, version validation and tail probe, alignment double-fault halt/reset; opaque restart/input state, RMW and physical timing remain unqualified';
+        m68010Format8Scope='58-byte address-error frame, reserved holes, version validation and tail probe, alignment double-fault halt/reset; marked private word-MOVE/MOVEA images resume their faulted cycle; other opaque restart/input state, long transfers, RMW and physical timing remain unqualified';
         m68000DoubleFaultScope='Address-error entry/handler faults; reset-only recovery; external BERR/reset-vector faults unavailable through the current public bus API';
-        unavailableSystemCoverage=@('RTE bus-fault internal restart on 010/020/030', '020/030 coprocessor midinstruction restoration', '040 access-fault pending trace/writeback restoration', 'External BKPT replacement responder', 'Physical MOVES function-code spaces and LPSTOP CPU-space broadcast');
+        unavailableSystemCoverage=@('010 long/non-MOVE/external bus-fault restart and 020/030 internal restart', '020/030 coprocessor midinstruction restoration', '040 access-fault pending trace/writeback restoration', 'External BKPT replacement responder', 'Physical MOVES function-code spaces and LPSTOP CPU-space broadcast');
         timing='Semantic gate; timing policy and physical qualification remain separate'} |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'summary.json')
     Write-Host "Synthetic milestones 1-5 semantic gates: $logicalCases logical cases; reports at $output"

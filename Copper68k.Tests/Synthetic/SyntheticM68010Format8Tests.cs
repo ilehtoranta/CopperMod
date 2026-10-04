@@ -88,7 +88,16 @@ public sealed class SyntheticM68010Format8Tests(ITestOutputHelper output)
                 // Input/internal words are implementation placeholders, not qualified restart state.
                 e.Write(fp + 16, write ? kind == "write-long" ? 0x8001u : 0x1234u : 0, 2, m.Model);
                 e.Write(fp + 20, 0, 2, m.Model); e.Write(fp + 24, 0, 2, m.Model);
-                for (uint offset = 26; offset < 58; offset += 2) e.Write(fp + offset, 0, 2, m.Model);
+                for (uint offset = 26; offset < 58; offset += 2)
+                {
+                    if (kind is "read-word" or "write-word" or "movea-word" or "pre-read")
+                    {
+                        // Private continuation contents have their own restart gate.
+                        e.MemoryMasks[m.Model.Physical(fp + offset)] = 0;
+                        e.MemoryMasks[m.Model.Physical(fp + offset + 1)] = 0;
+                    }
+                    else e.Write(fp + offset, 0, 2, m.Model);
+                }
                 m.Core.ExecuteInstruction();
                 var mismatch = e.Verify(m);
                 if (mismatch != null) return mismatch;
@@ -194,6 +203,7 @@ public sealed class SyntheticM68010Format8Tests(ITestOutputHelper output)
                     e.Write(fp + 6, 0x800c, 2, m.Model);
                     e.Write(fp + 8, supervisor ? 0x1105u : 0x1101u, 2, m.Model);
                     e.Write(fp + 10, 0x4001, 4, m.Model);
+                    for (uint offset = 26; offset < 58; offset++) e.MemoryMasks[m.Model.Physical(fp + offset)] = 0;
                 }
                 m.Core.ExecuteInstruction();
                 var mismatch = e.Verify(m);

@@ -214,20 +214,52 @@ namespace Copper68k
         protected override bool IsSupportedRteFrameFormat(ushort format)
             => (format & 0xF000) is 0x0000 or 0x8000;
 
-        // MC68000UM 6.4: validate the version before changing SP, then probe
-        // the final word before loading the remaining information words.
-        // Version zero is this emulator's private convention. Opaque restart
-        // state and suspended-instruction continuation are not implemented.
+        private ushort[]? _rteInternalWords;
+        private ushort _rteSpecialStatus, _rteDataOutput, _rteDataInput, _rteInstructionInput;
+        private uint _rteFaultAddress;
+
+        // MC68000UM 6.4: validate before changing SP, then probe the final
+        // word before loading the rest. Unmarked images retain structural-only
+        // compatibility; marked images carry the private word-MOVE continuation.
         protected override bool ValidateRteFrame(ushort format, uint framePointer)
         {
+            _rteInternalWords = null;
             if ((format & 0xF000) != 0x8000) return true;
-            if ((ReadWord(framePointer + 26) & 0x3C00) != 0) return false;
-            _ = ReadWord(framePointer + 56);
+            var version = ReadWord(framePointer + 26);
+            if ((version & 0x3C00) != 0) return false;
+            var words = new ushort[16]; words[0] = version;
+            words[15] = ReadWord(framePointer + 56);
+            ushort addressHigh = 0;
             for (uint offset = 8; offset < 56; offset += 2)
             {
                 if (offset is 14 or 18 or 22 or 26) continue;
-                _ = ReadWord(framePointer + offset);
+                var value = ReadWord(framePointer + offset);
+                if (offset >= 28) words[(offset - 26) / 2] = value;
+                else switch (offset)
+                {
+                    case 8: _rteSpecialStatus = value; break;
+                    case 10: addressHigh = value; break;
+                    case 12: _rteFaultAddress = ((uint)addressHigh << 16) | value; break;
+                    case 16: _rteDataOutput = value; break;
+                    case 20: _rteDataInput = value; break;
+                    case 24: _rteInstructionInput = value; break;
+                }
             }
+            if (words[1] == M68010WordMoveResumeFrame.Marker && !M68010WordMoveResumeFrame.IsValid(words)) return false;
+            _rteInternalWords = words;
+            return true;
+        }
+
+        protected override bool TryResumeRteFrame(ushort format, uint framePointer, ushort statusRegister, uint programCounter)
+        {
+            if ((format & 0xF000) != 0x8000 || _rteInternalWords is not { } words || words[1] != M68010WordMoveResumeFrame.Marker) return false;
+            var specialStatus = _rteSpecialStatus; var faultAddress = _rteFaultAddress;
+            var output = _rteDataOutput; var input = _rteDataInput; var instructionInput = _rteInstructionInput;
+            _rteInternalWords = null;
+            State.SetActiveStackPointer(framePointer + 58);
+            State.StatusRegister = statusRegister;
+            AddInstructionCycles(20); // Retained RTE policy; physical restart timing is unqualified.
+            ResumeM68010WordMove(words, programCounter, faultAddress, specialStatus, output, input, instructionInput);
             return true;
         }
 
@@ -249,15 +281,15 @@ namespace Copper68k
             bool useDataAccessStackedProgramCounter,
             ushort dataOutput)
         {
-            _ = useDataAccessStackedProgramCounter;
+            var internalWords = CaptureM68010WordMoveResumeFrame(isWrite, accessKind, useDataAccessStackedProgramCounter);
             var stackedProgramCounter = State.LastInstructionProgramCounter;
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(3, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
             // Figure 6-8: 58 bytes, 26 information words, three unwritten
-            // reserved words. Zeroed internal/input buffers are placeholders;
-            // this structural frame does not encode resumable internal state.
-            for (var i = 0; i < 16; i++) PushWord(0);
+            // reserved words. Only marked word-MOVE images encode continuation;
+            // other internal/input state remains structurally unqualified.
+            for (var i = 15; i >= 0; i--) PushWord(internalWords?[i] ?? 0);
             PushWord(0); // instruction input buffer (unqualified)
             State.SetActiveStackPointer(State.A[7] - 2); // reserved
             PushWord(0); // data input buffer (unqualified)
