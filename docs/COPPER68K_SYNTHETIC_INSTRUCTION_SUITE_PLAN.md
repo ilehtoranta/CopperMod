@@ -641,3 +641,28 @@ nine optional/opt-in skips and zero failures. Fresh fixture generation reproduce
 the failing audit counts above and all eight corruption probes. Source revision
 rejection, script syntax and whitespace checks pass. Earlier production/consumer
 validation remains separate; no new package or consumer replay is claimed.
+
+The next reference-comparator checkpoint corrects an audit blind spot: Copperline
+skipped modern exception-frame records. A test-only parser now validates saved
+SR/PC, format/vector words and format-2/3/4 addresses, including normal 68000 and
+trace frames. Unsupported extra/restart records fail explicitly. Independent
+M68000PM masks limit SR comparisons to defined bits without changing CPU results.
+Twenty-four register/SR/frame mutations are rejected and eight undefined-flag
+acceptance controls pass across the eight profiles. Old frame-skipping bridges
+are rejected before callbacks. Report schema 2 records assembly/native/input
+identities and actual frame/masked-case counts.
+
+The stronger audit records 1,304 passing / 77 mismatching groups, 11,133,876
+callbacks and 1,371,000 frame checks; failing groups may be partial. It remains
+red without excluding any family. The pinned TRAPcc generator disagrees with newer
+WinUAE source and the documented PC rule, so remaining mismatches require source/
+adapter/CPU triage rather than blindly changing the CPU. Milestone 6 remains open.
+
+Final classification splits the 77 non-passing groups into 62 mismatching and
+15 emulator-unsupported, with zero untested; all still fail the requested gate.
+The ordinary Release CPU suite passes 4,652 tests with nine optional skips and
+zero failures. Twenty focused rule/preflight tests and all 32 native controls pass.
+Old frame-skipping bridges are rejected. Test-only changes preserve the production
+CPU, timing policy, package/API and prior consumer evidence. No release or regression
+retirement is included. The reference document records the scoped evidence and
+remaining generator/adapter/CPU classification work.

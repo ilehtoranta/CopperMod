@@ -293,6 +293,9 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		private readonly NativeLastOutput? _lastOutput;
 		private readonly NativeAddressingMask? _addressingMask;
 		private readonly NativeDestroy? _destroy;
+		private readonly NativeDefinedSr? _definedSr;
+		private readonly NativeCount? _frameChecks;
+		private readonly NativeCount? _maskedCases;
 		private readonly NativeCallback _callback;
 		private Exception? _callbackException;
 		private int _executedCases;
@@ -302,6 +305,10 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		private byte _cpuLevel;
 		private ModelSpec? _integerProfile;
 		private bool _corruptResult;
+		private bool _corruptFrame;
+		private ushort _corruptSr;
+		private bool _corruptIgnoredSr;
+		private string _integerFamily = "";
 
 		private NativeTester(IntPtr library)
 		{
@@ -311,6 +318,9 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			_lastOutput = TryGetDelegate<NativeLastOutput>(library, "M68KTester_last_output");
 			_addressingMask = TryGetDelegate<NativeAddressingMask>(library, "m68k_tester_addressing_mask");
 			_destroy = TryGetDelegate<NativeDestroy>(library, "M68KTester_destroy");
+			_definedSr = TryGetDelegate<NativeDefinedSr>(library, "M68KTester_set_defined_sr");
+			_frameChecks = TryGetDelegate<NativeCount>(library, "M68KTester_frame_checks");
+			_maskedCases = TryGetDelegate<NativeCount>(library, "M68KTester_masked_cases");
 			_callback = RunCopper68k;
 		}
 
@@ -339,7 +349,10 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			bool checkUndefinedSr,
 			bool continueOnError,
 			ModelSpec? integerProfile = null,
-			bool corruptResult = false)
+			bool corruptResult = false,
+			bool corruptFrame = false,
+			ushort corruptSr = 0,
+			bool corruptIgnoredSr = false)
 		{
 			_callbackException = null;
 			_executedCases = 0;
@@ -349,8 +362,14 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			_cpuLevel = cpuLevel;
 			_integerProfile = integerProfile;
 			_corruptResult = corruptResult;
+			_corruptFrame = corruptFrame;
+			_corruptSr = corruptSr;
+			_corruptIgnoredSr = corruptIgnoredSr;
+			_integerFamily = opcode;
 			if (integerProfile is not null && (_destroy is null || _addressingMask is null || _lastOutput is null))
 				throw new XunitException("Multi-model integer audit requires the qualified native bridge exports (destroy, addressing mask and diagnostics).");
+			if (integerProfile is not null && (_definedSr is null || _frameChecks is null || _maskedCases is null))
+				throw new XunitException("Multi-model integer audit requires architectural SR masks and exception-frame validation exports.");
 
 			var corpusPathPtr = Marshal.StringToHGlobalAnsi(corpusPath);
 			var opcodePtr = Marshal.StringToHGlobalAnsi(opcode);
@@ -426,6 +445,10 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			int UnmappedWrites,
 			string Detail);
 
+		public uint FrameChecks => _frameChecks?.Invoke() ?? 0;
+		public uint MaskedCases => _maskedCases?.Invoke() ?? 0;
+		public bool UnsupportedExecution => _callbackException?.InnerException is UnsupportedM68kTimingException;
+
 		public void Dispose()
 		{
 			if (_library != IntPtr.Zero)
@@ -452,7 +475,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 					: _cpuLevel == 4
 					? new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz)
 					: new M68kInterpreter(bus);
-				_lastCaseSummary = FormatCaseSummary(context, registers, bus);
+				_lastCaseSummary = (_integerProfile is null ? "" : $"family={_integerFamily}, ") + FormatCaseSummary(context, registers, bus);
 				bus.CopyStackImage(registers.Regs[15], registers.Ssp, 0x20);
 
 				ApplyRegisters(cpu, registers, _cpuLevel);
@@ -523,7 +546,19 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 				}
 
 				CopyRegisters(cpu.State, bus, _cpuLevel, ref registers);
+				if (_integerProfile is not null)
+				{
+					var mask = WinUaeArchitecturalFlags.DefinedMask(_integerFamily, cpu.State.LastExceptionVector, (ushort)registers.Sr);
+					_definedSr!(mask);
+					if (_corruptIgnoredSr) registers.Sr ^= (uint)(~mask & 31);
+				}
 				if (_corruptResult) registers.Regs[0] ^= 1;
+				registers.Sr ^= _corruptSr;
+				if (_corruptFrame && cpu.State.LastExceptionVector >= 0)
+				{
+					var address = registers.ExcFrame + (_cpuLevel == 0 ? 4u : 6u);
+					bus.WriteHostWord(address, (ushort)(bus.ReadHostWord(address) ^ 1));
+				}
 				Marshal.StructureToPtr(registers, registersPtr, fDeleteOld: false);
 				_unmappedReads += bus.UnmappedReads;
 				_unmappedWrites += bus.UnmappedWrites;
@@ -806,6 +841,12 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 
 		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 		private delegate void NativeDestroy(IntPtr context);
+
+		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+		private delegate void NativeDefinedSr(ushort mask);
+
+		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+		private delegate uint NativeCount();
 
 		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 		private delegate void NativeCallback(IntPtr userData, IntPtr context, IntPtr registers);

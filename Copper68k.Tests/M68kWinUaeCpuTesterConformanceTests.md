@@ -157,3 +157,59 @@ timing, cache, enabled MMU and FPU arithmetic remain outside this integer audit.
 Generator candidate counts and executed callback counts are separate quantities.
 The audit remains failing until reference/adapter/CPU disagreements are resolved;
 its presence does not mark milestone 6 complete.
+
+## Architectural SR masks and exception-frame assertions
+
+The integer model audit requires the updated bridge exports. Older bridges which
+skip exception-frame records are rejected before callbacks execute. Report schema
+2 adds executed frame assertions, cases using architectural SR masks, probe kinds
+and adapter/CPU assembly SHA-256 identities. The input manifest also records the
+native integer-validator header hash.
+
+`WinUaeArchitecturalFlags` defines comparison masks independently of the production
+CPU. Its source is [M68000PM](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+sections 4-2, 4-69/71, 4-92/96, 4-141 and 4-170. CHK retains its defined trap N
+bit and X; CHK2/CMP2 and decimal operations retain their defined flags. Division
+masks depend on zero/overflow outcome, while defined C/V/X remain checked as
+applicable. Exception identity and those outcome bits are independently asserted.
+Normal execution results are never normalized to the reference. The bridge applies
+these masks to both explicit SR updates and preservation checks. Fourteen ordinary
+rule regressions retain every upper SR bit and X.
+
+The old Copperline `validate_exception` returned immediately after consuming each
+length-prefixed record. It therefore verified exception numbers without frame
+contents; the preceding report's generic frame-effects wording was too broad.
+The replacement parser follows the pinned generator's `save_exception` layout.
+It reconstructs expected saved SR/PC from independent fixture result records,
+parses format/vector words and format-2/3/4 additional addresses, and compares
+actual memory at the reported exception stack pointer. Normal 68000 six-byte
+frames are also checked. Repeated-record markers retain the reference fields.
+Standard trace frames produced by SR-changing instructions are included.
+Unimplemented extra-trace/group-2/fault and restart-frame records fail explicitly.
+Nothing silently skips those records to claim coverage.
+
+Every model must reject three distinct mutations: NOP D0, NOP's defined X, and
+TRAP's actual frame memory (saved-PC word on 68000, format/vector word otherwise).
+The frame mutation occurs after copying result registers, isolating memory
+validation from the ordinary register assertions. A fourth control toggles only
+CHK's documented undefined bits in returned SR; all those cases must still pass.
+This proves both that defined assertions remain active and that undefined bits
+are excluded from architectural comparisons. Probe callbacks are separate from
+normal coverage totals. Native diagnostics now terminate appended byte/line data
+so stale previous-case text cannot contaminate the reported failure.
+
+The stronger comparator exposes additional saved-PC disagreements, including
+BKPT, CHK2 and TRAPcc. The pinned TRAPcc generator raises the exception before
+synchronizing PC; local newer WinUAE revision
+`6ae6fb6b84bb9517e0245a80fc9bdca1a8580dde`, `gencpu.cpp`'s `i_TRAPcc` case,
+synchronizes PC before raising it. M68000PM 4-189 also specifies the next
+instruction-word address. This is a reference disagreement requiring generator
+qualification, not permission to change Copper68k to the old expected value.
+Other saved-PC and result disagreements remain unclassified pending equivalent
+manual/source audits. No family is excluded and the requested audit remains red.
+
+Schema 2 separates emulator-unsupported callbacks from value/frame mismatches.
+Both fail the gate. The current classifier records 62 mismatching and 15 unsupported
+groups (77 total), with zero untested; frame/masked-case counts and all 32 controls
+are recorded separately from normal callbacks. Older bridges lacking these
+assertions are rejected. Source/adapter/CPU disagreements remain open.

@@ -45,28 +45,45 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
             // A native 'success' contract must detect a deliberately wrong result.
             var probe = tester.Run(path, "NOP", fixture.CpuLevel, false, false, model, corruptResult: true);
             var detected = !probe.Passed && probe.ExecutedCases > 0 && probe.Detail.Contains("WinUAE cputest reported failure", StringComparison.Ordinal);
-            probes.Add(new(id, detected, probe.ExecutedCases, probe.Detail));
+            probes.Add(new(id, "register", detected, probe.ExecutedCases, probe.Detail));
             if (!detected) throw new XunitException($"Native register-corruption probe was not detected for {id}: {probe.Detail}");
+            var srProbe = tester.Run(path, "NOP", fixture.CpuLevel, false, false, model, corruptSr: 0x10);
+            var srDetected = !srProbe.Passed && srProbe.ExecutedCases > 0 && srProbe.Detail.Contains("SR:", StringComparison.Ordinal);
+            probes.Add(new(id, "defined-sr", srDetected, srProbe.ExecutedCases, srProbe.Detail));
+            if (!srDetected) throw new XunitException($"Native defined-SR corruption probe was not detected for {id}: {srProbe.Detail}");
+            var frameProbe = tester.Run(path, "TRAP", fixture.CpuLevel, false, false, model, corruptFrame: true);
+            var frameDetected = !frameProbe.Passed && tester.FrameChecks > 0 && frameProbe.Detail.Contains("frame byte", StringComparison.Ordinal);
+            probes.Add(new(id, "exception-frame", frameDetected, frameProbe.ExecutedCases, frameProbe.Detail));
+            if (!frameDetected) throw new XunitException($"Native exception-frame corruption probe was not detected for {id}: {frameProbe.Detail}");
+            var undefinedProbe = tester.Run(path, "CHK.W", fixture.CpuLevel, false, false, model, corruptIgnoredSr: true);
+            var undefinedVerified = undefinedProbe.Passed && undefinedProbe.ExecutedCases > 0 && tester.MaskedCases == undefinedProbe.ExecutedCases;
+            probes.Add(new(id, "undefined-sr-ignored", undefinedVerified, undefinedProbe.ExecutedCases, undefinedProbe.Detail));
+            if (!undefinedVerified) throw new XunitException($"Undefined-SR comparison control failed for {id}: {undefinedProbe.Detail}");
             foreach (var opcode in fixture.Opcodes)
             {
                 try
                 {
                     var result = tester.Run(path, opcode, fixture.CpuLevel, false, false, model);
-                    rows.Add(new(id, opcode, result.Passed ? result.ExecutedCases > 0 ? "passing" : "untested" : "mismatching",
-                        result.ExecutedCases, result.UnmappedReads, result.UnmappedWrites, result.Detail));
+                    rows.Add(new(id, opcode, result.Passed ? result.ExecutedCases > 0 ? "passing" : "untested" : tester.UnsupportedExecution ? "unsupported" : "mismatching",
+                        result.ExecutedCases, result.UnmappedReads, result.UnmappedWrites, tester.FrameChecks, tester.MaskedCases, result.Detail));
                 }
-                catch (Exception ex) { rows.Add(new(id, opcode, "mismatching", 0, 0, 0, ex.Message)); }
+                catch (Exception ex) { rows.Add(new(id, opcode, "mismatching", 0, 0, 0, 0, 0, ex.Message)); }
             }
             _output.WriteLine($"{id}: {rows.Count(r => r.Model == id && r.Status == "passing")} directories passed; {rows.Where(r => r.Model == id).Sum(r => (long)r.ExecutedCases)} callbacks executed.");
         }
         File.WriteAllText(Path.Combine(output, "winuae-model-audit.json"), JsonSerializer.Serialize(new
         {
-            schema = 1, reference = "WinUAE generator through Copperline native assertion runner", selectedModels = ids,
+            schema = 2, reference = "WinUAE generator through Copperline native assertion runner", selectedModels = ids,
             manifest.GeneratorCommit, manifest.RunnerCommit, manifest.NativeLibrarySha256,
             manifestSha256 = Hash(Path.Combine(root, "manifest.json")),
-            qualification = "Pinned software assertions; integer state, defined SR and memory/frame effects. Basic preset omits bus/address faults, trace/M rounds, physical timing, cache/MMU/FPU and advanced RTE restart protocols. Callbacks differ from generator candidate counts.",
+            adapterAssemblySha256 = Hash(typeof(M68kWinUaeCpuTesterConformanceTests).Assembly.Location),
+            cpuAssemblySha256 = Hash(typeof(Copper68k.M68kCoreFactory).Assembly.Location),
+            flagAuthority = "M68000PM 4-2, 4-69/71, 4-92/96, 4-141, 4-170; comparison masks only, actual results unchanged",
+            qualification = "Pinned software assertions; integer state, independently defined SR masks, memory and Basic format 0/2/3/4 exception frames (68000 six-byte frames). Other exception records fail instead of being skipped. Basic preset omits bus/address faults, trace/M rounds, physical timing, cache/MMU/FPU and advanced RTE restart protocols. Callbacks differ from generator candidate counts.",
             passing = rows.Count(r => r.Status == "passing"), mismatching = rows.Count(r => r.Status == "mismatching"),
-            untested = rows.Count(r => r.Status == "untested"), executedCases = rows.Sum(r => (long)r.ExecutedCases), probes, rows
+            unsupported = rows.Count(r => r.Status == "unsupported"),
+            untested = rows.Count(r => r.Status == "untested"), executedCases = rows.Sum(r => (long)r.ExecutedCases),
+            exceptionFrames = rows.Sum(r => (long)r.ExceptionFrames), maskedSrCases = rows.Sum(r => (long)r.MaskedSrCases), probes, rows
         }, new JsonSerializerOptions { WriteIndented = true }));
         var failures = rows.Where(r => r.Status != "passing").ToArray();
         Assert.True(failures.Length == 0, string.Join(Environment.NewLine, failures.Select(r => $"{r.Model}/{r.Opcode}: {r.Detail}")));
@@ -131,6 +148,6 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
     internal sealed record WinUaeManifest(int Schema, string GeneratorCommit, string RunnerCommit, string NativeLibrarySha256, WinUaeProfile[] Profiles);
     internal sealed record WinUaeProfile(string Id, string CpuDirectory, byte CpuLevel, int AddressBits, string[] Opcodes, WinUaeInput[] Inputs);
     internal sealed record WinUaeInput(string Path, long Bytes, string Sha256);
-    private sealed record WinUaeModelRow(string Model, string Opcode, string Status, int ExecutedCases, int UnmappedReads, int UnmappedWrites, string Detail);
-    private sealed record WinUaeProbeRow(string Model, bool Detected, int ExecutedCases, string Detail);
+    private sealed record WinUaeModelRow(string Model, string Opcode, string Status, int ExecutedCases, int UnmappedReads, int UnmappedWrites, uint ExceptionFrames, uint MaskedSrCases, string Detail);
+    private sealed record WinUaeProbeRow(string Model, string Kind, bool Detected, int ExecutedCases, string Detail);
 }

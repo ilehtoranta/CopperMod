@@ -57,6 +57,16 @@ try {
     $native = Patch-Once $native 'cpu_lvl = settings->cpu_level == 6 ? 5 : settings->cpu_level;' 'ccr_mask = 0xff; check_undefined_sr = settings->check_undefined_sr; cpu_lvl = settings->cpu_level == 6 ? 5 : settings->cpu_level;'
     $native = Patch-Once $native 'context->opcode = settings->opcode;' 'context->stop_on_error = !settings->continue_on_error; context->opcode = settings->opcode;'
     $native = Patch-Once $native 'int lvl2 = cpu_lvl;' 'fclose(f); int lvl2 = cpu_lvl;'
+    $start = $native.IndexOf('static uae_u8* validate_exception(', [StringComparison]::Ordinal);
+    $end = $native.IndexOf('// regs: registers before execution of test code', $start, [StringComparison]::Ordinal);
+    if ($start -lt 0 -or $end -le $start) { throw 'Exception-validator patch anchor changed' }
+    $native = $native.Substring(0, $start) + "#include `"integer_validation.h`"`n`n" + $native.Substring($end);
+    $native = Patch-Once $native 'vbr_zero = calloc(1, 1024);' 'vbr_zero = calloc(1, 1024); copper_defined_sr = 0xffff; copper_frame_checks = 0; copper_masked_cases = 0; last_exception_len = 0;'
+    if (($native.Split([string[]]@('sr_undefined_mask & test_ccrignoremask'), [StringSplitOptions]::None).Count - 1) -ne 2) { throw 'SR comparison patch anchors changed' }
+    $native = $native.Replace('sr_undefined_mask & test_ccrignoremask', 'sr_undefined_mask & test_ccrignoremask & copper_defined_sr')
+    $native = Patch-Once $native 'if ((last_registers.sr & test_ccrignoremask) != (test_regs.sr & test_ccrignoremask))' 'if ((last_registers.sr & test_ccrignoremask & sr_undefined_mask & copper_defined_sr) != (test_regs.sr & test_ccrignoremask & sr_undefined_mask & copper_defined_sr))'
+    $native = Patch-Once $native 'printf("%s\n", outbuffer);' '*outbp = 0; printf("%s\n", outbuffer);'
+    $native = $native.Replace("*outbp++ = '\n';", "*outbp++ = '\n'; *outbp = 0;")
     $native += @'
 
 const char* M68KTester_last_output(void) { return outbuffer; }
@@ -74,9 +84,10 @@ void M68KTester_destroy(M68KTesterContext* context) {
 '@
     [IO.File]::WriteAllText((Join-Path $output 'winuae-native.c'), $native)
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'winuae/msc_dirent.h') -Destination $output
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'winuae/integer_validation.h') -Destination $output
     Push-Location $output
     try {
-        Run-Compiler @('/nologo','/O2','/w','/std:c11','/LD','/I.',"/I$vendor","/I$vendor/capstone-stub",'winuae-native.c','/Fe:m68k_cpu_tester.dll','/link','/EXPORT:M68KTester_init','/EXPORT:M68KTester_run_tests','/EXPORT:M68KTester_last_output','/EXPORT:m68k_tester_addressing_mask','/EXPORT:M68KTester_destroy') (Join-Path $output 'native-build.log')
+        Run-Compiler @('/nologo','/O2','/w','/std:c11','/LD','/I.',"/I$vendor","/I$vendor/capstone-stub",'winuae-native.c','/Fe:m68k_cpu_tester.dll','/link','/EXPORT:M68KTester_init','/EXPORT:M68KTester_run_tests','/EXPORT:M68KTester_last_output','/EXPORT:m68k_tester_addressing_mask','/EXPORT:M68KTester_destroy','/EXPORT:M68KTester_set_defined_sr','/EXPORT:M68KTester_frame_checks','/EXPORT:M68KTester_masked_cases') (Join-Path $output 'native-build.log')
     } finally { Pop-Location }
 
     $profiles = @()
@@ -118,6 +129,7 @@ void M68KTester_destroy(M68KTesterContext* context) {
         NativeLibrarySha256=(Get-FileHash -LiteralPath (Join-Path $output 'm68k_cpu_tester.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
         Compiler=$compiler; GeneratorExecutableSha256=(Get-FileHash -LiteralPath (Join-Path $generator 'cputester.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
         NativeSourceSha256=(Get-FileHash -LiteralPath (Join-Path $output 'winuae-native.c') -Algorithm SHA256).Hash.ToLowerInvariant()
+        IntegerValidationSha256=(Get-FileHash -LiteralPath (Join-Path $output 'integer_validation.h') -Algorithm SHA256).Hash.ToLowerInvariant()
         Seed='Pinned generator xorshift state initialized to 1 per test set; one Basic round'
     } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $output 'manifest.json') -Encoding utf8
     Write-Host "Prepared input manifest and native bridge: $output"

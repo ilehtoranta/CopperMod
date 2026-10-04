@@ -659,3 +659,59 @@ A wrong source revision is rejected before creating output. PowerShell syntax an
 Git whitespace checks pass. Previous production/consumer evidence remains the
 `1.5.2-synthetic-dev.39` checkpoint; no new consumer replay or package is claimed
 for this test-only follow-up.
+
+## WinUAE defined flags and exception-frame verification
+
+The native wrapper's previous exception validator skipped modern frame records,
+so earlier discovery counts did not independently qualify saved frame contents.
+The new test-only parser checks normal six-byte 68000 frames, format/vector words,
+saved SR/PC and format-2/3/4 extra addresses using independent fixture results.
+Unsupported trace-extra, combined-fault or restart records fail explicitly.
+Architectural SR masks now come from M68000PM rather than the pinned generator's
+zero instruction-level undefined-mask field. CPU results stay unchanged; only
+undefined comparisons are masked. Defined X/SR/register assertions remain active.
+
+Twenty-four mutations are rejected across eight profiles: wrong D0, defined X,
+and actual exception-frame memory. Eight additional controls toggle only undefined
+CHK flags and pass. The actual-frame mutation occurs after copying returned
+registers, so it proves a separate memory assertion. Older frame-skipping bridges
+are rejected before execution. The report records schema 2, assembly/input/native
+identities, executed frame checks and cases using partial SR masks.
+
+The stronger audit records 1,304 passing and 77 mismatching opcode/profile groups,
+11,133,876 callbacks, 1,371,000 exception-frame checks and 199,327 masked-SR cases.
+Totals include partial failing groups; these are scoped software assertions, not
+qualified hardware coverage. All 32 controls pass. No family is excluded to make
+this run green. The initial stricter parser's trace-record rejection was corrected
+to accept ordinary trace frames; unsupported extra records still fail.
+
+Remaining saved-PC disagreements require source qualification: the pinned TRAPcc
+generator raises before advancing PC, while newer WinUAE source at revision
+`6ae6fb6b84bb9517e0245a80fc9bdca1a8580dde` synchronizes PC first. M68000PM 4-189
+specifies the next instruction-word address. The old generated value cannot serve
+as authority for changing the CPU. Other failing families still need independent
+triage. Existing production behavior and timing policy remain untouched.
+
+Evidence: `artifacts/m6-winuae-frame-focused/`,
+`artifacts/m6-winuae-frame-cpu/`, `artifacts/m6-winuae-basic-trace-inputs/`,
+`artifacts/m6-winuae-basic-trace-audit/`,
+`artifacts/m6-winuae-old-bridge-rejected/` and
+`artifacts/m6-winuae-frame-verified/`. No package or old-test retirement is included;
+milestone 6 remains in progress.
+
+The final schema-2 run distinguishes the 77 non-passing groups as **62 mismatching
+and 15 emulator-unsupported**, with zero untested groups. Unsupported callbacks
+are identified by their typed `UnsupportedM68kTimingException`; they remain gate
+failures, including reserved/invalid encodings whose architectural classification
+still needs review. No documented processor exception is treated as implementation
+unsupported merely because its vector is raised.
+
+Ordinary Release validation passes **4,652 tests**, with nine optional/opt-in
+skips and zero failures. The final focused run passes 20 rule/preflight tests
+without skips; its separate external audit intentionally fails on the 77 unresolved
+groups. All 32 mutation/acceptance controls pass. The old bridge is rejected with
+the explicit missing-validation-export diagnostic. The final classifier report is
+`artifacts/m6-winuae-frame-classified/winuae-model-audit.json`. Its counts reproduce
+the stronger audit above. Preparation, PowerShell syntax and Git whitespace checks
+pass. This follow-up changes only test tooling/documentation; existing .39 consumer
+results remain prior evidence, without a new package or replay claim.
