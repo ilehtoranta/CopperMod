@@ -152,4 +152,3 @@ public sealed class SyntheticModelSystemTests(ITestOutputHelper output)
         report.Complete(output);
     }
 }
-

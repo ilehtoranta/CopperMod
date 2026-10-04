@@ -127,4 +127,3 @@ public sealed class SyntheticModuleTests(ITestOutputHelper output)
         report.Complete(output);
     }
 }
-

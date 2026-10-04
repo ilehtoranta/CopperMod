@@ -160,4 +160,3 @@ internal partial class M68kAdvancedTimingInterpreter
         return true;
     }
 }
-
