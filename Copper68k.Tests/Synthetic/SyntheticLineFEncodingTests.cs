@@ -75,6 +75,30 @@ public sealed class SyntheticLineFEncodingTests(ITestOutputHelper output)
         report.Complete(output);
     }
 
+    [Theory, MemberData(nameof(Models)), Trait("Suite", "Synthetic")]
+    public void UnassignedFpuCategoriesTakeLineFWithoutOperandEffects(string modelId)
+    {
+        var machine = new SyntheticMachine(ModelSpec.All.Single(m => m.Id == modelId));
+        var report = new CoverageBatch(modelId, "system-linef-unassigned-fpu-types");
+        // MC68020UM 7.5.2.2: types 110/111 are not coprocessor
+        // instructions. MC68060UM 8.2.4: unrecognized F-line words use
+        // vector 11, format 0 and the faulting PC, rather than the FPU's
+        // unimplemented-operation exception or a host unsupported error.
+        var words = Enumerable.Range(0xf380, 128).Select(x => (ushort)x).ToArray();
+        Assert.Equal(128, words.Distinct().Count());
+        Assert.Equal(0b001, (words[0] >> 9) & 7);
+        Assert.Equal(0b110, (words[0] >> 6) & 7);
+        Assert.Equal(0b111, (words[^1] >> 6) & 7);
+        Assert.DoesNotContain(words, x => x is 0xf327 or 0xf35f or 0xf588 or 0xf5c8);
+        foreach (var opcode in words)
+        foreach (var supervisor in new[] { false, true })
+        for (var ccr = 0; ccr < 32; ccr++)
+            InvalidOperandScenario.Run(machine, report, opcode,
+                $"LineF/FPU/unassigned-type={(opcode >> 6) & 7}/field={opcode & 0x3f:X2}",
+                supervisor, ccr, vector: 11);
+        report.Complete(output);
+    }
+
     [Fact, Trait("Suite", "Synthetic")]
     public void M68040PcRelativeRestoreUsesExtensionBaseAndFullIndexPointerOrder()
     {

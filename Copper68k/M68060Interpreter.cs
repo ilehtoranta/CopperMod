@@ -72,7 +72,9 @@ namespace Copper68k
                 return true;
             }
             if ((opcode & 0xFFF0) == 0xF200) return ExecuteFpuControlTransfer(opcode);
-            if ((opcode & 0xFE00) == 0xF200)
+            // Types 110/111 are unassigned F-line words, not unsupported
+            // floating-point operations (MC68020UM 7.5.2.2; MC68060UM 8.2.4).
+            if ((opcode & 0xFE00) == 0xF200 && (opcode & 0x0180) != 0x0180)
                 throw Unavailable("floating-point execution", opcode);
             if ((opcode & 0xFFE0) == 0xF500 || (opcode & 0xFFF8) is 0xF588 or 0xF5C8)
                 throw Unavailable("MMU instructions", opcode);

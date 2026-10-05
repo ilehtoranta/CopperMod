@@ -1060,3 +1060,26 @@ Release build, host/disk/engine tests and all three native Workbench/A1200
 replays, with exact package-resolution and loaded-DLL identity checks. Timing
 policy is retained; physical timing, host performance and package publication
 are not claimed. `roadmapComplete=false` remains unchanged.
+
+The unassigned FPU category follow-up corrects the 060 unsupported-operation
+guard for CpID 1 types 110/111. Every F380..F3FF word now enters the existing
+architectural vector-11 path without operand effects. One new required batch
+per profile adds 65,536 cases across eight profiles, both stacks and all CCR
+states. Failed-before evidence detects all 8,192 060 cases; the other seven
+profiles already pass. No FPU arithmetic, timing-policy change, instruction
+retry or specialized-test retirement is introduced.
+
+The unchanged broad Basic reference advances 060 to F400, matching the existing
+040 reference/manual disagreement. Its overall 1,326 passing, 47 mismatching
+and eight unsupported groups remain explicitly failing. Reserved long
+multiply/divide extensions and all earlier advanced restoration, reference and
+consolidation requirements remain open. Milestone 6 stays **in progress**.
+
+Final validation passes 4,882 CPU tests with ten optional skips and both
+qualified exception presets enabled. The strict gate verifies 14,646,552
+logical cases in 574 batches, with fresh pinned SingleStepTests/Musashi audits;
+missing and stale-cardinality category reports fail its controls. Qualified
+TRAP trace and AHX pass. Private unpublished .53 passes the isolated CopperScreen
+Release build, host/disk/engine tests and all three native Workbench/A1200
+replays, with exact package and loaded-assembly identity checks. Timing policy
+is retained; `roadmapComplete=false` remains unchanged.

@@ -2166,3 +2166,67 @@ resolve exactly .52. Evidence: `artifacts/linef-validation/`,
 `artifacts/linef-identities.json`. No media/build artifacts are committed,
 unrelated root CopperScreen changes remain untouched, and package publication
 is not authorized or performed.
+
+### Unassigned FPU category follow-up (2026-10-05)
+
+MC68020UM 7.5.2.2 identifies coprocessor instruction types 110/111 as
+unassigned. MC68060UM 8.2.4 assigns unrecognized F-line words vector 11 with
+a format-zero frame and the causing instruction address. The 060 unavailable
+floating-point guard incorrectly intercepted these words. Its narrow correction
+allows the existing architectural line-F path to handle them before operand
+effects. Actual floating-point operations retain their existing handling; no
+FPU arithmetic, enabled-MMU, physical timing or instruction retry is added.
+
+The new required `system-linef-unassigned-fpu-types` batch covers every
+`F380..F3FF` word (CpID 1), both stacks and all 32 CCR states: 8,192 cases per
+profile, 65,536 across all eight profiles. Independent exception verification
+checks saved PC/SR, stack selection, registers and memory. Fixed encoding
+examples distinguish state-transfer words and CpID 2 PLPA aliases, which must
+not be classified by a blanket category guard. Failed-before evidence in
+`artifacts/m6-fpu-types-before/` has seven passing profiles and all 8,192 060
+cases mismatching because of emulator exceptions. The corrected focused run
+passes all 107 selected tests without skips in
+`artifacts/m6-fpu-types-focused/`. No specialized regression is retired.
+
+The unchanged Basic reference now reaches `F400` on both 040 and 060 at callback
+29,331. This retains the previously documented illegal-instruction versus
+line-F reference/manual disagreement and native adapter diagnostic caveat.
+Overall Basic still fails: 1,326 passing, 47 mismatching, eight unsupported and
+zero untested groups, with 11,474,194 callbacks. Input manifest, native bridge,
+comparison masks and family selections remain unchanged. Evidence:
+`artifacts/m6-fpu-types-broad/`. Reserved long multiply/divide extensions and
+all earlier restoration/reference/consolidation requirements remain open.
+Milestone 6 remains in progress; the passing bounded scope does not establish
+roadmap completion.
+
+Final Release CPU validation passes **4,882 tests with ten optional skips** and
+zero failures in `artifacts/m6-fpu-types-full/`. Qualified BKPT and trap/bounds
+retain their exact 224 / 951,522 callbacks and 224 / 476,339 frame assertions.
+The strict gate verifies **14,646,552 logical cases in 574 batches**, with
+`roadmapComplete=false`, fresh pinned SingleStepTests (312,500 cases in 125
+files) and Musashi (536 programs, 88 exclusions). Separate qualified TRAP trace
+passes 512 callbacks and 512 frames; AHX passes 18 tests. Evidence:
+`artifacts/m6-fpu-types-gate.log`, `artifacts/m6-fpu-types-trace/` and
+`artifacts/m6-fpu-types-ahx-results/`. The copied-report positive control passes;
+omitting the new 060 report or reducing its count to 8,191 fails the gate.
+Original reports remain intact. Evidence:
+`artifacts/m6-fpu-types-gate-controls/controls.json`.
+
+Private **unpublished** package `1.5.2-synthetic-dev.53` has SHA-256
+`6157c9f4585cee92c15efc1173dfb33a15413eed8164d843c87439553f81b496`;
+its CPU assembly is
+`4118e59f278507443e8d763f0d75d800b6cc45d9b13082179528d13b08ddb7a0`.
+`artifacts/m6-fpu-types-package.json` records source/package/assembly identities
+against `903f45c`. The default-version CPU used by the reference adapters is
+`e2cc6606d8b2ae05604f6413ec2fb45e3d30535cb5acd8a2c72590bc32e53a10`.
+Packing uses separate outputs; final source and CPU hashes remain unchanged.
+
+Isolated CopperScreen baseline `d9beae8` builds in Release with zero warnings or
+errors against .53. Host 149 pass with six optional skips, disk 74, separate
+engine diagnostics 1,080, and all three native Workbench/A1200 boot and
+disk-persistence replays pass without skips. All four loaded CPU DLLs match the
+package ZIP entry, and all four assets resolve exactly .53. Evidence:
+`artifacts/fpu-types-validation/`, `artifacts/fpu-types-diagnostic-tests/`,
+`artifacts/fpu-types-production.binlog` and `artifacts/fpu-types-identities.json`.
+Unrelated CopperScreen changes remain untouched; no media/artifacts or package
+publication is included in this source checkpoint.

@@ -102,6 +102,7 @@ try {
             'system-basic'=1728;
             'system-linef-state-encodings'=$(if ($model -in @('68000','68010')) {65536} elseif ($model -eq '68030') {49856} elseif ($model -eq '68040') {60224} elseif ($model -eq '68060') {61248} else {47616});
             'system-linef-unassigned-fpu-ea'=1536;
+            'system-linef-unassigned-fpu-types'=8192;
             'system-trap-trace'=$(if ($model -eq '68040') {10368} elseif ($model -eq '68060') {8384} elseif ($model -in @('68000','68010')) {3968} else {5952});
             'system-chk-invalid-operands'=11264;
             'system-unassigned-4140'=32768;
