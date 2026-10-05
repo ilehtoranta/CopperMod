@@ -4060,3 +4060,90 @@ The 480-case inventory, user-tail/internal-restoration faults, handler-entry
 prefetch, repaired-original-RTE retry, general format-7 restart, writeback/context
 transfer and the earlier model/reference/consolidation requirements remain open.
 Milestone 6 remains **in progress**, with `roadmapComplete=false`.
+
+## 040 executed RTE repair and retry — 2026-10-05
+
+The authority is [MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+8.4.2, 8.4.6.7 and 8.2.6: throwaways commit their stack/SR changes,
+validation faults preserve the attempted frame for software repair, and trace
+depends on instruction entry versus restored trace state. These are independent
+synthetic architectural expectations, not hardware captures or software-reference
+agreement. Enabled MMU, physical timing and opaque internal fault phases are
+outside this execution fixture.
+
+`SyntheticM68040RteRepairTests` adds two ordinary CI batches:
+
+| Report | Logical instruction phases | Architectural combinations |
+| --- | ---: | ---: |
+| `rte-repair-boundaries` | 143,424 | 540 |
+| `rte-repair-chained` | 768,960 | 45,792 |
+
+The first covers all 32 CCRs, both entry supervisor banks, all incoming/restored
+trace states and all three restored stack banks using a canonical SR validation
+fault. The second faults each byte of the selected SR/PC/format/SSW/continuation
+EA reads after every one/two-throwaway supervisor path, with CCR 0/31, incoming
+T1, all restored trace states, both VBRs, odd/even stacks and all result banks.
+Both cover formats 0/2/3, invalid 4/15 repaired to 0, normal format 7 and CM,
+CT, CU and original-vector CP49. CP50–55 are separately qualified by existing
+positive continuation fixtures, not by these repair cases.
+
+Repair is executed code: fixed MOVE.W/MOVE.L immediate instruction encodings
+write the original SR/PC/format, then MOVE.W explicitly clears incoming trace in
+the fault frame. Each store checks its flags, exact PC, unchanged registers and
+surrounding memory; four exact bus writes are verified before handler return.
+Handler RTE returns to the original RTE with the current supervisor tail still
+selected. Retry may not reread consumed throwaways. It restores the repaired
+frame, returns/converts pending delivery, resumes MOVEM using saved EA rather
+than the handler's live base, and applies repaired trace to the following
+instruction. Untouched incoming-trace retry is explicitly not claimed.
+
+The initial fixture run failed because `3EFC` encoded postincrement. Correcting
+it to indirect `3EBC` fixed the fixture; this was not a production CPU defect.
+The final complete 040 audit in `artifacts/m6-rte-repair-audit/` executes 30 tests:
+29 pass and the retained inventory test fails, with 2,505,408 passing phases,
+zero mismatches/unsupported execution and 480 untested requirements. Independent
+PowerShell enumeration requires 24 reporting batches, six fixed examples and
+ten distinct fixture/command identities. Nine copied-input controls in
+`artifacts/m6-rte-repair-controls/controls.json` reject missing, shortened,
+foreign and redistributed repair combinations for both new reports and an
+omitted repair fixture identity. Redistribution preserves aggregate counts and
+combination cardinality, proving per-combination counts are enforced.
+
+`-Scope RteRepair` in the maintained mutation command executes both complete
+batches for every mutation. Required diagnostic phases are enforced; a compile
+failure, empty selection or mismatch only at an unrelated prerequisite cannot
+satisfy qualification.
+
+| Mutation | Boundary mismatches | Chained mismatches | Required phase |
+| --- | ---: | ---: | --- |
+| Short-frame return PC +2 | 13,824 | 70,848 | Retry RTE |
+| Saved MOVEM EA +4 | 1,728 | 12,096 | Following MOVEM |
+| Pending exception stacks prior SR | 5,184 | 32,256 | Retry RTE conversion |
+
+All three are detected in `artifacts/m6-rte-repair-mutations/mutation-proof.json`;
+prerequisite-dependent later phases are labeled untested during mutations, with
+no unsupported execution. Production sources are restored byte-for-byte and
+rebuilt with zero warnings/errors. No existing regression is retired.
+
+Qualification begins at `9ab8d56030898e520c42142a59ce1191e5965d83`, CPU tree
+`6bb8bd68a93ba23bf79d1d077d0b34c48e5e6679`. Discovery records CPU SHA-256
+`e93cb1cdd30a88f9c6fceb829d80e5e2442b240a6751b977c390a2d1c9872af3`
+and test/reference adapter SHA-256
+`61f468ab7e75aebdaeea466f5315b0ceba2649e66b35bac6c3c79ad8e1d1686f`.
+These are this rebuilt test snapshot's identities; the earlier full CPU,
+external-reference and private `.60` consumer evidence retains its own binary
+identities. No production CPU change, new consumer package or public release is
+introduced in this checkpoint.
+
+The fresh ordinary synthetic command in `artifacts/m6-rte-repair-ordinary/`
+passes 616 tests with no failures or skips and validates 17,474,070 logical
+cases in 614 reporting batches across all eight profiles. Its CPU and adapter
+binaries match the dedicated audit identities above. External reference audits
+were not requested/executed in this run; their preceding pinned evidence remains
+separately identified. The full goal is not implied by the passing semantic gate.
+
+User-tail validation, internal restoration/double faults, handler-entry prefetch,
+untouched incoming-trace retry, chained odd-PC provenance, general real format-7
+restart, writeback/context transfer and earlier model/reference/consolidation
+requirements remain open. The 480-case inventory and `roadmapComplete=false`
+are preserved. Milestone 6 and the full goal remain **in progress**.

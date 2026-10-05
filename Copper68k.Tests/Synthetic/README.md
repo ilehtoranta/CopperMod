@@ -408,8 +408,8 @@ Run `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope AccessDoubleFault`
 for maintained fatal-latch, reset, compiled-entry, master-stack and six classic
 memory-routing mutations. The complete 040 audit includes these combinations
 and fixture identities while retaining its failing untested protocol inventory.
-Handler-entry prefetch, internal-restoration faults and repaired-original-RTE
-retry remain required work.
+Handler-entry prefetch and internal-restoration faults remain required work;
+executed repair/retry coverage is described below.
 
 `SyntheticM68040BatchFaultTests` adds two ordinary CI batches:
 `rte-validation-batch` (129,024 scenarios) and `access-fault-batch-dispatch`
@@ -422,8 +422,8 @@ architectural format-7 expectations. Generic operand/fetch frames and scalar/
 batch cycle and bus-order equality verify existing execution policy, not general
 architectural restart or physical timing. The dedicated 040 discovery command
 requires these reports, independently enumerates their 4,032 and 5,184
-combinations and binds their fixture and CPU identities. It executes 28 tests
-(22 reporting batches and six fixed examples) while retaining the failing
+combinations and binds their fixture and CPU identities. With repair coverage it
+executes 30 tests (24 reporting batches and six fixed examples), retaining the failing
 480-case untested protocol inventory.
 
 Run `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope BatchFault` to
@@ -433,5 +433,29 @@ or retry after partial operand effects. Every mutation must execute both full
 batches and detect mismatches in its intended path; a build failure, empty
 selection or failure only in another path is insufficient. Sources are restored
 and rebuilt even when qualification fails. General format-7 restart, user-tail
-and internal-restoration faults, handler-entry prefetch and repaired-RTE retry
-remain required work.
+and internal-restoration faults and handler-entry prefetch remain required work.
+
+`SyntheticM68040RteRepairTests` executes the access-error handler's stores,
+handler RTE, original RTE retry and following instruction in two ordinary CI
+batches: `rte-repair-boundaries` (143,424 phases, 540 combinations) and
+`rte-repair-chained` (768,960 phases, 45,792 combinations). The first covers all
+32 CCRs and incoming/restored trace states; the second rejects each byte of
+every selected validation read after one/two consumed supervisor throwaways,
+with odd/even stacks, VBR and boundary CCRs. Both restore user/ISP/MSP results
+and cover formats 0/2/3, invalid 4/15 repaired to 0, and normal/CM/CT/CU/CP49.
+The handler repairs SR, PC and format using fixed MOVE encodings, then explicitly
+clears saved incoming trace. Expectations check each store, exact PC, untouched
+registers/memory, stack banks, no repeated throwaway read, saved MOVEM EA,
+pending conversion/return and trace on the following instruction. This does not
+qualify untouched incoming-trace retry, user-tail validation, enabled MMU,
+internal-restoration faults, arbitrary CP context transfer or physical timing.
+
+The dedicated 040 audit requires these complete reports and independently
+enumerates their combinations. Its 30 tests comprise 24 reporting batches and
+six fixed examples; the 480-case untested inventory still fails the full gate.
+Run `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope RteRepair` to corrupt
+the short-frame return PC, MOVEM continuation EA or pending exception's stacked
+SR. Each mutation must execute both full batches and mismatch in its intended
+retry/following phase, rather than failing at an unrelated prerequisite. The
+[qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-executed-rte-repair-and-retry--2026-10-05)
+records current evidence and remaining scope. No existing regression is retired.

@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -306,6 +306,19 @@ foreach ($mutation in $batchFaultMutations) {
     $mutation.group='SyntheticM68040BatchFaultTests'; $mutation.model='68040'
     $mutation.milestone=6; $mutation.batchFault=$true; $mutations += $mutation
 }
+$repairMutations = @(
+    @{name='040-repair-short-pc'; file=$advanced; before='                State.ProgramCounter = restoredPc;';
+      after='                State.ProgramCounter = restoredPc + 2;'; proofCombination='/repair/format0/'; proofPhase='/retry-RTE'},
+    @{name='040-repair-movem-ea'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs';
+      before='            if (continuation == 0x1000) _m68040MovemContinuation = (pc, address);';
+      after='            if (continuation == 0x1000) _m68040MovemContinuation = (pc, address + 4);'; proofCombination='/repair/CM/'; proofPhase='/following'},
+    @{name='040-repair-pending-sr'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs';
+      before='            PushWord(sr);'; after='            PushWord(priorSr);'; proofCombination='/repair/CT/'; proofPhase='/retry-RTE'}
+)
+foreach ($mutation in $repairMutations) {
+    $mutation.group='SyntheticM68040RteRepairTests'; $mutation.model='68040'
+    $mutation.milestone=6; $mutation.repair=$true; $mutations += $mutation
+}
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
@@ -313,6 +326,7 @@ if ($Scope -eq 'Control') { $mutations = @($mutations | Where-Object { $_.milest
 if ($Scope -eq 'Consolidation') { $mutations = @($mutations | Where-Object { $_.milestone -eq 6 }) }
 if ($Scope -eq 'Rte040') { $mutations = @($mutations | Where-Object { $_.odd }) }
 if ($Scope -eq 'RteValidationFault') { $mutations = @($mutations | Where-Object { $_.validationFault }) }
+if ($Scope -eq 'RteRepair') { $mutations = @($mutations | Where-Object { $_.repair }) }
 if ($Scope -eq 'AccessDoubleFault') { $mutations = @($mutations | Where-Object { $_.doubleFault }) }
 if ($Scope -eq 'BatchFault') { $mutations = @($mutations | Where-Object { $_.batchFault }) }
 if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
@@ -375,6 +389,18 @@ try {
                     throw 'RTE validation-fault mutation did not execute its complete two-batch selection'
                 }
             }
+            if ($mutation.repair) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $batches.Count -ne 2 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq 'rte-repair-boundaries' -and $_.logicalCases -eq 143424 }).Count -ne 1 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq 'rte-repair-chained' -and $_.logicalCases -eq 768960 }).Count -ne 1) {
+                    throw 'RTE repair mutation omitted its complete two-batch selection'
+                }
+                if (@($failures | Where-Object {
+                    $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
+                    $_.id.EndsWith($mutation.proofPhase, [StringComparison]::Ordinal)
+                }).Count -eq 0) { throw "RTE repair mutation did not detect its intended phase: $($mutation.name)" }
+            }
             if ($mutation.batchFault) {
                 [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
                 if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $batches.Count -ne 2 -or
@@ -421,7 +447,7 @@ try {
             }
             $results += @{mutation=$mutation.name; file=$mutation.file; sourceSha256=(Get-FileHash -LiteralPath $path).Hash;
                 detected=$true; replacementCase=$failures[0].id; diagnostic=$failures[0].reason; originalRegressionDetected=$legacyPresent;
-                proofGroup=$mutation.proofGroup; proofCombination=$mutation.proofCombination;
+                proofGroup=$mutation.proofGroup; proofCombination=$mutation.proofCombination; proofPhase=$mutation.proofPhase;
                 reports=@($batches | ForEach-Object { @{group=$_.group; logicalCases=$_.logicalCases; counts=$_.counts} })}
             Write-Host "Detected $($mutation.name): $($failures[0].id)"
         }

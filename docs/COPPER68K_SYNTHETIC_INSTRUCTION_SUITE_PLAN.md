@@ -1520,3 +1520,39 @@ retains 16,561,686 cases in 612 batches; full CPU/external/consumer evidence is
 retained from the preceding production checkpoint, rather than rerun for this
 test/gate-only change. The complete required-gap inventory remains explicit and
 `roadmapComplete=false`.
+
+### Milestone 6 executed RTE repair and retry — 2026-10-05
+
+Two ordinary-CI batches execute a real access-error repair handler, its RTE,
+the original RTE again, optional pending exception return and the following
+instruction. They add 912,384 logical phases across 46,332 combinations. Direct
+boundaries cover all CCRs and incoming/restored trace states; chained fixtures
+fault each byte of selected validation reads after committed supervisor
+throwaways, with both VBRs and odd/even stacks. Repaired results select any of
+the three stack banks. Formats 0/2/3, invalid 4/15 repaired to 0, and normal,
+CM, CT, CU and original-vector CP49 returns are covered.
+
+The handler's three original-frame stores and saved incoming-trace clear have
+fixed instruction encodings and independent state/memory expectations. Retry
+must not read consumed throwaways; MOVEM uses the restored EA, pending delivery
+uses the repaired SR/PC, and following trace uses the repaired trace bits.
+`-Scope RteRepair` detects wrong return PC, saved MOVEM EA and pending stacked
+SR in the intended retry/following phase. Every mutation executes both complete
+batches; sources are restored and rebuilt.
+
+The dedicated 040 gate includes these independently enumerated reports and
+fixture identities. The 480-case inventory stays explicit: user-tail validation,
+internal restoration, handler-entry prefetch, untouched incoming-trace retry,
+general real format-7 restart, writeback/context transfer and all earlier
+model/reference/consolidation requirements remain open. No regression is
+retired, CPU production behavior changed or package published. Milestone 6
+and the goal remain **in progress**, with `roadmapComplete=false`.
+See the [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-executed-rte-repair-and-retry--2026-10-05).
+
+Fresh ordinary validation passes 616 tests without skips/failures and checks
+17,474,070 logical cases in 614 reporting batches across all eight profiles.
+Complete 040 discovery has 2,505,408 passing phases, zero mismatches or
+unsupported execution and the retained 480 untested requirements. All three
+repair mutations and nine report/identity controls detect their intended defects.
+Previous full CPU/external/private-consumer evidence is retained separately;
+no new external or consumer execution is claimed for this test/gate checkpoint.
