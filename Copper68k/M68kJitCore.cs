@@ -2585,6 +2585,7 @@ namespace Copper68k
             uint effectiveAddress,
             int cycles)
         {
+            var pending = State.M68040PendingFpuExceptions.Begin(format, vector, stackedProgramCounter);
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Master);
@@ -2593,6 +2594,7 @@ namespace Copper68k
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + ((uint)vector * 4));
+            State.M68040PendingFpuExceptions.Complete(pending);
             AddCycles(cycles);
         }
 

@@ -23,17 +23,16 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
     public void PendingTraceConvertsTheFrameBeforeReturningAndResuming() => Audit("rte-access-trace", [7], true);
 
     [EnvironmentFact(Enable, "audit complete 040 format-7 restoration prerequisites"), Trait("Suite", "ReferenceDiscovery")]
-    public void RemainingContinuationProtocolsCannotDisappearFromTheGate()
+    public void RemainingFaultProtocolsCannotDisappearFromTheGate()
     {
-        var report = new CoverageBatch("68040", "rte-access-continuations");
-        // These are explicit prerequisite gaps, not asserted format-error behavior.
-        // CU/CP need independently qualified pending-FPU state. The separate
-        // MOVEM matrices cover CM; FPU arithmetic being out of scope does not prove RTE.
+        var report = new CoverageBatch("68040", "rte-access-remaining-protocols");
+        // Preserve the unqualified protocols explicitly after promoting CU/CP.
         foreach (var bank in Banks)
         for (var ccr = 0; ccr < 32; ccr++)
-        foreach (var form in new[] { "CU-pending-unimplemented", "CP-pending-postinstruction" })
+        foreach (var form in new[] { "frame-validation-fault", "odd-user-trace-PC", "throwaway-to-access",
+            "real-access-fault-entry", "writeback-handler", "CP-context-transferred-vector" })
             report.Record($"68040/RTE/format7/{form}/bank={bank}/op=4E73/ccr={ccr:X2}", "untested",
-                "Required continuation protocol has no independently qualified execution fixture yet");
+                "Required fault/context protocol has no independently qualified execution fixture yet");
         report.Complete(output);
     }
 
@@ -84,7 +83,7 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
         report.Complete(output);
     }
 
-    private static (ArchitecturalExpectation Expected, uint Frame, ushort SavedSr) Prepare(
+    internal static (ArchitecturalExpectation Expected, uint Frame, ushort SavedSr) Prepare(
         SyntheticMachine m, int format, string bank, int ccr, ushort trace, uint vbr, uint ea, ushort ssw)
     {
         m.Reset(ccr);
@@ -123,7 +122,7 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
     internal static ushort SavedStatus(string bank, ushort trace, int ccr) =>
         (ushort)((bank switch { "user" => 0, "ISP" => 0x2000, "MSP" => 0x3000, _ => throw new ArgumentException("Unknown stack bank") }) | trace | (ccr ^ 31));
 
-    private static void Restore(ArchitecturalExpectation e, string bank, uint stack, ushort sr)
+    internal static void Restore(ArchitecturalExpectation e, string bank, uint stack, ushort sr)
     {
         e.Sr = sr;
         e.A[7] = bank == "user" ? 0x7800u : stack;
@@ -149,7 +148,7 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
         e.Pc = TraceHandler; e.ExceptionVector = 9;
     }
 
-    private static bool Step(SyntheticMachine m, ArchitecturalExpectation e, CoverageBatch report, string id)
+    internal static bool Step(SyntheticMachine m, ArchitecturalExpectation e, CoverageBatch report, string id)
     {
         try
         {

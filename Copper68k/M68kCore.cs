@@ -1497,6 +1497,8 @@ namespace Copper68k
 
         internal M68040FpuState M68040Fpu { get; } = new M68040FpuState();
 
+        internal M68040PendingFpuExceptions M68040PendingFpuExceptions { get; } = new();
+
         internal M68040MmuState M68040Mmu { get; } = new M68040MmuState();
 
         internal uint M68060ProcessorConfiguration { get; set; } = 0x0430_0000;

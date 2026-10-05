@@ -1199,3 +1199,30 @@ for architectural authority, exact coverage, evidence and remaining scope.
 The strict gate verifies 14,911,576 passing logical cases in 579 reporting batches,
 with fresh pinned SingleStepTests (312,500 cases / 125 files) and Musashi
 (536 programs / 88 exclusions across eight profiles); roadmapComplete=false.
+
+### Milestone 6 CU/CP delivery implementation — 2026-10-05
+
+CU/CP RTE now converts the access frame to the pending exception and retains its
+selected vector across interrupted delivery, nested handlers and FPU context
+changes. Sixteen state/JIT scenarios prove actual delivery ownership, reset,
+redirected PCs and no repeated completed operand store. Independent CU and CP
+matrices add 110,592 passing phases in two ordinary-CI reporting batches. Original
+return code and vector/lifetime mutations reproduce failures; restored focused
+tests and corruption controls pass.
+
+The complete discovery command remains failing: 375,552 passing phases and 576
+explicitly untested fault/context requirements. Real access-frame entry,
+validation faults, odd user trace PCs, throwaway frames, writeback-handler
+qualification and CP context-transferred vector recovery remain required, as do
+other-model restoration, broader independent coverage and consolidation. The
+[reference record](COPPER68K_REFERENCE_QUALIFICATION.md#040-cucp-pending-delivery-checkpoint--2026-10-05)
+records the exact scope, manual authority and evidence. Milestone 6 and the full
+goal remain **in progress**; `roadmapComplete=false`. No FPU arithmetic, enabled
+MMU, physical timing or OS qualification is inferred.
+
+Final validation passes 4,950 Release CPU tests (eleven optional/opt-in skips),
+15,022,168 logical cases in 581 strict reporting batches, fresh pinned
+SingleStepTests and Musashi audits. Private unpublished `.55` validates the
+isolated CopperScreen Release build, host/disk/engine tests and all three native
+boot replays through NuGet. Package/assets/loaded DLL identities match; see the
+reference record for counts and hashes. No package publication is included.

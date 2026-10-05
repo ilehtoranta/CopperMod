@@ -5596,6 +5596,7 @@ namespace Copper68k
             State.CacheControlRegister = 0;
             State.CacheAddressRegister = 0;
             State.M68040Fpu.Reset();
+            State.M68040PendingFpuExceptions.Reset();
             State.M68040Mmu.Reset();
             State.Cycles = 0;
             State.NativeCycles = 0;

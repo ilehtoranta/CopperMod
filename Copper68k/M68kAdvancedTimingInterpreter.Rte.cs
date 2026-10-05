@@ -9,27 +9,39 @@ internal partial class M68kAdvancedTimingInterpreter
     private bool TryRestoreM68040AccessFrame(uint frame, ushort sr, uint pc)
     {
         var continuation = ReadWord(frame + 12) & 0xf000;
-        // CU/CP need qualified pending-FPU state; multiple bits are undefined.
-        // Keep those explicit gaps on the existing rejected-frame path for now.
-        if (continuation is not (0 or 0x1000 or 0x2000)) return false;
+        // Multiple continuation bits are undefined (MC68040UM 8.4.6.7).
+        if (continuation is not (0 or 0x1000 or 0x2000 or 0x4000 or 0x8000)) return false;
+        var pending = continuation == 0x8000
+            ? State.M68040PendingFpuExceptions.Find(3)
+            : continuation == 0x4000 ? State.M68040PendingFpuExceptions.Find(2) : null;
+        // A foreign/context-transferred CP frame without its selected vector is
+        // still an explicit implementation gap. Do not invent a format error or
+        // reselect a vector from handler-modified FPCR/FPSR registers.
+        if (continuation == 0x8000 && pending == null)
+            throw new UnsupportedM68kTimingException(0x4e73, State.LastInstructionProgramCounter, _profile);
         var address = continuation == 0 ? 0u : ReadLong(frame + 8);
         State.SetActiveStackPointer(unchecked(frame + 60));
         State.StatusRegister = sr;
         State.ProgramCounter = pc;
         if (continuation == 0x1000)
             _m68040MovemContinuation = (pc, address);
-        if (continuation == 0x2000)
+        if (continuation >= 0x2000)
         {
-            // MC68040UM 8.4.6.2: old SP+48 is the new format-2 frame.
-            // The instruction address is the saved EA, not the RTE opcode PC.
-            State.RecordException(9, pc, sr);
+            // MC68040UM 8.4.6.2/7: convert the pending exception frame at
+            // old SP+48. CT/CU use format 2; CP uses format 3. Trace is deferred
+            // to the CU/CP handler, as indicated by the saved SR trace bits.
+            var vector = continuation == 0x8000 ? pending!.Vector : continuation == 0x4000 ? 11 : 9;
+            var format = continuation == 0x8000 ? 3 : 2;
+            State.RecordException(vector, pc, sr);
             State.StatusRegister = (ushort)((sr | M68kCpuState.Supervisor) & ~0xc000);
             PushLong(address);
-            PushWord(0x2024);
+            PushWord((ushort)(format << 12 | vector * 4));
             PushLong(pc);
             PushWord(sr);
-            State.ProgramCounter = ReadLong(State.VectorBaseRegister + 36);
-            CompleteTiming(M68kInstructionTimingKey.IllegalInstruction);
+            State.ProgramCounter = ReadLong(State.VectorBaseRegister + (uint)vector * 4);
+            if (pending != null && (continuation == 0x8000 || pending.Vector == 11))
+                State.M68040PendingFpuExceptions.Complete(pending);
+            CompleteTiming(continuation == 0x2000 ? M68kInstructionTimingKey.IllegalInstruction : M68kInstructionTimingKey.LineFException);
         }
         else CompleteTiming(M68kInstructionTimingKey.Rte);
         return true;

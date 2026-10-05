@@ -276,11 +276,12 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
 - Generated 010 word-MOVE/MOVEA format-8 images now have the scoped continuation
   gate below. Long transfers, other instruction families, foreign silicon images,
   external bus faults, 020/030 formats 9/A/B and the remaining 040 format-7
-  CU/CP and detailed fault protocols remain unqualified. The advanced decoder does not implement all these
+  CP context transfer and detailed fault protocols remain unqualified. The advanced decoder does not implement all these
   legal restoration protocols; this is an implementation gap, not invalid encoding.
   The [040 access-frame discovery gate](#040-access-frame-restoration-discovery-2026-10-05)
   retains the original failed-before record. The latest checkpoint below promotes
-  normal/CT/CM synthetic returns and preserves CU/CP prerequisites explicitly.
+  normal/CT/CM/CU/CP synthetic returns and preserves the remaining fault/context
+  prerequisites explicitly.
 - Nested 000 address errors during exception stacking previously recursed on an
   odd SSP. This is corrected by the address-error double-fault slice above. External
   BERR and reset-vector fault signaling remain unavailable through the current
@@ -2707,3 +2708,97 @@ Evidence is `artifacts/m6-rte-continuation-gate-final.log` and the full-run
 `summary.json`; `roadmapComplete=false`. An initial verifier invocation incorrectly
 requested zero-count 040-only reports for other models and failed; the corrected
 model-scoped selection is the successful invocation recorded here.
+
+## 040 CU/CP pending delivery checkpoint — 2026-10-05
+
+RTE now converts CU frames to format 2/vector 11 and CP frames to format 3/the
+original pending FPU vector, at old SP+48. Saved PC/SR/EA and the supervisor stack
+bank are preserved; saved trace bits reach the new handler, which is responsible
+for servicing the original trace. Authority is MC68040UM sections 8.3 and
+8.4.6.2/7. The selected vector is integer exception-delivery state, distinct from
+handler-visible FPCR/FPSR/FPIAR and FSAVE data. The interpreter and JIT retain it
+until vector fetching succeeds. Nested completed deliveries preserve a suspended
+outer event, including equal-valued entries. CPU reset clears delivery state;
+FPU context/register reset does not. A redirected saved PC does not reselect or
+lose the pending vector. Ordinary exception frame and timing policies remain.
+
+The new CU matrix passes 13,824 logical phases/144 combinations. The CP matrix
+passes 96,768 phases/1,008 combinations for vectors 49–55. Both use all 32 CCRs,
+user/ISP/MSP banks, T0/T1/no trace, two VBRs/EAs and four lower SSW patterns.
+Each scenario checks conversion, handler RTE and a following self-BRA; common
+verification checks registers, exact PC/SR, guarded memory and writeback
+non-replay. Fixed pending vectors are fixture inputs, not arithmetic expectations.
+Deliberately inconsistent handler FPU control registers prove vector ownership.
+BSUN is not a post-instruction FMOVE exception and is outside this CP selection.
+
+Sixteen additional ordinary xUnit scenarios exercise actual FSIN unimplemented
+and FMOVE unsupported/overflow exception delivery. A one-shot injected internal
+fault at the vector fetch suspends delivery. Accurate, warmed V1 and warmed V2
+entries preserve the event; compiled entry is mandatory in JIT scenarios. A
+completed single-precision operand store is not fetched or written again during
+CP return. Reset, nested delivery and redirected return PCs are covered. Foreign
+CP frames without their original selected vector fail explicitly as unsupported,
+without a fabricated architectural format error or operand retry. These tests
+use the existing approximate internal fault entry and independently construct
+the returning format-7 frame; they do not qualify real access-error frame entry,
+FPU arithmetic, enabled MMU, silicon timing or foreign/context-transfer recovery.
+
+The complete discovery selection is still failing:
+`artifacts/m6-fpu-continuation-discovery-final/` executes fourteen xUnit cases,
+with thirteen passing and one inventory failure. Its summary reports 376,128
+logical phases: 375,552 passing, zero mismatching/unsupported and 576 explicitly
+untested requirements. The inventory expands the previously documented gaps
+into six named categories across three banks/all CCRs: frame-validation faults,
+odd user trace PCs, throwaway-to-access return, real access-fault entry,
+writeback-handler qualification and CP context-transferred vector recovery.
+The latter remains necessary; preserving an original local pending event does
+not solve migrating that event to another CPU/context. No requirement is removed
+from the milestone or relabeled as invalid.
+
+Failed-before CU/CP evidence is `artifacts/m6-fpu-continuation-before/`: 4,608
+and 32,256 mismatching RTE prerequisites, with 9,216/64,512 dependent phases
+untested. A constant-49 CP-vector mutation passes only that vector's scope and
+fails exactly 27,648 prerequisites, leaving 55,296 dependent phases untested.
+Premature delivery-state consumption fails all fifteen actual-delivery scenarios;
+the explicit missing-state gap test still passes. Source is restored byte-for-byte
+and all 73 focused FPU/matrix/lifetime/MOVEM tests pass. Evidence is
+`artifacts/m6-fpu-continuation-probes/controls.json`. All thirteen specific
+malformed input/report controls still detect their intended defects in
+`artifacts/m6-fpu-continuation-preflight-controls/controls.json`. Earlier failed
+V2 fixture attempts remain recorded; the qualified FSIN route proves a compiled
+entry rather than accepting a fallback as V2 coverage.
+
+Final Release CPU validation passes 4,950 tests, with eleven optional/opt-in
+skips and zero failures; all four qualified WinUAE presets are enabled.
+The strict report gate verifies 15,022,168 passing logical cases in 581 reporting
+batches, with fresh pinned SingleStepTests (312,500 cases / 125 files) and
+Musashi (536 programs / 88 explicit exclusions across eight profiles).
+Evidence is `artifacts/m6-fpu-continuation-full/` and
+`artifacts/m6-fpu-continuation-gate.log`; `roadmapComplete=false`.
+
+Isolated unpublished NuGet `1.5.2-synthetic-dev.55` validates CopperScreen at
+baseline `d9beae8b88be24032221e3482942a249c03c27d3`: Release build has zero
+warnings/errors; host 149 passing/six optional skips, disk 74, separate engine
+diagnostics 1,080, native Workbench boots two and A1200 AGA boot/persistence one,
+without native skips. Four restored assets and four loaded CPU assemblies match
+the package. Package SHA-256 is
+`e804107087da31910386ca8d5ea46b622c71482bd46a4dc927751f2c07312f11`;
+CPU assembly SHA-256 is
+`3f09d72f14ae9dd9242845ecd745421a461b35dc1019825dc9edb763a46c69a8`.
+Consumer evidence is its `artifacts/fpu-continuation-identities.json`,
+`artifacts/fpu-continuation-validation/` and separate diagnostic outputs.
+Published package versions and root CopperScreen dependencies are unchanged.
+
+The fresh broad Basic audit in `artifacts/m6-fpu-continuation-broad-final/`
+still fails: 1,326 passing directories, 47 mismatching and eight unsupported,
+with 11,474,194 executed callbacks, 1,663,891 exception frames and 199,327
+masked-SR cases. All 32 comparator controls detect their intended defects.
+The pinned generator, runner, native library and input manifest are unchanged.
+An initial invocation used the wrong native-library path and was rejected before
+execution; its failure remains in `artifacts/m6-fpu-continuation-broad/`.
+The corrected invocation verifies the manifest's exact library identity.
+
+Other-model advanced restoration, the broad reference disagreements, independent
+combination qualification and consolidation remain required. Existing specialized
+regressions are retained. Milestone 6 and the goal remain **in progress** with
+`roadmapComplete=false`; publication remains a separate release step.
