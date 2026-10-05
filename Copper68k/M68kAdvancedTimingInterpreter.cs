@@ -8504,14 +8504,18 @@ namespace Copper68k
             BeginInstruction(opcode);
             var instructionPc = State.ProgramCounter;
             _ = FetchWord();
+            var extension = FetchWord();
+            if (!IsMovecControlEncodingValid(extension & 0x0FFF))
+            {
+                RaiseFormat0Exception(4, instructionPc, M68kInstructionTimingKey.IllegalInstruction);
+                return;
+            }
             if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
             {
-                _ = FetchWord();
                 RaiseFormat0Exception(8, instructionPc, M68kInstructionTimingKey.PrivilegeViolation);
                 return;
             }
 
-            var extension = FetchWord();
             var generalRegister = (extension >> 12) & 7;
             var useAddressRegister = (extension & 0x8000) != 0;
             var controlRegister = extension & 0x0FFF;
@@ -8536,6 +8540,10 @@ namespace Copper68k
 
             CompleteTiming(M68kInstructionTimingKey.Movec);
         }
+
+        // Most profiles retain their existing privilege-first convention.
+        // 060 additionally decodes control-field legality before privilege.
+        protected virtual bool IsMovecControlEncodingValid(int register) => true;
 
         private void ExecuteRte()
         {

@@ -188,6 +188,10 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.Rte);
         }
 
+        // MC68060UM 8.2.4: an undefined MOVEC control field is illegal.
+        protected override bool IsMovecControlEncodingValid(int register) =>
+            register is >= 0 and <= 8 or 0x800 or 0x801 or 0x806 or 0x807 or 0x808;
+
         protected override bool TryReadControlRegister(int register, uint pc, out uint value)
         {
             switch (register)
@@ -219,7 +223,9 @@ namespace Copper68k
                     // cache capacity are outside the current execution policy.
                     return base.TryWriteControlRegister(register, value & 0xF880_E000u, pc);
                 case 0x008:
-                    State.M68060BusControl = value & 0xF000_0000; return true;
+                    // L/LE are software commands; SL/SLE retain exception state.
+                    State.M68060BusControl = (State.M68060BusControl & 0x5000_0000) | (value & 0xA000_0000);
+                    return true;
                 case 0x800: State.SetUserStackPointer(value); return true;
                 case 0x808:
                     State.M68060ProcessorConfiguration = 0x0430_0000 | (value & 0x83); return true;

@@ -1603,7 +1603,10 @@ namespace Copper68k
             }
 
             ExceptionSequence++;
-            if (M68060StackModeEnabled) M68060BusControl = (M68060BusControl & 0xA000_0000u) >> 1;
+            // MC68060AR section 5: nested exceptions must not clear SL/SLE.
+            // Capture active commands, retain prior shadows, then clear L/LE.
+            if (M68060StackModeEnabled)
+                M68060BusControl = (M68060BusControl & 0x5000_0000u) | ((M68060BusControl & 0xA000_0000u) >> 1);
             LastExceptionVector = vector;
             LastExceptionStackedProgramCounter = stackedProgramCounter;
             LastExceptionStatusRegister = savedStatusRegister;

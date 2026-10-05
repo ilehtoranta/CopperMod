@@ -1391,3 +1391,104 @@ and `artifacts/ttr-production.binlog`. All earlier restoration, 010 format-error
 reference-adapter and consolidation gaps remain open. No package publication,
 regression retirement, seeded audit or host/physical timing qualification is
 added; milestone 6 remains in progress with its accepted scope.
+
+### 060 BUSCR snapshots and MOVEC control-field legality — 2026-10-05
+
+MOVEC BUSCR writes now update L/LE (`A0000000`) and preserve SL/SLE
+(`50000000`). [MC68060UM 7.4](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+describes software lock commands and exception snapshots. Preserving shadows
+across software writes is the interpretation of that snapshot model corroborated
+by pinned WinUAE `newcpu_common.cpp`, rather than an explicit read-only sentence
+or hardware measurement. Reserved nonzero writes are robustness samples; they
+are canonicalized to implemented command bits. Raw reads cover all 16 legal
+upper-nibble images, not arbitrary internally corrupted reserved bits.
+
+Exception entry now accumulates active L/LE into SL/SLE and clears L/LE while
+retaining existing shadows. The user manual's generic copy wording does not
+spell out nested retention. The later Motorola [MC68060AR section 5, printed
+page 6](https://www.nxp.com/docs/en/supporting-information/MC68060AR.pdf)
+explicitly states that the processor does not clear SL and nested exceptions
+must not lose the lock state, with equivalent LE/SLE behavior. That clarification
+is the independent expectation. Reset clears BUSCR; RTE does not automatically
+restore software lock commands. Current WinUAE `newcpu.cpp` has a different
+exception update, so this nested-state expectation is not inferred from
+software agreement. Physical LOCK/LOCKE timing, cache bypass, locked access
+faults and actual CAS2 software emulation remain unqualified.
+
+Three deterministic BUSCR groups add 315,408 cases: 247,808 command writes,
+dependent readbacks, privilege and raw reads; 65,536 TRAP entries, nested TRAPs
+and both RTE phases; and 2,064 privilege/trace/illegal/reset checks. They cover
+all general registers including A7, all CCRs, both stacks and all four shadow
+images. Against `964266e`, they detect respectively **119,808 / 15,360 / 896
+mismatches**, with **59,904 / 37,888 / zero** dependent cases untested. All
+315,408 pass after the fix. A fourth group adds 4,096 interrupt cases across
+accepted/masked requests and running/STOP state. Replacing only the exception
+update with its original expression detects 896 interrupt mismatches; 3,200
+other cases pass. Production source is restored after each mutation.
+
+With BUSCR corrected, the unchanged external 060 `MOVEC2` sequence advances
+from callback 71 to 73: undefined control field `009` in user state expected
+vector 4 but got vector 8. [MC68060UM
+8.2.4](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf) explicitly identifies
+undefined MOVEC register fields as illegal. The pinned generator corroborates
+legality before privilege on 060. The interpreter now validates that field before
+privilege, fetching the same opcode/extension words as before and performing
+no transfer on rejection. Other models keep their prior privilege convention;
+legal 060 transfers retain their successful execution order and timing policy.
+The canonical fixture's two erroneous expectations are corrected; none is retired.
+
+`system-movec-control-encodings` adds **536,832 cases**. Every one of the
+4,082 undefined fields is tested in both directions, all 16 general registers,
+both stacks and CCR 0/31; all 14 implemented fields are tested in user state
+for every CCR and register. Assertions include saved PC/SR, frame/stack state,
+untouched registers and control images. Disabling only the 060 legality check
+detects **261,248 mismatches** with 275,584 passing and zero unsupported/untested
+cases. All cases pass with the guard restored. BUSCR/encoding additions total
+**856,336 cases in five reporting batches**. A failing prerequisite is never
+retried or counted as a passing dependent phase.
+
+The unchanged broad WinUAE audit now passes 060 `MOVEC2` (**8,228 callbacks /
+8,192 frame assertions**) and the already-passing 040 sequence. This is the
+generated group's scope, not exhaustive external qualification of every MOVEC
+register and initial image. Overall the audit remains failing: **1,322 passing,
+46 mismatching, 13 unsupported and zero untested groups**, over 11,335,687
+callbacks, 1,525,385 frames, 199,327 masked-SR cases and one terminal callback.
+All 32 controls pass. The original Basic manifest and library identities recorded
+above are unchanged; no comparison mask or family exclusion is added. The
+original PCR diagram uses EDEBUG bit 7 while pinned WinUAE writes bit 6; the
+current addendum does not resolve that difference. No PCR production correction
+is made from software agreement alone.
+
+Evidence includes `artifacts/m6-buscr-before/`, `artifacts/m6-buscr-focused/`,
+`artifacts/m6-buscr-control-focused/`, `artifacts/m6-movec-legality-before/`,
+`artifacts/m6-buscr-interrupt-before/`, `artifacts/m6-buscr-discovery/`
+and `artifacts/m6-buscr-winuae/`. Milestone 6 remains in progress: prior
+restoration, stage-specific 010 format-error, reference and consolidation
+requirements remain. No package publication, regression retirement or physical
+qualification is added.
+
+Final Release validation passes **4,775 CPU tests** with ten optional skips and
+zero failures. The deterministic gate validates **11,168,408 logical cases in
+469 reporting batches**, with `roadmapComplete=false`. Omitting only the new
+060 control-encoding report rejects the gate. Fresh pinned SingleStepTests passes
+312,500 selected cases in 125 files; Musashi passes 536 programs with 88
+exclusions. The script rechecks source revisions, exact inputs and selection.
+AHX passes 18 tests. The qualified TRAP trace preset passes 512 callbacks,
+256 incoming-T1 cases, 512 frames and six controls against this CPU.
+
+Private **unpublished** NuGet `1.5.2-synthetic-dev.48` has SHA-256
+`de7ce3911783486a52077c0213684c1f722037e064eda1131e67c27b4d00b7c5`.
+`artifacts/m6-buscr-package.json` records all three changed production source
+hashes against `964266e` and CPU assembly identity
+`624cd5631ea0e33e5eba2e5de0aa85e6dd8a4c55541b561df1cccbfa9812ba15`.
+The isolated CopperScreen `d9beae8` baseline resolves the exact package in
+production and separate diagnostics, with all four loaded DLLs matching that
+identity. Release build has zero warnings/errors. Host 149, disk 74 and engine
+diagnostics 1,080 pass. Three native Workbench/A1200 boot and disk-persistence
+replays pass with no skips; six optional host/media skips remain unavailable
+coverage. Evidence: `artifacts/m6-buscr-full/`,
+`artifacts/m6-buscr-missing-report/`, `artifacts/m6-buscr-trace-reference/`,
+`artifacts/m6-buscr-ahx-results/` and `artifacts/synthetic-private-feed-48/`;
+consumer `artifacts/buscr-validation/`, `artifacts/buscr-diagnostic-tests/`
+and `artifacts/buscr-production.binlog`. No seeded, physical timing or host
+performance qualification is claimed.

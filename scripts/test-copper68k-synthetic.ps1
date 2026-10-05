@@ -114,6 +114,13 @@ try {
             foreach ($control in 4..7) { $expected["system-transparent-control-$control"] = 77824 }
             foreach ($control in @('806','807')) { $expected["system-root-control-$control"] = 55296 }
         }
+        if ($model -eq '68060') {
+            $expected['system-bus-control'] = 247808
+            $expected['system-bus-control-exceptions'] = 65536
+            $expected['system-bus-control-state'] = 2064
+            $expected['system-bus-control-interrupts'] = 4096
+            $expected['system-movec-control-encodings'] = 536832
+        }
         if ($model -eq '68010') {
             $expected['system-format8-entry'] = 1024
             $expected['system-format8-rte'] = 4096

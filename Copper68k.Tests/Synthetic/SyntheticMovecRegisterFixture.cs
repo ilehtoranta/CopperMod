@@ -5,7 +5,8 @@ namespace Copper68k.Tests.Synthetic;
 // Shared register-transfer fixture; masks and encodings are independent
 // specifications, not results computed with production decoder/MMU helpers.
 internal sealed record SyntheticMovecRegisterFixture(int Control, string Name, uint Mask,
-    Func<M68kCpuState, uint> Read, Action<M68kCpuState, uint> Initialize)
+    Func<M68kCpuState, uint> Read, Action<M68kCpuState, uint> Initialize,
+    Func<uint, uint, uint>? StoredValue = null)
 {
     private static readonly (string Name, Func<M68kCpuState, uint> Read)[] Preserved =
     [
@@ -15,10 +16,11 @@ internal sealed record SyntheticMovecRegisterFixture(int Control, string Name, u
         ("DTT0", s => s.M68040Mmu.DataTransparentTranslation0),
         ("DTT1", s => s.M68040Mmu.DataTransparentTranslation1),
         ("URP", s => s.M68040Mmu.UserRootPointer),
-        ("SRP", s => s.M68040Mmu.SupervisorRootPointer)
+        ("SRP", s => s.M68040Mmu.SupervisorRootPointer),
+        ("BUSCR", s => s.M68060BusControl)
     ];
 
-    internal void WritesAndReadback(SyntheticMachine m, CoverageBatch report, IEnumerable<uint> values, int storeRegisters = 16)
+    internal void WritesAndReadback(SyntheticMachine m, CoverageBatch report, IEnumerable<uint> values, int storeRegisters = 16, uint initial = 0)
     {
         foreach (var value in values)
         for (var general = 0; general < storeRegisters; general++)
@@ -30,24 +32,26 @@ internal sealed record SyntheticMovecRegisterFixture(int Control, string Name, u
             else if (general == 15) m.Core.State.SetActiveStackPointer(value);
             else m.Core.State.A[general - 8] = value;
             var e = SyntheticExecution.Prepare(m, [0x4e7b, (ushort)(general << 12 | Control), 0x4e7a, (ushort)(general << 12 | Control)]);
+            Initialize(m.Core.State, initial);
             e.Pc = SyntheticMachine.Code + 4;
             Preserve(m, e);
-            var id = $"{m.Model.Id}/MOVEC/L/{Name}/R{general}/value={value:X8}/super={supervisor}/ccr={ccr:X2}";
+            var id = $"{m.Model.Id}/MOVEC/L/{Name}/R{general}/initial={initial:X8}/value={value:X8}/super={supervisor}/ccr={ccr:X2}";
             if (!supervisor)
             {
                 SyntheticExecution.ExpectException(m, e, 8);
                 SyntheticExecution.Run(m, e, report, id + "/privilege", false);
                 continue;
             }
-            e.ControlChecks[Name] = (Read, value & Mask);
+            var stored = StoredValue?.Invoke(initial, value) ?? value & Mask;
+            e.ControlChecks[Name] = (Read, stored);
             if (!Step(m, e, report, id + "/write"))
             {
                 report.Record(id + "/read", "untested", $"{Name} write failed; dependent readback not executed.");
                 continue;
             }
             e.Pc += 4;
-            if (general < 8) e.D[general] = value & Mask;
-            else e.A[general - 8] = value & Mask;
+            if (general < 8) e.D[general] = stored;
+            else e.A[general - 8] = stored;
             SyntheticExecution.Run(m, e, report, id + "/read");
         }
     }

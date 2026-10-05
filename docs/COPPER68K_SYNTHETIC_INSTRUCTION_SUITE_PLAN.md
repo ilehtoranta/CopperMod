@@ -880,3 +880,29 @@ qualified TRAP trace checks pass. The private unpublished .47 package validates
 the isolated CopperScreen Release build, host/disk/engine tests and three native
 Workbench/A1200 replays. Exact input/source/package identities and qualification
 limits remain in the reference document.
+
+The 060 BUSCR/control-field follow-up preserves exception shadow bits across
+MOVEC writes and nested exception entry, while clearing active lock commands.
+The later Motorola porting guide supplies the explicit nested-retention rule;
+software-write preservation is a documented interpretation corroborated by the
+pinned reference. Physical pin/cache/locked-access effects remain unqualified.
+Undefined 060 MOVEC control fields now enter vector 4 before privilege checking,
+with the same instruction fetch order and no transfer effects or retry.
+
+Five required batches add 856,336 cases for BUSCR writes/readback, all shadow
+images, nested TRAP/RTE, privilege/trace/reset, accepted/masked interrupts and
+every 060 control-field encoding. The original BUSCR code and isolated legality
+and interrupt mutations are detected; all new cases pass with fixes restored.
+The canonical expectations are corrected and the reusable fixture extended;
+no old regression is retired. The unchanged WinUAE 060 MOVEC2 group now passes
+8,228 callbacks and 8,192 frames. Its broader audit still fails 46 mismatching
+and 13 unsupported groups. PCR reference/manual disagreement and all earlier
+restoration, reference and consolidation requirements remain open. Milestone 6
+stays in progress; no package is published.
+
+Final validation passes 4,775 CPU tests with ten optional skips. The report gate
+validates 11,168,408 cases in 469 batches and rejects the missing new 060
+control-encoding report. Fresh pinned SingleStepTests/Musashi, AHX and qualified
+TRAP trace checks pass. The private unpublished .48 package passes the isolated
+CopperScreen Release build, host/disk/engine checks and three native replays.
+The reference document records exact identities, failed-before proofs and limits.

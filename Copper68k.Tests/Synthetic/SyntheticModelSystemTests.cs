@@ -64,14 +64,14 @@ public sealed class SyntheticModelSystemTests(ITestOutputHelper output)
             if (store) { if (general < 8) m.Core.State.D[general] = value; else if (general == 15) m.Core.State.SetActiveStackPointer(0x7100); else m.Core.State.A[general - 8] = value; }
             var op = (ushort)(store ? 0x4e7b : 0x4e7a); var e = SyntheticExecution.Prepare(m, [op, (ushort)(general << 12 | control)]);
             var valid = modelId != "68000" && (control is 0 or 1 or 0x800 or 0x801 || m.Model.FullIndex && (control == 2 || control == 0x802 && modelId is not ("68040" or "68060") || control is 0x803 or 0x804 && modelId != "68060") || modelId is "68040" or "68060" && (control is >= 3 and <= 7 or 0x806 or 0x807 || control == 0x805 && modelId == "68040" || control is 8 or 0x808 && modelId == "68060"));
-            if (modelId == "68000" || !supervisor || !valid) SyntheticExecution.ExpectException(m, e, modelId == "68000" || supervisor ? 4 : 8);
+            if (modelId == "68000" || !supervisor || !valid) SyntheticExecution.ExpectException(m, e, modelId == "68000" || supervisor || modelId == "68060" && !valid ? 4 : 8);
             else
             {
                 var read = ControlReader(control); var actualValue = read(m.Core.State);
                 if (store)
                 {
                     var source = general < 8 ? e.D[general] : e.A[general - 8];
-                    var masked = control switch { 0 or 1 => source & 7, 2 when modelId == "68060" => source & 0xf880e000, 2 when modelId == "68040" => source & 0x80008000, 2 => source & (modelId == "68030" ? 0x3313u : 3u), 3 when modelId == "68040" => source & 0xc000, 3 when modelId == "68060" => source & 0xfffe, >= 4 and <= 7 when modelId is "68040" or "68060" => source & 0xffffe364, 8 => source & 0xf0000000, 0x808 => 0x04300000 | source & 0x83, 0x806 or 0x807 when modelId == "68060" => source & 0xfffffe00, _ => source };
+                    var masked = control switch { 0 or 1 => source & 7, 2 when modelId == "68060" => source & 0xf880e000, 2 when modelId == "68040" => source & 0x80008000, 2 => source & (modelId == "68030" ? 0x3313u : 3u), 3 when modelId == "68040" => source & 0xc000, 3 when modelId == "68060" => source & 0xfffe, >= 4 and <= 7 when modelId is "68040" or "68060" => source & 0xffffe364, 8 => source & 0xa0000000, 0x808 => 0x04300000 | source & 0x83, 0x806 or 0x807 when modelId == "68060" => source & 0xfffffe00, _ => source };
                     e.ControlChecks[$"control {control:X3}"] = (read, masked);
                     if (control == 0x800) e.InactiveStackPointer = masked;
                     if (control == 0x803) e.MasterStackPointer = masked;
