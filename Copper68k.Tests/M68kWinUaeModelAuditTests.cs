@@ -93,15 +93,15 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
     private static string FixtureId(string id) => id == "A1200" ? "68EC020" : id;
     private static string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 
-    internal static void ValidateWinUaeProfile(string root, WinUaeManifest manifest, ModelSpec model, bool traceTraps = false)
+    internal static void ValidateWinUaeProfile(string root, WinUaeManifest manifest, ModelSpec model, bool traceTraps = false, string[]? requiredOpcodes = null)
     {
         var fixture = manifest.Profiles.SingleOrDefault(p => p.Id == FixtureId(model.Id))
             ?? throw new XunitException($"Missing WinUAE profile: {model.Id}");
         var level = model.Id switch { "68000" => 0, "68010" => 1, "68030" => 3, "68040" => 4, "68060" => 5, _ => 2 };
         var cpu = level == 5 ? "68060" : $"{68000 + level * 10}";
-        var requiredCount = traceTraps ? 1 : model.Id switch { "68000" => 146, "68010" => 153, "68030" => 180, "68040" => 181, "68060" => 184, _ => 179 };
+        var requiredCount = requiredOpcodes?.Length ?? (traceTraps ? 1 : model.Id switch { "68000" => 146, "68010" => 153, "68030" => 180, "68040" => 181, "68060" => 184, _ => 179 });
         if (fixture.CpuLevel != level || fixture.CpuDirectory != cpu || fixture.AddressBits != model.AddressBits ||
-            fixture.Opcodes.Length != requiredCount || fixture.Opcodes.Distinct().Count() != requiredCount || !fixture.Opcodes.Contains(traceTraps ? "TRAP" : "NOP"))
+            fixture.Opcodes.Length != requiredCount || fixture.Opcodes.Distinct().Count() != requiredCount || (requiredOpcodes is null ? !fixture.Opcodes.Contains(traceTraps ? "TRAP" : "NOP") : !fixture.Opcodes.Order().SequenceEqual(requiredOpcodes.Order())))
             throw new XunitException($"Incomplete or incompatible WinUAE profile: {model.Id}");
         var path = Path.Combine(root, fixture.Id, cpu);
         foreach (var memory in new[] { ("lmem.dat", 0x8000), ("hmem.dat", 0x8000), ("tmem.dat", 0x40000) })

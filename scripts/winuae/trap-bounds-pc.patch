@@ -1,0 +1,10 @@
+--- a/gencpu/gencpu.cpp
++++ b/gencpu/gencpu.cpp
+@@
+ 		out("}\n");
++		sync_m68k_pc();
+ 		out("if ((extra & 0x800) && GET_CFLG()) {\n");
+@@
+ 		fill_prefetch_0();
++		sync_m68k_pc();
+ 		out("if (cctrue(%d)) {\n", curi->cc);

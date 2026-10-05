@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $GeneratorSource,
     [Parameter(Mandatory)] [string] $RunnerSource,
     [Parameter(Mandatory)] [string] $VcVars64,
-    [ValidateSet('Basic','TraceTraps')] [string] $Preset = 'Basic',
+    [ValidateSet('Basic','TraceTraps','TrapBounds')] [string] $Preset = 'Basic',
     [string] $OutputDirectory = 'artifacts/winuae-model-inputs'
 )
 $ErrorActionPreference = 'Stop'
@@ -47,7 +47,26 @@ try {
         Run-Compiler @('/nologo','/O2','/EHsc','/w','/I.','/Iinclude','build68k.cpp','/Fe:build68k.exe') (Join-Path $output 'build68k.log')
         & ./build68k.exe table68k | Set-Content -Encoding utf8 cpudefs.cpp
         if ($LASTEXITCODE -ne 0) { throw 'Opcode table generation failed' }
-        Run-Compiler @('/nologo','/O2','/EHsc','/w','/I.','/Iinclude','gencpu.cpp','missing.cpp','readcpu.cpp','cpudefs.cpp','/Fe:gencpu_prog.exe') (Join-Path $output 'gencpu-build.log')
+        $cpuGeneratorSource = 'gencpu.cpp'
+        if ($Preset -eq 'TrapBounds') {
+            # MC68020UM 6.1.4 / MC68040UM 8.2.3 require the next PC on
+            # instruction traps. Patch a copy; Basic keeps the pinned source.
+            $patchPath = Join-Path $PSScriptRoot 'winuae/trap-bounds-pc.patch'
+            $patch = [IO.File]::ReadAllText($patchPath).Replace("`r`n", "`n")
+            $source = [IO.File]::ReadAllText((Join-Path $generator 'gencpu.cpp')).Replace("`r`n", "`n")
+            $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
+            if ($hunks.Count -ne 2) { throw 'Trap/bounds patch must contain exactly two hunks' }
+            foreach ($hunk in $hunks) {
+                $lines = $hunk.TrimEnd("`n").Split("`n")
+                $before = (($lines | Where-Object { $_.StartsWith('-') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
+                $after = (($lines | Where-Object { $_.StartsWith('+') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
+                $source = Patch-Once $source $before $after
+            }
+            $cpuGeneratorSource = Join-Path $output 'gencpu-trap-bounds.cpp'
+            [IO.File]::WriteAllText($cpuGeneratorSource, $source)
+            [IO.File]::WriteAllText((Join-Path $output 'trap-bounds-pc.patch'), $patch)
+        }
+        Run-Compiler @('/nologo','/O2','/EHsc','/w','/I.','/Iinclude',$cpuGeneratorSource,'missing.cpp','readcpu.cpp','cpudefs.cpp','/Fe:gencpu_prog.exe') (Join-Path $output 'gencpu-build.log')
         & ./gencpu_prog.exe . *> (Join-Path $output 'gencpu-run.log')
         if ($LASTEXITCODE -ne 0) { throw 'CPU source generation failed' }
         $testerSource = 'cputest.cpp'
@@ -65,7 +84,7 @@ try {
         }
         $cpp = @('cpudefs.cpp','cpuemu_90_test.cpp','cpuemu_91_test.cpp','cpuemu_92_test.cpp','cpuemu_93_test.cpp','cpuemu_94_test.cpp','cpuemu_95_test.cpp','cputbl_test.cpp',$testerSource,'cputest_support.cpp','disasm.cpp','fpp.cpp','fpp_softfloat.cpp','ini.cpp','newcpu_common.cpp','readcpu.cpp','softfloat/softfloat.cpp','softfloat/softfloat_decimal.cpp','softfloat/softfloat_fpsp.cpp')
         Run-Compiler (@('/nologo','/O2','/EHsc','/w','/I.','/Iinclude','/Icputest','/I../zlib','/DCPUEMU_90','/DCPUEMU_91','/DCPUEMU_92','/DCPUEMU_93','/DCPUEMU_94','/DCPUEMU_95','/DCPU_TESTER') + $cpp + @('/Fe:cputester.exe')) (Join-Path $output 'cputester-build.log')
-        if ($Preset -eq 'TraceTraps') { Copy-Item -LiteralPath 'cputester.exe' -Destination $output }
+        if ($Preset -ne 'Basic') { Copy-Item -LiteralPath 'cputester.exe' -Destination $output }
     } finally { Pop-Location }
 
     $native = [IO.File]::ReadAllText((Join-Path $vendor 'm68k_cpu_tester.c'))
@@ -110,18 +129,22 @@ void M68KTester_destroy(M68KTesterContext* context) {
     if ($Preset -eq 'TraceTraps') {
         $baseIni = $baseIni.Replace('[test=Basic]', '[test=TraceTraps]').Replace('mode=all', 'mode=TRAP').Replace('feature_sr_mask=0x0000', 'feature_sr_mask=0xa000')
     }
-    $index = 0
+    if ($Preset -eq 'TrapBounds') {
+        $baseIni = $baseIni.Replace('[test=Basic]', '[test=TrapBounds]').Replace('mode=all', 'mode=TRAPcc,CHK2.B,CHK2.W,CHK2.L')
+    }
     foreach ($model in @(
         @{id='68000'; cpu='68000'; width=24}, @{id='68010'; cpu='68010'; width=24},
         @{id='68EC020'; cpu='68020'; width=24}, @{id='68020'; cpu='68020'; width=32},
         @{id='68030'; cpu='68030'; width=32}, @{id='68040'; cpu='68040'; width=32},
         @{id='68060'; cpu='68060'; width=32})) {
         if ($Preset -eq 'TraceTraps' -and $model.id -notin @('68040','68060')) { continue }
+        if ($Preset -eq 'TrapBounds' -and $model.id -in @('68000','68010')) { continue }
         $profileRoot = Join-Path $output $model.id
         New-Item -ItemType Directory -Path $profileRoot | Out-Null
         # Every invocation uses a fresh generator output path; stale data cannot fill a gap.
         $prefix = 'copper68k-' + [guid]::NewGuid().ToString('N') + '/'
         $config = $baseIni.Replace("cpu=68000`n", "cpu=$($model.cpu)`n").Replace('path=data/', "path=$prefix")
+        if ($Preset -eq 'TrapBounds' -and $model.id -eq '68060') { $config = $config.Replace('mode=TRAPcc,CHK2.B,CHK2.W,CHK2.L', 'mode=TRAPcc') }
         if ($model.width -eq 24) { $config = $config.Replace('cpu_address_space=68020','cpu_address_space=68030') }
         else { $config = $config.Replace('test_high_memory_start=0x00ff8000','test_high_memory_start=0xffff8000').Replace('test_high_memory_end=0x01000000','test_high_memory_end=0xffffffff') }
         [IO.File]::WriteAllText((Join-Path $profileRoot 'cputestgen.ini'), $config)
@@ -135,7 +158,7 @@ void M68KTester_destroy(M68KTesterContext* context) {
             Copy-Item -LiteralPath $generated -Destination (Join-Path $profileRoot $model.cpu) -Recurse
         } finally { Pop-Location }
         $profiles += @{
-            Id=$model.id; CpuDirectory=$model.cpu; CpuLevel=$(if ($Preset -eq 'TraceTraps') { if ($model.id -eq '68040') {4} else {5} } else {$index}); AddressBits=$model.width
+            Id=$model.id; CpuDirectory=$model.cpu; CpuLevel=$(switch ($model.cpu) {'68000' {0} '68010' {1} '68020' {2} '68030' {3} '68040' {4} '68060' {5}}); AddressBits=$model.width
             Opcodes=@(Get-ChildItem -LiteralPath (Join-Path $profileRoot $model.cpu) -Directory | Select-Object -ExpandProperty Name | Sort-Object)
             Inputs=@(Get-ChildItem -LiteralPath $profileRoot -Recurse -File -Filter '*.dat' | Sort-Object FullName | ForEach-Object {
                 @{Path=[IO.Path]::GetRelativePath($profileRoot,$_.FullName).Replace('\','/'); Bytes=$_.Length; Sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
@@ -148,6 +171,8 @@ void M68KTester_destroy(M68KTesterContext* context) {
         Preset=$Preset
         TracePrioritySourceSha256=$(if ($Preset -eq 'TraceTraps') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-trace.cpp')).Hash.ToLowerInvariant()} else {$null})
         TracePriorityPatchSha256=$(if ($Preset -eq 'TraceTraps') {(Get-FileHash -LiteralPath (Join-Path $output 'trace-priority.patch')).Hash.ToLowerInvariant()} else {$null})
+        TrapBoundsSourceSha256=$(if ($Preset -eq 'TrapBounds') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-trap-bounds.cpp')).Hash.ToLowerInvariant()} else {$null})
+        TrapBoundsPatchSha256=$(if ($Preset -eq 'TrapBounds') {(Get-FileHash -LiteralPath (Join-Path $output 'trap-bounds-pc.patch')).Hash.ToLowerInvariant()} else {$null})
         NativeLibrarySha256=(Get-FileHash -LiteralPath (Join-Path $output 'm68k_cpu_tester.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
         Compiler=$compiler; GeneratorExecutableSha256=(Get-FileHash -LiteralPath (Join-Path $generator 'cputester.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
         NativeSourceSha256=(Get-FileHash -LiteralPath (Join-Path $output 'winuae-native.c') -Algorithm SHA256).Hash.ToLowerInvariant()

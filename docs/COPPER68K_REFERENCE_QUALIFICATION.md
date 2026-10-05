@@ -1492,3 +1492,96 @@ coverage. Evidence: `artifacts/m6-buscr-full/`,
 consumer `artifacts/buscr-validation/`, `artifacts/buscr-diagnostic-tests/`
 and `artifacts/buscr-production.binlog`. No seeded, physical timing or host
 performance qualification is claimed.
+
+## TRAPcc and CHK2 saved-PC reference qualification (2026-10-05)
+
+The pinned Basic generator raises CHK2 and TRAPcc exceptions before committing
+its pending PC offset. For example, `50FA 0095` at `0087FFA0` expects stacked
+`0087FFA0` instead of `0087FFA4`; `00D0 0800` has the same discrepancy for CHK2.B.
+These are reference defects, not evidence for changing the CPU. The authority is
+[M68000PM 4-189](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf),
+[MC68020UM 6.1.4](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf),
+[MC68040UM 8.2.3](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+and [MC68060UM 8.2.3](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf):
+instruction traps save the following instruction address and retain the causing
+instruction address separately. PM 4-71 defines CHK2's X/Z/C and undefined N/V.
+
+The new `TrapBounds` preset applies exactly two anchored additions of
+`sync_m68k_pc()` in a copy of pinned `gencpu.cpp`, before the CHK2 and TRAPcc trap
+conditions. It retains the generator/runner pins and native assertion bridge.
+Original tracked reference sources, Basic inputs and trace preset stay intact.
+The common profile preflight accepts an explicit required family set; its
+existing Basic and TraceTraps defaults retain their strict original selections.
+No production CPU code, timing policy, SR comparison mask or exception frame
+expectation changes. A1200 uses the independently selected EC020 fixture profile.
+
+The focused preset requires all five advanced fixture profiles and audits all
+six CPU profiles including A1200. CHK2 is unavailable in 060 hardware (UM 8.2.4),
+so that model's focused selection is TRAPcc only; the existing synthetic bounds
+suite retains its required architectural exception coverage. This does not
+exclude any directory from the unchanged broad audit.
+
+| Profile | CHK2.B callbacks / frames | CHK2.W callbacks / frames | CHK2.L callbacks / frames | TRAPcc callbacks / frames |
+| --- | --- | --- | --- | --- |
+| EC020 and A1200, each | 1,074 / 628 | 1,048 / 534 | 1,130 / 546 | 156,160 / 78,080 |
+| 020, 030 and 040, each | 912 / 542 | 900 / 533 | 874 / 406 | 156,160 / 78,080 |
+| 060 | unavailable here | unavailable here | unavailable here | 156,160 / 78,080 |
+
+All **21 groups pass**, totaling **951,522 executed callbacks, 476,339 exception
+frames and 14,562 callbacks with documented undefined SR bits masked**. Each
+group must meet these exact counts, not merely execute one passing sample.
+All 63 register/defined-X/frame corruption controls are detected. An isolated
+CPU mutation saving the opcode PC for both families fails all 21 groups, at
+31 callbacks and 21 frames; the original CPU source is restored byte-for-byte.
+Separate copied-input preflight controls reject a missing data file, changed
+fixture byte, empty profile selection and modified generator source, before
+native execution. Evidence: `artifacts/m6-trap-bounds-command/`,
+`artifacts/m6-trap-bounds-pc-mutation/` and `artifacts/m6-trap-bounds-preflight/`.
+
+Identities for `artifacts/m6-trap-bounds-qualified-inputs/`:
+
+- Manifest: `6d3fd2de241776b7fb22fa70225924932cc1c6c487e4931311916adab6b210ef`.
+- Normalized patched source: `3ef386033792e585b093e55a44242b32d2cee16be7a597aa687bae7191ca449d`.
+- Normalized patch: `ca94d93ec49447e853769bb93bd4e823fe313854aba59601161b35ef8f7bcca4`.
+- Generator executable: `6b350167e05a2fc27a6320251488383384a86e9aa2e59e21f691853123cb0f9d`.
+- Native bridge: `05ee1b8f5e6fbe67526cd5a53e7768e38e207091f4cc5ac11850700000bbac2d`.
+- CPU assembly: `423405f59e9e0706a96fd2bd8f9d67b479032692e831a4f6e31480df6954b785`.
+- Adapter assembly: `13a0baa1f50b368f3f0df818ca4a0b331496f512f29fa5f5acd7cf024ee4fe76`.
+
+Generator seeds initialize xorshift state to 1 per test set, one round. This
+focused selection changes the random stream's family order relative to Basic;
+its passing counts cannot be substituted into the old Basic report. Full-format
+extensions are enabled, with CCR 0/31 and user/supervisor rounds; bus/address
+faults, incoming trace/M rounds, physical timing and exhaustive architectural
+combination coverage are not claimed. These are explicitly patched software
+expectations, not unchanged upstream or hardware measurements.
+
+Reproduce with fresh output directories (supply the local pinned checkouts and
+MSVC environment script; no generated binary/media is committed):
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 -GeneratorSource <pinned-generator> -RunnerSource <pinned-runner> -VcVars64 <vcvars64.bat> -Preset TrapBounds -OutputDirectory artifacts/trap-bounds-inputs
+./scripts/test-copper68k-winuae-trap-bounds.ps1 -InputDirectory artifacts/trap-bounds-inputs -OutputDirectory artifacts/trap-bounds-audit
+```
+
+The audit command restores its environment and fails on missing, changed, empty
+or mismatching inputs, skipped execution or a missing report. Fresh unchanged
+Basic validation still reports **1,322 passing, 46 mismatching, 13 unsupported
+and zero untested groups**, with 11,335,687 callbacks, 1,525,385 frame assertions,
+199,327 masked-SR callbacks and all 32 controls passing. The Basic manifest and
+library retain their previous identities. The existing qualified TRAP trace
+audit still passes 512 callbacks, 256 incoming-T1 cases, 512 frames and six
+controls. Evidence: `artifacts/m6-trap-bounds-broad/` and
+`artifacts/m6-trap-bounds-trace/`. Milestone 6 remains in progress with all earlier
+restoration, reference and consolidation requirements retained. No regression
+is retired and no package is published in this follow-up.
+
+Final Release CPU validation passes **4,776 tests with ten optional skips** and
+zero failures, including the enabled new reference audit. The deterministic gate
+still validates **11,168,408 logical cases in 469 reporting batches** with
+`roadmapComplete=false`. Fresh pinned SingleStepTests passes 312,500 selected
+cases in 125 files; Musashi passes 536 programs with 88 exclusions. Source pins,
+input hashes and selections are checked again. Evidence:
+`artifacts/m6-trap-bounds-full/` and `artifacts/m6-trap-bounds-gate.log`.
+Consumer package/replay qualification remains the earlier .48 evidence; this
+follow-up changes only test adapters, scripts and documentation.

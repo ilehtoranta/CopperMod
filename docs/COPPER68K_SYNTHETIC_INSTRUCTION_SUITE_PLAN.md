@@ -906,3 +906,27 @@ control-encoding report. Fresh pinned SingleStepTests/Musashi, AHX and qualified
 TRAP trace checks pass. The private unpublished .48 package passes the isolated
 CopperScreen Release build, host/disk/engine checks and three native replays.
 The reference document records exact identities, failed-before proofs and limits.
+
+The TRAPcc/CHK2 reference follow-up qualifies a separate pinned `TrapBounds`
+preset against Motorola's following-instruction saved-PC rules. Two missing PC
+synchronizations are corrected in a copied generator source; CPU execution and
+the unchanged Basic audit retain their behavior. Six advanced CPU profiles pass
+21 groups, 951,522 callbacks and 476,339 frame checks. All 63 comparator controls
+pass; an isolated wrong-saved-PC CPU mutation fails every group. Missing, changed,
+empty and unqualified-source inputs are rejected before native execution. The
+new dedicated audit command requires exact profile/family and callback/frame
+coverage; it cannot pass from a skipped or empty selection.
+
+CHK2's 060 architectural unavailability remains covered synthetically; the
+focused generated 060 profile contains only TRAPcc. This is patched software
+qualification with CCR 0/31 and ordinary stacks, not physical qualification or
+exhaustive trace/fault coverage. The unchanged broad audit still fails 46
+mismatching and 13 unsupported groups; its figures are not replaced by the new
+preset. Milestone 6 remains in progress. No CPU source/package change or test
+retirement is needed. Exact identities, scope and reproduction commands are in
+`COPPER68K_REFERENCE_QUALIFICATION.md`.
+
+Final follow-up validation passes 4,776 CPU tests with ten optional skips,
+including the enabled trap/bounds audit. The deterministic gate retains
+11,168,408 cases in 469 batches and `roadmapComplete=false`; fresh pinned
+SingleStepTests/Musashi and the earlier qualified trace preset pass.
