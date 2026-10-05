@@ -20,33 +20,46 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
     [Fact, Trait("Suite", "Synthetic")]
     public void ExecutedRepairRetriesEveryValidationReadAfterCommittedThrowaways() => Audit(true);
 
-    private void Audit(bool chained)
+    [Fact, Trait("Suite", "Synthetic")]
+    public void RepairWithUntouchedIncomingTraceBoundariesScalar() => Audit(false, true);
+
+    [Fact, Trait("Suite", "Synthetic")]
+    public void RepairWithUntouchedIncomingTraceBoundariesBatch() => Audit(false, true, true);
+
+    [Fact, Trait("Suite", "Synthetic")]
+    public void RepairWithUntouchedIncomingTraceChainedScalar() => Audit(true, true);
+
+    [Fact, Trait("Suite", "Synthetic")]
+    public void RepairWithUntouchedIncomingTraceChainedBatch() => Audit(true, true, true);
+
+    private void Audit(bool chained, bool keepTrace = false, bool batch = false)
     {
         var bus = new SyntheticM68040RteValidationFaultTests.ValidationFaultBus();
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);
-        var report = new CoverageBatch("68040", chained ? "rte-repair-chained" : "rte-repair-boundaries");
+        var report = new CoverageBatch("68040", keepTrace ? $"rte-retry-trace-{(chained ? "chained" : "boundaries")}-{(batch ? "batch" : "scalar")}"
+            : chained ? "rte-repair-chained" : "rte-repair-boundaries");
         foreach (var start in SupervisorBanks)
         foreach (var tail in chained ? SupervisorBanks : [start])
         foreach (var middle in chained ? new[] { "none", "ISP", "MSP" } : ["none"])
         foreach (var result in new[] { "user", "ISP", "MSP" })
-        foreach (var incoming in chained ? new ushort[] { 0x8000 } : [0, 0x8000, 0x4000])
+        foreach (var incoming in chained && !keepTrace ? new ushort[] { 0x8000 } : [0, 0x8000, 0x4000])
         foreach (var restoredTrace in new ushort[] { 0, 0x8000, 0x4000 })
         foreach (var alignment in chained ? new uint[] { 0, 1 } : [0])
         foreach (var vbr in chained ? new uint[] { 0, 0x10000 } : [0x10000])
         foreach (var ccr in chained ? new[] { 0, 31 } : Enumerable.Range(0, 32))
-        foreach (var form in Forms)
+        foreach (var form in keepTrace ? Forms.Where(f => f is not ("CT" or "CU" or "CP")) : Forms)
         foreach (var (offset, width) in chained ? SyntheticM68040RteValidationFaultTests.Reads(form) : [(0u, 2)])
         for (var faultByte = 0; faultByte < (chained ? width : 1); faultByte++)
         {
             var path = !chained ? new[] { start } : middle == "none" ? [start, tail] : new[] { start, middle, tail };
-            Run(m, bus, report, path, result, incoming, restoredTrace, alignment, vbr, ccr, form, offset, width, faultByte);
+            Run(m, bus, report, path, result, incoming, restoredTrace, alignment, vbr, ccr, form, offset, width, faultByte, keepTrace, batch);
         }
         report.Complete(output);
     }
 
     private static void Run(SyntheticMachine m, SyntheticM68040RteValidationFaultTests.ValidationFaultBus bus,
         CoverageBatch report, string[] path, string result, ushort incoming, ushort restoredTrace,
-        uint alignment, uint vbr, int ccr, string form, uint offset, int width, int faultByte)
+        uint alignment, uint vbr, int ccr, string form, uint offset, int width, int faultByte, bool keepTrace, bool batch)
     {
         bus.Disarm(); m.Reset(ccr);
         var pointers = new Dictionary<string, uint> { ["user"] = 0x7800 + alignment, ["ISP"] = 0x4700 + alignment, ["MSP"] = 0x7400 + alignment };
@@ -80,12 +93,13 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         m.InitializePhysical(Operand, 0x89abcdef, 4); m.InitializePhysical(Operand + 4, 0x12345678, 4);
         m.Core.State.A[0] = 0x4300; // CM must use the saved EA, not this live base.
         // Fixed reference encodings: MOVE.W #imm,(xxx).L; MOVE.L #imm,(xxx).L;
-        // MOVE.W #imm,(A7); RTE. Clearing the saved incoming trace is an explicit
-        // handler action, so retry trace comes solely from the repaired frame.
+        // MOVE.W #imm,(A7); RTE. Legacy repair explicitly clears saved incoming
+        // trace. The retry-trace fixture does not store to the access frame SR.
         ushort[] handler = [0x33fc, savedSr, (ushort)(frame >> 16), (ushort)frame,
             0x23fc, 0, (ushort)Target, (ushort)((frame + 2) >> 16), (ushort)(frame + 2),
             0x33fc, (ushort)((repairedFormat << 12) | 8), (ushort)((frame + 6) >> 16), (ushort)(frame + 6),
             0x3ebc, (ushort)(priorSr & ~0xc000), 0x4e73, 0x7e7e];
+        if (keepTrace) handler = [.. handler.Take(13), 0x4e73, 0x7e7e];
         for (var n = 0; n < handler.Length; n++) m.InitializePhysical(Handler + (uint)n * 2, handler[n], 2);
         m.InitializePhysical(PendingHandler, 0x4e73, 2); m.InitializePhysical(PendingHandler + 2, 0x7e7e, 2);
         m.InitializePhysical(vbr + 8, Handler, 4);
@@ -108,13 +122,17 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         ExpectProvenance(e, sequence + 1, SyntheticMachine.Code, priorSr);
         SyntheticM68040RteValidationFaultTests.ExpectAccessFrame(m, e, accessFrame, priorSr, SyntheticMachine.Code, frame + offset, width);
         bus.Arm(frame + offset + (uint)faultByte);
-        var phases = new List<string> { "fault-entry", "repair-SR", "repair-PC", "repair-format", "clear-incoming-trace", "handler-return", "retry-RTE" };
+        var phases = new List<string> { "fault-entry", "repair-SR", "repair-PC", "repair-format" };
+        if (!keepTrace) phases.Add("clear-incoming-trace");
+        phases.AddRange(["handler-return", "retry-RTE"]);
+        if (keepTrace && incoming != 0) phases.Add("retry-trace-return");
         if (vector != 0) phases.Add("pending-return"); phases.Add("following");
-        var id = $"68040/RTE/repair/{form}/path={string.Join('-', path)}/result={result}/incoming={incoming:X4}/T={restoredTrace:X4}/align={alignment}/VBR={vbr:X8}/read={offset}:{width}/fault-byte={faultByte}/op=4E73/ccr={ccr:X2}";
+        var id = $"68040/RTE/{(keepTrace ? "retry-trace" : "repair")}/{form}/path={string.Join('-', path)}/result={result}/incoming={incoming:X4}/T={restoredTrace:X4}/align={alignment}/VBR={vbr:X8}/read={offset}:{width}/fault-byte={faultByte}/op=4E73/ccr={ccr:X2}";
         var phase = 0;
         bool Step()
         {
-            var passed = SyntheticM68040AccessFrameAuditTests.Step(m, e, report, id + "/" + phases[phase++]);
+            var caseId = id + "/" + phases[phase++];
+            var passed = batch ? BatchStep(m, e, report, caseId) : SyntheticM68040AccessFrameAuditTests.Step(m, e, report, caseId);
             if (!passed) while (phase < phases.Count) report.Record(id + "/" + phases[phase++], "untested", "Repair prerequisite failed");
             return passed;
         }
@@ -125,18 +143,18 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         foreach (var (at, value, bytes, next) in new[] {
             (frame, (uint)savedSr, 2, Handler + 8), (frame + 2, Target, 4, Handler + 18),
             (frame + 6, (uint)((repairedFormat << 12) | 8), 2, Handler + 26),
-            (accessFrame, (uint)(priorSr & ~0xc000), 2, Handler + 30) })
+            (accessFrame, (uint)(priorSr & ~0xc000), 2, Handler + 30) }.Where(s => !keepTrace || s.Item1 != accessFrame))
         {
             e.Write(at, value, bytes, m.Model); e.Sr = SyntheticExecution.MoveFlags(e.Sr, value, bytes); e.Pc = next;
             if (!Step()) return;
         }
         var repairWrites = bus.Accesses.Skip(repairStart).Where(a => a.Write).ToArray();
-        e.ControlChecks["four exact repair writes"] = (_ => repairWrites.Length == 4 &&
+        e.ControlChecks["exact repair writes"] = (_ => repairWrites.Length == (keepTrace ? 3 : 4) &&
             repairWrites[0] == new BusAccess(frame, 2, true, savedSr, M68kBusAccessKind.CpuDataWrite) &&
             repairWrites[1] == new BusAccess(frame + 2, 4, true, Target, M68kBusAccessKind.CpuDataWrite) &&
             repairWrites[2] == new BusAccess(frame + 6, 2, true, (uint)((repairedFormat << 12) | 8), M68kBusAccessKind.CpuDataWrite) &&
-            repairWrites[3] == new BusAccess(accessFrame, 2, true, (uint)(priorSr & ~0xc000), M68kBusAccessKind.CpuDataWrite) ? 1u : 0u, 1);
-        var resumeSr = (ushort)(priorSr & ~0xc000);
+            (keepTrace || repairWrites[3] == new BusAccess(accessFrame, 2, true, (uint)(priorSr & ~0xc000), M68kBusAccessKind.CpuDataWrite)) ? 1u : 0u, 1);
+        var resumeSr = keepTrace ? priorSr : (ushort)(priorSr & ~0xc000);
         pointers[tail] = frame; SetStacks(e, pointers, resumeSr); e.Pc = SyntheticMachine.Code; e.ExceptionVector = null;
         if (!Step()) return;
         var retryStart = bus.Accesses.Count;
@@ -151,8 +169,19 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
             ExpectException(m, e, pointers, savedSr, vector, Target, Operand, sequence + 2);
             if (form is "CU" or "CP") e.ControlChecks["pending delivery"] = (s => s.M68040PendingFpuExceptions.Find(form == "CU" ? 2 : 3) == null ? 0u : 1u, 0);
         }
+        // MC68040UM 8.2.6: the suspended RTE is traced only once it completes.
+        // Both T1 and T0 trace RTE; the repaired frame's SR is saved in that
+        // trace frame, independently of the trace bits which caused entry.
+        var retryTrace = keepTrace && incoming != 0;
+        if (retryTrace) ExpectException(m, e, pointers, savedSr, 9, Target, SyntheticMachine.Code, sequence + 2);
         if (!Step()) return;
         e.ControlChecks.Remove("consumed throwaways not read by retry");
+        e.ControlChecks.Remove("exact repair writes");
+        if (retryTrace)
+        {
+            pointers[ExceptionBank(savedSr)] += 12; SetStacks(e, pointers, savedSr); e.Pc = Target; e.ExceptionVector = null;
+            if (!Step()) return;
+        }
         if (vector != 0)
         {
             pointers[ExceptionBank(savedSr)] += 12; SetStacks(e, pointers, savedSr); e.Pc = Target; e.ExceptionVector = null;
@@ -161,7 +190,7 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         e.Pc = form == "CM" ? Target + 4 : Target;
         if (form == "CM") { e.D[0] = 0x89abcdef; e.D[1] = 0x12345678; }
         if (restoredTrace == 0x8000 || restoredTrace == 0x4000 && form != "CM")
-            ExpectException(m, e, pointers, savedSr, 9, e.Pc, Target, sequence + (vector != 0 ? 3u : 2u));
+            ExpectException(m, e, pointers, savedSr, 9, e.Pc, Target, sequence + (vector != 0 ? 3u : retryTrace ? 3u : 2u));
         Step();
     }
 
@@ -192,5 +221,26 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         var at = pointers[bank]; e.Write(at, sr, 2, m.Model); e.Write(at + 2, pc, 4, m.Model);
         e.Write(at + 6, (uint)((vector >= 49 ? 3 : 2) << 12 | vector * 4), 2, m.Model); e.Write(at + 8, address, 4, m.Model);
         for (uint n = 0; n < 12; n++) e.MemoryMasks[at + n] = 255;
+    }
+
+    private static bool BatchStep(SyntheticMachine m, ArchitecturalExpectation e, CoverageBatch report, string id)
+    {
+        try
+        {
+            var boundary = new Boundary();
+            var count = ((IM68kBatchCore)m.Core).ExecuteInstructions(1, m.Core.State.Cycles + 1000, boundary);
+            var mismatch = count != 1 || boundary.Before != 1 || boundary.After != 1
+                ? $"Batch count/callbacks differ: {count}/{boundary.Before}/{boundary.After}" : e.Verify(m);
+            report.Record(id, mismatch == null ? "passing" : "mismatching", mismatch);
+            return mismatch == null;
+        }
+        catch (NotSupportedException ex) { report.Record(id, "unsupported", ex.Message); return false; }
+        catch (Exception ex) { report.Record(id, "mismatching", ex.Message); return false; }
+    }
+    private sealed class Boundary : IM68kInstructionBoundary
+    {
+        public int Before, After;
+        public bool BeforeInstruction() { Before++; return true; }
+        public void AfterInstruction(long previousCycle, long currentCycle) => After++;
     }
 }

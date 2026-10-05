@@ -4587,3 +4587,113 @@ its binary identity is not relabeled as the preceding checkpoint's binary.
 No new consumer validation or private/public package is generated for this
 test-only checkpoint; preceding unpublished `.63` evidence remains scoped to
 its own unchanged package and binary. Root CopperScreen work is untouched.
+
+## 040 preserved-trace RTE repair — 2026-10-05
+
+This test-only checkpoint extends executed supervisor-tail repair without
+changing production CPU code. Expectations follow
+[MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf) sections
+8.2.6, 8.4.2 and 8.4.6.7: an access fault defers tracing until the suspended
+instruction completes, incoming trace controls that completion, RTE is a T0
+flow change, and the trace frame saves the resulting SR and next PC. Synthetic
+repair/continuation frames provide manual-derived software qualification;
+there is no executed hardware reference for these combined scenarios.
+
+The real handler performs exactly three original-frame SR/PC/format stores.
+It leaves the access frame's saved SR untouched. Its RTE restores the original
+incoming trace state; the retried original RTE then completes the repaired
+frame. T1/T0 produce a trace with the repaired SR/PC even when the repaired
+SR clears trace. The trace-handler RTE returns to the target, whose following
+BRA or MOVEM verifies restored trace, stacks and CM continuation delivery.
+CM must retain its saved operand address across the intervening trace-handler
+RTE, instead of consuming it there or using the live address register.
+
+| Group, each scalar/batch | Cases | Combinations |
+| --- | ---: | ---: |
+| Canonical CCR boundaries | 92,736 | 378 |
+| Chained validation read bytes | 1,271,808 | 82,944 |
+
+The four groups total **2,729,088 phases**. Canonical direct SR-read faults
+cover all 32 CCRs. Structural cases use CCR 0/31 and reject every byte of each
+SR/PC/format/SSW/continuation-address validation read, with both alignments,
+both VBRs and twelve one/two-throwaway supervisor paths. Each group crosses
+incoming 0/T1/T0, restored 0/T1/T0 and restored user/ISP/MSP. Forms are 0/2/3,
+invalid 4/15 repaired to 0 and normal/CM format 7. Consumed throwaway PCs are
+never fetched; committed stack effects are preserved and retry cannot reread
+their frames. Both public scalar and one-instruction batch execution verify
+architectural state and unchanged-memory guards; batch count/callbacks are
+also checked.
+
+The initial focused run in `artifacts/m6-rte-retry-trace-first/` executes all
+four tests with zero skips, mismatches, unsupported execution or untested
+phases. The earlier explicit-trace-clear repair groups keep their original
+case identifiers/cardinalities and separate mutation selection.
+
+Pending CT/CU/CP interactions, the user-tail trace bridge and mixed trace
+values across consumed throwaways remain required separately. This checkpoint
+uses the same incoming trace value throughout each throwaway chain. Internal
+restoration, chained odd-PC saved-SR provenance, general data/writeback/context
+transfer and all broader model/reference/consolidation requirements remain
+open. The 480-case remaining-protocol inventory continues to fail the complete
+gate. Physical pipeline/cache timing, enabled MMU, FPU arithmetic and OS
+compatibility remain outside this roadmap. No old regression is retired,
+public API changed or package released; milestone 6 remains **in progress**
+with `roadmapComplete=false`.
+
+The three maintained `RteRetryTrace` mutations in
+`artifacts/m6-rte-retry-trace-mutations/` each execute all four complete reports
+and require their intended phase and architectural diagnostic on both routes.
+Counts below are per route, with boundary/chained values respectively:
+
+| Mutation | Mismatching | Dependent phases untested | Required diagnostic |
+| --- | ---: | ---: | --- |
+| Require restored trace bits | 2,688 / 36,864 | 5,376 / 73,728 | Incoming T1 with restored trace clear, retry PC |
+| Omit RTE from T0 flow changes | 4,032 / 55,296 | 8,064 / 110,592 | Incoming T0 with restored trace clear, retry PC |
+| Consume CM in trace-handler RTE | 1,152 / 24,192 | 0 / 0 | CM following instruction, D0 from saved EA |
+
+Mutations are restored byte-for-byte and the original source rebuilt before
+acceptance. These failures prove the new checks discriminate the target defects;
+they are not relabeled as production mismatches.
+
+The refreshed legacy `RteRepair` campaign in
+`artifacts/m6-rte-retry-trace-legacy-mutations/` still executes exactly its two
+original reports (143,424 and 768,960 cases). All three retry-PC, saved MOVEM EA
+and pending saved-SR mutations are detected at the required retry/following
+phase. Its explicit method filter preserves that selection after adding the
+four new facts to the shared fixture class.
+
+Acceptance validation finished on 2026-10-06. Fresh full Release execution in
+`artifacts/m6-rte-retry-trace-full/` passes **5,073 tests, zero failures and
+eleven optional skips**. All nine qualified WinUAE presets match their pinned
+directory/callback/frame counts and current CPU/adapter identities, recorded
+in `qualified-preset-identities.json`. Optional unavailable coverage remains
+separate from these executed reference selections.
+
+The dedicated `artifacts/m6-rte-retry-trace-audit/` run executes **48 tests:
+47 passing and the required inventory failing**, with no skips. All
+**7,496,000 executable cases pass**; there are zero mismatches/unsupported
+cases and **480 untested requirements**. All 42 reports, six fixed examples,
+thirteen fixture/command identities and independently enumerated combinations
+validate before the inventory rejection. All **17** malformed-report/identity
+controls in `artifacts/m6-rte-retry-trace-controls/` reject their specific
+missing, shortened, foreign, redistributed or omitted-fixture corruption;
+the generic inventory failure cannot satisfy a negative control.
+
+CPU assembly SHA-256 is
+`21a9f11e4bdcad46880db2643a04e6997e2adf172e6d3edbc799b68b18956dd2`;
+test/reference adapter is
+`e800f3f49757dbc39bb3b972d63f11eb92a1b0839a9d0d04e5ee4fbde59b4445`.
+The audit manifest records starting commit `32761cc`, its committed CPU tree
+and actual current source/fixture hashes. Production source is unchanged from
+that commit; the newly built binary is recorded under its own identity.
+No consumer replay or private/public package is generated for this test-only
+checkpoint. Prior unpublished `.63` consumer evidence remains scoped to its
+own package and binary. Unrelated root CopperScreen changes remain untouched.
+
+The final strict gate in `artifacts/m6-rte-retry-trace-strict.log` passes
+**22,464,662 logical cases / 632 reporting batches**. Fresh pinned
+SingleStepTests passes **312,500 cases / 125 files** and Musashi passes
+**536 programs with 88 explicit exclusions**. Both reference tests execute
+without skips; their source pins and software-reference limits remain
+unchanged. The full-run optional skips are not credited as reference coverage.
+The ordinary summary retains `roadmapComplete=false`.

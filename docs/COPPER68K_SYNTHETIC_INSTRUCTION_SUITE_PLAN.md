@@ -1707,3 +1707,43 @@ untested requirements and failing completion. All three mutations and seventeen
 report/identity controls detect their intended failures. No consumer or package
 change is needed for this test-only checkpoint; preceding `.63` consumer
 evidence remains historical evidence of its own qualified binary.
+
+### Milestone 6 preserved incoming trace after RTE repair — 2026-10-05
+
+Four ordinary scalar/batch reports add **2,729,088 phases** for supervisor-tail
+repair that leaves the access frame's saved SR untouched. The real handler
+executes exactly three original-frame stores. Its return restores incoming
+T1/T0, and the original RTE traces on completion using repaired SR/PC even
+when its restored SR clears trace. An intervening trace-handler return and
+the following instruction verify that CM retains its saved MOVEM address.
+Expectations follow MC68040UM trace and RTE rules, with software fixtures rather
+than an executed hardware oracle.
+
+Canonical faults cover all CCRs. Structural faults cover every validation-read
+byte, twelve supervisor throwaway paths, both alignments/VBRs and all incoming/
+restored trace and restored stack combinations. Forms are 0/2/3, invalid 4/15
+repaired to 0 and normal/CM format 7. Three maintained `RteRetryTrace` mutations
+target restored-bit trace gating, omitted T0 RTE classification and CM consumed
+by the trace handler. The complete 040 gate requires 48 tests, 42 reporting
+batches, six fixed examples and thirteen input identities, checking each
+combination independently.
+
+Pending CT/CU/CP, user-tail trace bridge and mixed trace values within throwaway
+chains remain required separately, along with the earlier internal-restoration,
+chained odd-PC, general data/writeback/context-transfer and broader model/
+reference/consolidation work. The 480-case inventory remains required and
+fails completion. Production CPU source is unchanged; no public API/package
+change or regression retirement is included. Milestone 6 stays **in progress**,
+`roadmapComplete=false`. See the
+[qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-preserved-trace-rte-repair--2026-10-05).
+
+Fresh validation completed on 2026-10-06: **5,073** full Release CPU tests pass,
+with eleven optional skips and zero failures. All nine pinned WinUAE selections
+match their exact counts and CPU/adapter identities. The strict ordinary gate
+passes **22,464,662 cases / 632 batches**; fresh SingleStepTests passes 312,500
+cases / 125 files and Musashi passes 536 programs with 88 exclusions. All three
+new mutations, three refreshed legacy repair mutations and seventeen new
+report/identity controls detect their intended defects. The complete 040 run
+has 7,496,000 passing cases, zero mismatches/unsupported execution and the
+retained 480 untested requirements; it continues to fail completion. No new
+consumer or package validation is needed for this test-only checkpoint.

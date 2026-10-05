@@ -553,3 +553,33 @@ packages are unchanged; no old regression is retired. See the
 [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-user-tail-validation-and-software-repair--2026-10-05)
 for the distinction between this manual-derived software qualification and
 unobserved hardware behavior.
+
+### Preserved incoming trace after RTE repair
+
+Four additional `SyntheticM68040RteRepairTests` reports cover 2,729,088 phases
+through accurate scalar and one-instruction batch execution. The real handler
+repairs the original SR/PC/format with three stores, leaving the access frame's
+saved SR untouched. Handler return restores incoming T1/T0. Successful original
+RTE completion traces using the repaired SR/PC even when its restored trace
+bits are clear. The trace-handler RTE and following instruction also check that
+the CM saved MOVEM address survives the intervening handler.
+
+Canonical cases cover all 32 CCRs. Chained cases reject every validation read
+byte, use CCR 0/31, both alignments/VBRs and all twelve supervisor throwaway
+paths, including middle stacks. Both groups cross incoming/restored trace and
+restored user/ISP/MSP stacks. Forms are 0/2/3, invalid 4/15 repaired to 0 and
+normal/CM format 7. Each throwaway in a case uses the same incoming trace value;
+pending CT/CU/CP, a user-tail trace bridge and mixed-epoch trace provenance remain
+separate required gaps.
+
+```powershell
+./scripts/test-copper68k-synthetic-mutations.ps1 -Scope RteRetryTrace -OutputDirectory artifacts/rte-retry-trace-mutations
+```
+
+The command requires all four complete reports and the intended semantic
+failure for restored-bit trace gating, missing T0 RTE classification and early
+CM continuation consumption. The complete 040 gate now checks 48 tests, 42
+reports, six fixed examples and thirteen input identities. Its retained
+480-case remaining-protocol inventory still fails completion. No production
+CPU change, package publication or regression retirement is included. See the
+[qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-preserved-trace-rte-repair--2026-10-05).
