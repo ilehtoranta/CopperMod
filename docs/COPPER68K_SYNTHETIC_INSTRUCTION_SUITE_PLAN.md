@@ -1002,3 +1002,32 @@ retains `roadmapComplete=false`. Fresh pinned SingleStepTests/Musashi, qualified
 TRAP trace and AHX pass. The private .50 package passes the isolated CopperScreen
 Release build, host/disk/engine tests and all three native Workbench/A1200 replays,
 with exact package/version and loaded-DLL identity checks.
+
+The next illegal-integer follow-up adds six required matrices for ADDQ/SUBQ,
+unassigned Scc-neighbor and MOVEQ words, invalid binary operands, unassigned
+C180 words and invalid memory shifts. Their 2,379,776 cases across eight profiles
+exercise every selected word, both stacks and all CCR states. Failed-before
+coverage detects unsupported execution on five advanced profiles; narrow static
+classification now enters vector 4 before operand effects. Legal data/address,
+extend/decimal/packing, EXG/CMPM, DBcc/TRAPcc, register-shift and bitfield aliases
+are preserved. No generic fallback, instruction retry or timing-policy change
+is introduced.
+
+The unchanged broad ILLEGAL group reaches line-F exception disagreements on all
+advanced profiles. Overall Basic remains failing: 1,322 passing, 51 mismatching
+and eight unsupported groups. Five groups now reach later architectural
+mismatches instead of stopping at unsupported integer execution. The original
+inputs and masks remain intact. Older MOVEQ/ADDQ/OR/EXG tests retain distinct
+timing-policy assertions and are not retired. Exact authorities, failed-before
+evidence and remaining gaps are in `COPPER68K_REFERENCE_QUALIFICATION.md`.
+Milestone 6 remains in progress with its full earlier requirements retained.
+
+Final follow-up validation passes 4,857 CPU tests with ten optional skips and
+both qualified exception presets enabled. The strict gate verifies 14,117,016
+logical cases in 549 batches and rejects each missing new 020 report. Fresh
+pinned SingleStepTests/Musashi, qualified TRAP trace and AHX pass. The private
+unpublished .51 package passes the isolated CopperScreen Release build,
+host/disk/engine tests and all three native Workbench/A1200 replays, with exact
+package/version and loaded-DLL identity checks. `roadmapComplete=false` is
+retained; line-F priority, reserved multiply/divide extensions and earlier
+advanced restoration/reference/consolidation requirements remain open.

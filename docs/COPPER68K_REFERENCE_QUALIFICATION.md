@@ -262,10 +262,12 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
 
 ## Remaining qualification and implementation gaps
 
-- SingleStepTests now has the pinned 312,500-case 68000 instruction-body audit
-  described above. WinUAE's executable adapter has no new fixture run in this
-  slice; the LINK source review is separate evidence. WinUAE integer integration
-  currently selects 68000; multi-model native bridge/fixtures still need qualification.
+- SingleStepTests has the pinned 312,500-case 68000 instruction-body audit.
+  The later checkpoints below add a pinned multi-model WinUAE bridge, the
+  unchanged failing Basic discovery audit, and separately qualified trace,
+  trap/bounds and breakpoint presets. Remaining Basic disagreements and
+  unsupported integer execution still require per-case qualification; passing
+  focused presets do not replace the failing broad audit.
 - Generated 010 word-MOVE/MOVEA format-8 images now have the scoped continuation
   gate below. Long transfers, other instruction families, foreign silicon images,
   external bus faults, 020/030 formats 9/A/B and 040 format 7 remain unqualified. The current advanced decoder does not implement all these
@@ -1894,3 +1896,141 @@ Controls use separate directories and preserve the original evidence. See
 `artifacts/m6-invalid-address-gate-controls-v2/controls.json`. Ordinary CI requires
 the expanded matrices and exact per-profile cardinalities. The complete milestone
 6 goal remains open despite these passing scoped gates.
+
+## Quick, binary and memory-shift illegal decoding (2026-10-05)
+
+The unchanged Basic ILLEGAL run exposed `5008`, `7100`, `8008`, `C180` and
+`E0C0` in sequence. These words reached unsupported-timing exceptions on
+EC020/A1200/020/030/060. Narrow classifier guards now enter the existing
+architectural vector-4 path before operand effects. The correction preserves
+legal execution ordering, timing policy and public API; no generic fallback or
+retry after partial effects is introduced.
+
+Authority is [M68000PM](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf):
+ADDQ/SUBQ 4-11/12 and 4-181/182 permit only alterable destinations and forbid byte
+An; Scc 4-173 and the separate DBcc/TRAPcc formats distinguish the unassigned
+condition words. MOVEQ 4-134 fixes bit 8 to zero. ADD/SUB/CMP source rules admit
+word/long An, unlike AND/OR; destination tables exclude PC/immediate. The binary
+matrix uses their explicit instruction/opmode tables, including address variants
+and word multiply/divide source limits. EXG 4-105 admits opmodes 01000, 01001 and
+10001, excluding the unassigned `C180` words. Memory shifts/rotates at 4-24,
+4-115, 4-162 and 4-166 require memory-alterable operands. Unassigned first words
+use the causing opcode PC per
+[MC68020UM 6.1.5](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf).
+
+Six required batches cover every selected illegal/unassigned opcode word, both
+stacks and every initial CCR. Fixed examples, exact distinct-word counts and
+legal exclusions audit the independent encoding fixtures. The common verifier
+checks saved PC/SR, frame/bank selection, all registers, surrounding memory and
+forbidden operand reads. Unassigned words/EA fields are labeled explicitly;
+they are not included as legal instruction combinations.
+
+| Batch | Distinct words | Cases per profile | Added cases across eight profiles |
+| --- | ---: | ---: | ---: |
+| `arithmetic-quick-invalid-operands` | 416 | 26,624 | 212,992 |
+| `control-scc-unassigned-operands` | 48 | 3,072 | 24,576 |
+| `transfer-moveq-unassigned-words` | 2,048 | 131,072 | 1,048,576 |
+| `integer-binary-invalid-operands` | 1,896 | 121,344 | 970,752 |
+| `logical-unassigned-c180` | 64 | 4,096 | 32,768 |
+| `logical-memory-shift-invalid-operands` | 176 | 11,264 | 90,112 |
+
+Total addition: **2,379,776 cases in 48 batches**. Quick size 3, DBcc/TRAPcc,
+legal MOVEQ, ADDX/SUBX, CMPM, SBCD/PACK/UNPK, ABCD/EXG, and register shifts /
+bitfields retain their separate legal or architectural-unavailability coverage.
+Word-multiply/divide An invalid-source coverage is retained in its prior matrix,
+rather than duplicated in the new binary batch.
+
+Failed-before runs have zero mismatches or untested cases. The 000/010/040
+profiles already pass all new matrices. Each affected advanced profile reports:
+
+- `artifacts/m6-invalid-quick-before/`: 26,624 unsupported quick cases and 3,072
+  unsupported unassigned-condition cases.
+- `artifacts/m6-unassigned-moveq-before/`: 131,072 unsupported cases.
+- `artifacts/m6-invalid-binary-before/`: 17,408 passing / 103,936 unsupported.
+- `artifacts/m6-unassigned-c180-before/`: 4,096 unsupported cases.
+- `artifacts/m6-invalid-memory-shift-before/`: 11,264 unsupported cases.
+
+Restored focused runs retain the corresponding `*-focused/` reports. Quick and
+legal arithmetic/control tests pass 80 xUnit tests; MOVEQ and legal transfers
+pass 40; binary and legal arithmetic/logical/multiply/divide/decimal/transfer
+tests pass 120; C180 and legal register transfers pass 16. These are scoped
+checks, separate from the final full CPU suite. Invalid memory operands and
+legal shifts/bitfields pass 40 tests with no skips or failures.
+
+The unchanged broad audit reaches line-F words on every advanced profile:
+EC020/A1200/020 `F110` at callback 28,467; 030 `F520` at 28,551; 040 `F300` at
+28,959; 060 `F23D` at 28,946. There is no remaining integer unsupported stop in
+the ILLEGAL group, but these line-F exception disagreements are still failing
+evidence requiring per-case source/manual/CPU qualification. The complete Basic
+result is **1,322 passing / 51 mismatching / eight unsupported / zero untested
+groups**, over **11,445,125 callbacks and 1,634,819 frames**. Five groups have
+moved from unsupported execution to later architectural mismatches; they have
+not become passing groups. All 32 controls pass. Masked-SR count 199,327 and
+the original Basic manifest/native bridge remain unchanged. No family exclusion,
+comparison mask or fixture alteration is added. See
+`artifacts/m6-invalid-memory-shift-broad/`; intermediate failing audits are retained.
+
+Consolidation review retains `MoveqSignExtendsImmediateAndSetsFlags`,
+`AddqWordDataRegisterAddsImmediateUpdatesFlagsAndPreservesUpperWord`,
+`OrByteDataToDataRegisterUpdatesLowByteAndFlags` and the three EXG register tests
+in `M68020InterpreterTests`: they assert native and elapsed timing policy in
+addition to semantic state. The shared semantic matrices do not replace that
+timing evidence. No regression is retired in this follow-up. The earlier proven
+ASL retirement and all specialized bus/prefetch/cache/JIT/native regressions
+remain retained as documented. The stale initial gap summary above is corrected
+to describe the now-implemented multi-model bridge and its remaining failures.
+
+Milestone 6 remains in progress, including earlier reference disagreements,
+advanced exception restoration and consolidation requirements. New seeded audits,
+physical timing/host-throughput qualification and package publication are not
+claimed by this checkpoint.
+
+Private **unpublished** package `1.5.2-synthetic-dev.51` has SHA-256
+`3967602830b825abe065684737788da47ea7109ba5e290c5838a97ad81853a45`;
+the packaged CPU assembly is
+`277818b4de5bb7638613b7cb26301ef6b14d691b711279cf91487ba20428bb27`.
+`artifacts/m6-integer-illegal-package.json` records source and assembly identities
+against `31a6221`; the default-version CPU used by the reference adapters is
+`e73b8e1f89922399fad793a8f37025864b1bd4af3390dcf171d66de019572374`.
+The assembly version differs from the private package; production source is
+identical.
+
+Isolated CopperScreen baseline `d9beae8` builds in Release with zero warnings or
+errors against the exact .51 dependency. Host **149** pass with six optional
+skips, disk **74**, separate engine diagnostics **1,080**, and all three native
+Workbench/A1200 boot and disk-persistence replays pass without skips. All four
+loaded CPU DLLs match the package ZIP entry, and all four dependency assets
+resolve exactly .51. Evidence: `artifacts/integer-illegal-validation/`,
+`artifacts/integer-illegal-diagnostic-tests/`,
+`artifacts/integer-illegal-production.binlog` and
+`artifacts/integer-illegal-identities.json`. No native media/build artifacts are
+committed, and unrelated root CopperScreen changes remain untouched. AHX passes
+18 tests in `artifacts/m6-integer-illegal-ahx-results/`; the qualified TRAP trace
+audit retains 512 callbacks / 512 frames / six controls in
+`artifacts/m6-integer-illegal-trace/`.
+
+Final Release CPU validation passes **4,857 tests with ten optional skips** and
+zero failures in `artifacts/m6-integer-illegal-full/`. Both qualified exception
+presets execute: BKPT 224 callbacks / 224 frames / 21 controls, trap/bounds
+951,522 callbacks / 476,339 frames / 63 controls. Optional skips remain
+unavailable coverage, and the separately run Basic audit remains failing.
+
+The strict gate verifies **14,117,016 logical cases in 549 batches**, retaining
+`roadmapComplete=false`. Fresh pinned SingleStepTests passes 312,500 selected
+68000 cases in 125 files; Musashi passes 536 programs with 88 exclusions.
+The positive copied-report gate passes, and omitting each of the six new 020
+reports is rejected. Original evidence is preserved in separate control folders.
+See `artifacts/m6-integer-illegal-gate.log` and
+`artifacts/m6-integer-illegal-gate-controls/controls.json`. Ordinary CI requires
+every new per-profile report at its exact cardinality.
+
+Remaining Basic ILLEGAL diagnostics record expected/actual vectors: `F110`
+EC020/A1200/020 and `F520` 030 expect 8 versus actual 11; 040 `F300` expects 11
+versus actual 8; 060 `F23D` expects 11 versus actual no exception. These require
+instruction-format and exception-priority qualification, not a blanket line-F
+exclusion. The eight remaining unsupported groups are the DIVL/MULL families
+on EC020/A1200/020/030, first stopping at extension words `0031`, `0084` or
+`5B2B`. Their reserved extension fields still need per-case qualification;
+entire multiply/divide families are not excluded. Earlier restoration and
+reference requirements remain open, so this checkpoint does not complete the
+milestone 6 goal.

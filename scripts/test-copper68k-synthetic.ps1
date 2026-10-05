@@ -65,11 +65,16 @@ try {
             'move-register-overlap'=$(if ($model -in @('68000','68010')) {1801} else {2593});
             'move-address-boundary'=$(if ($model -in @('68000','68010')) {44} else {60});
             'transfer-registers'=17624; 'transfer-addresses'=$(if ($model -in @('68000','68010')) {8064} else {9252});
+            'transfer-moveq-unassigned-words'=131072;
             'transfer-movep'=3708; 'transfer-movem'=$(if ($model -in @('68000','68010')) {3196} else {3592});
             'transfer-movem-invalid-operands'=6400;
             'arithmetic-boundaries'=56448; 'arithmetic-addressing'=$(if ($model -in @('68000','68010')) {4667} else {8237});
             'arithmetic-scenarios'=21072; 'arithmetic-extend'=25440;
             'arithmetic-invalid-operands'=$(if ($model -in @('68000','68010')) {6336} else {5952});
+            'arithmetic-quick-invalid-operands'=26624;
+            'integer-binary-invalid-operands'=121344;
+            'logical-unassigned-c180'=4096;
+            'logical-memory-shift-invalid-operands'=11264;
             'arithmetic-muldiv-word-invalid-operands'=16384;
             'arithmetic-muldiv-long-invalid-operands'=4096;
             'arithmetic-decimal'=$(if ($model -in @('68000','68010')) {111392} else {111458});
@@ -80,6 +85,7 @@ try {
             'control-conditions'=$(if ($model -in @('68000','68010')) {42048} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {43104});
             'control-jumps'=$(if ($model -in @('68000','68010')) {3592} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {3856});
             'control-trapcc'=3072;
+            'control-scc-unassigned-operands'=3072;
             'control-invalid-addresses'=23808;
             'logical-addressing'=$(if ($model -in @('68000','68010')) {6660} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {9944});
             'logical-bitfield-addressing'=$(if ($model -in @('68000','68010')) {2688} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {3480});

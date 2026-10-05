@@ -815,6 +815,36 @@ namespace Copper68k
             // CCR/SR forms were handled above; dynamic mode-1 words are MOVEP.
             var logicalMode = (opcode >> 3) & 7;
             var logicalRegister = opcode & 7;
+            // Count-one word shifts/rotates require memory-alterable EAs.
+            // Bit 11 distinguishes the neighboring 020+ bitfield encodings.
+            if ((opcode & 0xF8C0) == 0xE0C0 &&
+                (logicalMode < 2 || logicalMode == 7 && logicalRegister > 1))
+                return M68020OpcodeKind.IllegalInstruction;
+            // Binary data sources end at mode-7 field 4; destinations end
+            // at field 1. ADD/SUB/CMP admit An for word/long, OR/AND do not.
+            // Destination mode 0/1 aliases and opmode 3/7 remain separate.
+            var integerLine = opcode >> 12;
+            // AND.L destination-Dn words have no assigned alias; EXG's
+            // long data/address exchange uses mode 1 (C188), not mode 0.
+            if ((opcode & 0xF1F8) == 0xC180)
+                return M68020OpcodeKind.IllegalInstruction;
+            if (integerLine is 8 or 9 or 11 or 12 or 13)
+            {
+                var opmode = (opcode >> 6) & 7;
+                if (logicalMode == 7 && logicalRegister > (opmode is >= 4 and <= 6 ? 1 : 4) ||
+                    logicalMode == 1 && opmode < 3 && (integerLine is 8 or 12 || opmode == 0))
+                    return M68020OpcodeKind.IllegalInstruction;
+            }
+            // ADDQ/SUBQ allow An only for word/long and otherwise require
+            // alterable EAs. Size 3 selects DBcc/Scc/TRAPcc, not arithmetic.
+            if ((opcode & 0xF000) == 0x5000)
+            {
+                var size = (opcode >> 6) & 3;
+                if (size < 3
+                    ? logicalMode == 1 && size == 0 || logicalMode == 7 && logicalRegister > 1
+                    : logicalMode == 7 && logicalRegister > 4)
+                    return M68020OpcodeKind.IllegalInstruction;
+            }
             if ((opcode & 0xFF00) is 0x0000 or 0x0200 or 0x0A00 &&
                 ((opcode >> 6) & 3) < 3 &&
                 (logicalMode == 1 || logicalMode == 7 && logicalRegister > 1))
@@ -894,6 +924,10 @@ namespace Copper68k
                         : M68020OpcodeKind.IllegalInstruction;
             }
 
+            // MOVEQ's bit 8 must be zero; other line-7 first words are
+            // unassigned on these models, not alternate MOVEQ encodings.
+            if ((opcode & 0xF100) == 0x7100)
+                return M68020OpcodeKind.IllegalInstruction;
             if ((opcode & 0xF100) == 0x7000)
             {
                 return M68020OpcodeKind.Moveq;
