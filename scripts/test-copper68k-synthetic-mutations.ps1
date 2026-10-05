@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','UserRteFault','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','RteUserMaster','UserRteFault','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -358,6 +358,24 @@ foreach ($mutation in $pendingTraceMutations) {
     $mutation.group='PendingRepairWithPreservedIncomingTrace'; $mutation.model='68040'; $mutation.milestone=6
     $mutation.pendingTrace=$true; $mutations += $mutation
 }
+$userMasterMutations = @(
+    @{name='040-user-master-selects-msp-in-user-mode'; file='Copper68k/M68kCore.cs';
+      before='                return UserStackPointer;';
+      after='                return (statusRegister & Master) != 0 ? MasterStackPointer : UserStackPointer;';
+      proofCombination='/user-master/format0/'; proofPhase='/retry-RTE'; proofReason='A7 expected'},
+    @{name='040-user-master-pending-clears-m'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs';
+      before='            State.StatusRegister = (ushort)((sr | M68kCpuState.Supervisor) & ~0xc000);';
+      after='            State.StatusRegister = (ushort)((sr | M68kCpuState.Supervisor) & ~0xd000);';
+      proofCombination='/user-master/CT/'; proofPhase='/retry-RTE'; proofReason='SR expected'},
+    @{name='040-user-master-trace-clears-m'; file=$advanced;
+      before='            State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~0xc000);';
+      after='            State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~0xd000);';
+      proofCombination='/user-master/format0/'; proofPhase='/following'; proofReason='SR expected'}
+)
+foreach ($mutation in $userMasterMutations) {
+    $mutation.group='RestoredUserMaster'; $mutation.model='68040'; $mutation.milestone=6
+    $mutation.userMaster=$true; $mutations += $mutation
+}
 $instructionMutations = @(
     @{name='040-instruction-short-frame'; before='                    RaiseUnbufferedReadAccessFault(fault, stackedProgramCounter, instruction: true);';
       after='                    RaiseFormat0Exception(VectorBusError, stackedProgramCounter, M68kInstructionTimingKey.IllegalInstruction);'; proofCombination='/instruction/opcode/'},
@@ -428,6 +446,7 @@ if ($Scope -eq 'RteValidationFault') { $mutations = @($mutations | Where-Object 
 if ($Scope -eq 'RteRepair') { $mutations = @($mutations | Where-Object { $_.repair }) }
 if ($Scope -eq 'RteRetryTrace') { $mutations = @($mutations | Where-Object { $_.retryTrace }) }
 if ($Scope -eq 'RtePendingTrace') { $mutations = @($mutations | Where-Object { $_.pendingTrace }) }
+if ($Scope -eq 'RteUserMaster') { $mutations = @($mutations | Where-Object { $_.userMaster }) }
 if ($Scope -eq 'InstructionFault') { $mutations = @($mutations | Where-Object { $_.instructionFault }) }
 if ($Scope -eq 'HandlerPrefetch') { $mutations = @($mutations | Where-Object { $_.handlerPrefetch }) }
 if ($Scope -eq 'EntryPrefetch') { $mutations = @($mutations | Where-Object { $_.entryPrefetch }) }
@@ -544,15 +563,15 @@ try {
                     throw 'Instruction-fault mutation omitted complete cases or intended semantic failure'
                 }
             }
-            if ($mutation.retryTrace -or $mutation.pendingTrace) {
+            if ($mutation.retryTrace -or $mutation.pendingTrace -or $mutation.userMaster) {
                 [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
                 if ($trx.TestRun.ResultSummary.Counters.executed -ne 4 -or $trx.TestRun.ResultSummary.Counters.failed -ne 4 -or $batches.Count -ne 4) {
                     throw 'Retry-trace mutation omitted its complete four-batch selection'
                 }
                 foreach ($matrix in @('boundaries','chained')) {
                     foreach ($route in @('scalar','batch')) {
-                        $prefix = if ($mutation.pendingTrace) {'rte-pending-trace'} else {'rte-retry-trace'}
-                        $cases = if ($mutation.pendingTrace) {if ($matrix -eq 'boundaries') {41472} else {870912}} else {if ($matrix -eq 'boundaries') {92736} else {1271808}}
+                        $prefix = if ($mutation.userMaster) {'rte-user-master'} elseif ($mutation.pendingTrace) {'rte-pending-trace'} else {'rte-retry-trace'}
+                        $cases = if ($mutation.userMaster) {if ($matrix -eq 'boundaries') {44736} else {714240}} elseif ($mutation.pendingTrace) {if ($matrix -eq 'boundaries') {41472} else {870912}} else {if ($matrix -eq 'boundaries') {92736} else {1271808}}
                         $target = @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq "$prefix-$matrix-$route" })
                         if ($target.Count -ne 1 -or $target[0].logicalCases -ne $cases -or
                             @($target[0].failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
@@ -624,7 +643,7 @@ try {
             } elseif ($mutation.entryPrefetch) {
                 @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
                     $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) })[0]
-            } elseif ($mutation.retryTrace -or $mutation.pendingTrace) {
+            } elseif ($mutation.retryTrace -or $mutation.pendingTrace -or $mutation.userMaster) {
                 @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
                     $_.id.EndsWith($mutation.proofPhase, [StringComparison]::Ordinal) -and $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) })[0]
             } elseif ($mutation.userRte) {

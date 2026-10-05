@@ -4803,3 +4803,127 @@ its subsequent exception-bank selection needs separate qualification. This
 is distinct from the already qualified initial user-tail fault M values and
 from a user-tail trace bridge. It remains a required stack-state combination,
 along with the other named unqualified protocols above.
+
+### 040 restored user M=1 — 2026-10-06
+
+`SyntheticM68040RteRepairTests` now includes a separate restored user S=0,M=1
+matrix through accurate scalar and one-instruction batch execution. MC68040UM
+2.2.2.1 makes USP active in user mode regardless of M; 8.1 forces S and clears
+trace for a synchronous exception, preserving M and selecting MSP. The shared
+independent exception expectation must therefore use M alone to select that
+future supervisor bank. Existing user M=0 / ISP / MSP reports retain their
+original case identities and cardinalities. No production CPU correction was
+required by the new focused run.
+
+The real handler repairs SR/PC/format with exactly three MOVE stores while
+preserving the access frame's saved incoming trace. The original RTE restores
+S=0,M=1, then normal/CM completion trace or CT/CU/CP49 pending conversion must use
+MSP. Handler return restores USP without clearing M, and the following BRA or
+CM MOVEM obeys the restored trace. Every phase checks architectural registers,
+all three stack pointers, saved SR/PC/EA, exception sequence, format/vector,
+pending context consumption, guarded memory and batch counts/callbacks. CM
+still uses the saved operand address across intervening trace handlers.
+
+| Group, each scalar/batch | Cases | Combinations |
+| --- | ---: | ---: |
+| Canonical CCR boundaries | 44,736 | 180 |
+| Chained validation-read bytes | 714,240 | 45,792 |
+
+The four reports total **1,517,952 checked phases**. Canonical cases cover all
+32 CCRs. Chained cases use CCR 0/31 and every byte of each documented validation
+read, twelve supervisor throwaway paths, both alignments/VBRs and all incoming/
+restored 0/T1/T0. Forms are 0/2/3, invalid 4/15 repaired to 0, normal/CM and
+CT/CU/CP49. The initial run at `artifacts/m6-user-master-focused/` passes all four
+tests without skips, mismatches, unsupported execution or untested phases.
+
+The complete 040 command requires 56 executed tests, 50 reports, six fixed
+examples and thirteen input identities. Its independent iterator checks every
+new path/result/trace/form/read/fault-byte combination and expected cardinality.
+The ordinary strict command also requires the four new reports. Maintained
+mutation scope `RteUserMaster` requires the intended semantic diagnostic from
+all four reports for incorrect user stack selection, pending M clearing and
+trace M clearing. It restores exact production source bytes before rebuilding.
+
+These are manually derived software expectations, composing the documented
+stack-selection and exception-entry rules with RTE continuation rules; they
+are not observed hardware faults or independent FPU arithmetic qualification.
+The pending handler performs a bare RTE rather than the remaining software
+trace-service protocol. This closes the restored user M=1 combination in these
+supervisor-tail repair programs, separately from initial user-tail M and
+user-tail trace bridges. Other CP vectors, software trace service, mixed-epoch
+provenance, internal restoration, chained odd-PC SR, general data/writeback/
+context-transfer and the broader selected-model/reference/consolidation work
+remain required. The 480-case inventory still fails completion. Milestone 6
+remains **in progress**, `roadmapComplete=false`. Enabled MMU, FPU arithmetic,
+physical pipeline/cache timing and OS compatibility remain outside the roadmap.
+No regression is retired, public API changed or package published.
+
+The maintained `RteUserMaster` proof in `artifacts/m6-user-master-mutations-v2/`
+detects all three mutations. Each executes all four complete reports and
+requires the intended retry/following phase and diagnostic in both routes and
+both matrices. Counts below are per route, canonical/chained respectively:
+
+| Mutation | Mismatching | Dependent phases untested | Required diagnostic |
+| --- | ---: | ---: | --- |
+| Select MSP during user execution | 5,760 / 91,584 | 10,176 / 164,736 | Format-0 retry, A7 differs |
+| Clear M during pending conversion | 1,728 / 36,288 | 3,456 / 72,576 | CT retry, SR loses M |
+| Clear M during trace entry | 4,672 / 72,000 | 5,376 / 73,728 | Format-0 following instruction, SR loses M |
+
+The first proof attempt expected an A7 diagnostic for pending M clearing, but
+the common verifier reports the SR mismatch first. The proof checker now
+requires that precise missing-M SR diagnostic; all three mutations were rerun
+in a fresh directory. The initial failed proof attempt remains at
+`artifacts/m6-user-master-mutations/`; it is not acceptance evidence. Exact
+production source bytes match the preceding checkpoint after restoration, and
+the restored Release rebuild succeeds with zero warnings/errors.
+
+The first complete run executes all 56 tests: 55 pass and the required inventory
+fails. Its report validator then rejects `rte-user-master-boundaries-scalar`
+because the older `rte-user-` prefix selector also matched the new group. The
+selector now names `rte-user-fault-` and `rte-user-repair-` explicitly, preserving
+both iterators' independent scopes. The original run remains at
+`artifacts/m6-user-master-audit/`; acceptance uses a fresh complete run rather
+than rewriting that run's command identity or results.
+
+Fresh full Release validation in `artifacts/m6-user-master-full/` passes **5,081
+tests with zero failures and eleven optional skips**. All nine qualified WinUAE
+presets match their exact selections and current CPU/adapter identities in
+`qualified-preset-identities.json`. CPU assembly SHA-256 is
+`9765973d30625e2e15c1f76159391fe8a1c7c39c7b0cce1a80187748f382700e`;
+test/reference adapter is
+`70a3f5a04b5e47a872cfdc12036747bf30ca95b8829e65865338b43d216be4b8`.
+The build starts from commit `b59300c`; production CPU source is unchanged,
+while the tested fixture source has its own recorded hashes. These binaries
+are not relabeled as built from the subsequent checkpoint commit.
+
+No new consumer validation or private/public package is produced for this
+test-only checkpoint. Prior unpublished `.63` evidence retains its own
+package/binary scope. Root CopperScreen changes and the pinned dependency
+boundary are untouched. Original Basic reference mismatches/unsupported groups
+remain historical failures, separate from the qualified selections above.
+
+The strict ordinary gate in `artifacts/m6-user-master-strict.log` passes
+**25,807,382 logical cases / 640 batches**. Fresh pinned SingleStepTests passes
+**312,500 cases / 125 files**, and Musashi passes **536 programs with 88 explicit
+exclusions**. Both reference tests execute once without skips, with fixture
+identities and source pins checked by the maintained command. These are scoped
+software references rather than hardware qualification. The ordinary summary
+retains `roadmapComplete=false` and the new restored-user scope separately.
+
+The fresh corrected run in `artifacts/m6-user-master-audit-v2/` executes **56
+tests: 55 pass and the required inventory fails**, with no skips. All
+**10,838,720 executable phases pass**, with zero mismatches or unsupported
+execution and **480 untested requirements**. The verifier validates all 50
+reports, six fixed examples, thirteen fixture/command identities and every
+independently enumerated combination before rejecting the inventory. Logical
+coverage totals 10,839,200 including the required untested rows. The manifest
+records starting commit `b59300c`, CPU tree
+`795fd12d6c0237a22a5f92f4a96cc4823e0364c1` and current input/source/binary hashes.
+This gate remains failed and does not establish milestone-6 completion.
+
+All **17** controls in `artifacts/m6-user-master-controls/` reject their intended
+missing, shortened, foreign, redistributed or omitted-fixture corruption with
+the specific expected diagnostic, rather than the generic inventory rejection.
+Both scalar/batch canonical and chained restored-user reports are covered. All
+current fixture/source/binary identities still match after reference audits.
+Production CPU source remains unchanged; milestone 6 remains **in progress**.

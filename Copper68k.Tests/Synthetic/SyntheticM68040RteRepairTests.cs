@@ -44,35 +44,47 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
     [Fact, Trait("Suite", "Synthetic")]
     public void PendingRepairWithPreservedIncomingTraceChainedBatch() => Audit(true, true, true, true);
 
-    private void Audit(bool chained, bool keepTrace = false, bool batch = false, bool pendingTrace = false)
+    [Fact, Trait("Suite", "Synthetic")]
+    public void RestoredUserMasterBoundariesScalar() => Audit(false, true, userMaster: true);
+
+    [Fact, Trait("Suite", "Synthetic")]
+    public void RestoredUserMasterBoundariesBatch() => Audit(false, true, true, userMaster: true);
+
+    [Fact, Trait("Suite", "Synthetic")]
+    public void RestoredUserMasterChainedScalar() => Audit(true, true, userMaster: true);
+
+    [Fact, Trait("Suite", "Synthetic")]
+    public void RestoredUserMasterChainedBatch() => Audit(true, true, true, userMaster: true);
+
+    private void Audit(bool chained, bool keepTrace = false, bool batch = false, bool pendingTrace = false, bool userMaster = false)
     {
         var bus = new SyntheticM68040RteValidationFaultTests.ValidationFaultBus();
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);
-        var traceGroup = pendingTrace ? "rte-pending-trace" : "rte-retry-trace";
+        var traceGroup = userMaster ? "rte-user-master" : pendingTrace ? "rte-pending-trace" : "rte-retry-trace";
         var report = new CoverageBatch("68040", keepTrace ? $"{traceGroup}-{(chained ? "chained" : "boundaries")}-{(batch ? "batch" : "scalar")}"
             : chained ? "rte-repair-chained" : "rte-repair-boundaries");
         foreach (var start in SupervisorBanks)
         foreach (var tail in chained ? SupervisorBanks : [start])
         foreach (var middle in chained ? new[] { "none", "ISP", "MSP" } : ["none"])
-        foreach (var result in new[] { "user", "ISP", "MSP" })
+        foreach (var result in userMaster ? new[] { "user-M" } : ["user", "ISP", "MSP"])
         foreach (var incoming in chained && !keepTrace ? new ushort[] { 0x8000 } : [0, 0x8000, 0x4000])
         foreach (var restoredTrace in new ushort[] { 0, 0x8000, 0x4000 })
         foreach (var alignment in chained ? new uint[] { 0, 1 } : [0])
         foreach (var vbr in chained ? new uint[] { 0, 0x10000 } : [0x10000])
         foreach (var ccr in chained ? new[] { 0, 31 } : Enumerable.Range(0, 32))
-        foreach (var form in Forms.Where(f => pendingTrace ? f is "CT" or "CU" or "CP" : !keepTrace || f is not ("CT" or "CU" or "CP")))
+        foreach (var form in Forms.Where(f => userMaster || (pendingTrace ? f is "CT" or "CU" or "CP" : !keepTrace || f is not ("CT" or "CU" or "CP"))))
         foreach (var (offset, width) in chained ? SyntheticM68040RteValidationFaultTests.Reads(form) : [(0u, 2)])
         for (var faultByte = 0; faultByte < (chained ? width : 1); faultByte++)
         {
             var path = !chained ? new[] { start } : middle == "none" ? [start, tail] : new[] { start, middle, tail };
-            Run(m, bus, report, path, result, incoming, restoredTrace, alignment, vbr, ccr, form, offset, width, faultByte, keepTrace, batch, pendingTrace);
+            Run(m, bus, report, path, result, incoming, restoredTrace, alignment, vbr, ccr, form, offset, width, faultByte, keepTrace, batch, pendingTrace, userMaster);
         }
         report.Complete(output);
     }
 
     private static void Run(SyntheticMachine m, SyntheticM68040RteValidationFaultTests.ValidationFaultBus bus,
         CoverageBatch report, string[] path, string result, ushort incoming, ushort restoredTrace,
-        uint alignment, uint vbr, int ccr, string form, uint offset, int width, int faultByte, bool keepTrace, bool batch, bool pendingTrace)
+        uint alignment, uint vbr, int ccr, string form, uint offset, int width, int faultByte, bool keepTrace, bool batch, bool pendingTrace, bool userMaster)
     {
         bus.Disarm(); m.Reset(ccr);
         var pointers = new Dictionary<string, uint> { ["user"] = 0x7800 + alignment, ["ISP"] = 0x4700 + alignment, ["MSP"] = 0x7400 + alignment };
@@ -140,7 +152,7 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         phases.AddRange(["handler-return", "retry-RTE"]);
         if (keepTrace && incoming != 0 && vector == 0) phases.Add("retry-trace-return");
         if (vector != 0) phases.Add("pending-return"); phases.Add("following");
-        var id = $"68040/RTE/{(pendingTrace ? "pending-trace" : keepTrace ? "retry-trace" : "repair")}/{form}/path={string.Join('-', path)}/result={result}/incoming={incoming:X4}/T={restoredTrace:X4}/align={alignment}/VBR={vbr:X8}/read={offset}:{width}/fault-byte={faultByte}/op=4E73/ccr={ccr:X2}";
+        var id = $"68040/RTE/{(userMaster ? "user-master" : pendingTrace ? "pending-trace" : keepTrace ? "retry-trace" : "repair")}/{form}/path={string.Join('-', path)}/result={result}/incoming={incoming:X4}/T={restoredTrace:X4}/align={alignment}/VBR={vbr:X8}/read={offset}:{width}/fault-byte={faultByte}/op=4E73/ccr={ccr:X2}";
         var phase = 0;
         bool Step()
         {
@@ -210,8 +222,11 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         Step();
     }
 
-    private static ushort Status(string bank, ushort trace, int ccr) => (ushort)((bank == "MSP" ? 0x3000 : bank == "ISP" ? 0x2000 : 0) | trace | ccr);
-    private static string ExceptionBank(ushort sr) => (sr & 0x3000) == 0x3000 ? "MSP" : "ISP";
+    private static ushort Status(string bank, ushort trace, int ccr) => (ushort)((bank == "MSP" ? 0x3000 : bank == "ISP" ? 0x2000 : bank == "user-M" ? 0x1000 : 0) | trace | ccr);
+    // MC68040UM 2.2.2.1 / 8.1: user execution uses USP regardless of M.
+    // A synchronous exception sets S, preserves M and therefore selects MSP
+    // whenever M was set, including the restored S=0,M=1 state.
+    private static string ExceptionBank(ushort sr) => (sr & 0x1000) != 0 ? "MSP" : "ISP";
     private static void SetStacks(ArchitecturalExpectation e, Dictionary<string, uint> pointers, ushort sr)
     {
         e.Sr = sr; e.A[7] = pointers[(sr & 0x2000) == 0 ? "user" : ExceptionBank(sr)];

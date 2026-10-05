@@ -614,3 +614,33 @@ See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#0
 The three result states are user M=0, ISP M=0 and MSP M=1. Restored user M=1
 is not covered here; its exception-bank selection remains a required separate
 qualification, alongside the pending software trace-service and other gaps.
+
+### Restored user mode with M=1
+
+Four `RestoredUserMaster` reports check 1,517,952 phases after a supervisor-tail
+validation fault and real software repair. The original frame restores S=0,M=1.
+User execution uses USP regardless of M; synchronous completion trace, pending
+CT/CU/CP49 conversion and a following traced instruction select MSP. Expectations
+compose MC68040UM 2.2.2.1 and 8.1 with 8.2.6, 8.3 and 8.4.6.7. The shared
+exception-bank helper now tests M independently of pre-exception S.
+
+Canonical cases cover all 32 CCRs. Chained cases reject every validation-read
+byte, with CCR 0/31, all twelve supervisor throwaway paths and both alignments/
+VBRs. Both routes cross incoming/restored 0/T1/T0 and forms 0/2/3, invalid 4/15
+repaired to 0, normal/CM and pending CT/CU/CP49. All three stack pointers, saved
+SR/PC/EA, exact repair stores, pending consumption, handler returns and following
+instruction state are checked. The original result-state reports retain their
+own cardinalities.
+
+```powershell
+./scripts/test-copper68k-synthetic-mutations.ps1 -Scope RteUserMaster -OutputDirectory artifacts/rte-user-master-mutations
+```
+
+The dedicated gate requires 56 tests, 50 reports, six fixed examples and thirteen
+input identities, independently checking each combination. The 480-case required
+inventory still prevents completion. Other pending vectors, software trace
+service, user-tail trace bridges, mixed-epoch provenance and all earlier
+internal/data/writeback/reference gaps remain required. These synthetic results
+are software qualification, not hardware observations or physical timing.
+
+See the [restored-user qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-restored-user-m1--2026-10-06).

@@ -39,6 +39,10 @@ $expected = [ordered]@{
     'rte-pending-trace-boundaries-batch' = @{cases=41472; combinations=162}
     'rte-pending-trace-chained-scalar' = @{cases=870912; combinations=54432}
     'rte-pending-trace-chained-batch' = @{cases=870912; combinations=54432}
+    'rte-user-master-boundaries-scalar' = @{cases=44736; combinations=180}
+    'rte-user-master-boundaries-batch' = @{cases=44736; combinations=180}
+    'rte-user-master-chained-scalar' = @{cases=714240; combinations=45792}
+    'rte-user-master-chained-batch' = @{cases=714240; combinations=45792}
     'instruction-fault-frame' = @{cases=36864; combinations=576}
     'instruction-fault-restart' = @{cases=79872; combinations=624}
     'handler-prefetch-entry-scalar' = @{cases=196608; combinations=6144}
@@ -119,8 +123,8 @@ foreach ($assembly in $identity.assemblies) {
 }
 [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
 $counters = $trx.TestRun.ResultSummary.Counters
-if ([int]$counters.executed -ne 52 -or [int]$counters.total -ne 52 -or [int]$counters.notExecuted -ne 0) {
-    throw '040 access-frame audit did not execute its complete selection (46 batches, 6 fixed examples)'
+if ([int]$counters.executed -ne 56 -or [int]$counters.total -ne 56 -or [int]$counters.notExecuted -ne 0) {
+    throw '040 access-frame audit did not execute its complete selection (50 batches, 6 fixed examples)'
 }
 $totals = [ordered]@{passing=0; mismatching=0; unsupported=0; untested=0}
 foreach ($group in $expected.Keys) {
@@ -143,7 +147,7 @@ foreach ($group in $expected.Keys) {
                 $expectedCombinations["68040/RTE/format7/$form/bank=$bank"] = 32
             }
         }
-    } elseif ($group.StartsWith('rte-user-', [StringComparison]::Ordinal)) {
+    } elseif ($group.StartsWith('rte-user-fault-', [StringComparison]::Ordinal) -or $group.StartsWith('rte-user-repair-', [StringComparison]::Ordinal)) {
         $repair = $group.StartsWith('rte-user-repair-', [StringComparison]::Ordinal)
         foreach ($matrix in @('boundaries','structure')) {
             foreach ($start in @('ISP','MSP')) {
@@ -220,18 +224,19 @@ foreach ($group in $expected.Keys) {
                 } }
             } }
         }
-    } elseif ($group -in @('rte-repair-boundaries','rte-repair-chained') -or $group.StartsWith('rte-retry-trace-', [StringComparison]::Ordinal) -or $group.StartsWith('rte-pending-trace-', [StringComparison]::Ordinal)) {
+    } elseif ($group -in @('rte-repair-boundaries','rte-repair-chained') -or $group.StartsWith('rte-retry-trace-', [StringComparison]::Ordinal) -or $group.StartsWith('rte-pending-trace-', [StringComparison]::Ordinal) -or $group.StartsWith('rte-user-master-', [StringComparison]::Ordinal)) {
+        $userMaster = $group.StartsWith('rte-user-master-', [StringComparison]::Ordinal)
         $pendingTrace = $group.StartsWith('rte-pending-trace-', [StringComparison]::Ordinal)
-        $keepTrace = $pendingTrace -or $group.StartsWith('rte-retry-trace-', [StringComparison]::Ordinal)
-        $chained = $group -eq 'rte-repair-chained' -or $group.StartsWith('rte-retry-trace-chained-', [StringComparison]::Ordinal) -or $group.StartsWith('rte-pending-trace-chained-', [StringComparison]::Ordinal)
+        $keepTrace = $userMaster -or $pendingTrace -or $group.StartsWith('rte-retry-trace-', [StringComparison]::Ordinal)
+        $chained = $group -eq 'rte-repair-chained' -or $group.StartsWith('rte-retry-trace-chained-', [StringComparison]::Ordinal) -or $group.StartsWith('rte-pending-trace-chained-', [StringComparison]::Ordinal) -or $group.StartsWith('rte-user-master-chained-', [StringComparison]::Ordinal)
         $paths = if ($chained) { @('ISP-ISP','ISP-ISP-ISP','ISP-MSP-ISP','ISP-MSP','ISP-ISP-MSP','ISP-MSP-MSP',
             'MSP-ISP','MSP-ISP-ISP','MSP-MSP-ISP','MSP-MSP','MSP-ISP-MSP','MSP-MSP-MSP') } else { @('ISP','MSP') }
-        foreach ($path in $paths) { foreach ($result in @('user','ISP','MSP')) {
+        foreach ($path in $paths) { foreach ($result in $(if ($userMaster) { @('user-M') } else { @('user','ISP','MSP') })) {
             foreach ($incoming in $(if ($chained -and -not $keepTrace) { @(0x8000) } else { @(0,0x8000,0x4000) })) {
                 foreach ($trace in @(0,0x8000,0x4000)) {
                     foreach ($alignment in $(if ($chained) { @(0,1) } else { @(0) })) {
                         foreach ($vbr in $(if ($chained) { @(0,0x10000) } else { @(0x10000) })) {
-                            foreach ($form in $(if ($pendingTrace) { @('CT','CU','CP') } elseif ($keepTrace) { @('format0','format2','format3','invalid4','invalid15','normal','CM') } else { @('format0','format2','format3','invalid4','invalid15','normal','CM','CT','CU','CP') })) {
+                            foreach ($form in $(if ($pendingTrace) { @('CT','CU','CP') } elseif ($keepTrace -and -not $userMaster) { @('format0','format2','format3','invalid4','invalid15','normal','CM') } else { @('format0','format2','format3','invalid4','invalid15','normal','CM','CT','CU','CP') })) {
                                 # Literal read ranges are independent of the fixture iterator.
                                 $reads = @('0:2')
                                 if ($chained) {
@@ -242,8 +247,8 @@ foreach ($group in $expected.Keys) {
                                 foreach ($read in $reads) {
                                     $bytes = if ($chained) { [int]$read.Split(':')[1] } else { 1 }
                                     for ($byte=0; $byte -lt $bytes; $byte++) {
-                                        $key = '68040/RTE/{0}/{1}/path={2}/result={3}/incoming={4:X4}/T={5:X4}/align={6}/VBR={7:X8}/read={8}/fault-byte={9}' -f $(if ($pendingTrace) {'pending-trace'} elseif ($keepTrace) {'retry-trace'} else {'repair'}),$form,$path,$result,$incoming,$trace,$alignment,$vbr,$read,$byte
-                                        $phases = if ($pendingTrace) { 8 } elseif ($keepTrace) { $(if ($incoming -eq 0) {7} else {8}) } elseif ($form -in @('CT','CU','CP')) { 9 } else { 8 }
+                                        $key = '68040/RTE/{0}/{1}/path={2}/result={3}/incoming={4:X4}/T={5:X4}/align={6}/VBR={7:X8}/read={8}/fault-byte={9}' -f $(if ($userMaster) {'user-master'} elseif ($pendingTrace) {'pending-trace'} elseif ($keepTrace) {'retry-trace'} else {'repair'}),$form,$path,$result,$incoming,$trace,$alignment,$vbr,$read,$byte
+                                        $phases = if ($pendingTrace -or ($userMaster -and $form -in @('CT','CU','CP'))) { 8 } elseif ($keepTrace) { $(if ($incoming -eq 0) {7} else {8}) } elseif ($form -in @('CT','CU','CP')) { 9 } else { 8 }
                                         $ccrs = if ($chained) { 2 } else { 32 }
                                         $expectedCombinations[$key] = $phases * $ccrs
                                     }
@@ -432,8 +437,8 @@ foreach ($group in $expected.Keys) {
         if ($combinationTotals[$status] -ne $report.counts.$status) { throw "$group combination totals differ" }
     }
 }
-$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 52 -and
+$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 56 -and
     ($totals.mismatching + $totals.unsupported + $totals.untested) -eq 0
-@{schema=1; model='68040'; logicalCases=9321248; xunitBatches=46; fixedExamples=6; counts=$totals; passed=$passed; roadmapComplete=$false} |
+@{schema=1; model='68040'; logicalCases=10839200; xunitBatches=50; fixedExamples=6; counts=$totals; passed=$passed; roadmapComplete=$false} |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'audit-summary.json')
 if (-not $passed) { throw "040 access-frame audit incomplete: $($totals | ConvertTo-Json -Compress)" }

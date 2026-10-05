@@ -1790,3 +1790,53 @@ The repaired result selector covers user M=0, ISP M=0 and MSP M=1. Restored user
 M=1 and its exception-bank selection remain **untested** separately from the
 initial user-tail M qualification and user-tail trace bridge. This required
 stack-state combination remains part of milestone 6.
+
+### Milestone 6 restored user M=1 — 2026-10-06
+
+The required restored S=0,M=1 state now has four separate scalar/batch reports,
+adding **1,517,952 phases**. The initial focused run passes all four without skips
+or missing phases. User execution retains USP; completion trace, pending
+CT/CU/CP49 delivery and following trace select MSP while preserving M. Independent
+expectations compose MC68040UM 2.2.2.1 and 8.1 with the existing trace/repair rules.
+The test expectation helper selects the synchronous exception bank from M rather
+than requiring pre-exception S as well. No production CPU correction was needed.
+
+Canonical cases cover all CCRs. Structural cases cover every validation-read
+byte, CCR 0/31, twelve supervisor paths, both alignments/VBRs and all incoming/
+restored 0/T1/T0. Forms are 0/2/3, repaired invalid 4/15, normal/CM and CT/CU/CP49.
+The maintained `RteUserMaster` mutation scope targets selecting MSP during user
+execution and clearing M during pending conversion or trace entry. The complete
+040 gate now requires 56 tests, 50 reports, six fixed examples and thirteen input
+identities, with an independent combination iterator.
+
+This closes the restored user M=1 gap for these supervisor-tail repair programs;
+initial user-tail M and user-tail trace bridges are distinct protocols. Other CP
+vectors, software trace service, mixed-epoch provenance, internal restoration,
+chained odd-PC, general data/writeback/context transfer and the broader model/
+reference/consolidation requirements remain open. The required 480-case inventory
+continues to fail completion. Milestone 6 remains **in progress** and
+`roadmapComplete=false`. No package/API change or regression retirement is made.
+
+See the [restored-user qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-restored-user-m1--2026-10-06).
+
+Fresh full Release validation passes **5,081 tests**, with eleven optional skips
+and zero failures. All nine pinned qualified WinUAE selections match their exact
+counts and current CPU/adapter identities. Strict reporting passes **25,807,382
+cases / 640 batches**; fresh SingleStepTests passes 312,500 cases / 125 files and
+Musashi passes 536 programs with 88 explicit exclusions. All three new mutations
+are detected, and exact production source bytes are restored. The first audit's
+report selector collision is corrected with explicit user-tail prefixes; that
+failed verifier attempt remains distinct from the new complete audit run.
+
+The corrected complete 040 audit executes all 56 tests (55 pass, inventory
+fails), checks all 50 reports and independently enumerates their combinations.
+It records **10,838,720 passing phases**, zero mismatches/unsupported execution
+and the retained **480 untested requirements**. The gate remains failed, with
+no skips or omitted scope. No new consumer/package validation is needed for
+this test-only checkpoint; prior `.63` evidence remains scoped to its own binary.
+
+Seventeen fresh missing/short/foreign/redistributed-report and missing-fixture
+identity controls reject their specific corruption diagnostics. Source/fixture/
+binary identities still match after all acceptance checks. Milestone 6 remains
+**in progress**; the restored user M=1 software slice is qualified, while the
+full required restoration/reference/consolidation scope remains retained.
