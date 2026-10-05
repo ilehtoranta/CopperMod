@@ -313,6 +313,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		private string _integerFamily = "";
 		private bool _qualifyLongArithmetic;
 		private readonly Dictionary<string, int> _longArithmeticForms = new(StringComparer.Ordinal);
+		private Func<ushort, ushort, string>? _fixtureClassifier;
+		private readonly Dictionary<string, int> _fixtureForms = new(StringComparer.Ordinal);
 
 		private NativeTester(IntPtr library)
 		{
@@ -357,7 +359,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			bool corruptFrame = false,
 			ushort corruptSr = 0,
 			bool corruptIgnoredSr = false,
-			bool qualifyLongArithmetic = false)
+			bool qualifyLongArithmetic = false,
+			Func<ushort, ushort, string>? fixtureClassifier = null)
 		{
 			_callbackException = null;
 			_executedCases = 0;
@@ -375,6 +378,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			_integerFamily = opcode;
 			_qualifyLongArithmetic = qualifyLongArithmetic;
 			_longArithmeticForms.Clear();
+			_fixtureClassifier = fixtureClassifier;
+			_fixtureForms.Clear();
 			if (integerProfile is not null && (_destroy is null || _addressingMask is null || _lastOutput is null))
 				throw new XunitException("Multi-model integer audit requires the qualified native bridge exports (destroy, addressing mask and diagnostics).");
 			if (integerProfile is not null && (_definedSr is null || _frameChecks is null || _maskedCases is null))
@@ -460,6 +465,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		public int TraceInputCases => _traceInputCases;
 		public bool UnsupportedExecution => _callbackException?.InnerException is UnsupportedM68kTimingException;
 		public IReadOnlyDictionary<string, int> LongArithmeticForms => _longArithmeticForms;
+		public IReadOnlyDictionary<string, int> FixtureForms => _fixtureForms;
 
 		public void Dispose()
 		{
@@ -495,6 +501,11 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 					var form = QualifyLongArithmeticEncoding(bus.ReadHostWord(registers.Pc),
 						bus.ReadHostWord(registers.Pc + 2), _integerFamily);
 					_longArithmeticForms[form] = _longArithmeticForms.GetValueOrDefault(form) + 1;
+				}
+				if (_fixtureClassifier is not null)
+				{
+					var form = _fixtureClassifier(bus.ReadHostWord(registers.Pc), (ushort)registers.Sr);
+					_fixtureForms[form] = _fixtureForms.GetValueOrDefault(form) + 1;
 				}
 				bus.CopyStackImage(registers.Regs[15], registers.Ssp, 0x20);
 

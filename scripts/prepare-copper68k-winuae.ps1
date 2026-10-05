@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $GeneratorSource,
     [Parameter(Mandatory)] [string] $RunnerSource,
     [Parameter(Mandatory)] [string] $VcVars64,
-    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic')] [string] $Preset = 'Basic',
+    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision')] [string] $Preset = 'Basic',
     [string] $OutputDirectory = 'artifacts/winuae-model-inputs'
 )
 $ErrorActionPreference = 'Stop'
@@ -48,17 +48,17 @@ try {
         & ./build68k.exe table68k | Set-Content -Encoding utf8 cpudefs.cpp
         if ($LASTEXITCODE -ne 0) { throw 'Opcode table generation failed' }
         $cpuGeneratorSource = 'gencpu.cpp'
-        if ($Preset -in @('TrapBounds','Breakpoints','LongArithmetic')) {
+        if ($Preset -in @('TrapBounds','Breakpoints','LongArithmetic','WordDivision')) {
             # TrapBounds: following PC (MC68020UM 6.1.4 / MC68040UM 8.2.3).
             # Breakpoints: opcode PC (illegal exception, UM 6.1.5 / 8.2.4).
             # Patch a copy; Basic keeps the pinned source.
-            $sourceName = switch ($Preset) {'TrapBounds' {'gencpu-trap-bounds.cpp'} 'Breakpoints' {'gencpu-breakpoints.cpp'} 'LongArithmetic' {'gencpu-long-arithmetic.cpp'}}
-            $patchName = switch ($Preset) {'TrapBounds' {'trap-bounds-pc.patch'} 'Breakpoints' {'breakpoint-pc.patch'} 'LongArithmetic' {'long-arithmetic-unimplemented.patch'}}
+            $sourceName = switch ($Preset) {'TrapBounds' {'gencpu-trap-bounds.cpp'} 'Breakpoints' {'gencpu-breakpoints.cpp'} 'LongArithmetic' {'gencpu-long-arithmetic.cpp'} 'WordDivision' {'gencpu-word-division.cpp'}}
+            $patchName = switch ($Preset) {'TrapBounds' {'trap-bounds-pc.patch'} 'Breakpoints' {'breakpoint-pc.patch'} 'LongArithmetic' {'long-arithmetic-unimplemented.patch'} 'WordDivision' {'word-division-carry.patch'}}
             $patchPath = Join-Path $PSScriptRoot ('winuae/' + $patchName)
             $patch = [IO.File]::ReadAllText($patchPath).Replace("`r`n", "`n")
             $source = [IO.File]::ReadAllText((Join-Path $generator 'gencpu.cpp')).Replace("`r`n", "`n")
             $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
-            $requiredHunks = switch ($Preset) {'Breakpoints' {1} 'TrapBounds' {2} 'LongArithmetic' {3}}
+            $requiredHunks = switch ($Preset) {'Breakpoints' {1} 'TrapBounds' {2} 'LongArithmetic' {3} 'WordDivision' {1}}
             if ($hunks.Count -ne $requiredHunks) { throw "Incorrect $Preset patch hunk count" }
             foreach ($hunk in $hunks) {
                 $lines = $hunk.TrimEnd("`n").Split("`n")
@@ -158,6 +158,9 @@ void M68KTester_destroy(M68KTesterContext* context) {
     if ($Preset -eq 'LongArithmetic') {
         $baseIni = $baseIni.Replace('[test=Basic]', '[test=LongArithmetic]').Replace('mode=all', 'mode=MULL.L,DIVL.L')
     }
+    if ($Preset -eq 'WordDivision') {
+        $baseIni = $baseIni.Replace('[test=Basic]', '[test=WordDivision]').Replace('mode=all', 'mode=DIVU.W,DIVS.W')
+    }
     foreach ($model in @(
         @{id='68000'; cpu='68000'; width=24}, @{id='68010'; cpu='68010'; width=24},
         @{id='68EC020'; cpu='68020'; width=24}, @{id='68020'; cpu='68020'; width=32},
@@ -207,6 +210,8 @@ void M68KTester_destroy(M68KTesterContext* context) {
         LongArithmeticPatchSha256=$(if ($Preset -eq 'LongArithmetic') {(Get-FileHash -LiteralPath (Join-Path $output 'long-arithmetic-encodings.patch')).Hash.ToLowerInvariant()} else {$null})
         LongArithmeticCpuSourceSha256=$(if ($Preset -eq 'LongArithmetic') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-long-arithmetic.cpp')).Hash.ToLowerInvariant()} else {$null})
         LongArithmeticCpuPatchSha256=$(if ($Preset -eq 'LongArithmetic') {(Get-FileHash -LiteralPath (Join-Path $output 'long-arithmetic-unimplemented.patch')).Hash.ToLowerInvariant()} else {$null})
+        WordDivisionSourceSha256=$(if ($Preset -eq 'WordDivision') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-word-division.cpp')).Hash.ToLowerInvariant()} else {$null})
+        WordDivisionPatchSha256=$(if ($Preset -eq 'WordDivision') {(Get-FileHash -LiteralPath (Join-Path $output 'word-division-carry.patch')).Hash.ToLowerInvariant()} else {$null})
         NativeLibrarySha256=(Get-FileHash -LiteralPath (Join-Path $output 'm68k_cpu_tester.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
         Compiler=$compiler; GeneratorExecutableSha256=(Get-FileHash -LiteralPath (Join-Path $generator 'cputester.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
         NativeSourceSha256=(Get-FileHash -LiteralPath (Join-Path $output 'winuae-native.c') -Algorithm SHA256).Hash.ToLowerInvariant()

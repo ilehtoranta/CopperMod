@@ -270,7 +270,7 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
 - SingleStepTests has the pinned 312,500-case 68000 instruction-body audit.
   The later checkpoints below add a pinned multi-model WinUAE bridge, the
   unchanged failing Basic discovery audit, and separately qualified trace,
-  trap/bounds and breakpoint presets. Remaining Basic disagreements and
+  trap/bounds, breakpoint, legal long-arithmetic and word-division presets. Remaining Basic disagreements and
   unsupported integer execution still require per-case qualification; passing
   focused presets do not replace the failing broad audit.
 - Generated 010 word-MOVE/MOVEA format-8 images now have the scoped continuation
@@ -2376,3 +2376,134 @@ Pinned tracked WinUAE/runner sources are clean. No production CPU, package or
 consumer change is made in this follow-up; the prior isolated .53 consumer
 evidence remains separate. No new package publication or host-performance
 measurement is claimed. Unrelated root CopperScreen changes remain untouched.
+
+## Word division reference qualification (2026-10-05)
+
+This follow-up qualifies a remaining defined-flag disagreement without changing
+production CPU behavior. In the original Basic report, `DIVU.W` on
+EC020/A1200/020/030 first fails at `84C0`: D2=`FFFFFFFF`, D0=`00000010`,
+initial CCR=`1F`. The unsigned quotient overflows. The reference leaves C=1;
+Copper68k returns C=0. Evidence remains in
+`artifacts/m6-long-arithmetic-broad/winuae-model-audit.json` (EC020/A1200 callback
+1,480; 020/030 callback 1,344). The unsigned 000/010/040/060 groups and every
+signed group pass their original Basic inputs.
+
+[M68000PM 4-92/96](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+defines X preservation and cleared carry for signed/unsigned division. Overflow
+sets V and leaves the destination unchanged; N/Z are undefined. Divide-by-zero
+traps with undefined N/Z/V and cleared carry. The pinned generator's
+`newcpu_common.cpp:setdivuflags` documents C=0 for 020, but its 020/030 branch
+only sets V and conditionally N. It omits the carry clear. The separate
+[`WordDivision` patch](../scripts/winuae/word-division-carry.patch) adds an
+explicit C clear after that helper in a copied `gencpu.cpp`. Signed division,
+normal unsigned results, divide-by-zero and other model behavior retain their
+existing paths. N/Z values and timing are not changed. This is a manual-qualified
+software reference correction, not hardware observation or unchanged upstream.
+
+The preparation command retains pinned generator
+`025b999239800357e95065fe5b9a15ea5b300fa7` and runner
+`7a83745d6c6159bc74ab0471578ffc8bc244e66e`, untouched tracked sources and all
+original Basic inputs. The copied normalized source is
+`254873bb8a1b59b081e98defa72fda572d5a2c93c33bb644c8ac07c4257e5c5e`;
+the patch is
+`7eb90f09aaad56d164d0eafb9f66ddfc31becde9951a832820d5fdcc7973a83f`.
+Prepared evidence: `artifacts/m6-word-division-inputs/`. Its manifest is
+`a9aa908a2367fe46189c98e3778f34f6504d7d0a3784705116ecc030cc40abde`,
+generator executable
+`b0983c76a403017ad4e4a4480c4c571ace760f0ee07af01478ac3f8f829ab615`,
+and native bridge
+`dee99883158721c1166cd510977973667165f7ffc8d5c9641621b6a60eb4fa8b`.
+All `.dat` input hashes are retained and checked before native loading.
+
+The complete profile/family selection, fixed callbacks, frames, masked-SR
+counts and operand/profile forms are required. A reusable test-internal native
+callback classifier observes immutable opcode/SR fields, rejects illegal data
+sources, incorrect families and SR states outside this preset, and records
+EA/register/input-SR combinations without production decoders or EA helpers.
+Fourteen fixed encoding/profile examples join ordinary CI. These forms count
+distinct first-word fields and initial SR; they do not imply exhaustive external
+indexed structures or values. Basic generation uses CCR 0/31, user/supervisor
+states and enabled full extensions, without incoming trace or bus faults.
+
+| Profile | DIVS callbacks / frames / masked / forms | DIVU callbacks / frames / masked / forms |
+| --- | ---: | ---: |
+| 68000 | 5,738 / 1,590 / 3,530 / 736 | 6,166 / 1,838 / 4,158 / 736 |
+| 68010 | 5,782 / 1,632 / 3,836 / 736 | 6,058 / 1,792 / 4,032 / 736 |
+| EC020 and A1200, each | 9,690 / 2,734 / 6,074 / 784 | 9,670 / 2,670 / 7,132 / 752 |
+| 020, 030, 040 and 060, each | 9,246 / 2,570 / 5,816 / 688 | 8,870 / 2,466 / 5,676 / 656 |
+
+All sixteen groups pass: **134,928 callbacks, 37,804 frames, 87,936 masked-SR
+cases and 11,392 architectural combinations**. Per-group register, defined-X,
+defined-C and exception-frame corruption must fail; changes confined to
+documented undefined flags must pass. All **80 controls** pass. The existing
+independent flag masks remain unchanged, including defined C in overflow/trap
+comparisons. No actual CPU result or fixture operand is modified to match.
+The standalone command executes fifteen tests with zero skips, and writes
+`winuae-word-division-audit.json` with distinct passing/mismatching/unsupported/
+untested counts. Evidence: `artifacts/m6-word-division-final/`.
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 `
+  -GeneratorSource artifacts/reference-winuae-api `
+  -RunnerSource artifacts/reference-copperline `
+  -VcVars64 '<Visual Studio>/VC/Auxiliary/Build/vcvars64.bat' `
+  -Preset WordDivision -OutputDirectory artifacts/winuae-word-division-inputs
+./scripts/test-copper68k-winuae-qualified-exceptions.ps1 `
+  -Preset WordDivision -InputDirectory artifacts/winuae-word-division-inputs `
+  -OutputDirectory artifacts/winuae-word-division-report
+```
+
+Eight copied-input controls reject missing manifest/memory, empty families,
+changed data, empty/duplicate profiles, unqualified source and unqualified patch
+before native execution. The original qualified inputs remain intact. Evidence:
+`artifacts/m6-word-division-preflight-controls/controls.json`.
+
+A temporary production mutation preserves incoming C only on unsigned word
+overflow. The reference audit detects all six advanced DIVU groups; every other
+group passes. The existing synthetic boundary matrix detects **448 mismatches
+per advanced profile / 2,688 total**, while all sixteen addressing/boundary
+reports contain zero unsupported or untested cases. Classic profiles and the
+addressing groups pass; this mutation does not exercise overflow in their
+chosen addressing samples. A separate expected-count mutation (000 DIVU
+6,166 to 6,165) fails only that group despite native arithmetic passing.
+Evidence: `artifacts/m6-word-division-mutation-controls-final/controls.json`.
+Both source files are restored byte-for-byte before final validation. The first
+control script incorrectly expected addressing mismatches too; its assertion
+failed, its `finally` restored sources, and the corrected control run verifies
+the measured boundary-only scope. Exploratory count/form discovery reports are
+retained separately and never labeled passing gates.
+
+This slice does not retire a regression, produce/publish a package, change the
+CPU/public API/timing policy or broaden physical qualification. The prior private
+.53 consumer evidence remains separate because production source is unchanged.
+Milestone 6 remains in progress, including advanced restoration, other reference
+disagreements, broader independent coverage and consolidation review.
+
+Final Release CPU validation passes **4,916 tests / ten optional skips / zero
+failures**, including WordDivision, LongArithmetic, TrapBounds and Breakpoints.
+The strict gate passes **14,646,552 logical cases / 574 batches**, with
+`roadmapComplete=false`; fresh pinned SingleStepTests passes 312,500 cases in
+125 files, and Musashi passes 536 programs with 88 explicit exclusions. Evidence:
+`artifacts/m6-word-division-full/`, `artifacts/m6-word-division-full.log` and
+`artifacts/m6-word-division-gate.log`.
+
+The fresh original Basic audit retains exactly **1,326 passing / 47 mismatching /
+eight unsupported / zero untested** groups: 11,474,194 callbacks, 1,663,891
+frames, 199,327 masked-SR cases and one terminal callback. All 32 controls pass.
+Evidence: `artifacts/m6-word-division-broad/`. The unchanged original manifest
+`37cd8ddae8b61ac60e3a49ba835362fbf80d418f48c2539338e6541c9d85e31f`
+and native library
+`75f0c11352d4a8c1e84f32a49a5347ae4cb5bd9128f1501a33d843e6f99cb057`
+remain intact. These failures are not relabeled by the qualified preset.
+
+`artifacts/m6-word-division-identities.json` records exact source/script/assembly
+hashes against baseline `e8140401e9ea37e2a05583eb3cea9f12c9b4a0a5`.
+The unchanged production source tree is
+`12753a6d2bb677f36cae03f3193f370828f50a66`; its default assembly is
+`b56545b9695b2b18f2c906e330152885fd52b28d6166f544166ea1910d836102`,
+and the adapter assembly is
+`2a858963843343689c0637de0843f1d61ccdd9e48f6862d102adbb15dfb7bc7e`.
+The CPU informational version now embeds baseline `e814040`; the different
+assembly hash does not imply a CPU source change. Validated source/assembly
+identities remain stable after the strict gate. PowerShell parsing and local
+documentation link checks pass. No additional seeded audit is claimed.

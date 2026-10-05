@@ -1,7 +1,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('TrapBounds','Breakpoints')] [string] $Preset = 'TrapBounds',
+    [ValidateSet('TrapBounds','Breakpoints','WordDivision')] [string] $Preset = 'TrapBounds',
     [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $InputDirectory,
     [string] $NativeLibrary,
     [string] $OutputDirectory = 'artifacts/winuae-trap-bounds-audit'
@@ -14,9 +14,15 @@ $library = (Resolve-Path -LiteralPath $NativeLibrary).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
 if (Test-Path -LiteralPath $output) { throw "Use a fresh output directory: $output" }
 New-Item -ItemType Directory -Path $output | Out-Null
-$key = if ($Preset -eq 'TrapBounds') {'TRAP_BOUNDS'} else {'BREAKPOINT'}
-$testName = if ($Preset -eq 'TrapBounds') {'WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled'} else {'WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled'}
-$reportName = if ($Preset -eq 'TrapBounds') {'winuae-trap-bounds-audit.json'} else {'winuae-breakpoint-audit.json'}
+$key = switch ($Preset) {'TrapBounds' {'TRAP_BOUNDS'} 'Breakpoints' {'BREAKPOINT'} 'WordDivision' {'WORD_DIVISION'}}
+$testName = switch ($Preset) {'TrapBounds' {'WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled'} 'Breakpoints' {'WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled'} 'WordDivision' {'WinUaeWordDivisionAcrossSelectedModelsWhenEnabled'}}
+$reportName = switch ($Preset) {'TrapBounds' {'winuae-trap-bounds-audit.json'} 'Breakpoints' {'winuae-breakpoint-audit.json'} 'WordDivision' {'winuae-word-division-audit.json'}}
+$filter = "FullyQualifiedName~$testName"
+$expectedTests = 1
+if ($Preset -eq 'WordDivision') {
+    $filter += '|FullyQualifiedName~M68kWinUaeWordDivisionEncodingTests'
+    $expectedTests = 15
+}
 $settings = @{
     ('COPPER68K_RUN_WINUAE_' + $key + '_AUDIT') = '1'
     ('COPPER68K_WINUAE_' + $key + '_PATH') = $root
@@ -29,11 +35,11 @@ try {
         $saved[$name] = [Environment]::GetEnvironmentVariable($name)
         [Environment]::SetEnvironmentVariable($name, $settings[$name])
     }
-    & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --filter "FullyQualifiedName~$testName" --logger 'trx;LogFileName=audit.trx' --results-directory $output
+    & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --filter $filter --logger 'trx;LogFileName=audit.trx' --results-directory $output
     if ($LASTEXITCODE -ne 0) { throw "Qualified $Preset audit failed" }
     [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
     $counts = $trx.TestRun.ResultSummary.Counters
-    if ([int]$counts.executed -ne 1 -or [int]$counts.passed -ne 1) { throw "$Preset audit did not execute its required test" }
+    if ([int]$counts.executed -ne $expectedTests -or [int]$counts.passed -ne $expectedTests) { throw "$Preset audit did not execute its complete test selection" }
     if (-not (Test-Path -LiteralPath (Join-Path $output $reportName))) { throw "$Preset coverage report is missing" }
 } finally {
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }

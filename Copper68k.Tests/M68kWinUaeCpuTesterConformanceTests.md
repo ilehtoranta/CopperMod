@@ -323,3 +323,47 @@ encoding checks; this external audit remains opt-in. No new seeded audit,
 trace/bus-fault/MMU/cache/pipeline qualification or old regression retirement is
 claimed. Full current evidence and remaining milestone requirements are in
 [reference qualification](../docs/COPPER68K_REFERENCE_QUALIFICATION.md#long-arithmetic-reference-qualification-2026-10-05).
+
+## Qualified word division preset
+
+`WordDivision` qualifies DIVS.W and DIVU.W on all seven CPU models and the
+A1200 profile. [M68000PM 4-92/96](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+defines carry as cleared, including overflow and divide-by-zero, while X is
+preserved. N/Z are undefined on overflow; N/Z/V are undefined on divide-by-zero.
+The pinned generator's `setdivuflags` helper omits the carry clear on 020/030,
+despite its own comment specifying C=0. A separate
+[generator patch](../scripts/winuae/word-division-carry.patch) explicitly clears
+carry after unsigned word overflow. Copper68k already implements this behavior.
+No CPU result normalization, flag-mask change or physical hardware claim is made.
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 `
+  -GeneratorSource artifacts/reference-winuae-api `
+  -RunnerSource artifacts/reference-copperline `
+  -VcVars64 '<Visual Studio>/VC/Auxiliary/Build/vcvars64.bat' `
+  -Preset WordDivision -OutputDirectory artifacts/winuae-word-division-inputs
+./scripts/test-copper68k-winuae-qualified-exceptions.ps1 `
+  -Preset WordDivision -InputDirectory artifacts/winuae-word-division-inputs `
+  -OutputDirectory artifacts/winuae-word-division-report
+```
+
+The command requires the qualified source/patch, generator/native identities,
+complete profiles/families and exact input hashes. All 134,928 callbacks, 37,804
+frames, 87,936 masked-CCR cases and 11,392 model/family/EA/register/input-SR
+combinations are pinned. Immutable raw opcode/SR classification rejects invalid
+words or profile states and never calls production helpers. Fourteen fixed
+encoding/profile checks run in ordinary CI. Every external group must reject
+register, X, carry and frame corruption and accept changes confined to undefined
+flags: 80 controls in total. A wrong callback count also fails the gate.
+
+`winuae-word-division-audit.json` reports passing, mismatching, unsupported and
+untested scope separately, and records architectural forms, source/input/assembly
+identities and controls. The command requires all fifteen selected xUnit tests
+to execute successfully. The shared qualified audit runner retains the existing
+TrapBounds and Breakpoints scopes. Full indexing is enabled in generation, but
+this preset does not prove every indexed structural combination or operand
+boundary; the synthetic matrices retain that coverage. Incoming trace, bus
+faults, physical timing and enabled MMU remain outside this preset. Original
+Basic inputs and their failing discovery report remain separate. See the
+[qualification record](../docs/COPPER68K_REFERENCE_QUALIFICATION.md#word-division-reference-qualification-2026-10-05)
+for mutation/rejection evidence and remaining milestone requirements.

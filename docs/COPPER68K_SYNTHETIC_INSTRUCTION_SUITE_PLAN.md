@@ -1112,3 +1112,36 @@ remain visible. CPU sources and timing policy are unchanged; no new package or
 consumer modification is needed. Source/input/assembly identities, historical
 failures and limitations are maintained in the reference record. The goal stays
 active with `roadmapComplete=false`.
+
+### Milestone 6 word-division qualification — 2026-10-05
+
+The pinned WinUAE unsigned-word-overflow helper omitted carry clearing on
+020/030 despite the programmer reference and its own C=0 comment. A separate
+`WordDivision` preset qualifies this defined-flag behavior through a copied CPU
+generator. Existing CPU behavior and independent flag masks remain unchanged;
+the original Basic corpus and its disagreements remain visible.
+
+All eight profiles pass DIVS.W/DIVU.W: 134,928 callbacks, 37,804 exception frames,
+87,936 masked-SR cases and 11,392 model/family/EA/register/input-SR combinations.
+The shared qualified audit requires exact complete selections, pinned identities,
+callback/frame/mask/form counts and raw input classification. Fourteen fixed
+encoding/profile checks join ordinary CI. All 80 register/X/C/frame/undefined-flag
+controls pass; eight missing/changed/empty/duplicate/unqualified inputs fail
+preflight. A carry mutation causes six reference disagreements and 2,688 synthetic
+boundary mismatches; a stale expected count fails its exact group. Sources are
+restored before final validation. The addressing groups pass that mutation and
+are explicitly not claimed as overflow detection. No old regression is retired.
+
+The [reference record](COPPER68K_REFERENCE_QUALIFICATION.md#word-division-reference-qualification-2026-10-05)
+maintains commands, exact inputs, corrections, failure evidence and scope limits.
+Advanced restoration, other reference disagreements, independent coverage and
+consolidation remain required. Milestone 6 stays **in progress**; no package
+publication, consumer change, physical timing or enabled-MMU/FPU qualification
+is included.
+
+Final validation passes 4,916 Release CPU tests with ten optional skips, including
+all four qualified presets. The strict gate retains 14,646,552 logical cases in
+574 batches with fresh pinned SingleStepTests/Musashi audits. The fresh original
+Basic audit retains 1,326 passing, 47 mismatching, eight unsupported and zero
+untested groups; all 32 controls pass. It remains failing. Source/input/assembly
+identities stay stable; the goal remains active with `roadmapComplete=false`.
