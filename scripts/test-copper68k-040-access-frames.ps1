@@ -37,6 +37,10 @@ $expected = [ordered]@{
     'handler-prefetch-entry-batch' = @{cases=196608; combinations=6144}
     'handler-prefetch-executing-scalar' = @{cases=12288; combinations=384}
     'handler-prefetch-executing-batch' = @{cases=12288; combinations=384}
+    'handler-prefetch-retention-scalar' = @{cases=7680; combinations=240}
+    'handler-prefetch-retention-batch' = @{cases=7680; combinations=240}
+    'handler-prefetch-odd-scalar' = @{cases=12288; combinations=384}
+    'handler-prefetch-odd-batch' = @{cases=12288; combinations=384}
     'rte-access-remaining-protocols' = @{cases=480; combinations=15}
 }
 $testExit = 0
@@ -57,7 +61,7 @@ if (-not $ValidateReportsOnly) {
     }
     $identity = [ordered]@{
         schema=1; reference='MC68040UM'; url='https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf'
-        sections=@('7.6.3','8.2.1','8.2.2','8.2.6','8.4','8.4.1','8.4.2','8.4.3','8.4.4','8.4.6.2','8.4.6.7'); softwareReferenceExecuted=$false
+        sections=@('7.6.1','7.6.3','8.1 figure 8-1','8.2.1','8.2.2','8.2.6','8.4','8.4.1','8.4.2','8.4.3','8.4.4','8.4.6.2','8.4.6.7'); softwareReferenceExecuted=$false
         sourceCommit=(& git -C $repo rev-parse HEAD); cpuCommittedTree=(& git -C $repo rev-parse HEAD:Copper68k)
         cpuSourceFiles=@(& git -C $repo ls-files --cached --others --exclude-standard 'Copper68k/*') | ForEach-Object {
             @{file=$_; sha256=(Get-FileHash -LiteralPath (Join-Path $repo $_) -Algorithm SHA256).Hash.ToLowerInvariant()}
@@ -74,7 +78,7 @@ if (-not $ValidateReportsOnly) {
             'Selected active accurate-batch paths verify counts/callbacks and scalar/batch bus/cycle policy; generic short operand frames do not qualify architectural format-7 data restart',
             'Instruction-fault fixtures use cache-disabled accurate execution and physical-map rejection; speculative deferral, enabled caches/MMU and compiled fetch PC provenance remain unqualified',
             'Executed supervisor-tail frame repair explicitly clears saved incoming trace; untouched incoming-trace retry and user-tail repair are not qualified',
-            'User-tail validation, internal-restoration double faults, handler-entry prefetch, chained odd-PC SR provenance and physical timing remain unqualified',
+            'User-tail validation, internal-restoration double faults, cache/MMU/compiled handler-entry prefetch, chained odd-PC SR provenance and physical timing remain unqualified',
             'Direct odd-RTE saved-SR ordering uses documentary WinUAE 5d22d336, not an executed hardware oracle')
     }
     $identity | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'identities.json')
@@ -102,8 +106,8 @@ foreach ($assembly in $identity.assemblies) {
 }
 [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
 $counters = $trx.TestRun.ResultSummary.Counters
-if ([int]$counters.executed -ne 36 -or [int]$counters.total -ne 36 -or [int]$counters.notExecuted -ne 0) {
-    throw '040 access-frame audit did not execute its complete selection (30 batches, 6 fixed examples)'
+if ([int]$counters.executed -ne 40 -or [int]$counters.total -ne 40 -or [int]$counters.notExecuted -ne 0) {
+    throw '040 access-frame audit did not execute its complete selection (34 batches, 6 fixed examples)'
 }
 $totals = [ordered]@{passing=0; mismatching=0; unsupported=0; untested=0}
 foreach ($group in $expected.Keys) {
@@ -126,14 +130,25 @@ foreach ($group in $expected.Keys) {
                 $expectedCombinations["68040/RTE/format7/$form/bank=$bank"] = 32
             }
         }
+    } elseif ($group.StartsWith('handler-prefetch-retention-', [StringComparison]::Ordinal)) {
+        $route = if ($group.EndsWith('-scalar', [StringComparison]::Ordinal)) { 'scalar' } else { 'batch' }
+        foreach ($mode in @('linear','branch','subroutine','task','map')) {
+            foreach ($bank in @('user','ISP','MSP')) { foreach ($offset in @(0,2,4,6)) {
+                foreach ($alignment in @(0,1)) { foreach ($vbr in @(0,0x10000)) {
+                    $key = '68040/access-error/handler-retention/{0}/route={1}/bank={2}/handler={3}/align={4}/VBR={5:X8}' -f $mode,$route,$bank,$offset,$alignment,$vbr
+                    $expectedCombinations[$key] = 32
+                } }
+            } }
+        }
     } elseif ($group.StartsWith('handler-prefetch-', [StringComparison]::Ordinal)) {
         $entry = $group.StartsWith('handler-prefetch-entry-', [StringComparison]::Ordinal)
+        $odd = $group.StartsWith('handler-prefetch-odd-', [StringComparison]::Ordinal)
         $route = if ($group.EndsWith('-scalar', [StringComparison]::Ordinal)) { 'scalar' } else { 'batch' }
         foreach ($form in @('opcode','extension','RTE')) {
             foreach ($bank in $(if ($form -eq 'RTE') { @('ISP','MSP') } else { @('user','ISP','MSP') })) {
                 foreach ($trace in @(0,0x8000,0x4000)) { foreach ($alignment in @(0,1)) { foreach ($vbr in @(0,0x10000)) {
-                    foreach ($offset in $(if ($entry) { @(0,2,4,6) } else { @(0) })) {
-                        foreach ($byte in 0..$(if ($entry) {15} else {3})) {
+                    foreach ($offset in $(if ($odd) { @(1,3,5,7) } elseif ($entry) { @(0,2,4,6) } else { @(0) })) {
+                        foreach ($byte in $(if ($odd) { @(-1) } elseif ($entry) { 0..15 } else { 0..3 })) {
                             $key = '68040/access-error/handler-prefetch/{0}/route={1}/bank={2}/T={3:X4}/align={4}/VBR={5:X8}/handler={6}/byte={7}' -f $form,$route,$bank,$trace,$alignment,$vbr,$offset,$byte
                             $expectedCombinations[$key] = 32
                         }
@@ -366,8 +381,8 @@ foreach ($group in $expected.Keys) {
         if ($combinationTotals[$status] -ne $report.counts.$status) { throw "$group combination totals differ" }
     }
 }
-$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 36 -and
+$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 40 -and
     ($totals.mismatching + $totals.unsupported + $totals.untested) -eq 0
-@{schema=1; model='68040'; logicalCases=3040416; xunitBatches=30; fixedExamples=6; counts=$totals; passed=$passed; roadmapComplete=$false} |
+@{schema=1; model='68040'; logicalCases=3080352; xunitBatches=34; fixedExamples=6; counts=$totals; passed=$passed; roadmapComplete=$false} |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'audit-summary.json')
 if (-not $passed) { throw "040 access-frame audit incomplete: $($totals | ConvertTo-Json -Compress)" }

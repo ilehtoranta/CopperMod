@@ -4358,3 +4358,126 @@ after execution starts. Suppressing the discovery test, fetching only a safe
 first word or retrying an instruction after operand side effects is insufficient.
 All earlier model, restart, writeback, reference and consolidation requirements
 remain open. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+## 040 access-error handler entry window — 2026-10-05
+
+This checkpoint addresses the preceding handler-entry discovery rather than
+discarding its failed evidence. The authoritative scope is cache-disabled,
+MMU-disabled accurate 040 scalar and batch execution after instruction-fetch
+faults and pre-commit supervisor RTE validation faults. Other entry routes,
+enabled caches/MMU, compiled fetch provenance and physical pipeline timing remain
+unqualified.
+
+The documentary reading was checked against the image of MC68040UM figure 8-1
+(printed 8-3), not just extracted text: four longwords precede instruction
+execution, and an entry bus/address error leads to HALT. Section 8.2.1 also
+distinguishes errors during access-error processing from later handler execution.
+This is the exception-entry interpretation; it does not override the ordinary
+speculative-fetch deferral rules in 7.6.1/8.2.1. Suppressed unused prefetches and
+enabled-cache line fills still require separate qualification.
+
+An independently archived Motorola 1993 manual was inspected at PDF page 224
+(one based): [scan](https://ftpmirror.your.org/pub/misc/bitsavers/components/motorola/68000/68040/MC68040_Users_Manual_1993.pdf),
+17,233,053 bytes, SHA-256
+`93741393f70656941e413beb232c060a5e4e0218ea2adc2f5b392f9165454a7f`.
+The [NXP reference](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+remains the primary citation. The scan is documentary evidence, not hardware or
+an executed reference CPU. Neither manual nor ROM/media files are committed.
+
+The timed bus now acquires and retains four aligned longwords beginning at the
+uncached half-line boundary. Entry is published only after all four transfers
+succeed. An entry rejection halts before handler execution; an odd handler
+address halts without another fetch or frame. Original format-7 fields,
+registers, neighboring memory and translation-bypass restoration are checked.
+HALT remains sticky across interrupts and host entry until external reset.
+Sequential consumption uses retained data; selected branch, subroutine, task
+and host-map changes discard stale data. Host map changes during a rejected
+access cannot discard newly fetched entry data on the next scalar step.
+Existing timing-plan keys are preserved; newly required bus accesses do not
+establish physical timing accuracy.
+
+The later-handler fault fixture now executes eight retained words before
+rejecting the demand fetch at handler+16. Its previous handler+4 fault would
+target data already acquired during entry and could not prove later demand
+fault delivery. Historical report counts and failures remain unchanged in the
+preceding record; fresh results describe the revised fixture explicitly.
+
+| Group, each scalar/batch | Cases | Combinations |
+| --- | ---: | ---: |
+| Entry rejection | 196,608 | 6,144 |
+| Later handler demand fault | 12,288 | 384 |
+| Entry retention/context change | 7,680 | 240 |
+| Odd handler address | 12,288 | 384 |
+
+All eight groups are ordinary CI requirements: **457,728 cases**. The two
+formerly optional entry discovery tests are promoted; their existing fault-byte
+matrix remains intact. Retention fixtures replace handler code after entry to
+prove that fetched values are retained rather than read again. The stable-map
+fixture rejects page probes without consuming one-shot CPU faults, advances its
+generation on actual map changes, and records real accesses separately.
+
+Before host-entry/map invalidation was corrected, the final retention fixture in
+`artifacts/m6-entry-retention-before-v3/` reports 4,608 passing and 3,072
+mismatching cases per route. Intermediate fixture-development outputs are not
+qualification evidence. Five maintained `EntryPrefetch` mutations separately
+remove the entry window, its fourth long, retained data, subroutine invalidation
+and task invalidation. Each requires complete scalar/batch selections and its
+specific mismatch, not merely a failing process.
+
+The complete 040 gate requires **40 executed tests, 34 reporting batches, six
+fixed examples and twelve input identities**. Its independent iterator checks
+all eight groups' exact combinations. The preserved 480-case protocol inventory
+still fails completion; this checkpoint does not remove it. No old regression is
+retired. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Fresh full Release CPU validation in `artifacts/m6-entry-window-full/` passes
+**5,065 tests with eleven optional skips and zero failures**. The required
+inventory discovery is executed separately; its ordinary skip is not successful
+coverage. All nine qualified WinUAE presets match their exact directory,
+callback and exception-frame counts and current CPU/adapter identities in
+`qualified-preset-identities.json`. Their generator/runner pins, original Basic
+failures and documented reference caveats remain unchanged; this does not
+promote the original Basic selection.
+
+The fresh strict report gate checks **18,048,534 deterministic cases in 624
+reporting batches** across all eight profiles. Fresh pinned SingleStepTests
+passes **312,500 cases in 125 files**, source
+`64b253116a3de04aaac4346c43680960dc9b67e5`. Fresh Musashi passes **536 programs
+with 88 explicit exclusions**, source
+`72c1d74800f3087b45a0c1a7342601bbed898881`. These independent software audits
+retain their original architectural and timing limits.
+
+The complete 040 run in `artifacts/m6-entry-window-audit/` executes 40 tests:
+39 pass and the retained inventory test fails. All **3,079,872 executed cases
+pass**, with zero mismatches/unsupported execution and **480 untested** cases.
+Source, assembly, input selection and independently enumerated combinations
+validate before the gate rejects the inventory. All **33** report/identity
+controls in `artifacts/m6-entry-window-controls/` detect their specific missing,
+shortened, foreign, redistributed or omitted-fixture corruption.
+
+All five new mutations are detected in `artifacts/m6-entry-window-mutations/`:
+per route, omitted entry mismatches 196,608 cases, omitted fourth long 49,152,
+discarded data 3,072, stale subroutine context 1,536 and stale task context
+1,536. The refreshed host-reader mutation in
+`artifacts/m6-entry-window-host-mutation/` passes all 12,288 scalar cases and
+mismatches all 12,288 batch cases at the denied boundary. Mutations restore
+source bytes and rebuild successfully; no mutated binary is used for acceptance.
+
+Verified CPU SHA-256 is
+`8b0a29e30ecafa1a0acdd2bb3c9e53e9026c9bff5ed61f899edd90ab2ce01131`;
+test/reference adapter is
+`9452ec20f94b35e0ef081adb050dca67223e6a261226f548aee72ad270f7c970`.
+The manifest identifies starting commit `92922a7` and separately hashes the
+working source actually built; its starting committed CPU tree is not relabeled
+as the correction's tree.
+
+Isolated CopperScreen baseline
+`d9beae8b88be24032221e3482942a249c03c27d3` consumes unpublished private
+`1.5.2-synthetic-dev.63`, package SHA-256
+`68d5e7f3158c682df451e3c156a4387bbb6a87e0a65c6589ccac2d7c4c260133`.
+Release builds with zero warnings/errors; host tests pass 149 with six optional
+skips, disk tests pass 74, separate engine diagnostics pass 1,080, and all three
+native Workbench/A1200 boot/persistence replays pass without native skips.
+Embedded CPU, four package assets and four loaded assemblies match the audited
+CPU. Evidence is in the isolated consumer's `artifacts/entry-window-validation/`
+and `entry-window-identities.json`. Root CopperScreen changes and its 1.5.1 pin
+remain untouched. No package is published and no throughput claim is made.

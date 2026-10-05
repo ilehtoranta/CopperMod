@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','InstructionFault','HandlerPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -341,6 +341,26 @@ $mutations += @{
 '@; after='            _codeReader = bus as IM68kCodeReader;';
     group='FetchFaultAfterHandlerExecutionStartsANewException'; model='68040'; milestone=6; handlerPrefetch=$true
 }
+$entryMutations = @(
+    @{name='040-entry-missing-window'; file='Copper68k/M68040Support.cs'; before='                if (_timedBus.PrefetchM68040AccessErrorHandler(State.ProgramCounter))';
+      after='                if (State.Stopped) // Mutant: omit handler entry prefetch.'; group='EveryRequired'; reportPrefix='handler-prefetch-entry-'; cases=196608; proofCombination='/byte=0/'; proofReason='Handler-entry prefetch must halt'},
+    @{name='040-entry-final-long'; file='Copper68k/M68kTimingEngine.cs'; before='            _exceptionFetchFourth = ReadM68040InstructionLong(unchecked(_exceptionFetchBase + 12), out _);';
+      after='            _exceptionFetchFourth = 0; // Mutant: only three entry longs.'; group='EveryRequired'; reportPrefix='handler-prefetch-entry-'; cases=196608; proofCombination='/byte=12/'; proofReason='Handler-entry prefetch must halt'},
+    @{name='040-entry-refetch'; file='Copper68k/M68kTimingEngine.cs'; before='            _exceptionFetchValid = true;';
+      after='            _exceptionFetchValid = false; // Mutant: discard acquired entry data.'; group='EntryFetchDataIsRetainedUntilConsumedOrItsContextChanges'; reportPrefix='handler-prefetch-retention-'; cases=7680; proofCombination='/handler-retention/linear/'; proofReason='Retained entry value differs'},
+    @{name='040-entry-subroutine-context'; file='Copper68k/M68040Support.cs'; before=@'
+            _timedBus.ResetInstructionFetchBuffer();
+            base.BeginSubroutine(address, stackPointer, returnAddress);
+'@; after='            base.BeginSubroutine(address, stackPointer, returnAddress);'; group='EntryFetchDataIsRetainedUntilConsumedOrItsContextChanges'; reportPrefix='handler-prefetch-retention-'; cases=7680; proofCombination='/handler-retention/subroutine/'; proofReason='Entry context invalidation differs'},
+    @{name='040-entry-task-context'; file='Copper68k/M68040Support.cs'; before=@'
+            State.CopyTaskContextFrom(next);
+            _timedBus.ResetInstructionFetchBuffer();
+            DiscardInstructionPrefetch();
+'@; after='            State.CopyTaskContextFrom(next);'; group='EntryFetchDataIsRetainedUntilConsumedOrItsContextChanges'; reportPrefix='handler-prefetch-retention-'; cases=7680; proofCombination='/handler-retention/task/'; proofReason='Entry context invalidation differs'}
+)
+foreach ($mutation in $entryMutations) {
+    $mutation.model='68040'; $mutation.milestone=6; $mutation.entryPrefetch=$true; $mutations += $mutation
+}
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
@@ -351,6 +371,7 @@ if ($Scope -eq 'RteValidationFault') { $mutations = @($mutations | Where-Object 
 if ($Scope -eq 'RteRepair') { $mutations = @($mutations | Where-Object { $_.repair }) }
 if ($Scope -eq 'InstructionFault') { $mutations = @($mutations | Where-Object { $_.instructionFault }) }
 if ($Scope -eq 'HandlerPrefetch') { $mutations = @($mutations | Where-Object { $_.handlerPrefetch }) }
+if ($Scope -eq 'EntryPrefetch') { $mutations = @($mutations | Where-Object { $_.entryPrefetch }) }
 if ($Scope -eq 'AccessDoubleFault') { $mutations = @($mutations | Where-Object { $_.doubleFault }) }
 if ($Scope -eq 'BatchFault') { $mutations = @($mutations | Where-Object { $_.batchFault }) }
 if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
@@ -423,6 +444,16 @@ try {
                     throw 'Host-reader mutation omitted complete cases or intended boundary failure'
                 }
             }
+            if ($mutation.entryPrefetch) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $batches.Count -ne 2 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq ($mutation.reportPrefix + 'scalar') -and $_.logicalCases -eq $mutation.cases }).Count -ne 1 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq ($mutation.reportPrefix + 'batch') -and $_.logicalCases -eq $mutation.cases }).Count -ne 1 -or
+                    @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
+                        $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) }).Count -eq 0) {
+                    throw 'Entry-prefetch mutation omitted complete cases or intended semantic failure'
+                }
+            }
             if ($mutation.instructionFault) {
                 [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
                 if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $batches.Count -ne 2 -or
@@ -492,6 +523,9 @@ try {
             $proofFailure = if ($mutation.handlerPrefetch) {
                 @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains('/route=batch/', [StringComparison]::Ordinal) -and
                     $_.reason.StartsWith('Denied cold batch', [StringComparison]::Ordinal) })[0]
+            } elseif ($mutation.entryPrefetch) {
+                @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
+                    $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) })[0]
             } else { $failures[0] }
             $results += @{mutation=$mutation.name; file=$mutation.file; sourceSha256=(Get-FileHash -LiteralPath $path).Hash;
                 detected=$true; replacementCase=$proofFailure.id; diagnostic=$proofFailure.reason; originalRegressionDetected=$legacyPresent;

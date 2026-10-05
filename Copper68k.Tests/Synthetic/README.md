@@ -496,12 +496,33 @@ requires a physical host code reader for speculative hot-block construction;
 the logical bus's real-fetch fallback cannot run before an instruction boundary.
 `-Scope HandlerPrefetch` restores that defect and requires intended denial proof.
 
-The two entry-prefetch reports are enabled only by the complete 040 discovery
-command. They reject each byte of the required four-long window and currently
-fail all 393,216 cases: deferred demand fetch does not perform architectural
-handler-entry prefetch. The dedicated command requires 36 tests (30 reports,
-six fixed examples), twelve fixture identities and all four independent new
-combination matrices. It preserves the earlier 480 untested requirements.
-These entry mismatches are not a passing ordinary-CI qualification. See the
+At historical checkpoint `92922a7`, the two entry-prefetch reports were enabled
+only by the complete 040 discovery command. They rejected each byte of the
+four-long window and failed all 393,216 cases: deferred demand fetch did not
+perform architectural handler-entry prefetch. That command required 36 tests
+(30 reports, six fixed examples), twelve fixture identities and four independent
+new combination matrices, preserving 480 untested requirements. Those results
+remain failed historical discovery, not current ordinary qualification. See the
 [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-host-reader-boundary-and-handler-prefetch-discovery--2026-10-05)
-for authorities, evidence and the required follow-up correction.
+for authorities and historical evidence.
+
+### Current 040 access-error handler entry
+
+The 040 access-error handler-entry window is now an ordinary eight-batch gate
+(457,728 cases): four aligned longwords are acquired before handler execution,
+entry rejections and odd handler PCs halt, retained words survive memory changes,
+and selected branch/host/task/map transitions invalidate stale entry data. The
+later-handler fault is at handler+16, beyond the retained entry window. Coverage
+uses cache/MMU-disabled accurate scalar/batch execution with physical-map faults;
+other exception paths, enabled-cache speculation, compiled fetch provenance and
+physical timing remain unqualified. Historical failed discovery is preserved.
+
+```powershell
+./scripts/test-copper68k-synthetic-mutations.ps1 -Scope EntryPrefetch -OutputDirectory artifacts/entry-prefetch-mutations
+```
+
+This mutation command requires both routes and the intended semantic mismatch
+for each of five defects. The complete 040 audit still fails its retained
+480-case protocol inventory; passing ordinary handler tests do not complete
+milestone 6. See the
+[reference record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-access-error-handler-entry-window--2026-10-05).

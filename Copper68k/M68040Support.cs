@@ -2584,6 +2584,7 @@ namespace Copper68k
         public override void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
             if (_accessErrorDoubleFaultHalted) return;
+            _timedBus.ResetInstructionFetchBuffer();
             base.BeginSubroutine(address, stackPointer, returnAddress);
         }
 
@@ -2592,6 +2593,8 @@ namespace Copper68k
             ArgumentNullException.ThrowIfNull(next);
             if (_accessErrorDoubleFaultHalted) return;
             State.CopyTaskContextFrom(next);
+            _timedBus.ResetInstructionFetchBuffer();
+            DiscardInstructionPrefetch();
         }
 
         public override void RequestInterrupt(int level, uint vectorAddress)
@@ -4311,6 +4314,24 @@ namespace Copper68k
             PushLong(instructionPc);
             PushWord(savedSr);
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + 8);
+            DiscardInstructionPrefetch();
+            if ((State.ProgramCounter & 1) != 0)
+            {
+                // An odd handler PC is an address error during access-error
+                // entry, not an instruction which can create a second frame.
+                LatchAccessErrorDoubleFault();
+            }
+            else
+            {
+                if (_timedBus.PrefetchM68040AccessErrorHandler(State.ProgramCounter))
+                {
+                    // The entry window was fetched using the current host map.
+                    // A map change while rejecting the original access must not
+                    // invalidate that newly acquired window on the next step.
+                    _observedPhysicalAddressMapGeneration =
+                        _stablePhysicalAddressMap?.CpuPhysicalAddressMapGeneration ?? 0;
+                }
+            }
             CompleteTiming(M68kInstructionTimingKey.IllegalInstruction);
         }
 

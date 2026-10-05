@@ -1628,3 +1628,40 @@ and all three native replays with matching package/assets/CPU binaries. The
 complete 040 audit intentionally fails: 2,646,720 passing cases, 393,216
 handler-entry mismatches and 480 untested requirements. Ordinary skips and
 software references do not imply completion of that required discovery scope.
+### Milestone 6 access-error handler entry window — 2026-10-05
+
+The accurate, cache/MMU-disabled 040 instruction-fault and supervisor RTE
+validation paths now acquire and retain the four-long handler-entry window.
+Entry bus faults and odd handler addresses halt before instruction execution;
+later demand faults preserve the executed prefix and start another format-7
+exception. Retention and selected flow/host/task/map invalidation are tested
+independently of production fetch calculations. The former handler+4 demand
+fixture moves beyond the retained window to handler+16.
+
+The complete 393,216-case entry-byte matrix is promoted into ordinary CI.
+Retention/context and odd-address groups add 39,936 cases; all eight handler
+groups total 457,728 cases. Five maintained mutations target missing entry,
+missing fourth long, discarded data and stale subroutine/task contexts. The
+complete 040 audit requires 40 tests, 34 reports, six fixed examples and twelve
+input identities, with independently enumerated combinations.
+
+Historical failed discovery and intermediate fixture-development results remain
+separate from fresh qualification. Other exception entry routes, enabled-cache
+deferral, compiled fetch provenance, data writeback/restart and every earlier
+model/reference/consolidation requirement remain required. The existing
+480-case untested inventory is retained and continues to fail the complete
+gate. No regression is retired or public API/package released. Milestone 6
+remains **in progress**, `roadmapComplete=false`. See the
+[qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-access-error-handler-entry-window--2026-10-05).
+
+Fresh validation passes 5,065 Release CPU tests with eleven optional skips,
+all nine pinned WinUAE presets, and the strict 18,048,534-case / 624-batch gate.
+Fresh SingleStepTests passes 312,500 cases in 125 files; Musashi passes 536
+programs with 88 exclusions. All five entry mutations, the refreshed host-reader
+mutation and 33 report/identity controls detect their intended failures.
+The complete 040 audit has 3,079,872 passing cases, zero mismatches/unsupported
+execution and the retained 480 untested requirements; its gate remains failed.
+Isolated CopperScreen through unpublished private `.63` passes Release build,
+host/disk suites, 1,080 separate engine diagnostics and all three native replays,
+with matching package/assets/CPU binaries. Evidence and limits are recorded in
+the qualification record; this checkpoint does not complete milestone 6.
