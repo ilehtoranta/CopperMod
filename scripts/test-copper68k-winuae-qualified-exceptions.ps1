@@ -1,7 +1,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('TrapBounds','Breakpoints','WordDivision')] [string] $Preset = 'TrapBounds',
+    [ValidateSet('TrapBounds','Breakpoints','WordDivision','LowPowerStop')] [string] $Preset = 'TrapBounds',
     [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $InputDirectory,
     [string] $NativeLibrary,
     [string] $OutputDirectory = 'artifacts/winuae-trap-bounds-audit'
@@ -14,14 +14,18 @@ $library = (Resolve-Path -LiteralPath $NativeLibrary).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
 if (Test-Path -LiteralPath $output) { throw "Use a fresh output directory: $output" }
 New-Item -ItemType Directory -Path $output | Out-Null
-$key = switch ($Preset) {'TrapBounds' {'TRAP_BOUNDS'} 'Breakpoints' {'BREAKPOINT'} 'WordDivision' {'WORD_DIVISION'}}
-$testName = switch ($Preset) {'TrapBounds' {'WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled'} 'Breakpoints' {'WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled'} 'WordDivision' {'WinUaeWordDivisionAcrossSelectedModelsWhenEnabled'}}
-$reportName = switch ($Preset) {'TrapBounds' {'winuae-trap-bounds-audit.json'} 'Breakpoints' {'winuae-breakpoint-audit.json'} 'WordDivision' {'winuae-word-division-audit.json'}}
+$key = switch ($Preset) {'TrapBounds' {'TRAP_BOUNDS'} 'Breakpoints' {'BREAKPOINT'} 'WordDivision' {'WORD_DIVISION'} 'LowPowerStop' {'LPSTOP'}}
+$testName = switch ($Preset) {'TrapBounds' {'WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled'} 'Breakpoints' {'WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled'} 'WordDivision' {'WinUaeWordDivisionAcrossSelectedModelsWhenEnabled'} 'LowPowerStop' {'WinUaeLowPowerStopExceptionsWhenEnabled'}}
+$reportName = switch ($Preset) {'TrapBounds' {'winuae-trap-bounds-audit.json'} 'Breakpoints' {'winuae-breakpoint-audit.json'} 'WordDivision' {'winuae-word-division-audit.json'} 'LowPowerStop' {'winuae-lpstop-audit.json'}}
 $filter = "FullyQualifiedName~$testName"
 $expectedTests = 1
 if ($Preset -eq 'WordDivision') {
     $filter += '|FullyQualifiedName~M68kWinUaeWordDivisionEncodingTests'
     $expectedTests = 15
+}
+if ($Preset -eq 'LowPowerStop') {
+    $filter += '|FullyQualifiedName~M68kWinUaeLowPowerStopEncodingTests'
+    $expectedTests = 11
 }
 $settings = @{
     ('COPPER68K_RUN_WINUAE_' + $key + '_AUDIT') = '1'

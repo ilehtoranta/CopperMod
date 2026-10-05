@@ -314,6 +314,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		private bool _qualifyLongArithmetic;
 		private readonly Dictionary<string, int> _longArithmeticForms = new(StringComparer.Ordinal);
 		private Func<ushort, ushort, string>? _fixtureClassifier;
+		private Func<ushort, ushort, ushort, ushort, string>? _fixtureWordsClassifier;
 		private readonly Dictionary<string, int> _fixtureForms = new(StringComparer.Ordinal);
 
 		private NativeTester(IntPtr library)
@@ -360,7 +361,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			ushort corruptSr = 0,
 			bool corruptIgnoredSr = false,
 			bool qualifyLongArithmetic = false,
-			Func<ushort, ushort, string>? fixtureClassifier = null)
+			Func<ushort, ushort, string>? fixtureClassifier = null,
+			Func<ushort, ushort, ushort, ushort, string>? fixtureWordsClassifier = null)
 		{
 			_callbackException = null;
 			_executedCases = 0;
@@ -379,6 +381,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			_qualifyLongArithmetic = qualifyLongArithmetic;
 			_longArithmeticForms.Clear();
 			_fixtureClassifier = fixtureClassifier;
+			_fixtureWordsClassifier = fixtureWordsClassifier;
 			_fixtureForms.Clear();
 			if (integerProfile is not null && (_destroy is null || _addressingMask is null || _lastOutput is null))
 				throw new XunitException("Multi-model integer audit requires the qualified native bridge exports (destroy, addressing mask and diagnostics).");
@@ -505,6 +508,13 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 				if (_fixtureClassifier is not null)
 				{
 					var form = _fixtureClassifier(bus.ReadHostWord(registers.Pc), (ushort)registers.Sr);
+					_fixtureForms[form] = _fixtureForms.GetValueOrDefault(form) + 1;
+				}
+				if (_fixtureWordsClassifier is not null)
+				{
+					// Read immutable input before any CPU execution or stack copying.
+					var form = _fixtureWordsClassifier(bus.ReadHostWord(registers.Pc),
+						bus.ReadHostWord(registers.Pc + 2), bus.ReadHostWord(registers.Pc + 4), (ushort)registers.Sr);
 					_fixtureForms[form] = _fixtureForms.GetValueOrDefault(form) + 1;
 				}
 				bus.CopyStackImage(registers.Regs[15], registers.Ssp, 0x20);

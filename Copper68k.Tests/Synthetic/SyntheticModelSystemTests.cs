@@ -97,7 +97,7 @@ public sealed class SyntheticModelSystemTests(ITestOutputHelper output)
     };
 
     [Theory, MemberData(nameof(Models)), Trait("Suite", "Synthetic")]
-    public void Move16CacheInstructionsBreakpointsAndLowPowerStop(string modelId)
+    public void Move16CacheInstructionsAndBreakpoints(string modelId)
     {
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == modelId)); var report = new CoverageBatch(modelId, "system-model");
         for (var ccr = 0; ccr < 32; ccr++)
@@ -117,14 +117,6 @@ public sealed class SyntheticModelSystemTests(ITestOutputHelper output)
                 if (modelId is not ("68040" or "68060")) SyntheticExecution.ExpectException(m, e, 11);
                 else if (!supervisor) SyntheticExecution.ExpectException(m, e, 8);
                 SyntheticExecution.Run(m, e, report, $"{modelId}/{(push ? "CPUSH" : "CINV")}/{scope}/cache={cache}/A{reg}/super={supervisor}/op={op:X4}/ccr={ccr:X2}");
-            }
-            foreach (var sr in new ushort[] { 0, 0x0700, 0x2000, 0x2700, 0x271f })
-            {
-                m.Reset(ccr, supervisor); var e = SyntheticExecution.Prepare(m, [0xf800, 0x01c0, sr]);
-                if (modelId != "68060") SyntheticExecution.ExpectException(m, e, 11);
-                else if (!supervisor || (sr & 0x2000) == 0) SyntheticExecution.ExpectException(m, e, 8);
-                else { SyntheticSystemTests.ApplyStatus(m, e, sr); e.Stopped = true; }
-                SyntheticExecution.Run(m, e, report, $"{modelId}/LPSTOP/W/imm={sr:X4}/super={supervisor}/op=F800/ccr={ccr:X2}", !e.Stopped);
             }
         }
         for (var form = 0; form < 5; form++)

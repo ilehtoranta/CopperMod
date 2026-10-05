@@ -88,7 +88,7 @@ $mutations += @(
     @{name='chk2-boundary-z'; file=$advanced; before='            State.SetFlag(M68kCpuState.Zero, value == lower || value == upper);'; after='            State.SetFlag(M68kCpuState.Zero, false);'; group='CheckBoundsValuesFlagsFormsAndRegisterAliases'; milestone=5},
     @{name='cmp2-address-width'; file=$advanced; before='            var value = useAddressRegister ? unchecked((int)State.A[register]) : SignExtendForSize(State.D[register], size);'; after='            var value = SignExtendForSize(useAddressRegister ? State.A[register] : State.D[register], size);'; group='CheckBoundsValuesFlagsFormsAndRegisterAliases'; milestone=5},
     @{name='rte-throwaway'; file=$advanced; before='                if (format == 1) continue; // Throwaway frame can select another stack.'; after='                // Mutant: accept throwaway as final frame.'; group='RteFramesPrivilegeStackSelectionAndInvalidFormats'; milestone=5},
-    @{name='move16-postincrement'; file='Copper68k/M68kAdvancedTimingInterpreter.System.cs'; before='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 16));'; after='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 4));'; group='Move16CacheInstructionsBreakpointsAndLowPowerStop'; milestone=5; model='68040'},
+    @{name='move16-postincrement'; file='Copper68k/M68kAdvancedTimingInterpreter.System.cs'; before='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 16));'; after='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 4));'; group='Move16CacheInstructionsAndBreakpoints'; milestone=5; model='68040'},
     @{name='cacr-clear-readback'; file=$advanced; before='? value & ~0x0C0Cu : value; // Clear commands always read as zero.'; after='? value : value; // Mutant: clear commands read back set.'; group='MovecControlInventoryMasksPrivilegeAndAllGeneralRegisters'; milestone=5}
 )
 $mutations += @(
@@ -138,7 +138,8 @@ $mutations += @(
             if (FetchWord() != 0x01c0)
 '@; group='SyntheticLowPowerStopTests'; milestone=6; model='68060'; lpstop=$true},
     @{name='060-lpstop-clear-s'; file='Copper68k/M68kAdvancedTimingInterpreter.System.cs'; before='            if ((immediate & M68kCpuState.Supervisor) == 0)';
-      after='            if (false)'; group='SyntheticLowPowerStopTests'; milestone=6; model='68060'; lpstop=$true}
+      after='            if (false)'; group='SyntheticLowPowerStopTests'; milestone=6; model='68060'; lpstop=$true;
+      legacyTest='Move16CacheInstructionsBreakpointsAndLowPowerStop'; legacyFile='Copper68k.Tests/Synthetic/SyntheticModelSystemTests.cs'; legacyModel='68060'}
 )
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
@@ -171,7 +172,10 @@ try {
             $model = $(if ($mutation.model) { $mutation.model } elseif ($mutation.name -eq '060-divide-frame') { '68060' } else { '68020' })
             $filter = "FullyQualifiedName~$($mutation.group)&DisplayName~$model"
             $legacyPresent = $mutation.legacyTest -and [IO.File]::ReadAllText((Join-Path $repo $mutation.legacyFile)).Contains("void $($mutation.legacyTest)(")
-            if ($legacyPresent) { $filter += "|FullyQualifiedName~$($mutation.legacyTest)" }
+            if ($legacyPresent) {
+                $filter += "|FullyQualifiedName~$($mutation.legacyTest)"
+                if ($mutation.legacyModel) { $filter += "&DisplayName~$($mutation.legacyModel)" }
+            }
             & dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --no-restore --filter $filter --logger "trx;LogFileName=mutation.trx" --results-directory $directory *> (Join-Path $directory 'run.log')
             $exitCode = $LASTEXITCODE
             $batches = @(Get-ChildItem -LiteralPath $directory -Filter '*.json' | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json })
@@ -196,15 +200,17 @@ try {
             }
             if ($mutation.lpstop) {
                 [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
-                if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $batches.Count -ne 2 -or
+                $expectedBatches = 2 + [int][bool]$legacyPresent
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne $expectedBatches -or $batches.Count -ne $expectedBatches -or
                     @($batches | Where-Object { $_.model -eq '68060' -and $_.group -eq 'system-lpstop-extensions' -and $_.logicalCases -eq 131070 }).Count -ne 1 -or
-                    @($batches | Where-Object { $_.model -eq '68060' -and $_.group -eq 'system-lpstop-values' -and $_.logicalCases -eq 12160 }).Count -ne 1) {
+                    @($batches | Where-Object { $_.model -eq '68060' -and $_.group -eq 'system-lpstop-values' -and $_.logicalCases -eq 17024 }).Count -ne 1 -or
+                    ($legacyPresent -and @($batches | Where-Object { $_.model -eq '68060' -and $_.group -eq 'system-model' -and $_.logicalCases -eq 13120 }).Count -ne 1)) {
                     throw 'LPSTOP mutation did not execute its complete two-batch selection'
                 }
             }
             if ($legacyPresent) {
                 [xml]$legacyTrx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
-                if (@($legacyTrx.TestRun.Results.UnitTestResult | Where-Object { $_.testName.EndsWith($mutation.legacyTest) -and $_.outcome -eq 'Failed' }).Count -ne 1) { throw 'Original regression did not detect the same mutation' }
+                if (@($legacyTrx.TestRun.Results.UnitTestResult | Where-Object { ($_.testName.EndsWith($mutation.legacyTest) -or $_.testName.Contains($mutation.legacyTest + '(')) -and $_.outcome -eq 'Failed' }).Count -ne 1) { throw 'Original regression did not detect the same mutation' }
             }
             $results += @{mutation=$mutation.name; file=$mutation.file; sourceSha256=(Get-FileHash -LiteralPath $path).Hash;
                 detected=$true; replacementCase=$failures[0].id; diagnostic=$failures[0].reason; originalRegressionDetected=$legacyPresent;

@@ -3104,3 +3104,131 @@ frame/mask counts; the generator, runner, native-library and input-manifest pins
 are unchanged. In particular, the first legal user-mode LPSTOP case still exposes
 the reference's opcode-PC-plus-two disagreement. Correcting malformed encodings
 does not normalize that result or make the broad audit passing.
+
+## LPSTOP independent exception qualification and consolidation, 2026-10-05
+
+[MC68060UM](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf) D-19/20
+defines the fixed `F800 01C0` encoding and S-clear privilege violation;
+8.2.4/5 defines Line-F recognition and original-SR/opcode-PC exception frames.
+Inspection of the executed generator pin explains its saved-PC disagreement:
+`get_wordi_test(offset)` fetches at the given offset, then advances `regs.pc`
+by two. LPSTOP calls it for fixed offsets two and four, so the first fetch
+changes the saved exception PC and the second fetch address. The separate
+`LowPowerStop` preset patches a copy of `gencpu.cpp` to use its existing
+nonadvancing `get_word_test_prefetch` helper for both words. It does not change
+CPU results, comparison masks, the original Basic corpus or tracked upstream
+source. Physical fetch ordering/cycles are not qualified by this correction.
+
+Generator `025b999239800357e95065fe5b9a15ea5b300fa7` and assertion-runner
+`7a83745d6c6159bc74ab0471578ffc8bc244e66e` remain pinned. The normalized copied
+generator SHA-256 is
+`69ceec2d63bf35e27990142ca2e9e72f9c36dd2f4fba5113d17552c1ccbc35ca`;
+`lpstop-fetch-pc.patch` is
+`64cb8ff58d5a3a4fb4f217e3327fb1748d73f85521e3c9be98af7fd08f3a47bf`.
+The fresh `artifacts/m6-lpstop-qualified-inputs-v2/manifest.json` SHA-256 is
+`2cff30fc342e5c3953193eb2e85b08b89cab3d15bb87a992fc41a7a7ca30278e`;
+it records every input file, configuration, compiler, executable and bridge
+identity. Generator executable SHA-256 is
+`2e57b5685af5f18dc2c7856d44c9c38e7bd2c0ebd89dd0b0babb9fcc26409b5b`;
+native bridge SHA-256 is
+`17e8b5c7ae0edc6fa4b79c4ee52d797b1d65a1e7423a80770197603cd2d22b3f`.
+
+The first generated selection had 147,456 passing exception callbacks, but
+malformed encodings did not request automatic supervisor rounds. It is retained
+as discovery, not the final qualified scope. The maintained preset explicitly
+requests `feature_sr_mask=0x2000` for both privilege states. The pinned generator
+uses a recognized second word when immediate bits 6/7 are zero, otherwise a
+seeded unrecognized word. It skips legal supervisor stopped outcomes. Thus this
+corpus does not cover every immediate/extension pair or stopped/trace behavior.
+The final exception corpus passes **245,760 callbacks and frames**, zero masked
+SR cases, mismatches, unsupported or untested selected directories. Its input
+classifier reads immutable opcode/extension/immediate/SR bytes before CPU
+execution, requires the canonical first word and CCR 0/31 with no incoming
+trace, and rejects stopped or foreign profile inputs. Exact form distributions
+are checked, not just their total:
+
+| Encoding / immediate S | Incoming SR combinations | Cases per combination | Total |
+| --- | --- | ---: | ---: |
+| Recognized / S=0 | `0000`, `001F`, `2000`, `201F` | 8,192 | 32,768 |
+| Recognized / S=1 | `0000`, `001F` | 8,192 | 16,384 |
+| Unrecognized / S=0 | `0000`, `001F`, `2000`, `201F` | 24,576 | 98,304 |
+| Unrecognized / S=1 | `0000`, `001F`, `2000`, `201F` | 24,576 | 98,304 |
+| Total | 14 combinations | | 245,760 |
+
+Register, defined-SR and frame-byte corruptions each fail on an executed case.
+The maintained command requires the opt-in audit plus ten encoding/distribution
+tests to execute and pass, with a nonempty coverage report:
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 -GeneratorSource <pinned-generator> -RunnerSource <pinned-runner> -VcVars64 <vcvars64.bat> -Preset LowPowerStop -OutputDirectory <fresh-inputs>
+./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset LowPowerStop -InputDirectory <fresh-inputs> -OutputDirectory <fresh-output>
+```
+
+Evidence is `artifacts/m6-lpstop-reference-final/` and the full-suite
+`winuae-lpstop-audit.json`. Preliminary reports intentionally fail while exact
+corpus counts are being discovered; they are not relabeled as qualified gates.
+Seven isolated input/source controls fail for their specific defects: empty
+profile/family/input selections, missing/changed data, changed generator and
+changed patch. See `artifacts/m6-lpstop-reference-controls-v2/controls.json`.
+The first control attempt retains partial evidence: removing a memory image
+returns a different diagnostic from the helper's expected missing-data selection
+message. It is not counted as the complete seven-control proof.
+
+### LPSTOP duplicate retirement proof
+
+The former LPSTOP loop in
+`SyntheticModelSystemTests.Move16CacheInstructionsBreakpointsAndLowPowerStop`
+tested the legal extension, immediates `0000/0700/2000/2700/271F`, all 32
+initial CCRs and both privilege states: 320 cases per profile, 2,560 total.
+The replacement
+`SyntheticLowPowerStopTests.EncodingPrivilegeStatusAndIncomingTraceHaveIndependentOutcomes`
+now includes those exact five values plus `071F/A01F`, with the legal extension,
+eighteen malformed encoding controls, both privilege states, incoming T1/no
+trace and all CCRs. Its former-compatible cases use the same public factory,
+stack/neighbor fixtures and full architectural checks. For stopped outcomes it
+also verifies a second execution cannot retire the sentinel or add an exception.
+The exhaustive malformed-word group remains separate.
+
+Before removing the old loop, the maintained S-clear mutation ran both tests:
+the old batch detects 64 mismatches and the replacement detects 192. The
+first replacement witness is
+`68060/LPSTOP/encoding=01C0/imm=0000/super=True/T=0000/op=F800/ccr=00`.
+The exhaustive group still passes under this mutation, demonstrating a distinct
+status-rule defect rather than encoding failure. Wrong-vector and early-
+privilege mutations detect 147,198 and 73,599 mismatches respectively. Source
+restores byte-for-byte and rebuilds. Proof is
+`artifacts/m6-lpstop-consolidation-proof/mutation-proof.json`.
+
+Only the duplicate LPSTOP loop is retired. Its remaining test is renamed
+`Move16CacheInstructionsAndBreakpoints`, and its MOVE16 mutation selection is
+updated. No cache/prefetch/bus/fault/JIT/native test is retired. Ordinary-CI
+LPSTOP coverage is now 267,262 cases in nine batches: 131,070 exhaustive cases
+and 17,024 boundary/status cases per profile. The residual `system-model`
+batch has 12,800 cases per profile. Historical counts above describe their
+original checkpoints and are not rewritten.
+
+Final validation in `artifacts/m6-lpstop-consolidated-full/` passes **4,978 CPU
+tests**, eleven optional skips and zero failures, with all five qualified WinUAE
+presets enabled. The strict gate in `artifacts/m6-lpstop-consolidated-gate.log`
+verifies **16,035,670 passing logical cases / 595 reporting batches**; fresh
+SingleStepTests and Musashi audits pass 312,500 cases / 125 files and 536
+programs / 88 explicit exclusions. CPU production source remains `cb9679d`;
+this checkpoint changes test/reference infrastructure only. Its full-suite CPU
+assembly SHA-256 is
+`4e718d58cd6c24df668b498943e5e38a770c14ec04cfbf3bbd756cbe06d14f9e`;
+adapter SHA-256 is
+`290709cd4f3a447c106015f3ecc4881e1d8647888490e1b89d68709945d037d7`.
+Six fresh report controls reject missing enumeration/absence profiles, empty
+enumeration, stale boundary counts, foreign model and the old duplicate loop's
+13,120-case count. See
+`artifacts/m6-lpstop-consolidated-report-controls/controls.json`.
+Consumer/package validation remains the preceding unpublished `.57` evidence
+with its original binary identities; it is not claimed as a new consumer replay.
+No package is published or dependency boundary changed.
+
+The original Basic LPSTOP failure remains preserved. This qualified exception
+preset resolves its documented reference-fetch issue for a separate selection;
+it does not make Basic passing or close ordinary STOP's S-clear disagreement.
+Advanced restoration/fault, chained SR provenance, broader reference and
+consolidation gaps remain required. Milestone 6 and the active goal remain
+**in progress**, with `roadmapComplete=false`.

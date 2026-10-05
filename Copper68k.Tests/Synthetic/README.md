@@ -261,10 +261,10 @@ fresh output directory used. It cannot pass merely by fixing normal/trace return
 See the [reference record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-access-frame-restoration-discovery-2026-10-05)
 for failed-before evidence, mutation controls and the remaining scope.
 
-The LPSTOP qualification adds 228,350 ordinary-CI cases in nine batches.
+The LPSTOP qualification runs 267,262 ordinary-CI cases in nine batches.
 On 060, every second opcode word except the fixed `$01c0` encoding is checked
 in both privilege modes (131,070 cases). These unrecognized F-line forms must
-take vector 11 before privilege handling. Eight profile batches add 12,160
+take vector 11 before privilege handling. Eight profile batches add 17,024
 cases each for individual encoding-bit changes, immediate SR boundaries, all
 initial CCRs, user/supervisor mode and incoming trace. Legal 060 LPSTOP retains
 its S-clear privilege rule, trace behavior and stopped-state nonretirement.
@@ -272,4 +272,21 @@ Exception frames preserve the original SR and opcode PC according to the manual.
 Run its three discriminating controls with
 `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope LowPowerStop`.
 Physical broadcast/pins and the separate ordinary STOP S-clear disagreement
-remain unqualified; no specialized regression is retired.
+remain unqualified. The former 320-case-per-profile LPSTOP loop is replaced by
+the encoding/status matrix after shared S-clear mutation proof; MOVE16, cache,
+breakpoint and specialized regressions remain.
+
+The independent LPSTOP exception preset uses a copied pinned WinUAE generator
+with nonadvancing fixed-offset fetches. Its 245,760 callbacks validate actual
+CPU results, original SR and opcode-PC frames in fourteen encoding/immediate-S/
+incoming-S-and-CCR combinations. The generator skips stopped outcomes and this
+preset has no incoming trace: these remain synthetic coverage. It requires exact
+source/patch/input identities, all combinations and their recorded distributions;
+missing fixtures or empty selections fail. Register/SR/frame corruption probes
+must fail too. Prepare with `./scripts/prepare-copper68k-winuae.ps1 -Preset
+LowPowerStop` and the same pinned-source/compiler arguments as other presets;
+run with `./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset
+LowPowerStop -InputDirectory <qualified-inputs> -OutputDirectory <fresh-output>`.
+The [reference record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#lpstop-independent-exception-qualification-and-consolidation-2026-10-05)
+records the source correction, corpus limitations and retirement proof. The
+original Basic disagreement remains retained; this is a separate qualified preset.

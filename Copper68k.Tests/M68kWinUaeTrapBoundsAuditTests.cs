@@ -78,15 +78,17 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
                 probes.Add(new(model.Id, family, detected, register.ExecutedCases, sr.ExecutedCases, frame.ExecutedCases,
                     preset.ArithmeticFlagControls, carryDetected, carry.ExecutedCases, ignoredAccepted, ignored.ExecutedCases));
                 var result = tester.Run(path, family, fixture.CpuLevel, false, false, model,
-                    fixtureClassifier: preset.ClassifyForm is null ? null : (opcode, inputSr) => preset.ClassifyForm(opcode, inputSr, family));
+                    fixtureClassifier: preset.ClassifyForm is null ? null : (opcode, inputSr) => preset.ClassifyForm(opcode, inputSr, family),
+                    fixtureWordsClassifier: preset.ClassifyWords);
                 var expected = preset.Counts(model, family);
                 var forms = new SortedDictionary<string, int>(tester.FixtureForms.ToDictionary(x => x.Key, x => x.Value), StringComparer.Ordinal);
                 var expectedForms = preset.FormCounts?.Invoke(model, family) ?? 0;
+                var formDistributionMatches = preset.ExpectedForms is null || forms.SequenceEqual(preset.ExpectedForms(model, family).OrderBy(x => x.Key, StringComparer.Ordinal));
                 var expectedMasked = preset.MaskedCounts?.Invoke(model, family) ?? (family.StartsWith("CHK2.", StringComparison.Ordinal) ? (uint)expected.Cases : 0);
                 var passing = detected && result.Passed && result.ExecutedCases == expected.Cases &&
                     tester.FrameChecks == expected.Frames && tester.MaskedCases == expectedMasked &&
-                    forms.Count == expectedForms && (preset.ClassifyForm is null || forms.Values.Sum() == result.ExecutedCases);
-                var detail = $"{result.Detail} Expected/actual callbacks={expected.Cases}/{result.ExecutedCases}, frames={expected.Frames}/{tester.FrameChecks}, masked={expectedMasked}/{tester.MaskedCases}, forms={expectedForms}/{forms.Count}.";
+                    forms.Count == expectedForms && formDistributionMatches && ((preset.ClassifyForm is null && preset.ClassifyWords is null) || forms.Values.Sum() == result.ExecutedCases);
+                var detail = $"{result.Detail} Expected/actual callbacks={expected.Cases}/{result.ExecutedCases}, frames={expected.Frames}/{tester.FrameChecks}, masked={expectedMasked}/{tester.MaskedCases}, forms={expectedForms}/{forms.Count}, formDistributionMatches={formDistributionMatches}.";
                 rows.Add(new(model.Id, family, passing ? "passing" : tester.UnsupportedExecution ? "unsupported" : result.ExecutedCases == 0 ? "untested" : "mismatching",
                     result.ExecutedCases, tester.FrameChecks, tester.MaskedCases, detected, forms, detail));
                 _output.WriteLine($"{model.Id}/{family}: {result.ExecutedCases} callbacks, {tester.FrameChecks} frames; controls={detected}.");
@@ -131,7 +133,9 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
         string ManifestPrefix, string SourceHash, string PatchHash, string ReportName, string[] ProfileIds, string[] ModelIds,
         Func<ModelSpec, string[]> Families, Func<ModelSpec, string, (int Cases, uint Frames)> Counts, string Qualification,
         bool ArithmeticFlagControls = false, Func<ModelSpec, string, uint>? MaskedCounts = null,
-        Func<ushort, ushort, string, string>? ClassifyForm = null, Func<ModelSpec, string, int>? FormCounts = null);
+        Func<ushort, ushort, string, string>? ClassifyForm = null, Func<ModelSpec, string, int>? FormCounts = null,
+        Func<ushort, ushort, ushort, ushort, string>? ClassifyWords = null,
+        Func<ModelSpec, string, IReadOnlyDictionary<string, int>>? ExpectedForms = null);
     private sealed record WinUaeQualifiedExceptionRow(string Model, string Family, string Status, int ExecutedCases,
         uint ExceptionFrames, uint MaskedSrCases, bool Controls, SortedDictionary<string, int> Forms, string Detail);
     private sealed record WinUaeQualifiedExceptionProbe(string Model, string Family, bool Detected,

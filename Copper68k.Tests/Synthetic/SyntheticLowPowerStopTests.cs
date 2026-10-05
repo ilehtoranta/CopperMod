@@ -33,7 +33,7 @@ public sealed class SyntheticLowPowerStopTests(ITestOutputHelper output)
             .Concat(new ushort[] { 0, 0xffff, 0x01c0 }).ToArray();
         Assert.Equal(19, extensions.Distinct().Count());
         foreach (var extension in extensions)
-        foreach (var immediate in new ushort[] { 0, 0x071f, 0x2000, 0x271f, 0xa01f })
+        foreach (var immediate in new ushort[] { 0, 0x0700, 0x071f, 0x2000, 0x2700, 0x271f, 0xa01f })
         foreach (var supervisor in new[] { false, true })
         foreach (var trace in new ushort[] { 0, 0x8000 })
         for (var ccr = 0; ccr < 32; ccr++)

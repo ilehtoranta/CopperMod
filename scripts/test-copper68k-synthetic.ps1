@@ -111,8 +111,8 @@ try {
             'system-bounds'=$(if ($model -in @('68000','68010')) {11828} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {12488});
             'system-callm'=$(if ($model -in @('68000','68010')) {10832} elseif ($model -in @('68020','68EC020','A1200')) {11000} elseif ($model -in @('68030','68040','68060')) {10964});
             'system-interrupt'=$(if ($model -in @('68000')) {224} elseif ($model -in @('68010','68060')) {226} elseif ($model -in @('68020','68030','68040','68EC020','A1200')) {418});
-            'system-model'=13120;
-            'system-lpstop-values'=12160;
+            'system-model'=12800;
+            'system-lpstop-values'=17024;
             'system-movec'=2432;
             'system-moves'=$(if ($model -in @('68000','68010')) {10656} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {11052});
             'system-moves-invalid-operands'=7296;

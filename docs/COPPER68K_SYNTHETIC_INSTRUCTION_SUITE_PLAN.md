@@ -122,6 +122,17 @@ identities, replacement proofs and remaining required coverage here as work
 progresses. No milestone is complete merely because an inventory exists or a
 partial matrix passes.
 
+Latest milestone-6 checkpoint, 2026-10-05: independent LPSTOP exception
+qualification passes 245,760 pinned WinUAE callbacks/frames in fourteen
+architectural combinations. The new synthetic matrix includes all former SR
+values and passes 267,262 cases; shared mutation proof permits removal of the
+duplicate 320-case-per-profile LPSTOP loop. MOVE16/cache/BKPT and specialized
+regressions remain. The full CPU suite passes 4,978 tests (eleven optional skips),
+and the strict gate passes 16,035,670 logical cases in 595 reporting batches.
+See the [qualification and retirement record](COPPER68K_REFERENCE_QUALIFICATION.md#lpstop-independent-exception-qualification-and-consolidation-2026-10-05).
+Milestone 6 remains in progress: this checkpoint does not close the advanced
+restoration, reference disagreement or broader consolidation requirements.
+
 ### First implementation checkpoint — 2026-10-04
 
 The [suite guide](../Copper68k.Tests/Synthetic/README.md) describes fixtures,
