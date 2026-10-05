@@ -4375,7 +4375,11 @@ namespace Copper68k
                 M68kAcceleratorModel.M68040 => M68040FastKinds,
                 _ => M68020FastKinds
             };
-            _codeReader = bus as IM68kCodeReader;
+            // The 040 logical bus can implement host reads using real fetches.
+            // Those must execute inside an instruction boundary, never during
+            // speculative hot-block construction.
+            _codeReader = bus is M68040LogicalBus { HasHostCodeReader: false }
+                ? null : bus as IM68kCodeReader;
             _jitBus = bus as IM68kJitBus;
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
             _hasModelSpecificInstructions = hasModelSpecificInstructions;

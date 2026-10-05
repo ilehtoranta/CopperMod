@@ -1596,3 +1596,35 @@ engine diagnostics and all three native Workbench/A1200 replays; package,
 assets and loaded CPU identities match. Software references and existing timing
 policy remain separate from hardware/physical timing qualification. See the
 [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-instruction-fetch-access-faults--2026-10-05).
+
+### Milestone 6 host-reader boundary and handler-entry discovery — 2026-10-05
+
+The accurate 040 engine no longer builds speculative hot blocks through a
+logical host-read fallback that performs real CPU fetches before the instruction
+boundary. Buses without a physical host code reader use ordinary execution;
+buses with a host reader retain the fast path. Two ordinary batches add 24,576
+passing cases for denied cold-batch boundaries and faults after an executed
+handler prefix. A maintained mutation restores the old admission rule and must
+fail at the denied boundary.
+
+Two reference-discovery batches execute the complete four-long handler-entry
+prefetch requirement: 393,216 mismatching cases across scalar/batch routes.
+They do not promote the existing deferred demand-fetch policy as architectural
+entry qualification. The complete 040 gate now requires 36 tests, 30 reports,
+six fixed examples and twelve fixture identities, while preserving its 480-case
+untested inventory. The next correction must implement buffered entry prefetch,
+fatal entry faults and the boundary to later handler execution; all earlier
+requirements remain open. No regression or public API/package is retired or
+released. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+See the [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-host-reader-boundary-and-handler-prefetch-discovery--2026-10-05).
+
+Validation passes 5,059 Release CPU tests with thirteen opt-in skips and all nine
+pinned WinUAE selections. Strict ordinary reporting checks 17,615,382 cases in
+618 batches; fresh SingleStepTests passes 312,500 cases / 125 files and Musashi
+passes 536 programs with 88 exclusions. All seventeen report/identity controls
+detect their intended corruptions. Isolated CopperScreen through unpublished
+private `.62` passes Release build, host/disk suites, separate engine diagnostics
+and all three native replays with matching package/assets/CPU binaries. The
+complete 040 audit intentionally fails: 2,646,720 passing cases, 393,216
+handler-entry mismatches and 480 untested requirements. Ordinary skips and
+software references do not imply completion of that required discovery scope.

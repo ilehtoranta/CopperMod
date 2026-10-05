@@ -487,3 +487,21 @@ including updated architectural self-fetch frames. No regression is retired.
 The [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-instruction-fetch-access-faults--2026-10-05)
 records current execution, historical proof, mutations, identities and remaining
 scope.
+
+`SyntheticM68040HandlerPrefetchTests` adds two ordinary reports with 24,576
+cases. They check that a denied cold batch makes no CPU fetch/state change, and
+that an instruction-fetch fault after an executed handler MOVEQ/NOP prefix starts
+a new format-7 exception with precise handler PC/SR. The accurate 040 engine
+requires a physical host code reader for speculative hot-block construction;
+the logical bus's real-fetch fallback cannot run before an instruction boundary.
+`-Scope HandlerPrefetch` restores that defect and requires intended denial proof.
+
+The two entry-prefetch reports are enabled only by the complete 040 discovery
+command. They reject each byte of the required four-long window and currently
+fail all 393,216 cases: deferred demand fetch does not perform architectural
+handler-entry prefetch. The dedicated command requires 36 tests (30 reports,
+six fixed examples), twelve fixture identities and all four independent new
+combination matrices. It preserves the earlier 480 untested requirements.
+These entry mismatches are not a passing ordinary-CI qualification. See the
+[qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-host-reader-boundary-and-handler-prefetch-discovery--2026-10-05)
+for authorities, evidence and the required follow-up correction.

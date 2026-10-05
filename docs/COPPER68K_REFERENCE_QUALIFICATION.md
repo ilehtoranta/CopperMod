@@ -4254,3 +4254,107 @@ untouched incoming-trace retry, context transfer and all earlier model/reference
 and consolidation requirements remain open. Original Basic's 47 mismatching and
 eight unsupported groups are not reclassified. The 480-case inventory and
 `roadmapComplete=false` remain explicit; milestone 6 is **in progress**.
+
+## 040 host-reader boundary and handler-prefetch discovery — 2026-10-05
+
+The authority for the handler boundary is
+[MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+8.1, figure 8-1, and 7.6.3. Entry prefetch precedes handler execution and a
+fault during entry halts the processor; a later fault in executing handler code
+starts another exception. Four required entry longs must be distinguished from
+the demand-driven frontend's current fetch policy. Software-reference agreement
+or a successful later handler instruction cannot qualify this entry window.
+
+Investigation also found that the logical 040 bus advertises `IM68kCodeReader`
+even when its physical bus has no host code reader. Its fallback host read then
+performs a real instruction fetch during speculative hot-block construction,
+before `BeforeInstruction`, and can leak the physical fault to the host. The
+accurate interpreter now admits hot-block construction only when the physical
+bus supplies a host code reader. Other buses execute through the ordinary
+instruction boundary and fault handler. This preserves the existing timing
+keys and available host-reader fast path; no throughput or physical timing
+qualification is inferred.
+
+`SyntheticM68040HandlerPrefetchTests` supplies fixed opcode, extension and RTE
+validation faults. Instruction faults cover user/ISP/MSP; RTE begins on ISP/MSP.
+All CCRs, incoming trace states, odd/even stacks, VBRs and rejected bytes are
+included. A denied cold batch must make one before callback, no after callback,
+no fetch/rejection, and no state/memory change. After a valid handler MOVEQ/NOP
+prefix, a new instruction-fetch fault must preserve the prefix, stack an
+independently checked format-7 frame and retain precise handler PC/SR.
+
+| Report | Logical cases | Architectural combinations | Status |
+| --- | ---: | ---: | --- |
+| `handler-prefetch-executing-scalar` | 12,288 | 384 | Passing ordinary CI |
+| `handler-prefetch-executing-batch` | 12,288 | 384 | Passing ordinary CI after correction |
+| `handler-prefetch-entry-scalar` | 196,608 | 6,144 | Failing reference discovery |
+| `handler-prefetch-entry-batch` | 196,608 | 6,144 | Failing reference discovery |
+
+The entry reports reject each byte of the four-long window with four handler
+word offsets. They require fatal halt before handler execution, no second
+exception or subsequent bus transfer, frozen host-entry behavior and external
+reset recovery. Current source fails at the entry prerequisite: no handler
+prefetch is attempted during exception processing. Subsequent halt/reset checks
+are therefore not yet qualified by this fixture. These failures are actual
+executed mismatches, not exclusions or renamed passing policy coverage.
+
+Before correction, the focused executing-handler audit passes its scalar batch
+but fails all 12,288 batch cases; evidence is in
+`artifacts/m6-handler-prefetch-positive-v2/`. The maintained mutation command
+`-Scope HandlerPrefetch` reinstates the old host-reader admission rule, executes
+both full ordinary reports and requires a denied-boundary mismatch. It detects
+the defect in `artifacts/m6-handler-prefetch-mutations-v2/`; production sources are
+restored byte-for-byte and rebuilt. No historical regression is retired.
+
+The complete run in `artifacts/m6-handler-prefetch-audit/` executes 36 tests:
+33 pass and three discovery tests fail. It checks 3,040,416 logical cases:
+2,646,720 passing, 393,216 entry-prefetch mismatches, zero unsupported execution
+and 480 untested inventory cases. Seventeen copied-input controls in
+`artifacts/m6-handler-prefetch-controls/` reject omitted, shortened, foreign and
+redistributed combinations in all four new reports, plus missing fixture
+identity. Controls require their specific diagnostic; a pre-existing discovery
+failure cannot satisfy corruption detection. Redistribution preserves aggregate
+counts and combination cardinality.
+
+The source baseline is `d99f7c80efd42399e2c367fccdf14ff853f695f2`; the dedicated
+manifest distinguishes that committed tree from corrected working-source
+hashes. Qualified CPU SHA-256 is
+`adae3e327e83199dbc804346b7eb1814c05b2f05b89a799d42cfb8e6043b0146`
+and test/reference adapter SHA-256 is
+`4dabd59a3453a4dd1320224a04dcefa9dfa5045066da3f83facffedaea0f80d7`.
+The isolated consumer at `d9beae8b88be24032221e3482942a249c03c27d3`
+consumes unpublished private `.62`, package SHA-256
+`da4a2dd6c57d2248809d0b873dd4f96f96040bcce98416a4543e665598abd955`.
+Release build passes with zero warnings/errors; host 149/six optional skips,
+disk 74, separate engine diagnostics 1,080 and all three native Workbench/A1200
+boot/persistence replays pass, with no native skips. The embedded CPU, four
+assets and four loaded DLLs match. Evidence is under the isolated consumer's
+`artifacts/handler-prefetch-validation/` and
+`artifacts/handler-prefetch-identities.json`; root CopperScreen edits and its
+published dependency pin are preserved. No public package is released.
+
+Fresh full Release CPU execution in `artifacts/m6-handler-prefetch-full/`
+passes 5,059 tests with zero failures and thirteen opt-in skips. Two skips are
+the required handler-entry discovery tests executed separately above; their
+failures are not successful full-goal coverage. All nine pinned WinUAE presets
+match exact directory/callback/frame counts and the same CPU/adapter binaries;
+`qualified-preset-identities.json` records each selection. Generator and runner
+pins remain `025b999239800357e95065fe5b9a15ea5b300fa7` and
+`7a83745d6c6159bc74ab0471578ffc8bc244e66e`. Strict ordinary report validation
+checks 17,615,382 cases in 618 batches across all eight profiles. Fresh pinned
+SingleStepTests passes 312,500 cases / 125 files at
+`64b253116a3de04aaac4346c43680960dc9b67e5`; Musashi passes 536 programs with
+88 explicit exclusions at `72c1d74800f3087b45a0c1a7342601bbed898881`.
+The restored mutation sources/binaries match this qualified snapshot. These
+software-reference selections do not qualify the missing handler-entry window,
+silicon behavior, physical timing or the full roadmap.
+
+The dedicated gate independently enumerates all four new reports and requires
+36 tests, 30 reporting batches, six fixed examples and twelve fixture/command
+identities. The new entry mismatches must fail it; the earlier 480-case required
+inventory remains intact. Completing entry prefetch requires a real buffered
+entry/fault protocol that handles the complete window and distinguishes faults
+after execution starts. Suppressing the discovery test, fetching only a safe
+first word or retrying an instruction after operand side effects is insufficient.
+All earlier model, restart, writeback, reference and consolidation requirements
+remain open. Milestone 6 remains **in progress**, `roadmapComplete=false`.

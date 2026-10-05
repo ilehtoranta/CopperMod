@@ -1950,6 +1950,8 @@ namespace Copper68k
 
         internal IM68kBus PhysicalBus => _physicalBus;
 
+        internal bool HasHostCodeReader => _codeReader != null;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool CanUseDirectIdentityAccess(uint address, int byteCount)
             => _allPhysicalAddressesMapped &&

@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','InstructionFault','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','InstructionFault','HandlerPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -334,6 +334,13 @@ foreach ($mutation in $instructionMutations) {
     $mutation.file='Copper68k/M68040Support.cs'; $mutation.group='SyntheticM68040InstructionFaultTests'; $mutation.model='68040'
     $mutation.milestone=6; $mutation.instructionFault=$true; $mutation.proofPhase='/fault-entry'; $mutations += $mutation
 }
+$mutations += @{
+    name='040-host-reader-speculative-fetch'; file=$advanced; before=@'
+            _codeReader = bus is M68040LogicalBus { HasHostCodeReader: false }
+                ? null : bus as IM68kCodeReader;
+'@; after='            _codeReader = bus as IM68kCodeReader;';
+    group='FetchFaultAfterHandlerExecutionStartsANewException'; model='68040'; milestone=6; handlerPrefetch=$true
+}
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
@@ -343,6 +350,7 @@ if ($Scope -eq 'Rte040') { $mutations = @($mutations | Where-Object { $_.odd }) 
 if ($Scope -eq 'RteValidationFault') { $mutations = @($mutations | Where-Object { $_.validationFault }) }
 if ($Scope -eq 'RteRepair') { $mutations = @($mutations | Where-Object { $_.repair }) }
 if ($Scope -eq 'InstructionFault') { $mutations = @($mutations | Where-Object { $_.instructionFault }) }
+if ($Scope -eq 'HandlerPrefetch') { $mutations = @($mutations | Where-Object { $_.handlerPrefetch }) }
 if ($Scope -eq 'AccessDoubleFault') { $mutations = @($mutations | Where-Object { $_.doubleFault }) }
 if ($Scope -eq 'BatchFault') { $mutations = @($mutations | Where-Object { $_.batchFault }) }
 if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
@@ -403,6 +411,16 @@ try {
                     @($batches | Where-Object { $_.group -eq 'rte-validation-physical-direct' -and $_.logicalCases -eq 162816 }).Count -ne 1 -or
                     @($batches | Where-Object { $_.group -eq 'rte-validation-physical-chained' -and $_.logicalCases -eq 61056 }).Count -ne 1) {
                     throw 'RTE validation-fault mutation did not execute its complete two-batch selection'
+                }
+            }
+            if ($mutation.handlerPrefetch) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $batches.Count -ne 2 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq 'handler-prefetch-executing-scalar' -and $_.logicalCases -eq 12288 }).Count -ne 1 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq 'handler-prefetch-executing-batch' -and $_.logicalCases -eq 12288 }).Count -ne 1 -or
+                    @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains('/route=batch/', [StringComparison]::Ordinal) -and
+                        $_.reason.StartsWith('Denied cold batch', [StringComparison]::Ordinal) }).Count -eq 0) {
+                    throw 'Host-reader mutation omitted complete cases or intended boundary failure'
                 }
             }
             if ($mutation.instructionFault) {
@@ -471,11 +489,15 @@ try {
                 [xml]$legacyTrx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
                 if (@($legacyTrx.TestRun.Results.UnitTestResult | Where-Object { ($_.testName.EndsWith($mutation.legacyTest) -or $_.testName.Contains($mutation.legacyTest + '(')) -and $_.outcome -eq 'Failed' }).Count -ne 1) { throw 'Original regression did not detect the same mutation' }
             }
+            $proofFailure = if ($mutation.handlerPrefetch) {
+                @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains('/route=batch/', [StringComparison]::Ordinal) -and
+                    $_.reason.StartsWith('Denied cold batch', [StringComparison]::Ordinal) })[0]
+            } else { $failures[0] }
             $results += @{mutation=$mutation.name; file=$mutation.file; sourceSha256=(Get-FileHash -LiteralPath $path).Hash;
-                detected=$true; replacementCase=$failures[0].id; diagnostic=$failures[0].reason; originalRegressionDetected=$legacyPresent;
+                detected=$true; replacementCase=$proofFailure.id; diagnostic=$proofFailure.reason; originalRegressionDetected=$legacyPresent;
                 proofGroup=$mutation.proofGroup; proofCombination=$mutation.proofCombination; proofPhase=$mutation.proofPhase;
                 reports=@($batches | ForEach-Object { @{group=$_.group; logicalCases=$_.logicalCases; counts=$_.counts} })}
-            Write-Host "Detected $($mutation.name): $($failures[0].id)"
+            Write-Host "Detected $($mutation.name): $($proofFailure.id)"
         }
         finally { [IO.File]::WriteAllBytes($path, $saved[$path]) }
     }
