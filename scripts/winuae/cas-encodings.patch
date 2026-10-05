@@ -1,0 +1,10 @@
+--- a/gencpu/cputest.cpp
++++ b/gencpu/cputest.cpp
+@@
++						if (dp->mnemo == i_CAS) {
++							// M68000PM 4-67: only Du/Dc fields are nonzero.
++							uae_u16 extra = get_word_test(opcode_memory_start + 2) & 0x01c7;
++							put_word_test(opcode_memory_start + 2, extra);
++						}
+ 						if (dp->mnemo == i_MOVES) {
+ 							// MOVES is stupid

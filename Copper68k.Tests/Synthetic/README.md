@@ -311,3 +311,26 @@ The 68000 unavailable outcome remains in synthetic coverage. The existing
 MOVES privilege-before-extension bus-ordering regression is retained.
 The [MOVES qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#moves-legal-input-reference-qualification-2026-10-05)
 documents identities, complete selections, failed discovery and limitations.
+
+Legal CAS B/W/L reference inputs use the `Cas` preset on EC020/A1200/020/030/
+040/060. A copied input generator clears reserved extension fields; a separate
+copied CPU generator fixes the 060 misalignment vector-61 saved PC to the
+causing instruction, as MC68060UM C.2.2 requires. The original Basic saved-PC
+disagreement is retained. All eighteen selected directories pass 49,284
+callbacks, 2,466 exception frames and 38,448 recorded architectural forms.
+The report records size, EA register/mode, compare/update register, incoming
+S/CCR and indexed structure. Fixed encodings, exact counts and complete
+selections are required. Register/SR controls apply to every directory; frame
+and saved-PC corruption controls apply to the two 060 W/L directories with
+exceptions. Zero-frame directories must report exactly zero frames; their
+inapplicable frame controls are labeled explicitly.
+Prepare with `./scripts/prepare-copper68k-winuae.ps1 -Preset Cas` and the pinned
+source/compiler arguments; run
+`./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset Cas
+-InputDirectory <qualified-inputs> -OutputDirectory <fresh-output>`.
+Both source/patch identities and all fixture hashes are checked. This is a
+seeded software-reference qualification with CCR 0/31 and both privilege states,
+not physical lock/bus, cache, trace/fault restart, timing or exhaustive indexed-
+value qualification. CAS2 remains separate; 000/010 absence remains synthetic.
+The [CAS qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#cas-legal-input-and-unimplemented-frame-reference-qualification-2026-10-05)
+records the original disagreement, controls and remaining scope.

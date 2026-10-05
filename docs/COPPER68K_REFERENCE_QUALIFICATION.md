@@ -3336,3 +3336,129 @@ Production CPU source remains unchanged from `cb9679d`; prior unpublished `.57`
 consumer evidence retains its original package/assembly identities, without a
 new consumer replay or package publication claim. Unrelated CopperScreen working
 changes and its NuGet boundary remain preserved.
+
+### CAS legal-input and unimplemented-frame reference qualification — 2026-10-05
+
+The retained Basic audit stops at callback 273 for both 060 CAS.W and CAS.L.
+Its first misaligned predecrement operand is `-(A3)` with initial A3 `00007FFF`:
+opcodes `0CE3` / `0EE3`, extensions `0043` / `00C1`, initial SR `0000`,
+instruction PC `0087FFA0`. The CPU takes vector 61 and saves `0087FFA0`;
+the reference expects `0087FFA4`. [MC68060UM C.2.2 and figure
+8-3](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf) require a format-0
+frame pointing to the unimplemented instruction. Section 7.7.6 identifies
+misaligned CAS as an unimplemented-integer case. Copper68k already has the
+documented PC; no production change is made. The pinned generator's CAS path
+calls `sync_m68k_pc_noreset()` before its exception helper, which stacks that
+advanced PC. `cas-unimplemented-pc.patch` changes only this path in a copied
+generator to restore `regs.instruction_pc` before vector 61. The original Basic
+corpus, generator and failed evidence remain unchanged.
+
+The separate `Cas` preset selects B/W/L on EC020/020/030/040/060, with A1200
+reusing EC020 inputs. [M68000PM 4-66/67](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+defines memory-alterable operands, fixed-zero reserved extension fields and
+compare/update registers. `cas-encodings.patch` clears all fields except Du/Dc
+in the copied input generator before reference execution. The bridge rejects
+noncanonical inputs; it never normalizes an input, CPU result or expected frame.
+The immutable-word classifier records size, EA mode/register, Dc/Du, initial
+S/CCR and brief/full indexed structure. Reserved full-format fields, unsupported
+profiles, foreign families and incoming SR values outside `0000`, `001F`,
+`2000`, `201F` are rejected.
+
+The exact passing selections are:
+
+| Profile(s), each | Family | Callbacks | Exception frames | Recorded forms |
+| --- | --- | ---: | ---: | ---: |
+| EC020 / A1200 | B | 3,358 | 0 | 2,620 |
+| EC020 / A1200 | W | 2,924 | 0 | 2,340 |
+| EC020 / A1200 | L | 3,476 | 0 | 2,736 |
+| 020 / 030 / 040 / 060 | B | 2,348 | 0 | 1,826 |
+| 020 / 030 / 040 | W | 2,442 | 0 | 1,904 |
+| 020 / 030 / 040 | L | 2,652 | 0 | 2,034 |
+| 060 | W | 2,442 | 894 | 1,904 |
+| 060 | L | 2,652 | 1,572 | 2,034 |
+| All six profiles | B/W/L | 49,284 | 2,466 | 38,448 |
+
+All eighteen directories pass with zero mismatching, unsupported or untested
+selected directories and zero masked SR cases. Fifteen fixed encoding/profile
+tests also pass. Independent register and defined-SR corruptions fail for all
+directories. Frame-format/vector-word and saved-PC corruptions fail in the two
+060 W/L directories, giving forty applicable comparator controls. Adding four
+to the saved PC recreates the original discrepancy; both controls fail after
+517 callbacks with frame byte 5 expected `A0`, actual `A4`. Zero-frame directories
+require exactly zero frames and explicitly label their frame controls inapplicable;
+they are not evidence of exception-frame coverage. The first count-discovery
+report intentionally fails against placeholder zero counts and remains in
+`artifacts/m6-cas-reference-discovery/`. Subsequent passing evidence with fixed
+counts and saved-PC controls is `artifacts/m6-cas-reference-qualified-v2/`.
+
+Preparation and audit commands:
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 -GeneratorSource <pinned-generator> -RunnerSource <pinned-runner> -VcVars64 <vcvars64.bat> -Preset Cas -OutputDirectory <fresh-inputs>
+./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset Cas -InputDirectory <fresh-inputs> -OutputDirectory <fresh-output>
+```
+
+The generator remains pinned to `025b999239800357e95065fe5b9a15ea5b300fa7`
+and runner to `7a83745d6c6159bc74ab0471578ffc8bc244e66e`. Required normalized
+source/patch SHA-256 identities are:
+
+| Input | SHA-256 |
+| --- | --- |
+| Copied CPU generator | `40e65f21b503437993d1a704c7552b8b6f8ab17493c109583c13e00c93d77b10` |
+| CPU-generator patch | `a27200bdbac2441b1b63651f02590d2894eadc3257df54097fd8a50a5c0d8646` |
+| Copied input generator | `6b24d70455aa39ed6894ad2a2253d60bf4b8b487be4e2dada194a0589eb53b5b` |
+| Input-generator patch | `cb45000b18f7d4a11dcb0fec7130202c7918ac7fd42c9940effa248b1991fba2` |
+
+The manifest in `artifacts/m6-cas-qualified-inputs/` has SHA-256
+`a1cf7a6d6af743c2f01a51a92d4270a149a692aaee3235f2b241a379a9d3bb76`;
+generator executable SHA-256 is
+`610d0815532612eb6485cd2cab86ab655e5f2180501dae2d9c4a999668790cc8`;
+native library SHA-256 is
+`0aff0778debe3b56ca5cee818f32f835afa46015eb1efc83641f39711272b7fd`.
+Complete profiles/families, data and memory images, input hashes, both copied
+sources and both patches are validated before execution. Nine isolated controls
+reject empty profiles/families/input selections, missing or changed input data,
+changed CPU generator/patch and changed input generator/patch. Each fails for
+its intended reason in `artifacts/m6-cas-reference-controls/controls.json`.
+
+This is one seeded round with CCR 0/31 and user/supervisor states, with full
+addressing extensions enabled. It is a corrected software reference, not an
+unchanged upstream or silicon oracle. The reference reads its operand before
+checking 060 alignment; this audit qualifies architectural state and frames,
+not bus accesses or fault sequencing. Physical locks/bus ordering, cache,
+incoming trace, operand faults/restart, timing and exhaustive signed/scaled
+indexed-value combinations remain unqualified. CAS2 (including the separate
+040 alias-order disagreement) is not promoted by this preset. Unavailable
+000/010 CAS remains synthetic coverage. No regression is retired, no production
+CPU change or package release is made, and all required RTE/restart/reference/
+consolidation gaps remain. Milestone 6 stays in progress.
+
+The next CAS2 reference follow-up has a distinct manual rule. M68000PM 4-68
+states that if Dc1 and Dc2 name the same register and comparison fails, memory
+operand 1 is stored there. The retained 040 CAS2.W witness is `0CFC 8083 E043`
+(both compare fields D3), with different operand addresses A0/A6. Copper68k
+returns operand 1 (`FFFF0001`); the reference expects operand 2 (`FFFFC700`).
+The pinned generator explicitly reverses the compare-register write order on
+040. This identifies a separate reference correction to qualify, not a CPU fix
+or completed CAS2 audit. CAS2 inputs, applicable frame controls and independent
+coverage still need their own validation; none are silently included above.
+
+The full Release CPU suite in `artifacts/m6-cas-full/` passes 5,011 tests,
+eleven optional skips and zero failures, with all seven qualified WinUAE presets
+enabled. All seven reports have zero mismatching, unsupported or untested
+selected directories and matching CPU/adapter identities. CPU assembly SHA-256
+is `dd9fab1d6aebb4c35ad48e6c8443fc19dd6d52dc0ede9f5d7a49f11013d188c7`;
+adapter SHA-256 is
+`1a427ea255554770f5891b82be5e29a159ff6984b722c7b0be8e6e29f325fa17`.
+Production source remains unchanged since `cb9679d`; this test/reference-only
+checkpoint retains the preceding unpublished `.57` consumer evidence with its
+original package/assembly identities. It does not claim a fresh consumer replay,
+binary equality with `.57`, or package publication. Unrelated CopperScreen
+changes and its pinned NuGet boundary remain preserved.
+
+The strict gate in `artifacts/m6-cas-gate.log` validates 16,035,670 passing
+logical cases in 595 reporting batches, with `roadmapComplete=false` and the
+complete required-gap inventory retained. Fresh pinned SingleStepTests passes
+312,500 cases in 125 files; Musashi passes 536 programs with 88 explicit
+exclusions. Their input identities and complete selections are rechecked; this
+does not broaden the references' documented qualification or close other gaps.

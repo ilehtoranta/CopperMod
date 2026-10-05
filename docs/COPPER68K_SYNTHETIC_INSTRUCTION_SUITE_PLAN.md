@@ -122,7 +122,25 @@ identities, replacement proofs and remaining required coverage here as work
 progresses. No milestone is complete merely because an inventory exists or a
 partial matrix passes.
 
-Latest milestone-6 reference checkpoint, 2026-10-05: legal sampled MOVES B/W/L
+Latest milestone-6 reference checkpoint, 2026-10-05: legal sampled CAS B/W/L
+passes 49,284 independent callbacks, 2,466 unimplemented-integer frames and
+38,448 recorded architectural combinations across EC020/A1200/020/030/040/060.
+The CPU already saves the documented 060 instruction PC; a separate copied
+reference generator corrects its advanced PC and selects canonical extensions.
+All eighteen directories and fifteen fixed encoding/profile tests pass, with
+forty applicable comparator controls (including two saved-PC controls) and nine
+input/source rejection controls. Both copied source/patch identities are required.
+See the [CAS qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#cas-legal-input-and-unimplemented-frame-reference-qualification-2026-10-05).
+No CPU behavior changes, regression retirement or package publication are added.
+The original Basic results and all broader restoration/reference/consolidation
+requirements remain retained; milestone 6 is still **in progress**.
+The full Release CPU suite passes 5,011 tests, with eleven optional skips and
+all seven qualified WinUAE presets enabled against the same CPU/adapter binaries.
+The strict gate passes 16,035,670 logical cases in 595 reporting batches, with
+fresh pinned SingleStepTests (312,500 cases / 125 files) and Musashi (536 programs /
+88 exclusions). `roadmapComplete=false` and all required gaps remain explicit.
+
+Preceding milestone-6 reference checkpoint, 2026-10-05: legal sampled MOVES B/W/L
 passes 110,492 independent callbacks, 86,072 privilege frames and 59,920
 recorded architectural combinations across seven profiles. The retained Basic
 010 MOVES.L failure uses an undefined same-An store and noncanonical extension;

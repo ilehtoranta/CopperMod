@@ -40,6 +40,17 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
         using var identity = JsonDocument.Parse(json);
         var fields = identity.RootElement;
         var sourcePath = Path.Combine(root, preset.SourceName);
+        if (preset.InputIdentity is { } input)
+        {
+            var inputPath = Path.Combine(root, input.SourceName);
+            var normalizedInputHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(File.ReadAllText(inputPath).Replace("\r\n", "\n")))).ToLowerInvariant();
+            if (normalizedInputHash != input.SourceHash ||
+                Hash(inputPath) != fields.GetProperty(preset.ManifestPrefix + "InputSourceSha256").GetString() ||
+                fields.GetProperty(preset.ManifestPrefix + "InputPatchSha256").GetString() != input.PatchHash ||
+                Hash(Path.Combine(root, input.PatchName)) != input.PatchHash)
+                throw new XunitException($"{preset.Name} input source or patch identity is unqualified.");
+        }
         var normalizedSourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(File.ReadAllText(sourcePath).Replace("\r\n", "\n")))).ToLowerInvariant();
         if (manifest.Schema != 1 || manifest.GeneratorCommit != GeneratorPin || manifest.RunnerCommit != RunnerPin ||
@@ -64,23 +75,34 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
             var path = Path.Combine(root, fixture.Id);
             foreach (var family in preset.Families(model))
             {
+                var expected = preset.Counts(model, family);
+                // A frame corruption control applies only to a corpus containing
+                // exception frames. Zero-frame selections still require exact
+                // zero-frame counts and independent register/SR controls.
+                var frameRequired = !preset.AllowFrameFreeFamilies || expected.Frames != 0;
                 var register = tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptResult: true);
                 var sr = tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptSr: 0x10);
-                var frame = tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptFrame: true);
+                var frame = frameRequired ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptFrame: true) : default;
+                var frameDetected = !frameRequired || (!frame.Passed && tester.FrameChecks > 0 &&
+                    frame.Detail.Contains("frame byte", StringComparison.Ordinal));
+                var pcRequired = preset.SavedPcControls && frameRequired;
+                var pc = pcRequired ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptSavedPc: true) : default;
+                var pcDetected = !pcRequired || (!pc.Passed && pc.ExecutedCases > 0 && tester.FrameChecks > 0 &&
+                    pc.Detail.Contains("frame byte 5", StringComparison.Ordinal));
                 var detected = !register.Passed && register.ExecutedCases > 0 && !sr.Passed && sr.ExecutedCases > 0 &&
-                    sr.Detail.Contains("SR:", StringComparison.Ordinal) && !frame.Passed && tester.FrameChecks > 0 &&
-                    frame.Detail.Contains("frame byte", StringComparison.Ordinal);
+                    sr.Detail.Contains("SR:", StringComparison.Ordinal) && frameDetected && pcDetected;
                 var carry = preset.ArithmeticFlagControls ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptSr: 1) : default;
                 var carryDetected = !preset.ArithmeticFlagControls || (!carry.Passed && carry.ExecutedCases > 0 && carry.Detail.Contains("SR:", StringComparison.Ordinal));
                 var ignored = preset.ArithmeticFlagControls ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptIgnoredSr: true) : default;
                 var ignoredAccepted = !preset.ArithmeticFlagControls || (ignored.Passed && ignored.ExecutedCases > 0 && tester.MaskedCases > 0);
                 detected &= carryDetected && ignoredAccepted;
                 probes.Add(new(model.Id, family, detected, register.ExecutedCases, sr.ExecutedCases, frame.ExecutedCases,
-                    preset.ArithmeticFlagControls, carryDetected, carry.ExecutedCases, ignoredAccepted, ignored.ExecutedCases));
+                    preset.ArithmeticFlagControls, carryDetected, carry.ExecutedCases, ignoredAccepted, ignored.ExecutedCases,
+                    frameRequired, frameDetected, pcRequired, pcDetected, pc.ExecutedCases,
+                    pcRequired ? pc.Detail : null));
                 var result = tester.Run(path, family, fixture.CpuLevel, false, false, model,
                     fixtureClassifier: preset.ClassifyForm is null ? null : (opcode, inputSr) => preset.ClassifyForm(opcode, inputSr, family),
                     fixtureWordsClassifier: preset.ClassifyWords is null ? null : (opcode, extension, followingWord, inputSr) => preset.ClassifyWords(model, opcode, extension, followingWord, inputSr, family));
-                var expected = preset.Counts(model, family);
                 var forms = new SortedDictionary<string, int>(tester.FixtureForms.ToDictionary(x => x.Key, x => x.Value), StringComparer.Ordinal);
                 var expectedForms = preset.FormCounts?.Invoke(model, family) ?? 0;
                 var formDistributionMatches = preset.ExpectedForms is null || forms.SequenceEqual(preset.ExpectedForms(model, family).OrderBy(x => x.Key, StringComparer.Ordinal));
@@ -101,6 +123,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
             manifest.GeneratorCommit, manifest.RunnerCommit, manifest.NativeLibrarySha256,
             manifestSha256 = Hash(manifestFile), generatorSourceSha256 = Hash(sourcePath),
             generatorNormalizedSourceSha256 = preset.SourceHash, generatorPatchSha256 = preset.PatchHash,
+            inputIdentity = preset.InputIdentity,
             adapterAssemblySha256 = Hash(typeof(M68kWinUaeCpuTesterConformanceTests).Assembly.Location),
             cpuAssemblySha256 = Hash(typeof(Copper68k.M68kCoreFactory).Assembly.Location),
             qualification = preset.Qualification,
@@ -135,10 +158,14 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
         bool ArithmeticFlagControls = false, Func<ModelSpec, string, uint>? MaskedCounts = null,
         Func<ushort, ushort, string, string>? ClassifyForm = null, Func<ModelSpec, string, int>? FormCounts = null,
         Func<ModelSpec, ushort, ushort, ushort, ushort, string, string>? ClassifyWords = null,
-        Func<ModelSpec, string, IReadOnlyDictionary<string, int>>? ExpectedForms = null);
+        Func<ModelSpec, string, IReadOnlyDictionary<string, int>>? ExpectedForms = null,
+        QualifiedInputIdentity? InputIdentity = null, bool AllowFrameFreeFamilies = false, bool SavedPcControls = false);
+    private sealed record QualifiedInputIdentity(string SourceName, string PatchName, string SourceHash, string PatchHash);
     private sealed record WinUaeQualifiedExceptionRow(string Model, string Family, string Status, int ExecutedCases,
         uint ExceptionFrames, uint MaskedSrCases, bool Controls, SortedDictionary<string, int> Forms, string Detail);
     private sealed record WinUaeQualifiedExceptionProbe(string Model, string Family, bool Detected,
         int RegisterCases, int SrCases, int FrameCases, bool ArithmeticFlagControls,
-        bool CarryDetected, int CarryCases, bool IgnoredAccepted, int IgnoredCases);
+        bool CarryDetected, int CarryCases, bool IgnoredAccepted, int IgnoredCases,
+        bool FrameControlRequired, bool FrameDetected, bool SavedPcControlRequired,
+        bool SavedPcDetected, int SavedPcCases, string? SavedPcDetail);
 }

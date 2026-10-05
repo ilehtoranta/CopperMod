@@ -308,6 +308,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		private ModelSpec? _integerProfile;
 		private bool _corruptResult;
 		private bool _corruptFrame;
+		private bool _corruptSavedPc;
 		private ushort _corruptSr;
 		private bool _corruptIgnoredSr;
 		private string _integerFamily = "";
@@ -362,7 +363,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			bool corruptIgnoredSr = false,
 			bool qualifyLongArithmetic = false,
 			Func<ushort, ushort, string>? fixtureClassifier = null,
-			Func<ushort, ushort, ushort, ushort, string>? fixtureWordsClassifier = null)
+			Func<ushort, ushort, ushort, ushort, string>? fixtureWordsClassifier = null,
+			bool corruptSavedPc = false)
 		{
 			_callbackException = null;
 			_executedCases = 0;
@@ -375,6 +377,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			_integerProfile = integerProfile;
 			_corruptResult = corruptResult;
 			_corruptFrame = corruptFrame;
+			_corruptSavedPc = corruptSavedPc;
 			_corruptSr = corruptSr;
 			_corruptIgnoredSr = corruptIgnoredSr;
 			_integerFamily = opcode;
@@ -607,6 +610,13 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 				{
 					var address = registers.ExcFrame + (_cpuLevel == 0 ? 4u : 6u);
 					bus.WriteHostWord(address, (ushort)(bus.ReadHostWord(address) ^ 1));
+				}
+				if (_corruptSavedPc && cpu.State.LastExceptionVector >= 0)
+				{
+					// Recreate the advanced-PC reference defect without modifying
+					// the expected fixture or production instruction execution.
+					var address = registers.ExcFrame + 4;
+					bus.WriteHostWord(address, unchecked((ushort)(bus.ReadHostWord(address) + 4)));
 				}
 				Marshal.StructureToPtr(registers, registersPtr, fDeleteOld: false);
 				_unmappedReads += bus.UnmappedReads;
