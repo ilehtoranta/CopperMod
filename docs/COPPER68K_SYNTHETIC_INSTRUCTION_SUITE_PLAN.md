@@ -1665,3 +1665,45 @@ Isolated CopperScreen through unpublished private `.63` passes Release build,
 host/disk suites, 1,080 separate engine diagnostics and all three native replays,
 with matching package/assets/CPU binaries. Evidence and limits are recorded in
 the qualification record; this checkpoint does not complete milestone 6.
+
+### Milestone 6 user-tail RTE validation and executed repair — 2026-10-05
+
+Four ordinary-CI batches add **1,687,040 passing cases** for throwaways selecting
+USP, including both values of the live user M bit. Fault expectations compose
+MC68040UM's documented live-SR throwaway behavior with general access-exception
+entry; this is manual-derived software qualification, not an observed hardware
+reference for the unusual combination. The selected supervisor stack receives
+the access frame, while the incomplete user frame stays intact and consumed
+throwaway stack-pointer effects survive. A bare return restores user mode and
+the next RTE raises privilege violation. A real seven-store handler instead repairs the user frame, constructs
+a new throwaway bridge and explicitly sets saved S before retrying RTE.
+
+Canonical SR-read cases cover all 32 CCRs. Structural cases reject every byte of
+SR/PC/format/SSW/continuation-EA reads, one/two-throwaway paths through any stack,
+both alignments/VBRs and all supported frame/continuation forms. Repair covers
+all restored stacks/traces in its canonical group, continuation delivery and
+the following instruction. Three maintained `UserRteFault` mutations detect
+saved-S corruption, supervisor-data TM and forced ISP selection on both routes.
+Production CPU source is unchanged; the shared test frame checker now derives
+TM from the independently specified fault SR.
+
+The complete 040 gate requires 44 tests, 38 reporting batches, six fixed examples
+and thirteen input identities. Its independent iterator checks each new
+combination and cardinality. The 480-case inventory remains failing for internal
+restoration, chained odd-PC provenance, general data/writeback/context transfer
+and other pending requirements. Untouched incoming-trace retry and all earlier
+model/reference/consolidation work remain required. No regression is retired,
+public API changed or package released. Milestone 6 remains **in progress**;
+`roadmapComplete=false`. See the
+[qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-user-tail-validation-and-software-repair--2026-10-05).
+
+Fresh full Release validation passes 5,069 CPU tests with eleven optional skips
+and zero failures. All nine pinned WinUAE presets retain their exact counts and
+matching CPU/adapter identities. The strict ordinary gate passes 19,735,574
+cases / 628 batches; fresh SingleStepTests passes 312,500 cases / 125 files and
+Musashi passes 536 programs with 88 exclusions. The dedicated 040 run passes
+4,766,912 cases with zero mismatches/unsupported execution, retaining its 480
+untested requirements and failing completion. All three mutations and seventeen
+report/identity controls detect their intended failures. No consumer or package
+change is needed for this test-only checkpoint; preceding `.63` consumer
+evidence remains historical evidence of its own qualified binary.

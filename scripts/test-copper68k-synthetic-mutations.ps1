@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','UserRteFault','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -361,6 +361,28 @@ $entryMutations = @(
 foreach ($mutation in $entryMutations) {
     $mutation.model='68040'; $mutation.milestone=6; $mutation.entryPrefetch=$true; $mutations += $mutation
 }
+$userRteMutations = @(
+    @{name='040-user-validation-saved-s'; before=@'
+            var savedSr = State.StatusRegister;
+            State.RecordException(VectorBusError, instructionPc, savedSr);
+'@; after=@'
+            var savedSr = (ushort)(State.StatusRegister | M68kCpuState.Supervisor);
+            State.RecordException(VectorBusError, instructionPc, savedSr);
+'@; proofCombination='/M=False/'; proofReason='saved SR expected'},
+    @{name='040-user-validation-supervisor-tm'; before='            var modifier = ((savedSr & M68kCpuState.Supervisor) != 0 ? 4 : 0) | (instruction ? 2 : 1);';
+      after='            var modifier = ((savedSr & M68kCpuState.Supervisor) != 0 ? 4 : 0) | (instruction ? 2 : 5);'; proofCombination='/M=False/'; proofReason='Memory'},
+    @{name='040-user-validation-forced-isp'; before=@'
+            State.RecordException(VectorBusError, instructionPc, savedSr);
+            State.StatusRegister = (ushort)((savedSr | M68kCpuState.Supervisor) & ~0xc000);
+'@; after=@'
+            State.RecordException(VectorBusError, instructionPc, savedSr);
+            State.StatusRegister = (ushort)((savedSr | M68kCpuState.Supervisor) & ~0xd000);
+'@; proofCombination='/M=True/'; proofReason='SR expected'}
+)
+foreach ($mutation in $userRteMutations) {
+    $mutation.file='Copper68k/M68040Support.cs'; $mutation.model='68040'; $mutation.milestone=6
+    $mutation.group='UserTailFaultsAndBareReturnsUseLiveStatus'; $mutation.userRte=$true; $mutations += $mutation
+}
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
@@ -372,6 +394,7 @@ if ($Scope -eq 'RteRepair') { $mutations = @($mutations | Where-Object { $_.repa
 if ($Scope -eq 'InstructionFault') { $mutations = @($mutations | Where-Object { $_.instructionFault }) }
 if ($Scope -eq 'HandlerPrefetch') { $mutations = @($mutations | Where-Object { $_.handlerPrefetch }) }
 if ($Scope -eq 'EntryPrefetch') { $mutations = @($mutations | Where-Object { $_.entryPrefetch }) }
+if ($Scope -eq 'UserRteFault') { $mutations = @($mutations | Where-Object { $_.userRte }) }
 if ($Scope -eq 'AccessDoubleFault') { $mutations = @($mutations | Where-Object { $_.doubleFault }) }
 if ($Scope -eq 'BatchFault') { $mutations = @($mutations | Where-Object { $_.batchFault }) }
 if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
@@ -454,6 +477,21 @@ try {
                     throw 'Entry-prefetch mutation omitted complete cases or intended semantic failure'
                 }
             }
+            if ($mutation.userRte) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $trx.TestRun.ResultSummary.Counters.failed -ne 2 -or $batches.Count -ne 2 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq 'rte-user-fault-scalar' -and $_.logicalCases -eq 168192 }).Count -ne 1 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq 'rte-user-fault-batch' -and $_.logicalCases -eq 168192 }).Count -ne 1) {
+                    throw 'User-tail mutation omitted complete scalar/batch selections'
+                }
+                foreach ($route in @('scalar','batch')) {
+                    $routeFailures = @($batches | Where-Object group -CEQ "rte-user-fault-$route")[0].failures
+                    if (@($routeFailures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
+                        $_.id.EndsWith('/fault-entry', [StringComparison]::Ordinal) -and $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) }).Count -eq 0) {
+                        throw "User-tail mutation omitted intended $route architectural failure"
+                    }
+                }
+            }
             if ($mutation.instructionFault) {
                 [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
                 if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $batches.Count -ne 2 -or
@@ -526,6 +564,9 @@ try {
             } elseif ($mutation.entryPrefetch) {
                 @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
                     $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) })[0]
+            } elseif ($mutation.userRte) {
+                @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
+                    $_.id.EndsWith('/fault-entry', [StringComparison]::Ordinal) -and $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) })[0]
             } else { $failures[0] }
             $results += @{mutation=$mutation.name; file=$mutation.file; sourceSha256=(Get-FileHash -LiteralPath $path).Hash;
                 detected=$true; replacementCase=$proofFailure.id; diagnostic=$proofFailure.reason; originalRegressionDetected=$legacyPresent;

@@ -4481,3 +4481,109 @@ Embedded CPU, four package assets and four loaded assemblies match the audited
 CPU. Evidence is in the isolated consumer's `artifacts/entry-window-validation/`
 and `entry-window-identities.json`. Root CopperScreen changes and its 1.5.1 pin
 remain untouched. No package is published and no throughput claim is made.
+
+### 040 user-tail validation and software repair — 2026-10-05
+
+`SyntheticM68040UserRteFaultTests` qualifies the MMU/cache-disabled accurate
+factory and one-instruction batching against independently composed manual
+expectations. [MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+2.2.2.1 defines stack selection; 8.4.2/figure 8-6 install live SR when consuming
+throwaways, including USP; 8.1/8.2.1 preserve current SR and enter supervisor
+mode for an access exception; 8.2.5 defines privilege faults; 8.4.6.7 preserves
+an incompletely validated frame. The previously inspected 1993 scan additionally
+provides figure 8-6 at PDF page 243 (one based), printed 8-22, with the same
+SHA-256 recorded above. No new reference input or media is committed.
+
+This expectation is an **inference combining those documented rules**. The
+manual's usual description of stacking below the incomplete frame assumes a
+supervisor validation stack; it does not explicitly show the combined USP fault
+path. These tests instead require the general exception's supervisor stack,
+chosen by retained M, and preserve the user frame. No hardware measurement or
+executed WinUAE oracle for this combination is claimed. The historical WinUAE
+source snapshot in `artifacts/m6-rte-address-winuae/` uses live SR after a
+throwaway and changes from USP to the M-selected supervisor stack on exception;
+that is documentary corroboration only, not an independent execution audit.
+Hardware provenance of the combined case stays unqualified and cannot be
+inferred from interpreter/batch agreement.
+
+Both user M values are exercised, with each initial supervisor stack and optional
+middle throwaway on user/ISP/MSP. The fault saves live intermediate SR and the
+original RTE PC in format 7, reports user-data TM=1 and the rejected read's FA/
+SIZE, and leaves the unvalidated user SR/PC/frame and memory outside the new
+access frame intact. Consumed throwaway memory can be reused by exception
+stacking; its committed stack-pointer effects survive and it is not replayed.
+Incoming trace is cleared for handler execution. A bare RTE return restores
+user mode; the following RTE raises privilege violation on the selected
+supervisor stack. Pending CU/CP objects stay pending on this path.
+
+The repair path executes three stores to the original user frame, three to a
+fresh supervisor throwaway bridge and one to the access frame's saved SR.
+It explicitly sets S and clears incoming trace for the handler return. The
+retried supervisor RTE consumes the fresh bridge, selects USP and completes
+the repaired frame without rereading any consumed throwaway or fetching its
+discarded PC. Repair-store address/width/value/count, exact next PC, preserved
+registers/stacks/memory, following traces, CM saved-EA accesses and CT/CU/CP49
+delivery are independently checked. FPU arithmetic is not in this scope.
+
+| Group, each scalar/batch | Cases | Combinations |
+| --- | ---: | ---: |
+| User validation / bare return / privilege | 168,192 | 20,832 |
+| Executed repair / bridge / retry / following | 675,328 | 8,224 |
+
+The four ordinary groups total **1,687,040 cases**. Canonical SR-read cases use
+all 32 CCRs; structural cases use 0/31 while rejecting each byte of every
+validation read. Every admitted frame form is retained: 0/2/3, invalid 4/15,
+normal format 7 and CM/CT/CU/CP49. Invalid formats are repaired to format 0.
+All three incoming trace states are covered by fault groups; repair explicitly
+clears saved incoming T1 and checks all three restored traces and stacks in its
+canonical cases. Untouched incoming-trace retry is still required separately.
+
+The first focused run in `artifacts/m6-user-rte-first/` passes all four tests
+with no skips, mismatches, unsupported execution or untested phases. The
+production CPU source is unchanged. Three maintained `UserRteFault` mutations
+in `artifacts/m6-user-rte-mutations/` each execute both complete fault batches:
+saved-S corruption and supervisor-data TM mismatch 56,064 fault-entry cases per
+route (112,128 dependent phases untested); forced ISP mismatches 28,032 per route,
+leaves 56,064 dependent phases untested and passes the 84,096 M-clear phases.
+Proof requires the intended SR/SSW diagnostic on each route. Source bytes are
+restored and rebuilt before acceptance validation. No old test is retired.
+
+The full 040 command now requires **44 executed tests, 38 reporting batches,
+six fixed examples and thirteen input identities**, with independent
+combination enumeration for all four new groups. Its preserved 480-case
+inventory still fails the complete gate; internal-restoration faults, chained
+odd-PC SR provenance, general data/writeback/context-transfer protocols and
+all broader reference/consolidation requirements remain open. Selected software
+qualification does not replace physical bus sequencing/timing or enabled-MMU/
+cache coverage. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+Fresh full Release validation in `artifacts/m6-user-rte-full/` passes **5,069
+tests with eleven optional skips and zero failures**. All nine qualified WinUAE
+presets match the previously pinned exact directory/callback/frame counts and
+the current CPU/adapter identities in `qualified-preset-identities.json`.
+The strict report gate passes **19,735,574 cases / 628 reporting batches**.
+Fresh pinned SingleStepTests passes **312,500 cases / 125 files**; fresh Musashi
+passes **536 programs with 88 explicit exclusions**. Their source pins and
+software-reference limits remain unchanged. Both fresh reference tests execute
+without skips; they are separate from the optional skips in the full run.
+
+The complete 040 audit in `artifacts/m6-user-rte-audit/` executes 44 tests:
+43 pass and the required inventory fails. All **4,766,912 executable cases
+pass**, with zero mismatches/unsupported execution; **480 remain untested**.
+All source/input/binary and independent combination checks validate before the
+inventory rejection. All **17** new malformed-report/identity controls in
+`artifacts/m6-user-rte-controls/` reject their specific missing, shortened,
+foreign, redistributed or omitted-fixture corruption. A generic inventory
+failure is never accepted as proof that a negative control worked.
+
+CPU assembly SHA-256 is
+`dccd468b1a26090501e310acc6cafd1ef3cc3fb6b3fb63fc48f0f614869f889e`;
+test/reference adapter is
+`ae19b94ecd01f7c4ce908e1779f511ef411371e8c8f6e4a4e963bf97d85cab86`.
+The manifest records starting commit `dc27536`, the committed CPU tree and
+separate current source/fixture hashes. Production CPU source has no changes
+from that commit. This rebuild's informational version includes `dc27536`;
+its binary identity is not relabeled as the preceding checkpoint's binary.
+No new consumer validation or private/public package is generated for this
+test-only checkpoint; preceding unpublished `.63` evidence remains scoped to
+its own unchanged package and binary. Root CopperScreen work is untouched.

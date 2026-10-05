@@ -526,3 +526,30 @@ for each of five defects. The complete 040 audit still fails its retained
 480-case protocol inventory; passing ordinary handler tests do not complete
 milestone 6. See the
 [reference record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-access-error-handler-entry-window--2026-10-05).
+
+### User-stack RTE validation and software repair
+
+`SyntheticM68040UserRteFaultTests` adds four ordinary scalar/batch reports with
+1,687,040 cases. It combines documented throwaway live-SR behavior with general
+supervisor exception entry; the combined USP fault path has no executed hardware
+oracle. Both user M values select the expected exception stack, with TM=1 and
+preserved user frame/consumed throwaways. Bare handler return is followed by a
+privilege fault at RTE. A seven-store software handler repairs the frame, builds
+a fresh throwaway bridge and explicitly sets saved S before retry. Canonical
+SR reads use all CCRs; structural cases reject every validation read byte. Repair
+checks following traces, saved MOVEM EA and pending CT/CU/CP49 delivery.
+
+```powershell
+./scripts/test-copper68k-synthetic-mutations.ps1 -Scope UserRteFault -OutputDirectory artifacts/user-rte-mutations
+```
+
+The command requires complete scalar/batch fault reports and each mutation's
+intended saved-S, TM or stack-selection mismatch. The complete 040 command now
+checks 44 tests / 38 reports / six fixed examples / thirteen input identities,
+while keeping the failing 480-case remaining-protocol inventory. Internal
+restoration, untouched trace retry, chained odd-PC provenance and broader
+reference/consolidation work remain required. Production CPU code and public
+packages are unchanged; no old regression is retired. See the
+[qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-user-tail-validation-and-software-repair--2026-10-05)
+for the distinction between this manual-derived software qualification and
+unobserved hardware behavior.

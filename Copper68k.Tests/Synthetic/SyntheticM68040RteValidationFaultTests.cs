@@ -122,7 +122,8 @@ public sealed class SyntheticM68040RteValidationFaultTests(ITestOutputHelper out
         // EA/invalid WB data are undefined. Verify defined status/address fields,
         // all untouched original-frame bytes and all neighboring memory instead.
         for (uint n = 8; n < 60; n++) e.MemoryMasks[accessFrame + n] = 0;
-        e.Write(accessFrame + 12, width == 2 ? 0x0145u : 0x0105u, 2, m.Model);
+        var transferModifier = (priorSr & 0x2000) != 0 ? 5u : 1u;
+        e.Write(accessFrame + 12, (width == 2 ? 0x0140u : 0x0100u) | transferModifier, 2, m.Model);
         e.MemoryMasks[accessFrame + 12] = 0xff; e.MemoryMasks[accessFrame + 13] = 0x7f; // SSW X undefined
         foreach (var at in new uint[] { 14, 16, 18 })
         {

@@ -5,8 +5,8 @@ namespace Copper68k.Tests.Synthetic;
 
 // MC68040UM 8.4.2 and 8.4.6.7: software may repair the preserved frame.
 // The handler really executes its stores and RTE; initialization is not repair.
-// Supervisor validation tails only. Internal restoration faults and user tails
-// require separate architectural evidence and remain in the discovery inventory.
+// Supervisor validation tails only. User-tail repair is covered separately by
+// SyntheticM68040UserRteFaultTests; internal restoration remains unqualified.
 public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
 {
     private const uint Handler = 0x9020, PendingHandler = 0x9090, Target = 0x6000, Operand = 0x4200;
