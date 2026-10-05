@@ -4553,7 +4553,9 @@ namespace Copper68k
             {
                 var instructionPc = State.ProgramCounter;
                 BeginInstruction(0);
-                RaiseFormat0Exception(3, instructionPc, M68kInstructionTimingKey.IllegalInstruction);
+                if (_profile.Model == M68kAcceleratorModel.M68040)
+                    RaiseM68040AddressError(instructionPc, instructionPc, State.StatusRegister);
+                else RaiseFormat0Exception(3, instructionPc, M68kInstructionTimingKey.IllegalInstruction);
                 return;
             }
 
@@ -8652,6 +8654,7 @@ namespace Copper68k
             while (true)
             {
                 var framePointer = State.A[7];
+                var priorSr = State.StatusRegister;
                 var restoredStatus = ReadWord(framePointer);
                 var restoredPc = ReadLong(framePointer + 2);
                 var format = ReadWord(framePointer + 6) >> 12;
@@ -8663,6 +8666,7 @@ namespace Copper68k
                 State.SetActiveStackPointer(framePointer + size);
                 State.StatusRegister = restoredStatus;
                 if (format == 1) continue; // Throwaway frame can select another stack.
+                if (TryRaiseM68040RteAddressError(restoredPc, priorSr, instructionPc)) return;
                 State.ProgramCounter = restoredPc;
                 break;
             }

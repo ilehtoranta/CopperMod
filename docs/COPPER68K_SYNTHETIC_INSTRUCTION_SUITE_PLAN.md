@@ -1252,3 +1252,38 @@ Production source and the preceding private `.55` consumer evidence are
 unchanged; no new package is published. An exploratory odd-user-trace-PC probe
 reproduces the next restoration defect; it remains required fixing work rather
 than passing qualification. See the reference record for exact evidence.
+
+### Milestone 6 direct odd-PC return implementation — 2026-10-05
+
+040 direct odd-PC returns now take a format-2 address error during RTE, saving
+the causing instruction PC and the aligned fault address without fetching the
+odd target. CT/CU/CP delivery has priority; its handler return then takes the
+address error. CM retains no unusable continuation. Three independent ordinary
+CI batches add 237,312 passing phases; 540 accurate/V1/V2 state scenarios require
+warmed compiled dispatch and RTE fallback. Four maintained `-Scope Rte040`
+mutations detect frame, address, saved-SR and pending-priority defects, then
+restore/rebuild production source.
+
+The direct saved-SR image follows documentary pinned WinUAE source; it is not
+an executed hardware oracle. The chained user-tail SR question retains its
+explicit inventory requirement. Complete 040 discovery still requires 480
+fault/context cases; other-model restoration, broader independent coverage and
+consolidation remain required. No regression is retired. The
+[reference record](COPPER68K_REFERENCE_QUALIFICATION.md#040-odd-pc-return-correction--2026-10-05)
+records primary manual authority, source identities and failed-before/mutation
+evidence. Milestone 6 and the full goal remain **in progress** with
+`roadmapComplete=false`; public release authorization remains separate.
+
+Validation passes 4,958 Release CPU tests (eleven optional/opt-in skips),
+15,770,968 logical cases in 586 strict reporting batches and fresh pinned
+SingleStepTests/Musashi audits. Complete 040 discovery passes 1,124,352 phases,
+has no mismatches/unsupported promoted phases and still fails on 480 named
+untested requirements. Isolated unpublished `.56` validates CopperScreen through
+NuGet: clean Release build, host 149/six skips, disk 74, separate engine 1,080,
+and all three native Workbench/A1200 replays pass without skips. Package/assets/
+loaded DLL identities match. No public package is published.
+
+All thirteen input/report controls detect their defects. Fresh broad Basic
+discovery retains 1,326 passing directories, 47 mismatching and eight unsupported,
+with the same per-model/opcode statuses and callback/frame/mask counts; its 32
+comparator controls remain effective. These gaps remain required work.

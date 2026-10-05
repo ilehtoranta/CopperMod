@@ -29,7 +29,7 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
         // Preserve the unqualified protocols explicitly after promoting CU/CP.
         foreach (var bank in Banks)
         for (var ccr = 0; ccr < 32; ccr++)
-        foreach (var form in new[] { "frame-validation-fault", "odd-user-trace-PC",
+        foreach (var form in new[] { "frame-validation-fault", "odd-PC-chained-SR-provenance",
             "real-access-fault-entry", "writeback-handler", "CP-context-transferred-vector" })
             report.Record($"68040/RTE/format7/{form}/bank={bank}/op=4E73/ccr={ccr:X2}", "untested",
                 "Required fault/context protocol has no independently qualified execution fixture yet");

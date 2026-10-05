@@ -8,6 +8,7 @@ internal partial class M68kAdvancedTimingInterpreter
 
     private bool TryRestoreM68040AccessFrame(uint frame, ushort sr, uint pc)
     {
+        var priorSr = State.StatusRegister;
         var continuation = ReadWord(frame + 12) & 0xf000;
         // Multiple continuation bits are undefined (MC68040UM 8.4.6.7).
         if (continuation is not (0 or 0x1000 or 0x2000 or 0x4000 or 0x8000)) return false;
@@ -23,8 +24,6 @@ internal partial class M68kAdvancedTimingInterpreter
         State.SetActiveStackPointer(unchecked(frame + 60));
         State.StatusRegister = sr;
         State.ProgramCounter = pc;
-        if (continuation == 0x1000)
-            _m68040MovemContinuation = (pc, address);
         if (continuation >= 0x2000)
         {
             // MC68040UM 8.4.6.2/7: convert the pending exception frame at
@@ -43,8 +42,40 @@ internal partial class M68kAdvancedTimingInterpreter
                 State.M68040PendingFpuExceptions.Complete(pending);
             CompleteTiming(continuation == 0x2000 ? M68kInstructionTimingKey.IllegalInstruction : M68kInstructionTimingKey.LineFException);
         }
-        else CompleteTiming(M68kInstructionTimingKey.Rte);
+        else
+        {
+            if (TryRaiseM68040RteAddressError(pc, priorSr, State.LastInstructionProgramCounter)) return true;
+            if (continuation == 0x1000) _m68040MovemContinuation = (pc, address);
+            CompleteTiming(M68kInstructionTimingKey.Rte);
+        }
         return true;
+    }
+
+    private bool TryRaiseM68040RteAddressError(uint target, ushort priorSr, uint rtePc)
+    {
+        if (_profile.Model != M68kAcceleratorModel.M68040 || (target & 1) == 0) return false;
+        // MC68040UM 8.4 requires S in the saved SR on a traced user return.
+        // Documentary WinUAE retains the pre-restoration SR image, while the
+        // restored SR selects the live exception bank and CCR. Chained USP SR
+        // provenance remains separately unqualified rather than disappearing.
+        if ((State.StatusRegister & 0x2000) == 0 && (State.StatusRegister & 0xc000) != 0)
+            priorSr |= M68kCpuState.Supervisor;
+        RaiseM68040AddressError(rtePc, target, priorSr);
+        return true;
+    }
+
+    private void RaiseM68040AddressError(uint instructionPc, uint faultAddress, ushort savedSr)
+    {
+        // MC68040UM 8.2.2, 8.4.3/6.7: format 2, fault address with A0
+        // cleared, and the instruction which caused the failed prefetch.
+        State.RecordException(3, instructionPc, savedSr);
+        State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~0xc000);
+        PushLong(faultAddress & ~1u);
+        PushWord(0x200c);
+        PushLong(instructionPc);
+        PushWord(savedSr);
+        State.ProgramCounter = ReadLong(State.VectorBaseRegister + 12);
+        CompleteTiming(M68kInstructionTimingKey.IllegalInstruction);
     }
 
     private bool TryExecuteM68040MovemContinuation(ushort opcode)

@@ -179,8 +179,8 @@ CPU-space access-control responder. An ordinary bus has no such responder and
 produces a format error for type-1 modules; ordinary RAM is never used as one.
 
 Detailed RTE bus-fault restart/internal-state restoration on 010/020/030,
-020/030 coprocessor midinstruction restoration and 040 access-fault pending
-exceptions/writebacks remain **untested by this synthetic matrix**. They are
+020/030 coprocessor midinstruction restoration and detailed 040 access-fault
+entry/validation, writeback handlers and CP context transfer remain **untested**. They are
 listed separately in report qualification boundaries rather than reported as
 invalid frame formats or passing coverage. External BKPT instruction replacement,
 physical MOVES function-code buses and LPSTOP CPU-space broadcast are also
@@ -227,8 +227,9 @@ it does not replace the deterministic synthetic gate or complete milestone 6.
 The independent 040 access-frame discovery command is
 `./scripts/test-copper68k-040-access-frames.ps1 -OutputDirectory artifacts/040-access-frame-audit`.
 It currently **fails** on 480 explicit fault/context requirements. Normal,
-CT, CM, CU and CP restoration and chained throwaways now pass 887,040 logical
-phases, including short-frame controls. Nine promoted batches run in ordinary CI. CP uses the
+CT, CM, CU and CP restoration, chained throwaways and direct odd-PC returns now
+pass 1,124,352 logical phases, including short-frame and odd-fetch controls.
+Twelve promoted batches run in ordinary CI. CP uses the
 original suspended delivery vector; context-transferred frames without that
 state remain an implementation gap. The MOVEM
 matrices cover every legal opcode word and all 66 full-index structures;
@@ -243,8 +244,17 @@ never fetched; terminal short/access frames preserve guarded memory and pending
 writebacks. CM's following MOVEM uses the saved EA. The maintained consolidation
 mutation command proves early chain termination and missing stack selection are
 detected, then restores and rebuilds source. Detailed validation/access faults,
-odd final user trace PCs, real access-fault entry, writeback handlers and CP context
+chained odd-PC saved-SR provenance, real access-fault entry, writeback handlers and CP context
 transfer remain required; no regression is retired by this checkpoint.
+Direct short/normal/CM odd returns now raise a format-2 address error during RTE,
+with the causing instruction PC and fault address A0 cleared. CT/CU/CP delivery
+takes priority; its handler return then produces the address error. The matrices
+check both return phases, explicit software repair and the following instruction.
+Saved-SR image ordering follows documentary pinned WinUAE source rather than an
+executed hardware oracle; chained user-tail provenance remains an explicit gap.
+Separate accurate/V1/V2 tests run 540 state scenarios and witness warmed compiled
+dispatch followed by RTE fallback. Run the four discriminating mutations with
+`./scripts/test-copper68k-synthetic-mutations.ps1 -Scope Rte040`.
 The command checks exact selections, combinations, counts and source/assembly
 identities. Existing outputs must be validated with `-ValidateReportsOnly` or a
 fresh output directory used. It cannot pass merely by fixing normal/trace return.

@@ -2885,3 +2885,123 @@ preceding private `.55` consumer-validated production checkpoint. Consumer
 replays and package publication are not repeated for this test/reporting-only
 change. All previously recorded native results and broad discovery disagreements
 remain in force, with their original scope and identities. No package is published.
+
+## 040 odd-PC return correction — 2026-10-05
+
+The advanced 040 interpreter now takes an address error during a direct RTE
+return to an odd instruction address. Short formats 0/2/3 and normal/CM format 7
+pop their original frame and restore the selected stack before entering vector 3.
+The address-error frame is format 2 (`$200c`), saves the RTE instruction PC and
+stores the failed prefetch address with A0 cleared. Standalone odd instruction
+fetch uses the same architectural frame, saving the current instruction PC.
+Neither route reads the odd target. A rejected CM return installs no MOVEM
+continuation and never retries completed operands. Existing timing keys are
+preserved; this is not physical timing qualification.
+
+The primary authority is [MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+sections 8.2.2, 8.4, 8.4.3 and 8.4.6.7. The manual explicitly requires S set
+in the stacked SR when restoring a traced user PC, and gives CT/CU/CP precedence
+over an odd returned PC. Those pending exceptions therefore convert/deliver
+first; their handler's later RTE takes the address error. The original saved EA
+and pending vector remain intact until that delivery completes.
+
+Additional pre-restoration SR-image ordering is documentary software evidence:
+[WinUAE gencpu.cpp](https://github.com/tonioni/WinUAE/blob/5d22d33632646efc3f747f03e82d28353e52722e/gencpu.cpp)
+passes `oldsr` to `exception3_read_prefetch_68040bug`, and
+[newcpu.cpp](https://github.com/tonioni/WinUAE/blob/5d22d33632646efc3f747f03e82d28353e52722e/newcpu.cpp)
+uses that SR for the stacked image while retaining restored live SR. The source
+pin is `5d22d33632646efc3f747f03e82d28353e52722e`; local identities under
+`artifacts/m6-rte-address-winuae/` are:
+
+| Documentary file | SHA-256 |
+| --- | --- |
+| newcpu.cpp | `eb538884af9c14012b083db9b1e18106f1b351be7e3aca59767d915911beb6f5` |
+| gencpu.cpp | `e993c18b19c68a98ec5404c2ee2983dba0f17252cff42a1ba932c92d8c13f094` |
+| cpummu.cpp | `a833e9adcddbe68483bad603b1a8b8554393f21f1d319b2b138bb3fbabd94a08` |
+
+These source files were inspected, not executed as a new reference oracle or
+observed on hardware. They are distinct from the executed emoon tester/generator
+pin `025b999…` already recorded above. Chained throwaways selecting a user tail
+leave a saved-SR provenance question between that software path and the manual's
+S requirement. The direct ISP/MSP matrices do not qualify it. Its original
+inventory scope remains as `odd-PC-chained-SR-provenance` (three banks/all CCRs),
+alongside frame-validation faults, real access-fault entry, writeback handlers
+and CP context transfer. No requirement is removed or relabeled invalid.
+
+| New ordinary-CI group | Passing phases | Combinations |
+| --- | ---: | ---: |
+| Direct short/normal/CM odd returns | 69,120 | 720 |
+| CT/CU/CP odd-return priority and handler returns | 165,888 | 1,296 |
+| Standalone odd instruction fetch | 2,304 | 72 |
+| Total new | 237,312 | 2,088 |
+
+The independent fixtures cover all CCRs, distinct restored CCRs, ISP/MSP entry,
+all restored banks, T0/T1/no trace, two odd target addresses including a full
+32-bit address, two VBRs and even/odd stack data addresses. They check exact
+registers, every stack pointer, frame and neighbor memory, saved PC/SR, exception
+sequence, pending delivery consumption and operand/writeback non-replay. A
+handler explicitly repairs the frame to a new even PC, then returns and executes
+the following BRA/trace; the consumed faulty RTE is never retried.
+
+Before the production fix, `artifacts/m6-rte-odd-before/` records 66,816
+mismatching prerequisites, 41,472 passing pending-delivery phases and 129,024
+dependent phases untested. After the fix all new phases pass. Separate
+`M68040OddReturnStateTests` execute 540 scenarios across accurate/V1/V2 dispatch;
+both JIT engines must witness compiled warm dispatch and actual RTE fallback.
+This does not claim a compiled RTE implementation. Together with retained
+FPU/MOVEM continuation tests, the qualified focused selection passes 24 cases
+in `artifacts/m6-rte-odd-state-qualified/state.trx`.
+
+The maintained `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope Rte040`
+requires all three complete reports to execute for each mutation. Wrong frame
+format and uncleared A0 each fail 66,816 phases, pass 41,472 pending prerequisites
+and leave 129,024 downstream phases untested. Substituting restored SR for the
+saved image fails 50,688, passes 85,248 and leaves 101,376 untested. Taking the
+address error ahead of CT/CU/CP fails 41,472, passes 71,424 and leaves 124,416
+untested. All four mutants fail semantically, not on compilation or missing
+selection; exact IDs/counts are retained in
+`artifacts/m6-rte-odd-mutations/mutation-proof.json`. Source is restored
+byte-for-byte and rebuilt. No specialized regression is retired.
+
+Milestone 6 and the goal remain **in progress** with `roadmapComplete=false`.
+Other-model restoration, broader independent qualification, the recorded Basic
+disagreements and consolidation remain required. Enabled MMU, FPU arithmetic,
+physical timing and OS compatibility are outside this roadmap.
+
+Isolated unpublished NuGet `1.5.2-synthetic-dev.56` validates CopperScreen at
+baseline `d9beae8b88be24032221e3482942a249c03c27d3`: Release build has zero
+warnings/errors; host 149 passing/six optional skips, disk 74, separate engine
+diagnostics 1,080 and native Workbench boots two/A1200 AGA persistence one pass
+without native skips. Four restored assets and four loaded CPU assemblies match
+the package. Package SHA-256 is
+`8377ea7330a5a4f22b944735e4ea611bdb43bfe0d1ba218da37f69994d5dc540`;
+CPU assembly SHA-256 is
+`1c0a788adf1443bf4cf34049115080083dcab7c2f568065335e5994944ffe26c`.
+Consumer evidence is its `artifacts/rte-odd-identities.json`,
+`artifacts/rte-odd-validation/` and separate diagnostic outputs. Published
+package versions, the root CopperScreen dependencies and unrelated changes are
+preserved. No package is published.
+
+Final Release CPU validation passes 4,958 tests, eleven optional/opt-in skips
+and zero failures with all four qualified WinUAE presets enabled. The strict
+gate verifies 15,770,968 passing logical cases in 586 reporting batches, plus
+fresh pinned SingleStepTests (312,500 cases / 125 files) and Musashi (536
+programs / 88 explicit exclusions across eight profiles). Evidence is
+`artifacts/m6-rte-odd-full/` and `artifacts/m6-rte-odd-gate.log`.
+
+Complete 040 discovery remains failing in `artifacts/m6-rte-odd-discovery/`:
+1,124,832 logical phases, 1,124,352 passing, zero mismatching/unsupported and
+480 explicitly untested. Nineteen xUnit cases execute: eighteen pass and the
+remaining inventory fails. Exact combination, cardinality, input/source and
+assembly selections are checked; passing direct odd returns does not complete
+the broader return/fault gate.
+
+All thirteen malformed-input/report controls detect their specific defects in
+`artifacts/m6-rte-odd-preflight-controls/controls.json`. The fresh broad Basic
+audit still fails in `artifacts/m6-rte-odd-broad/`: 1,326 passing directories,
+47 mismatching and eight unsupported, with 11,474,194 callbacks, 1,663,891
+exception frames and 199,327 masked-SR cases. All 32 comparator controls detect
+their defects. Generator/runner/native-library/manifest pins match the preceding
+record; each model/opcode row retains its status and callback/frame/mask counts.
+This checkpoint neither hides those disagreements nor treats discovery as a
+passing qualification gate.

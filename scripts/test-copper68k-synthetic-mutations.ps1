@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -115,13 +115,23 @@ $mutations += @(
 '@; after=@'
                 if (format != 1) State.StatusRegister = restoredStatus;
                 if (format == 1) continue; // Mutant: retain the old stack selector.
-'@; group='SyntheticM68040ThrowawayTests'; milestone=6; model='68040'; throwaway=$true}
+'@; group='SyntheticM68040ThrowawayTests'; milestone=6; model='68040'; throwaway=$true},
+    @{name='040-address-error-format'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs'; before='        PushWord(0x200c);'; after='        PushWord(0x000c);';
+      group='SyntheticM68040OddReturnTests'; milestone=6; model='68040'; odd=$true},
+    @{name='040-address-error-a0'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs'; before='        PushLong(faultAddress & ~1u);'; after='        PushLong(faultAddress);';
+      group='SyntheticM68040OddReturnTests'; milestone=6; model='68040'; odd=$true},
+    @{name='040-rte-saved-sr-image'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs'; before='        RaiseM68040AddressError(rtePc, target, priorSr);'; after='        RaiseM68040AddressError(rtePc, target, (ushort)(State.StatusRegister | 0x2000));';
+      group='SyntheticM68040OddReturnTests'; milestone=6; model='68040'; odd=$true},
+    @{name='040-rte-pending-priority'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs'; before='        if (continuation >= 0x2000)';
+      after="        if (TryRaiseM68040RteAddressError(pc, priorSr, State.LastInstructionProgramCounter)) return true;`n        if (continuation >= 0x2000)";
+      group='SyntheticM68040OddReturnTests'; milestone=6; model='68040'; odd=$true}
 )
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
 if ($Scope -eq 'Control') { $mutations = @($mutations | Where-Object { $_.milestone -eq 5 }) }
 if ($Scope -eq 'Consolidation') { $mutations = @($mutations | Where-Object { $_.milestone -eq 6 }) }
+if ($Scope -eq 'Rte040') { $mutations = @($mutations | Where-Object { $_.odd }) }
 $saved = @{}
 foreach ($mutation in $mutations) {
     $path = Join-Path $repo $mutation.file
@@ -158,6 +168,15 @@ try {
                     $batches.Count -ne 2 -or @($batches | Where-Object { $_.group -eq 'rte-throwaway-controls' -and $_.logicalCases -eq 82944 }).Count -ne 1 -or
                     @($batches | Where-Object { $_.group -eq 'rte-throwaway-access' -and $_.logicalCases -eq 428544 }).Count -ne 1) {
                     throw 'Throwaway mutation did not execute its complete two-batch selection'
+                }
+            }
+            if ($mutation.odd) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 3 -or $batches.Count -ne 3 -or
+                    @($batches | Where-Object { $_.group -eq 'rte-odd-normal' -and $_.logicalCases -eq 69120 }).Count -ne 1 -or
+                    @($batches | Where-Object { $_.group -eq 'rte-odd-pending' -and $_.logicalCases -eq 165888 }).Count -ne 1 -or
+                    @($batches | Where-Object { $_.group -eq 'address-error-fetch-040' -and $_.logicalCases -eq 2304 }).Count -ne 1) {
+                    throw 'Odd-return mutation did not execute its complete three-batch selection'
                 }
             }
             if ($legacyPresent) {
