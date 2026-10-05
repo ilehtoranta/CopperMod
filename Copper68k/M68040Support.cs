@@ -2661,16 +2661,17 @@ namespace Copper68k
                     value = State.M68040Mmu.TranslationControl & 0xC000;
                     return true;
                 case 0x004:
-                    value = State.M68040Mmu.InstructionTransparentTranslation0;
+                    // MC68040UM 3.1.3: reserved TTR bits always read zero.
+                    value = State.M68040Mmu.InstructionTransparentTranslation0 & 0xFFFF_E364;
                     return true;
                 case 0x005:
-                    value = State.M68040Mmu.InstructionTransparentTranslation1;
+                    value = State.M68040Mmu.InstructionTransparentTranslation1 & 0xFFFF_E364;
                     return true;
                 case 0x006:
-                    value = State.M68040Mmu.DataTransparentTranslation0;
+                    value = State.M68040Mmu.DataTransparentTranslation0 & 0xFFFF_E364;
                     return true;
                 case 0x007:
-                    value = State.M68040Mmu.DataTransparentTranslation1;
+                    value = State.M68040Mmu.DataTransparentTranslation1 & 0xFFFF_E364;
                     return true;
                 case 0x805:
                     value = State.M68040Mmu.Status;
@@ -2701,19 +2702,19 @@ namespace Copper68k
                     State.M68040Mmu.Flush();
                     return true;
                 case 0x004:
-                    State.M68040Mmu.InstructionTransparentTranslation0 = value;
+                    State.M68040Mmu.InstructionTransparentTranslation0 = value & 0xFFFF_E364;
                     State.M68040Mmu.Flush();
                     return true;
                 case 0x005:
-                    State.M68040Mmu.InstructionTransparentTranslation1 = value;
+                    State.M68040Mmu.InstructionTransparentTranslation1 = value & 0xFFFF_E364;
                     State.M68040Mmu.Flush();
                     return true;
                 case 0x006:
-                    State.M68040Mmu.DataTransparentTranslation0 = value;
+                    State.M68040Mmu.DataTransparentTranslation0 = value & 0xFFFF_E364;
                     State.M68040Mmu.Flush();
                     return true;
                 case 0x007:
-                    State.M68040Mmu.DataTransparentTranslation1 = value;
+                    State.M68040Mmu.DataTransparentTranslation1 = value & 0xFFFF_E364;
                     State.M68040Mmu.Flush();
                     return true;
                 case 0x805:

@@ -852,3 +852,31 @@ three native replays. Exact source/input/package identities, failed-before
 proof, initial invalid invocations and remaining scope are recorded in the
 reference document. No package publication or regression retirement is added;
 milestone 6 remains in progress with its full accepted scope unchanged.
+
+The transparent-control checkpoint masks 040/060 ITT0/ITT1/DTT0/DTT1 MOVEC
+images to `FFFFE364`, the processor manuals' defined zero-read bits. A shared
+test-internal register fixture serves TC, TTR and root-pointer tests and checks
+untouched control state as well as registers, CCR, PC, privilege, dependent
+readback and sentinels. Eight new TTR batches add 622,592 cases; four legal
+aligned root-pointer batches add 221,184. All 843,776 pass after the correction.
+The TTR batches detect 114,688 mismatches before correction, with 57,344
+dependent cases explicitly untested. Refactored TC and legal root transfers
+already pass against that baseline. Reserved writes are robustness samples;
+nonaligned root-pointer behavior and enabled translation remain unqualified.
+
+The original broad WinUAE audit now passes the 040 MOVEC2 sequence and reaches
+a later 060 BUSCR shadow-bit disagreement. Its overall result remains failing:
+1,321 passing, 47 mismatching and 13 unsupported groups. No family is excluded
+or expected state weakened. BUSCR, stage-specific 010 format-error behavior and
+all previous restoration/reference/consolidation requirements remain open.
+Milestone 6 stays in progress; no package publication or regression retirement
+is included. Exact evidence and final validation are recorded in the reference
+qualification document.
+
+Final validation passes 4,770 CPU tests with ten optional skips, and the gate
+validates 10,312,072 logical cases in 464 reporting batches. Missing the new
+040 ITT0 report fails the gate. Fresh pinned SingleStepTests/Musashi, AHX and
+qualified TRAP trace checks pass. The private unpublished .47 package validates
+the isolated CopperScreen Release build, host/disk/engine tests and three native
+Workbench/A1200 replays. Exact input/source/package identities and qualification
+limits remain in the reference document.

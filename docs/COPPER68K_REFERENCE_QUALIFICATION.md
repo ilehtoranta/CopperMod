@@ -1305,3 +1305,89 @@ alone. Stage-specific qualified fixtures or verified hardware evidence remain
 required. All earlier restoration, reference, adapter and consolidation gaps
 remain open. No release, regression retirement or physical audit is added;
 milestone 6 remains in progress with its full scope unchanged.
+
+### Transparent-control and legal root-pointer MOVEC images — 2026-10-05
+
+MOVEC now masks all four 040/060 transparent-translation registers to
+`FFFFE364` on architectural reads and writes. [MC68040UM 3.1.3 / figure
+3-5](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf) and
+[MC68060UM 4.1.3 / figure
+4-5](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf) define bits 12–10,
+7, 4, 3, 1 and 0 as always reading zero. Existing enabled-TTR rejection on 060,
+040 cache/ATC policy and instruction execution order remain unchanged. Reserved
+nonzero writes exercise robustness and storage canonicalization; they do not
+claim compliant hardware programming. Enabled MMU/TTR translation and physical
+timing remain outside this semantic qualification.
+
+A shared test-internal MOVEC fixture now serves TC, TTR and root-pointer tests.
+It verifies registers, CCR, exact PC, privilege entry, untouched control state,
+dependent readback and a following instruction sentinel. It computes expectations
+from fixed encodings/masks without production decoder or MMU helpers. The two
+existing TC batches retain their 145,280 logical cases and gain control-state
+preservation checks; no old regression is retired. The older canonical MOVEC
+fixture's unmasked TTR expectation is corrected independently.
+
+Eight `system-transparent-control-{4,5,6,7}` batches add **622,592 cases**:
+77,824 per register/model, using 38 disabled values, every general register
+including A7, both stacks, every CCR, privileged writes/readback and raw reads.
+Four `system-root-control-{806,807}` batches add **221,184 cases**: 55,296 per
+register/model with 27 legal aligned values and the same transfer dimensions.
+Both manuals require root-pointer bits 8–0 to be written zero. That rule alone
+does not define nonaligned write/read behavior: the pinned reference preserves
+those bits on 040 and masks them on 060. This checkpoint qualifies legal aligned
+transfers without changing root-pointer production behavior or claiming either
+nonaligned convention as hardware authority.
+
+Before the TTR fix, against production `e4f8bb6`, the TTR groups record
+**450,560 passing, 114,688 mismatching, zero unsupported and 57,344 untested
+dependent readback cases**. All legal root and refactored TC groups already pass.
+After correction, all **843,776 new cases** pass. A failed prerequisite write
+never retries an instruction or claims a dependent readback pass. The focused
+MOVEC/MMU gate passes 38 tests.
+
+The unchanged broad WinUAE audit advances 040 `MOVEC2` from its first ITT0
+failure to **16,384 passing callbacks**. The 060 sequence advances from callback
+39 to callback 71 and now exposes BUSCR: after writing `FFFFFFFF`, the reference
+expects `A0000000` while the CPU returns `F0000000`. Pinned reference code
+preserves SL/SLE while MOVEC writes L/LE. BUSCR shadow-write and nested-exception
+qualification remain open; no production correction is inferred solely from
+that software agreement. The complete broad audit still fails, with **1,321
+passing, 47 mismatching, 13 unsupported and zero untested groups**, 11,327,530
+callbacks, 1,517,229 frame assertions, 199,327 masked-SR cases and one terminal
+callback. All 32 comparator controls pass. Generator/runner pins, original
+Basic manifest `37cd8ddae8b61ac60e3a49ba835362fbf80d418f48c2539338e6541c9d85e31f`
+and library `75f0c11352d4a8c1e84f32a49a5347ae4cb5bd9128f1501a33d843e6f99cb057`
+are unchanged. No family is excluded or comparison weakened to obtain progress.
+
+Ordinary Release CPU validation passes **4,770 tests**, with ten optional
+skips and zero failures. The deterministic report gate validates **10,312,072
+logical cases in 464 reporting batches**, with `roadmapComplete=false`.
+Omitting only the new 040 ITT0 report rejects the gate. Fresh pinned
+SingleStepTests passes 312,500 cases in 125 files; pinned Musashi passes 536
+programs with 88 exclusions. The script rechecks source revisions, input
+identities and complete selections. AHX passes 18 tests. The qualified 040/060 TRAP trace
+audit passes 512 callbacks, 256 incoming-T1 cases, 512 frame assertions and
+six comparator controls against this CPU; its original qualification caveats
+apply unchanged.
+
+Private **unpublished** NuGet `1.5.2-synthetic-dev.47` has SHA-256
+`fee96e4233a340c0564f3975bb278fe0a94882ddb92073aac20fb21b63f87c20`.
+`artifacts/m6-ttr-package.json` records both changed production source hashes
+against `e4f8bb6` and CPU DLL identity
+`b6311bcc1b25d5d18ed5a92780d589c3d9251f1efb0a2884b259ef85883adde0`.
+The isolated CopperScreen `d9beae8` baseline resolves the exact package in
+production and separate diagnostics; all four loaded CPU DLLs match. Release
+build has zero warnings/errors. Host 149, disk 74, engine diagnostics 1,080
+and three native Workbench/A1200 boot and disk-persistence replays pass.
+Six optional host/media skips remain unavailable coverage.
+
+Evidence includes `artifacts/m6-ttr-before/`, `artifacts/m6-ttr-focused/`,
+`artifacts/m6-ttr-discovery/`, `artifacts/m6-ttr-winuae/`,
+`artifacts/m6-ttr-full/`, `artifacts/m6-ttr-trace-reference/`,
+`artifacts/m6-ttr-missing-report/`, `artifacts/m6-ttr-ahx-results/`
+and `artifacts/synthetic-private-feed-47/`;
+consumer `artifacts/ttr-validation/`, `artifacts/ttr-diagnostic-tests/`
+and `artifacts/ttr-production.binlog`. All earlier restoration, 010 format-error,
+reference-adapter and consolidation gaps remain open. No package publication,
+regression retirement, seeded audit or host/physical timing qualification is
+added; milestone 6 remains in progress with its accepted scope.

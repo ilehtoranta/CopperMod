@@ -197,10 +197,11 @@ namespace Copper68k
                 case 0x808: value = State.M68060ProcessorConfiguration; return true;
                 // MC68060UM 4.1.2: bits 31-16 and bit 0 always read zero.
                 case 0x003: value = State.M68040Mmu.TranslationControl & 0xFFFE; return true;
-                case 0x004: value = State.M68040Mmu.InstructionTransparentTranslation0; return true;
-                case 0x005: value = State.M68040Mmu.InstructionTransparentTranslation1; return true;
-                case 0x006: value = State.M68040Mmu.DataTransparentTranslation0; return true;
-                case 0x007: value = State.M68040Mmu.DataTransparentTranslation1; return true;
+                // MC68060UM 4.1.3 has the same TTR zero-read mask as 040.
+                case 0x004: value = State.M68040Mmu.InstructionTransparentTranslation0 & 0xFFFF_E364; return true;
+                case 0x005: value = State.M68040Mmu.InstructionTransparentTranslation1 & 0xFFFF_E364; return true;
+                case 0x006: value = State.M68040Mmu.DataTransparentTranslation0 & 0xFFFF_E364; return true;
+                case 0x007: value = State.M68040Mmu.DataTransparentTranslation1 & 0xFFFF_E364; return true;
                 case 0x806: value = State.M68040Mmu.UserRootPointer; return true;
                 case 0x807: value = State.M68040Mmu.SupervisorRootPointer; return true;
                 case 0x802: case 0x803: case 0x804: case 0x805:
@@ -227,6 +228,7 @@ namespace Copper68k
                     State.M68040Mmu.TranslationControl = value & 0xFFFE; return true;
                 case 0x004: case 0x005: case 0x006: case 0x007:
                     if ((value & 0x8000) != 0) throw Unavailable("enabled transparent translation", State.LastOpcode);
+                    value &= 0xFFFF_E364;
                     if (register == 4) State.M68040Mmu.InstructionTransparentTranslation0 = value;
                     if (register == 5) State.M68040Mmu.InstructionTransparentTranslation1 = value;
                     if (register == 6) State.M68040Mmu.DataTransparentTranslation0 = value;
