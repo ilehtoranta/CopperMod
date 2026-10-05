@@ -27,11 +27,10 @@ public sealed class SyntheticExceptionControlTests(ITestOutputHelper output)
             // These legal restoration protocols remain implementation/qualification
             // gaps, not invalid formats. The separate 040 access-frame discovery
             // command reports its required gaps and fails until they are qualified.
-            var outside = modelId == "68040" ? format == 7 :
-                m.Model.FullIndex && modelId != "68060" && format is 9 or 10 or 11;
+            var outside = modelId is "68EC020" or "68020" or "68030" or "A1200" && format is 9 or 10 or 11;
             if (outside && supervisor) continue;
             var size = modelId == "68000" ? 6u : format == 0 ? 8u : modelId == "68010" && format == 8 ? 58u :
-                m.Model.FullIndex && modelId != "68060" && format == 1 ? 8u : m.Model.FullIndex && format == 2 ? 12u : modelId is "68040" or "68060" && format == 3 ? 12u : modelId == "68060" && format == 4 ? 16u : 0;
+                m.Model.FullIndex && modelId != "68060" && format == 1 ? 8u : m.Model.FullIndex && format == 2 ? 12u : modelId is "68040" or "68060" && format == 3 ? 12u : modelId == "68060" && format == 4 ? 16u : modelId == "68040" && format == 7 ? 60u : 0;
             if (!supervisor) SyntheticExecution.ExpectException(m, e, 8);
             else if (size == 0) SyntheticExecution.ExpectException(m, e, 14);
             else

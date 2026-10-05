@@ -4562,6 +4562,7 @@ namespace Copper68k
                 throw new UnsupportedM68kTimingException(0, State.ProgramCounter, _profile);
             }
 
+            if (TryExecuteM68040MovemContinuation(opcode)) return;
             if (TryExecuteModule(opcode) || TryExecuteExtendedSystem(opcode) || TryExecutePackUnpack(opcode)) return;
 
             if (TryExecuteFastInstruction(opcode))
@@ -4612,6 +4613,7 @@ namespace Copper68k
             if (maxInstructions <= 0 ||
                 State.Halted ||
                 State.Stopped ||
+                HasPendingM68040MovemContinuation ||
                 (State.StatusRegister & 0xC000) != 0 ||
                 (State.ProgramCounter & 1) != 0 ||
                 !TryGetHotBlock(State.ProgramCounter, out var cacheSlot, out var block))
@@ -5573,6 +5575,7 @@ namespace Copper68k
 
         public virtual void Reset(uint programCounter, uint stackPointer)
         {
+            _m68040MovemContinuation = null;
             Array.Clear(State.D);
             Array.Clear(State.A);
             State.ProgramCounter = programCounter;
@@ -8651,6 +8654,8 @@ namespace Copper68k
                 var restoredStatus = ReadWord(framePointer);
                 var restoredPc = ReadLong(framePointer + 2);
                 var format = ReadWord(framePointer + 6) >> 12;
+                if (format == 7 && _profile.Model == M68kAcceleratorModel.M68040 &&
+                    TryRestoreM68040AccessFrame(framePointer, restoredStatus, restoredPc)) return;
                 var size = format switch { 0 or 1 => 8u, 2 => 12u, 3 when _profile.Model == M68kAcceleratorModel.M68040 => 12u, _ => 0u };
                 if (size == 0)
                 { RaiseFormat0Exception(14, instructionPc, M68kInstructionTimingKey.FormatError); return; }

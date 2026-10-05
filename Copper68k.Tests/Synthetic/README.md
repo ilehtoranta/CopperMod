@@ -226,11 +226,14 @@ it does not replace the deterministic synthetic gate or complete milestone 6.
 
 The independent 040 access-frame discovery command is
 `./scripts/test-copper68k-040-access-frames.ps1 -OutputDirectory artifacts/040-access-frame-audit`.
-It currently **fails**: required format-7 normal/trace restoration disagrees,
-and CM/CU/CP continuation fixtures remain explicitly untested. Short-frame
-controls qualify the fixture; failed prerequisites leave later phases untested.
+It currently **fails** on 192 explicit CU/CP continuation requirements. Normal,
+CT trace and CM MOVEM restoration now pass 264,960 logical phases, including
+short-frame controls. Five promoted batches run in ordinary CI. The MOVEM
+matrices cover every legal opcode word and all 66 full-index structures;
+separate state/JIT regressions check reset, interrupts and warmed V1/V2 traces.
+Failed prerequisites leave later phases untested.
 The command checks exact selections, combinations, counts and source/assembly
 identities. Existing outputs must be validated with `-ValidateReportsOnly` or a
 fresh output directory used. It cannot pass merely by fixing normal/trace return.
 See the [reference record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-access-frame-restoration-discovery-2026-10-05)
-for failed-before evidence, temporary probe controls and the remaining scope.
+for failed-before evidence, mutation controls and the remaining scope.

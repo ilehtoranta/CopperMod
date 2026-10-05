@@ -3,7 +3,7 @@ using Xunit.Abstractions;
 
 namespace Copper68k.Tests.Synthetic;
 
-// Discovery gate, deliberately separate from the promoted ordinary CI matrix.
+// Qualified ordinary-CI paths plus the remaining explicit discovery gate.
 // MC68040UM 8.4.6.2/7 is the expectation source, not WinUAE's non-MMU RTE.
 public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper output)
 {
@@ -13,13 +13,13 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
     private static readonly string[] Banks = ["user", "ISP", "MSP"];
     private const uint Target = 0x6000, TraceHandler = 0x9090;
 
-    [EnvironmentFact(Enable, "audit complete 040 format-7 restoration prerequisites"), Trait("Suite", "ReferenceDiscovery")]
+    [Fact, Trait("Suite", "Synthetic")]
     public void ExistingShortFramesValidateTheRestorationFixture() => Audit("rte-access-controls", [0, 2, 3], false);
 
-    [EnvironmentFact(Enable, "audit complete 040 format-7 restoration prerequisites"), Trait("Suite", "ReferenceDiscovery")]
+    [Fact, Trait("Suite", "Synthetic")]
     public void AccessFrameWithoutContinuationRestoresAndTracesFollowingInstruction() => Audit("rte-access-normal", [7], false);
 
-    [EnvironmentFact(Enable, "audit complete 040 format-7 restoration prerequisites"), Trait("Suite", "ReferenceDiscovery")]
+    [Fact, Trait("Suite", "Synthetic")]
     public void PendingTraceConvertsTheFrameBeforeReturningAndResuming() => Audit("rte-access-trace", [7], true);
 
     [EnvironmentFact(Enable, "audit complete 040 format-7 restoration prerequisites"), Trait("Suite", "ReferenceDiscovery")]
@@ -27,12 +27,11 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
     {
         var report = new CoverageBatch("68040", "rte-access-continuations");
         // These are explicit prerequisite gaps, not asserted format-error behavior.
-        // CM needs full MOVEM replay fixtures; CU/CP need independently qualified
-        // pending-FPU state. FPU arithmetic being out of scope does not prove RTE.
+        // CU/CP need independently qualified pending-FPU state. The separate
+        // MOVEM matrices cover CM; FPU arithmetic being out of scope does not prove RTE.
         foreach (var bank in Banks)
         for (var ccr = 0; ccr < 32; ccr++)
-        foreach (var form in new[] { "CM-indirect", "CM-postincrement", "CM-predecrement", "CM-displacement",
-            "CM-indexed", "CM-absolute", "CM-PC-relative", "CU-pending-unimplemented", "CP-pending-postinstruction" })
+        foreach (var form in new[] { "CU-pending-unimplemented", "CP-pending-postinstruction" })
             report.Record($"68040/RTE/format7/{form}/bank={bank}/op=4E73/ccr={ccr:X2}", "untested",
                 "Required continuation protocol has no independently qualified execution fixture yet");
         report.Complete(output);

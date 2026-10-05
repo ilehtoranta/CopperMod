@@ -5,7 +5,7 @@ namespace Copper68k;
 
 internal partial class M68kAdvancedTimingInterpreter
 {
-    private bool TryExecuteGeneralMovem(ushort opcode)
+    private bool TryExecuteGeneralMovem(ushort opcode, uint? continuationAddress = null)
     {
         if ((opcode & 0xfb80) != 0x4880) return false;
         var mode = (opcode >> 3) & 7;
@@ -26,7 +26,13 @@ internal partial class M68kAdvancedTimingInterpreter
         Span<uint> registers = stackalloc uint[16];
         State.D.CopyTo(registers);
         State.A.CopyTo(registers[8..]);
-        var address = mode is 3 or 4 ? State.A[baseRegister] : ResolveMoveAddress(mode, baseRegister, size, opcode);
+        uint address;
+        if (continuationAddress.HasValue)
+        {
+            ConsumeMovemAddressExtensions(mode, baseRegister, opcode);
+            address = continuationAddress.Value;
+        }
+        else address = mode is 3 or 4 ? State.A[baseRegister] : ResolveMoveAddress(mode, baseRegister, size, opcode);
         for (var bit = 0; bit < 16; bit++)
         {
             if ((mask & (1 << bit)) == 0) continue;

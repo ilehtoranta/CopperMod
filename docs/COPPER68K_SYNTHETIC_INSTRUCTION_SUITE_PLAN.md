@@ -1170,3 +1170,32 @@ skips. The complete requested discovery executes all four batches and six fixed
 examples, exits 1 and records exactly the required failures/gaps. All thirteen
 specific malformed-input/report controls are detected. No earlier green gate
 is relabeled as advanced-restoration coverage.
+
+### Milestone 6 normal/CT/CM implementation — 2026-10-05
+
+The advanced 040 interpreter now restores normal and CT format-7 frames and
+restarts CM MOVEM from its saved EA without recomputing indexes or reading pointer
+chains. Five ordinary-CI batches pass 264,960 logical phases, including every
+legal MOVEM word and all full-index structures. Separate reset/interrupt/one-shot
+and warmed V1/V2 JIT tests prove continuation ownership. Original-CPU and omitted
+JIT-guard probes detect the defects; restored focused tests pass. The exact
+selection/report corruption controls remain effective.
+
+The explicit discovery command still fails: 192 required CU/CP cases remain
+untested. Detailed frame faults, real access-fault entry/writeback handling,
+other-model advanced restoration, independent combination qualification and
+consolidation remain required. Milestone 6 is **in progress**, with
+`roadmapComplete=false`; this does not narrow the accepted completion gate.
+
+Full Release CPU validation passes 4,932 tests, eleven optional/opt-in skips and
+zero failures with all four qualified presets enabled. Isolated unpublished
+`1.5.2-synthetic-dev.54` validates CopperScreen through NuGet: clean Release build,
+host 149/six skips, disk 74, engine 1,080, native Workbench two and A1200 one
+without skips. Package/assets/loaded DLL identities match. Published versions and
+the root CopperScreen checkout are untouched. See the
+[reference record](COPPER68K_REFERENCE_QUALIFICATION.md#040-normal-ct-and-movem-restoration-checkpoint--2026-10-05)
+for architectural authority, exact coverage, evidence and remaining scope.
+
+The strict gate verifies 14,911,576 passing logical cases in 579 reporting batches,
+with fresh pinned SingleStepTests (312,500 cases / 125 files) and Musashi
+(536 programs / 88 exclusions across eight profiles); roadmapComplete=false.

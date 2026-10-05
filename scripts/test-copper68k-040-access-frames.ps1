@@ -11,7 +11,9 @@ $expected = [ordered]@{
     'rte-access-controls' = @{cases=6912; combinations=108}
     'rte-access-normal' = @{cases=9216; combinations=144}
     'rte-access-trace' = @{cases=13824; combinations=144}
-    'rte-access-continuations' = @{cases=864; combinations=27}
+    'rte-access-movem-opcodes' = @{cases=120960; combinations=1260}
+    'rte-access-movem-full-index' = @{cases=114048; combinations=1188}
+    'rte-access-continuations' = @{cases=192; combinations=6}
 }
 $testExit = 0
 if (-not $ValidateReportsOnly) {
@@ -24,7 +26,7 @@ if (-not $ValidateReportsOnly) {
             $saved[$name] = [Environment]::GetEnvironmentVariable($name)
             [Environment]::SetEnvironmentVariable($name, $settings[$name])
         }
-        & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --filter 'FullyQualifiedName~SyntheticM68040AccessFrameAuditTests|FullyQualifiedName~M68040AccessFrameFixtureTests' --logger 'trx;LogFileName=audit.trx' --results-directory $output
+        & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --filter 'FullyQualifiedName~SyntheticM68040AccessFrameAuditTests|FullyQualifiedName~M68040AccessFrameFixtureTests|FullyQualifiedName~SyntheticM68040MovemContinuationTests' --logger 'trx;LogFileName=audit.trx' --results-directory $output
         $testExit = $LASTEXITCODE
     } finally {
         foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
@@ -33,17 +35,17 @@ if (-not $ValidateReportsOnly) {
         schema=1; reference='MC68040UM'; url='https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf'
         sections=@('8.4.1','8.4.3','8.4.4','8.4.6.2','8.4.6.7'); softwareReferenceExecuted=$false
         sourceCommit=(& git -C $repo rev-parse HEAD); cpuCommittedTree=(& git -C $repo rev-parse HEAD:Copper68k)
-        cpuSourceFiles=@(& git -C $repo ls-files 'Copper68k/*') | ForEach-Object {
+        cpuSourceFiles=@(& git -C $repo ls-files --cached --others --exclude-standard 'Copper68k/*') | ForEach-Object {
             @{file=$_; sha256=(Get-FileHash -LiteralPath (Join-Path $repo $_) -Algorithm SHA256).Hash.ToLowerInvariant()}
         }
-        inputs=@('Copper68k.Tests/Synthetic/SyntheticM68040AccessFrameAuditTests.cs','scripts/test-copper68k-040-access-frames.ps1') | ForEach-Object {
+        inputs=@('Copper68k.Tests/Synthetic/SyntheticM68040AccessFrameAuditTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040MovemContinuationTests.cs','scripts/test-copper68k-040-access-frames.ps1') | ForEach-Object {
             @{file=$_; sha256=(Get-FileHash -LiteralPath (Join-Path $repo $_) -Algorithm SHA256).Hash.ToLowerInvariant()}
         }
         assemblies=@('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll') | ForEach-Object {
             @{file=$_; sha256=(Get-FileHash -LiteralPath (Join-Path $repo $_) -Algorithm SHA256).Hash.ToLowerInvariant()}
         }
         limitations=@('Canonical synthetic frames, not hardware captures or enabled-MMU access faults',
-            'CM/CU/CP continuation inventory remains untested and fails the gate',
+            'CU/CP continuation inventory remains untested and fails the gate',
             'Multiple continuation bits are architecturally undefined and excluded',
             'Detailed fault validation, odd return PCs, throwaway-to-access frames and physical timing remain unqualified')
     }
@@ -54,14 +56,14 @@ if (-not $ValidateReportsOnly) {
 $identity = Get-Content -LiteralPath (Join-Path $output 'identities.json') -Raw | ConvertFrom-Json
 if ($identity.schema -ne 1 -or $identity.reference -cne 'MC68040UM' -or $identity.softwareReferenceExecuted -ne $false -or
     $identity.sourceCommit -notmatch '^[a-f0-9]{40}$' -or $identity.cpuCommittedTree -notmatch '^[a-f0-9]{40}$' -or
-    @($identity.cpuSourceFiles).Count -eq 0 -or @($identity.inputs).Count -ne 2 -or @($identity.inputs.file | Sort-Object -Unique).Count -ne 2 -or
+    @($identity.cpuSourceFiles).Count -eq 0 -or @($identity.inputs).Count -ne 3 -or @($identity.inputs.file | Sort-Object -Unique).Count -ne 3 -or
     @($identity.assemblies).Count -ne 2) { throw '040 access-frame input identity is missing or incomplete' }
 foreach ($input in $identity.inputs) {
     $path = Join-Path $repo $input.file
-    if ($input.file -notin @('Copper68k.Tests/Synthetic/SyntheticM68040AccessFrameAuditTests.cs','scripts/test-copper68k-040-access-frames.ps1') -or
+    if ($input.file -notin @('Copper68k.Tests/Synthetic/SyntheticM68040AccessFrameAuditTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040MovemContinuationTests.cs','scripts/test-copper68k-040-access-frames.ps1') -or
         $input.sha256 -cne (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()) { throw '040 access-frame fixture/command identity differs' }
 }
-$cpuFiles = @(& git -C $repo ls-files 'Copper68k/*')
+$cpuFiles = @(& git -C $repo ls-files --cached --others --exclude-standard 'Copper68k/*')
 if (@($identity.cpuSourceFiles).Count -ne $cpuFiles.Count -or @($identity.cpuSourceFiles.file | Sort-Object -Unique).Count -ne $cpuFiles.Count) { throw '040 access-frame CPU source selection differs' }
 foreach ($source in $identity.cpuSourceFiles) {
     if ($source.file -notin $cpuFiles -or $source.sha256 -cne (Get-FileHash -LiteralPath (Join-Path $repo $source.file) -Algorithm SHA256).Hash.ToLowerInvariant()) { throw '040 access-frame CPU source identity differs' }
@@ -72,8 +74,8 @@ foreach ($assembly in $identity.assemblies) {
 }
 [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
 $counters = $trx.TestRun.ResultSummary.Counters
-if ([int]$counters.executed -ne 10 -or [int]$counters.total -ne 10 -or [int]$counters.notExecuted -ne 0) {
-    throw '040 access-frame audit did not execute its complete selection (4 batches, 6 fixed examples)'
+if ([int]$counters.executed -ne 12 -or [int]$counters.total -ne 12 -or [int]$counters.notExecuted -ne 0) {
+    throw '040 access-frame audit did not execute its complete selection (6 batches, 6 fixed examples)'
 }
 $totals = [ordered]@{passing=0; mismatching=0; unsupported=0; untested=0}
 foreach ($group in $expected.Keys) {
@@ -92,8 +94,33 @@ foreach ($group in $expected.Keys) {
     $expectedCombinations = @{}
     if ($group -eq 'rte-access-continuations') {
         foreach ($bank in @('user','ISP','MSP')) {
-            foreach ($form in @('CM-indirect','CM-postincrement','CM-predecrement','CM-displacement','CM-indexed','CM-absolute','CM-PC-relative','CU-pending-unimplemented','CP-pending-postinstruction')) {
+            foreach ($form in @('CU-pending-unimplemented','CP-pending-postinstruction')) {
                 $expectedCombinations["68040/RTE/format7/$form/bank=$bank"] = 32
+            }
+        }
+    } elseif ($group -in @('rte-access-movem-opcodes','rte-access-movem-full-index')) {
+        foreach ($load in @($false,$true)) {
+            foreach ($width in @(2,4)) {
+                foreach ($mode in 2..7) {
+                    foreach ($register in 0..7) {
+                        if ($mode -notin @(2,5,6) -and $mode -ne $(if ($load) {3} else {4}) -and -not ($mode -eq 7 -and $register -le $(if ($load) {3} else {1}))) { continue }
+                        $indexes=@('brief')
+                        $masks=@(1,0x0101,0xffff)
+                        if ($group -eq 'rte-access-movem-full-index') {
+                            if (-not (($mode -eq 6 -and $register -eq 0) -or ($load -and $mode -eq 7 -and $register -eq 3))) { continue }
+                            $indexes=@()
+                            $masks=@(0x0101)
+                            foreach ($bs in @($false,$true)) { foreach ($suppressed in @($false,$true)) { foreach ($bd in 1..3) { foreach ($iis in @(0,1,2,3,5,6,7)) {
+                                if ($suppressed -and $iis -ge 5) { continue }
+                                $indexes += "full/bs=$bs/is=$suppressed/bd=$bd/iis=$iis"
+                            } } } }
+                        }
+                        foreach ($index in $indexes) { foreach ($bank in @('user','ISP','MSP')) { foreach ($mask in $masks) {
+                            $key = '68040/MOVEM-CM/{0}/{1}/ea={2}:{3}/{4}/bank={5}/mask={6:X4}' -f $(if ($load) {'load'} else {'store'}),$width,$mode,$register,$index,$bank,$mask
+                            $expectedCombinations[$key] = 96
+                        } } }
+                    }
+                }
             }
         }
     } else {
@@ -116,7 +143,7 @@ foreach ($group in $expected.Keys) {
         }
     }
     foreach ($combination in $report.combinations.PSObject.Properties) {
-        if (-not $expectedCombinations.ContainsKey($combination.Name)) { throw "$group foreign combination" }
+        if (-not $expectedCombinations.ContainsKey($combination.Name)) { throw "$group foreign combination: $($combination.Name); first expected: $($expectedCombinations.Keys | Sort-Object | Select-Object -First 1)" }
         $combinationCases = 0
         foreach ($entry in $combination.Value.PSObject.Properties) {
             if ($entry.Name -notin $totals.Keys -or $entry.Value -isnot [long] -and $entry.Value -isnot [int] -or $entry.Value -lt 0) { throw "$group invalid combination status" }
@@ -129,8 +156,8 @@ foreach ($group in $expected.Keys) {
         if ($combinationTotals[$status] -ne $report.counts.$status) { throw "$group combination totals differ" }
     }
 }
-$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 10 -and
+$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 12 -and
     ($totals.mismatching + $totals.unsupported + $totals.untested) -eq 0
-@{schema=1; model='68040'; logicalCases=30816; xunitBatches=4; fixedExamples=6; counts=$totals; passed=$passed; roadmapComplete=$false} |
+@{schema=1; model='68040'; logicalCases=265152; xunitBatches=6; fixedExamples=6; counts=$totals; passed=$passed; roadmapComplete=$false} |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'audit-summary.json')
 if (-not $passed) { throw "040 access-frame audit incomplete: $($totals | ConvertTo-Json -Compress)" }

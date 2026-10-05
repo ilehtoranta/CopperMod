@@ -275,10 +275,12 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
   focused presets do not replace the failing broad audit.
 - Generated 010 word-MOVE/MOVEA format-8 images now have the scoped continuation
   gate below. Long transfers, other instruction families, foreign silicon images,
-  external bus faults, 020/030 formats 9/A/B and 040 format 7 remain unqualified. The current advanced decoder does not implement all these
+  external bus faults, 020/030 formats 9/A/B and the remaining 040 format-7
+  CU/CP and detailed fault protocols remain unqualified. The advanced decoder does not implement all these
   legal restoration protocols; this is an implementation gap, not invalid encoding.
   The [040 access-frame discovery gate](#040-access-frame-restoration-discovery-2026-10-05)
-  now exposes normal/trace failures and preserves CM/CU/CP prerequisites explicitly.
+  retains the original failed-before record. The latest checkpoint below promotes
+  normal/CT/CM synthetic returns and preserves CU/CP prerequisites explicitly.
 - Nested 000 address errors during exception stacking previously recursed on an
   odd SSP. This is corrected by the address-error double-fault slice above. External
   BERR and reset-vector fault signaling remain unavailable through the current
@@ -2616,3 +2618,92 @@ executes them and fails as recorded above. Production CPU sources remain
 unchanged, so no new NuGet consumer validation or release is claimed or required
 for this audit-only checkpoint. Earlier full-suite, strict deterministic and
 external-reference records are retained unchanged; they do not certify format 7.
+
+## 040 normal, CT and MOVEM restoration checkpoint — 2026-10-05
+
+This checkpoint implements normal, CT and CM format-7 RTE restoration in the
+advanced 68040 interpreter. Normal return consumes the 60-byte frame. CT creates
+its format-2 trace frame at old SP+48, using the saved EA as the instruction
+address. CM preserves a one-shot PC/address pair and restarts MOVEM after EA
+calculation: extension words are consumed without calculating an index or reading
+an indirect pointer chain. Reset clears the pair; an interrupt handler at another
+PC preserves it. Interpreter hot blocks and warmed V1/V2 JIT traces defer to the
+interpreter until the continuation is consumed. Ordinary MOVEM calculation,
+operand ordering and the existing timing policy remain unchanged.
+
+Authority is MC68040UM sections 8.4.6.2 and 8.4.6.7, as cited in the discovery
+record. Applying the saved EA to every legal MOVEM addressing mode interprets
+8.4.6.7's restart-after-EA rule; 8.4.6.2 specifically discusses indexed and
+PC-relative calculation. The pinned WinUAE MMU generator is documentary agreement,
+not an executed oracle or silicon qualification. Physical restart timing remains
+unqualified. CU/CP still need independently qualified pending-FPU state; they are
+implementation gaps, not invalid encodings or exclusions caused by the FPU
+arithmetic boundary. Multiple continuation bits remain undefined/excluded.
+
+| Promoted batch | Passing logical phases | Architectural combinations |
+| --- | ---: | ---: |
+| Formats 0/2/3 controls | 6,912 | 108 |
+| Format-7 normal return | 9,216 | 144 |
+| Format-7 CT trace conversion/return | 13,824 | 144 |
+| Every legal MOVEM opcode word, W/L, three masks | 120,960 | 1,260 |
+| All 66 full-index structures, W/L, load/store/PC source | 114,048 | 1,188 |
+| Total promoted | 264,960 | 2,844 |
+
+The two MOVEM matrices contain 40,320 and 38,016 scenarios respectively; each
+scenario checks RTE, MOVEM and a following NOP. Opcode enumeration covers all
+140 legal MOVEM first words. All 32 CCRs and user/ISP/MSP banks are included.
+Expectations use the shared independent addressing fixture, check registers,
+memory guards, operand transfer widths/order, exact extension consumption and
+absence of pointer-chain reads. Five additional ordinary xUnit scenarios prove
+reset/interrupt/one-shot lifetime and warmed V1/V2 compiled entry before and after
+the fallback. V2 uses its bus-batch boundary and explicit cycle target; the test
+requires a compiled execution witness, not interpreter/JIT agreement alone.
+
+Fresh discovery evidence is `artifacts/m6-rte-movem-discovery-qualified/`:
+12 executed xUnit cases, 11 passing and one intentional CU/CP inventory failure.
+The command exits 1 and records 265,152 logical phases: 264,960 passing, zero
+mismatching/unsupported and 192 explicitly untested CU/CP requirements in six
+combinations. `roadmapComplete=false`. The five promoted batches run in ordinary
+CI; the remaining inventory executes only when explicitly requested. Detailed
+validation faults, odd return PCs, throwaway-to-access frames, real access-fault
+entry/writeback handling, other-model restoration and the broader reference gaps
+remain required. No specialized regression is retired.
+
+Repaired failed-before evidence is `artifacts/m6-rte-current-probes/before/`:
+the original CPU fails all 40,320/38,016 RTE prerequisites and leaves
+80,640/76,032 dependent phases untested. Removing the pending-continuation JIT
+guard fails both warmed compiler tests. Restoring source byte-for-byte passes
+all seven focused matrix/state tests. Evidence is
+`artifacts/m6-rte-current-probes/controls.json`. Earlier fixture/command development
+failures remain recorded and are not relabeled as successful qualification.
+All thirteen specific malformed-input/report controls still detect their intended
+defect (`artifacts/m6-rte-continuation-preflight-controls/controls.json`).
+
+Full Release CPU validation passes 4,932 tests with eleven optional/opt-in skips
+and zero failures, including all four qualified WinUAE presets
+(`artifacts/m6-rte-continuation-full/full.trx`). The broad Basic discovery record
+above remains unresolved; this checkpoint does not certify its disagreements.
+
+Fresh private, unpublished NuGet `1.5.2-synthetic-dev.54` validates the production
+fix through isolated CopperScreen baseline
+`d9beae8b88be24032221e3482942a249c03c27d3`: Release solution build has zero
+warnings/errors, host 149 passed/six optional skips, disk 74 passed, separate
+engine diagnostics 1,080 passed, native Workbench boot two passed and A1200
+AGA boot/persistence one passed without skips. Four restored assets select the
+exact package and all four loaded CPU DLLs match its SHA-256
+`57570f04cc1bd2cbff2103ca5dfc0912e9f1e74de86ef1ce02a14d1c95b3e861`.
+Package SHA-256 is
+`7f0ef9ce3c2a645b5b9202bb3f54bd1273a2e5724ea639ec83cee95fa0103884`.
+Consumer identities/results are under the isolated worktree's
+`artifacts/rte-continuation-identities.json` and
+`artifacts/rte-continuation-validation/`. Published packages remain immutable;
+no package publication or root CopperScreen dependency change is included.
+Milestone 6 and the full reference/consolidation goal remain **in progress**.
+
+The strict report gate verifies **14,911,576 passing logical cases in 579 reporting
+batches**, with fresh pinned SingleStepTests (312,500 cases / 125 files) and
+Musashi (536 programs / 88 explicit exclusions across all eight profiles).
+Evidence is `artifacts/m6-rte-continuation-gate-final.log` and the full-run
+`summary.json`; `roadmapComplete=false`. An initial verifier invocation incorrectly
+requested zero-count 040-only reports for other models and failed; the corrected
+model-scoped selection is the successful invocation recorded here.

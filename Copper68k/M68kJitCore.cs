@@ -1155,6 +1155,9 @@ namespace Copper68k
             bool allowV2TraceHandoff = true)
         {
             _pendingFallbackReason = M68kJitFallbackReason.Unknown;
+            // An RTE MOVEM continuation must consume its saved EA before any
+            // warmed compiled route can perform ordinary address calculation.
+            if (_fallback is M68kAdvancedTimingInterpreter { HasPendingM68040MovemContinuation: true }) return 0;
             // Architectural tracing requires an exception after each instruction.
             if ((State.StatusRegister & M68kCpuState.Trace) != 0)
                 return 0;
