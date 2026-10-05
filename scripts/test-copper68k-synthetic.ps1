@@ -66,6 +66,7 @@ try {
             'move-address-boundary'=$(if ($model -in @('68000','68010')) {44} else {60});
             'transfer-registers'=17624; 'transfer-addresses'=$(if ($model -in @('68000','68010')) {8064} else {9252});
             'transfer-movep'=3708; 'transfer-movem'=$(if ($model -in @('68000','68010')) {3196} else {3592});
+            'transfer-movem-invalid-operands'=6400;
             'arithmetic-boundaries'=56448; 'arithmetic-addressing'=$(if ($model -in @('68000','68010')) {4667} else {8237});
             'arithmetic-scenarios'=21072; 'arithmetic-extend'=25440;
             'arithmetic-invalid-operands'=$(if ($model -in @('68000','68010')) {6336} else {5952});
@@ -79,13 +80,14 @@ try {
             'control-conditions'=$(if ($model -in @('68000','68010')) {42048} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {43104});
             'control-jumps'=$(if ($model -in @('68000','68010')) {3592} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {3856});
             'control-trapcc'=3072;
+            'control-invalid-addresses'=23808;
             'logical-addressing'=$(if ($model -in @('68000','68010')) {6660} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {9944});
             'logical-bitfield-addressing'=$(if ($model -in @('68000','68010')) {2688} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {3480});
             'logical-bitfield-values'=155136;
             'logical-bits'=$(if ($model -in @('68000','68010')) {104192} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {104852});
             'logical-boundaries'=31808;
             'logical-invalid-operands'=13248;
-            'logical-unary-invalid-operands'=$(if ($model -in @('68000','68010')) {11968} elseif ($model -eq '68060') {9728} else {9856});
+            'logical-unary-invalid-operands'=$(if ($model -in @('68000','68010')) {12544} elseif ($model -eq '68060') {10304} else {10432});
             'logical-bitfield-invalid-operands'=13312;
             'logical-cas-invalid-operands'=3456;
             'logical-cas'=$(if ($model -in @('68000','68010')) {36975} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {37371});
@@ -94,6 +96,8 @@ try {
             'system-basic'=1728;
             'system-trap-trace'=$(if ($model -eq '68040') {10368} elseif ($model -eq '68060') {8384} elseif ($model -in @('68000','68010')) {3968} else {5952});
             'system-chk-invalid-operands'=11264;
+            'system-unassigned-4140'=32768;
+            'system-unassigned-4e'=4480;
             'system-debug-instructions'=$(if ($model -eq '68060') {512} else {256});
             'system-bounds'=$(if ($model -in @('68000','68010')) {11828} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {12488});
             'system-callm'=$(if ($model -in @('68000','68010')) {10832} elseif ($model -in @('68020','68EC020','A1200')) {11000} elseif ($model -in @('68030','68040','68060')) {10964});

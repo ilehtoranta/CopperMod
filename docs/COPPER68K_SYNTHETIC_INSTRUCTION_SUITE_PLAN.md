@@ -978,3 +978,27 @@ exception presets execute. The deterministic gate verifies 11,192,984 cases in
 `roadmapComplete=false`. Fresh pinned SingleStepTests/Musashi and the separately
 qualified TRAP trace audit pass. The broad audit still fails 46 mismatching and
 13 unsupported groups, so the full milestone 6 objective remains open.
+
+The line-4 illegal-encoding follow-up fixes narrowly defined advanced decoder
+gaps for unassigned `4140`/`4E` words, invalid control EAs and MOVEM EAs, and
+unassigned TST EAs. Independent matrices add 544,256 cases across eight profiles,
+using both stacks and every CCR. Failed-before runs distinguish emulator
+unsupported execution from architectural vector 4. An initial fixture wrongly
+included EXTB.L aliases as illegal LEA; its expectation is corrected before the
+CPU guard, with legal EXTB/SWAP/BKPT/EXT and system neighbors retained.
+
+The unchanged broad audit advances to illegal integer word `5008` but retains
+46 mismatching and 13 unsupported groups. No family exclusion, comparison-mask
+change or regression retirement is made. The private .50 package is unpublished.
+Exact source/package identities, failed-before proofs and qualification limits
+are in `COPPER68K_REFERENCE_QUALIFICATION.md`. All earlier reference, advanced
+exception restoration and consolidation requirements remain open; milestone 6
+stays in progress.
+
+Final follow-up validation passes 4,809 CPU tests with ten optional skips and both
+qualified exception presets enabled. The strict gate verifies 11,737,240 logical
+cases in 501 batches, rejects missing/new-group and stale-unary reports, and
+retains `roadmapComplete=false`. Fresh pinned SingleStepTests/Musashi, qualified
+TRAP trace and AHX pass. The private .50 package passes the isolated CopperScreen
+Release build, host/disk/engine tests and all three native Workbench/A1200 replays,
+with exact package/version and loaded-DLL identity checks.

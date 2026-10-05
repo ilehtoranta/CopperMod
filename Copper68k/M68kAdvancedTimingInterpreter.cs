@@ -838,11 +838,42 @@ namespace Copper68k
             if ((opcode & 0xFFC0) == 0x4800 && logicalMode == 7 && logicalRegister > 1 ||
                 (opcode & 0xFFC0) == 0x4A00 && logicalMode == 1)
                 return M68020OpcodeKind.IllegalInstruction;
+            if ((opcode & 0xFF00) == 0x4A00 && ((opcode >> 6) & 3) < 3 &&
+                logicalMode == 7 && logicalRegister > 4)
+                return M68020OpcodeKind.IllegalInstruction;
             // CHK admits data sources, including immediate, but no An or
             // unassigned mode-7 EA. Reject these words before execution.
             if ((opcode & 0xF140) == 0x4100 &&
                 (logicalMode == 1 || logicalMode == 7 && logicalRegister > 4))
                 return M68020OpcodeKind.IllegalInstruction;
+            // M68000PM: CHK requires bit 6 = 0; LEA requires bits 8..6
+            // = 111. The intervening 101 first-word pattern is unassigned.
+            if ((opcode & 0xF1C0) == 0x4140)
+                return M68020OpcodeKind.IllegalInstruction;
+            // Unassigned first words between the line-4 system groups.
+            // TRAP/LINK/UNLK/USP/returns and MOVEC retain their decoders.
+            if ((opcode & 0xFFC0) == 0x4E00 ||
+                opcode is 0x4E78 or 0x4E79 or >= 0x4E7C and <= 0x4E7F)
+                return M68020OpcodeKind.IllegalInstruction;
+            // LEA/PEA/JMP/JSR require control EAs. Preserve PEA's SWAP
+            // and BKPT aliases, and LEA's 49C0..49C7 EXTB.L encodings.
+            if (logicalMode is 0 or 1 or 3 or 4 || logicalMode == 7 && logicalRegister > 3)
+            {
+                if ((opcode & 0xF1C0) == 0x41C0 && (opcode & 0xFFF8) != 0x49C0 ||
+                    (opcode & 0xFFC0) is 0x4E80 or 0x4EC0 ||
+                    (opcode & 0xFFC0) == 0x4840 && logicalMode is not (0 or 1))
+                    return M68020OpcodeKind.IllegalInstruction;
+            }
+            // MOVEM load allows control/postincrement, store allows
+            // control-alterable/predecrement. Store mode 0 is EXT.W/.L.
+            if ((opcode & 0xFB80) == 0x4880)
+            {
+                var load = (opcode & 0x0400) != 0;
+                if (load
+                    ? logicalMode is 0 or 1 or 4 || logicalMode == 7 && logicalRegister > 3
+                    : logicalMode is 1 or 3 || logicalMode == 7 && logicalRegister > 1)
+                    return M68020OpcodeKind.IllegalInstruction;
+            }
 
             if ((opcode & 0xFF00) == 0x0800 || (opcode & 0xF100) == 0x0100)
             {

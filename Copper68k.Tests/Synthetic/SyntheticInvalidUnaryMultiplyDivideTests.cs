@@ -14,9 +14,9 @@ public sealed class SyntheticInvalidUnaryMultiplyDivideTests(ITestOutputHelper o
         // M68000PM: CLR/NEG/NEGX/NOT/TAS/NBCD require data-alterable EAs.
         // TST gained PC/immediate and word/long An sources on 020 (4-193).
         // 020+ NBCD mode-1 words encode LINK.L instead (4-111). Size 3 and
-        // unassigned mode-7 registers are outside this matrix.
+        // unassigned mode-7 registers are outside this matrix except TST.
         var opcodes = UnaryOpcodes(machine.Model.FullIndex, modelId == "68060").ToArray();
-        Assert.Equal(modelId == "68060" ? 152 : machine.Model.FullIndex ? 154 : 187, opcodes.Length);
+        Assert.Equal(modelId == "68060" ? 161 : machine.Model.FullIndex ? 163 : 196, opcodes.Length);
         Assert.Equal(opcodes.Length, opcodes.Select(x => x.Opcode).Distinct().Count());
         Assert.Contains(opcodes, x => x.Opcode == 0x4008);
         Assert.Contains(opcodes, x => x.Opcode == 0x483c);
@@ -25,6 +25,8 @@ public sealed class SyntheticInvalidUnaryMultiplyDivideTests(ITestOutputHelper o
         Assert.Equal(!machine.Model.FullIndex, opcodes.Any(x => x.Opcode == 0x4a48));
         Assert.Equal(!machine.Model.FullIndex, opcodes.Any(x => x.Opcode == 0x4a3c));
         Assert.Equal(!machine.Model.FullIndex, opcodes.Any(x => x.Opcode == 0x4808));
+        Assert.Contains(opcodes, x => x.Opcode == 0x4a3d);
+        Assert.Contains(opcodes, x => x.Opcode == 0x4abf);
         Assert.DoesNotContain(opcodes, x => x.Opcode is 0x4000 or 0x4810 or 0x4ad0 or 0x40c0);
 
         foreach (var (opcode, family, form) in opcodes)
@@ -84,14 +86,20 @@ public sealed class SyntheticInvalidUnaryMultiplyDivideTests(ITestOutputHelper o
         foreach (var (encoding, family) in new[] { (0x4000, "NEGX"), (0x4200, "CLR"),
             (0x4400, "NEG"), (0x4600, "NOT"), (0x4a00, "TST"), (0x4800, "NBCD"), (0x4ac0, "TAS") })
         for (var size = 0; size < (family is "NBCD" or "TAS" ? 1 : 3); size++)
-        foreach (var form in InvalidDestinations())
         {
-            if (family == "TST" && advancedTst && (form.Mode == 7 || size != 0)) continue;
-            if (family == "NBCD" && advancedTst && form.Mode == 1) continue;
-            // MC68060UM 9.2.2: HALT/PULSE reuse two TAS mode-1 words.
-            if (family == "TAS" && debug060 && form.Mode == 1 && form.Register is 0 or 4) continue;
-            yield return ((ushort)(encoding | size << 6 | form.Mode << 3 | form.Register),
-                $"{family}.{new[] { "B", "W", "L" }[size]}", form.Id);
+            foreach (var form in InvalidDestinations())
+            {
+                if (family == "TST" && advancedTst && (form.Mode == 7 || size != 0)) continue;
+                if (family == "NBCD" && advancedTst && form.Mode == 1) continue;
+                // MC68060UM 9.2.2: HALT/PULSE reuse two TAS mode-1 words.
+                if (family == "TAS" && debug060 && form.Mode == 1 && form.Register is 0 or 4) continue;
+                yield return ((ushort)(encoding | size << 6 | form.Mode << 3 | form.Register),
+                    $"{family}.{new[] { "B", "W", "L" }[size]}", form.Id);
+            }
+            if (family == "TST")
+            for (var register = 5; register < 8; register++)
+                yield return ((ushort)(encoding | size << 6 | 0x38 | register),
+                    $"TST.{new[] { "B", "W", "L" }[size]}", $"unassigned-EA(7,{register})");
         }
     }
 

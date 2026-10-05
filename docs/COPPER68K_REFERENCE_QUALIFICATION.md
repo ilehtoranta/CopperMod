@@ -1780,3 +1780,117 @@ and `artifacts/m6-chk-unassigned-trace/`. Ordinary CI uses the expanded existing
 CHK matrix and updated strict cardinality. The full-suite skips remain unavailable
 coverage; the independently run Basic audit remains failing. No seeded audit,
 test consolidation, package publication or hardware qualification is added.
+
+## Line-4 illegal and unassigned words (2026-10-05)
+
+The unchanged Basic ILLEGAL audit next exposed `4140`, invalid LEA `41C0`,
+invalid MOVEM `4888`, unassigned TST `4A3D`, and unassigned system word `4E00`.
+On EC020/A1200/020/030/060 these reached an emulator unsupported-timing exception
+instead of architectural vector 4. The 000/010/040 paths already handled them.
+The advanced classifier now rejects these narrowly identified encodings before
+operand effects, using the existing illegal-exception path and timing policy.
+There is no generic fallback, partial-instruction retry or public API change.
+
+[M68000PM](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf) defines CHK
+at 4-69/70 (bit 6 zero), LEA at 4-110 (bits 8..6 = 111), control EAs for
+JMP/JSR/LEA/PEA at 4-108/109/110/159, MOVEM direction-specific EAs at 4-128..130,
+and TST sizes/EAs at 4-192/193. Its instruction-format inventory leaves the
+selected `4140` and `4E` words unassigned on these processors.
+[MC68020UM 6.1.5](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf) specifies
+vector 4 and the causing instruction PC for unassigned first words. Tests label
+unassigned first words and EA fields explicitly; these are selected-model rules,
+not claims about future architectures. Assigned invalid operand forms remain
+distinct from legal instruction coverage.
+
+The new and expanded mandatory matrices use independent vector-4 expectations,
+both user/supervisor stacks and all 32 initial CCR images. They check saved PC/SR,
+frame and bank selection, every register, surrounding memory and forbidden
+operand reads. Fixed opcode examples and distinct-word counts audit encoding.
+
+| Batch | Opcode words | Cases per profile | Cases across eight profiles |
+| --- | ---: | ---: | ---: |
+| `system-unassigned-4140` | 512 | 32,768 | 262,144 |
+| `control-invalid-addresses` | 372 | 23,808 | 190,464 |
+| `transfer-movem-invalid-operands` | 100 | 6,400 | 51,200 |
+| Added unassigned TST words in `logical-unary-invalid-operands` | 9 | 576 additional | 4,608 additional |
+| `system-unassigned-4e` | 70 | 4,480 | 35,840 |
+
+The net addition is **544,256 cases and 32 reporting batches**. Legal aliases
+remain covered by the existing transfer/control/system matrices: `49C0..49C7`
+EXTB.L, PEA's SWAP/BKPT, MOVEM's EXT.W/L, and neighboring TRAP/LINK/UNLK/USP,
+return and MOVEC words. TST size 3 remains TAS, including 060 HALT/PULSE rules.
+
+The initial control-EA fixture incorrectly included EXTB.L aliases as illegal
+LEA. That was a test expectation defect: each advanced profile reported 512
+mismatches from correct EXTB.L execution. The corrected failed-before fixture
+excludes those eight words, before the production control-EA guard is added.
+It reports 23,808 unsupported cases on each affected profile. This is recorded
+separately from the CPU defects, rather than used to alter correct EXTB behavior.
+
+Failed-before directories retain the evidence for each correction:
+
+- `artifacts/m6-unassigned-4140-before/`: 32,768 unsupported per affected profile.
+- `artifacts/m6-invalid-control-qualified-before/`: 23,808 unsupported per affected
+  profile; earlier erroneous fixture is in `m6-invalid-control-before/`.
+- `artifacts/m6-invalid-movem-before/`: 3,328 passing and 3,072 unsupported per
+  affected profile.
+- `artifacts/m6-unassigned-tst-before/`: 576 additional unsupported per affected
+  profile, with previous unary cases passing.
+- `artifacts/m6-unassigned-4e-before/`: 4,480 unsupported per affected profile.
+
+All three unaffected profiles pass these failed-before matrices. The corrected
+final focused run passes **128 tests with zero skips/failures** in
+`artifacts/m6-invalid-address-focused/`, including legal neighbors. No existing
+regression is retired.
+
+The unchanged Basic audit now reaches the next illegal integer word `5008`,
+after 9,574 callbacks per affected advanced profile. The 040 `F300` exception
+priority mismatch remains. Basic still fails **1,322 passing, 46 mismatching,
+13 unsupported and zero untested groups**, over **11,350,097 callbacks and
+1,539,795 frames**. All 32 controls pass; 199,327 masked-SR cases and the
+manifest/native-library identities remain unchanged. No family exclusion or
+comparison-mask change is added. Evidence: `artifacts/m6-invalid-address-broad/`.
+The intermediate broad runs retain each earlier failing word and progression.
+
+Private **unpublished** package `1.5.2-synthetic-dev.50` has SHA-256
+`3ed5f13504404f751f8d7aa563965a49fd137fe4da940e077aba294ae597994e`;
+the packaged CPU DLL is
+`8743b5ba04f7bcb416b63cda9a63329017613235a2927755c95234dff852438d`.
+`artifacts/m6-invalid-address-package.json` records source and assembly identities
+against `0041aec`. The default-version tested CPU DLL is
+`da4bbd49e4a4083ac8a6da2ef19eea3941bc2132d9e4137e5c13ceeb3c866aea`;
+the version differs from the private package with identical production source.
+Milestone 6 remains in progress; its earlier reference, advanced restoration
+and consolidation requirements remain open. No new seeded audit, physical
+timing/host-throughput qualification or package publication is claimed.
+
+Final Release CPU validation passes **4,809 tests with ten optional skips** and
+zero failures, with both qualified exception presets enabled. BKPT retains
+224 callbacks / 224 frames / 21 controls; trap/bounds retains 951,522 callbacks /
+476,339 frames / 63 controls. The separate qualified TRAP trace audit passes
+512 callbacks / 512 frames / six controls. AHX passes 18 tests. Evidence:
+`artifacts/m6-invalid-address-full/`, `artifacts/m6-invalid-address-trace/` and
+`artifacts/m6-invalid-address-ahx-results/`. Optional skips are unavailable
+coverage; the unchanged broad Basic audit remains failing.
+
+Isolated CopperScreen baseline `d9beae8` builds in Release with zero warnings or
+errors against the exact .50 dependency. Host tests pass **149** with six optional
+skips, disk **74**, separate engine diagnostics **1,080**, and three native
+Workbench/A1200 boot and disk-persistence replays pass with no skips. The package
+ZIP's CPU DLL, all four consumer DLLs and four resolved dependency assets match
+the recorded package/version. Consumer evidence is retained in
+`artifacts/invalid-address-validation/`, `artifacts/invalid-address-diagnostic-tests/`,
+`artifacts/invalid-address-production.binlog` and
+`artifacts/invalid-address-identities.json`. Native media and build artifacts
+are not committed; the root CopperScreen user's changes are preserved.
+
+The strict deterministic gate verifies **11,737,240 logical cases in 501 batches**
+and retains `roadmapComplete=false`. Fresh pinned SingleStepTests passes 312,500
+selected 68000 cases in 125 files; Musashi passes 536 programs with 88 exclusions.
+The positive copied-report gate passes, while omission of each of the four new
+020 reports and substitution of the old 9,856-case unary report are rejected.
+Controls use separate directories and preserve the original evidence. See
+`artifacts/m6-invalid-address-gate.log` and
+`artifacts/m6-invalid-address-gate-controls-v2/controls.json`. Ordinary CI requires
+the expanded matrices and exact per-profile cardinalities. The complete milestone
+6 goal remains open despite these passing scoped gates.
