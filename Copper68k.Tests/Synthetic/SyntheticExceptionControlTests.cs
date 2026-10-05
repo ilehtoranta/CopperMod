@@ -24,7 +24,9 @@ public sealed class SyntheticExceptionControlTests(ITestOutputHelper output)
             }
             m.InitializePhysical(0x6000, 0x4e71, 2); m.InitializePhysical(0x6002, 0x4e71, 2);
             var e = SyntheticExecution.Prepare(m, [0x4e73]);
-            // Fault restart and coprocessor internal-state restoration remain in retained specialist suites.
+            // These legal restoration protocols remain implementation/qualification
+            // gaps, not invalid formats. The separate 040 access-frame discovery
+            // command reports its required gaps and fails until they are qualified.
             var outside = modelId == "68040" ? format == 7 :
                 m.Model.FullIndex && modelId != "68060" && format is 9 or 10 or 11;
             if (outside && supervisor) continue;

@@ -1145,3 +1145,28 @@ all four qualified presets. The strict gate retains 14,646,552 logical cases in
 Basic audit retains 1,326 passing, 47 mismatching, eight unsupported and zero
 untested groups; all 32 controls pass. It remains failing. Source/input/assembly
 identities stay stable; the goal remains active with `roadmapComplete=false`.
+
+### Milestone 6 advanced-restoration discovery — 2026-10-05
+
+The new independent 040 access-frame audit reproduces 9,216 format-7 RTE
+mismatches, retains 14,688 prerequisite/continuation phases as untested and
+passes 6,912 short-frame control phases. Its complete 30,816-phase selection is
+explicitly failing. Six fixed saved-SR examples join ordinary CI; the four
+restoration batches remain an opt-in discovery gate until implementation and
+reference qualification are complete.
+
+A temporary normal/CT prototype reaches all downstream phases, but CM/CU/CP
+gaps still fail the command. Skip-only and wrong-traced-address probes detect
+all CT prerequisites. Production sources are restored; no CPU fix, package,
+consumer change, timing-policy change or regression retirement is included.
+The [reference record](COPPER68K_REFERENCE_QUALIFICATION.md#040-access-frame-restoration-discovery-2026-10-05)
+maintains the full scope, authorities, failure evidence and limitations. Legal
+advanced restoration on all applicable models, other reference disagreements,
+independent combination coverage and consolidation remain required. Milestone 6
+stays **in progress** with `roadmapComplete=false`.
+
+Final Release focused validation passes 22 tests with four explicit discovery
+skips. The complete requested discovery executes all four batches and six fixed
+examples, exits 1 and records exactly the required failures/gaps. All thirteen
+specific malformed-input/report controls are detected. No earlier green gate
+is relabeled as advanced-restoration coverage.

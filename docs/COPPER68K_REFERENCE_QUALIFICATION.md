@@ -277,6 +277,8 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
   gate below. Long transfers, other instruction families, foreign silicon images,
   external bus faults, 020/030 formats 9/A/B and 040 format 7 remain unqualified. The current advanced decoder does not implement all these
   legal restoration protocols; this is an implementation gap, not invalid encoding.
+  The [040 access-frame discovery gate](#040-access-frame-restoration-discovery-2026-10-05)
+  now exposes normal/trace failures and preserves CM/CU/CP prerequisites explicitly.
 - Nested 000 address errors during exception stacking previously recursed on an
   odd SSP. This is corrected by the address-error double-fault slice above. External
   BERR and reset-vector fault signaling remain unavailable through the current
@@ -2507,3 +2509,110 @@ The CPU informational version now embeds baseline `e814040`; the different
 assembly hash does not imply a CPU source change. Validated source/assembly
 identities remain stable after the strict gate. PowerShell parsing and local
 documentation link checks pass. No additional seeded audit is claimed.
+
+## 040 access-frame restoration discovery — 2026-10-05
+
+This checkpoint adds an independent, deliberately failing restoration audit;
+**no production CPU correction is committed**. The existing Basic WinUAE RTE
+successes do not establish advanced-frame continuation correctness. The ordinary
+synthetic RTE matrix skips the relevant legal formats, and its former comment
+incorrectly suggested that retained specialist tests supplied the missing proof.
+That comment now identifies the implementation/qualification gap.
+
+Authority is [MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf),
+sections 8.4.6.2/7. A normal format-7 return consumes 60 bytes. CT creates the
+trace frame at old SP+48 using the saved EA. CM replays MOVEM operands with the
+saved address where required. Pending writebacks belong to the handler.
+Simultaneous continuation bits are undefined and excluded. The trace vector
+offset 0x24 follows the normal trace-frame interpretation; it is not a silicon
+observation. Short-frame controls use sections 8.4.1/3/4.
+
+The pinned [WinUAE MMU helper](https://raw.githubusercontent.com/tonioni/WinUAE/6ae6fb6b84bb9517e0245a80fc9bdca1a8580dde/cpummu.cpp)
+was inspected, not executed as an oracle. Its CT staging and CM saved-EA state
+are distinct from the pinned non-MMU generator's skip-only format-7 path
+(`025b999239800357e95065fe5b9a15ea5b300fa7`, `gencpu/gencpu.cpp`). Neither path
+certifies all continuation protocols. The primary PDF was inspected through the
+web reader; direct NXP download was unavailable, so no local PDF hash is claimed.
+
+Run the complete discovery command:
+
+```powershell
+./scripts/test-copper68k-040-access-frames.ps1 -OutputDirectory artifacts/040-access-frame-audit
+```
+
+The command rejects reused outputs, missing identities/reports, empty or partial
+test selection, changed source/assembly inputs, foreign combinations, negative
+counts and stale group/combination cardinalities. `-ValidateReportsOnly` verifies
+existing reports against the current inputs; it does not turn historical failures
+into success. Each request executes four xUnit batches and six fixed saved-SR
+examples. Reports separate actual execution phases from dependent untested phases.
+
+Canonical fixtures cover user, ISP and MSP returns, all 32 CCRs, separate T0/T1
+and no-trace SR states, default/relocated VBR, two saved EAs and four SSW access
+states. The sparse recording bus guards the complete frame, its neighbors and
+pending writeback destinations, including absence of their operand transfers.
+Normal return executes a following self-BRA; CT additionally returns through the
+new trace frame before the following BRA. This checks restored trace retirement,
+exact PC/SR/stack banks, registers, memory, saved exception diagnostics and entry
+count. Expectations use independent constants and never production EA helpers.
+
+| Group | Passing phases | Mismatching phases | Unsupported | Untested phases |
+| --- | ---: | ---: | ---: | ---: |
+| Existing formats 0/2/3 controls | 6,912 | 0 | 0 | 0 |
+| Format-7 normal return | 0 | 4,608 | 0 | 4,608 |
+| Format-7 pending trace | 0 | 4,608 | 0 | 9,216 |
+| CM/CU/CP prerequisite inventory | 0 | 0 | 0 | 864 |
+| Total | 6,912 | 9,216 | 0 | 14,688 |
+
+These are **30,816 logical phases**, not 30,816 executed instructions: 864 are
+explicit inventory gaps and 13,824 depend on failed RTE prerequisites. The
+continuation inventory names seven CM addressing categories plus CU and CP for
+each bank/CCR; it is not a completed size/opcode/full-index/alias matrix. Those
+more detailed combinations still require fixtures and qualification.
+
+Failed-before evidence is `artifacts/m6-rte-access-before/before.trx` and the
+fresh command output recorded below. All attempted format-7 returns enter the
+incorrect format-error path; their dependent phases are not retried. The current
+CPU source tree remains `12753a6d2bb677f36cae03f3193f370828f50a66` at baseline
+`7845c5ee06db83885c3f69cd1f0951c9e4e77090`.
+
+Temporary, uncommitted probes qualify the downstream audit phases. A normal/CT
+prototype passes all 29,952 executable phases while the complete gate still
+fails on 864 continuation gaps. A skip-only prototype and a wrong traced-address
+prototype each preserve the 6,912 short-frame controls and 9,216 normal phases
+but fail all 4,608 pending-trace prerequisites. The latter distinguishes saved
+EA from the RTE opcode address. These probes establish detection and fixture
+reachability, not a shipped fix or independent hardware qualification. Source
+is restored byte-for-byte and rebuilt after probing. No instruction fallback,
+retry, changed timing policy or package publication is introduced.
+
+The next implementation must qualify MOVEM saved-EA/replay and pending CU/CP
+protocols, alongside normal/CT return. Detailed frame-validation faults, odd
+return PCs, throwaway-to-access frames, real access-fault entry and other-model
+advanced restoration remain open. FPU arithmetic, enabled MMU and physical
+pipeline/cache/timing remain outside the roadmap. No specialized regression is
+retired. Milestone 6 and the full goal remain **in progress**;
+`roadmapComplete=false` remains unchanged.
+
+Final unchanged-CPU evidence is `artifacts/m6-rte-access-restored/`: the command
+exits 1 with the exact table above and writes a failing `audit-summary.json`.
+`identities.json` records the actual tracked CPU-file hashes (separate from the
+committed tree), fixture/command hashes and loaded build assemblies. The restored
+RTE source SHA-256 is
+`31ca43359abf7aff20a54e8507e5876a7c980fc73732556e2c320d70c7f3407f`.
+Probe evidence is `artifacts/m6-rte-access-probes-final/controls.json`; all three
+probe runs leave the complete gate failing. Earlier command-development failures
+and the initial compile typo remain historical failures, not successful audits.
+
+All thirteen specific report/input corruption controls fail for their intended
+reason (`artifacts/m6-rte-access-preflight-controls/controls.json`): missing report,
+missing identity, empty selection, stale cardinality, negative status, foreign
+model/combination, duplicate fixture input, changed/empty CPU source identity,
+changed fixture/command identity, changed assembly identity and missing status.
+The restored Release focused selection passes 22 tests with four discovery skips
+and zero failures (`artifacts/m6-rte-access-focused/focused.trx`). Those skips are
+unavailable ordinary-CI restoration coverage; the explicit discovery command
+executes them and fails as recorded above. Production CPU sources remain
+unchanged, so no new NuGet consumer validation or release is claimed or required
+for this audit-only checkpoint. Earlier full-suite, strict deterministic and
+external-reference records are retained unchanged; they do not certify format 7.

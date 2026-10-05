@@ -223,3 +223,14 @@ The additional pinned Windows WinUAE model audit and preparation command are
 documented in [WinUAE conformance](../M68kWinUaeCpuTesterConformanceTests.md#pinned-integer-audit-across-cpu-models-milestone-6-checkpoint).
 It is an opt-in discovery gate that currently reports unresolved mismatches;
 it does not replace the deterministic synthetic gate or complete milestone 6.
+
+The independent 040 access-frame discovery command is
+`./scripts/test-copper68k-040-access-frames.ps1 -OutputDirectory artifacts/040-access-frame-audit`.
+It currently **fails**: required format-7 normal/trace restoration disagrees,
+and CM/CU/CP continuation fixtures remain explicitly untested. Short-frame
+controls qualify the fixture; failed prerequisites leave later phases untested.
+The command checks exact selections, combinations, counts and source/assembly
+identities. Existing outputs must be validated with `-ValidateReportsOnly` or a
+fresh output directory used. It cannot pass merely by fixing normal/trace return.
+See the [reference record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-access-frame-restoration-discovery-2026-10-05)
+for failed-before evidence, temporary probe controls and the remaining scope.
