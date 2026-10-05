@@ -290,3 +290,24 @@ LowPowerStop -InputDirectory <qualified-inputs> -OutputDirectory <fresh-output>`
 The [reference record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#lpstop-independent-exception-qualification-and-consolidation-2026-10-05)
 records the source correction, corpus limitations and retirement proof. The
 original Basic disagreement remains retained; this is a separate qualified preset.
+
+Legal MOVES B/W/L reference inputs have a separate `Moves` preset. It clears the
+eleven reserved extension bits and excludes same-An postincrement/predecrement
+stores before reference execution, as M68000PM 6-24/25/26 requires. Original
+Basic inputs and undefined-store disagreements remain preserved. All three
+families on 010/EC020/A1200/020/030/040/060 pass 110,492 callbacks, with 86,072
+validated privilege frames and 59,920 recorded architectural forms. The report
+identifies operand mode/register, general register, direction, incoming S/CCR,
+brief indexing and full-format suppression/displacement/indirection structure.
+It is a seeded flat-address-space sample, not physical function-code, bus,
+cache, trace/fault-restart or exhaustive indexed-value qualification.
+Prepare with `./scripts/prepare-copper68k-winuae.ps1 -Preset Moves` and the pinned
+source/compiler arguments; run
+`./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset Moves
+-InputDirectory <qualified-inputs> -OutputDirectory <fresh-output>`.
+Missing/incompatible fixtures or empty selections fail. Fixed encoding examples
+and register/SR/frame corruption controls run alongside actual CPU comparisons.
+The 68000 unavailable outcome remains in synthetic coverage. The existing
+MOVES privilege-before-extension bus-ordering regression is retained.
+The [MOVES qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#moves-legal-input-reference-qualification-2026-10-05)
+documents identities, complete selections, failed discovery and limitations.

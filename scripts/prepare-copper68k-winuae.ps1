@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $GeneratorSource,
     [Parameter(Mandatory)] [string] $RunnerSource,
     [Parameter(Mandatory)] [string] $VcVars64,
-    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop')] [string] $Preset = 'Basic',
+    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Moves')] [string] $Preset = 'Basic',
     [string] $OutputDirectory = 'artifacts/winuae-model-inputs'
 )
 $ErrorActionPreference = 'Stop'
@@ -86,19 +86,21 @@ try {
             [IO.File]::WriteAllText($testerSource, (Patch-Once ([IO.File]::ReadAllText((Join-Path $generator 'cputest.cpp'))) $before $after))
             [IO.File]::WriteAllText((Join-Path $output 'trace-priority.patch'), ([IO.File]::ReadAllText($patchPath)).Replace("`r`n", "`n"))
         }
-        if ($Preset -eq 'LongArithmetic') {
+        if ($Preset -in @('LongArithmetic','Moves')) {
             # M68000PM 4-94/98/136/140: reserved extension fields are zero;
-            # Dh == Dl with a 64-bit multiply has undefined results. Select
+            # Dh == Dl with a 64-bit multiply has undefined results. MOVES
+            # 6-24/25/26 similarly fixes reserved fields and excludes undefined
+            # same-An postincrement/predecrement store values. Select
             # legal inputs before reference execution, never in the CPU bridge.
-            $patchName = 'long-arithmetic-encodings.patch'
+            $patchName = $(if ($Preset -eq 'Moves') { 'moves-encodings.patch' } else { 'long-arithmetic-encodings.patch' })
             $patch = [IO.File]::ReadAllText((Join-Path $PSScriptRoot ('winuae/' + $patchName))).Replace("`r`n", "`n")
             $source = [IO.File]::ReadAllText((Join-Path $generator 'cputest.cpp')).Replace("`r`n", "`n")
             $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
-            if ($hunks.Count -ne 1) { throw 'Incorrect LongArithmetic patch hunk count' }
+            if ($hunks.Count -ne 1) { throw "Incorrect $Preset input patch hunk count" }
             $lines = $hunks[0].TrimEnd("`n").Split("`n")
             $before = (($lines | Where-Object { $_.StartsWith('-') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
             $after = (($lines | Where-Object { $_.StartsWith('+') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
-            $testerSource = Join-Path $output 'cputest-long-arithmetic.cpp'
+            $testerSource = Join-Path $output $(if ($Preset -eq 'Moves') { 'cputest-moves.cpp' } else { 'cputest-long-arithmetic.cpp' })
             [IO.File]::WriteAllText($testerSource, (Patch-Once $source $before $after))
             [IO.File]::WriteAllText((Join-Path $output $patchName), $patch)
         }
@@ -166,6 +168,9 @@ void M68KTester_destroy(M68KTesterContext* context) {
         # alone does not request the generator's automatic supervisor round.
         $baseIni = $baseIni.Replace('[test=Basic]', '[test=LowPowerStop]').Replace('mode=all', 'mode=LPSTOP').Replace('feature_sr_mask=0x0000', 'feature_sr_mask=0x2000')
     }
+    if ($Preset -eq 'Moves') {
+        $baseIni = $baseIni.Replace('[test=Basic]', '[test=Moves]').Replace('mode=all', 'mode=MOVES.B,MOVES.W,MOVES.L').Replace('feature_sr_mask=0x0000', 'feature_sr_mask=0x2000')
+    }
     foreach ($model in @(
         @{id='68000'; cpu='68000'; width=24}, @{id='68010'; cpu='68010'; width=24},
         @{id='68EC020'; cpu='68020'; width=24}, @{id='68020'; cpu='68020'; width=32},
@@ -176,6 +181,7 @@ void M68KTester_destroy(M68KTesterContext* context) {
         if ($Preset -eq 'Breakpoints' -and $model.id -eq '68000') { continue }
         if ($Preset -eq 'LongArithmetic' -and $model.id -in @('68000','68010')) { continue }
         if ($Preset -eq 'LowPowerStop' -and $model.id -ne '68060') { continue }
+        if ($Preset -eq 'Moves' -and $model.id -eq '68000') { continue }
         $profileRoot = Join-Path $output $model.id
         New-Item -ItemType Directory -Path $profileRoot | Out-Null
         # Every invocation uses a fresh generator output path; stale data cannot fill a gap.
@@ -220,6 +226,8 @@ void M68KTester_destroy(M68KTesterContext* context) {
         WordDivisionPatchSha256=$(if ($Preset -eq 'WordDivision') {(Get-FileHash -LiteralPath (Join-Path $output 'word-division-carry.patch')).Hash.ToLowerInvariant()} else {$null})
         LowPowerStopSourceSha256=$(if ($Preset -eq 'LowPowerStop') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-lpstop.cpp')).Hash.ToLowerInvariant()} else {$null})
         LowPowerStopPatchSha256=$(if ($Preset -eq 'LowPowerStop') {(Get-FileHash -LiteralPath (Join-Path $output 'lpstop-fetch-pc.patch')).Hash.ToLowerInvariant()} else {$null})
+        MovesSourceSha256=$(if ($Preset -eq 'Moves') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-moves.cpp')).Hash.ToLowerInvariant()} else {$null})
+        MovesPatchSha256=$(if ($Preset -eq 'Moves') {(Get-FileHash -LiteralPath (Join-Path $output 'moves-encodings.patch')).Hash.ToLowerInvariant()} else {$null})
         NativeLibrarySha256=(Get-FileHash -LiteralPath (Join-Path $output 'm68k_cpu_tester.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
         Compiler=$compiler; GeneratorExecutableSha256=(Get-FileHash -LiteralPath (Join-Path $generator 'cputester.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
         NativeSourceSha256=(Get-FileHash -LiteralPath (Join-Path $output 'winuae-native.c') -Algorithm SHA256).Hash.ToLowerInvariant()

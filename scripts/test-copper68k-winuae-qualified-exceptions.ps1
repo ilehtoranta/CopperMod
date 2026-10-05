@@ -1,7 +1,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('TrapBounds','Breakpoints','WordDivision','LowPowerStop')] [string] $Preset = 'TrapBounds',
+    [ValidateSet('TrapBounds','Breakpoints','WordDivision','LowPowerStop','Moves')] [string] $Preset = 'TrapBounds',
     [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $InputDirectory,
     [string] $NativeLibrary,
     [string] $OutputDirectory = 'artifacts/winuae-trap-bounds-audit'
@@ -14,9 +14,9 @@ $library = (Resolve-Path -LiteralPath $NativeLibrary).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
 if (Test-Path -LiteralPath $output) { throw "Use a fresh output directory: $output" }
 New-Item -ItemType Directory -Path $output | Out-Null
-$key = switch ($Preset) {'TrapBounds' {'TRAP_BOUNDS'} 'Breakpoints' {'BREAKPOINT'} 'WordDivision' {'WORD_DIVISION'} 'LowPowerStop' {'LPSTOP'}}
-$testName = switch ($Preset) {'TrapBounds' {'WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled'} 'Breakpoints' {'WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled'} 'WordDivision' {'WinUaeWordDivisionAcrossSelectedModelsWhenEnabled'} 'LowPowerStop' {'WinUaeLowPowerStopExceptionsWhenEnabled'}}
-$reportName = switch ($Preset) {'TrapBounds' {'winuae-trap-bounds-audit.json'} 'Breakpoints' {'winuae-breakpoint-audit.json'} 'WordDivision' {'winuae-word-division-audit.json'} 'LowPowerStop' {'winuae-lpstop-audit.json'}}
+$key = switch ($Preset) {'TrapBounds' {'TRAP_BOUNDS'} 'Breakpoints' {'BREAKPOINT'} 'WordDivision' {'WORD_DIVISION'} 'LowPowerStop' {'LPSTOP'} 'Moves' {'MOVES'}}
+$testName = switch ($Preset) {'TrapBounds' {'WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled'} 'Breakpoints' {'WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled'} 'WordDivision' {'WinUaeWordDivisionAcrossSelectedModelsWhenEnabled'} 'LowPowerStop' {'WinUaeLowPowerStopExceptionsWhenEnabled'} 'Moves' {'WinUaeMovesAcrossSelectedModelsWhenEnabled'}}
+$reportName = switch ($Preset) {'TrapBounds' {'winuae-trap-bounds-audit.json'} 'Breakpoints' {'winuae-breakpoint-audit.json'} 'WordDivision' {'winuae-word-division-audit.json'} 'LowPowerStop' {'winuae-lpstop-audit.json'} 'Moves' {'winuae-moves-audit.json'}}
 $filter = "FullyQualifiedName~$testName"
 $expectedTests = 1
 if ($Preset -eq 'WordDivision') {
@@ -26,6 +26,10 @@ if ($Preset -eq 'WordDivision') {
 if ($Preset -eq 'LowPowerStop') {
     $filter += '|FullyQualifiedName~M68kWinUaeLowPowerStopEncodingTests'
     $expectedTests = 11
+}
+if ($Preset -eq 'Moves') {
+    $filter += '|FullyQualifiedName~M68kWinUaeMovesEncodingTests'
+    $expectedTests = 17
 }
 $settings = @{
     ('COPPER68K_RUN_WINUAE_' + $key + '_AUDIT') = '1'

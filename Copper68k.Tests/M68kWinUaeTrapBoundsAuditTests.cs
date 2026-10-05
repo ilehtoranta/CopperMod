@@ -79,7 +79,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
                     preset.ArithmeticFlagControls, carryDetected, carry.ExecutedCases, ignoredAccepted, ignored.ExecutedCases));
                 var result = tester.Run(path, family, fixture.CpuLevel, false, false, model,
                     fixtureClassifier: preset.ClassifyForm is null ? null : (opcode, inputSr) => preset.ClassifyForm(opcode, inputSr, family),
-                    fixtureWordsClassifier: preset.ClassifyWords);
+                    fixtureWordsClassifier: preset.ClassifyWords is null ? null : (opcode, extension, followingWord, inputSr) => preset.ClassifyWords(model, opcode, extension, followingWord, inputSr, family));
                 var expected = preset.Counts(model, family);
                 var forms = new SortedDictionary<string, int>(tester.FixtureForms.ToDictionary(x => x.Key, x => x.Value), StringComparer.Ordinal);
                 var expectedForms = preset.FormCounts?.Invoke(model, family) ?? 0;
@@ -134,7 +134,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
         Func<ModelSpec, string[]> Families, Func<ModelSpec, string, (int Cases, uint Frames)> Counts, string Qualification,
         bool ArithmeticFlagControls = false, Func<ModelSpec, string, uint>? MaskedCounts = null,
         Func<ushort, ushort, string, string>? ClassifyForm = null, Func<ModelSpec, string, int>? FormCounts = null,
-        Func<ushort, ushort, ushort, ushort, string>? ClassifyWords = null,
+        Func<ModelSpec, ushort, ushort, ushort, ushort, string, string>? ClassifyWords = null,
         Func<ModelSpec, string, IReadOnlyDictionary<string, int>>? ExpectedForms = null);
     private sealed record WinUaeQualifiedExceptionRow(string Model, string Family, string Status, int ExecutedCases,
         uint ExceptionFrames, uint MaskedSrCases, bool Controls, SortedDictionary<string, int> Forms, string Detail);

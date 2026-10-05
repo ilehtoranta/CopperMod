@@ -122,7 +122,20 @@ identities, replacement proofs and remaining required coverage here as work
 progresses. No milestone is complete merely because an inventory exists or a
 partial matrix passes.
 
-Latest milestone-6 checkpoint, 2026-10-05: independent LPSTOP exception
+Latest milestone-6 reference checkpoint, 2026-10-05: legal sampled MOVES B/W/L
+passes 110,492 independent callbacks, 86,072 privilege frames and 59,920
+recorded architectural combinations across seven profiles. The retained Basic
+010 MOVES.L failure uses an undefined same-An store and noncanonical extension;
+no CPU change is required. A copied generator selects legal inputs before
+execution; exact identities/selections/counts and corruption controls are required.
+The full CPU suite passes 4,995 tests, with eleven optional skips and all six
+qualified WinUAE presets enabled. See the
+[MOVES qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#moves-legal-input-reference-qualification-2026-10-05).
+The strict gate remains passing at 16,035,670 logical cases in 595 reporting
+batches, with fresh pinned SingleStepTests and Musashi audits and the complete
+required-gap inventory retained.
+
+Preceding milestone-6 checkpoint, 2026-10-05: independent LPSTOP exception
 qualification passes 245,760 pinned WinUAE callbacks/frames in fourteen
 architectural combinations. The new synthetic matrix includes all former SR
 values and passes 267,262 cases; shared mutation proof permits removal of the

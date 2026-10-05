@@ -10,7 +10,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
         "69ceec2d63bf35e27990142ca2e9e72f9c36dd2f4fba5113d17552c1ccbc35ca", "64cb8ff58d5a3a4fb4f217e3327fb1748d73f85521e3c9be98af7fd08f3a47bf",
         "winuae-lpstop-audit.json", ["68060"], ["68060"], _ => ["LPSTOP"], (_, _) => (245760, 245760),
         "MC68060UM D-19/20 and 8.2.4/5: fixed F800/01C0 encoding, malformed second-word Line-F priority, original SR and opcode-PC privilege frames. A copied generator uses the existing nonadvancing instruction-fetch helper for LPSTOP fixed offsets; get_wordi_test advances PC as a side effect, corrupting the second fetch address and saved PC. Basic and CPU results are unchanged. One seeded round, incoming CCR 0/31 and user/supervisor, no incoming trace. The generator skips stopped outcomes: this preset qualifies exceptions only; stopped state, full CCR, trace and complete malformed-word enumeration remain synthetic coverage. No physical broadcast/pin/timing qualification.",
-        FormCounts: (_, _) => 14, ClassifyWords: QualifyLowPowerStopEncoding,
+        FormCounts: (_, _) => 14, ClassifyWords: (_, opcode, extension, immediate, sr, _) => QualifyLowPowerStopEncoding(opcode, extension, immediate, sr),
         ExpectedForms: (_, _) => LowPowerStopFormDistribution()));
 
     internal static IReadOnlyDictionary<string, int> LowPowerStopFormDistribution()

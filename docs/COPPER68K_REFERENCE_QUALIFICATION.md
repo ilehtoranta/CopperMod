@@ -3232,3 +3232,107 @@ it does not make Basic passing or close ordinary STOP's S-clear disagreement.
 Advanced restoration/fault, chained SR provenance, broader reference and
 consolidation gaps remain required. Milestone 6 and the active goal remain
 **in progress**, with `roadmapComplete=false`.
+
+## MOVES legal-input reference qualification, 2026-10-05
+
+The retained Basic 68010 `MOVES.L` failure at callback 783 has opcode `0E9D`,
+extension `DA5E`, SR `2000`: it stores A5 through `(A5)+`. The native reference
+expects the original value and Copper68k stores the incremented value.
+[M68000PM](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf) 6-26 marks
+same-An postincrement/predecrement stored values undefined; 6-24/25 fixes the
+extension's lower eleven fields at zero. This input violates both qualifications.
+The synthetic MOVES matrix already excludes undefined stores and uses canonical
+extension words. No production change is warranted by this disagreement.
+
+The separate `Moves` preset qualifies legal sampled inputs for 010, EC020,
+020, 030, 040 and 060, with A1200 executing the EC020 fixture through its own
+public factory. The generator does not supply MOVES on 000; its documented
+unavailable outcome remains synthetic coverage. A copied `cputest.cpp` masks
+reserved fields and rejects undefined same-An store candidates before reference
+execution. Random consumption remains intact. The generator's direction check
+now reads the fixed instruction extension at `opcode_memory_start+2`, rather
+than the final EA extension at `pc-2`. Neither CPU results nor comparator masks
+are normalized. Original Basic inputs, sources and mismatching rows remain.
+
+Pins remain generator `025b999239800357e95065fe5b9a15ea5b300fa7` and runner
+`7a83745d6c6159bc74ab0471578ffc8bc244e66e`. Normalized copied source SHA-256 is
+`8a7f2930a6f28a48170834481fcb449eee07a92dd7d6df96f8b6675d082692a7`;
+`moves-encodings.patch` is
+`e79367079bbbbe4fda3b326cf7c6a5cf15e08f021cc3137b1fc3b3aeee756368`.
+The fresh `artifacts/m6-moves-qualified-inputs-v2/manifest.json` SHA-256 is
+`8b4d4c819af6d7b011384253cb20b06e9be42502a7981bc7e4e8939ed8f61125`;
+each of its six profiles has three families and twelve pinned input files.
+Generator executable SHA-256 is
+`987f3d22f6529541ccbbe9508a32a03bd2f161d6af2b83a8c0799ac15a99d0fc`;
+native bridge SHA-256 is
+`efec6cced943fcbea7312e380b102d2c483d0eb56ac2eb1aceee47481aabb5a0`.
+
+The input classifier checks immutable words before stack copying or CPU
+execution. It rejects wrong family/size, non-memory-alterable EAs, reserved
+extension bits, undefined stores, foreign S/CCR profiles and reserved full-
+format structural fields. Ordinary 010 indexing is labeled unscaled brief,
+including ignored format bits. Advanced full-index forms report base/index
+suppression, base displacement length and pre/post/no memory indirection.
+This records actual sampled combinations rather than inferring them from a test
+count. Exact callback/frame/form counts and complete model/family selections
+are required:
+
+| Profile(s), each | Family | Callbacks | Privilege frames | Recorded forms |
+| --- | --- | ---: | ---: | ---: |
+| 010 | B | 5,410 | 3,844 | 2,760 |
+| 010 | W | 4,748 | 3,770 | 2,460 |
+| 010 | L | 4,810 | 3,778 | 2,468 |
+| EC020 / A1200 | B | 5,368 | 3,936 | 3,032 |
+| EC020 / A1200 | W | 5,346 | 3,980 | 3,022 |
+| EC020 / A1200 | L | 5,476 | 3,892 | 3,030 |
+| 020 / 030 / 040 / 060 | B | 5,238 | 4,268 | 2,846 |
+| 020 / 030 / 040 / 060 | W | 5,214 | 4,300 | 2,752 |
+| 020 / 030 / 040 / 060 | L | 5,334 | 4,198 | 2,918 |
+| All seven profiles | B/W/L | 110,492 | 86,072 | 59,920 |
+
+All 21 directories pass, with zero mismatching, unsupported or untested selected
+directories and no masked SR cases. Each directory's independent register,
+defined-SR and frame-byte corruptions fail, for 63 comparator controls. The
+command also requires sixteen fixed encoding/profile tests to pass. Evidence
+is `artifacts/m6-moves-reference-qualified/`:
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 -GeneratorSource <pinned-generator> -RunnerSource <pinned-runner> -VcVars64 <vcvars64.bat> -Preset Moves -OutputDirectory <fresh-inputs>
+./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset Moves -InputDirectory <fresh-inputs> -OutputDirectory <fresh-output>
+```
+
+The initial patch affected only the generator's exact-target EA path. The
+callback classifier rejected its still-reserved random inputs before execution:
+all 21 selected directories are explicitly untested, with zero callbacks. This
+failed discovery is retained in `artifacts/m6-moves-reference-discovery/`; it
+is not counted as CPU failure or passing coverage. The corrected selection's
+first count-discovery report intentionally fails while exact count expectations
+are established; subsequent qualified evidence uses the fixed expectations.
+Seven isolated input/source controls reject empty profile/family/input
+selections, missing/changed data, changed generator and changed patch. Their
+specific failures and identities are recorded in
+`artifacts/m6-moves-reference-controls/controls.json`.
+
+Qualification is limited to the one-round flat-address-space corpus, incoming
+CCR 0/31 and user/supervisor mode. It does not establish physical SFC/DFC spaces,
+cache coherency, bus ordering, trace/fault restart, timing or exhaustive
+indexed-value combinations. The existing 040 privilege-before-extension bus
+regression is retained; no regression is retired here. Required broader
+restoration and reference gaps remain, and milestone 6 stays in progress.
+
+The full Release CPU suite in `artifacts/m6-moves-full/` passes 4,995 tests,
+eleven optional skips and zero failures, with all six qualified WinUAE presets
+enabled. Every preset reports zero mismatching, unsupported or untested selected
+directories with the same CPU/adapter identities. CPU assembly SHA-256 is
+`bf8abb3a4603d55e19ad38ef64293569b2f6cea8a9ec251ccfe08e70f42f6a35`;
+adapter SHA-256 is
+`5d7d21a851072f49812bdc27164024e2b50ac060a1add15d96424b4751a80bf3`.
+The strict gate in `artifacts/m6-moves-gate.log` validates 16,035,670 passing
+logical cases in 595 reporting batches, with `roadmapComplete=false`. Fresh
+SingleStepTests passes 312,500 cases in 125 files; Musashi passes 536 programs,
+with 88 explicit exclusions. Their new evidence retains the pinned inputs and
+does not broaden the documented software-reference qualification.
+Production CPU source remains unchanged from `cb9679d`; prior unpublished `.57`
+consumer evidence retains its original package/assembly identities, without a
+new consumer replay or package publication claim. Unrelated CopperScreen working
+changes and its NuGet boundary remain preserved.

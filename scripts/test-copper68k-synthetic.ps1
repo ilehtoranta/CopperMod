@@ -243,7 +243,7 @@ try {
         Set-AuditEnvironment 'COPPER68K_WINUAE_CPUTEST_AUDIT' '1'
         Set-AuditEnvironment 'COPPER68K_WINUAE_CPUTEST_AUDIT_OUTPUT' (Join-Path $output 'winuae-audit.tsv')
         Invoke-Tests 'FullyQualifiedName~WinUaeM68000CpuTesterPassesInterpreterWhenEnabled' 'winuae-68000'
-        $references += 'WinUAE: available adapter is 68000 integer; generator supports other models, adapters/fixtures still need qualification'
+        $references += 'WinUAE: this command option audits the legacy 68000 integer adapter; separately pinned multi-model qualified presets use test-copper68k-winuae-qualified-exceptions.ps1 and test-copper68k-winuae-long-arithmetic.ps1'
     }
     $inventory = Get-Content -LiteralPath (Join-Path $output 'integer-inventory.json') -Raw | ConvertFrom-Json
     foreach ($row in $inventory.combinations) {
