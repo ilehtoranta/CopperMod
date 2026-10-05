@@ -15,7 +15,9 @@ public sealed class SyntheticSystemTests(ITestOutputHelper output)
         foreach (var supervisor in new[] { false, true })
         {
             for (var trap = 0; trap < 16; trap++) Basic(machine, report, "TRAP", (ushort)(0x4e40 | trap), ccr, supervisor);
-            foreach (var (family, opcode) in new[] { ("NOP", 0x4e71), ("RESET", 0x4e70), ("ILLEGAL", 0x4afc), ("LineA", 0xa123), ("LineF", 0xf123), ("TRAPV", 0x4e76) })
+            // Type 110 is an unassigned F-line word on every selected model.
+            // F123 is instead a legal privileged cpSAVE on EC020/020.
+            foreach (var (family, opcode) in new[] { ("NOP", 0x4e71), ("RESET", 0x4e70), ("ILLEGAL", 0x4afc), ("LineA", 0xa123), ("LineF", 0xf1c0), ("TRAPV", 0x4e76) })
                 Basic(machine, report, family, (ushort)opcode, ccr, supervisor);
             foreach (var sr in new ushort[] { 0, 0x0700, 0x2000, 0x2700, 0x271f }) Basic(machine, report, "STOP", 0x4e72, ccr, supervisor, sr);
         }

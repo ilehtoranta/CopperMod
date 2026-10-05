@@ -2034,3 +2034,135 @@ on EC020/A1200/020/030, first stopping at extension words `0031`, `0084` or
 entire multiply/divide families are not excluded. Earlier restoration and
 reference requirements remain open, so this checkpoint does not complete the
 milestone 6 goal.
+
+### Line-F state and operand qualification (2026-10-05)
+
+The unchanged Basic ILLEGAL diagnostics exposed incorrect privilege ordering on
+EC020/020/030, invalid FSAVE/FRESTORE operands on 040/060, and unassigned FPU
+operand fields on 060. The corrections use architectural exceptions before
+operand effects, retaining the existing exception timing policy, host gateway
+`FF00` and public API. No instruction is retried after partial effects.
+
+Authority is [MC68020UM 7.2.3.3/4 and 7.5.2.2/3](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf)
+and [MC68030UM 10.1, 10.2.3.3/4 and 10.5.2.2/3](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf):
+legal cpSAVE/cpRESTORE instructions check supervisor privilege before contacting
+an absent coprocessor. Invalid first-word operands instead take vector 11.
+The 030's CpID 0 denotes its internal MMU, so these words do not acquire the
+external-coprocessor privilege rule. Existing supervisor absent-coprocessor
+fallback behavior is retained; these tests do not qualify physical CIR/bus-fault
+sequencing or implement an external coprocessor responder.
+
+[M68000PM 6-13/16](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+and [MC68060UM D-15/18 and 8.2.4](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+define the state-transfer EAs and distinguish unrecognized first words from
+unimplemented floating-point operations. Invalid 040/060 FSAVE/FRESTORE words
+now take format-zero line-F before a privilege check. FPU command/conditional
+mode-7 register fields 5..7 are unassigned and take line-F before command or
+operand execution. Legal FDBcc/FTRAPcc neighbors retain their separate paths;
+060 floating-point arithmetic and legal unimplemented FPU operations remain
+outside this integer profile's qualification.
+
+The shared state-frame legality predicate admits legal PC-relative FRESTORE
+sources. The 040 now executes those sources with the extension-word PC base.
+Their independent fixtures also detected reversed preindexed/postindexed pointer
+ordering in the existing 040 FPU EA helper, corrected according to M68000PM
+table 2-2. This correction applies to that shared helper; legal timing-bearing
+FPU, integer, JIT and consumer regressions remain required.
+
+| Required batch | Cases per profile | Scope |
+| --- | ---: | --- |
+| `system-linef-state-encodings` | 65,536 (000/010); 47,616 (EC020/A1200/020); 49,856 (030); 60,224 (040); 61,248 (060) | Save/restore first words, all CpID/EA encodings, both privilege states and all CCR values for required exceptions |
+| `system-linef-unassigned-fpu-ea` | 1,536 | Six unassigned command/conditional words, four following extension patterns, both stacks and all CCR values |
+| `system-linef-pc-restore` | 6,464 (040 only) | Displacement, brief index and all 66 legal full-format structures; NULL/IDLE/invalid frames and all CCR values |
+
+The addition is **464,000 logical cases in 17 batches**. Legal supervisor
+coprocessor/FPU state protocols are explicitly outside the first-word exception
+batch, not counted as passing exceptions. 040/060 PFLUSH and 040 PTEST overlap
+these bit patterns but are integer MMU instructions; their existing separate
+matrices own them. The first fixture version failed to distinguish those
+overlaps; `artifacts/m6-linef-before/` is retained as fixture debugging, not CPU
+failed-before evidence. The qualified baseline is
+`artifacts/m6-linef-qualified-before/`: each EC020/A1200/020 has 17,920 privilege
+mismatches, 030 has 15,680, 040 has 1,856 invalid-state priority mismatches, and
+060 has 3,712 invalid-state mismatches. The original three unassigned FPU command
+words have 384 unsupported 040 cases and 768 060 emulator-error mismatches.
+
+After command corrections, the additional conditional words are proved failing
+in `artifacts/m6-linef-conditional-before/`: 040 has 576 unsupported cases and
+060 has 768 emulator-error mismatches. Corrected PC fixtures preserve instruction
+bytes when a null displacement and suppressed index makes the instruction's own
+extension a header or pointer. Such direct self-reference can only test an
+invalid frame, not simultaneously encode a NULL/IDLE header. The original PC
+fixture debugging run is retained separately; qualified index-order failed-before
+evidence has 3,456 mismatches in `artifacts/m6-linef-qualified-index-before/`.
+Removing only the new PC address paths produces 6,464 unsupported cases in
+`artifacts/m6-linef-pc-mutation/`; source is restored before final validation.
+
+The earlier generic line-F fixture `F123` was a legal privileged cpSAVE word on
+EC020/020. Its common unassigned-word example is corrected to `F1C0`; the new
+matrix retains the actual `F123` exception outcomes. This is an expectation
+correction, not regression retirement. Existing specialized FPU state/timing,
+bus/prefetch/cache, JIT and native tests remain retained. No additional old test
+is retired in this follow-up.
+
+The unchanged final Basic audit now passes ILLEGAL on EC020, A1200 and 020
+(35,828 callbacks each), and 030 (34,780). The 000/010 groups retain 34,880 each.
+040 advances to `F400` at callback 29,331; 060 advances past `F27D` to `F380`
+at 29,074. Overall it still fails: **1,326 passing / 47 mismatching / eight
+unsupported / zero untested groups**, over **11,473,937 callbacks and 1,663,635
+frames**. All 32 controls pass; masked-SR count 199,327, one terminal callback,
+original manifest and native bridge remain unchanged. No exclusion, mask change
+or fixture alteration makes the failing audit green. Evidence:
+`artifacts/m6-linef-final-broad/`.
+
+`F400` needs further per-case qualification: WinUAE expects vector 11 whereas
+M68000PM 6-3/6-9 explicitly assigns scope 00 an illegal-instruction trap. The
+current CPU raises vector 4; the native diagnostic reports a subsequent trap as
+"no exception", so the adapter boundary also needs inspection. No CPU change
+is made merely to match this software disagreement. `F380` is a further
+unassigned 060 F-line category still caught by its broad unsupported floating
+execution path. The eight DIVL/MULL unsupported groups and all earlier advanced
+restoration/reference/consolidation requirements remain open. Milestone 6 stays
+in progress; these passing scopes do not establish roadmap completion.
+
+Final Release CPU validation passes **4,874 tests with ten optional skips** and
+zero failures in `artifacts/m6-linef-full/`. Both qualified exception presets
+execute: BKPT 224 callbacks / 224 frames / 21 controls, trap/bounds 951,522
+callbacks / 476,339 frames / 63 controls. The strict gate checks **14,581,016
+logical cases in 566 batches**, retains `roadmapComplete=false`, and freshly
+passes pinned SingleStepTests (312,500 cases / 125 files) and Musashi (536
+programs / 88 exclusions). Evidence: `artifacts/m6-linef-gate.log` and the full
+report directory. Additional seeded audits are not claimed. The separate
+qualified TRAP trace run passes 512 callbacks / 512 frames / six controls in
+`artifacts/m6-linef-qualified-trace/`; an initial invocation omitted the native
+library environment variable, failed preflight and is retained separately.
+AHX passes 18 tests in `artifacts/m6-linef-ahx-results/`.
+
+Private **unpublished** package `1.5.2-synthetic-dev.52` has SHA-256
+`16eab48210a68daf11e118d5fa55aa52cf93296dd455d0686a31f2cdc33352a6`;
+the packaged CPU assembly is
+`5453e81863793e8155a8c1505aa867f10f3c7e872fb34172cbe80988a5d667b8`.
+`artifacts/m6-linef-package.json` records source/assembly identities against
+`281b91b`; the default-version CPU used by the reference adapters is
+`a3f298936ca3ea57eefbb63b2c491105ee210c66138f96c7b66631b48fd10e79`.
+Packing uses separate artifact outputs, so it cannot replace the assembly used
+by the full CPU run. Final source and default CPU hashes remain identical after
+the reference gate.
+
+The positive copied-report gate passes. Omitting each of the three new report
+types, retaining the old 768-case unassigned-FPU count, or retaining the
+unqualified 6,528-case PC fixture count is rejected. Original evidence remains
+intact in its source directory; controls use separate copies. Evidence:
+`artifacts/m6-linef-gate-controls/controls.json`. Ordinary CI requires every
+new per-profile report at its exact cardinality.
+
+Isolated CopperScreen baseline `d9beae8` builds in Release with zero warnings or
+errors against the exact .52 dependency. Host **149** pass with six optional
+skips, disk **74**, separate engine diagnostics **1,080**, and all three native
+Workbench/A1200 boot and disk-persistence replays pass without skips. All four
+loaded CPU DLLs match the package ZIP entry, and all four dependency assets
+resolve exactly .52. Evidence: `artifacts/linef-validation/`,
+`artifacts/linef-diagnostic-tests/`, `artifacts/linef-production.binlog` and
+`artifacts/linef-identities.json`. No media/build artifacts are committed,
+unrelated root CopperScreen changes remain untouched, and package publication
+is not authorized or performed.

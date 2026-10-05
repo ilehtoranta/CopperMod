@@ -64,6 +64,13 @@ namespace Copper68k
                 RaiseFormat0Exception(61, pc, M68kInstructionTimingKey.IllegalInstruction);
                 return true;
             }
+            if ((opcode & 0xFF80) == 0xF200 && (opcode & 0x3F) >= 0x3D)
+            {
+                BeginInstruction(opcode);
+                _ = FetchWord();
+                RaiseFormat0Exception(11, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
+                return true;
+            }
             if ((opcode & 0xFFF0) == 0xF200) return ExecuteFpuControlTransfer(opcode);
             if ((opcode & 0xFE00) == 0xF200)
                 throw Unavailable("floating-point execution", opcode);
@@ -117,6 +124,11 @@ namespace Copper68k
             BeginInstruction(opcode);
             var pc = State.ProgramCounter;
             _ = FetchWord();
+            if (!IsValidCoprocessorStateFrameEa(opcode))
+            {
+                RaiseFormat0Exception(11, pc, M68kInstructionTimingKey.LineFException);
+                return true;
+            }
             if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
             {
                 RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation);

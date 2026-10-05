@@ -2857,6 +2857,11 @@ namespace Copper68k
 
             BeginInstruction(opcode);
             _ = FetchWord();
+            if ((opcode & 0x003F) >= 0x003D)
+            {
+                RaiseFormat0Exception(VectorLineF, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
+                return true;
+            }
             var extension = FetchWord();
             return ExecuteFpuCommand(opcode, extension, useFastTiming: false);
         }
@@ -3143,6 +3148,11 @@ namespace Copper68k
         {
             BeginInstruction(opcode);
             _ = FetchWord();
+            if ((opcode & 0x3F) >= 0x3D)
+            {
+                RaiseFormat0Exception(VectorLineF, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
+                return;
+            }
             var mode = (opcode >> 3) & 7;
             var register = opcode & 7;
             var extension = FetchWord();
@@ -3254,15 +3264,15 @@ namespace Copper68k
         {
             var mode = (opcode >> 3) & 7;
             var register = opcode & 7;
-            if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
+            if (!IsValidCoprocessorStateFrameEa(opcode))
             {
-                RaiseFormat0Exception(8, State.LastInstructionProgramCounter, M68kInstructionTimingKey.PrivilegeViolation);
+                RaiseFormat0Exception(VectorLineF, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
                 return true;
             }
 
-            if (!IsValidFpuStateFrameEa(mode, register, restore: false))
+            if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
             {
-                RaiseFormat0Exception(VectorLineF, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
+                RaiseFormat0Exception(8, State.LastInstructionProgramCounter, M68kInstructionTimingKey.PrivilegeViolation);
                 return true;
             }
 
@@ -3292,15 +3302,15 @@ namespace Copper68k
         {
             var mode = (opcode >> 3) & 7;
             var register = opcode & 7;
-            if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
+            if (!IsValidCoprocessorStateFrameEa(opcode))
             {
-                RaiseFormat0Exception(8, State.LastInstructionProgramCounter, M68kInstructionTimingKey.PrivilegeViolation);
+                RaiseFormat0Exception(VectorLineF, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
                 return true;
             }
 
-            if (!IsValidFpuStateFrameEa(mode, register, restore: true))
+            if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
             {
-                RaiseFormat0Exception(VectorLineF, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
+                RaiseFormat0Exception(8, State.LastInstructionProgramCounter, M68kInstructionTimingKey.PrivilegeViolation);
                 return true;
             }
 
@@ -4092,7 +4102,9 @@ namespace Copper68k
             }
 
             var outerDisplacement = ReadFpuIndexedDisplacement(indirectSelection & 3, baseDisplacement: false);
-            if (indirectSelection >= 5)
+            // PRM table 2-2: IIS 001..011 adds the index before the pointer
+            // read; IIS 101..111 adds it after the pointer read.
+            if (indirectSelection <= 3)
             {
                 var pointer = ReadLong(unchecked(baseValue + baseDisplacement + indexValue));
                 return unchecked(pointer + outerDisplacement);
@@ -4128,11 +4140,6 @@ namespace Copper68k
             };
         }
 
-        private static bool IsValidFpuStateFrameEa(int mode, int register, bool restore)
-            => mode is 2 or 5 or 6 ||
-                (restore ? mode == 3 : mode == 4) ||
-                (mode == 7 && register is 0 or 1);
-
         private uint GetFpuStateFrameAddress(int mode, int register, uint byteSize, bool restore)
         {
             return mode switch
@@ -4144,6 +4151,8 @@ namespace Copper68k
                 6 => GetFpuIndexedAddress(State.A[register]),
                 7 when register == 0 => unchecked((uint)(int)(short)FetchWord()),
                 7 when register == 1 => FetchLong(),
+                7 when register == 2 && restore => GetFpuPcDisplacementAddress(),
+                7 when register == 3 && restore => GetFpuPcIndexedAddress(),
                 _ => throw new UnsupportedM68kTimingException(State.LastOpcode, State.LastInstructionProgramCounter, _profile)
             };
         }

@@ -100,6 +100,8 @@ try {
             'logical-cas2'=36864;
             'logical-shifts'=$(if ($model -in @('68000','68010')) {130561} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {131089});
             'system-basic'=1728;
+            'system-linef-state-encodings'=$(if ($model -in @('68000','68010')) {65536} elseif ($model -eq '68030') {49856} elseif ($model -eq '68040') {60224} elseif ($model -eq '68060') {61248} else {47616});
+            'system-linef-unassigned-fpu-ea'=1536;
             'system-trap-trace'=$(if ($model -eq '68040') {10368} elseif ($model -eq '68060') {8384} elseif ($model -in @('68000','68010')) {3968} else {5952});
             'system-chk-invalid-operands'=11264;
             'system-unassigned-4140'=32768;
@@ -141,7 +143,10 @@ try {
             $expected['system-move-word-restart-a7'] = 192
             $expected['system-move-word-restart-invalid'] = 224
         }
-        if ($model -eq '68040') { $expected['system-mmu-disabled'] = 34850 }
+        if ($model -eq '68040') {
+            $expected['system-mmu-disabled'] = 34850
+            $expected['system-linef-pc-restore'] = 6464
+        }
         foreach ($group in $expected.Keys) {
             $report = Get-Content -LiteralPath (Join-Path $output "$model-$group.json") -Raw | ConvertFrom-Json
             if ($report.schema -ne 1 -or $report.model -cne $model -or $report.group -cne $group -or

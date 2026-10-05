@@ -5710,6 +5710,17 @@ namespace Copper68k
                 case M68020OpcodeKind.LineFException:
                     BeginInstruction(opcode);
                     _ = FetchWord();
+                    // MC68020UM 7.5.2.2/3; MC68030UM 10.1, 10.5.2.2/3:
+                    // legal cpSAVE/cpRESTORE checks privilege before accessing
+                    // an absent coprocessor. 030 CpID 0 is the internal MMU.
+                    if (_profile.Model is M68kAcceleratorModel.M68020 or M68kAcceleratorModel.M68030 &&
+                        (_profile.Model != M68kAcceleratorModel.M68030 || (opcode & 0x0E00) != 0) &&
+                        (opcode & 0xF180) == 0xF100 && IsValidCoprocessorStateFrameEa(opcode) &&
+                        (State.StatusRegister & M68kCpuState.Supervisor) == 0)
+                    {
+                        RaiseFormat0Exception(8, State.LastInstructionProgramCounter, M68kInstructionTimingKey.PrivilegeViolation);
+                        return true;
+                    }
                     if (opcode == 0xFF00)
                     {
                         var token = FetchLong();
@@ -8414,6 +8425,16 @@ namespace Copper68k
         {
             _ = opcode;
             return false;
+        }
+
+        // cpSAVE permits control-alterable/predecrement; cpRESTORE permits
+        // control/postincrement, including PC-relative sources (M68000PM 6-13/16).
+        protected static bool IsValidCoprocessorStateFrameEa(ushort opcode)
+        {
+            var mode = (opcode >> 3) & 7;
+            var restore = (opcode & 0x40) != 0;
+            return mode is 2 or 5 or 6 || mode == (restore ? 3 : 4) ||
+                (mode == 7 && (opcode & 7) <= (restore ? 3 : 1));
         }
 
         protected virtual bool TryExecuteModelSpecificInstruction(ushort opcode)

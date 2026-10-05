@@ -1031,3 +1031,32 @@ host/disk/engine tests and all three native Workbench/A1200 replays, with exact
 package/version and loaded-DLL identity checks. `roadmapComplete=false` is
 retained; line-F priority, reserved multiply/divide extensions and earlier
 advanced restoration/reference/consolidation requirements remain open.
+
+The line-F follow-up qualifies cpSAVE/cpRESTORE first words, illegal 040/060
+state-transfer operands and unassigned FPU command/conditional EAs. It corrects
+020/030 privilege-before-absent-coprocessor behavior and 040/060 invalid-word
+priority. Independent PC-relative 040 FRESTORE fixtures also expose and correct
+reversed preindexed/postindexed pointer ordering. The new required batches add
+464,000 cases across eight profiles. MMU opcode overlaps, legal supervisor
+coprocessor/FPU protocols and self-referential frame/extension encodings are
+explicitly distinguished; no FPU arithmetic qualification is claimed. The old
+generic F123 example is corrected to an unassigned F1C0 word because F123 is a
+legal privileged cpSAVE on EC020/020. No specialized regression is retired.
+
+The unchanged WinUAE ILLEGAL groups now pass on EC020/A1200/020/030 and retain
+000/010 passing coverage. Basic still fails overall: 1,326 passing, 47
+mismatching and eight unsupported groups. 040 F400 has a reference/manual
+exception disagreement, and 060 reaches further unassigned F380 decoding.
+Reserved long multiply/divide extension qualification and all earlier advanced
+restoration/reference/consolidation requirements remain open. Exact authorities,
+failed-before evidence, mutation controls and caveats are maintained in
+`COPPER68K_REFERENCE_QUALIFICATION.md`; milestone 6 remains **in progress**.
+
+Final validation passes 4,874 CPU tests with ten optional skips and both qualified
+exception presets enabled. The strict gate verifies 14,581,016 logical cases in
+566 batches, with fresh pinned SingleStepTests/Musashi audits. Qualified TRAP
+trace and AHX pass. Private unpublished .52 passes the isolated CopperScreen
+Release build, host/disk/engine tests and all three native Workbench/A1200
+replays, with exact package-resolution and loaded-DLL identity checks. Timing
+policy is retained; physical timing, host performance and package publication
+are not claimed. `roadmapComplete=false` remains unchanged.
