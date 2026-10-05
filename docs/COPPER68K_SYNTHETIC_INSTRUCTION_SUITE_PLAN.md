@@ -1840,3 +1840,53 @@ identity controls reject their specific corruption diagnostics. Source/fixture/
 binary identities still match after all acceptance checks. Milestone 6 remains
 **in progress**; the restored user M=1 software slice is qualified, while the
 full required restoration/reference/consolidation scope remains retained.
+
+### Milestone 6 preserved-trace CP vectors 50–55 — 2026-10-06
+
+Four separate scalar/batch reports add **4,866,048 phases** for repaired CP50–55
+frames while preserving incoming trace. The initial focused run passes all four
+without skips or missing phases. They cross restored user M=0/M=1, ISP/MSP,
+incoming/restored 0/T1/T0 and all six original vectors. Canonical cases cover all
+CCRs; structural cases reject every validation-read byte, use CCR 0/31 and all
+twelve supervisor throwaway paths, with both alignments/VBRs.
+
+The pending vector is selected before suspension; conflicting FPCR/FPSR/FPIAR
+values must neither reselect it nor change during the integer repair protocol.
+Saved format-3 SR/PC/EA, pending consumption, all stack banks, handler return and
+following traced BRA are checked. The independent expectations compose
+MC68040UM 8.3, 8.4.6.2/7 and 9.6 table 9-9; 9.6.2 confirms vector-55 post-instruction
+support for register-to-memory unsupported data types. BSUN48 is excluded from
+this CP selection; arithmetic and actual FPU event generation remain outside
+scope.
+
+The maintained `RteCpVectors` scope probes forced vector 49, extra automatic RTE
+trace and an unconsumed context, requiring intended diagnostics in all four
+reports. The complete 040 gate now requires 60 tests, 54 reports, six fixed
+examples and thirteen input identities. CP49 retains its separate earlier
+qualification. No production CPU correction was needed by the focused run.
+
+This closes preserved-trace supervisor-tail repair for the remaining CP vectors.
+Software trace service, user-tail trace bridges, mixed-epoch provenance, internal
+restoration, chained odd-PC, general data/writeback/context transfer and the
+broader model/reference/consolidation requirements remain open. The required
+480-case inventory continues to fail completion. Milestone 6 remains **in progress**
+and `roadmapComplete=false`; no API/package change or regression retirement is
+included.
+
+See the [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md) for identities, proofs and remaining scope.
+
+Current acceptance passes **5,085 full Release CPU tests**, with eleven optional
+skips and zero failures. All nine qualified WinUAE selections and identities
+match; strict reporting checks **30,673,430 cases in 644 batches**. Fresh
+SingleStepTests passes 312,500 cases / 125 files, and Musashi passes 536 programs
+with 88 explicit exclusions. Both requested reference adapters execute without
+skips. The complete 040 command executes 60 tests (59 passing, one required
+inventory failure), with 15,704,768 passing phases, zero mismatches/unsupported
+execution and the retained 480 untested requirements. Every independently
+enumerated combination and all thirteen fixture/command identities match.
+
+All three maintained CP-vector mutations are detected with their intended
+diagnostics in all four reports. Seventeen fresh report/fixture controls reject
+their specific corruptions. Restored production source bytes and current
+acceptance identities match; this is a test-only checkpoint. Milestone 6 remains
+**in progress**, with the full required scope retained above.

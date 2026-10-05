@@ -644,3 +644,33 @@ internal/data/writeback/reference gaps remain required. These synthetic results
 are software qualification, not hardware observations or physical timing.
 
 See the [restored-user qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-restored-user-m1--2026-10-06).
+
+### Preserved-trace repair for CP vectors 50–55
+
+Four `OtherCpVectorsPreserveTrace` reports add 4,866,048 checked phases through
+accurate scalar and one-instruction batch execution. They restore user M=0,
+user M=1, ISP or MSP after a physical validation fault and three executed repair
+stores. The CP event must retain its originally selected vector despite
+conflicting handler-visible FPCR/FPSR/FPIAR. Format-3 saved SR/PC/EA, pending
+context consumption, stack selection, handler return and following trace are
+checked. Pending delivery cannot generate an extra automatic RTE trace.
+
+Canonical cases cover all CCRs; chained cases use CCR 0/31, every validation-read
+byte, twelve supervisor paths and both alignments/VBRs. Both groups cross
+incoming/restored 0/T1/T0 and all six vectors. Existing CP49 reports remain
+separate. MC68040UM 9.6.2 explicitly permits vector 55 as a post-instruction
+exception for register-to-memory unsupported data types; BSUN vector 48 is
+outside this CP selection. FPU arithmetic is outside this suite.
+
+```powershell
+./scripts/test-copper68k-synthetic-mutations.ps1 -Scope RteCpVectors -OutputDirectory artifacts/rte-cp-vectors-mutations
+```
+
+The gate requires the intended wrong-vector, extra-RTE-trace or unconsumed-context
+diagnostic in all four complete reports. The complete 040 audit requires 60 tests,
+54 reports, six fixed examples and thirteen input identities. The retained
+480-case inventory still prevents completion. Pending software trace service,
+user-tail trace bridges, mixed-epoch provenance and the earlier context/internal/
+data/writeback/reference gaps remain required.
+
+See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md) for identities, proofs and remaining scope.

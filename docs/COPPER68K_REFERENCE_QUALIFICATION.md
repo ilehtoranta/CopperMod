@@ -4927,3 +4927,108 @@ the specific expected diagnostic, rather than the generic inventory rejection.
 Both scalar/batch canonical and chained restored-user reports are covered. All
 current fixture/source/binary identities still match after reference audits.
 Production CPU source remains unchanged; milestone 6 remains **in progress**.
+
+### 040 preserved-trace CP vectors 50–55 — 2026-10-06
+
+`SyntheticM68040RteRepairTests` adds four `OtherCpVectorsPreserveTrace` reports
+for the remaining original CP vectors 50–55 after a physical validation fault
+and real three-store software repair. Existing CP49, CT/CU, normal/CM and restored
+user-M matrices retain their own report identities and cardinalities. Expectations
+compose MC68040UM 8.3, 8.4.6.2 and 8.4.6.7 with 9.6 table 9-9. Section 9.6.2
+explicitly permits vector 55 as a post-instruction exception for opclass 011
+unsupported data types. BSUN48 is outside this CP selection. These are synthetic
+suspended contexts, not FPU arithmetic or observed hardware faults.
+
+The pending vector is an input selected before suspension. Handler-visible
+FPCR=0, FPSR=08008198 and FPIAR=1234ABCD deliberately suggest another event;
+RTE must preserve them and deliver the original vector. After three executed
+stores repair SR/PC/format without changing the access frame's SR, handler return
+restores incoming 0/T1/T0. The original RTE converts to format 3, with repaired
+saved SR/PC/EA and no extra automatic RTE trace. Pending consumption, exception
+sequence, all three stack pointers, guarded memory and batch counts/callbacks
+are checked. A bare pending-handler RTE returns, and the following self-BRA
+obeys the repaired trace bits.
+
+| Group, each scalar/batch | Phases | Combinations |
+| --- | ---: | ---: |
+| Canonical CCR boundaries | 110,592 | 432 |
+| Chained validation-read bytes | 2,322,432 | 145,152 |
+
+All four reports total **4,866,048 checked phases**. Canonical cases cover all
+32 CCRs. Structural cases reject every documented validation-read byte, use
+CCR 0/31 and all twelve supervisor throwaway paths, both alignments/VBRs and
+all incoming/restored traces. All four restored states (user M=0/M=1, ISP/MSP)
+and all six vectors have separate identifiers. Consumed throwaways cannot be
+replayed or their odd discarded PCs fetched. The initial focused run at
+`artifacts/m6-cp-vectors-focused/` passes all four tests, with zero skips,
+mismatches, unsupported execution or untested phases.
+
+The maintained `RteCpVectors` mutation scope requires the intended wrong-vector,
+extra-RTE-trace or unconsumed-context diagnostic in each complete route/matrix.
+The complete 040 command independently enumerates every CP50–55 combination;
+it requires 60 tests, 54 reports, six fixed examples and thirteen input
+identities. Ordinary reporting also requires all four groups, with their scope
+recorded separately from the earlier CP49 matrices.
+
+Pending software trace service remains unqualified: the pending handler here
+performs a bare RTE. User-tail trace bridges, mixed-epoch provenance, internal
+restoration, chained odd-PC SR, general data/writeback/context transfer and the
+broader model/reference/consolidation work remain required. The 480-case
+inventory still fails completion. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. Enabled MMU, FPU arithmetic, physical pipeline/cache
+timing and OS compatibility remain outside the roadmap. No old regression is
+retired, public API changed or package published.
+
+The maintained `RteCpVectors` run in `artifacts/m6-cp-vectors-mutations/` detects
+all three mutations. Each executes all four complete reports and requires the
+intended retry-RTE diagnostic in both routes and matrices. Counts below are per
+route, canonical/chained respectively:
+
+| Mutation | Mismatching | Dependent phases untested | Required diagnostic |
+| --- | ---: | ---: | --- |
+| Force original vector to 49 | 13,824 / 290,304 | 27,648 / 580,608 | CP50 retry delivers 49 |
+| Add automatic RTE trace after CP | 9,216 / 193,536 | 18,432 / 387,072 | CP50 retry delivers 9 |
+| Leave pending context unconsumed | 13,824 / 290,304 | 27,648 / 580,608 | CP50 retry retains pending delivery |
+
+Exact production source bytes match the preceding checkpoint after restoration;
+the restored Release rebuild succeeds with zero warnings/errors. Deliberate
+mutation failures and their dependent untested phases are proof evidence, not
+production mismatches. The shared proof validator retains each earlier trace/
+restored-user scope's separate four-report cardinalities and identifiers.
+
+The complete current 040 run in `artifacts/m6-cp-vectors-audit/` executes all
+**60 tests: 59 pass, one required inventory failure, zero skips**. All 54 reports,
+six fixed examples and thirteen fixture/command identities are present. The
+independent combination verifier checks **15,704,768 passing phases**, zero
+mismatches/unsupported execution and the retained **480 untested requirements**
+(15,705,248 total). The command's final rejection is exactly that inventory;
+it is not a passing completion gate.
+
+The fresh full Release run in `artifacts/m6-cp-vectors-full/` passes **5,085 tests**
+with eleven optional skips and zero failures. All nine qualified WinUAE presets
+match their exact directory/callback/frame selections and CPU/adapter identities.
+The acceptance build starts from `e26a8cc3cfd3caf27e0e525bf0eba9f239134e59` plus
+the recorded fixture changes, with unchanged committed CPU tree
+`795fd12d6c0237a22a5f92f4a96cc4823e0364c1`. CPU SHA-256 is
+`614599a2840b2fa5860e27038873259cf74fea625144eebdd6a9a1a0a294b1d1`;
+test/adapter SHA-256 is
+`1a42b10c1bb128323b8254e9e655eadd4b73cb18202a2fe4550797c8939168ba`.
+These identities describe the validation build, not a rebuild of the subsequent
+checkpoint commit. The complete manifest's source, input and binary hashes all
+match current bytes.
+
+Strict ordinary validation checks **30,673,430 logical cases in 644 batches**.
+Fresh pinned SingleStepTests passes **312,500 cases in 125 files**; Musashi
+passes **536 programs with 88 explicit exclusions** across all eight profiles.
+Both requested adapters execute exactly one passing test with zero skips, and
+all current acceptance binary/source/fixture identities still match afterward.
+The original Basic reference failures remain separate historical evidence.
+
+All **17 fresh controls** in `artifacts/m6-cp-vectors-controls/` reject their
+specific missing, shortened, foreign, redistributed or omitted-fixture
+corruption. Both canonical/chained scalar/batch CP-vector reports are covered;
+the controls require the intended diagnostic rather than accepting the generic
+inventory rejection. Current source, fixture and assembly identities still
+match after all checks. No production CPU fix, consumer rerun, package release
+or old-test retirement is needed for this test-only addition. Milestone 6
+remains **in progress**.
