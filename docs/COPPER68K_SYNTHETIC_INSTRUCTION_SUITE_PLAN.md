@@ -122,7 +122,7 @@ identities, replacement proofs and remaining required coverage here as work
 progresses. No milestone is complete merely because an inventory exists or a
 partial matrix passes.
 
-Latest milestone-6 checkpoint, 2026-10-05: the exhaustive cache-encoding matrix
+Earlier milestone-6 checkpoint, 2026-10-05: the exhaustive cache-encoding matrix
 passes 131,072 cases across eight profiles, including illegal scope-zero and
 neither-cache forms. Independent scope-zero reference qualification passes
 2,048 callbacks/frames with exact opcode/status distributions and 32 comparator
@@ -1494,3 +1494,29 @@ Fresh pinned SingleStepTests/Musashi audits pass. Four report controls reject
 missing/shortened new batches. Isolated unpublished `.60` passes the CopperScreen
 Release build, host/disk/separate engine suites and all three native boot replays;
 the package, assets and loaded CPU binaries match. No public release is made.
+
+### Milestone 6 batch-fault qualification gate — 2026-10-05
+
+The dedicated 040 audit now includes both batch-fault groups and independently
+enumerates every required combination, using fixed validation read ranges rather
+than the C# fixture's read plan. It requires nine distinct fixture/command inputs,
+CPU source and assembly identities, and 28 executed tests: 22 reporting batches
+and six fixed examples. It verifies 1,593,024 passing scenarios, zero mismatches
+or unsupported execution, and the retained 480 named untested requirements.
+The complete gate therefore still fails; milestone 6 is not complete.
+
+`-Scope BatchFault` adds seven maintained mutations: four distinct delivery
+paths, self-branch instruction count, cached callbacks and retry after partial
+effects. Every mutation executes both complete batches and must produce semantic
+mismatches in its intended path. All seven are detected, with no unsupported or
+untested mutation cases; production sources are restored and rebuilt. No new
+production behavior, public API, package release or regression retirement is
+included. The [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-batch-fault-gate-and-mutation-qualification--2026-10-05)
+preserves detailed counts, identities, controls and remaining work.
+
+Eleven copied-input controls reject missing/short/foreign/distributed new reports
+and missing fixture or changed CPU/binary identities. Ordinary report validation
+retains 16,561,686 cases in 612 batches; full CPU/external/consumer evidence is
+retained from the preceding production checkpoint, rather than rerun for this
+test/gate-only change. The complete required-gap inventory remains explicit and
+`roadmapComplete=false`.

@@ -3989,3 +3989,74 @@ diagnostic outputs and `artifacts/batch-fault-identities.json`. Root CopperScree
 changes and public packages remain untouched. Dedicated 040 discovery was not
 rerun or extended in this checkpoint; its previously recorded 480 untested
 requirements remain, with `roadmapComplete=false`.
+
+## 040 batch-fault gate and mutation qualification — 2026-10-05
+
+The dedicated `test-copper68k-040-access-frames.ps1` selection now includes both
+ordinary batch-fault groups. Its independent enumeration specifies cached/cold
+execution, prefix lengths, stack banks, valid trace modes, alignment, VBR, limits,
+fault outcomes and bytes. Validation read ranges are fixed in the command rather
+than imported from the C# fixture. Each of 4,032 RTE combinations must contain
+32 CCR cases; each of 5,184 dispatch combinations contains CCR 0/31. Independent
+enumeration cardinalities are themselves checked. The command requires nine
+distinct fixture/command identities, exact CPU sources and both compiled binaries.
+
+Fresh `artifacts/m6-batch-fault-discovery/` executes 28 tests: 27 pass and the
+retained inventory fails on 480 untested cases. All 22 reports and six fixed
+examples are present, with **1,593,024 passing scenarios, zero mismatches and
+zero unsupported execution**. Including the inventory gives 1,593,504 logical
+cases. The command validates these distributions and identities before reporting
+the expected incomplete gate. Its inventory reason now acknowledges selected
+active-batch coverage without removing any user-tail or internal-restoration gap.
+
+Seven maintained mutations execute all 139,392 cases in both batch-fault groups
+on every run. Detection requires mismatches in the intended combination, in
+addition to complete xUnit/report selection. Thus a compiler failure, empty
+selection or unrelated failure cannot satisfy qualification. Evidence:
+`artifacts/m6-batch-fault-mutations/mutation-proof.json` and per-mutation reports.
+
+| Mutation | RTE mismatches | Dispatch mismatches | Intended detection |
+| --- | ---: | ---: | --- |
+| Cold delivery removed | 129,024 | 1,728 | Cold RTE and slow partial MOVE path |
+| Normal cached delivery removed | 0 | 4,608 | Warm load/store and mixed forms without a model-specific prefix |
+| Model-specific cached delivery removed | 0 | 2,304 | Mixed blocks with completed FPU register-transfer prefix |
+| Self-branch delivery removed | 0 | 1,728 | Warm self-branch physical fetch |
+| Self-branch count doubled | 0 | 1,728 | Instruction-count contract |
+| Cached callback omitted on fault | 0 | 4,608 | Boundary callback contract |
+| Failed instruction retried | 129,024 | 3,456 | Successful-entry cases, including partial MOVE effects |
+
+All mutation cases execute with zero unsupported or untested outcomes. The retry
+mutation explicitly rewinds the failed PC after delivery and executes again;
+partial-store combinations detect repeated operand effects independently of
+scalar/batch agreement. Production source is restored byte-for-byte and rebuilt
+with zero warnings/errors. No regression is retired and no CPU behavior changes
+are added by this qualification checkpoint. Generic short frames, callback/count
+and bus/cycle policies retain their previously documented scope; this does not
+qualify general architectural restart, enabled MMU, FPU arithmetic or physical
+timing.
+
+Eleven copied-input controls in
+`artifacts/m6-batch-fault-dedicated-report-controls/controls.json` reject missing,
+shortened, foreign and redistributed combinations for both new groups, plus a
+missing fixture identity and altered CPU-source/assembly identities. Distribution
+controls preserve total cases and combination counts, proving that fixed counts
+per architectural combination are enforced independently of aggregate totals.
+Every control fails for its specific intended reason.
+
+Qualification starts from `c46999824c6ab62b6220543e26c791e07e12e961`, CPU tree
+`6bb8bd68a93ba23bf79d1d077d0b34c48e5e6679`. Current discovery identities record
+CPU SHA-256 `fc36b2ce0d0f4a816d08e322836d7d59feb333d71d7909fe3b747f3b44e247c9`
+and test/reference adapter SHA-256
+`c1163ad174e5c900dda725b6726427ad0bf1a72aef54e0cfe71a6381aa79b87c`.
+These rebuilt identities belong to this discovery run; the preceding full CPU,
+external-reference and private-consumer evidence remains separately bound to its
+recorded binaries. Ordinary report validation retains 16,561,686 logical cases
+in 612 batches; this checkpoint revalidates those reports rather than claiming
+another full ordinary execution or external audit. No new production change,
+consumer package or public release is introduced.
+
+Dedicated batch-fault integration and its mutation requirement are now satisfied.
+The 480-case inventory, user-tail/internal-restoration faults, handler-entry
+prefetch, repaired-original-RTE retry, general format-7 restart, writeback/context
+transfer and the earlier model/reference/consolidation requirements remain open.
+Milestone 6 remains **in progress**, with `roadmapComplete=false`.

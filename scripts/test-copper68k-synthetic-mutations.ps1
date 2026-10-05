@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','AccessDoubleFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -228,6 +228,84 @@ foreach ($mutation in $doubleFaultMutations) {
     $mutation.group='WarmDispatchHaltsBothRteFallbackAndOperandFaultEntry'; $mutation.model='68040'
     $mutation.milestone=6; $mutation.doubleFault=$true; $mutations += $mutation
 }
+$slowFault = @'
+                ExecuteInstructionWithTrace();
+            }
+            catch (M68040MmuFaultException ex)
+            {
+                if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;
+            }
+'@
+$hotFault = @'
+                        exitBlock = true;
+                    }
+                    else ExecuteHotInstruction(hotInstruction.Kind, opcode);
+                }
+                catch (M68040MmuFaultException ex)
+                {
+                    if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;
+                    exitBlock = true;
+                }
+                boundary.AfterInstruction(previousCycle, State.Cycles);
+                executedInstructions++;
+'@
+$modelFault = @'
+                        if (!TryExecuteFastModelSpecificInstruction(opcode))
+                            throw new InvalidOperationException("The MC68040 FPU hot instruction was not handled.");
+                    }
+                    else ExecuteHotInstruction(hotInstruction.Kind, opcode);
+                }
+                catch (M68040MmuFaultException ex)
+                {
+                    if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;
+                    exitBlock = true;
+                }
+'@
+$selfFault = @'
+                    opcode = _timedBus.ReadInstructionFetchWordHot(
+                        hotInstruction.Address, out cacheHit,
+                        out requiresSynchronization, out completedMachineCycle);
+                }
+                catch (M68040MmuFaultException ex)
+                {
+                    if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;
+                    boundary.AfterInstruction(previousCycle, State.Cycles);
+                    executedInstructions++;
+                    return true;
+                }
+'@
+$retryFault = @'
+        protected override bool TryHandleM68040ExecutionFault(M68040MmuFault fault)
+        {
+            RaiseMmuFault(fault);
+            return true;
+        }
+'@
+$batchFaultMutations = @(
+    @{name='040-batch-cold-delivery'; file=$advanced; before=$slowFault; after=$slowFault.Replace('if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;', 'throw;'); proofGroup='rte-validation-batch'; proofCombination='cached=False'},
+    @{name='040-batch-hot-delivery'; file=$advanced; before=$hotFault; after=$hotFault.Replace('if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;', 'throw;'); proofGroup='access-fault-batch-dispatch'; proofCombination='/batch/load/'},
+    @{name='040-batch-model-delivery'; file=$advanced; before=$modelFault; after=$modelFault.Replace('if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;', 'throw;'); proofGroup='access-fault-batch-dispatch'; proofCombination='/batch/mixed-load/'},
+    @{name='040-batch-self-delivery'; file=$advanced; before=$selfFault; after=$selfFault.Replace('if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;', 'throw;'); proofGroup='access-fault-batch-dispatch'; proofCombination='/batch/self-fetch/'},
+    @{name='040-batch-self-count'; file=$advanced; before=$selfFault; after=$selfFault.Replace('executedInstructions++;', 'executedInstructions += 2;'); proofGroup='access-fault-batch-dispatch'; proofCombination='/batch/self-fetch/'},
+    @{name='040-batch-hot-callback'; file=$advanced; before=$hotFault; after=$hotFault.Replace('boundary.AfterInstruction(previousCycle, State.Cycles);', 'if (!exitBlock) boundary.AfterInstruction(previousCycle, State.Cycles);'); proofGroup='access-fault-batch-dispatch'; proofCombination='/batch/load/'},
+    @{name='040-batch-retry-partial'; file='Copper68k/M68040Support.cs'; before=$retryFault; after=@'
+        protected override bool TryHandleM68040ExecutionFault(M68040MmuFault fault)
+        {
+            var failedPc = State.LastInstructionProgramCounter;
+            RaiseMmuFault(fault);
+            if (!State.Halted)
+            {
+                State.ProgramCounter = failedPc;
+                base.ExecuteInstruction();
+            }
+            return true;
+        }
+'@; proofGroup='access-fault-batch-dispatch'; proofCombination='/batch/partial-store/'}
+)
+foreach ($mutation in $batchFaultMutations) {
+    $mutation.group='SyntheticM68040BatchFaultTests'; $mutation.model='68040'
+    $mutation.milestone=6; $mutation.batchFault=$true; $mutations += $mutation
+}
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
@@ -236,6 +314,7 @@ if ($Scope -eq 'Consolidation') { $mutations = @($mutations | Where-Object { $_.
 if ($Scope -eq 'Rte040') { $mutations = @($mutations | Where-Object { $_.odd }) }
 if ($Scope -eq 'RteValidationFault') { $mutations = @($mutations | Where-Object { $_.validationFault }) }
 if ($Scope -eq 'AccessDoubleFault') { $mutations = @($mutations | Where-Object { $_.doubleFault }) }
+if ($Scope -eq 'BatchFault') { $mutations = @($mutations | Where-Object { $_.batchFault }) }
 if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
 if ($Scope -eq 'CacheEncodings') { $mutations = @($mutations | Where-Object { $_.cache }) }
 $saved = @{}
@@ -296,6 +375,18 @@ try {
                     throw 'RTE validation-fault mutation did not execute its complete two-batch selection'
                 }
             }
+            if ($mutation.batchFault) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $batches.Count -ne 2 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq 'rte-validation-batch' -and $_.logicalCases -eq 129024 }).Count -ne 1 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq 'access-fault-batch-dispatch' -and $_.logicalCases -eq 10368 }).Count -ne 1) {
+                    throw 'Batch-fault mutation omitted its complete two-batch selection'
+                }
+                $target = @($batches | Where-Object group -CEQ $mutation.proofGroup)[0]
+                if (@($target.combinations.PSObject.Properties | Where-Object {
+                    $_.Name.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and $_.Value.mismatching -gt 0
+                }).Count -eq 0) { throw "Batch-fault mutation did not detect its intended path: $($mutation.name)" }
+            }
             if ($mutation.doubleFault) {
                 [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
                 if ($trx.TestRun.ResultSummary.Counters.executed -ne 3 -or $batches.Count -ne 3) { throw 'Double-fault mutation omitted dispatch batches' }
@@ -330,6 +421,7 @@ try {
             }
             $results += @{mutation=$mutation.name; file=$mutation.file; sourceSha256=(Get-FileHash -LiteralPath $path).Hash;
                 detected=$true; replacementCase=$failures[0].id; diagnostic=$failures[0].reason; originalRegressionDetected=$legacyPresent;
+                proofGroup=$mutation.proofGroup; proofCombination=$mutation.proofCombination;
                 reports=@($batches | ForEach-Object { @{group=$_.group; logicalCases=$_.logicalCases; counts=$_.counts} })}
             Write-Host "Detected $($mutation.name): $($failures[0].id)"
         }

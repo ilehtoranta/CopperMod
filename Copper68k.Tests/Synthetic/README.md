@@ -420,5 +420,18 @@ The fixtures check instruction counts, callback counts, handler sentinels and
 each byte of selected physical reads/writes. RTE validation uses independent
 architectural format-7 expectations. Generic operand/fetch frames and scalar/
 batch cycle and bus-order equality verify existing execution policy, not general
-architectural restart or physical timing. Dedicated discovery combination and
-maintained mutation integration remain a later qualification step.
+architectural restart or physical timing. The dedicated 040 discovery command
+requires these reports, independently enumerates their 4,032 and 5,184
+combinations and binds their fixture and CPU identities. It executes 28 tests
+(22 reporting batches and six fixed examples) while retaining the failing
+480-case untested protocol inventory.
+
+Run `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope BatchFault` to
+remove handling separately from cold, normal cached, model-specific cached and
+self-branch execution, change the self-branch count, omit the cached callback,
+or retry after partial operand effects. Every mutation must execute both full
+batches and detect mismatches in its intended path; a build failure, empty
+selection or failure only in another path is insufficient. Sources are restored
+and rebuilt even when qualification fails. General format-7 restart, user-tail
+and internal-restoration faults, handler-entry prefetch and repaired-RTE retry
+remain required work.
