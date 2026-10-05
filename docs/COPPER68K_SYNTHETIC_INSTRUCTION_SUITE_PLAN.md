@@ -930,3 +930,28 @@ Final follow-up validation passes 4,776 CPU tests with ten optional skips,
 including the enabled trap/bounds audit. The deterministic gate retains
 11,168,408 cases in 469 batches and `roadmapComplete=false`; fresh pinned
 SingleStepTests/Musashi and the earlier qualified trace preset pass.
+
+The breakpoint follow-up qualifies a separate corrected WinUAE `Breakpoints`
+preset against Motorola's illegal-exception saved-PC rule. All eight encodings
+pass on 010 and the six advanced profiles, at 224 callbacks / 224 frames with
+all 21 comparator controls detected. A narrowly scoped wrong-saved-PC mutation
+fails every reference group and 512 existing synthetic cases on each of all
+eight profiles. Sources are restored exactly. Twelve preflight controls across
+both exception presets reject missing, changed, empty, duplicate and unqualified
+inputs. The TrapBounds and breakpoint adapters and CLIs now share their strict
+runner, while preserving the old TrapBounds command and source qualification.
+Regenerating TrapBounds retains its exact callback/frame coverage.
+
+External breakpoint replacement and physical acknowledge timing remain
+unqualified. The optional m68k-rs extra BKPT exclusion is retained with a corrected
+reason because its handler fixture is unavailable; it is not a Musashi exclusion
+and not evidence of missing standalone BKPT execution. No regression is retired
+and no CPU/package behavior changes. The original broad failures and all prior
+milestone 6 requirements remain open; exact identities and scope are recorded in
+`COPPER68K_REFERENCE_QUALIFICATION.md`.
+
+Final validation passes 4,777 CPU tests with ten optional skips, with both
+exception reference presets enabled. The deterministic gate retains 11,168,408
+cases in 469 batches and `roadmapComplete=false`; fresh pinned SingleStepTests,
+Musashi and the existing trace preset pass. The unchanged broad audit retains
+46 mismatching and 13 unsupported groups, so milestone 6 remains in progress.

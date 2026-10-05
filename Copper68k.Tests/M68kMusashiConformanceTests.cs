@@ -65,7 +65,7 @@ public sealed partial class M68kMusashiConformanceTests
 			["m68030/bin/move16_030.bin"] = "MOVE16 is not currently implemented",
 			["m68040/bin/32bit_disp.bin"] = "full-extension indexed addressing is not fully implemented",
 			["m68040/bin/arch_unaligned.bin"] = "unaligned access and address-error completion semantics still diverge from this fixture",
-			["m68040/bin/bkpt.bin"] = "BKPT handler setup or related addressing forms are not currently implemented",
+			["m68040/bin/bkpt.bin"] = "Optional fixture's breakpoint handler and expected frame have not been requalified; standalone BKPT illegal-exception fallback is covered by synthetic and qualified WinUAE audits",
 			["m68040/bin/callm_rtm.bin"] = "CALLM/RTM behavior is not currently implemented",
 			["m68040/bin/ec040_positive.bin"] = "EC040 control/MMU behavior is not currently modeled",
 			["m68040/bin/fpu_arith.bin"] = "MC68040 FPU arithmetic behavior is not currently modeled",

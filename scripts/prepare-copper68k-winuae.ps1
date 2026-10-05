@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $GeneratorSource,
     [Parameter(Mandatory)] [string] $RunnerSource,
     [Parameter(Mandatory)] [string] $VcVars64,
-    [ValidateSet('Basic','TraceTraps','TrapBounds')] [string] $Preset = 'Basic',
+    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints')] [string] $Preset = 'Basic',
     [string] $OutputDirectory = 'artifacts/winuae-model-inputs'
 )
 $ErrorActionPreference = 'Stop'
@@ -48,23 +48,27 @@ try {
         & ./build68k.exe table68k | Set-Content -Encoding utf8 cpudefs.cpp
         if ($LASTEXITCODE -ne 0) { throw 'Opcode table generation failed' }
         $cpuGeneratorSource = 'gencpu.cpp'
-        if ($Preset -eq 'TrapBounds') {
-            # MC68020UM 6.1.4 / MC68040UM 8.2.3 require the next PC on
-            # instruction traps. Patch a copy; Basic keeps the pinned source.
-            $patchPath = Join-Path $PSScriptRoot 'winuae/trap-bounds-pc.patch'
+        if ($Preset -in @('TrapBounds','Breakpoints')) {
+            # TrapBounds: following PC (MC68020UM 6.1.4 / MC68040UM 8.2.3).
+            # Breakpoints: opcode PC (illegal exception, UM 6.1.5 / 8.2.4).
+            # Patch a copy; Basic keeps the pinned source.
+            $sourceName = if ($Preset -eq 'TrapBounds') {'gencpu-trap-bounds.cpp'} else {'gencpu-breakpoints.cpp'}
+            $patchName = if ($Preset -eq 'TrapBounds') {'trap-bounds-pc.patch'} else {'breakpoint-pc.patch'}
+            $patchPath = Join-Path $PSScriptRoot ('winuae/' + $patchName)
             $patch = [IO.File]::ReadAllText($patchPath).Replace("`r`n", "`n")
             $source = [IO.File]::ReadAllText((Join-Path $generator 'gencpu.cpp')).Replace("`r`n", "`n")
             $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
-            if ($hunks.Count -ne 2) { throw 'Trap/bounds patch must contain exactly two hunks' }
+            $requiredHunks = if ($Preset -eq 'TrapBounds') {2} else {1}
+            if ($hunks.Count -ne $requiredHunks) { throw "Incorrect $Preset patch hunk count" }
             foreach ($hunk in $hunks) {
                 $lines = $hunk.TrimEnd("`n").Split("`n")
                 $before = (($lines | Where-Object { $_.StartsWith('-') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
                 $after = (($lines | Where-Object { $_.StartsWith('+') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
                 $source = Patch-Once $source $before $after
             }
-            $cpuGeneratorSource = Join-Path $output 'gencpu-trap-bounds.cpp'
+            $cpuGeneratorSource = Join-Path $output $sourceName
             [IO.File]::WriteAllText($cpuGeneratorSource, $source)
-            [IO.File]::WriteAllText((Join-Path $output 'trap-bounds-pc.patch'), $patch)
+            [IO.File]::WriteAllText((Join-Path $output $patchName), $patch)
         }
         Run-Compiler @('/nologo','/O2','/EHsc','/w','/I.','/Iinclude',$cpuGeneratorSource,'missing.cpp','readcpu.cpp','cpudefs.cpp','/Fe:gencpu_prog.exe') (Join-Path $output 'gencpu-build.log')
         & ./gencpu_prog.exe . *> (Join-Path $output 'gencpu-run.log')
@@ -132,6 +136,9 @@ void M68KTester_destroy(M68KTesterContext* context) {
     if ($Preset -eq 'TrapBounds') {
         $baseIni = $baseIni.Replace('[test=Basic]', '[test=TrapBounds]').Replace('mode=all', 'mode=TRAPcc,CHK2.B,CHK2.W,CHK2.L')
     }
+    if ($Preset -eq 'Breakpoints') {
+        $baseIni = $baseIni.Replace('[test=Basic]', '[test=Breakpoints]').Replace('mode=all', 'mode=BKPT')
+    }
     foreach ($model in @(
         @{id='68000'; cpu='68000'; width=24}, @{id='68010'; cpu='68010'; width=24},
         @{id='68EC020'; cpu='68020'; width=24}, @{id='68020'; cpu='68020'; width=32},
@@ -139,6 +146,7 @@ void M68KTester_destroy(M68KTesterContext* context) {
         @{id='68060'; cpu='68060'; width=32})) {
         if ($Preset -eq 'TraceTraps' -and $model.id -notin @('68040','68060')) { continue }
         if ($Preset -eq 'TrapBounds' -and $model.id -in @('68000','68010')) { continue }
+        if ($Preset -eq 'Breakpoints' -and $model.id -eq '68000') { continue }
         $profileRoot = Join-Path $output $model.id
         New-Item -ItemType Directory -Path $profileRoot | Out-Null
         # Every invocation uses a fresh generator output path; stale data cannot fill a gap.
@@ -173,6 +181,8 @@ void M68KTester_destroy(M68KTesterContext* context) {
         TracePriorityPatchSha256=$(if ($Preset -eq 'TraceTraps') {(Get-FileHash -LiteralPath (Join-Path $output 'trace-priority.patch')).Hash.ToLowerInvariant()} else {$null})
         TrapBoundsSourceSha256=$(if ($Preset -eq 'TrapBounds') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-trap-bounds.cpp')).Hash.ToLowerInvariant()} else {$null})
         TrapBoundsPatchSha256=$(if ($Preset -eq 'TrapBounds') {(Get-FileHash -LiteralPath (Join-Path $output 'trap-bounds-pc.patch')).Hash.ToLowerInvariant()} else {$null})
+        BreakpointSourceSha256=$(if ($Preset -eq 'Breakpoints') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-breakpoints.cpp')).Hash.ToLowerInvariant()} else {$null})
+        BreakpointPatchSha256=$(if ($Preset -eq 'Breakpoints') {(Get-FileHash -LiteralPath (Join-Path $output 'breakpoint-pc.patch')).Hash.ToLowerInvariant()} else {$null})
         NativeLibrarySha256=(Get-FileHash -LiteralPath (Join-Path $output 'm68k_cpu_tester.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
         Compiler=$compiler; GeneratorExecutableSha256=(Get-FileHash -LiteralPath (Join-Path $generator 'cputester.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
         NativeSourceSha256=(Get-FileHash -LiteralPath (Join-Path $output 'winuae-native.c') -Algorithm SHA256).Hash.ToLowerInvariant()

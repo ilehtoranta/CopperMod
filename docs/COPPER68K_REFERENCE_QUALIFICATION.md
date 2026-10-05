@@ -1585,3 +1585,111 @@ input hashes and selections are checked again. Evidence:
 `artifacts/m6-trap-bounds-full/` and `artifacts/m6-trap-bounds-gate.log`.
 Consumer package/replay qualification remains the earlier .48 evidence; this
 follow-up changes only test adapters, scripts and documentation.
+
+## Breakpoint fallback qualification and shared audit runner (2026-10-05)
+
+The original Basic audit fails BKPT on all seven applicable CPU profiles at the
+first callback: `4848` at `0087FFA0` expects stacked PC `0087FFA2`, while the CPU
+saves `0087FFA0`. Pinned `gencpu.cpp` synchronizes its two-byte PC offset before
+calling `op_illg`. The documented illegal-exception PC is the causing instruction,
+so this is a reference defect. Authority:
+[MC68000UM 5.1.4 / 6.3.6](https://www.nxp.com/docs/en/reference-manual/MC68000UM.pdf),
+[MC68020UM 6.1.5 / 6.1.10](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf),
+[MC68040UM 8.2.4 / 8.2.8](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+and [MC68060UM 8.2.4 / 8.2.8](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf).
+010 continues illegal-instruction processing after an acknowledge and does not
+accept replacement data. 020/EC020 support an external replacement instruction,
+or illegal processing on BERR. 040/060 enter illegal processing after TA or TEA.
+The current public bus API provides no breakpoint acknowledge/replacement device;
+only the integer-state illegal-exception fallback is qualified here.
+
+The new separate `Breakpoints` preset replaces the generator's PC synchronization
+with `m68k_pc_offset = 0` in a copied source, leaving the opcode address available
+to the exception constructor. Original reference sources and Basic inputs remain
+unchanged. All eight BKPT encodings, both ordinary privilege states and CCR 0/31
+run on 010, EC020, A1200, 020, 030, 040 and 060: **32 callbacks and 32 frame checks
+per profile, 224 total**, with zero masked SR bits. Every register/X/frame
+corruption control is detected (**21 controls**). 000 does not implement BKPT;
+its defined illegal-word handling remains covered by the synthetic suite.
+No incoming trace/M/fault rounds, physical acknowledge cycles or external
+instruction substitution are qualified by this preset.
+
+The test-internal `QualifiedExceptionPreset` runner shares exact source/patch/
+executable/library checks, complete profile/family and fixture preflight,
+comparator controls, fixed callback/frame gates and coverage reporting between
+Breakpoints and TrapBounds. Each preset has its own optional native-library
+environment override, so both can run in one ordinary CPU-suite invocation.
+The existing common library variable still works. The dedicated TrapBounds CLI
+is retained as a forwarding command; the generic command executes either preset
+with the same fresh-output, environment-restoration and non-skipped-test gates:
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 -GeneratorSource <pinned-generator> -RunnerSource <pinned-runner> -VcVars64 <vcvars64.bat> -Preset Breakpoints -OutputDirectory artifacts/breakpoint-inputs
+./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset Breakpoints -InputDirectory artifacts/breakpoint-inputs -OutputDirectory artifacts/breakpoint-audit
+```
+
+An isolated CPU mutation saves opcode PC + 2 on BKPT, narrowly affecting the
+advanced system path and BKPT-only illegal entry in the 000/010 core. All seven
+reference groups detect it on their first callback. The existing synthetic
+`system-model` batch detects **512 mismatches per profile, 4,096 total**, with
+zero unsupported or untested cases; its other cases remain passing. Both source
+files are restored byte-for-byte. This proves the saved-PC checks in the existing
+synthetic coverage as well as the new reference preset; no old test is retired.
+Six copied-input controls per preset (**12 total**) reject missing/changed data,
+empty or duplicate profiles, an empty family set and modified reference source
+before native execution. Evidence: `artifacts/m6-breakpoint-pc-mutation/` and
+`artifacts/m6-breakpoint-preflight/`.
+
+The initial preparer attempt stopped without a manifest because its new preset
+did not enter the source-patching branch. That failed directory is not an input
+qualification. The corrected preparer uses a fresh v2 directory. Initial
+callback-cardinality discovery rejected a provisional 128-case contract while
+all native comparisons passed; the frozen required count is the actually
+executed 32 per profile. Neither preparer failure nor discovery is reported as
+an emulator mismatch or a passing audit.
+
+Qualified `artifacts/m6-breakpoint-qualified-inputs-v2/` identities:
+
+- Manifest: `a2503a7bd97335f92d19b8f52257fcf0029d92a46bcc994390e5fc530020519d`.
+- Normalized source: `d83606b597e5bd38efc289e0ecbd1d41843e67ecedaac72e4b9335312d2ead21`.
+- Normalized patch: `27b0fb21a7fadbe0bf92ae42074ceaf665d7c19a83efdc841bc7730befc87a7b`.
+- Generator executable: `f6185f3231feac952bf321ffa5c0c61ec8a8600cf49f361ecc84290a51ed742c`.
+- Native bridge: `f1b17372c36560a4557016c29bf9b438d9744dd7f9f67b533afcea5d42585f20`.
+
+Generator seeds initialize xorshift state to 1 per test set, one focused round.
+Regenerating TrapBounds with the shared preparer retains its normalized source
+and patch hashes and all 21 passing groups / 951,522 callbacks / 476,339 frames.
+Both old and new CLIs execute their complete selection. Evidence:
+`artifacts/m6-breakpoint-command/` and
+`artifacts/m6-breakpoint-regenerated-trap-bounds/`. Qualification remains patched
+software agreement, not unchanged upstream or hardware measurement.
+
+A stale BKPT exclusion was found in the optional **m68k-rs extra** adapter, not
+the pinned Musashi suite. Its exact fixture is unavailable locally, so the
+exclusion is retained with a corrected reason: standalone fallback is now
+qualified, while that program's handler/frame assumptions still require audit.
+No Musashi exclusion is removed, and absent optional inputs remain unavailable
+coverage. Milestone 6 retains its earlier reference, advanced-restoration and
+consolidation requirements. No production CPU correction, package publication,
+physical timing claim or public API change is made in this follow-up.
+
+Final Release validation passes **4,777 CPU tests with ten optional skips** and
+zero failures, including both enabled exception presets. The deterministic gate
+validates **11,168,408 logical cases in 469 reporting batches** with
+`roadmapComplete=false`. Fresh pinned SingleStepTests passes 312,500 selected
+cases in 125 files; Musashi remains 536 passing programs and 88 exclusions.
+The qualified 040/060 TRAP trace audit passes 512 callbacks, 256 incoming-T1
+cases, 512 frames and six controls. The unchanged Basic audit still fails:
+1,322 passing, 46 mismatching, 13 unsupported and zero untested groups over
+11,335,687 callbacks and 1,525,385 frames, with all 32 controls passing. It is
+not overwritten or narrowed by the new preset.
+
+Evidence: `artifacts/m6-breakpoint-full/`, `artifacts/m6-breakpoint-gate.log`,
+`artifacts/m6-breakpoint-final-command/`, `artifacts/m6-breakpoint-broad/` and
+`artifacts/m6-breakpoint-trace/`. At baseline `f249fe9`, the unchanged production
+source builds CPU assembly SHA-256
+`1a4b59a07ddb13f6cce318c901cca6d025c468b25a65db1c89aa7b52c31f8012`;
+the final adapter assembly is
+`ce24a4016c02922a6a99ecc856d54497b85ebfd51dc40fb9ed93bb6ac2d9c91d`.
+Earlier .48 consumer-package qualification is retained; no new consumer package
+or native replay is needed for these adapter/script/documentation changes.

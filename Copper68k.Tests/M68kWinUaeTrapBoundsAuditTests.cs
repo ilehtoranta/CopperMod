@@ -10,42 +10,59 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
     private const string TrapBoundsPatchHash = "ca94d93ec49447e853769bb93bd4e823fe313854aba59601161b35ef8f7bcca4";
 
     [EnvironmentFact("COPPER68K_RUN_WINUAE_TRAP_BOUNDS_AUDIT", "audit qualified WinUAE TRAPcc/CHK2 saved PCs")]
-    public void WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled()
+    public void WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled() => RunQualifiedExceptionPreset(new(
+        "TrapBounds", "TRAP_BOUNDS", "gencpu-trap-bounds.cpp", "trap-bounds-pc.patch", "TrapBounds",
+        TrapBoundsSourceHash, TrapBoundsPatchHash, "winuae-trap-bounds-audit.json",
+        ["68020", "68030", "68040", "68060", "68EC020"],
+        ["68EC020", "68020", "68030", "68040", "68060", "A1200"], TrapBoundsFamilies, TrapBoundsCounts,
+        "TRAPcc on EC020/A1200/020/030/040/060; CHK2 B/W/L on EC020/A1200/020/030/040. Basic CCR 0/31 and user/supervisor, full extensions enabled, no incoming trace/bus faults. CHK2 is unavailable on 060 and is covered architecturally by synthetic tests, not this generated preset. Patched software reference, not unchanged upstream or silicon qualification."));
+
+    [EnvironmentFact("COPPER68K_RUN_WINUAE_BREAKPOINT_AUDIT", "audit qualified WinUAE BKPT illegal-exception saved PCs")]
+    public void WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled() => RunQualifiedExceptionPreset(new(
+        "Breakpoints", "BREAKPOINT", "gencpu-breakpoints.cpp", "breakpoint-pc.patch", "Breakpoint",
+        "d83606b597e5bd38efc289e0ecbd1d41843e67ecedaac72e4b9335312d2ead21", "27b0fb21a7fadbe0bf92ae42074ceaf665d7c19a83efdc841bc7730befc87a7b", "winuae-breakpoint-audit.json",
+        ["68010", "68020", "68030", "68040", "68060", "68EC020"],
+        ["68010", "68EC020", "68020", "68030", "68040", "68060", "A1200"],
+        _ => ["BKPT"], (_, _) => (32, 32),
+        "BKPT illegal-exception fallback on 010/EC020/A1200/020/030/040/060. Basic CCR 0/31 and user/supervisor. No incoming trace/bus faults or external breakpoint instruction replacement; acknowledge pins and physical cycles are unqualified. Patched software reference, not unchanged upstream or silicon qualification."));
+
+    private void RunQualifiedExceptionPreset(QualifiedExceptionPreset preset)
     {
-        var root = Environment.GetEnvironmentVariable("COPPER68K_WINUAE_TRAP_BOUNDS_PATH");
-        var library = Environment.GetEnvironmentVariable(LibraryVariable);
+        var root = Environment.GetEnvironmentVariable($"COPPER68K_WINUAE_{preset.EnvironmentKey}_PATH");
+        var library = Environment.GetEnvironmentVariable($"COPPER68K_WINUAE_{preset.EnvironmentKey}_LIBRARY")
+            ?? Environment.GetEnvironmentVariable(LibraryVariable);
         var output = Environment.GetEnvironmentVariable("COPPER68K_SYNTHETIC_REPORT_DIR");
         if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(library) || string.IsNullOrWhiteSpace(output))
-            throw new XunitException("Trap/bounds audit requires qualified fixtures, native library and report directory.");
+            throw new XunitException($"{preset.Name} audit requires qualified fixtures, native library and report directory.");
         var manifestFile = Path.Combine(root, "manifest.json");
         var json = File.ReadAllText(manifestFile);
-        var manifest = JsonSerializer.Deserialize<WinUaeManifest>(json) ?? throw new XunitException("Missing trap/bounds manifest.");
+        var manifest = JsonSerializer.Deserialize<WinUaeManifest>(json) ?? throw new XunitException($"Missing {preset.Name} manifest.");
         using var identity = JsonDocument.Parse(json);
         var fields = identity.RootElement;
-        var sourcePath = Path.Combine(root, "gencpu-trap-bounds.cpp");
+        var sourcePath = Path.Combine(root, preset.SourceName);
         var normalizedSourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(File.ReadAllText(sourcePath).Replace("\r\n", "\n")))).ToLowerInvariant();
         if (manifest.Schema != 1 || manifest.GeneratorCommit != GeneratorPin || manifest.RunnerCommit != RunnerPin ||
-            fields.GetProperty("Preset").GetString() != "TrapBounds" || normalizedSourceHash != TrapBoundsSourceHash ||
-            fields.GetProperty("TrapBoundsPatchSha256").GetString() != TrapBoundsPatchHash ||
-            Hash(sourcePath) != fields.GetProperty("TrapBoundsSourceSha256").GetString() ||
-            Hash(Path.Combine(root, "trap-bounds-pc.patch")) != TrapBoundsPatchHash ||
+            fields.GetProperty("Preset").GetString() != preset.Name || normalizedSourceHash != preset.SourceHash ||
+            fields.GetProperty(preset.ManifestPrefix + "PatchSha256").GetString() != preset.PatchHash ||
+            Hash(sourcePath) != fields.GetProperty(preset.ManifestPrefix + "SourceSha256").GetString() ||
+            Hash(Path.Combine(root, preset.PatchName)) != preset.PatchHash ||
             Hash(Path.Combine(root, "cputester.exe")) != fields.GetProperty("GeneratorExecutableSha256").GetString() ||
             Hash(library) != manifest.NativeLibrarySha256)
-            throw new XunitException("Trap/bounds source, patch, generator or native identity is unqualified.");
-        var profileIds = new[] { "68020", "68030", "68040", "68060", "68EC020" };
+            throw new XunitException($"{preset.Name} source, patch, generator or native identity is unqualified.");
+        var profileIds = preset.ProfileIds;
         if (manifest.Profiles.Length != profileIds.Length || !manifest.Profiles.Select(x => x.Id).Order().SequenceEqual(profileIds.Order()))
-            throw new XunitException("Trap/bounds audit requires all five advanced profiles, without empty or duplicate selections.");
-        var models = ModelSpec.All.Where(x => x.Id is not ("68000" or "68010")).ToArray();
-        foreach (var model in models) ValidateWinUaeProfile(root, manifest, model, requiredOpcodes: TrapBoundsFamilies(model));
-        var rows = new List<WinUaeTrapBoundsRow>();
-        var probes = new List<WinUaeTrapBoundsProbe>();
+            throw new XunitException($"{preset.Name} audit requires its complete profile selection, without empty or duplicate selections.");
+        var models = preset.ModelIds.Select(id => ModelSpec.All.Single(x => x.Id == id)).ToArray();
+        foreach (var model in models) ValidateWinUaeProfile(root, manifest, model, requiredOpcodes: preset.Families(model));
+        var rows = new List<WinUaeQualifiedExceptionRow>();
+        var probes = new List<WinUaeQualifiedExceptionProbe>();
         using var tester = NativeTester.Load(library);
         foreach (var model in models)
         {
             var fixture = manifest.Profiles.Single(x => x.Id == FixtureId(model.Id));
             var path = Path.Combine(root, fixture.Id);
-            foreach (var family in TrapBoundsFamilies(model))
+            foreach (var family in preset.Families(model))
             {
                 var register = tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptResult: true);
                 var sr = tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptSr: 0x10);
@@ -55,24 +72,24 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
                     frame.Detail.Contains("frame byte", StringComparison.Ordinal);
                 probes.Add(new(model.Id, family, detected, register.ExecutedCases, sr.ExecutedCases, frame.ExecutedCases));
                 var result = tester.Run(path, family, fixture.CpuLevel, false, false, model);
-                var expected = TrapBoundsCounts(model, family);
+                var expected = preset.Counts(model, family);
                 var passing = detected && result.Passed && result.ExecutedCases == expected.Cases &&
-                    tester.FrameChecks == expected.Frames && tester.MaskedCases == (family == "TRAPcc" ? 0 : expected.Cases);
+                    tester.FrameChecks == expected.Frames && tester.MaskedCases == (family.StartsWith("CHK2.", StringComparison.Ordinal) ? expected.Cases : 0);
                 rows.Add(new(model.Id, family, passing ? "passing" : tester.UnsupportedExecution ? "unsupported" : "mismatching",
                     result.ExecutedCases, tester.FrameChecks, tester.MaskedCases, detected, result.Detail));
                 _output.WriteLine($"{model.Id}/{family}: {result.ExecutedCases} callbacks, {tester.FrameChecks} frames; controls={detected}.");
             }
         }
         Directory.CreateDirectory(output);
-        File.WriteAllText(Path.Combine(output, "winuae-trap-bounds-audit.json"), JsonSerializer.Serialize(new
+        File.WriteAllText(Path.Combine(output, preset.ReportName), JsonSerializer.Serialize(new
         {
-            schema = 1, reference = "WinUAE trap/bounds preset with explicit Motorola-qualified saved-PC correction",
+            schema = 1, reference = $"WinUAE {preset.Name} preset with explicit Motorola-qualified saved-PC correction",
             manifest.GeneratorCommit, manifest.RunnerCommit, manifest.NativeLibrarySha256,
             manifestSha256 = Hash(manifestFile), generatorSourceSha256 = Hash(sourcePath),
-            generatorNormalizedSourceSha256 = TrapBoundsSourceHash, generatorPatchSha256 = TrapBoundsPatchHash,
+            generatorNormalizedSourceSha256 = preset.SourceHash, generatorPatchSha256 = preset.PatchHash,
             adapterAssemblySha256 = Hash(typeof(M68kWinUaeCpuTesterConformanceTests).Assembly.Location),
             cpuAssemblySha256 = Hash(typeof(Copper68k.M68kCoreFactory).Assembly.Location),
-            qualification = "TRAPcc on EC020/A1200/020/030/040/060; CHK2 B/W/L on EC020/A1200/020/030/040. Basic CCR 0/31 and user/supervisor, full extensions enabled, no incoming trace/bus faults. CHK2 is unavailable on 060 and is covered architecturally by synthetic tests, not this generated preset. Patched software reference, not unchanged upstream or silicon qualification.",
+            qualification = preset.Qualification,
             passing = rows.Count(x => x.Status == "passing"), mismatching = rows.Count(x => x.Status == "mismatching"),
             unsupported = rows.Count(x => x.Status == "unsupported"), executedCases = rows.Sum(x => (long)x.ExecutedCases),
             exceptionFrames = rows.Sum(x => (long)x.ExceptionFrames), maskedSrCases = rows.Sum(x => (long)x.MaskedSrCases),
@@ -96,8 +113,11 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
             (_, "CHK2.L") => (874, 406),
             _ => throw new XunitException($"Unqualified trap/bounds family: {model.Id}/{family}")
         };
-    private sealed record WinUaeTrapBoundsRow(string Model, string Family, string Status, int ExecutedCases,
+    private sealed record QualifiedExceptionPreset(string Name, string EnvironmentKey, string SourceName, string PatchName,
+        string ManifestPrefix, string SourceHash, string PatchHash, string ReportName, string[] ProfileIds, string[] ModelIds,
+        Func<ModelSpec, string[]> Families, Func<ModelSpec, string, (int Cases, uint Frames)> Counts, string Qualification);
+    private sealed record WinUaeQualifiedExceptionRow(string Model, string Family, string Status, int ExecutedCases,
         uint ExceptionFrames, uint MaskedSrCases, bool Controls, string Detail);
-    private sealed record WinUaeTrapBoundsProbe(string Model, string Family, bool Detected,
+    private sealed record WinUaeQualifiedExceptionProbe(string Model, string Family, bool Detected,
         int RegisterCases, int SrCases, int FrameCases);
 }
