@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $GeneratorSource,
     [Parameter(Mandatory)] [string] $RunnerSource,
     [Parameter(Mandatory)] [string] $VcVars64,
-    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Moves','Cas')] [string] $Preset = 'Basic',
+    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Moves','Cas','Cas2')] [string] $Preset = 'Basic',
     [string] $OutputDirectory = 'artifacts/winuae-model-inputs'
 )
 $ErrorActionPreference = 'Stop'
@@ -48,17 +48,17 @@ try {
         & ./build68k.exe table68k | Set-Content -Encoding utf8 cpudefs.cpp
         if ($LASTEXITCODE -ne 0) { throw 'Opcode table generation failed' }
         $cpuGeneratorSource = 'gencpu.cpp'
-        if ($Preset -in @('TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Cas')) {
+        if ($Preset -in @('TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Cas','Cas2')) {
             # TrapBounds: following PC (MC68020UM 6.1.4 / MC68040UM 8.2.3).
             # Breakpoints: opcode PC (illegal exception, UM 6.1.5 / 8.2.4).
             # Patch a copy; Basic keeps the pinned source.
-            $sourceName = switch ($Preset) {'TrapBounds' {'gencpu-trap-bounds.cpp'} 'Breakpoints' {'gencpu-breakpoints.cpp'} 'LongArithmetic' {'gencpu-long-arithmetic.cpp'} 'WordDivision' {'gencpu-word-division.cpp'} 'LowPowerStop' {'gencpu-lpstop.cpp'} 'Cas' {'gencpu-cas.cpp'}}
-            $patchName = switch ($Preset) {'TrapBounds' {'trap-bounds-pc.patch'} 'Breakpoints' {'breakpoint-pc.patch'} 'LongArithmetic' {'long-arithmetic-unimplemented.patch'} 'WordDivision' {'word-division-carry.patch'} 'LowPowerStop' {'lpstop-fetch-pc.patch'} 'Cas' {'cas-unimplemented-pc.patch'}}
+            $sourceName = switch ($Preset) {'TrapBounds' {'gencpu-trap-bounds.cpp'} 'Breakpoints' {'gencpu-breakpoints.cpp'} 'LongArithmetic' {'gencpu-long-arithmetic.cpp'} 'WordDivision' {'gencpu-word-division.cpp'} 'LowPowerStop' {'gencpu-lpstop.cpp'} 'Cas' {'gencpu-cas.cpp'} 'Cas2' {'gencpu-cas2.cpp'}}
+            $patchName = switch ($Preset) {'TrapBounds' {'trap-bounds-pc.patch'} 'Breakpoints' {'breakpoint-pc.patch'} 'LongArithmetic' {'long-arithmetic-unimplemented.patch'} 'WordDivision' {'word-division-carry.patch'} 'LowPowerStop' {'lpstop-fetch-pc.patch'} 'Cas' {'cas-unimplemented-pc.patch'} 'Cas2' {'cas2-compare-alias.patch'}}
             $patchPath = Join-Path $PSScriptRoot ('winuae/' + $patchName)
             $patch = [IO.File]::ReadAllText($patchPath).Replace("`r`n", "`n")
             $source = [IO.File]::ReadAllText((Join-Path $generator 'gencpu.cpp')).Replace("`r`n", "`n")
             $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
-            $requiredHunks = switch ($Preset) {'Breakpoints' {1} 'TrapBounds' {2} 'LongArithmetic' {3} 'WordDivision' {1} 'LowPowerStop' {2} 'Cas' {1}}
+            $requiredHunks = switch ($Preset) {'Breakpoints' {1} 'TrapBounds' {2} 'LongArithmetic' {3} 'WordDivision' {1} 'LowPowerStop' {2} 'Cas' {1} 'Cas2' {2}}
             if ($hunks.Count -ne $requiredHunks) { throw "Incorrect $Preset patch hunk count" }
             foreach ($hunk in $hunks) {
                 $lines = $hunk.TrimEnd("`n").Split("`n")
@@ -86,14 +86,14 @@ try {
             [IO.File]::WriteAllText($testerSource, (Patch-Once ([IO.File]::ReadAllText((Join-Path $generator 'cputest.cpp'))) $before $after))
             [IO.File]::WriteAllText((Join-Path $output 'trace-priority.patch'), ([IO.File]::ReadAllText($patchPath)).Replace("`r`n", "`n"))
         }
-        if ($Preset -in @('LongArithmetic','Moves','Cas')) {
+        if ($Preset -in @('LongArithmetic','Moves','Cas','Cas2')) {
             # M68000PM 4-94/98/136/140: reserved extension fields are zero;
             # Dh == Dl with a 64-bit multiply has undefined results. MOVES
             # 6-24/25/26 similarly fixes reserved fields and excludes undefined
             # same-An postincrement/predecrement store values. CAS 4-67 allows
             # only Du/Dc extension fields. Select
             # legal inputs before reference execution, never in the CPU bridge.
-            $patchName = switch ($Preset) {'Moves' {'moves-encodings.patch'} 'Cas' {'cas-encodings.patch'} default {'long-arithmetic-encodings.patch'}}
+            $patchName = switch ($Preset) {'Moves' {'moves-encodings.patch'} 'Cas' {'cas-encodings.patch'} 'Cas2' {'cas2-overlap-inputs.patch'} default {'long-arithmetic-encodings.patch'}}
             $patch = [IO.File]::ReadAllText((Join-Path $PSScriptRoot ('winuae/' + $patchName))).Replace("`r`n", "`n")
             $source = [IO.File]::ReadAllText((Join-Path $generator 'cputest.cpp')).Replace("`r`n", "`n")
             $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
@@ -101,7 +101,7 @@ try {
             $lines = $hunks[0].TrimEnd("`n").Split("`n")
             $before = (($lines | Where-Object { $_.StartsWith('-') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
             $after = (($lines | Where-Object { $_.StartsWith('+') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
-            $testerSource = Join-Path $output $(switch ($Preset) {'Moves' {'cputest-moves.cpp'} 'Cas' {'cputest-cas.cpp'} default {'cputest-long-arithmetic.cpp'}})
+            $testerSource = Join-Path $output $(switch ($Preset) {'Moves' {'cputest-moves.cpp'} 'Cas' {'cputest-cas.cpp'} 'Cas2' {'cputest-cas2.cpp'} default {'cputest-long-arithmetic.cpp'}})
             [IO.File]::WriteAllText($testerSource, (Patch-Once $source $before $after))
             [IO.File]::WriteAllText((Join-Path $output $patchName), $patch)
         }
@@ -172,6 +172,9 @@ void M68KTester_destroy(M68KTesterContext* context) {
     if ($Preset -eq 'Moves') {
         $baseIni = $baseIni.Replace('[test=Basic]', '[test=Moves]').Replace('mode=all', 'mode=MOVES.B,MOVES.W,MOVES.L').Replace('feature_sr_mask=0x0000', 'feature_sr_mask=0x2000')
     }
+    if ($Preset -eq 'Cas2') {
+        $baseIni = $baseIni.Replace('[test=Basic]', '[test=Cas2]').Replace('mode=all', 'mode=CAS2.W,CAS2.L').Replace('feature_sr_mask=0x0000', 'feature_sr_mask=0x2000')
+    }
     if ($Preset -eq 'Cas') {
         $baseIni = $baseIni.Replace('[test=Basic]', '[test=Cas]').Replace('mode=all', 'mode=CAS.B,CAS.W,CAS.L').Replace('feature_sr_mask=0x0000', 'feature_sr_mask=0x2000')
     }
@@ -186,7 +189,7 @@ void M68KTester_destroy(M68KTesterContext* context) {
         if ($Preset -eq 'LongArithmetic' -and $model.id -in @('68000','68010')) { continue }
         if ($Preset -eq 'LowPowerStop' -and $model.id -ne '68060') { continue }
         if ($Preset -eq 'Moves' -and $model.id -eq '68000') { continue }
-        if ($Preset -eq 'Cas' -and $model.id -in @('68000','68010')) { continue }
+        if ($Preset -in @('Cas','Cas2') -and $model.id -in @('68000','68010')) { continue }
         $profileRoot = Join-Path $output $model.id
         New-Item -ItemType Directory -Path $profileRoot | Out-Null
         # Every invocation uses a fresh generator output path; stale data cannot fill a gap.
@@ -233,6 +236,10 @@ void M68KTester_destroy(M68KTesterContext* context) {
         LowPowerStopPatchSha256=$(if ($Preset -eq 'LowPowerStop') {(Get-FileHash -LiteralPath (Join-Path $output 'lpstop-fetch-pc.patch')).Hash.ToLowerInvariant()} else {$null})
         MovesSourceSha256=$(if ($Preset -eq 'Moves') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-moves.cpp')).Hash.ToLowerInvariant()} else {$null})
         MovesPatchSha256=$(if ($Preset -eq 'Moves') {(Get-FileHash -LiteralPath (Join-Path $output 'moves-encodings.patch')).Hash.ToLowerInvariant()} else {$null})
+        Cas2InputSourceSha256=$(if ($Preset -eq 'Cas2') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-cas2.cpp')).Hash.ToLowerInvariant()} else {$null})
+        Cas2InputPatchSha256=$(if ($Preset -eq 'Cas2') {(Get-FileHash -LiteralPath (Join-Path $output 'cas2-overlap-inputs.patch')).Hash.ToLowerInvariant()} else {$null})
+        Cas2SourceSha256=$(if ($Preset -eq 'Cas2') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-cas2.cpp')).Hash.ToLowerInvariant()} else {$null})
+        Cas2PatchSha256=$(if ($Preset -eq 'Cas2') {(Get-FileHash -LiteralPath (Join-Path $output 'cas2-compare-alias.patch')).Hash.ToLowerInvariant()} else {$null})
         CasSourceSha256=$(if ($Preset -eq 'Cas') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-cas.cpp')).Hash.ToLowerInvariant()} else {$null})
         CasPatchSha256=$(if ($Preset -eq 'Cas') {(Get-FileHash -LiteralPath (Join-Path $output 'cas-unimplemented-pc.patch')).Hash.ToLowerInvariant()} else {$null})
         CasInputSourceSha256=$(if ($Preset -eq 'Cas') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-cas.cpp')).Hash.ToLowerInvariant()} else {$null})

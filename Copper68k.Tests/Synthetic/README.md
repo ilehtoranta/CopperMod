@@ -334,3 +334,22 @@ not physical lock/bus, cache, trace/fault restart, timing or exhaustive indexed-
 value qualification. CAS2 remains separate; 000/010 absence remains synthetic.
 The [CAS qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#cas-legal-input-and-unimplemented-frame-reference-qualification-2026-10-05)
 records the original disagreement, controls and remaining scope.
+
+CAS2 W/L has a separate `Cas2` preset for EC020/A1200/020/030/040/060. It corrects
+the pinned 040 reference's compare-alias result to operand 1 (M68000PM 4-68),
+and excludes undefined overlapping memory-update candidates before reference
+execution. On 060 overlapping candidates remain selected because CAS2 takes
+vector 61 without memory updates. The input classifier independently checks
+physical overlap, including boundary wrap, and records register/address selectors,
+compare/update aliases, alignment and incoming S/CCR. Twelve directories pass
+3,180 callbacks, 2,296 exception frames and 3,072 recorded forms. Both source/
+patch identities, all fixture hashes, complete selections and exact counts are
+required. Comparator controls recreate both W/L alias defects and corrupt 060
+saved PCs; eleven fixed encoding/overlap tests also run. This is a small seeded
+software-reference sample, not exhaustive combinations or physical qualification.
+Prepare with `./scripts/prepare-copper68k-winuae.ps1 -Preset Cas2` and the pinned
+source/compiler arguments; run
+`./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset Cas2
+-InputDirectory <qualified-inputs> -OutputDirectory <fresh-output>`.
+See the [CAS2 qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#cas2-compare-alias-and-unimplemented-frame-reference-qualification-2026-10-05)
+for retained failed discovery, controls, exclusions and remaining scope.

@@ -122,7 +122,26 @@ identities, replacement proofs and remaining required coverage here as work
 progresses. No milestone is complete merely because an inventory exists or a
 partial matrix passes.
 
-Latest milestone-6 reference checkpoint, 2026-10-05: legal sampled CAS B/W/L
+Latest milestone-6 reference checkpoint, 2026-10-05: sampled CAS2 W/L passes
+3,180 callbacks, 2,296 unimplemented-integer frames and 3,072 recorded forms
+across EC020/A1200/020/030/040/060. The CPU already implements the manual's
+shared-compare operand-1 rule; a copied reference corrects 040 alias ordering.
+A copied input generator excludes overlapping memory-update candidates before
+execution, with independent physical-width/wrap checks in the bridge; 060
+unimplemented cases retain overlapping inputs. Twelve directories and eleven
+fixed cases pass, with thirty comparator controls and nine input/source controls.
+Both source/patch identities, complete selections and exact counts are required.
+The [CAS2 qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#cas2-compare-alias-and-unimplemented-frame-reference-qualification-2026-10-05)
+retains failed discovery and reports the limited seeded scope honestly. No
+production fix, regression retirement or package publication is added. The full
+milestone-6 restoration/reference/consolidation requirements remain in progress.
+Full Release CPU validation passes 5,023 tests with eleven optional skips and
+all eight qualified WinUAE presets enabled against the same CPU/adapter binaries.
+The strict gate passes 16,035,670 logical cases in 595 batches; pinned
+SingleStepTests passes 312,500 cases in 125 files, and Musashi passes 536 programs
+with 88 explicit exclusions. `roadmapComplete=false` remains explicit.
+
+Preceding milestone-6 reference checkpoint, 2026-10-05: legal sampled CAS B/W/L
 passes 49,284 independent callbacks, 2,466 unimplemented-integer frames and
 38,448 recorded architectural combinations across EC020/A1200/020/030/040/060.
 The CPU already saves the documented 060 instruction PC; a separate copied

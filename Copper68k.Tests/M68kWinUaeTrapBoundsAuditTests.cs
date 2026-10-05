@@ -89,8 +89,12 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
                 var pc = pcRequired ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptSavedPc: true) : default;
                 var pcDetected = !pcRequired || (!pc.Passed && pc.ExecutedCases > 0 && tester.FrameChecks > 0 &&
                     pc.Detail.Contains("frame byte 5", StringComparison.Ordinal));
+                var aliasRequired = preset.CompareAliasControls?.Invoke(model, family) == true;
+                var alias = aliasRequired ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptCas2CompareAlias: true) : default;
+                var aliasDetected = !aliasRequired || (!alias.Passed && alias.ExecutedCases > 0 &&
+                    alias.Detail.Contains(":D", StringComparison.Ordinal));
                 var detected = !register.Passed && register.ExecutedCases > 0 && !sr.Passed && sr.ExecutedCases > 0 &&
-                    sr.Detail.Contains("SR:", StringComparison.Ordinal) && frameDetected && pcDetected;
+                    sr.Detail.Contains("SR:", StringComparison.Ordinal) && frameDetected && pcDetected && aliasDetected;
                 var carry = preset.ArithmeticFlagControls ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptSr: 1) : default;
                 var carryDetected = !preset.ArithmeticFlagControls || (!carry.Passed && carry.ExecutedCases > 0 && carry.Detail.Contains("SR:", StringComparison.Ordinal));
                 var ignored = preset.ArithmeticFlagControls ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptIgnoredSr: true) : default;
@@ -99,17 +103,19 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
                 probes.Add(new(model.Id, family, detected, register.ExecutedCases, sr.ExecutedCases, frame.ExecutedCases,
                     preset.ArithmeticFlagControls, carryDetected, carry.ExecutedCases, ignoredAccepted, ignored.ExecutedCases,
                     frameRequired, frameDetected, pcRequired, pcDetected, pc.ExecutedCases,
-                    pcRequired ? pc.Detail : null));
+                    pcRequired ? pc.Detail : null, aliasRequired, aliasDetected, alias.ExecutedCases,
+                    aliasRequired ? alias.Detail : null));
                 var result = tester.Run(path, family, fixture.CpuLevel, false, false, model,
                     fixtureClassifier: preset.ClassifyForm is null ? null : (opcode, inputSr) => preset.ClassifyForm(opcode, inputSr, family),
-                    fixtureWordsClassifier: preset.ClassifyWords is null ? null : (opcode, extension, followingWord, inputSr) => preset.ClassifyWords(model, opcode, extension, followingWord, inputSr, family));
+                    fixtureWordsClassifier: preset.ClassifyWords is null ? null : (opcode, extension, followingWord, inputSr) => preset.ClassifyWords(model, opcode, extension, followingWord, inputSr, family),
+                    fixtureRegisterClassifier: preset.ClassifyRegisters is null ? null : (opcode, extension, followingWord, inputSr, registers) => preset.ClassifyRegisters(model, opcode, extension, followingWord, inputSr, registers, family));
                 var forms = new SortedDictionary<string, int>(tester.FixtureForms.ToDictionary(x => x.Key, x => x.Value), StringComparer.Ordinal);
                 var expectedForms = preset.FormCounts?.Invoke(model, family) ?? 0;
                 var formDistributionMatches = preset.ExpectedForms is null || forms.SequenceEqual(preset.ExpectedForms(model, family).OrderBy(x => x.Key, StringComparer.Ordinal));
                 var expectedMasked = preset.MaskedCounts?.Invoke(model, family) ?? (family.StartsWith("CHK2.", StringComparison.Ordinal) ? (uint)expected.Cases : 0);
                 var passing = detected && result.Passed && result.ExecutedCases == expected.Cases &&
                     tester.FrameChecks == expected.Frames && tester.MaskedCases == expectedMasked &&
-                    forms.Count == expectedForms && formDistributionMatches && ((preset.ClassifyForm is null && preset.ClassifyWords is null) || forms.Values.Sum() == result.ExecutedCases);
+                    forms.Count == expectedForms && formDistributionMatches && ((preset.ClassifyForm is null && preset.ClassifyWords is null && preset.ClassifyRegisters is null) || forms.Values.Sum() == result.ExecutedCases);
                 var detail = $"{result.Detail} Expected/actual callbacks={expected.Cases}/{result.ExecutedCases}, frames={expected.Frames}/{tester.FrameChecks}, masked={expectedMasked}/{tester.MaskedCases}, forms={expectedForms}/{forms.Count}, formDistributionMatches={formDistributionMatches}.";
                 rows.Add(new(model.Id, family, passing ? "passing" : tester.UnsupportedExecution ? "unsupported" : result.ExecutedCases == 0 ? "untested" : "mismatching",
                     result.ExecutedCases, tester.FrameChecks, tester.MaskedCases, detected, forms, detail));
@@ -159,7 +165,9 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
         Func<ushort, ushort, string, string>? ClassifyForm = null, Func<ModelSpec, string, int>? FormCounts = null,
         Func<ModelSpec, ushort, ushort, ushort, ushort, string, string>? ClassifyWords = null,
         Func<ModelSpec, string, IReadOnlyDictionary<string, int>>? ExpectedForms = null,
-        QualifiedInputIdentity? InputIdentity = null, bool AllowFrameFreeFamilies = false, bool SavedPcControls = false);
+        QualifiedInputIdentity? InputIdentity = null, bool AllowFrameFreeFamilies = false, bool SavedPcControls = false,
+        Func<ModelSpec, ushort, ushort, ushort, ushort, IReadOnlyList<uint>, string, string>? ClassifyRegisters = null,
+        Func<ModelSpec, string, bool>? CompareAliasControls = null);
     private sealed record QualifiedInputIdentity(string SourceName, string PatchName, string SourceHash, string PatchHash);
     private sealed record WinUaeQualifiedExceptionRow(string Model, string Family, string Status, int ExecutedCases,
         uint ExceptionFrames, uint MaskedSrCases, bool Controls, SortedDictionary<string, int> Forms, string Detail);
@@ -167,5 +175,6 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
         int RegisterCases, int SrCases, int FrameCases, bool ArithmeticFlagControls,
         bool CarryDetected, int CarryCases, bool IgnoredAccepted, int IgnoredCases,
         bool FrameControlRequired, bool FrameDetected, bool SavedPcControlRequired,
-        bool SavedPcDetected, int SavedPcCases, string? SavedPcDetail);
+        bool SavedPcDetected, int SavedPcCases, string? SavedPcDetail,
+        bool CompareAliasControlRequired, bool CompareAliasDetected, int CompareAliasCases, string? CompareAliasDetail);
 }

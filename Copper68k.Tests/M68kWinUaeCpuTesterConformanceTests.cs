@@ -309,6 +309,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		private bool _corruptResult;
 		private bool _corruptFrame;
 		private bool _corruptSavedPc;
+		private bool _corruptCas2CompareAlias;
 		private ushort _corruptSr;
 		private bool _corruptIgnoredSr;
 		private string _integerFamily = "";
@@ -316,6 +317,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		private readonly Dictionary<string, int> _longArithmeticForms = new(StringComparer.Ordinal);
 		private Func<ushort, ushort, string>? _fixtureClassifier;
 		private Func<ushort, ushort, ushort, ushort, string>? _fixtureWordsClassifier;
+		private Func<ushort, ushort, ushort, ushort, IReadOnlyList<uint>, string>? _fixtureRegisterClassifier;
 		private readonly Dictionary<string, int> _fixtureForms = new(StringComparer.Ordinal);
 
 		private NativeTester(IntPtr library)
@@ -364,7 +366,9 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			bool qualifyLongArithmetic = false,
 			Func<ushort, ushort, string>? fixtureClassifier = null,
 			Func<ushort, ushort, ushort, ushort, string>? fixtureWordsClassifier = null,
-			bool corruptSavedPc = false)
+			bool corruptSavedPc = false,
+			Func<ushort, ushort, ushort, ushort, IReadOnlyList<uint>, string>? fixtureRegisterClassifier = null,
+			bool corruptCas2CompareAlias = false)
 		{
 			_callbackException = null;
 			_executedCases = 0;
@@ -378,6 +382,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			_corruptResult = corruptResult;
 			_corruptFrame = corruptFrame;
 			_corruptSavedPc = corruptSavedPc;
+			_corruptCas2CompareAlias = corruptCas2CompareAlias;
 			_corruptSr = corruptSr;
 			_corruptIgnoredSr = corruptIgnoredSr;
 			_integerFamily = opcode;
@@ -385,6 +390,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			_longArithmeticForms.Clear();
 			_fixtureClassifier = fixtureClassifier;
 			_fixtureWordsClassifier = fixtureWordsClassifier;
+			_fixtureRegisterClassifier = fixtureRegisterClassifier;
 			_fixtureForms.Clear();
 			if (integerProfile is not null && (_destroy is null || _addressingMask is null || _lastOutput is null))
 				throw new XunitException("Multi-model integer audit requires the qualified native bridge exports (destroy, addressing mask and diagnostics).");
@@ -521,8 +527,41 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 					_fixtureForms[form] = _fixtureForms.GetValueOrDefault(form) + 1;
 				}
 				bus.CopyStackImage(registers.Regs[15], registers.Ssp, 0x20);
+				if (_fixtureRegisterClassifier is not null)
+				{
+					// The native input stores USP in slot A7 even when S is set.
+					// Select its actual initial stack without executing production EA.
+					var inputRegisters = (uint[])registers.Regs.Clone();
+					if ((registers.Sr & 0x2000) != 0) inputRegisters[15] = registers.Ssp;
+					var form = _fixtureRegisterClassifier(bus.ReadHostWord(registers.Pc),
+						bus.ReadHostWord(registers.Pc + 2), bus.ReadHostWord(registers.Pc + 4),
+						(ushort)registers.Sr, inputRegisters);
+					_fixtureForms[form] = _fixtureForms.GetValueOrDefault(form) + 1;
+				}
 
 				ApplyRegisters(cpu, registers, _cpuLevel);
+				uint? corruptAliasValue = null;
+				var corruptAliasRegister = 0;
+				var corruptAliasWidth = 0;
+				if (_corruptCas2CompareAlias)
+				{
+					var opcode = bus.ReadHostWord(registers.Pc);
+					var first = bus.ReadHostWord(registers.Pc + 2);
+					var second = bus.ReadHostWord(registers.Pc + 4);
+					if (opcode is 0x0cfc or 0x0efc && (first & 7) == (second & 7))
+					{
+						// Capture operand 2 independently before execution. On a
+						// failed aliased comparison, substituting it recreates the
+						// old reference defect (manual requires operand 1).
+						var selector = second >> 12;
+						var address = selector == 15 && (registers.Sr & 0x2000) != 0
+							? registers.Ssp : registers.Regs[selector];
+						corruptAliasRegister = first & 7;
+						corruptAliasWidth = opcode == 0x0cfc ? 2 : 4;
+						corruptAliasValue = corruptAliasWidth == 2 ? bus.ReadHostWord(address) :
+							((uint)bus.ReadHostWord(address) << 16) | bus.ReadHostWord(unchecked(address + 2));
+					}
+				}
 				registers.Cycles = 0;
 				DeferredFpuException? deferredFpuException = null;
 				var deferredFpuExceptionObserved = false;
@@ -598,6 +637,10 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 				}
 
 				CopyRegisters(cpu.State, bus, _cpuLevel, ref registers);
+				if (corruptAliasValue.HasValue && cpu.State.LastExceptionVector < 0 && (registers.Sr & 4) == 0)
+					registers.Regs[corruptAliasRegister] = corruptAliasWidth == 2
+						? (registers.Regs[corruptAliasRegister] & 0xffff0000) | corruptAliasValue.Value
+						: corruptAliasValue.Value;
 				if (_integerProfile is not null)
 				{
 					var mask = WinUaeArchitecturalFlags.DefinedMask(_integerFamily, cpu.State.LastExceptionVector, (ushort)registers.Sr);

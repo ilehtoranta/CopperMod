@@ -3462,3 +3462,125 @@ complete required-gap inventory retained. Fresh pinned SingleStepTests passes
 312,500 cases in 125 files; Musashi passes 536 programs with 88 explicit
 exclusions. Their input identities and complete selections are rechecked; this
 does not broaden the references' documented qualification or close other gaps.
+
+### CAS2 compare-alias and unimplemented-frame reference qualification — 2026-10-05
+
+The preceding CAS investigation identified the unchanged Basic 040 CAS2.W
+witness `0CFC 8083 E043`: both compare fields name D3, with different operand
+addresses A0/A6. Copper68k returns operand 1 (`FFFF0001`); the reference expects
+operand 2 (`FFFFC700`). [M68000PM 4-68](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+explicitly assigns operand 1 to a shared compare register on comparison failure.
+The pinned generator reverses the register-update order on 040. A copied CPU
+generator now writes operand 2 first, then operand 1, for both W/L, preserving
+the final operand-1 value when Dc1 == Dc2. Nonaliased results and CPU production
+behavior remain unchanged. The original Basic inputs, source and disagreement
+remain retained.
+
+The first `Cas2` discovery inputs also contain overlapping memory operands.
+The immutable input classifier rejects them before CPU execution, including
+`FFFFFFFF` and zero long transfers whose physical bytes overlap after wrapping.
+M68000PM 4-68 marks overlapping memory-update results undefined. A separate
+copied input generator now excludes overlapping operand ranges before reference
+execution, independently of the comparison outcome. It checks every physical
+byte using the profile's external address width and selects A7's actual initial
+USP/ISP according to S. It writes the generator's normal skip marker, undoes
+fixture write history and resets frame compression state. Existing upstream
+canonicalization already clears reserved CAS2 extension fields; the bridge
+verifies them rather than changing inputs. Each of EC020/020/030/040 excludes
+372 generated CCR/S candidates, recorded in its generation log. On 060 every
+CAS2 is an unimplemented-integer exception, so overlap candidates are retained:
+there is no ambiguous memory update. [MC68060UM C.2.2](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+requires vector 61 and an instruction-PC format-0 frame.
+
+The classifier uses immutable instruction words and initial registers, with
+explicit stack selection rather than production decoder/EA helpers. It records
+W/L, both general-register address selectors, both compare/update registers,
+shared-compare aliases, alignment residues, overlap and incoming S/CCR. Fixed
+tests distinguish 24/32-bit physical aliasing and transfers wrapping at the
+address boundary. Required selected counts are:
+
+| Profile(s), each | Family | Callbacks | Exception frames | Recorded forms |
+| --- | --- | ---: | ---: | ---: |
+| EC020 / A1200 | W | 174 | 0 | 174 |
+| EC020 / A1200 | L | 154 | 0 | 154 |
+| 020 / 030 / 040 | W | 42 | 0 | 42 |
+| 020 / 030 / 040 | L | 34 | 0 | 34 |
+| 060 | W | 1,148 | 1,148 | 1,096 |
+| 060 | L | 1,148 | 1,148 | 1,092 |
+| All six profiles | W/L | 3,180 | 2,296 | 3,072 |
+
+All twelve selected directories pass with zero mismatching, unsupported or
+untested directories and no masked SR cases. Eleven fixed encoding/profile/
+overlap tests also pass. Every directory detects register and defined-SR
+corruptions; the two 060 directories also detect frame-word and saved-PC
+corruptions. The two 040 directories detect a separate alias-result corruption
+that substitutes the independently captured original operand 2 on a failed
+shared-register comparison. The W control fails at callback 29 on the original
+`0CFC 8083 E043` witness, expected D3 `FFFF0001`, actual `FFFFC700`. The L control
+fails on its first callback (`0EFC E047 1147`), expected D7 `C700FD02`, actual
+`0001004F`. These thirty applicable controls prove the comparisons detect the
+old reference defect; inapplicable frame controls are labeled, not counted as
+coverage. Compare-alias forms occur in every selected family/profile; these
+counts do not establish exhaustive combinations or success/failure distributions.
+
+The initial overlapping-input failures remain in
+`artifacts/m6-cas2-reference-discovery/`; the subsequent count-discovery run
+intentionally fails against placeholder counts in
+`artifacts/m6-cas2-reference-counts/`. Neither is passing qualified evidence.
+The final exact-count run in `artifacts/m6-cas2-reference-qualified/` passes
+twelve xUnit tests (eleven fixed cases and the generated audit). Nine isolated
+controls reject empty profile/family/input selections, missing/changed data,
+changed CPU-generator source/patch and changed input-generator source/patch;
+`artifacts/m6-cas2-reference-controls/controls.json` records specific failures.
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 -GeneratorSource <pinned-generator> -RunnerSource <pinned-runner> -VcVars64 <vcvars64.bat> -Preset Cas2 -OutputDirectory <fresh-inputs>
+./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset Cas2 -InputDirectory <fresh-inputs> -OutputDirectory <fresh-output>
+```
+
+The generator pin remains `025b999239800357e95065fe5b9a15ea5b300fa7`, runner
+pin `7a83745d6c6159bc74ab0471578ffc8bc244e66e`. Required source/patch SHA-256:
+
+| Input | SHA-256 |
+| --- | --- |
+| Copied CPU generator | `beeb1f112867f1f11aa18b172c4607fe572db3f7500c8ef509a657423d640917` |
+| CPU-generator patch | `134b61047dfafb91f38374b5151b940ada98dee32bfec251b6a6855043092888` |
+| Copied input generator | `4edf1108dd8aab27ea8f61177c8e2166fca5b54e374f759ed388e3c804d5b93e` |
+| Input-generator patch | `dbf0c78f5b88bf2f2ddc0d656a52bca190ec6b970b9e3c6b82cc48d5eac5fc0d` |
+
+The complete fixture manifest has SHA-256
+`3d819a0373d698496e1db0d440745128eddf227ba066a11d70d35f7e124fccf4`;
+generator executable SHA-256
+`9bc0646013661b2e2a1882a321ee1d177fe34eb78298abcc19ef36a8eda9202f`;
+native library SHA-256
+`32178feb2c58e1c483fa23507400353efa7a2c06c7bc76cb6227b41818654003`.
+All profiles/families, data and memory images, input hashes, both copied sources
+and both patches are required before execution. Inputs are in
+`artifacts/m6-cas2-qualified-inputs/`, with one seeded round, CCR 0/31 and both
+privilege states. The small implemented-model selections are reported as actual
+software-reference samples, not comprehensive architectural qualification.
+
+Physical lock/bus order, cache, trace, operand-fault restart, physical timing
+and exhaustive register/value/alias combinations remain unqualified. Unavailable
+000/010 outcomes remain synthetic. No production fix, regression retirement,
+consumer replay or package publication is added here. This promotes only the
+documented sampled reference scope; the full required restoration/reference/
+consolidation roadmap remains in progress.
+
+Full Release CPU validation in `artifacts/m6-cas2-full/` passes 5,023 tests,
+eleven optional skips and zero failures, with all eight qualified WinUAE presets
+enabled. Every preset passes its exact selection/count controls with matching
+CPU/adapter identities. CPU assembly SHA-256 is
+`df73a9759389296aaa6300ec682d27fe67d37f66033bda8d78836044edc60132`;
+adapter SHA-256 is
+`c1d3cca379061aff66c065b2fb5b61e24eb3ae8e88e4e834ab698e07ec4df0f5`.
+Production CPU source remains unchanged since `cb9679d`; preceding private
+unpublished `.57` consumer evidence retains its original package/binary
+identities, without a new consumer replay or cross-checkpoint binary-equality
+claim. CopperScreen's unrelated changes and pinned NuGet boundary are preserved.
+
+The strict report gate passes 16,035,670 deterministic logical cases in 595
+xUnit batches. Pinned SingleStepTests passes 312,500 cases across 125 files;
+Musashi passes 536 programs with 88 explicit exclusions. Input identities and
+complete selections are rechecked. `roadmapComplete=false` remains explicit;
+these passing scoped gates do not close the remaining milestone-6 requirements.
