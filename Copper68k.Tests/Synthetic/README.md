@@ -583,3 +583,34 @@ reports, six fixed examples and thirteen input identities. Its retained
 480-case remaining-protocol inventory still fails completion. No production
 CPU change, package publication or regression retirement is included. See the
 [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-preserved-trace-rte-repair--2026-10-05).
+
+### Pending-exception delivery with preserved incoming trace
+
+Four `PendingRepairWithPreservedIncomingTrace` reports add 1,824,768 phases
+for CT/CU/CP49 after supervisor-tail repair. The handler preserves the access
+frame's SR. The original RTE must deliver the pending exception without an
+extra automatic trace of that RTE; repaired SR/PC/EA, format/vector and pending
+consumption remain visible to its handler. A bare pending-handler RTE returns,
+and the following BRA obeys the repaired trace bits. This fixture does not
+emulate the pending handler's software service of the original trace.
+
+Canonical cases cover all CCRs; chained cases reject every validation-read byte
+with CCR 0/31. Both routes cross all incoming/restored traces and restored
+stacks, twelve supervisor throwaway paths and both alignments/VBRs. The three
+continuation forms have separate case identifiers. CP vectors other than 49,
+software trace service, user-tail trace bridges and mixed-epoch trace provenance
+are not qualified by these new groups. Existing untraced CP-vector coverage
+remains separate.
+
+```powershell
+./scripts/test-copper68k-synthetic-mutations.ps1 -Scope RtePendingTrace -OutputDirectory artifacts/rte-pending-trace-mutations
+```
+
+The complete 040 gate now requires 52 tests, 46 reports, six fixed examples and
+thirteen input identities. Its independent iterator checks every combination
+and cardinality. The required 480-case inventory still prevents completion.
+See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-pending-delivery-with-preserved-trace--2026-10-06).
+
+The three result states are user M=0, ISP M=0 and MSP M=1. Restored user M=1
+is not covered here; its exception-bank selection remains a required separate
+qualification, alongside the pending software trace-service and other gaps.

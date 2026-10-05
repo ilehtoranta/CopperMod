@@ -4697,3 +4697,109 @@ SingleStepTests passes **312,500 cases / 125 files** and Musashi passes
 without skips; their source pins and software-reference limits remain
 unchanged. The full-run optional skips are not credited as reference coverage.
 The ordinary summary retains `roadmapComplete=false`.
+
+## 040 pending delivery with preserved trace — 2026-10-06
+
+This checkpoint extends the real three-store supervisor-tail repair fixture
+to CT/CU/CP49 with the access frame's saved SR untouched. Expectations use
+[MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf) 8.3,
+8.4.6.2 and 8.4.6.7: RTE immediately delivers the indicated pending exception;
+CU/CP take precedence over tracing, leaving software to inspect saved trace
+bits. CT already delivers its pending trace. An extra automatic trace of the
+converting RTE must not obscure that frame. These are manual-derived synthetic
+contexts, not observed hardware faults or qualification of FPU arithmetic.
+
+The handler changes the original frame's SR/PC/format with exactly three real
+MOVE stores. Its return restores incoming 0/T1/T0. The retried original RTE
+converts the repaired pending frame, preserving repaired SR/PC/EA and using
+format 2 for CT/CU or format 3 for CP49. Its handler sees the original pending
+vector and CU/CP context consumption. Incoming trace cannot cause a second
+automatic exception at this boundary. A bare pending-handler RTE then returns;
+the following self-BRA traces according to the repaired saved SR.
+
+| Group, each scalar/batch | Cases | Combinations |
+| --- | ---: | ---: |
+| Canonical CCR boundaries | 41,472 | 162 |
+| Chained validation read bytes | 870,912 | 54,432 |
+
+All four reports total **1,824,768 phases**. The canonical SR-read case covers
+all 32 CCRs. Structural cases use CCR 0/31, every rejected validation-read byte,
+twelve supervisor paths, both alignments/VBRs and all incoming/restored trace
+and restored user/ISP/MSP combinations. No consumed throwaway may be replayed
+or its discarded PC fetched. Exact repair writes, preserved architectural
+state/memory and public batch counts/callbacks remain checked. The initial
+focused run in `artifacts/m6-pending-trace-first/` passes all four tests with
+zero skips, mismatches, unsupported execution or untested phases.
+
+The pending handler here deliberately performs a bare RTE. Its required
+software service of the original trace is not claimed as executed coverage;
+the saved trace bits needed by that service are checked independently. Other
+CP vectors retain their earlier distinct continuation coverage but are not
+qualified by this new preserved-trace repair matrix. User-tail trace bridges,
+mixed-epoch trace provenance, internal restoration, chained odd-PC SR,
+general data/writeback/context-transfer and all earlier model/reference/
+consolidation requirements remain open. The 480-case inventory continues to
+fail the complete gate. Enabled MMU, FPU arithmetic, physical pipeline/cache
+timing and OS compatibility remain outside this roadmap. No regression is
+retired, API changed or package released; milestone 6 remains **in progress**
+with `roadmapComplete=false`.
+
+Three maintained `RtePendingTrace` mutations in
+`artifacts/m6-pending-trace-mutations/` each execute all four complete reports.
+The proof requires the intended retry/following phase and architectural
+diagnostic in both routes and both matrices. Counts below are per route,
+with canonical/chained values respectively:
+
+| Mutation | Mismatching | Dependent phases untested | Required diagnostic |
+| --- | ---: | ---: | --- |
+| Extra automatic RTE trace | 3,456 / 72,576 | 6,912 / 145,152 | CT retry, extra frame changes A7 |
+| Stack incoming instead of repaired SR | 5,184 / 96,768 | 10,368 / 193,536 | CT retry, saved-frame memory |
+| Suppress following self-BRA trace | 3,456 / 72,576 | 0 / 0 | Incoming/restored T1, following PC |
+
+Production source bytes are restored and rebuilt before acceptance. The new
+pending scope shares the validator with the existing normal/CM trace scope;
+each retains its own four-report cardinalities and intended proof identifiers.
+No historical failing mutation result is presented as a production mismatch.
+
+The dedicated run in `artifacts/m6-pending-trace-audit/` executes **52 tests:
+51 pass and the required inventory fails**, with no skips. All **9,320,768
+executable cases pass**, with zero mismatches/unsupported execution and **480
+untested requirements**. All 46 reports, six fixed examples, thirteen input
+identities and independently enumerated combinations validate before the
+inventory rejection. This gate remains failed; the new software qualification
+does not complete milestone 6.
+
+The manifest records starting commit `b884aee`, committed CPU tree
+`795fd12d6c0237a22a5f92f4a96cc4823e0364c1` and current source/fixture hashes.
+CPU assembly SHA-256 is
+`82bc2ed7607ab5c99006a65dc5f32a310730b8abd458a0acf7189c8dc6451e5d`;
+test/reference adapter is
+`2b72c0dc66b33c3f79e26aceebf384b2e40f7c3ea81be496dce183df69de34ce`.
+Production source is unchanged from that commit; this newly built binary has
+its own recorded identity. No new consumer replay or private/public package
+is generated for this test-only checkpoint. Prior unpublished `.63` consumer
+evidence remains scoped to its own package/binary; root CopperScreen work is
+untouched.
+
+Fresh full Release validation in `artifacts/m6-pending-trace-full/` passes
+**5,077 tests with zero failures and eleven optional skips**. All nine
+qualified WinUAE presets match the pinned exact selections and current
+CPU/adapter identities in `qualified-preset-identities.json`. Their executed
+coverage is separate from optional unavailable tests. Historical Basic
+mismatches/unsupported groups retain their original status.
+
+The strict ordinary gate in `artifacts/m6-pending-trace-strict.log` passes
+**24,289,430 logical cases / 636 batches**. Fresh pinned SingleStepTests passes
+**312,500 cases / 125 files** and Musashi passes **536 programs with 88 explicit
+exclusions**. Both fresh reference tests execute without skips; their pinned
+sources and software-reference caveats remain unchanged. All **17** controls
+in `artifacts/m6-pending-trace-controls/` reject their specific missing,
+shortened, foreign, redistributed or omitted-fixture corruption. The ordinary
+summary retains `roadmapComplete=false`.
+
+The current result selector specifies user mode with M=0, ISP with M=0 and
+MSP with M=1. Restored user mode with M=1 is **not covered** by this matrix;
+its subsequent exception-bank selection needs separate qualification. This
+is distinct from the already qualified initial user-tail fault M values and
+from a user-tail trace bridge. It remains a required stack-state combination,
+along with the other named unqualified protocols above.

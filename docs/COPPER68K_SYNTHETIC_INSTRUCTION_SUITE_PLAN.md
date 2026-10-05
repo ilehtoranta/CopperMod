@@ -1747,3 +1747,46 @@ report/identity controls detect their intended defects. The complete 040 run
 has 7,496,000 passing cases, zero mismatches/unsupported execution and the
 retained 480 untested requirements; it continues to fail completion. No new
 consumer or package validation is needed for this test-only checkpoint.
+
+### Milestone 6 pending delivery with preserved trace — 2026-10-06
+
+Four scalar/batch groups add **1,824,768 phases** for repaired CT/CU/CP49
+frames with untouched incoming trace. They verify pending conversion instead
+of an extra automatic RTE trace, repaired saved SR/PC/EA, format/vector,
+pending consumption, handler return and the following traced BRA. Canonical
+cases use all CCRs; structural cases use CCR 0/31 and every validation-read
+byte across twelve supervisor paths, both alignments/VBRs and all incoming/
+restored traces and restored stacks. Expectations compose MC68040UM 8.3 and
+8.4.6.2/7 with the existing repair/exception-entry fixtures.
+
+The first focused run passes all four groups without skips or missing phases.
+Three maintained `RtePendingTrace` mutations target extra RTE trace delivery,
+incorrect saved SR and suppressed following BRA trace. The complete 040 gate
+now requires 52 tests, 46 reports, six fixed examples and thirteen input
+identities; it independently enumerates the new combinations. Production CPU
+source is unchanged outside temporary mutation checks.
+
+These fixtures use a bare pending-handler RTE. The handler's software trace
+service, preserved-trace repair with other CP vectors, user-tail trace bridges
+and mixed-epoch trace provenance remain required separately. All earlier
+internal-restoration, chained odd-PC, data/writeback/context-transfer and broader
+model/reference/consolidation work remains open. The 480-case protocol inventory
+continues to fail completion. No regression is retired, public API changed or
+package released. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+See the [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-pending-delivery-with-preserved-trace--2026-10-06).
+
+Fresh full Release validation passes **5,077 tests**, with eleven optional skips
+and zero failures. All nine pinned WinUAE selections match their exact counts
+and CPU/adapter identities. Strict reporting passes **24,289,430 cases / 636
+batches**; fresh SingleStepTests passes 312,500 cases / 125 files and Musashi
+passes 536 programs with 88 explicit exclusions. All three mutations and
+seventeen new report/identity controls detect their intended defects. The
+complete 040 audit executes 52 tests (51 pass, inventory fails), with 9,320,768
+passing cases, zero mismatches/unsupported execution and 480 untested
+requirements. No new consumer/package validation is needed for this test-only
+checkpoint; prior `.63` evidence remains scoped to its own binary.
+
+The repaired result selector covers user M=0, ISP M=0 and MSP M=1. Restored user
+M=1 and its exception-bank selection remain **untested** separately from the
+initial user-tail M qualification and user-tail trace bridge. This required
+stack-state combination remains part of milestone 6.

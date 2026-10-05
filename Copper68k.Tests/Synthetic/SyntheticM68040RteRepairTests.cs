@@ -32,11 +32,24 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
     [Fact, Trait("Suite", "Synthetic")]
     public void RepairWithUntouchedIncomingTraceChainedBatch() => Audit(true, true, true);
 
-    private void Audit(bool chained, bool keepTrace = false, bool batch = false)
+    [Fact, Trait("Suite", "Synthetic")]
+    public void PendingRepairWithPreservedIncomingTraceBoundariesScalar() => Audit(false, true, false, true);
+
+    [Fact, Trait("Suite", "Synthetic")]
+    public void PendingRepairWithPreservedIncomingTraceBoundariesBatch() => Audit(false, true, true, true);
+
+    [Fact, Trait("Suite", "Synthetic")]
+    public void PendingRepairWithPreservedIncomingTraceChainedScalar() => Audit(true, true, false, true);
+
+    [Fact, Trait("Suite", "Synthetic")]
+    public void PendingRepairWithPreservedIncomingTraceChainedBatch() => Audit(true, true, true, true);
+
+    private void Audit(bool chained, bool keepTrace = false, bool batch = false, bool pendingTrace = false)
     {
         var bus = new SyntheticM68040RteValidationFaultTests.ValidationFaultBus();
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);
-        var report = new CoverageBatch("68040", keepTrace ? $"rte-retry-trace-{(chained ? "chained" : "boundaries")}-{(batch ? "batch" : "scalar")}"
+        var traceGroup = pendingTrace ? "rte-pending-trace" : "rte-retry-trace";
+        var report = new CoverageBatch("68040", keepTrace ? $"{traceGroup}-{(chained ? "chained" : "boundaries")}-{(batch ? "batch" : "scalar")}"
             : chained ? "rte-repair-chained" : "rte-repair-boundaries");
         foreach (var start in SupervisorBanks)
         foreach (var tail in chained ? SupervisorBanks : [start])
@@ -47,19 +60,19 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         foreach (var alignment in chained ? new uint[] { 0, 1 } : [0])
         foreach (var vbr in chained ? new uint[] { 0, 0x10000 } : [0x10000])
         foreach (var ccr in chained ? new[] { 0, 31 } : Enumerable.Range(0, 32))
-        foreach (var form in keepTrace ? Forms.Where(f => f is not ("CT" or "CU" or "CP")) : Forms)
+        foreach (var form in Forms.Where(f => pendingTrace ? f is "CT" or "CU" or "CP" : !keepTrace || f is not ("CT" or "CU" or "CP")))
         foreach (var (offset, width) in chained ? SyntheticM68040RteValidationFaultTests.Reads(form) : [(0u, 2)])
         for (var faultByte = 0; faultByte < (chained ? width : 1); faultByte++)
         {
             var path = !chained ? new[] { start } : middle == "none" ? [start, tail] : new[] { start, middle, tail };
-            Run(m, bus, report, path, result, incoming, restoredTrace, alignment, vbr, ccr, form, offset, width, faultByte, keepTrace, batch);
+            Run(m, bus, report, path, result, incoming, restoredTrace, alignment, vbr, ccr, form, offset, width, faultByte, keepTrace, batch, pendingTrace);
         }
         report.Complete(output);
     }
 
     private static void Run(SyntheticMachine m, SyntheticM68040RteValidationFaultTests.ValidationFaultBus bus,
         CoverageBatch report, string[] path, string result, ushort incoming, ushort restoredTrace,
-        uint alignment, uint vbr, int ccr, string form, uint offset, int width, int faultByte, bool keepTrace, bool batch)
+        uint alignment, uint vbr, int ccr, string form, uint offset, int width, int faultByte, bool keepTrace, bool batch, bool pendingTrace)
     {
         bus.Disarm(); m.Reset(ccr);
         var pointers = new Dictionary<string, uint> { ["user"] = 0x7800 + alignment, ["ISP"] = 0x4700 + alignment, ["MSP"] = 0x7400 + alignment };
@@ -125,9 +138,9 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         var phases = new List<string> { "fault-entry", "repair-SR", "repair-PC", "repair-format" };
         if (!keepTrace) phases.Add("clear-incoming-trace");
         phases.AddRange(["handler-return", "retry-RTE"]);
-        if (keepTrace && incoming != 0) phases.Add("retry-trace-return");
+        if (keepTrace && incoming != 0 && vector == 0) phases.Add("retry-trace-return");
         if (vector != 0) phases.Add("pending-return"); phases.Add("following");
-        var id = $"68040/RTE/{(keepTrace ? "retry-trace" : "repair")}/{form}/path={string.Join('-', path)}/result={result}/incoming={incoming:X4}/T={restoredTrace:X4}/align={alignment}/VBR={vbr:X8}/read={offset}:{width}/fault-byte={faultByte}/op=4E73/ccr={ccr:X2}";
+        var id = $"68040/RTE/{(pendingTrace ? "pending-trace" : keepTrace ? "retry-trace" : "repair")}/{form}/path={string.Join('-', path)}/result={result}/incoming={incoming:X4}/T={restoredTrace:X4}/align={alignment}/VBR={vbr:X8}/read={offset}:{width}/fault-byte={faultByte}/op=4E73/ccr={ccr:X2}";
         var phase = 0;
         bool Step()
         {
@@ -172,7 +185,10 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         // MC68040UM 8.2.6: the suspended RTE is traced only once it completes.
         // Both T1 and T0 trace RTE; the repaired frame's SR is saved in that
         // trace frame, independently of the trace bits which caused entry.
-        var retryTrace = keepTrace && incoming != 0;
+        // MC68040UM 8.3: pending CT/CU/CP processing wins; no extra automatic
+        // trace of RTE may obscure the converted exception frame. CU/CP trace
+        // emulation belongs to software, which sees the repaired saved SR.
+        var retryTrace = keepTrace && incoming != 0 && vector == 0;
         if (retryTrace) ExpectException(m, e, pointers, savedSr, 9, Target, SyntheticMachine.Code, sequence + 2);
         if (!Step()) return;
         e.ControlChecks.Remove("consumed throwaways not read by retry");
