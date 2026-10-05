@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $GeneratorSource,
     [Parameter(Mandatory)] [string] $RunnerSource,
     [Parameter(Mandatory)] [string] $VcVars64,
-    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Moves','Cas','Cas2')] [string] $Preset = 'Basic',
+    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Moves','Cas','Cas2','CacheEncodings')] [string] $Preset = 'Basic',
     [string] $OutputDirectory = 'artifacts/winuae-model-inputs'
 )
 $ErrorActionPreference = 'Stop'
@@ -74,6 +74,25 @@ try {
         & ./gencpu_prog.exe . *> (Join-Path $output 'gencpu-run.log')
         if ($LASTEXITCODE -ne 0) { throw 'CPU source generation failed' }
         $testerSource = 'cputest.cpp'
+        if ($Preset -eq 'CacheEncodings') {
+            # Correct only the scope-00 architectural exception; select its
+            # ILLEGAL inputs before execution. Upstream excludes actual cache
+            # handlers; their semantic outcomes remain synthetic coverage.
+            $patchPath = Join-Path $PSScriptRoot 'winuae/cache-encodings.patch'
+            $patch = [IO.File]::ReadAllText($patchPath).Replace("`r`n", "`n")
+            $source = [IO.File]::ReadAllText((Join-Path $generator 'cputest.cpp')).Replace("`r`n", "`n")
+            $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
+            if ($hunks.Count -ne 2) { throw 'Incorrect CacheEncodings patch hunk count' }
+            foreach ($hunk in $hunks) {
+                $lines = $hunk.TrimEnd("`n").Split("`n")
+                $before = (($lines | Where-Object { $_.StartsWith('-') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
+                $after = (($lines | Where-Object { $_.StartsWith('+') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
+                $source = Patch-Once $source $before $after
+            }
+            $testerSource = Join-Path $output 'cputest-cache-encodings.cpp'
+            [IO.File]::WriteAllText($testerSource, $source)
+            [IO.File]::WriteAllText((Join-Path $output 'cache-encodings.patch'), $patch)
+        }
         if ($Preset -eq 'TraceTraps') {
             # The pinned generator retained pending trace on 040/060. Qualify
             # this separate preset against MC68040UM 8.3 / MC68060UM 8.2.6.
@@ -178,6 +197,9 @@ void M68KTester_destroy(M68KTesterContext* context) {
     if ($Preset -eq 'Cas') {
         $baseIni = $baseIni.Replace('[test=Basic]', '[test=Cas]').Replace('mode=all', 'mode=CAS.B,CAS.W,CAS.L').Replace('feature_sr_mask=0x0000', 'feature_sr_mask=0x2000')
     }
+    if ($Preset -eq 'CacheEncodings') {
+        $baseIni = $baseIni.Replace('[test=Basic]', '[test=CacheEncodings]').Replace('mode=all', 'mode=ILLEGAL').Replace('feature_sr_mask=0x0000', 'feature_sr_mask=0x2000')
+    }
     foreach ($model in @(
         @{id='68000'; cpu='68000'; width=24}, @{id='68010'; cpu='68010'; width=24},
         @{id='68EC020'; cpu='68020'; width=24}, @{id='68020'; cpu='68020'; width=32},
@@ -237,6 +259,8 @@ void M68KTester_destroy(M68KTesterContext* context) {
         MovesSourceSha256=$(if ($Preset -eq 'Moves') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-moves.cpp')).Hash.ToLowerInvariant()} else {$null})
         MovesPatchSha256=$(if ($Preset -eq 'Moves') {(Get-FileHash -LiteralPath (Join-Path $output 'moves-encodings.patch')).Hash.ToLowerInvariant()} else {$null})
         Cas2InputSourceSha256=$(if ($Preset -eq 'Cas2') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-cas2.cpp')).Hash.ToLowerInvariant()} else {$null})
+        CacheEncodingsSourceSha256=$(if ($Preset -eq 'CacheEncodings') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-cache-encodings.cpp')).Hash.ToLowerInvariant()} else {$null})
+        CacheEncodingsPatchSha256=$(if ($Preset -eq 'CacheEncodings') {(Get-FileHash -LiteralPath (Join-Path $output 'cache-encodings.patch')).Hash.ToLowerInvariant()} else {$null})
         Cas2InputPatchSha256=$(if ($Preset -eq 'Cas2') {(Get-FileHash -LiteralPath (Join-Path $output 'cas2-overlap-inputs.patch')).Hash.ToLowerInvariant()} else {$null})
         Cas2SourceSha256=$(if ($Preset -eq 'Cas2') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-cas2.cpp')).Hash.ToLowerInvariant()} else {$null})
         Cas2PatchSha256=$(if ($Preset -eq 'Cas2') {(Get-FileHash -LiteralPath (Join-Path $output 'cas2-compare-alias.patch')).Hash.ToLowerInvariant()} else {$null})

@@ -111,7 +111,8 @@ try {
             'system-bounds'=$(if ($model -in @('68000','68010')) {11828} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {12488});
             'system-callm'=$(if ($model -in @('68000','68010')) {10832} elseif ($model -in @('68020','68EC020','A1200')) {11000} elseif ($model -in @('68030','68040','68060')) {10964});
             'system-interrupt'=$(if ($model -in @('68000')) {224} elseif ($model -in @('68010','68060')) {226} elseif ($model -in @('68020','68030','68040','68EC020','A1200')) {418});
-            'system-model'=12800;
+            'system-model'=3584;
+            'system-cache-encodings'=16384;
             'system-lpstop-values'=17024;
             'system-movec'=2432;
             'system-moves'=$(if ($model -in @('68000','68010')) {10656} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {11052});
@@ -257,6 +258,7 @@ try {
         m68040MmuInstructionScope=@{translationEnabled=$false; dfc=@(1,2,5,6); globalRegisterField='canonical zero'; undefined='Disabled PTEST MMUSR; DFC 0/3/4/7'; enabledMmu='Unqualified flat-table approximation; PFLUSH conservatively flushes all ATC entries'};
         m68040AccessFrameScope='Synthetic normal/CT/CM/CU/CP returns with original pending vectors, every legal MOVEM word and full-index structure, one/two throwaways selecting all stacks and direct odd-PC returns with format-2 address errors and pending-exception priority; chained odd-PC saved-SR provenance, CP context transfer, detailed fault validation, real fault entry and physical timing remain unqualified';
         m68060LowPowerStopScope='Every unrecognized second opcode word in both privilege modes; fixed encoding, status, CCR and incoming trace cases across all profiles. Opcode-PC exception frames follow MC68060UM 8.2.4/5; physical broadcast, pins and ordinary STOP S-clear software disagreement remain unqualified';
+        cacheInstructionEncodingScope='Every F4xx opcode, all CCRs and both privilege states across eight profiles; scope zero is illegal on 040/060, including neither-cache forms, before privilege effects. Empty fixture caches qualify architectural state and exception outcomes, not physical invalidation, writeback, bus faults or timing';
         m68010Format8Scope='58-byte address-error frame, reserved holes, version validation and tail probe, alignment double-fault halt/reset; marked private word-MOVE/MOVEA images resume their faulted cycle; other opaque restart/input state, long transfers, RMW and physical timing remain unqualified';
         m68000DoubleFaultScope='Address-error entry/handler faults; reset-only recovery; external BERR/reset-vector faults unavailable through the current public bus API';
         unavailableSystemCoverage=@('010 long/non-MOVE/external bus-fault restart and 020/030 internal restart', '020/030 coprocessor midinstruction restoration', '040 access-fault CP context transfer, detailed frame-validation/fault entry and writeback-handler qualification', 'External BKPT replacement responder', 'Physical MOVES function-code spaces and LPSTOP CPU-space broadcast', '060 HALT debug-port restart, PULSE PST pins and debug pipeline commands');

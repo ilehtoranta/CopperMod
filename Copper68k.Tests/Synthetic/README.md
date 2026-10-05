@@ -353,3 +353,25 @@ source/compiler arguments; run
 -InputDirectory <qualified-inputs> -OutputDirectory <fresh-output>`.
 See the [CAS2 qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#cas2-compare-alias-and-unimplemented-frame-reference-qualification-2026-10-05)
 for retained failed discovery, controls, exclusions and remaining scope.
+
+The `CacheEncodings` preset qualifies every scope-zero cache word on all eight
+profiles: 64 opcode words, CCR 0/31 and both privilege states, totaling 2,048
+callbacks and exception frames. M68000PM 6-4/9 and MC68060UM D-12 specify vector
+4 on 040/060; earlier profiles take line-F vector 11. A copied input generator
+corrects that reference exception and selects these inputs before execution.
+Exact opcode/status distributions, source/patch/input identities, complete
+selections and register/SR/frame/saved-PC controls are required. Twelve fixed
+encoding cases run with the audit. The original Basic disagreement is retained.
+Prepare with `./scripts/prepare-copper68k-winuae.ps1 -Preset CacheEncodings`
+and the pinned source/compiler arguments; run
+`./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset CacheEncodings
+-InputDirectory <qualified-inputs> -OutputDirectory <fresh-output>`.
+Upstream excludes actual cache operations; they are not external-reference
+coverage. The ordinary `system-cache-encodings` matrix enumerates every F4xx word,
+all CCRs and both privilege states (131,072 cases), including neither-cache
+no-operations and illegal-scope priority. `-Scope CacheEncodings` in the mutation
+script proves vector, priority, privilege, flag and extension-length detection.
+The duplicated cache loop is retired after shared mutation proof; MOVE16,
+breakpoints, specialized cache/prefetch/bus/JIT/native regressions remain.
+See the [cache encoding record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#cache-encoding-reference-qualification-and-consolidation-2026-10-05)
+for exact identities, replacement cases and qualification limits.

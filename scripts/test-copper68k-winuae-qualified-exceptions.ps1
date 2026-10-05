@@ -1,7 +1,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('TrapBounds','Breakpoints','WordDivision','LowPowerStop','Moves','Cas','Cas2')] [string] $Preset = 'TrapBounds',
+    [ValidateSet('TrapBounds','Breakpoints','WordDivision','LowPowerStop','Moves','Cas','Cas2','CacheEncodings')] [string] $Preset = 'TrapBounds',
     [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $InputDirectory,
     [string] $NativeLibrary,
     [string] $OutputDirectory = 'artifacts/winuae-trap-bounds-audit'
@@ -14,9 +14,9 @@ $library = (Resolve-Path -LiteralPath $NativeLibrary).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
 if (Test-Path -LiteralPath $output) { throw "Use a fresh output directory: $output" }
 New-Item -ItemType Directory -Path $output | Out-Null
-$key = switch ($Preset) {'TrapBounds' {'TRAP_BOUNDS'} 'Breakpoints' {'BREAKPOINT'} 'WordDivision' {'WORD_DIVISION'} 'LowPowerStop' {'LPSTOP'} 'Moves' {'MOVES'} 'Cas' {'CAS'} 'Cas2' {'CAS2'}}
-$testName = switch ($Preset) {'TrapBounds' {'WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled'} 'Breakpoints' {'WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled'} 'WordDivision' {'WinUaeWordDivisionAcrossSelectedModelsWhenEnabled'} 'LowPowerStop' {'WinUaeLowPowerStopExceptionsWhenEnabled'} 'Moves' {'WinUaeMovesAcrossSelectedModelsWhenEnabled'} 'Cas' {'WinUaeCasAcrossAdvancedModelsWhenEnabled'} 'Cas2' {'WinUaeCas2AcrossAdvancedModelsWhenEnabled'}}
-$reportName = switch ($Preset) {'TrapBounds' {'winuae-trap-bounds-audit.json'} 'Breakpoints' {'winuae-breakpoint-audit.json'} 'WordDivision' {'winuae-word-division-audit.json'} 'LowPowerStop' {'winuae-lpstop-audit.json'} 'Moves' {'winuae-moves-audit.json'} 'Cas' {'winuae-cas-audit.json'} 'Cas2' {'winuae-cas2-audit.json'}}
+$key = switch ($Preset) {'TrapBounds' {'TRAP_BOUNDS'} 'Breakpoints' {'BREAKPOINT'} 'WordDivision' {'WORD_DIVISION'} 'LowPowerStop' {'LPSTOP'} 'Moves' {'MOVES'} 'Cas' {'CAS'} 'Cas2' {'CAS2'} 'CacheEncodings' {'CACHE_ENCODINGS'}}
+$testName = switch ($Preset) {'TrapBounds' {'WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled'} 'Breakpoints' {'WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled'} 'WordDivision' {'WinUaeWordDivisionAcrossSelectedModelsWhenEnabled'} 'LowPowerStop' {'WinUaeLowPowerStopExceptionsWhenEnabled'} 'Moves' {'WinUaeMovesAcrossSelectedModelsWhenEnabled'} 'Cas' {'WinUaeCasAcrossAdvancedModelsWhenEnabled'} 'Cas2' {'WinUaeCas2AcrossAdvancedModelsWhenEnabled'} 'CacheEncodings' {'WinUaeCacheScopeZeroAcrossSelectedModelsWhenEnabled'}}
+$reportName = switch ($Preset) {'TrapBounds' {'winuae-trap-bounds-audit.json'} 'Breakpoints' {'winuae-breakpoint-audit.json'} 'WordDivision' {'winuae-word-division-audit.json'} 'LowPowerStop' {'winuae-lpstop-audit.json'} 'Moves' {'winuae-moves-audit.json'} 'Cas' {'winuae-cas-audit.json'} 'Cas2' {'winuae-cas2-audit.json'} 'CacheEncodings' {'winuae-cache-encodings-audit.json'}}
 $filter = "FullyQualifiedName~$testName"
 $expectedTests = 1
 if ($Preset -eq 'WordDivision') {
@@ -38,6 +38,10 @@ if ($Preset -eq 'Cas') {
 if ($Preset -eq 'Cas2') {
     $filter += '|FullyQualifiedName~M68kWinUaeCas2EncodingTests'
     $expectedTests = 12
+}
+if ($Preset -eq 'CacheEncodings') {
+    $filter += '|FullyQualifiedName~M68kWinUaeCacheScopeEncodingTests'
+    $expectedTests = 13
 }
 $settings = @{
     ('COPPER68K_RUN_WINUAE_' + $key + '_AUDIT') = '1'

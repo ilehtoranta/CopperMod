@@ -97,7 +97,7 @@ public sealed class SyntheticModelSystemTests(ITestOutputHelper output)
     };
 
     [Theory, MemberData(nameof(Models)), Trait("Suite", "Synthetic")]
-    public void Move16CacheInstructionsAndBreakpoints(string modelId)
+    public void Move16TransfersAndBreakpoints(string modelId)
     {
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == modelId)); var report = new CoverageBatch(modelId, "system-model");
         for (var ccr = 0; ccr < 32; ccr++)
@@ -108,16 +108,9 @@ public sealed class SyntheticModelSystemTests(ITestOutputHelper output)
                 m.Reset(ccr, supervisor); var op = (ushort)(0x4848 | breakpoint); var e = SyntheticExecution.Prepare(m, [op]);
                 SyntheticExecution.ExpectException(m, e, 4); SyntheticExecution.Run(m, e, report, $"{modelId}/BKPT/none/{breakpoint}/super={supervisor}/op={op:X4}/ccr={ccr:X2}");
             }
-            foreach (var push in new[] { false, true })
-            for (var cache = 1; cache < 4; cache++)
-            for (var scope = 1; scope < 4; scope++)
-            for (var reg = 0; reg < 8; reg++)
-            {
-                m.Reset(ccr, supervisor); var op = (ushort)(0xf400 | (push ? 0x20 : 0) | cache << 6 | scope << 3 | reg); var e = SyntheticExecution.Prepare(m, [op]);
-                if (modelId is not ("68040" or "68060")) SyntheticExecution.ExpectException(m, e, 11);
-                else if (!supervisor) SyntheticExecution.ExpectException(m, e, 8);
-                SyntheticExecution.Run(m, e, report, $"{modelId}/{(push ? "CPUSH" : "CINV")}/{scope}/cache={cache}/A{reg}/super={supervisor}/op={op:X4}/ccr={ccr:X2}");
-            }
+            // Cache semantics moved to the exhaustive F4xx matrix after
+            // shared X-flag and extension-length mutation proof. Specialized
+            // physical cache/prefetch regressions are retained separately.
         }
         for (var form = 0; form < 5; form++)
         for (var r = 0; r < 8; r++)

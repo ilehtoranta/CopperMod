@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','LowPowerStop')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -88,7 +88,7 @@ $mutations += @(
     @{name='chk2-boundary-z'; file=$advanced; before='            State.SetFlag(M68kCpuState.Zero, value == lower || value == upper);'; after='            State.SetFlag(M68kCpuState.Zero, false);'; group='CheckBoundsValuesFlagsFormsAndRegisterAliases'; milestone=5},
     @{name='cmp2-address-width'; file=$advanced; before='            var value = useAddressRegister ? unchecked((int)State.A[register]) : SignExtendForSize(State.D[register], size);'; after='            var value = SignExtendForSize(useAddressRegister ? State.A[register] : State.D[register], size);'; group='CheckBoundsValuesFlagsFormsAndRegisterAliases'; milestone=5},
     @{name='rte-throwaway'; file=$advanced; before='                if (format == 1) continue; // Throwaway frame can select another stack.'; after='                // Mutant: accept throwaway as final frame.'; group='RteFramesPrivilegeStackSelectionAndInvalidFormats'; milestone=5},
-    @{name='move16-postincrement'; file='Copper68k/M68kAdvancedTimingInterpreter.System.cs'; before='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 16));'; after='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 4));'; group='Move16CacheInstructionsAndBreakpoints'; milestone=5; model='68040'},
+    @{name='move16-postincrement'; file='Copper68k/M68kAdvancedTimingInterpreter.System.cs'; before='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 16));'; after='        if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 4));'; group='Move16TransfersAndBreakpoints'; milestone=5; model='68040'},
     @{name='cacr-clear-readback'; file=$advanced; before='? value & ~0x0C0Cu : value; // Clear commands always read as zero.'; after='? value : value; // Mutant: clear commands read back set.'; group='MovecControlInventoryMasksPrivilegeAndAllGeneralRegisters'; milestone=5}
 )
 $mutations += @(
@@ -141,6 +141,55 @@ $mutations += @(
       after='            if (false)'; group='SyntheticLowPowerStopTests'; milestone=6; model='68060'; lpstop=$true;
       legacyTest='Move16CacheInstructionsBreakpointsAndLowPowerStop'; legacyFile='Copper68k.Tests/Synthetic/SyntheticModelSystemTests.cs'; legacyModel='68060'}
 )
+$mutations += @(
+    @{name='cache-scope-linef'; file=$advanced; before=@'
+            if (scope == 0)
+            {
+                RaiseFormat0Exception(4, pc, M68kInstructionTimingKey.IllegalInstruction);
+'@; after=@'
+            if (scope == 0)
+            {
+                RaiseFormat0Exception(11, pc, M68kInstructionTimingKey.LineFException);
+'@; group='EveryCacheOpcodeIncludesInvalidScopeAndNeitherCache'; milestone=6; model='68040'; cache=$true},
+    @{name='cache-scope-privilege-priority'; file=$advanced; before=@'
+            var scope = (opcode >> 3) & 3;
+            if (scope == 0)
+'@; after=@'
+            var scope = (opcode >> 3) & 3;
+            if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
+            { RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation); return true; }
+            if (scope == 0)
+'@; group='EveryCacheOpcodeIncludesInvalidScopeAndNeitherCache'; milestone=6; model='68040'; cache=$true},
+    @{name='cache-neither-privilege'; file=$advanced; before=@'
+            if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
+            {
+                RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation);
+                return true;
+            }
+            var caches = (opcode >> 6) & 3;
+'@; after=@'
+            if ((State.StatusRegister & M68kCpuState.Supervisor) == 0 && ((opcode >> 6) & 3) != 0)
+            {
+                RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation);
+                return true;
+            }
+            var caches = (opcode >> 6) & 3;
+'@; group='EveryCacheOpcodeIncludesInvalidScopeAndNeitherCache'; milestone=6; model='68040'; cache=$true},
+    @{name='cache-preserve-x'; file=$advanced; before='            var caches = (opcode >> 6) & 3;'; after=@'
+            State.SetFlag(M68kCpuState.Extend, true);
+            var caches = (opcode >> 6) & 3;
+'@; group='EveryCacheOpcodeIncludesInvalidScopeAndNeitherCache'; milestone=6; model='68040'; cache=$true;
+      legacyTest='Move16CacheInstructionsAndBreakpoints'; legacyFile='Copper68k.Tests/Synthetic/SyntheticModelSystemTests.cs'; legacyModel='68040'},
+    @{name='cache-extension-length'; file=$advanced; before=@'
+            _ = FetchWord();
+            var scope = (opcode >> 3) & 3;
+'@; after=@'
+            _ = FetchWord();
+            _ = FetchWord();
+            var scope = (opcode >> 3) & 3;
+'@; group='EveryCacheOpcodeIncludesInvalidScopeAndNeitherCache'; milestone=6; model='68040'; cache=$true;
+      legacyTest='Move16CacheInstructionsAndBreakpoints'; legacyFile='Copper68k.Tests/Synthetic/SyntheticModelSystemTests.cs'; legacyModel='68040'}
+)
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
@@ -148,6 +197,7 @@ if ($Scope -eq 'Control') { $mutations = @($mutations | Where-Object { $_.milest
 if ($Scope -eq 'Consolidation') { $mutations = @($mutations | Where-Object { $_.milestone -eq 6 }) }
 if ($Scope -eq 'Rte040') { $mutations = @($mutations | Where-Object { $_.odd }) }
 if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
+if ($Scope -eq 'CacheEncodings') { $mutations = @($mutations | Where-Object { $_.cache }) }
 $saved = @{}
 foreach ($mutation in $mutations) {
     $path = Join-Path $repo $mutation.file
@@ -206,6 +256,15 @@ try {
                     @($batches | Where-Object { $_.model -eq '68060' -and $_.group -eq 'system-lpstop-values' -and $_.logicalCases -eq 17024 }).Count -ne 1 -or
                     ($legacyPresent -and @($batches | Where-Object { $_.model -eq '68060' -and $_.group -eq 'system-model' -and $_.logicalCases -eq 13120 }).Count -ne 1)) {
                     throw 'LPSTOP mutation did not execute its complete two-batch selection'
+                }
+            }
+            if ($mutation.cache) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                $expectedBatches = 1 + [int][bool]$legacyPresent
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne $expectedBatches -or $batches.Count -ne $expectedBatches -or
+                    @($batches | Where-Object { $_.model -eq '68040' -and $_.group -eq 'system-cache-encodings' -and $_.logicalCases -eq 16384 }).Count -ne 1 -or
+                    ($legacyPresent -and @($batches | Where-Object { $_.model -eq '68040' -and $_.group -eq 'system-model' -and $_.logicalCases -eq 12800 }).Count -ne 1)) {
+                    throw 'Cache mutation did not execute its complete selection'
                 }
             }
             if ($legacyPresent) {

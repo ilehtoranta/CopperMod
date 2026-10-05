@@ -3584,3 +3584,137 @@ xUnit batches. Pinned SingleStepTests passes 312,500 cases across 125 files;
 Musashi passes 536 programs with 88 explicit exclusions. Input identities and
 complete selections are rechecked. `roadmapComplete=false` remains explicit;
 these passing scoped gates do not close the remaining milestone-6 requirements.
+
+### Cache encoding reference qualification and consolidation — 2026-10-05
+
+The retained Basic 040/060 ILLEGAL failures stop at callback 29,331 with `F400`,
+initial SR `0000` and opcode PC `0087FFA0`. Copper68k takes vector 4; the pinned
+generator expects line-F vector 11. [M68000PM 6-4/9](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+assigns illegal-instruction traps to cache scope `00` and makes cache `00` a
+no-operation for other scopes. [MC68060UM D-12](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+repeats the scope-zero rule. The production CPU already follows these rules;
+no production correction or timing change is needed.
+
+The old native diagnostic's “got no exception” is not an absent CPU exception.
+The adapter trace records `exc=4`, and the pinned native tester special-cases
+vector 4 because its completion sentinel also uses ILLEGAL. At vendor
+`m68k_cpu_tester.c` lines 1289–1307 it describes a vector-4 mismatch at the
+matching PC as no exception. No result/frame/mask normalization is introduced
+to make that wording disappear. The new preset compares vector 4 and validates
+its real frame; frame and saved-PC corruption are independently rejected.
+Original Basic inputs, manifest, bridge and failures remain unchanged.
+
+`SyntheticCacheEncodingTests.EveryCacheOpcodeIncludesInvalidScopeAndNeitherCache`
+enumerates all 256 F4xx words, all 32 CCR states and both privilege states on
+every profile. The independent expectation checks all registers, stack banks,
+defined SR, exact PC, exception frames, terminal state and surrounding memory;
+successful instructions also execute a following sentinel. Scope-zero on
+040/060 takes vector 4 before privilege; valid scopes in user mode take vector
+8, including cache-zero forms. Older profiles take vector 11. All **131,072**
+cases pass in eight `system-cache-encodings` batches. These are architectural
+semantic cases; empty fixture caches do not establish physical invalidation,
+dirty-line writeback, enabled-MMU translation, bus faults or pipeline timing.
+
+The separate `CacheEncodings` reference preset copies pinned `cputest.cpp`.
+Its two-hunk patch corrects `op_illg_1` only for `F4xx` scope zero on 040/060,
+and selects only those words in the ILLEGAL family before reference execution.
+The CPU generator and native comparator remain unchanged. Upstream's
+`isunsupported` excludes actual CINV/CPUSH operations, so they are explicitly
+not promoted as independent reference coverage. Initial exploratory generation
+requested those families and produced only ILLEGAL; it is retained in
+`artifacts/m6-cache-encodings-inputs/`. The final configuration explicitly
+requests only ILLEGAL in `artifacts/m6-cache-encodings-qualified-inputs/`.
+
+Every selected profile, including A1200's EC020 fixture reuse, executes all 64
+scope-zero words with CCR 0/31 and both privilege states: **256 callbacks,
+frames and distinct forms per profile; 2,048 total**. Expectations require the
+complete fixed opcode/status distribution with multiplicity one, not just a
+snapshot distinct count. All eight directories pass with zero mismatching,
+unsupported, untested or masked-SR cases. Twelve fixed examples protect model
+distinctions, legal neighboring scopes and rejected foreign/status inputs.
+The focused command passes thirteen xUnit tests. All **32** applicable
+register/SR/frame/saved-PC comparator corruptions are detected. Evidence:
+`artifacts/m6-cache-encodings-reference/`.
+
+Seven isolated negative controls reject empty profiles, families or input
+selections; missing or changed fixtures; and changed copied source or patch.
+Each executes exactly one failing audit for its intended reason. The original
+inputs remain intact. Evidence:
+`artifacts/m6-cache-encodings-reference-controls/controls.json`. An initial
+control-helper invocation had a trailing-comma parser error before execution;
+it is not counted as reference evidence.
+
+Pinned generator remains `025b999239800357e95065fe5b9a15ea5b300fa7`; native
+runner remains `7a83745d6c6159bc74ab0471578ffc8bc244e66e`. Exact final identities:
+
+| Input | SHA-256 |
+| --- | --- |
+| Copied input/reference source | `5f6df41a9b6e5e96088c0c81c65f31d9363a1904e6a37c3001ebf4cf4105ab92` |
+| Two-hunk patch | `ef393d99b50198f1c0139de12d890f1f2c3cc0675bee19d22259de698c68e32e` |
+| Manifest | `c1e7170e4272e6fcb54d816ecc335016529511320b5d056c151023cd2a3bd41f` |
+| Generator executable | `0d7f05c598c611403ba541842967fda9d8b6c87eb62cf39e9ea946ef67da325c` |
+| Native library | `d531d1725958be836a90051dc645a6caf3ebccac63c59144282e921a6d342bd5` |
+
+Preparation uses the existing pinned source/compiler arguments with
+`-Preset CacheEncodings`; validation uses
+`./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset CacheEncodings
+-InputDirectory artifacts/m6-cache-encodings-qualified-inputs
+-OutputDirectory <fresh-output>`. Requested missing or incomplete audits fail.
+
+`./scripts/test-copper68k-synthetic-mutations.ps1 -Scope CacheEncodings`
+requires the complete 16,384-case 040 batch for each mutation, and both batches
+when the original regression is present. Evidence in
+`artifacts/m6-cache-encodings-mutations-qualified/mutation-proof.json`:
+
+| Mutation | Replacement mismatches | Original loop mismatches |
+| --- | ---: | ---: |
+| Scope-zero vector 11 | 4,096 | Inapplicable: absent old cases |
+| Privilege before scope recognition | 2,048 | Inapplicable: absent old cases |
+| Neither-cache user privilege bypass | 1,536 | Inapplicable: absent old cases |
+| X set instead of preserved | 3,072 | 2,304 |
+| Extra extension word consumed | 6,144 | 4,608 |
+
+The flag and extension controls fail both original and replacement matrices;
+source is restored byte-for-byte and rebuilt after each run. An initial harness
+attempt placed its TRX check before execution and failed before testing; it is
+retained separately in `artifacts/m6-cache-encodings-mutations/`, not counted as
+mutation proof. The new enumeration includes every old cache case: push 0/1,
+cache 1/2/3, scope 1/2/3, An 0..7, user/supervisor and CCR 0..31, exactly 9,216
+cases per profile. For example the old `68040/CINV/1/cache=1/A0/super=True/
+op=F448/ccr=00` maps to `68040/CINV/scope=1/cache=1/A0/super=True/ccr=00/op=F448`
+with the same machine initialization, preserved-state expectation and sentinel.
+The complete ordinary matrix additionally covers scope-zero and neither-cache.
+
+This permits removal of only the duplicate cache loop from
+`SyntheticModelSystemTests`. The retained method is named
+`Move16TransfersAndBreakpoints`, still exercising 512 breakpoint and 3,072
+MOVE16 scenarios per profile. Its `system-model` gate changes from 12,800 to
+3,584, with the separate 16,384 cache gate required for each profile. The focused
+consolidated selection passes sixteen tests, 131,072 cache plus 28,672 retained
+MOVE16/breakpoint cases. Specialized cache, prefetch, bus-ordering, fault, JIT
+and native regressions remain. No production CPU or public API change, package
+publication or fresh consumer replay is introduced. The full remaining
+restoration/reference/consolidation requirements and `roadmapComplete=false`
+remain explicit.
+
+Copied-report gate controls pass a complete prior-report baseline merged with
+the final sixteen cache/MOVE16 reports, then reject a missing 040 cache report,
+a reduced 16,383-case cache count and the stale 12,800-case retained-loop count.
+Original reports are preserved. This copied baseline proves gate detection,
+not a fresh full-suite run. Evidence:
+`artifacts/m6-cache-encodings-gate-controls/controls.json`.
+
+Final full Release CPU validation in `artifacts/m6-cache-encodings-full/`
+passes **5,044 tests, eleven optional skips and zero failures**. All nine
+qualified WinUAE presets pass their exact selections/counts against matching
+CPU/adapter assemblies: CPU SHA-256
+`1926da25083ab44ac860da0d40b14df043c6e5a78356f47922d4e50c19854c0a`,
+adapter SHA-256
+`ac2f9767ab33f266998db37e23f6f57eeea9840c845481eb8641d91f9e45a2db`.
+The strict gate passes **16,093,014 logical cases in 603 batches**. Fresh pinned
+SingleStepTests passes 312,500 cases across 125 files; Musashi passes 536 programs
+with 88 explicit exclusions. Binary identities remain unchanged through the
+strict gate. Production CPU source remains unchanged since `cb9679d`; the
+preceding unpublished `.57` consumer evidence keeps its own original source,
+package and binary identities. No new consumer replay or cross-checkpoint binary
+equality is claimed. All remaining required roadmap gaps remain in progress.

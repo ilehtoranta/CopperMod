@@ -122,7 +122,27 @@ identities, replacement proofs and remaining required coverage here as work
 progresses. No milestone is complete merely because an inventory exists or a
 partial matrix passes.
 
-Latest milestone-6 reference checkpoint, 2026-10-05: sampled CAS2 W/L passes
+Latest milestone-6 checkpoint, 2026-10-05: the exhaustive cache-encoding matrix
+passes 131,072 cases across eight profiles, including illegal scope-zero and
+neither-cache forms. Independent scope-zero reference qualification passes
+2,048 callbacks/frames with exact opcode/status distributions and 32 comparator
+controls. A separate copied reference follows the manual's 040/060 vector-4
+rule; the original Basic line-F disagreement remains retained. Five mutations
+are detected; shared X-flag and extension-length evidence permits retirement
+of the duplicated 9,216-case-per-profile cache loop. MOVE16, breakpoint and
+specialized cache/prefetch/bus/JIT/native regressions remain. The
+[cache encoding record](COPPER68K_REFERENCE_QUALIFICATION.md#cache-encoding-reference-qualification-and-consolidation-2026-10-05)
+maintains exact identities, replacement mapping and qualification limits.
+Milestone 6 remains in progress; production CPU source is unchanged.
+Full Release CPU validation passes 5,044 tests with eleven optional skips,
+all nine qualified WinUAE presets and matching CPU/adapter identities. The strict
+gate passes 16,093,014 logical cases in 603 batches; pinned SingleStepTests passes
+312,500 cases in 125 files, and Musashi passes 536 programs with 88 exclusions.
+Seven specific input/source controls and three copied-report controls reject
+their intended defects. `roadmapComplete=false` and the full required-gap
+inventory remain explicit.
+
+Preceding milestone-6 reference checkpoint, 2026-10-05: sampled CAS2 W/L passes
 3,180 callbacks, 2,296 unimplemented-integer frames and 3,072 recorded forms
 across EC020/A1200/020/030/040/060. The CPU already implements the manual's
 shared-compare operand-1 rule; a copied reference corrects 040 alias ordering.
