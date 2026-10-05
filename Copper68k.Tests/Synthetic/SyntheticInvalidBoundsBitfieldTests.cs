@@ -11,13 +11,19 @@ public sealed class SyntheticInvalidBoundsBitfieldTests(ITestOutputHelper output
     {
         var machine = new SyntheticMachine(ModelSpec.All.Single(m => m.Id == modelId));
         var report = new CoverageBatch(modelId, "system-chk-invalid-operands");
-        // M68000PM 4-70: CHK.W/.L data sources exclude An.
+        // M68000PM 4-70: CHK.W/.L data sources exclude An; mode 7
+        // registers 5..7 have no assigned EA. MC68020UM 6.1.5 specifies
+        // vector 4 and the causing instruction PC for illegal encodings.
         var opcodes = ChkOpcodes().ToArray();
-        Assert.Equal(128, opcodes.Length);
+        Assert.Equal(176, opcodes.Length);
         Assert.Equal(opcodes.Length, opcodes.Select(x => x.Opcode).Distinct().Count());
         Assert.Contains(opcodes, x => x.Opcode == 0x4108);
         Assert.Contains(opcodes, x => x.Opcode == 0x4f8f);
-        Assert.DoesNotContain(opcodes, x => x.Opcode is 0x4180 or 0x41bc or 0x41c8);
+        Assert.Contains(opcodes, x => x.Opcode == 0x413d);
+        Assert.Contains(opcodes, x => x.Opcode == 0x41bd);
+        Assert.Contains(opcodes, x => x.Opcode == 0x4f3f);
+        Assert.Contains(opcodes, x => x.Opcode == 0x4fbf);
+        Assert.DoesNotContain(opcodes, x => x.Opcode is 0x4180 or 0x413b or 0x413c or 0x41bc or 0x41c8);
         foreach (var (opcode, family, form) in opcodes)
         foreach (var supervisor in new[] { false, true })
         for (var ccr = 0; ccr < 32; ccr++)
@@ -52,9 +58,14 @@ public sealed class SyntheticInvalidBoundsBitfieldTests(ITestOutputHelper output
     {
         foreach (var word in new[] { false, true })
         for (var destination = 0; destination < 8; destination++)
-        for (var source = 0; source < 8; source++)
-            yield return ((ushort)(0x4108 | (word ? 0x80 : 0) | destination << 9 | source),
-                word ? "CHK.W" : "CHK.L", $"A{source},D{destination}");
+        {
+            for (var source = 0; source < 8; source++)
+                yield return ((ushort)(0x4108 | (word ? 0x80 : 0) | destination << 9 | source),
+                    word ? "CHK.W" : "CHK.L", $"A{source},D{destination}");
+            for (var source = 5; source < 8; source++)
+                yield return ((ushort)(0x4138 | (word ? 0x80 : 0) | destination << 9 | source),
+                    word ? "CHK.W" : "CHK.L", $"unassigned-EA(7,{source}),D{destination}");
+        }
     }
 
     private static IEnumerable<(ushort Opcode, string Family, string Form)> BitfieldOpcodes()

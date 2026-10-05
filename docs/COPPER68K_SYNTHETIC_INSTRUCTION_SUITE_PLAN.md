@@ -955,3 +955,26 @@ exception reference presets enabled. The deterministic gate retains 11,168,408
 cases in 469 batches and `roadmapComplete=false`; fresh pinned SingleStepTests,
 Musashi and the existing trace preset pass. The unchanged broad audit retains
 46 mismatching and 13 unsupported groups, so milestone 6 remains in progress.
+
+The unassigned-CHK-EA follow-up corrects advanced decoding of mode-7 registers
+5..7 to enter documented illegal-instruction vector 4 before operand effects.
+The existing CHK invalid-source matrix adds 48 opcode words, both stacks and
+every CCR: 24,576 new cases across all eight profiles. Failed-before runs detect
+3,072 unsupported cases per affected advanced profile; the restored guard passes
+all 90,112 invalid-CHK cases, with legal neighbors retained. No regression is
+retired. The unchanged broad audit advances to the next unassigned word `4140`
+and retains its failing status; its remaining families are not excluded.
+
+The private unpublished .49 package passes the isolated CopperScreen Release
+build, host/disk/engine checks and all three native Workbench/A1200 replays.
+Source, package, loaded-DLL identities and precise scope are recorded in
+`COPPER68K_REFERENCE_QUALIFICATION.md`. All earlier reference, advanced exception
+restoration and consolidation requirements remain open; milestone 6 stays in
+progress. No physical timing or new release is claimed.
+
+Final validation passes 4,777 CPU tests with ten optional skips; both qualified
+exception presets execute. The deterministic gate verifies 11,192,984 cases in
+469 batches, rejects missing/old-cardinality CHK reports and retains
+`roadmapComplete=false`. Fresh pinned SingleStepTests/Musashi and the separately
+qualified TRAP trace audit pass. The broad audit still fails 46 mismatching and
+13 unsupported groups, so the full milestone 6 objective remains open.

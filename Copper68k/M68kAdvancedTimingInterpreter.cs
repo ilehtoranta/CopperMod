@@ -838,7 +838,10 @@ namespace Copper68k
             if ((opcode & 0xFFC0) == 0x4800 && logicalMode == 7 && logicalRegister > 1 ||
                 (opcode & 0xFFC0) == 0x4A00 && logicalMode == 1)
                 return M68020OpcodeKind.IllegalInstruction;
-            if ((opcode & 0xF140) == 0x4100 && logicalMode == 1)
+            // CHK admits data sources, including immediate, but no An or
+            // unassigned mode-7 EA. Reject these words before execution.
+            if ((opcode & 0xF140) == 0x4100 &&
+                (logicalMode == 1 || logicalMode == 7 && logicalRegister > 4))
                 return M68020OpcodeKind.IllegalInstruction;
 
             if ((opcode & 0xFF00) == 0x0800 || (opcode & 0xF100) == 0x0100)

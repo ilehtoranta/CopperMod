@@ -1693,3 +1693,90 @@ the final adapter assembly is
 `ce24a4016c02922a6a99ecc856d54497b85ebfd51dc40fb9ed93bb6ac2d9c91d`.
 Earlier .48 consumer-package qualification is retained; no new consumer package
 or native replay is needed for these adapter/script/documentation changes.
+
+## Unassigned CHK effective-address words (2026-10-05)
+
+The unchanged Basic ILLEGAL audit exposed `413D` (CHK.L, unassigned mode 7 /
+register 5) at `0087FFA0` on EC020/A1200/020/030/060. The advanced classifier
+rejected An but omitted unassigned mode-7 fields. The subsequent general CHK
+handler correctly declined them, and execution threw an emulator timing exception
+instead of entering architectural vector 4. The existing 000/010/040 paths already
+handled those words correctly.
+
+[M68000PM 4-69/70](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+defines CHK's data EAs, with mode-7 fields only 0..4. These added words are
+explicitly labeled **unassigned EA encodings**, rather than legal operand forms.
+[MC68020UM 6.1.5](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf)
+defines illegal first-word patterns as vector 4 with the causing instruction
+address saved. The correction classifies only the CHK mask's An or mode-7
+registers 5..7 before operand execution. Immediate and PC-relative sources and
+the adjacent LEA encoding remain admitted. There is no generic illegal fallback,
+operand retry, timing-policy change or public API change.
+
+The existing `system-chk-invalid-operands` batch now contains **176 opcode words**:
+128 An-source words plus 48 unassigned words, covering both sizes, all destination
+registers, both stacks and every initial CCR. Fixed reference examples include
+`413D`, `41BD`, `4F3F` and `4FBF`; legal neighbors and LEA are excluded explicitly.
+Independent expectations check saved PC/SR, frame/stack state, all registers,
+surrounding memory and forbidden operand reads. The gate requires **11,264 cases
+per profile**, an addition of **24,576 cases across eight profiles**. No existing
+regression is retired.
+
+Failed-before evidence: `artifacts/m6-chk-unassigned-before/` reports 8,192 passing
+and 3,072 emulator-unsupported cases on each of EC020/A1200/020/030/060; the other
+three profiles pass all 11,264. There are no mismatches or untested cases. The
+restored classifier passes all **90,112 cases** with zero other statuses in
+`artifacts/m6-chk-unassigned-focused/`.
+
+The unchanged broad audit now completes six additional callbacks and frames per
+affected profile before encountering the next unassigned integer word, `4140`.
+This separately requires decoding/encoding qualification; it is not treated as a
+legal CHK byte form. The 040 `F300` illegal FPU operand/privilege-priority mismatch
+also remains open. Overall Basic still fails **1,322 passing, 46 mismatching,
+13 unsupported, zero untested groups**, over **11,335,717 callbacks and 1,525,415
+frames**, with 199,327 masked-SR cases and all 32 controls detected. The original
+Basic manifest and native library are unchanged. No family exclusion or comparison
+mask is added. Evidence: `artifacts/m6-chk-unassigned-broad-qualified/`.
+
+An initial invocation pointed to the wrong DLL filename; preflight rejected it
+before callbacks. The corresponding first full-suite invocation was interrupted
+after the setup error was identified. These are not passing validation evidence.
+The corrected invocations use the manifest-qualified `m68k_cpu_tester.dll`.
+
+Private, **unpublished** package `1.5.2-synthetic-dev.49` has SHA-256
+`817d9d166f64135aa894c1af42fce6bbf75b6e5e2e7d099eaefca77be984d5a6`;
+the packaged CPU assembly is
+`2e37452c73dd5ae46dac1e8bd2fb9ed7f8c44e2493bea3c203120d3798aef583`.
+`artifacts/m6-chk-unassigned-package.json` records changed-source and assembly
+identities against `eaddcac`. The default-version CPU tested by the reference
+adapter is `c01e30c9ba41db44cb37b329af7c3a42a2047890e3462403214f1cc37574bc5f`;
+its version differs from the private package, with the same production source.
+
+Isolated CopperScreen baseline `d9beae8` resolves the exact .49 dependency in
+production and separate diagnostic assets, and all four loaded DLLs match the
+packaged assembly. Release build has zero warnings/errors. Host **149** pass with
+six optional skips, disk **74**, engine **1,080**, and three native Workbench/A1200
+boot and disk-persistence replays pass with no skips. AHX passes **18** tests.
+Consumer evidence: `artifacts/chk-unassigned-validation/`,
+`artifacts/chk-unassigned-diagnostic-tests/` and
+`artifacts/chk-unassigned-production.binlog`; CPU AHX results are in
+`artifacts/m6-chk-unassigned-ahx-results/`. Native media is not committed. No
+package publication, physical timing or host-throughput qualification is claimed.
+Milestone 6 remains in progress with all earlier requirements retained.
+
+Final validation for this follow-up passes **4,777 CPU tests**, with ten optional
+skips and zero failures. The deterministic gate verifies **11,192,984 logical
+cases in 469 batches**, retaining `roadmapComplete=false`. It rejects an omitted
+020 CHK report and the previous passing report's 8,192-case cardinality. Fresh
+pinned SingleStepTests passes 312,500 selected cases in 125 files; Musashi passes
+536 programs with 88 explicit exclusions. Both qualified exception presets run
+in the full suite: BKPT 224 callbacks / 224 frames / 21 controls, and trap/bounds
+951,522 callbacks / 476,339 frames / 63 controls. The separately enabled qualified
+TRAP trace audit passes 512 callbacks / 512 frames / six controls.
+
+Evidence: `artifacts/m6-chk-unassigned-final-full/`,
+`artifacts/m6-chk-unassigned-gate.log`, `artifacts/m6-chk-unassigned-gate-controls/`
+and `artifacts/m6-chk-unassigned-trace/`. Ordinary CI uses the expanded existing
+CHK matrix and updated strict cardinality. The full-suite skips remain unavailable
+coverage; the independently run Basic audit remains failing. No seeded audit,
+test consolidation, package publication or hardware qualification is added.
