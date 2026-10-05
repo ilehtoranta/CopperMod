@@ -1399,3 +1399,31 @@ with 1,124,352 passing phases and no promoted mismatches. Fresh broad Basic
 discovery retains 1,326 passing directories, 47 mismatching and eight unsupported;
 its per-model/opcode statuses and counts are unchanged, and all 32 controls pass.
 These unresolved requirements remain part of the goal.
+
+### Milestone 6 physical RTE validation faults — 2026-10-05
+
+040 physical map faults during pre-commit RTE validation now build a format-7
+frame with the original access width/address, RTE PC and live SR, preserving the
+incomplete frame and committed throwaway stack effects. Two ordinary-CI batches
+add 223,872 passing entry/handler-return phases across direct and chained
+supervisor stacks. Five maintained mutations detect format, size, address, PC
+and continuation-read marker defects, then restore/rebuild source. Five report/
+identity controls reject their intended defects. No regression is retired.
+
+Full Release CPU validation passes 5,046 tests (eleven optional skips), all nine
+qualified WinUAE presets, 16,316,886 strict logical cases in 605 batches and fresh
+pinned SingleStepTests/Musashi audits. Isolated unpublished `.58` validates the
+CopperScreen Release build, host/disk/engine suites and three native boot/
+persistence replays through NuGet, with matching package/assets/loaded binaries.
+Published versions and the root CopperScreen checkout remain untouched.
+
+Complete 040 discovery still fails on 480 named untested fault/context cases,
+with 1,348,224 passing phases and no promoted mismatch/unsupported execution.
+User-tail validation, internal-restoration/double faults, re-execution after
+software repair, warmed JIT fault cases, other instruction fault entry,
+writeback handlers, CP context transfer and all broader remaining reference/
+consolidation requirements remain open. See the
+[reference record](COPPER68K_REFERENCE_QUALIFICATION.md#040-physical-rte-validation-fault-correction--2026-10-05)
+for exact scope, failed-before evidence, authorities and identities. Milestone 6
+and the full goal remain **in progress** with `roadmapComplete=false`; publication
+requires separate release authorization.

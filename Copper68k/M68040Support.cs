@@ -1859,7 +1859,9 @@ namespace Copper68k
         M68kBusAccessKind AccessKind,
         bool Write,
         uint Status,
-        uint? StackedProgramCounter = null);
+        uint? StackedProgramCounter = null,
+        int ByteCount = 0,
+        bool RteFrameValidation = false);
 
     internal sealed class UnsupportedM68040InstructionException : M68kEmulationException
     {
@@ -2143,7 +2145,7 @@ namespace Copper68k
                 return address;
             }
 
-            return ThrowPhysicalAddressFault(address, accessKind, write);
+            return ThrowPhysicalAddressFault(address, accessKind, write, byteCount);
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -2179,12 +2181,13 @@ namespace Copper68k
         private uint ThrowPhysicalAddressFault(
             uint address,
             M68kBusAccessKind accessKind,
-            bool write)
+            bool write,
+            int byteCount)
         {
             var supervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
             throw new M68040MmuFaultException(
                 WithStackedProgramCounter(
-                    CreatePhysicalAddressFault(address, accessKind, write, supervisor),
+                    CreatePhysicalAddressFault(address, accessKind, write, supervisor) with { ByteCount = byteCount },
                     address,
                     accessKind));
         }
@@ -4222,12 +4225,40 @@ namespace Copper68k
                     (fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch
                         ? fault.LogicalAddress
                         : State.LastInstructionProgramCounter);
-                RaiseFormat0Exception(VectorBusError, stackedProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+                if (fault.RteFrameValidation)
+                    RaiseRteValidationAccessFault(fault, stackedProgramCounter);
+                else
+                    RaiseFormat0Exception(VectorBusError, stackedProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
             }
             finally
             {
                 State.M68040Mmu.BypassTranslation = bypass;
             }
+        }
+
+        private void RaiseRteValidationAccessFault(M68040MmuFault fault, uint instructionPc)
+        {
+            // MC68040UM 8.4.6.7: preserve the frame being validated. Only
+            // pre-commit reads carry this marker; faults in exception delivery
+            // or internal restoration must not retry partially completed work.
+            var savedSr = State.StatusRegister;
+            State.RecordException(VectorBusError, instructionPc, savedSr);
+            State.StatusRegister = (ushort)((savedSr | M68kCpuState.Supervisor) & ~0xc000);
+            // No pending pipeline writebacks in this synchronous read path.
+            // Undefined EA/writeback/push data use zero as an implementation
+            // convention, not a hardware-defined result. ATC/MA/LK/TT are clear;
+            // SSW SIZE describes the original read, TM its data function code.
+            for (var n = 0; n < 9; n++) PushLong(0);
+            PushLong(fault.LogicalAddress);
+            PushWord(0); PushWord(0); PushWord(0);
+            var modifier = (savedSr & M68kCpuState.Supervisor) != 0 ? 5 : 1;
+            PushWord((ushort)(0x0100 | (fault.ByteCount == 2 ? 0x0040 : 0) | modifier));
+            PushLong(0);
+            PushWord(0x7008);
+            PushLong(instructionPc);
+            PushWord(savedSr);
+            State.ProgramCounter = ReadLong(State.VectorBaseRegister + 8);
+            CompleteTiming(M68kInstructionTimingKey.IllegalInstruction);
         }
 
         private uint ReadPhysicalLong(uint physicalAddress)

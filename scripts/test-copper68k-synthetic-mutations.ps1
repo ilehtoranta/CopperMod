@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -190,12 +190,20 @@ $mutations += @(
 '@; group='EveryCacheOpcodeIncludesInvalidScopeAndNeitherCache'; milestone=6; model='68040'; cache=$true;
       legacyTest='Move16CacheInstructionsAndBreakpoints'; legacyFile='Copper68k.Tests/Synthetic/SyntheticModelSystemTests.cs'; legacyModel='68040'}
 )
+$mutations += @(
+    @{name='rte-validation-frame'; file='Copper68k/M68040Support.cs'; before='            PushWord(0x7008);'; after='            PushWord(0x0008);'; group='SyntheticM68040RteValidationFaultTests'; milestone=6; model='68040'; validationFault=$true},
+    @{name='rte-validation-width'; file='Copper68k/M68040Support.cs'; before='(fault.ByteCount == 2 ? 0x0040 : 0)'; after='(fault.ByteCount == 2 ? 0 : 0x0040)'; group='SyntheticM68040RteValidationFaultTests'; milestone=6; model='68040'; validationFault=$true},
+    @{name='rte-validation-address'; file='Copper68k/M68040Support.cs'; before='            PushLong(fault.LogicalAddress);'; after='            PushLong(fault.LogicalAddress + 1);'; group='SyntheticM68040RteValidationFaultTests'; milestone=6; model='68040'; validationFault=$true},
+    @{name='rte-validation-saved-pc'; file='Copper68k/M68040Support.cs'; before='                    RaiseRteValidationAccessFault(fault, stackedProgramCounter);'; after='                    RaiseRteValidationAccessFault(fault, stackedProgramCounter + 2);'; group='SyntheticM68040RteValidationFaultTests'; milestone=6; model='68040'; validationFault=$true},
+    @{name='rte-validation-continuation-read'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs'; before='var address = continuation == 0 ? 0u : ReadRteFrameLong(frame + 8);'; after='var address = continuation == 0 ? 0u : ReadLong(frame + 8);'; group='SyntheticM68040RteValidationFaultTests'; milestone=6; model='68040'; validationFault=$true}
+)
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
 if ($Scope -eq 'Control') { $mutations = @($mutations | Where-Object { $_.milestone -eq 5 }) }
 if ($Scope -eq 'Consolidation') { $mutations = @($mutations | Where-Object { $_.milestone -eq 6 }) }
 if ($Scope -eq 'Rte040') { $mutations = @($mutations | Where-Object { $_.odd }) }
+if ($Scope -eq 'RteValidationFault') { $mutations = @($mutations | Where-Object { $_.validationFault }) }
 if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
 if ($Scope -eq 'CacheEncodings') { $mutations = @($mutations | Where-Object { $_.cache }) }
 $saved = @{}
@@ -246,6 +254,14 @@ try {
                     @($batches | Where-Object { $_.group -eq 'rte-odd-pending' -and $_.logicalCases -eq 165888 }).Count -ne 1 -or
                     @($batches | Where-Object { $_.group -eq 'address-error-fetch-040' -and $_.logicalCases -eq 2304 }).Count -ne 1) {
                     throw 'Odd-return mutation did not execute its complete three-batch selection'
+                }
+            }
+            if ($mutation.validationFault) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $batches.Count -ne 2 -or
+                    @($batches | Where-Object { $_.group -eq 'rte-validation-physical-direct' -and $_.logicalCases -eq 162816 }).Count -ne 1 -or
+                    @($batches | Where-Object { $_.group -eq 'rte-validation-physical-chained' -and $_.logicalCases -eq 61056 }).Count -ne 1) {
+                    throw 'RTE validation-fault mutation did not execute its complete two-batch selection'
                 }
             }
             if ($mutation.lpstop) {

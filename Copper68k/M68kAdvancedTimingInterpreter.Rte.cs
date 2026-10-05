@@ -6,10 +6,32 @@ internal partial class M68kAdvancedTimingInterpreter
     private (uint Pc, uint Address)? _m68040MovemContinuation;
     internal bool HasPendingM68040MovemContinuation => _m68040MovemContinuation.HasValue;
 
+    private ushort ReadRteFrameWord(uint address)
+    {
+        try { return ReadWord(address); }
+        catch (M68040MmuFaultException ex) when (IsM68040PhysicalRteValidationFault(ex.Fault))
+        {
+            throw new M68040MmuFaultException(ex.Fault with { RteFrameValidation = true });
+        }
+    }
+
+    private uint ReadRteFrameLong(uint address)
+    {
+        try { return ReadLong(address); }
+        catch (M68040MmuFaultException ex) when (IsM68040PhysicalRteValidationFault(ex.Fault))
+        {
+            throw new M68040MmuFaultException(ex.Fault with { RteFrameValidation = true });
+        }
+    }
+
+    private bool IsM68040PhysicalRteValidationFault(M68040MmuFault fault) =>
+        _profile.Model == M68kAcceleratorModel.M68040 && !State.M68040Mmu.Enabled &&
+        fault.ByteCount is 2 or 4 && !fault.Write && fault.AccessKind == M68kBusAccessKind.CpuDataRead;
+
     private bool TryRestoreM68040AccessFrame(uint frame, ushort sr, uint pc)
     {
         var priorSr = State.StatusRegister;
-        var continuation = ReadWord(frame + 12) & 0xf000;
+        var continuation = ReadRteFrameWord(frame + 12) & 0xf000;
         // Multiple continuation bits are undefined (MC68040UM 8.4.6.7).
         if (continuation is not (0 or 0x1000 or 0x2000 or 0x4000 or 0x8000)) return false;
         var pending = continuation == 0x8000
@@ -20,7 +42,7 @@ internal partial class M68kAdvancedTimingInterpreter
         // reselect a vector from handler-modified FPCR/FPSR registers.
         if (continuation == 0x8000 && pending == null)
             throw new UnsupportedM68kTimingException(0x4e73, State.LastInstructionProgramCounter, _profile);
-        var address = continuation == 0 ? 0u : ReadLong(frame + 8);
+        var address = continuation == 0 ? 0u : ReadRteFrameLong(frame + 8);
         State.SetActiveStackPointer(unchecked(frame + 60));
         State.StatusRegister = sr;
         State.ProgramCounter = pc;

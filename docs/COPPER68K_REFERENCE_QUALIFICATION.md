@@ -3718,3 +3718,114 @@ strict gate. Production CPU source remains unchanged since `cb9679d`; the
 preceding unpublished `.57` consumer evidence keeps its own original source,
 package and binary identities. No new consumer replay or cross-checkpoint binary
 equality is claimed. All remaining required roadmap gaps remain in progress.
+
+### 040 physical RTE validation fault correction — 2026-10-05
+
+[MC68040UM 8.4.6.7](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+requires a format-7 access frame for a fault during RTE frame validation,
+preserving the incomplete original frame. Sections 8.4.6.2/4 and table 7-1
+define transfer metadata and size encodings. The expectation source is the
+processor manual; no hardware oracle or WinUAE fault execution is claimed.
+
+The existing internal physical-address map can reject a read even with the MMU
+disabled. Previously that path lost the original access width and built an
+eight-byte format-0 vector-2 frame. The new fixtures reproduce **81,408 direct
+and 30,528 chained entry mismatches**, with the corresponding handler returns
+explicitly untested after the failed prerequisite. Evidence:
+`artifacts/m6-rte-validation-fault-before/`. No production exception is injected
+by the fixture: a one-shot map rejection reaches the real logical bus through
+the public CPU factory.
+
+The correction retains physical access width in internal fault metadata and
+marks only pre-commit RTE validation reads. Fault entry stacks 60 bytes, with
+the original RTE PC, live pre-validation SR, read/size/data-space attributes,
+the original transfer address and no pending writebacks. Undefined EA and
+writeback/push data use zero as an implementation convention. Successfully
+consumed throwaways retain their stack-pointer and SR effects; no instruction
+is automatically retried after partial side effects. Enabled-MMU faults and
+other instructions' existing fault paths are unchanged and remain unqualified.
+No public package API changes are introduced. The existing exception timing
+key remains `IllegalInstruction`; physical timing is not qualified.
+
+`SyntheticM68040RteValidationFaultTests` provides two ordinary-CI batches:
+
+| Group | Passing phases | Architectural combinations | CCRs per combination |
+| --- | ---: | ---: | --- |
+| `rte-validation-physical-direct` | 162,816 | 2,544 | All 32, entry and handler return |
+| `rte-validation-physical-chained` | 61,056 | 15,264 | 0/31, entry and handler return |
+
+The matrix rejects every byte of the selected SR/PC/format/SSW/continuation-EA
+read. It covers two direct and twelve one/two-throwaway supervisor-bank paths,
+T0/T1/no trace, even/odd data-stack addresses, and zero/nonzero VBR. Forms are
+short formats 0/2/3, unsupported 040 formats 4/15, and normal/CM/CT/CU/CP access
+frames. Different candidate restoration SRs expose premature installation.
+Common verification checks all registers, stack banks, exact PC/SR, exception
+entry count, saved PC/SR, guarded original-frame and neighboring memory, and
+pending CU/CP retention. The handler's following sentinel and discarded odd
+PCs must not execute. SSW X, EA and invalid writeback/push data are masked;
+writeback valid bits and the fault address are checked. Evidence:
+`artifacts/m6-rte-validation-fault-fixed/` and the final full-suite reports.
+
+The maintained `-Scope RteValidationFault` mutation command requires both
+complete batches and restores/rebuilds production source after testing:
+
+| Mutation | Direct entry mismatches | Chained entry mismatches |
+| --- | ---: | ---: |
+| Wrong format word | 81,408 | 30,528 |
+| Wrong word/long size | 81,408 | 30,528 |
+| Fault address incremented | 81,408 | 30,528 |
+| Saved RTE PC incremented | 81,408 | 30,528 |
+| Continuation EA loses validation marker | 12,288 | 4,608 |
+
+Failed prerequisites retain untested handler-return phases instead of reporting
+them as passing. Evidence:
+`artifacts/m6-rte-validation-fault-mutations/mutation-proof.json`.
+No historical regression is retired by this checkpoint.
+
+The complete discovery command validates the exact independent byte-range
+distribution, seven fixture/command identities and CPU/assembly identities.
+It passes **1,348,224 phases**, with zero mismatching/unsupported promoted
+phases, and still fails on **480 named untested fault/context requirements**.
+Supervisor physical validation is not a replacement for user-tail validation,
+internal restoration/double faults, other real instruction fault entry,
+writeback-handler execution or CP context transfer. Re-execution of a repaired
+original RTE, warmed JIT fault cases, public BERR signaling, physical bus beats
+and enabled-MMU operation are not qualified by these two phases. Evidence:
+`artifacts/m6-rte-validation-fault-discovery/`.
+
+Five copied-report/source controls reject a missing validation report, shortened
+case count, foreign byte-range combination, missing fixture identity and changed
+CPU identity for their specific reasons. The baseline retains the 480 inventory
+failures and is not called a passing roadmap. Evidence:
+`artifacts/m6-rte-validation-fault-report-controls/controls.json`.
+
+Full Release CPU validation in `artifacts/m6-rte-validation-fault-full/` passes
+**5,046 tests, eleven optional skips and zero failures**. All nine qualified
+WinUAE presets pass their existing exact callback/frame selections against the
+same CPU and adapter assemblies. CPU SHA-256:
+`91e634457a2736f4c98a19abeac75bab3562601caabbce967e30a3a564af7efb`;
+adapter SHA-256:
+`19359ce94782ea27c4226691c97e4abab6b939b905343043aa626f9883b2027e`.
+The strict gate passes **16,316,886 logical cases in 605 batches**, with fresh
+pinned SingleStepTests (312,500 cases / 125 files) and Musashi (536 programs /
+88 explicit exclusions). Identities remain unchanged through the strict gate.
+
+Isolated CopperScreen at baseline `d9beae8b88be24032221e3482942a249c03c27d3`
+validates private unpublished NuGet `1.5.2-synthetic-dev.58`: Release build has
+zero warnings/errors; host 149 passing/six optional skips, disk 74, separate
+engine diagnostics 1,080, and native Workbench boots two/A1200 persistence one
+pass without native skips. All four assets and loaded assemblies match the
+package and the CPU binary above. Package SHA-256:
+`e6b829df02b2eb449d68149832c4c569ae6a3f53e3c9774135a867fe490a52e9`.
+Evidence: the consumer's `artifacts/rte-validation-fault-identities.json`,
+`artifacts/rte-validation-fault-validation-v2/` and separate diagnostic outputs.
+The first consumer helper failed during restore because its URI argument was
+interpreted as a local source; the validated rerun uses an explicit isolated
+NuGet configuration. A preliminary ROM extraction identity check rejected raw
+bytes because the native test pins the supplied ZIP; no media was overwritten.
+Neither attempt is counted as semantic replay evidence.
+
+Root CopperScreen changes, its pinned dependency boundary and published package
+versions remain untouched. No package is published. The complete restoration,
+reference and consolidation requirements remain in progress, with
+`roadmapComplete=false`.

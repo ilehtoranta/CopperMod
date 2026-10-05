@@ -8655,9 +8655,9 @@ namespace Copper68k
             {
                 var framePointer = State.A[7];
                 var priorSr = State.StatusRegister;
-                var restoredStatus = ReadWord(framePointer);
-                var restoredPc = ReadLong(framePointer + 2);
-                var format = ReadWord(framePointer + 6) >> 12;
+                var restoredStatus = ReadRteFrameWord(framePointer);
+                var restoredPc = ReadRteFrameLong(framePointer + 2);
+                var format = ReadRteFrameWord(framePointer + 6) >> 12;
                 if (format == 7 && _profile.Model == M68kAcceleratorModel.M68040 &&
                     TryRestoreM68040AccessFrame(framePointer, restoredStatus, restoredPc)) return;
                 var size = format switch { 0 or 1 => 8u, 2 => 12u, 3 when _profile.Model == M68kAcceleratorModel.M68040 => 12u, _ => 0u };

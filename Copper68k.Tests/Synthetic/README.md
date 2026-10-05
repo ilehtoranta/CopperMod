@@ -258,6 +258,21 @@ dispatch followed by RTE fallback. Run the four discriminating mutations with
 The command checks exact selections, combinations, counts and source/assembly
 identities. Existing outputs must be validated with `-ValidateReportsOnly` or a
 fresh output directory used. It cannot pass merely by fixing normal/trace return.
+Two ordinary-CI physical-map batches additionally cover supervisor-stack RTE
+validation faults and handler returns (223,872 phases). The direct matrix uses
+all CCRs; one/two-throwaway chains use CCR 0/31. Every byte of each SR, PC, format,
+SSW and required continuation-EA read is rejected in turn, with T0/T1/no trace,
+even/odd data-stack addresses and zero/nonzero VBR. The format-7 frame preserves
+the incomplete original frame and committed stack selection. Expectations mask
+only undefined SSW X, EA and invalid writeback/push data. The recording bus
+rejects the original operand range through the existing internal physical-map
+interface with translation disabled; it does not synthesize a CPU exception.
+Run the five fault-frame/width/address/PC/continuation-read mutations with
+`./scripts/test-copper68k-synthetic-mutations.ps1 -Scope RteValidationFault`.
+User-tail validation, faults during internal restoration or fault entry, other
+instructions' fault frames and software writeback handlers remain required.
+These two phases do not qualify re-execution of the repaired original RTE,
+enabled MMU operation, a public BERR interface or physical timing.
 See the [reference record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-access-frame-restoration-discovery-2026-10-05)
 for failed-before evidence, mutation controls and the remaining scope.
 

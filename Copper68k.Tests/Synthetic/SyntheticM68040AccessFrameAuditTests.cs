@@ -32,7 +32,9 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
         foreach (var form in new[] { "frame-validation-fault", "odd-PC-chained-SR-provenance",
             "real-access-fault-entry", "writeback-handler", "CP-context-transferred-vector" })
             report.Record($"68040/RTE/format7/{form}/bank={bank}/op=4E73/ccr={ccr:X2}", "untested",
-                "Required fault/context protocol has no independently qualified execution fixture yet");
+                form == "frame-validation-fault"
+                    ? "Supervisor-stack physical validation reads are covered separately; user-tail validation and internal-restoration/double-fault distinctions remain required"
+                    : "Required fault/context protocol has no independently qualified execution fixture yet");
         report.Complete(output);
     }
 
