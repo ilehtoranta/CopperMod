@@ -2462,7 +2462,7 @@ namespace Copper68k
         }
     }
 
-    internal sealed class M68040Interpreter : M68kAdvancedTimingInterpreter
+    internal sealed class M68040Interpreter : M68kAdvancedTimingInterpreter, IM68kCore
     {
         private const int VectorBusError = 2;
         private const int VectorLineF = 11;
@@ -2470,6 +2470,7 @@ namespace Copper68k
         private readonly IM68kStablePhysicalAddressMap? _stablePhysicalAddressMap;
         private readonly M68kInterpreter _approximateIntegerFallback;
         private uint _observedPhysicalAddressMapGeneration;
+        private bool _accessErrorDoubleFaultHalted;
 
         public M68040Interpreter(IM68kBus bus)
             : this(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz)
@@ -2562,9 +2563,38 @@ namespace Copper68k
 
         public override void Reset(uint programCounter, uint stackPointer)
         {
+            _accessErrorDoubleFaultHalted = false;
             base.Reset(programCounter, stackPointer);
             State.M68040Fpu.Reset();
             State.M68040Mmu.Reset();
+        }
+
+        public override void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
+        {
+            if (_accessErrorDoubleFaultHalted) return;
+            base.BeginSubroutine(address, stackPointer, returnAddress);
+        }
+
+        public void SwitchTaskContext(M68kCpuState next)
+        {
+            ArgumentNullException.ThrowIfNull(next);
+            if (_accessErrorDoubleFaultHalted) return;
+            State.CopyTaskContextFrom(next);
+        }
+
+        public override void RequestInterrupt(int level, uint vectorAddress)
+        {
+            if (State.Halted) return;
+            base.RequestInterrupt(level, vectorAddress);
+        }
+
+        internal void LatchAccessErrorDoubleFault()
+        {
+            // MC68040UM 7.6.3 / 8.2.1: only external reset may restart this
+            // halt. Do not retry stacking or record a second exception entry.
+            _accessErrorDoubleFaultHalted = true;
+            State.Halted = true;
+            State.Stopped = false;
         }
 
         protected override bool TryExecuteFastModelSpecificInstruction(ushort opcode)
@@ -4229,6 +4259,11 @@ namespace Copper68k
                     RaiseRteValidationAccessFault(fault, stackedProgramCounter);
                 else
                     RaiseFormat0Exception(VectorBusError, stackedProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
+            }
+            catch (M68040MmuFaultException)
+            {
+                LatchAccessErrorDoubleFault();
+                CompleteTiming(M68kInstructionTimingKey.IllegalInstruction);
             }
             finally
             {

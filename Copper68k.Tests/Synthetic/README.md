@@ -390,3 +390,23 @@ The duplicated cache loop is retired after shared mutation proof; MOVE16,
 breakpoints, specialized cache/prefetch/bus/JIT/native regressions remain.
 See the [cache encoding record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#cache-encoding-reference-qualification-and-consolidation-2026-10-05)
 for exact identities, replacement cases and qualification limits.
+
+040 access-fault entry has five additional ordinary CI batches:
+`rte-access-entry-double-fault` (98,304 complete halt/host-entry/reset scenarios),
+`rte-access-handler-refault` (3,840 nested handler exceptions), and
+`access-double-fault-dispatch-accurate`, `-v1`, `-v2` (1,088 each). The first
+matrix rejects every byte of the format-7 stack and vector access across both
+supervisor banks, valid incoming trace states, all CCRs, odd/even stacks and VBRs.
+The dispatch groups require actual compiled warm execution, RTE fallback or a
+compiled operand-fault side exit, and B/W/L read/write access widths. Halted
+state cannot be resumed by interrupt, task or subroutine entry; external reset
+restores those host operations and instruction execution. Partial frame state
+and stack ordering remain opaque. The approximate short generic operand-fault
+frame is not promoted as architectural format-7 coverage.
+
+Run `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope AccessDoubleFault`
+for maintained fatal-latch, reset, compiled-entry, master-stack and six classic
+memory-routing mutations. The complete 040 audit includes these combinations
+and fixture identities while retaining its failing untested protocol inventory.
+Handler-entry prefetch, internal-restoration faults, active accurate-batch fault
+delivery and repaired-original-RTE retry remain required work.

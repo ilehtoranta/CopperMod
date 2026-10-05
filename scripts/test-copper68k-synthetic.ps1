@@ -148,6 +148,11 @@ try {
             $expected['system-move-word-restart-invalid'] = 224
         }
         if ($model -eq '68040') {
+            $expected['rte-access-entry-double-fault'] = 98304
+            $expected['rte-access-handler-refault'] = 3840
+            $expected['access-double-fault-dispatch-accurate'] = 1088
+            $expected['access-double-fault-dispatch-v1'] = 1088
+            $expected['access-double-fault-dispatch-v2'] = 1088
             $expected['rte-validation-physical-direct'] = 162816
             $expected['rte-validation-physical-chained'] = 61056
             $expected['rte-odd-normal'] = 69120
@@ -260,6 +265,7 @@ try {
         m68040MmuInstructionScope=@{translationEnabled=$false; dfc=@(1,2,5,6); globalRegisterField='canonical zero'; undefined='Disabled PTEST MMUSR; DFC 0/3/4/7'; enabledMmu='Unqualified flat-table approximation; PFLUSH conservatively flushes all ATC entries'};
         m68040AccessFrameScope='Synthetic normal/CT/CM/CU/CP returns with original pending vectors, every legal MOVEM word and full-index structure, one/two throwaways selecting all stacks, direct odd-PC returns, and supervisor-stack physical RTE validation fault entry/handler return; chained odd-PC saved-SR provenance, user-tail/internal-restoration faults, CP context transfer, other real fault entry and physical timing remain unqualified';
         m68040RtePhysicalValidationScope=@{logicalCases=223872; batches=2; translationEnabled=$false; banks=@('ISP','MSP'); directCcr='all 32'; chainedCcr=@(0,31); trace=@(0,0x8000,0x4000); alignment=@(0,1); vbr=@(0,0x10000); faults='Each byte of SR/PC/format/SSW/continuation-EA reads; 14 direct/one/two-throwaway supervisor paths'; phases=@('fault entry','handler return'); undefined='EA and invalid writeback/push data; SSW X'; remaining='User-tail and internal-restoration/double faults, other instruction faults and software writeback handlers'};
+        m68040AccessDoubleFaultScope=@{logicalCases=105408; batches=5; translationEnabled=$false; banks=@('ISP','MSP'); directCcr='all 32'; dispatchCcr=@(0,31); engines=@('accurate','classic','V2'); faults='Every byte of format-7 stack/vector; later handler validation refaults; warmed RTE fallback and compiled B/W/L operand read/write side exits'; recovery='External reset, including restored host entry; interrupt, task/subroutine entry and halted batches remain inactive'; undefined='Partial stack write order, contents and exact SP'; remaining='Internal restoration, handler-entry prefetch, active accurate-batch fault delivery, repaired original RTE retry, user-tail validation and general architectural access-fault restart'};
         m68060LowPowerStopScope='Every unrecognized second opcode word in both privilege modes; fixed encoding, status, CCR and incoming trace cases across all profiles. Opcode-PC exception frames follow MC68060UM 8.2.4/5; physical broadcast, pins and ordinary STOP S-clear software disagreement remain unqualified';
         cacheInstructionEncodingScope='Every F4xx opcode, all CCRs and both privilege states across eight profiles; scope zero is illegal on 040/060, including neither-cache forms, before privilege effects. Empty fixture caches qualify architectural state and exception outcomes, not physical invalidation, writeback, bus faults or timing';
         m68010Format8Scope='58-byte address-error frame, reserved holes, version validation and tail probe, alignment double-fault halt/reset; marked private word-MOVE/MOVEA images resume their faulted cycle; other opaque restart/input state, long transfers, RMW and physical timing remain unqualified';

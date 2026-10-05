@@ -3829,3 +3829,101 @@ Root CopperScreen changes, its pinned dependency boundary and published package
 versions remain untouched. No package is published. The complete restoration,
 reference and consolidation requirements remain in progress, with
 `roadmapComplete=false`.
+
+### 040 access-fault entry halt qualification — 2026-10-05
+
+Authority: [MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+7.6.3, 8.2.1 and exception-entry figure 8-1. A further access fault during
+stacking or vector fetch halts until external reset; a fault during an executing
+handler starts a new exception. This audit uses real translation-disabled
+physical-map rejections, independent addresses and public factory execution.
+It does not inject a production exception or call CPU frame/EA helpers.
+
+The interpreter previously allowed the second fault to escape to its host.
+Its new private fatal latch persists through host subroutine/task entry and
+interrupt requests. Compiled entry shares that latch, without retrying partial
+stacking or recording another exception. Existing interpreter timing keys and
+the compiled 34-cycle exception policy are retained; neither is a physical
+timing qualification. A separate classic-emitter defect bypassed the
+model-aware B/W/L helpers. Those six paths now use 040 address-map checks and
+unaligned data access; the 000 pipeline paths retain their existing behavior.
+Compiled exception entry also preserves M and clears trace like the interpreter.
+
+| Ordinary group | Logical scenarios | Architectural combinations |
+| --- | ---: | ---: |
+| `rte-access-entry-double-fault` | 98,304 | 3,072 |
+| `rte-access-handler-refault` | 3,840 | 120 |
+| `access-double-fault-dispatch-accurate` | 1,088 | 544 |
+| `access-double-fault-dispatch-v1` | 1,088 | 544 |
+| `access-double-fault-dispatch-v2` | 1,088 | 544 |
+
+Each fatal scenario verifies no transfer after rejection, unrelated register/
+memory preservation, inactivity through host entry and batches, then external
+reset and a MOVEQ sentinel. Partial frame contents and exact SP/write ordering
+are opaque. The main matrix includes every byte of the 60-byte frame and
+four-byte vector, both supervisor banks, all CCRs, three defined trace states,
+odd/even stacks and two VBRs. T1+T0 is undefined and excluded. The handler control
+faults all five validation reads after the first entry has completed and checks
+the new defined frame while preserving both older frames.
+
+Dispatch cases require actual warmed compiled code before selecting RTE fallback
+or compiled MOVE B/W/L read/write side exits. They check access widths, odd/even
+data and stacks, both supervisor banks and CCR 0/31. Generic operand faults still
+use the existing approximate short frame; these cases qualify fatal entry only,
+not general architectural format-7 restart. Accurate active-batch fault delivery,
+handler-entry prefetch, internal-state restoration, repaired-original RTE retry,
+user-tail validation, writeback handlers and CP context transfer remain required.
+The 480-case untested inventory remains in the complete audit. No old regression
+is retired and milestone 6 remains in progress.
+
+Failed-before evidence: `artifacts/m6-access-entry-double-fault-before/` records
+98,304 escaped second faults, with the 3,840 handler controls passing. Warmed
+dispatch failures in `artifacts/m6-access-entry-double-fault-dispatch-before/`
+also exposed compiled exception and odd-stack faults; later classic-dispatch
+diagnostics identified the missing model-aware memory routing. These discovery
+runs are not acceptance evidence. Validation records below bind the final
+selection and binaries; no public package release is authorized by this work.
+
+Final complete 040 discovery in
+`artifacts/m6-access-entry-double-fault-discovery/` executes 26 xUnit tests:
+25 pass and the retained inventory fails on 480 untested cases. All 20 reports,
+six fixed examples, 1,453,632 passing scenarios, fixture/source/assembly identities
+and independent combination distributions validate. Five missing-report, shortened
+count, foreign-combination and fixture/CPU identity controls reject their intended
+defects in `artifacts/m6-access-entry-double-fault-report-controls/controls.json`.
+
+Ten maintained mutations in
+`artifacts/m6-access-entry-double-fault-mutations-v3/mutation-proof.json`
+detect fatal-latch, reset, compiled halt, master-stack and all six classic
+memory-routing defects. Each executes all three 1,088-case dispatch batches.
+The latch and reset mutations fail 1,088 per engine; compiled halt fails 576
+per JIT engine, master-stack selection 192 per JIT engine, and each specialized
+memory route fails 96 classic cases. Source is restored and rebuilt afterward.
+A preliminary reset mutation survived, exposing a missing host-entry check after
+external reset; the final fixtures verify both restart and restored host entry.
+An intermediate mutation run rejected a mixed-newline anchor before execution;
+the final run normalizes source line endings and detects all ten mutations.
+Neither preliminary run is final mutation acceptance.
+
+Full Release CPU validation in `artifacts/m6-access-entry-double-fault-full/`
+passes **5,051 tests, eleven optional skips and zero failures**. All nine
+qualified WinUAE presets retain their exact callback/frame counts, checked in
+`qualified-preset-identities.json`. The strict gate passes **16,422,294 logical
+cases in 610 reporting batches**, with fresh pinned SingleStepTests (312,500 /
+125 files) and Musashi (536 programs / 88 explicit exclusions). CPU SHA-256:
+`216d59e53e3190a9f9faffa0d7790554cbf2528c1d7d41c48b6f3da22bd4751c`;
+test/reference adapter SHA-256:
+`d343fb7cd582a6e881153280e781e3b84b93d3bd352014d239b67beb4eb3780f`.
+Both identities remain unchanged through the strict gate.
+
+Isolated CopperScreen baseline `d9beae8b88be24032221e3482942a249c03c27d3`
+passes through unpublished private NuGet `1.5.2-synthetic-dev.59`: Release build
+zero warnings/errors, host 149/six optional skips, disk 74, separate engine
+diagnostics 1,080 and three native Workbench/A1200 boot/persistence replays with
+no native skips. Four assets and loaded CPU assemblies match the package and
+the CPU binary above. Package SHA-256:
+`1b8622efefe5364447020a4f3ce1d4bb9c0766b86bcfa50bc4a559ed53bcbe1d`.
+Consumer evidence is under `artifacts/access-entry-double-fault-validation-v2/`,
+separate diagnostic outputs and `artifacts/access-entry-double-fault-identities.json`.
+Root CopperScreen edits and published packages remain untouched. All remaining
+reference/consolidation requirements persist with `roadmapComplete=false`.

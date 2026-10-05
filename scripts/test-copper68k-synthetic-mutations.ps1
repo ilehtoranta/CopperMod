@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','AccessDoubleFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -197,6 +197,37 @@ $mutations += @(
     @{name='rte-validation-saved-pc'; file='Copper68k/M68040Support.cs'; before='                    RaiseRteValidationAccessFault(fault, stackedProgramCounter);'; after='                    RaiseRteValidationAccessFault(fault, stackedProgramCounter + 2);'; group='SyntheticM68040RteValidationFaultTests'; milestone=6; model='68040'; validationFault=$true},
     @{name='rte-validation-continuation-read'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs'; before='var address = continuation == 0 ? 0u : ReadRteFrameLong(frame + 8);'; after='var address = continuation == 0 ? 0u : ReadLong(frame + 8);'; group='SyntheticM68040RteValidationFaultTests'; milestone=6; model='68040'; validationFault=$true}
 )
+$doubleFaultMutations = @(
+    @{name='040-double-fault-latch'; file='Copper68k/M68040Support.cs'; before='            _accessErrorDoubleFaultHalted = true;'; after='            _accessErrorDoubleFaultHalted = false;'},
+    @{name='040-double-fault-reset'; file='Copper68k/M68040Support.cs'; before='            _accessErrorDoubleFaultHalted = false;'; after='            // Mutant: external reset retains fatal latch.'},
+    @{name='040-compiled-double-fault-halt'; file='Copper68k/M68kJitCore.cs'; before='                ((M68040Interpreter)_fallback).LatchAccessErrorDoubleFault();'; after='                // Mutant: compiled fatal entry fails to latch HALT.'},
+    @{name='040-compiled-master-stack'; file='Copper68k/M68kJitCore.cs'; before=@'
+        private void RaiseM68040Format0Exception(int vector, uint stackedProgramCounter, int cycles)
+        {
+            var savedStatusRegister = State.StatusRegister;
+            State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
+            State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~0xc000);
+'@; after=@'
+        private void RaiseM68040Format0Exception(int vector, uint stackedProgramCounter, int cycles)
+        {
+            var savedStatusRegister = State.StatusRegister;
+            State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
+            State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Master);
+'@}
+)
+foreach ($size in @('Byte','Word','Long')) {
+    $doubleFaultMutations += @{name="040-classic-read-$size"; file='Copper68k/M68kJitCore.cs';
+        before="            if (_cpuModel != M68kJitCpuModel.M68000) return Read$size(address);";
+        after="            // Mutant: classic $size read bypasses model-aware helper."}
+    $cast = if ($size -eq 'Byte') {'(byte)'} elseif ($size -eq 'Word') {'(ushort)'} else {''}
+    $doubleFaultMutations += @{name="040-classic-write-$size"; file='Copper68k/M68kJitCore.cs';
+        before="            if (_cpuModel != M68kJitCpuModel.M68000) { Write$size(address, ${cast}value); return; }";
+        after="            // Mutant: classic $size write bypasses model-aware helper."}
+}
+foreach ($mutation in $doubleFaultMutations) {
+    $mutation.group='WarmDispatchHaltsBothRteFallbackAndOperandFaultEntry'; $mutation.model='68040'
+    $mutation.milestone=6; $mutation.doubleFault=$true; $mutations += $mutation
+}
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
@@ -204,6 +235,7 @@ if ($Scope -eq 'Control') { $mutations = @($mutations | Where-Object { $_.milest
 if ($Scope -eq 'Consolidation') { $mutations = @($mutations | Where-Object { $_.milestone -eq 6 }) }
 if ($Scope -eq 'Rte040') { $mutations = @($mutations | Where-Object { $_.odd }) }
 if ($Scope -eq 'RteValidationFault') { $mutations = @($mutations | Where-Object { $_.validationFault }) }
+if ($Scope -eq 'AccessDoubleFault') { $mutations = @($mutations | Where-Object { $_.doubleFault }) }
 if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
 if ($Scope -eq 'CacheEncodings') { $mutations = @($mutations | Where-Object { $_.cache }) }
 $saved = @{}
@@ -262,6 +294,15 @@ try {
                     @($batches | Where-Object { $_.group -eq 'rte-validation-physical-direct' -and $_.logicalCases -eq 162816 }).Count -ne 1 -or
                     @($batches | Where-Object { $_.group -eq 'rte-validation-physical-chained' -and $_.logicalCases -eq 61056 }).Count -ne 1) {
                     throw 'RTE validation-fault mutation did not execute its complete two-batch selection'
+                }
+            }
+            if ($mutation.doubleFault) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 3 -or $batches.Count -ne 3) { throw 'Double-fault mutation omitted dispatch batches' }
+                foreach ($engine in @('accurate','v1','v2')) {
+                    if (@($batches | Where-Object { $_.model -eq '68040' -and $_.group -ceq "access-double-fault-dispatch-$engine" -and $_.logicalCases -eq 1088 }).Count -ne 1) {
+                        throw "Double-fault mutation omitted complete $engine selection"
+                    }
                 }
             }
             if ($mutation.lpstop) {

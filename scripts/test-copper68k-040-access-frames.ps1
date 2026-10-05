@@ -22,6 +22,11 @@ $expected = [ordered]@{
     'address-error-fetch-040' = @{cases=2304; combinations=72}
     'rte-validation-physical-direct' = @{cases=162816; combinations=2544}
     'rte-validation-physical-chained' = @{cases=61056; combinations=15264}
+    'rte-access-entry-double-fault' = @{cases=98304; combinations=3072}
+    'rte-access-handler-refault' = @{cases=3840; combinations=120}
+    'access-double-fault-dispatch-accurate' = @{cases=1088; combinations=544}
+    'access-double-fault-dispatch-v1' = @{cases=1088; combinations=544}
+    'access-double-fault-dispatch-v2' = @{cases=1088; combinations=544}
     'rte-access-remaining-protocols' = @{cases=480; combinations=15}
 }
 $testExit = 0
@@ -35,19 +40,19 @@ if (-not $ValidateReportsOnly) {
             $saved[$name] = [Environment]::GetEnvironmentVariable($name)
             [Environment]::SetEnvironmentVariable($name, $settings[$name])
         }
-        & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --filter 'FullyQualifiedName~SyntheticM68040AccessFrameAuditTests|FullyQualifiedName~M68040AccessFrameFixtureTests|FullyQualifiedName~SyntheticM68040MovemContinuationTests|FullyQualifiedName~SyntheticM68040FpuContinuationTests|FullyQualifiedName~SyntheticM68040ThrowawayTests|FullyQualifiedName~SyntheticM68040OddReturnTests|FullyQualifiedName~SyntheticM68040RteValidationFaultTests' --logger 'trx;LogFileName=audit.trx' --results-directory $output
+        & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --filter 'FullyQualifiedName~SyntheticM68040AccessFrameAuditTests|FullyQualifiedName~M68040AccessFrameFixtureTests|FullyQualifiedName~SyntheticM68040MovemContinuationTests|FullyQualifiedName~SyntheticM68040FpuContinuationTests|FullyQualifiedName~SyntheticM68040ThrowawayTests|FullyQualifiedName~SyntheticM68040OddReturnTests|FullyQualifiedName~SyntheticM68040RteValidationFaultTests|FullyQualifiedName~SyntheticM68040AccessDoubleFaultTests' --logger 'trx;LogFileName=audit.trx' --results-directory $output
         $testExit = $LASTEXITCODE
     } finally {
         foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
     }
     $identity = [ordered]@{
         schema=1; reference='MC68040UM'; url='https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf'
-        sections=@('8.2.2','8.4','8.4.1','8.4.2','8.4.3','8.4.4','8.4.6.2','8.4.6.7'); softwareReferenceExecuted=$false
+        sections=@('7.6.3','8.2.1','8.2.2','8.4','8.4.1','8.4.2','8.4.3','8.4.4','8.4.6.2','8.4.6.7'); softwareReferenceExecuted=$false
         sourceCommit=(& git -C $repo rev-parse HEAD); cpuCommittedTree=(& git -C $repo rev-parse HEAD:Copper68k)
         cpuSourceFiles=@(& git -C $repo ls-files --cached --others --exclude-standard 'Copper68k/*') | ForEach-Object {
             @{file=$_; sha256=(Get-FileHash -LiteralPath (Join-Path $repo $_) -Algorithm SHA256).Hash.ToLowerInvariant()}
         }
-        inputs=@('Copper68k.Tests/Synthetic/SyntheticM68040AccessFrameAuditTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040MovemContinuationTests.cs','scripts/test-copper68k-040-access-frames.ps1','Copper68k.Tests/Synthetic/SyntheticM68040FpuContinuationTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040ThrowawayTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040OddReturnTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040RteValidationFaultTests.cs') | ForEach-Object {
+        inputs=@('Copper68k.Tests/Synthetic/SyntheticM68040AccessFrameAuditTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040MovemContinuationTests.cs','scripts/test-copper68k-040-access-frames.ps1','Copper68k.Tests/Synthetic/SyntheticM68040FpuContinuationTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040ThrowawayTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040OddReturnTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040RteValidationFaultTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040AccessDoubleFaultTests.cs') | ForEach-Object {
             @{file=$_; sha256=(Get-FileHash -LiteralPath (Join-Path $repo $_) -Algorithm SHA256).Hash.ToLowerInvariant()}
         }
         assemblies=@('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll') | ForEach-Object {
@@ -56,7 +61,7 @@ if (-not $ValidateReportsOnly) {
         limitations=@('Synthetic frames and supervisor-stack physical map faults, not hardware captures or enabled-MMU access faults',
             'CP context transfer and detailed fault protocol inventory remain untested and fail the gate',
             'Multiple continuation bits are architecturally undefined and excluded',
-            'User-tail validation, internal-restoration/double faults, chained odd-PC SR provenance and physical timing remain unqualified',
+            'User-tail validation, internal-restoration double faults, handler-entry prefetch, active accurate-batch fault delivery, chained odd-PC SR provenance and physical timing remain unqualified',
             'Direct odd-RTE saved-SR ordering uses documentary WinUAE 5d22d336, not an executed hardware oracle')
     }
     $identity | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'identities.json')
@@ -66,11 +71,11 @@ if (-not $ValidateReportsOnly) {
 $identity = Get-Content -LiteralPath (Join-Path $output 'identities.json') -Raw | ConvertFrom-Json
 if ($identity.schema -ne 1 -or $identity.reference -cne 'MC68040UM' -or $identity.softwareReferenceExecuted -ne $false -or
     $identity.sourceCommit -notmatch '^[a-f0-9]{40}$' -or $identity.cpuCommittedTree -notmatch '^[a-f0-9]{40}$' -or
-    @($identity.cpuSourceFiles).Count -eq 0 -or @($identity.inputs).Count -ne 7 -or @($identity.inputs.file | Sort-Object -Unique).Count -ne 7 -or
+    @($identity.cpuSourceFiles).Count -eq 0 -or @($identity.inputs).Count -ne 8 -or @($identity.inputs.file | Sort-Object -Unique).Count -ne 8 -or
     @($identity.assemblies).Count -ne 2) { throw '040 access-frame input identity is missing or incomplete' }
 foreach ($input in $identity.inputs) {
     $path = Join-Path $repo $input.file
-    if ($input.file -notin @('Copper68k.Tests/Synthetic/SyntheticM68040AccessFrameAuditTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040MovemContinuationTests.cs','scripts/test-copper68k-040-access-frames.ps1','Copper68k.Tests/Synthetic/SyntheticM68040FpuContinuationTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040ThrowawayTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040OddReturnTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040RteValidationFaultTests.cs') -or
+    if ($input.file -notin @('Copper68k.Tests/Synthetic/SyntheticM68040AccessFrameAuditTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040MovemContinuationTests.cs','scripts/test-copper68k-040-access-frames.ps1','Copper68k.Tests/Synthetic/SyntheticM68040FpuContinuationTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040ThrowawayTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040OddReturnTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040RteValidationFaultTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040AccessDoubleFaultTests.cs') -or
         $input.sha256 -cne (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()) { throw '040 access-frame fixture/command identity differs' }
 }
 $cpuFiles = @(& git -C $repo ls-files --cached --others --exclude-standard 'Copper68k/*')
@@ -84,8 +89,8 @@ foreach ($assembly in $identity.assemblies) {
 }
 [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
 $counters = $trx.TestRun.ResultSummary.Counters
-if ([int]$counters.executed -ne 21 -or [int]$counters.total -ne 21 -or [int]$counters.notExecuted -ne 0) {
-    throw '040 access-frame audit did not execute its complete selection (15 batches, 6 fixed examples)'
+if ([int]$counters.executed -ne 26 -or [int]$counters.total -ne 26 -or [int]$counters.notExecuted -ne 0) {
+    throw '040 access-frame audit did not execute its complete selection (20 batches, 6 fixed examples)'
 }
 $totals = [ordered]@{passing=0; mismatching=0; unsupported=0; untested=0}
 foreach ($group in $expected.Keys) {
@@ -107,6 +112,33 @@ foreach ($group in $expected.Keys) {
             foreach ($form in @('frame-validation-fault','odd-PC-chained-SR-provenance','real-access-fault-entry','writeback-handler','CP-context-transferred-vector')) {
                 $expectedCombinations["68040/RTE/format7/$form/bank=$bank"] = 32
             }
+        }
+    } elseif ($group -in @('rte-access-entry-double-fault','rte-access-handler-refault')) {
+        foreach ($bank in @('ISP','MSP')) { foreach ($trace in @(0,0x8000,0x4000)) { foreach ($alignment in @(0,1)) {
+            foreach ($vbr in @(0,0x10000)) {
+                if ($group -eq 'rte-access-entry-double-fault') {
+                    foreach ($first in @(0,8)) { foreach ($second in 0..63) {
+                        $key = '68040/RTE/access-entry-double-fault/bank={0}/T={1:X4}/align={2}/VBR={3:X8}/first={4}/second={5}' -f $bank,$trace,$alignment,$vbr,$first,$second
+                        $expectedCombinations[$key] = 32
+                    } }
+                } else {
+                    foreach ($read in @(0,2,6,12,8)) {
+                        $key = '68040/RTE/access-handler-refault/bank={0}/T={1:X4}/align={2}/VBR={3:X8}/read={4}' -f $bank,$trace,$alignment,$vbr,$read
+                        $expectedCombinations[$key] = 32
+                    }
+                }
+            }
+        } } }
+    } elseif ($group.StartsWith('access-double-fault-dispatch-')) {
+        $engine = $group.Substring('access-double-fault-dispatch-'.Length)
+        foreach ($form in @('RTE','MOVE.B.read','MOVE.W.read','MOVE.L.read','MOVE.B.write','MOVE.W.write','MOVE.L.write')) {
+            foreach ($bank in @('ISP','MSP')) { foreach ($alignment in @(0,1)) { foreach ($stage in @('stack','vector')) {
+                $width = if ($stage -eq 'vector') {4} elseif ($form -eq 'RTE') {60} else {8}
+                for ($byte=0; $byte -lt $width; $byte++) {
+                    $key = '68040/access-double-fault/dispatch={0}/form={1}/bank={2}/align={3}/stage={4}/byte={5}' -f $engine,$form,$bank,$alignment,$stage,$byte
+                    $expectedCombinations[$key] = 2
+                }
+            } } }
         }
     } elseif ($group -in @('rte-validation-physical-direct','rte-validation-physical-chained')) {
         $chained = $group -eq 'rte-validation-physical-chained'
@@ -233,8 +265,8 @@ foreach ($group in $expected.Keys) {
         if ($combinationTotals[$status] -ne $report.counts.$status) { throw "$group combination totals differ" }
     }
 }
-$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 21 -and
+$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 26 -and
     ($totals.mismatching + $totals.unsupported + $totals.untested) -eq 0
-@{schema=1; model='68040'; logicalCases=1348704; xunitBatches=15; fixedExamples=6; counts=$totals; passed=$passed; roadmapComplete=$false} |
+@{schema=1; model='68040'; logicalCases=1454112; xunitBatches=20; fixedExamples=6; counts=$totals; passed=$passed; roadmapComplete=$false} |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'audit-summary.json')
 if (-not $passed) { throw "040 access-frame audit incomplete: $($totals | ConvertTo-Json -Compress)" }

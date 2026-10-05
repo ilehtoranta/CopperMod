@@ -1427,3 +1427,38 @@ consolidation requirements remain open. See the
 for exact scope, failed-before evidence, authorities and identities. Milestone 6
 and the full goal remain **in progress** with `roadmapComplete=false`; publication
 requires separate release authorization.
+
+### Milestone 6 access-fault entry halt qualification — 2026-10-05
+
+040 interpreter and compiled access-fault entry now latch HALT on a second
+stacking/vector fault, with no retry of partial side effects. External reset
+clears the latch; interrupt, host task/subroutine and batch execution cannot
+restart it. Classic B/W/L memory emitters now use the model-aware 040 helpers,
+including physical-map rejection and unaligned accesses. Compiled fault entry
+preserves master-stack selection and clears trace. Existing timing keys and
+the compiled exception-cycle policy remain intact; physical timing is separate.
+
+Five ordinary batches add 105,408 passing scenarios: every byte of format-7
+stack/vector rejection, later handler refaults and warmed accurate/classic/V2
+dispatch with B/W/L read/write faults. Ten maintained mutations detect latch,
+reset, compiled halt, stack and six memory-routing defects. Five report/source
+controls reject missing, shortened, foreign and stale identities. No old test
+is retired. Partial stacking order and generic short operand-fault frames are
+not promoted as architectural format-7 restart qualification.
+
+Full CPU validation passes 5,051 tests (eleven optional skips), all nine
+qualified WinUAE presets, 16,422,294 strict logical cases in 610 batches and
+fresh pinned SingleStepTests/Musashi audits. Private unpublished `.59` validates
+the isolated CopperScreen Release build, host/disk/separate engine suites and
+all three native Workbench/A1200 replays through NuGet; package/assets/loaded
+CPU binaries match. No public package is published.
+
+Complete 040 discovery has 1,453,632 passing scenarios, no promoted mismatch/
+unsupported cases and 480 retained untested requirements. Active accurate-batch
+fault delivery, internal-restoration faults, handler-entry prefetch, repaired-RTE
+retry, user-tail validation, chained SR provenance, real general access-fault
+frames, writeback/context transfer and earlier broader qualification/
+consolidation requirements remain open. The
+[reference record](COPPER68K_REFERENCE_QUALIFICATION.md#040-access-fault-entry-halt-qualification--2026-10-05)
+records authorities, exact identities, failed discovery, mutation evidence and
+scope. Milestone 6 and the full goal remain **in progress**, `roadmapComplete=false`.

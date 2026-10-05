@@ -2506,6 +2506,11 @@ namespace Copper68k
                 State.M68040Mmu.Status = faultStatus;
                 RaiseM68040Format0Exception(2, stackedProgramCounter, 34);
             }
+            catch (M68040MmuFaultException)
+            {
+                ((M68040Interpreter)_fallback).LatchAccessErrorDoubleFault();
+                AddCycles(34); // Retain the compiled access-fault timing policy.
+            }
             finally
             {
                 State.M68040Mmu.BypassTranslation = bypass;
@@ -2556,7 +2561,7 @@ namespace Copper68k
         {
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
-            State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Master);
+            State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~0xc000);
             PushWord((ushort)((vector * 4) & 0x0FFF));
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
@@ -13912,7 +13917,7 @@ namespace Copper68k
 
         private ushort ReadWord(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
-            if ((address & 1) != 0)
+            if (_cpuModel == M68kJitCpuModel.M68000 && (address & 1) != 0)
             {
                 throw new M68kEmulationException($"Odd MC68000 word read at 0x{address:X8}.");
             }
@@ -13937,7 +13942,7 @@ namespace Copper68k
 
         private uint ReadLong(uint address)
         {
-            if ((address & 1) != 0)
+            if (_cpuModel == M68kJitCpuModel.M68000 && (address & 1) != 0)
             {
                 throw new M68kEmulationException($"Odd MC68000 long read at 0x{address:X8}.");
             }
@@ -13993,7 +13998,7 @@ namespace Copper68k
 
         private void WriteWord(uint address, ushort value)
         {
-            if ((address & 1) != 0)
+            if (_cpuModel == M68kJitCpuModel.M68000 && (address & 1) != 0)
             {
                 throw new M68kEmulationException($"Odd MC68000 word write at 0x{address:X8}.");
             }
@@ -14025,7 +14030,7 @@ namespace Copper68k
 
         private void WriteLong(uint address, uint value)
         {
-            if ((address & 1) != 0)
+            if (_cpuModel == M68kJitCpuModel.M68000 && (address & 1) != 0)
             {
                 throw new M68kEmulationException($"Odd MC68000 long write at 0x{address:X8}.");
             }
@@ -14164,6 +14169,7 @@ namespace Copper68k
 
         private uint ReadClassicCompiledMemoryByte(uint address)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) return ReadByte(address);
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: false, prefetchPhase: 0);
             address = Normalize(address);
             var cycle = _classicCompiledCpuBusCycle;
@@ -14194,6 +14200,7 @@ namespace Copper68k
 
         private uint ReadClassicCompiledMemoryWord(uint address)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) return ReadWord(address);
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: false, prefetchPhase: 0);
             address = Normalize(address);
             if ((address & 1) != 0)
@@ -14231,6 +14238,7 @@ namespace Copper68k
 
         private uint ReadClassicCompiledMemoryLong(uint address)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) return ReadLong(address);
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: false, prefetchPhase: 0);
             address = Normalize(address);
             if ((address & 1) != 0)
@@ -14269,6 +14277,7 @@ namespace Copper68k
 
         private void WriteClassicCompiledMemoryByte(uint address, uint value)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) { WriteByte(address, (byte)value); return; }
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: true, prefetchPhase: 4);
             address = Normalize(address);
             var cycle = _classicCompiledCpuBusCycle;
@@ -14298,6 +14307,7 @@ namespace Copper68k
 
         private void WriteClassicCompiledMemoryWord(uint address, uint value)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) { WriteWord(address, (ushort)value); return; }
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: true, prefetchPhase: 4);
             address = Normalize(address);
             if ((address & 1) != 0)
@@ -14334,6 +14344,7 @@ namespace Copper68k
 
         private void WriteClassicCompiledMemoryLong(uint address, uint value)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) { WriteLong(address, value); return; }
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: true, prefetchPhase: 4);
             address = Normalize(address);
             if ((address & 1) != 0)
