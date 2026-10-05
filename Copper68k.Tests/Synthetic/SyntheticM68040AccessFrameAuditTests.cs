@@ -34,6 +34,8 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
             report.Record($"68040/RTE/format7/{form}/bank={bank}/op=4E73/ccr={ccr:X2}", "untested",
                 form == "frame-validation-fault"
                     ? "Supervisor validation, executed repair/retry, access-fault stacking/vector double faults and selected accurate-batch paths are covered separately; user-tail validation, internal restoration and handler-entry prefetch remain required"
+                    : form == "real-access-fault-entry"
+                        ? "Cache-disabled accurate instruction-fetch frames/restart are covered separately; data fault/writeback restart, enabled-cache deferral and compiled instruction-PC provenance remain required"
                     : "Required fault/context protocol has no independently qualified execution fixture yet");
         report.Complete(output);
     }

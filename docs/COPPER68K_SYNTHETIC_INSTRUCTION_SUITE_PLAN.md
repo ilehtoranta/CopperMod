@@ -1556,3 +1556,43 @@ unsupported execution and the retained 480 untested requirements. All three
 repair mutations and nine report/identity controls detect their intended defects.
 Previous full CPU/external/private-consumer evidence is retained separately;
 no new external or consumer execution is claimed for this test/gate checkpoint.
+
+### Milestone 6 instruction-fetch access faults — 2026-10-05
+
+Cache-disabled accurate instruction-fetch faults now stack format 7 rather than
+the generic 8-byte frame. The executing instruction boundary supplies the saved
+PC; the independent FA field retains the aligned prefetch address. This covers
+opcode, extension and following-opcode faults, including the cached self-branch
+path. Instruction function code is distinguished from data and all writebacks
+are invalid. Data fault/writeback restart is still required and is not implemented
+by changing a frame tag or replaying partial operand effects.
+
+Two ordinary batches add 116,736 passing phases across 1,200 combinations. They
+check all CCRs, all three stack banks, incoming trace for frame/handler return,
+odd/even stacks, VBRs, each byte of the selected long prefetch and deterministic
+restart values. Handler RTE, original instruction execution and following branch
+sentinels are verified. Historical source fails every fault-entry fixture.
+Three maintained `InstructionFault` mutations detect short frame, wrong TM and
+prefetch PC substitution; all seven `BatchFault` mutations are retained and
+detected with architectural self-fetch expectations. Nine report controls reject
+missing/short/foreign/distributed reports and omitted fixture identity.
+
+The complete 040 discovery selection is 32 tests: 26 reporting batches and six
+fixed examples. It records 2,622,144 passing phases, zero mismatches/unsupported
+execution and the preserved 480-case untested inventory. Data writebacks/restart,
+compiled instruction-fault PC provenance, enabled-cache/speculative prefetch,
+handler-entry prefetch, user-tail/internal-restoration faults, untouched incoming
+trace retry, context transfer and all earlier model/reference/consolidation
+requirements remain explicit. No regression is retired or public package/API
+released. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Fresh full Release CPU validation passes 5,057 tests with eleven optional skips
+and no failures; all nine pinned WinUAE selections match their exact counts and
+binaries. Strict ordinary validation checks 17,590,806 cases in 616 reporting
+batches. Fresh pinned SingleStepTests passes 312,500 cases in 125 files and
+Musashi passes 536 programs with 88 explicit exclusions. Isolated CopperScreen
+through private unpublished `.61` passes Release build, host/disk tests, separate
+engine diagnostics and all three native Workbench/A1200 replays; package,
+assets and loaded CPU identities match. Software references and existing timing
+policy remain separate from hardware/physical timing qualification. See the
+[qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-instruction-fetch-access-faults--2026-10-05).

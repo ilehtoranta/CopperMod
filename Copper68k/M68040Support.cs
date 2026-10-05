@@ -2539,6 +2539,10 @@ namespace Copper68k
 
         protected override bool TryHandleM68040ExecutionFault(M68040MmuFault fault)
         {
+            // The prefetch bus address may cover an extension or the other
+            // half of an aligned long. Restart the executing instruction.
+            if (!State.M68040Mmu.Enabled && fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
+                fault = fault with { StackedProgramCounter = ExecutionBoundaryProgramCounter };
             RaiseMmuFault(fault);
             return true;
         }
@@ -4263,6 +4267,8 @@ namespace Copper68k
                         : State.LastInstructionProgramCounter);
                 if (fault.RteFrameValidation)
                     RaiseRteValidationAccessFault(fault, stackedProgramCounter);
+                else if (!State.M68040Mmu.Enabled && fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
+                    RaiseUnbufferedReadAccessFault(fault, stackedProgramCounter, instruction: true);
                 else
                     RaiseFormat0Exception(VectorBusError, stackedProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
             }
@@ -4278,10 +4284,14 @@ namespace Copper68k
         }
 
         private void RaiseRteValidationAccessFault(M68040MmuFault fault, uint instructionPc)
+            => RaiseUnbufferedReadAccessFault(fault, instructionPc, instruction: false);
+
+        private void RaiseUnbufferedReadAccessFault(M68040MmuFault fault, uint instructionPc, bool instruction)
         {
-            // MC68040UM 8.4.6.7: preserve the frame being validated. Only
-            // pre-commit reads carry this marker; faults in exception delivery
-            // or internal restoration must not retry partially completed work.
+            // MC68040UM 8.4.6/7: instruction-prefetch faults have no pending
+            // writebacks. Pre-commit RTE validation reads use the same layout,
+            // preserving the original frame; data operand/write restart is a
+            // separate path and must not be implemented by replaying effects.
             var savedSr = State.StatusRegister;
             State.RecordException(VectorBusError, instructionPc, savedSr);
             State.StatusRegister = (ushort)((savedSr | M68kCpuState.Supervisor) & ~0xc000);
@@ -4292,7 +4302,7 @@ namespace Copper68k
             for (var n = 0; n < 9; n++) PushLong(0);
             PushLong(fault.LogicalAddress);
             PushWord(0); PushWord(0); PushWord(0);
-            var modifier = (savedSr & M68kCpuState.Supervisor) != 0 ? 5 : 1;
+            var modifier = ((savedSr & M68kCpuState.Supervisor) != 0 ? 4 : 0) | (instruction ? 2 : 1);
             PushWord((ushort)(0x0100 | (fault.ByteCount == 2 ? 0x0040 : 0) | modifier));
             PushLong(0);
             PushWord(0x7008);

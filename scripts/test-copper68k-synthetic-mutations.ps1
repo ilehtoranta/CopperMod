@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','InstructionFault','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -277,6 +277,10 @@ $selfFault = @'
 $retryFault = @'
         protected override bool TryHandleM68040ExecutionFault(M68040MmuFault fault)
         {
+            // The prefetch bus address may cover an extension or the other
+            // half of an aligned long. Restart the executing instruction.
+            if (!State.M68040Mmu.Enabled && fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
+                fault = fault with { StackedProgramCounter = ExecutionBoundaryProgramCounter };
             RaiseMmuFault(fault);
             return true;
         }
@@ -319,6 +323,17 @@ foreach ($mutation in $repairMutations) {
     $mutation.group='SyntheticM68040RteRepairTests'; $mutation.model='68040'
     $mutation.milestone=6; $mutation.repair=$true; $mutations += $mutation
 }
+$instructionMutations = @(
+    @{name='040-instruction-short-frame'; before='                    RaiseUnbufferedReadAccessFault(fault, stackedProgramCounter, instruction: true);';
+      after='                    RaiseFormat0Exception(VectorBusError, stackedProgramCounter, M68kInstructionTimingKey.IllegalInstruction);'; proofCombination='/instruction/opcode/'},
+    @{name='040-instruction-data-tm'; before='(instruction ? 2 : 1)'; after='1'; proofCombination='/instruction/opcode/'},
+    @{name='040-instruction-prefetch-pc'; before='                fault = fault with { StackedProgramCounter = ExecutionBoundaryProgramCounter };';
+      after='                fault = fault with { StackedProgramCounter = fault.LogicalAddress };'; proofCombination='/instruction/extension-low/'}
+)
+foreach ($mutation in $instructionMutations) {
+    $mutation.file='Copper68k/M68040Support.cs'; $mutation.group='SyntheticM68040InstructionFaultTests'; $mutation.model='68040'
+    $mutation.milestone=6; $mutation.instructionFault=$true; $mutation.proofPhase='/fault-entry'; $mutations += $mutation
+}
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
@@ -327,6 +342,7 @@ if ($Scope -eq 'Consolidation') { $mutations = @($mutations | Where-Object { $_.
 if ($Scope -eq 'Rte040') { $mutations = @($mutations | Where-Object { $_.odd }) }
 if ($Scope -eq 'RteValidationFault') { $mutations = @($mutations | Where-Object { $_.validationFault }) }
 if ($Scope -eq 'RteRepair') { $mutations = @($mutations | Where-Object { $_.repair }) }
+if ($Scope -eq 'InstructionFault') { $mutations = @($mutations | Where-Object { $_.instructionFault }) }
 if ($Scope -eq 'AccessDoubleFault') { $mutations = @($mutations | Where-Object { $_.doubleFault }) }
 if ($Scope -eq 'BatchFault') { $mutations = @($mutations | Where-Object { $_.batchFault }) }
 if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
@@ -387,6 +403,16 @@ try {
                     @($batches | Where-Object { $_.group -eq 'rte-validation-physical-direct' -and $_.logicalCases -eq 162816 }).Count -ne 1 -or
                     @($batches | Where-Object { $_.group -eq 'rte-validation-physical-chained' -and $_.logicalCases -eq 61056 }).Count -ne 1) {
                     throw 'RTE validation-fault mutation did not execute its complete two-batch selection'
+                }
+            }
+            if ($mutation.instructionFault) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $batches.Count -ne 2 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq 'instruction-fault-frame' -and $_.logicalCases -eq 36864 }).Count -ne 1 -or
+                    @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq 'instruction-fault-restart' -and $_.logicalCases -eq 79872 }).Count -ne 1 -or
+                    @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
+                        $_.id.EndsWith($mutation.proofPhase, [StringComparison]::Ordinal) }).Count -eq 0) {
+                    throw 'Instruction-fault mutation omitted complete cases or intended semantic failure'
                 }
             }
             if ($mutation.repair) {

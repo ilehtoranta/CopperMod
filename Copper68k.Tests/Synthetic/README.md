@@ -459,3 +459,31 @@ SR. Each mutation must execute both full batches and mismatch in its intended
 retry/following phase, rather than failing at an unrelated prerequisite. The
 [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-executed-rte-repair-and-retry--2026-10-05)
 records current evidence and remaining scope. No existing regression is retired.
+
+Physical instruction-fetch faults now use a 60-byte format-7 frame with separate
+executing-instruction PC and prefetch fault address, instruction TM and no valid
+writebacks. Accurate scalar, normal cached and self-branch boundaries retain the
+executing PC even when the rejected long covers an extension or the other half
+of a fetched long. Data operand/writeback restart remains a separate required
+protocol; its existing short-frame policy is not promoted by this correction.
+
+`SyntheticM68040InstructionFaultTests` adds `instruction-fault-frame` (36,864
+phases / 576 combinations) and `instruction-fault-restart` (79,872 / 624) to
+ordinary CI. Fixed opcode/extension/following-opcode/self-branch fixtures check
+each byte of the required prefetch, all CCRs, all stack banks, odd/even stacks,
+both VBRs, frame trace states and restart values. The handler really executes
+RTE, followed by the original instruction and a branch sentinel. These fixtures
+use the cache-disabled accurate factory with MMU off; speculative prefetch
+deferral, enabled-cache behavior, compiled instruction-PC provenance, data
+writebacks/restart and physical timing remain unqualified.
+
+The complete 040 command now requires 32 tests (26 reports, six fixed examples),
+eleven fixture/command identities and both new independent combination matrices,
+while retaining the failing 480-case inventory. `-Scope InstructionFault` in
+the maintained mutation command detects a short frame, data TM and prefetch PC
+substitution, requiring complete executable selection and intended fault-entry
+diagnostics. `-Scope BatchFault` retains the complete seven-mutation campaign
+including updated architectural self-fetch frames. No regression is retired.
+The [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-instruction-fetch-access-faults--2026-10-05)
+records current execution, historical proof, mutations, identities and remaining
+scope.

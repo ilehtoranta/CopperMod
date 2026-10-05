@@ -4147,3 +4147,110 @@ untouched incoming-trace retry, chained odd-PC provenance, general real format-7
 restart, writeback/context transfer and earlier model/reference/consolidation
 requirements remain open. The 480-case inventory and `roadmapComplete=false`
 are preserved. Milestone 6 and the full goal remain **in progress**.
+
+## 040 instruction-fetch access faults — 2026-10-05
+
+The authority is [MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+8.2.1 and 8.4.6, including 8.4.6.2/7. An instruction access error uses a
+60-byte format-7 frame: PC identifies the executing instruction, FA identifies
+the faulted prefetch, TM selects instruction space, and no writeback is valid.
+These are manual-derived synthetic expectations, not hardware captures. The
+fixture selects the existing cache-disabled accurate long-prefetch policy;
+its four-byte access width is not physical pipeline/bus qualification.
+
+Production fault entry now uses that layout for MMU-disabled instruction fetch.
+Accurate scalar, normal hot-block and self-branch boundaries record the executing
+PC before fetching; an extension or aligned long's other half must not become
+the restart PC. Existing exception timing policy and partial operand effects
+are preserved. Data errors retain their explicitly unqualified short-frame
+policy: writebacks/restart cannot be implemented by changing a tag and replaying
+an instruction after partial effects. Compiled fetch-PC provenance and enabled
+cache/speculative prefetch deferral remain unqualified.
+
+`SyntheticM68040InstructionFaultTests` adds two ordinary CI batches:
+
+| Report | Logical instruction phases | Architectural combinations |
+| --- | ---: | ---: |
+| `instruction-fault-frame` | 36,864 | 576 |
+| `instruction-fault-restart` | 79,872 | 624 |
+
+Fixed opcode, extension-low, following-opcode and self-branch encodings cover
+all CCRs, user/ISP/MSP stacks, odd/even stacks, both VBRs and rejection at every
+byte of the selected long prefetch. Frame/handler-return coverage includes
+incoming T0/T1; deterministic restart values execute handler RTE, the original
+instruction and a following branch. Expectations check defined frame fields,
+inactive stacks, unchanged registers, surrounding memory, single fault delivery
+and restored translation bypass. Undefined frame fields are masked explicitly.
+
+The first following-opcode fixture remained in an already fetched long;
+adding a fixed NOP prefix makes the rejected fetch observable. This was a
+fixture correction. With that corrected fixture, historical production source
+at `36a8edf266dc682036d638fc9a5bb3cd0985439a` fails all 38,400 fault-entry
+cases: 18,432 frame and 19,968 restart mismatches, with later prerequisite
+phases explicitly untested. Evidence is in
+`artifacts/m6-instruction-fault-before-v2/`; historical CPU SHA-256 is
+`f4756485a7945d5fa49e01be6af0c0332d279d60be364c48a435ba7dccc4d313`
+and historical adapter SHA-256 is
+`c6aab37470dada0f9ceb25aa7899437d09c81019e31c16e200d8a7a44dee3c18`.
+
+The maintained `-Scope InstructionFault` command executes both complete batches
+for each mutation and requires an intended fault-entry mismatch. Short-frame
+and data-TM substitutions each produce 18,432/19,968 mismatches; prefetch-PC
+substitution produces 9,216/7,680 mismatches. Prerequisite-dependent phases are
+untested during mutations, not successful coverage. All three mutations detect
+their intended defect in `artifacts/m6-instruction-fault-mutations/`.
+The full seven-mutation `BatchFault` campaign also passes with updated
+architectural self-fetch expectations in
+`artifacts/m6-instruction-fault-batch-mutations/`. Sources are restored
+byte-for-byte and rebuilt. No regression is retired.
+
+The complete dedicated command in `artifacts/m6-instruction-fault-audit/`
+executes 32 tests: 26 reporting batches and six fixed examples. It records
+2,622,144 passing phases, zero mismatches/unsupported execution and the retained
+480 untested requirements. Its intentional inventory failure remains a failed
+full discovery gate. Independent enumeration requires eleven fixture/command
+identities and fixed per-combination counts. Nine copied-input controls in
+`artifacts/m6-instruction-fault-controls/` reject missing, shortened, foreign and
+redistributed reports for both new groups, plus omitted fixture identity.
+Redistribution preserves aggregate counts and combination cardinality.
+
+Qualification starts from HEAD `36a8edf266dc682036d638fc9a5bb3cd0985439a`.
+The audit's committed-tree identity describes that starting point; recorded
+working-source hashes describe the correction. Qualified CPU SHA-256 is
+`3cc890bd66d7c5cc403a00a6d2aed556983a74a42595be90c60babb799eeac0d`
+and test/reference adapter SHA-256 is
+`5540e61568601aa580a039f18cde12e312680ed79a6fab6a56d2476e40034be1`.
+Dedicated, full-suite, external-reference and private-consumer executions below
+all match these binaries.
+
+Fresh full Release CPU validation in `artifacts/m6-instruction-fault-full/`
+passes 5,057 tests with zero failures and eleven optional skips. All nine pinned
+WinUAE presets match their exact directory/callback/frame counts and binaries;
+`qualified-preset-identities.json` records each selection. Generator source is
+`025b999239800357e95065fe5b9a15ea5b300fa7` and runner source is
+`7a83745d6c6159bc74ab0471578ffc8bc244e66e`. Strict report validation checks
+17,590,806 ordinary logical cases in 616 reporting batches across all eight
+profiles. Fresh external audits pass SingleStepTests' 312,500 cases in 125
+selected files at `64b253116a3de04aaac4346c43680960dc9b67e5` and Musashi's
+536 programs with 88 explicit exclusions at
+`72c1d74800f3087b45a0c1a7342601bbed898881`. These are scoped software-reference
+results, not exhaustive architectural combinations or silicon evidence.
+
+Isolated CopperScreen baseline `d9beae8b88be24032221e3482942a249c03c27d3`
+consumes unpublished private `1.5.2-synthetic-dev.61`, package SHA-256
+`5422e6153e28380b9898fdb58d97fb992d982bd94642f911b31573997420a020`.
+The package's embedded CPU, four asset manifests and four loaded CPU DLLs match.
+Release build has zero warnings/errors; host tests pass 149 with six optional
+skips, disk tests pass 74, separate engine diagnostics pass 1,080, and all three
+native Workbench/A1200 boot/persistence replays pass without native skips.
+Evidence and identities are under the isolated consumer's
+`artifacts/instruction-fault-validation/` and
+`artifacts/instruction-fault-identities.json`. Root consumer changes and its
+published dependency pin remain preserved. No public package/API is released.
+
+Data writebacks/restart, compiled fetch-PC provenance, enabled-cache/speculative
+prefetch, handler-entry prefetch, user-tail/internal-restoration faults,
+untouched incoming-trace retry, context transfer and all earlier model/reference
+and consolidation requirements remain open. Original Basic's 47 mismatching and
+eight unsupported groups are not reclassified. The 480-case inventory and
+`roadmapComplete=false` remain explicit; milestone 6 is **in progress**.

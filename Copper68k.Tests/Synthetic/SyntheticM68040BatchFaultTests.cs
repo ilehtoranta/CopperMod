@@ -172,16 +172,19 @@ public sealed class SyntheticM68040BatchFaultTests(ITestOutputHelper output)
         if (form == "partial-store") { e.A[0] += 4; e.A[1] -= 4; }
         var kind = form == "self-fetch" ? M68kBusAccessKind.CpuInstructionFetch : form.EndsWith("store") ? M68kBusAccessKind.CpuDataWrite : M68kBusAccessKind.CpuDataRead;
         var faultAddress = form == "RTE" ? frame + offset : form == "self-fetch" ? 0x1004u : form.EndsWith("store") ? 0x4300 + alignment : 0x4200 + alignment;
-        var stackedPc = form == "self-fetch" ? faultAddress : faultPc;
+        var stackedPc = faultPc;
         var sequence = m.Core.State.ExceptionSequence;
         e.ControlChecks["single exception"] = (s => s.ExceptionSequence, sequence + 1);
         e.ControlChecks["saved SR"] = (s => s.LastExceptionStatusRegister, savedSr);
         e.ControlChecks["saved PC (generic short-frame policy where applicable)"] = (s => s.LastExceptionStackedProgramCounter, stackedPc);
         e.ControlChecks["bypass cleared"] = (s => s.M68040Mmu.BypassTranslation ? 1u : 0u, 0);
-        var accessFrame = frame - (form == "RTE" ? 60u : 8u);
+        var accessFrame = frame - (form is "RTE" or "self-fetch" ? 60u : 8u);
         e.A[7] = accessFrame; if (bank == "MSP") e.MasterStackPointer = accessFrame;
-        if (form == "RTE")
+        if (form is "RTE" or "self-fetch")
+        {
             SyntheticM68040RteValidationFaultTests.ExpectAccessFrame(m, e, accessFrame, savedSr, faultPc, faultAddress, width);
+            if (form == "self-fetch") e.Write(accessFrame + 12, 0x0106, 2, m.Model);
+        }
         else
         {
             // Existing generic delivery policy, not architectural frame qualification.

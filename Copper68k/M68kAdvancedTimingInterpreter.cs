@@ -4500,8 +4500,11 @@ namespace Copper68k
             return (int)(State.Cycles - startCycles);
         }
 
+        protected uint ExecutionBoundaryProgramCounter { get; private set; }
+
         private void ExecuteInstructionCore()
         {
+            ExecutionBoundaryProgramCounter = State.ProgramCounter;
             try
             {
                 ExecuteInstructionWithTrace();
@@ -4702,6 +4705,7 @@ namespace Copper68k
 
                 var previousCycle = State.Cycles;
                 var exitBlock = false;
+                ExecutionBoundaryProgramCounter = State.ProgramCounter;
                 try
                 {
                     if (!TryFetchHotOpcode(in hotInstruction, out var opcode) ||
@@ -4932,6 +4936,7 @@ namespace Copper68k
 
                 var previousCycle = State.Cycles;
                 ushort opcode;
+                ExecutionBoundaryProgramCounter = State.ProgramCounter;
                 bool cacheHit, requiresSynchronization;
                 long completedMachineCycle;
                 try
