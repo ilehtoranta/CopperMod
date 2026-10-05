@@ -2537,6 +2537,12 @@ namespace Copper68k
             }
         }
 
+        protected override bool TryHandleM68040ExecutionFault(M68040MmuFault fault)
+        {
+            RaiseMmuFault(fault);
+            return true;
+        }
+
         private void InvalidateInstructionCacheForHostCodeVisibilityChange()
         {
             var stableMap = _stablePhysicalAddressMap;

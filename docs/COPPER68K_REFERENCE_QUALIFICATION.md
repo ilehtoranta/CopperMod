@@ -3927,3 +3927,65 @@ Consumer evidence is under `artifacts/access-entry-double-fault-validation-v2/`,
 separate diagnostic outputs and `artifacts/access-entry-double-fault-identities.json`.
 Root CopperScreen edits and published packages remain untouched. All remaining
 reference/consolidation requirements persist with `roadmapComplete=false`.
+
+## 040 accurate batch-fault checkpoint — 2026-10-05
+
+Physical faults previously escaped accurate batch execution, including cached
+blocks, although scalar execution delivered them. Shared instruction execution
+now offers the 040 fault handler; normal/model-specific cached blocks and cached
+self-branches also deliver faults and count the failed instruction exactly once.
+Boundary callbacks remain outside fault handling. Completed prefixes and partial
+MOVE address-register updates are preserved without retry.
+
+`SyntheticM68040BatchFaultTests` contributes `rte-validation-batch` (129,024
+scenarios, 4,032 combinations) and `access-fault-batch-dispatch` (10,368 scenarios,
+5,184 combinations). The former combines cold/warmed execution, prefixes 0/1/3,
+ISP/MSP, all CCRs, defined incoming trace modes, alignment, VBR, instruction-cap/
+boundary limits and each byte of the five validation reads. The latter covers
+warmed load/store, mixed model-specific prefixes, partial source/destination
+updates and self-branch fetch faults; instruction caps, boundary denial and cycle
+deadlines; successful entry and fatal stack/vector faults. Counts, callbacks,
+handler sentinels, surrounding state and exact scalar/batch transfer sequences
+are checked. Host code peeks are separate from CPU accesses.
+
+Architectural validation-frame expectations follow MC68040UM 8.4.6.7, and fatal
+entry follows 7.6.3/8.2.1. Existing generic short operand/fetch frames remain
+approximate and unqualified as architectural format-7 restart. Scalar/batch
+machine/native cycle equality and bus-order equality qualify execution policy,
+not physical timing. The FMOVE prefix selects model-specific block dispatch;
+it does not qualify FPU arithmetic. Enabled MMU operation remains outside scope.
+
+Failed-before evidence in `artifacts/m6-batch-fault-before/before.trx` records
+two failed batches and all 139,392 scenarios mismatching due to escaped faults.
+`artifacts/m6-batch-fault-fixed/fixed.trx` records two passing batches, with zero
+mismatches, unsupported execution or untested promoted scenarios. The strict
+ordinary gate requires both exact report counts. No old regression is retired.
+Dedicated discovery distribution and maintained per-path mutation integration
+are pending; the existing 480-case untested inventory and broader qualification
+requirements remain. This checkpoint does not complete milestone 6 or authorize
+public package publication.
+
+Final validation in `artifacts/m6-batch-fault-full/` passes **5,053 Release CPU
+tests, eleven optional skips and zero failures**. All nine qualified WinUAE
+presets retain their exact directory/callback/frame selections and matching
+CPU/adapter identities in `qualified-preset-identities.json`. The strict gate
+passes **16,561,686 logical cases in 612 reporting batches**, with fresh pinned
+SingleStepTests (312,500 cases / 125 files) and Musashi (536 programs / 88 explicit
+exclusions). Four controls in `artifacts/m6-batch-fault-report-controls/controls.json`
+reject missing and shortened reports for each new batch, then restore them.
+Audits and package validation use the same compiled snapshot with `--no-build`.
+CPU SHA-256: `178df423e5c24ff107d41ba49dd5789d432626260b67cc3cb95dce5c5ca4d1f0`;
+test/reference adapter SHA-256:
+`30535c74aa5af87576df8835d52bc7755d6f8cd4d2999e325781a93de90f5e80`.
+
+Isolated CopperScreen baseline `d9beae8b88be24032221e3482942a249c03c27d3`
+passes through unpublished private NuGet `1.5.2-synthetic-dev.60`: Release build
+zero warnings/errors, host 149/six optional skips, disk 74, separate engine 1,080
+and three native Workbench/A1200 boot/persistence replays without native skips.
+Four assets and loaded CPU assemblies match the package and CPU above. Package
+SHA-256: `e83f68bf8572cdf0b00a63eda6abd5b3a7b4be5a21d80dcbadb2f29fe6f8b001`.
+Consumer evidence is under `artifacts/batch-fault-validation/`, separate
+diagnostic outputs and `artifacts/batch-fault-identities.json`. Root CopperScreen
+changes and public packages remain untouched. Dedicated 040 discovery was not
+rerun or extended in this checkpoint; its previously recorded 480 untested
+requirements remain, with `roadmapComplete=false`.

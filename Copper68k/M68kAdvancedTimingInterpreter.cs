@@ -4502,6 +4502,20 @@ namespace Copper68k
 
         private void ExecuteInstructionCore()
         {
+            try
+            {
+                ExecuteInstructionWithTrace();
+            }
+            catch (M68040MmuFaultException ex)
+            {
+                if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;
+            }
+        }
+
+        protected virtual bool TryHandleM68040ExecutionFault(M68040MmuFault fault) => false;
+
+        private void ExecuteInstructionWithTrace()
+        {
             if ((State.StatusRegister & 0xC000) == 0 || State.Halted || State.Stopped)
             { ExecuteInstructionBody(); return; }
             var trace = State.StatusRegister & 0xC000;
@@ -4687,20 +4701,26 @@ namespace Copper68k
                 }
 
                 var previousCycle = State.Cycles;
-                if (!TryFetchHotOpcode(in hotInstruction, out var opcode) ||
-                    opcode != hotInstruction.Opcode)
+                var exitBlock = false;
+                try
                 {
-                    _hotBlocks![cacheSlot].Valid = false;
-                    ExecuteInstructionCore();
-                    boundary.AfterInstruction(previousCycle, State.Cycles);
-                    executedInstructions++;
-                    return true;
+                    if (!TryFetchHotOpcode(in hotInstruction, out var opcode) ||
+                        opcode != hotInstruction.Opcode)
+                    {
+                        _hotBlocks![cacheSlot].Valid = false;
+                        ExecuteInstructionCore();
+                        exitBlock = true;
+                    }
+                    else ExecuteHotInstruction(hotInstruction.Kind, opcode);
                 }
-
-                ExecuteHotInstruction(hotInstruction.Kind, opcode);
+                catch (M68040MmuFaultException ex)
+                {
+                    if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;
+                    exitBlock = true;
+                }
                 boundary.AfterInstruction(previousCycle, State.Cycles);
                 executedInstructions++;
-                if (State.Halted || State.Stopped || (State.StatusRegister & 0xC000) != 0)
+                if (exitBlock || State.Halted || State.Stopped || (State.StatusRegister & 0xC000) != 0)
                 {
                     return true;
                 }
@@ -4775,31 +4795,31 @@ namespace Copper68k
                 }
 
                 var previousCycle = State.Cycles;
-                if (!TryFetchHotOpcode(in hotInstruction, out var opcode) ||
-                    opcode != hotInstruction.Opcode)
+                var exitBlock = false;
+                try
                 {
-                    _hotBlocks![cacheSlot].Valid = false;
-                    ExecuteInstructionCore();
-                    boundary.AfterInstruction(previousCycle, State.Cycles);
-                    executedInstructions++;
-                    return true;
-                }
-
-                if (hotInstruction.Kind == M68kAdvancedFastKind.M68040FpuRegister)
-                {
-                    if (!TryExecuteFastModelSpecificInstruction(opcode))
+                    if (!TryFetchHotOpcode(in hotInstruction, out var opcode) ||
+                        opcode != hotInstruction.Opcode)
                     {
-                        throw new InvalidOperationException("The MC68040 FPU hot instruction was not handled.");
+                        _hotBlocks![cacheSlot].Valid = false;
+                        ExecuteInstructionCore();
+                        exitBlock = true;
                     }
+                    else if (hotInstruction.Kind == M68kAdvancedFastKind.M68040FpuRegister)
+                    {
+                        if (!TryExecuteFastModelSpecificInstruction(opcode))
+                            throw new InvalidOperationException("The MC68040 FPU hot instruction was not handled.");
+                    }
+                    else ExecuteHotInstruction(hotInstruction.Kind, opcode);
                 }
-                else
+                catch (M68040MmuFaultException ex)
                 {
-                    ExecuteHotInstruction(hotInstruction.Kind, opcode);
+                    if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;
+                    exitBlock = true;
                 }
-
                 boundary.AfterInstruction(previousCycle, State.Cycles);
                 executedInstructions++;
-                if (State.Halted || State.Stopped || (State.StatusRegister & 0xC000) != 0)
+                if (exitBlock || State.Halted || State.Stopped || (State.StatusRegister & 0xC000) != 0)
                 {
                     return true;
                 }
@@ -4911,11 +4931,22 @@ namespace Copper68k
                 }
 
                 var previousCycle = State.Cycles;
-                var opcode = _timedBus.ReadInstructionFetchWordHot(
-                    hotInstruction.Address,
-                    out var cacheHit,
-                    out var requiresSynchronization,
-                    out var completedMachineCycle);
+                ushort opcode;
+                bool cacheHit, requiresSynchronization;
+                long completedMachineCycle;
+                try
+                {
+                    opcode = _timedBus.ReadInstructionFetchWordHot(
+                        hotInstruction.Address, out cacheHit,
+                        out requiresSynchronization, out completedMachineCycle);
+                }
+                catch (M68040MmuFaultException ex)
+                {
+                    if (!TryHandleM68040ExecutionFault(ex.Fault)) throw;
+                    boundary.AfterInstruction(previousCycle, State.Cycles);
+                    executedInstructions++;
+                    return true;
+                }
                 if (opcode != hotInstruction.Opcode)
                 {
                     _hotBlocks![cacheSlot].Valid = false;

@@ -104,7 +104,20 @@ public sealed class SyntheticM68040RteValidationFaultTests(ITestOutputHelper out
         e.ControlChecks["handler sentinel never executed"] = (s => s.D[0], e.D[0]);
         if (form is "CU" or "CP") e.ControlChecks["pending delivery retained"] =
             (s => s.M68040PendingFpuExceptions.Find(form == "CU" ? 2 : 3) != null ? 1u : 0u, 1);
-        e.Write(accessFrame, priorSr, 2, m.Model); e.Write(accessFrame + 2, SyntheticMachine.Code, 4, m.Model);
+        ExpectAccessFrame(m, e, accessFrame, priorSr, SyntheticMachine.Code, frame + offset, width);
+        bus.Arm(frame + offset + (uint)faultByte);
+        var id = $"68040/RTE/validation-physical/{form}/path={string.Join('-', path)}/T={trace:X4}/align={alignment}/VBR={vbr:X8}/read={offset}:{width}/fault-byte={faultByte}/op=4E73/ccr={ccr:X2}";
+        if (!SyntheticM68040AccessFrameAuditTests.Step(m, e, report, id + "/fault-entry"))
+        { report.Record(id + "/handler-return", "untested", "Validation fault entry prerequisite failed"); return; }
+        pointers[tail] = frame;
+        SetStacks(e, pointers, tail, priorSr); e.Pc = SyntheticMachine.Code; e.ExceptionVector = null;
+        SyntheticM68040AccessFrameAuditTests.Step(m, e, report, id + "/handler-return");
+    }
+
+    internal static void ExpectAccessFrame(SyntheticMachine m, ArchitecturalExpectation e, uint accessFrame,
+        ushort priorSr, uint instructionPc, uint faultAddress, int width)
+    {
+        e.Write(accessFrame, priorSr, 2, m.Model); e.Write(accessFrame + 2, instructionPc, 4, m.Model);
         e.Write(accessFrame + 6, 0x7008, 2, m.Model);
         // EA/invalid WB data are undefined. Verify defined status/address fields,
         // all untouched original-frame bytes and all neighboring memory instead.
@@ -116,15 +129,8 @@ public sealed class SyntheticM68040RteValidationFaultTests(ITestOutputHelper out
             e.Write(accessFrame + at, 0, 2, m.Model);
             e.MemoryMasks[accessFrame + at + 1] = 0x80; // WB valid bit; no pending write
         }
-        e.Write(accessFrame + 20, frame + offset, 4, m.Model);
+        e.Write(accessFrame + 20, faultAddress, 4, m.Model);
         for (uint n = 20; n < 24; n++) e.MemoryMasks[accessFrame + n] = 0xff;
-        bus.Arm(frame + offset + (uint)faultByte);
-        var id = $"68040/RTE/validation-physical/{form}/path={string.Join('-', path)}/T={trace:X4}/align={alignment}/VBR={vbr:X8}/read={offset}:{width}/fault-byte={faultByte}/op=4E73/ccr={ccr:X2}";
-        if (!SyntheticM68040AccessFrameAuditTests.Step(m, e, report, id + "/fault-entry"))
-        { report.Record(id + "/handler-return", "untested", "Validation fault entry prerequisite failed"); return; }
-        pointers[tail] = frame;
-        SetStacks(e, pointers, tail, priorSr); e.Pc = SyntheticMachine.Code; e.ExceptionVector = null;
-        SyntheticM68040AccessFrameAuditTests.Step(m, e, report, id + "/handler-return");
     }
 
     private static ushort Status(string bank, ushort trace, int ccr) => (ushort)((bank == "MSP" ? 0x3000 : 0x2000) | trace | ccr);

@@ -253,7 +253,7 @@ public sealed class SyntheticM68040AccessDoubleFaultTests(ITestOutputHelper outp
         return frame;
     }
 
-    private sealed class FaultBus : SparseRecordingBus, IM68kPhysicalAddressMap
+    internal class FaultBus : SparseRecordingBus, IM68kPhysicalAddressMap
     {
         private readonly List<(uint At, M68kBusAccessKind Kind)> holes = [];
         public List<(uint Address, int Width, M68kBusAccessKind Kind, int AccessCount)> Rejected { get; } = [];

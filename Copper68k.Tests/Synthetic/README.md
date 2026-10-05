@@ -408,5 +408,17 @@ Run `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope AccessDoubleFault`
 for maintained fatal-latch, reset, compiled-entry, master-stack and six classic
 memory-routing mutations. The complete 040 audit includes these combinations
 and fixture identities while retaining its failing untested protocol inventory.
-Handler-entry prefetch, internal-restoration faults, active accurate-batch fault
-delivery and repaired-original-RTE retry remain required work.
+Handler-entry prefetch, internal-restoration faults and repaired-original-RTE
+retry remain required work.
+
+`SyntheticM68040BatchFaultTests` adds two ordinary CI batches:
+`rte-validation-batch` (129,024 scenarios) and `access-fault-batch-dispatch`
+(10,368). They cover cold execution, warmed cached blocks, model-specific mixed
+blocks and the self-branch path; completed prefixes, instruction caps, boundary
+denial and cycle deadlines; both supervisor stacks and partial MOVE side effects.
+The fixtures check instruction counts, callback counts, handler sentinels and
+each byte of selected physical reads/writes. RTE validation uses independent
+architectural format-7 expectations. Generic operand/fetch frames and scalar/
+batch cycle and bus-order equality verify existing execution policy, not general
+architectural restart or physical timing. Dedicated discovery combination and
+maintained mutation integration remain a later qualification step.

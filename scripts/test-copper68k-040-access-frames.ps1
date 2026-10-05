@@ -61,7 +61,7 @@ if (-not $ValidateReportsOnly) {
         limitations=@('Synthetic frames and supervisor-stack physical map faults, not hardware captures or enabled-MMU access faults',
             'CP context transfer and detailed fault protocol inventory remain untested and fail the gate',
             'Multiple continuation bits are architecturally undefined and excluded',
-            'User-tail validation, internal-restoration double faults, handler-entry prefetch, active accurate-batch fault delivery, chained odd-PC SR provenance and physical timing remain unqualified',
+            'User-tail validation, internal-restoration double faults, handler-entry prefetch, chained odd-PC SR provenance and physical timing remain unqualified; selected active accurate-batch paths have separate ordinary-CI coverage pending dedicated discovery integration',
             'Direct odd-RTE saved-SR ordering uses documentary WinUAE 5d22d336, not an executed hardware oracle')
     }
     $identity | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'identities.json')

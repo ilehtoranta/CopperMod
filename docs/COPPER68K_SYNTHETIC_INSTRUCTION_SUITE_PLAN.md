@@ -1462,3 +1462,35 @@ consolidation requirements remain open. The
 [reference record](COPPER68K_REFERENCE_QUALIFICATION.md#040-access-fault-entry-halt-qualification--2026-10-05)
 records authorities, exact identities, failed discovery, mutation evidence and
 scope. Milestone 6 and the full goal remain **in progress**, `roadmapComplete=false`.
+
+### Milestone 6 accurate 040 batch-fault checkpoint — 2026-10-05
+
+Accurate 040 batch execution now delivers physical faults through the same
+exception handler as scalar execution. Cold, normal cached, model-specific
+cached and self-branch paths preserve completed instruction counts and boundary
+callbacks. A failed instruction is not retried after partial operand effects.
+Other models retain their existing fault behavior and the existing timing policy.
+
+Two ordinary-CI reporting batches add 139,392 scenarios: 129,024 supervisor RTE
+validation faults and 10,368 operand/fetch dispatch cases. They check warmed
+block use, completed prefixes, both supervisor stacks, all CCRs for RTE,
+selected physical byte faults, trace, odd/even addresses, VBR, batch limits,
+fatal second faults and handler sentinels. Both batches failed completely
+before correction and pass after it. Architectural RTE expectations are
+independent; generic short frames and scalar/batch bus and cycle equality are
+existing execution-policy checks, not architectural restart or physical timing.
+
+No regression is retired. Dedicated 040 discovery combination integration and
+maintained per-path mutation integration remain pending. The 480-case discovery
+inventory is retained, along with user-tail/internal-restoration faults, entry
+prefetch, repaired-original-RTE retry, general architectural format-7 restart,
+writeback/context transfer and earlier reference/consolidation gaps. Milestone 6
+and the full goal remain **in progress** with `roadmapComplete=false`.
+See the [checkpoint record](COPPER68K_REFERENCE_QUALIFICATION.md#040-accurate-batch-fault-checkpoint--2026-10-05).
+
+Validation passes 5,053 Release CPU tests with eleven optional skips, all nine
+qualified WinUAE presets and 16,561,686 strict logical cases in 612 batches.
+Fresh pinned SingleStepTests/Musashi audits pass. Four report controls reject
+missing/shortened new batches. Isolated unpublished `.60` passes the CopperScreen
+Release build, host/disk/separate engine suites and all three native boot replays;
+the package, assets and loaded CPU binaries match. No public release is made.
