@@ -280,7 +280,7 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
   legal restoration protocols; this is an implementation gap, not invalid encoding.
   The [040 access-frame discovery gate](#040-access-frame-restoration-discovery-2026-10-05)
   retains the original failed-before record. The latest checkpoint below promotes
-  normal/CT/CM/CU/CP synthetic returns and preserves the remaining fault/context
+  normal/CT/CM/CU/CP synthetic returns and chained throwaways, preserving the remaining fault/context
   prerequisites explicitly.
 - Nested 000 address errors during exception stacking previously recursed on an
   odd SSP. This is corrected by the address-error double-fault slice above. External
@@ -2802,3 +2802,86 @@ Other-model advanced restoration, the broad reference disagreements, independent
 combination qualification and consolidation remain required. Existing specialized
 regressions are retained. Milestone 6 and the goal remain **in progress** with
 `roadmapComplete=false`; publication remains a separate release step.
+
+## 040 chained throwaway qualification — 2026-10-05
+
+MC68040UM section 8.4.2 permits a throwaway frame to select any of the three
+stacks, including another throwaway before the final frame. The previous
+ordinary-CI fixture covered only ISP-to-MSP followed by format 0. New matrices
+qualify every one/two-throwaway bank path from an initially privileged ISP/MSP,
+all three final restored banks, all 32 initial CCRs, T0/T1/no final trace and
+even/odd data-stack addresses. Discarded PCs are odd and never fetched; discarded
+SRs deliberately differ in trace state, without simultaneous T0/T1. There is
+no privilege recheck after a throwaway selects USP. Independent pointer tracking
+checks USP/ISP/MSP together, including repeated frames on the same stack.
+
+| New ordinary-CI group | Passing phases | Combinations |
+| --- | ---: | ---: |
+| Chained short-frame controls (formats 0/2/3) | 82,944 | 1,296 |
+| Chained format-7 normal/CM/CT/CU/CP (vectors 49–55) | 428,544 | 4,752 |
+| Total new | 511,488 | 6,048 |
+
+Each scenario checks RTE and the following BRA or CM MOVEM. Pending CT/CU/CP
+scenarios also return through the converted handler frame. Exact PC/SR/registers,
+every stack bank, guarded frame/neighbor memory, discarded-PC nonfetch,
+handler-owned writeback non-replay and pending-vector consumption are checked.
+CM executes MOVEM.L (A0),D0–D1 using the saved EA despite a changed A0. Restored
+trace applies to the following instruction. These are synthetic return frames,
+not captures or qualification of real fault entry, physical bus transfer order,
+enabled MMU or timing. Production CPU source is unchanged from `9fa9f84`.
+
+The maintained command
+`./scripts/test-copper68k-synthetic-mutations.ps1 -Scope Consolidation`
+now includes both chain termination and missing stack selection. Early
+termination fails 193,536 RTE prerequisites, leaving 317,952 dependent phases
+untested. Missing selection passes 85,248 phases on unchanged-stack paths and
+fails 161,280 RTE prerequisites, leaving 264,960 dependent phases untested.
+Neither mutation is accepted on compiler failure or a missing batch: both
+complete new reporting selections must run and fail. Reports preserve exact
+failing case IDs and status totals. All four consolidation mutations detect
+their defects; `finally` restores source byte-for-byte and rebuilds it.
+Evidence is `artifacts/m6-throwaway-mutations-final/mutation-proof.json`.
+An earlier fixture used simultaneous T0/T1 in a discarded SR; that input was
+removed and the proofs rerun rather than included as required defined coverage.
+
+The complete discovery command still exits 1 with one inventory failure:
+`artifacts/m6-throwaway-discovery-final/` reports 887,520 logical phases,
+887,040 passing, zero mismatching/unsupported and 480 explicitly untested.
+Sixteen xUnit cases execute: fifteen pass and the remaining inventory fails.
+The promoted throwaway requirement is replaced by these executable matrices;
+validation faults, odd final user trace PCs, real access-fault entry,
+writeback-handler qualification and CP context transfer retain their named
+requirements across all banks/CCRs. Exact report-combination selection and
+fixture/source/assembly identities are verified. No regression is retired.
+Milestone 6 and the full goal remain **in progress**, with all other-model and
+broad independent qualification/consolidation requirements preserved.
+
+The next odd-PC requirement has an executable exploratory reproduction at
+`artifacts/m6-rte-odd-probe/`, with output
+`artifacts/m6-rte-odd-probe-output-with-baseline.log`. Twenty-four public-factory
+cases cover short formats 0/2/3 and normal format 7, ISP/MSP entry and user return
+with no trace/T1/T0. RTE returns to odd PC `$6001` without changing the exception
+sequence; the following execution takes vector 3 with a format-0 frame. In the
+sixteen traced cases, the stacked SR still has S clear. MC68040UM sections 8.4,
+8.2.2 and 8.4.6.7 instead require an address error during user traced restoration,
+S set in the saved SR and a format-2 address-error frame. This is a reproduced
+defect, not passing qualification. Exact saved PC, fault timing, stack bank/pop
+ordering and pending-continuation priorities need independent qualification in
+the fixing matrix; its named inventory requirement remains. Probe CPU assembly
+SHA-256 is `c03904a1e9fb60ebe542450c50c2929b9e5865389041aad688ced528f9217ed0`.
+Initial probe dependency/setup failures are retained separately and not counted
+as execution evidence. The current checkpoint does not change CPU behavior.
+
+Final Release CPU validation passes 4,952 tests, eleven optional/opt-in skips
+and zero failures with all four qualified WinUAE presets enabled. The strict
+report gate passes 15,533,656 logical cases in 583 reporting batches, including
+fresh pinned SingleStepTests (312,500 cases / 125 files) and Musashi (536
+programs / 88 explicit exclusions across eight profiles). Evidence is
+`artifacts/m6-throwaway-full/` and `artifacts/m6-throwaway-gate.log`.
+All thirteen malformed-input/report controls reject their intended defects in
+`artifacts/m6-throwaway-preflight-controls/controls.json`. The latest CPU source
+tree remains `e7de8cba19a6b182b8cb329db8f79194eed51f35`, unchanged from the
+preceding private `.55` consumer-validated production checkpoint. Consumer
+replays and package publication are not repeated for this test/reporting-only
+change. All previously recorded native results and broad discovery disagreements
+remain in force, with their original scope and identities. No package is published.

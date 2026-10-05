@@ -145,6 +145,8 @@ try {
             $expected['system-move-word-restart-invalid'] = 224
         }
         if ($model -eq '68040') {
+            $expected['rte-throwaway-controls'] = 82944
+            $expected['rte-throwaway-access'] = 428544
             $expected['rte-access-fpu-unimplemented'] = 13824
             $expected['rte-access-fpu-post'] = 96768
             $expected['rte-access-controls'] = 6912
@@ -248,7 +250,7 @@ try {
         seeded=$(if ($Deep) {@{seed=$Seed; samplesPerModel=$Samples; models=$Models}} else {$null});
         externalReferences=$references; unavailableReferenceCoverage=$(if ($references.Count -eq 0) {'External audits not requested/executed'} else {'Software-reference coverage is scoped by the per-program exclusions; hardware and exhaustive external instruction-combination qualification remain unavailable'});
         m68040MmuInstructionScope=@{translationEnabled=$false; dfc=@(1,2,5,6); globalRegisterField='canonical zero'; undefined='Disabled PTEST MMUSR; DFC 0/3/4/7'; enabledMmu='Unqualified flat-table approximation; PFLUSH conservatively flushes all ATC entries'};
-        m68040AccessFrameScope='Synthetic normal/CT/CM/CU/CP returns with original pending vectors, every legal MOVEM word and full-index structure; CP context transfer, detailed fault validation, real fault entry and physical timing remain unqualified';
+        m68040AccessFrameScope='Synthetic normal/CT/CM/CU/CP returns with original pending vectors, every legal MOVEM word and full-index structure, one/two throwaways selecting all stacks; CP context transfer, detailed fault validation, real fault entry and physical timing remain unqualified';
         m68010Format8Scope='58-byte address-error frame, reserved holes, version validation and tail probe, alignment double-fault halt/reset; marked private word-MOVE/MOVEA images resume their faulted cycle; other opaque restart/input state, long transfers, RMW and physical timing remain unqualified';
         m68000DoubleFaultScope='Address-error entry/handler faults; reset-only recovery; external BERR/reset-vector faults unavailable through the current public bus API';
         unavailableSystemCoverage=@('010 long/non-MOVE/external bus-fault restart and 020/030 internal restart', '020/030 coprocessor midinstruction restoration', '040 access-fault CP context transfer, detailed frame-validation/fault entry and writeback-handler qualification', 'External BKPT replacement responder', 'Physical MOVES function-code spaces and LPSTOP CPU-space broadcast', '060 HALT debug-port restart, PULSE PST pins and debug pipeline commands');

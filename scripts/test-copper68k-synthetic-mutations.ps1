@@ -105,7 +105,17 @@ $mutations += @(
 '@; after=@'
                 if (false)
                     flow |= traceOpcode is 0x4E71 or 0x4E7A or 0x4E7B ||
-'@; group='TraceRetirementTakenAndUntakenFlowStopsAndAbortingFaults'; milestone=6; model='68040'}
+'@; group='TraceRetirementTakenAndUntakenFlowStopsAndAbortingFaults'; milestone=6; model='68040'},
+    @{name='040-throwaway-chain-stop'; file=$advanced; before='                if (format == 1) continue; // Throwaway frame can select another stack.';
+      after='                // Mutant: stop before the final chained frame.';
+      group='SyntheticM68040ThrowawayTests'; milestone=6; model='68040'; throwaway=$true},
+    @{name='040-throwaway-stack-selection'; file=$advanced; before=@'
+                State.StatusRegister = restoredStatus;
+                if (format == 1) continue; // Throwaway frame can select another stack.
+'@; after=@'
+                if (format != 1) State.StatusRegister = restoredStatus;
+                if (format == 1) continue; // Mutant: retain the old stack selector.
+'@; group='SyntheticM68040ThrowawayTests'; milestone=6; model='68040'; throwaway=$true}
 )
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
@@ -142,12 +152,21 @@ try {
             $batches = @(Get-ChildItem -LiteralPath $directory -Filter '*.json' | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json })
             $failures = @($batches | ForEach-Object { $_.failures })
             if ($exitCode -eq 0 -or $batches.Count -eq 0 -or $failures.Count -eq 0) { throw "Mutation survived or failed without executable semantic evidence: $($mutation.name)" }
+            if ($mutation.throwaway) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $trx.TestRun.ResultSummary.Counters.failed -ne 2 -or
+                    $batches.Count -ne 2 -or @($batches | Where-Object { $_.group -eq 'rte-throwaway-controls' -and $_.logicalCases -eq 82944 }).Count -ne 1 -or
+                    @($batches | Where-Object { $_.group -eq 'rte-throwaway-access' -and $_.logicalCases -eq 428544 }).Count -ne 1) {
+                    throw 'Throwaway mutation did not execute its complete two-batch selection'
+                }
+            }
             if ($legacyPresent) {
                 [xml]$legacyTrx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
                 if (@($legacyTrx.TestRun.Results.UnitTestResult | Where-Object { $_.testName.EndsWith($mutation.legacyTest) -and $_.outcome -eq 'Failed' }).Count -ne 1) { throw 'Original regression did not detect the same mutation' }
             }
             $results += @{mutation=$mutation.name; file=$mutation.file; sourceSha256=(Get-FileHash -LiteralPath $path).Hash;
-                detected=$true; replacementCase=$failures[0].id; diagnostic=$failures[0].reason; originalRegressionDetected=$legacyPresent}
+                detected=$true; replacementCase=$failures[0].id; diagnostic=$failures[0].reason; originalRegressionDetected=$legacyPresent;
+                reports=@($batches | ForEach-Object { @{group=$_.group; logicalCases=$_.logicalCases; counts=$_.counts} })}
             Write-Host "Detected $($mutation.name): $($failures[0].id)"
         }
         finally { [IO.File]::WriteAllBytes($path, $saved[$path]) }

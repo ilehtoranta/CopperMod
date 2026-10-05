@@ -1226,3 +1226,29 @@ SingleStepTests and Musashi audits. Private unpublished `.55` validates the
 isolated CopperScreen Release build, host/disk/engine tests and all three native
 boot replays through NuGet. Package/assets/loaded DLL identities match; see the
 reference record for counts and hashes. No package publication is included.
+
+### Milestone 6 throwaway chaining qualification — 2026-10-05
+
+Independent short/access matrices add 511,488 passing phases for every one/two
+throwaway bank path, all restored banks/CCRs/trace states and even/odd stack data
+addresses. Normal/CM/CT/CU/CP conversion, exact stack/PC/SR, following instruction,
+discarded-PC nonfetch and handler writeback non-replay are checked. Production
+source is unchanged from `9fa9f84`. Maintained consolidation mutations detect
+premature termination and missing stack selection, then restore/rebuild source.
+
+The complete 040 discovery remains failing: 887,040 passing phases, zero
+mismatching/unsupported and 480 untested validation/fault/context requirements.
+The throwaway inventory item is promoted to executable coverage; the remaining
+five categories and all broader milestone requirements are retained. No old
+regression is retired. See the
+[reference record](COPPER68K_REFERENCE_QUALIFICATION.md#040-chained-throwaway-qualification--2026-10-05).
+Milestone 6 and the goal remain **in progress**; `roadmapComplete=false`.
+
+Validation passes 4,952 Release CPU tests (eleven optional/opt-in skips),
+15,533,656 logical cases in 583 strict reporting batches, and fresh pinned
+SingleStepTests/Musashi audits. All four maintained consolidation mutations
+detect their defects and all thirteen report/input controls remain effective.
+Production source and the preceding private `.55` consumer evidence are
+unchanged; no new package is published. An exploratory odd-user-trace-PC probe
+reproduces the next restoration defect; it remains required fixing work rather
+than passing qualification. See the reference record for exact evidence.

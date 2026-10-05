@@ -226,9 +226,9 @@ it does not replace the deterministic synthetic gate or complete milestone 6.
 
 The independent 040 access-frame discovery command is
 `./scripts/test-copper68k-040-access-frames.ps1 -OutputDirectory artifacts/040-access-frame-audit`.
-It currently **fails** on 576 explicit fault/context requirements. Normal,
-CT, CM, CU and CP restoration now pass 375,552 logical phases, including
-short-frame controls. Seven promoted batches run in ordinary CI. CP uses the
+It currently **fails** on 480 explicit fault/context requirements. Normal,
+CT, CM, CU and CP restoration and chained throwaways now pass 887,040 logical
+phases, including short-frame controls. Nine promoted batches run in ordinary CI. CP uses the
 original suspended delivery vector; context-transferred frames without that
 state remain an implementation gap. The MOVEM
 matrices cover every legal opcode word and all 66 full-index structures;
@@ -236,6 +236,15 @@ separate state/JIT regressions check reset, interrupts, nested FPU delivery,
 completed operand-store preservation and warmed V1/V2 traces. These fixtures do
 not certify hardware access-fault generation or enabled-MMU operation.
 Failed prerequisites leave later phases untested.
+The throwaway matrices independently track all three stack pointers through one
+or two discarded frames, every start/intermediate/tail/result bank selection,
+even/odd data-stack addresses, all CCRs and T0/T1/no trace. Discarded odd PCs are
+never fetched; terminal short/access frames preserve guarded memory and pending
+writebacks. CM's following MOVEM uses the saved EA. The maintained consolidation
+mutation command proves early chain termination and missing stack selection are
+detected, then restores and rebuilds source. Detailed validation/access faults,
+odd final user trace PCs, real access-fault entry, writeback handlers and CP context
+transfer remain required; no regression is retired by this checkpoint.
 The command checks exact selections, combinations, counts and source/assembly
 identities. Existing outputs must be validated with `-ValidateReportsOnly` or a
 fresh output directory used. It cannot pass merely by fixing normal/trace return.
