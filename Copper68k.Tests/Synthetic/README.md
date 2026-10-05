@@ -260,3 +260,16 @@ identities. Existing outputs must be validated with `-ValidateReportsOnly` or a
 fresh output directory used. It cannot pass merely by fixing normal/trace return.
 See the [reference record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-access-frame-restoration-discovery-2026-10-05)
 for failed-before evidence, mutation controls and the remaining scope.
+
+The LPSTOP qualification adds 228,350 ordinary-CI cases in nine batches.
+On 060, every second opcode word except the fixed `$01c0` encoding is checked
+in both privilege modes (131,070 cases). These unrecognized F-line forms must
+take vector 11 before privilege handling. Eight profile batches add 12,160
+cases each for individual encoding-bit changes, immediate SR boundaries, all
+initial CCRs, user/supervisor mode and incoming trace. Legal 060 LPSTOP retains
+its S-clear privilege rule, trace behavior and stopped-state nonretirement.
+Exception frames preserve the original SR and opcode PC according to the manual.
+Run its three discriminating controls with
+`./scripts/test-copper68k-synthetic-mutations.ps1 -Scope LowPowerStop`.
+Physical broadcast/pins and the separate ordinary STOP S-clear disagreement
+remain unqualified; no specialized regression is retired.

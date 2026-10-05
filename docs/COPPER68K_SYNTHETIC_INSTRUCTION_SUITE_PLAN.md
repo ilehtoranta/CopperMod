@@ -1287,3 +1287,34 @@ All thirteen input/report controls detect their defects. Fresh broad Basic
 discovery retains 1,326 passing directories, 47 mismatching and eight unsupported,
 with the same per-model/opcode statuses and callback/frame/mask counts; its 32
 comparator controls remain effective. These gaps remain required work.
+
+### Milestone 6 LPSTOP encoding qualification — 2026-10-05
+
+060 LPSTOP now validates its fixed second opcode word before privilege handling
+and raises line-F for unrecognized encodings. Nine independent CI batches add
+228,350 cases: every malformed second word in both privilege modes, plus
+encoding/status/CCR/trace boundaries across all eight profiles. The manual's
+original SR/opcode-PC frame rules, trace behavior, S-clear rejection and stopped
+sentinel nonretirement are checked. Three maintained mutations detect wrong
+vector, early privilege handling and an omitted S-clear check, then restore and
+rebuild source. No regression is retired.
+
+See the [reference record](COPPER68K_REFERENCE_QUALIFICATION.md#lpstop-encoding-and-exception-priority-qualification--2026-10-05)
+for authority, failed-before counts and mutation evidence. Chained odd-PC SR,
+ordinary STOP's undocumented software rule, legal LPSTOP saved-PC reference
+disagreement, physical broadcast and all earlier milestone requirements remain
+open. Milestone 6 and the full goal remain **in progress**; `roadmapComplete=false`.
+
+Validation passes 4,967 Release CPU tests (eleven optional/opt-in skips),
+15,999,318 logical cases in 595 strict reporting batches and fresh pinned
+SingleStepTests/Musashi audits. Private unpublished `.57` validates CopperScreen
+through NuGet: clean Release build, host 149/six optional skips, disk 74, separate
+engine 1,080 and all three native Workbench/A1200 replays pass without skips.
+Package/assets/loaded DLL identities match. No public package is published.
+
+Five specific missing/empty/stale/foreign-model report controls reject their
+defects. Fresh complete 040 discovery still fails on 480 named untested cases,
+with 1,124,352 passing phases and no promoted mismatches. Fresh broad Basic
+discovery retains 1,326 passing directories, 47 mismatching and eight unsupported;
+its per-model/opcode statuses and counts are unchanged, and all 32 controls pass.
+These unresolved requirements remain part of the goal.

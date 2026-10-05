@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','LowPowerStop')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -124,7 +124,21 @@ $mutations += @(
       group='SyntheticM68040OddReturnTests'; milestone=6; model='68040'; odd=$true},
     @{name='040-rte-pending-priority'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs'; before='        if (continuation >= 0x2000)';
       after="        if (TryRaiseM68040RteAddressError(pc, priorSr, State.LastInstructionProgramCounter)) return true;`n        if (continuation >= 0x2000)";
-      group='SyntheticM68040OddReturnTests'; milestone=6; model='68040'; odd=$true}
+      group='SyntheticM68040OddReturnTests'; milestone=6; model='68040'; odd=$true},
+    @{name='060-lpstop-linef'; file='Copper68k/M68kAdvancedTimingInterpreter.System.cs'; before=@'
+            if (FetchWord() != 0x01c0)
+            { RaiseFormat0Exception(11, pc, M68kInstructionTimingKey.LineFException); return true; }
+'@; after=@'
+            if (FetchWord() != 0x01c0)
+            { RaiseFormat0Exception(4, pc, M68kInstructionTimingKey.IllegalInstruction); return true; }
+'@; group='SyntheticLowPowerStopTests'; milestone=6; model='68060'; lpstop=$true},
+    @{name='060-lpstop-privilege-priority'; file='Copper68k/M68kAdvancedTimingInterpreter.System.cs'; before='            if (FetchWord() != 0x01c0)'; after=@'
+            if (!State.GetFlag(M68kCpuState.Supervisor))
+            { RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation); return true; }
+            if (FetchWord() != 0x01c0)
+'@; group='SyntheticLowPowerStopTests'; milestone=6; model='68060'; lpstop=$true},
+    @{name='060-lpstop-clear-s'; file='Copper68k/M68kAdvancedTimingInterpreter.System.cs'; before='            if ((immediate & M68kCpuState.Supervisor) == 0)';
+      after='            if (false)'; group='SyntheticLowPowerStopTests'; milestone=6; model='68060'; lpstop=$true}
 )
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
@@ -132,6 +146,7 @@ if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milest
 if ($Scope -eq 'Control') { $mutations = @($mutations | Where-Object { $_.milestone -eq 5 }) }
 if ($Scope -eq 'Consolidation') { $mutations = @($mutations | Where-Object { $_.milestone -eq 6 }) }
 if ($Scope -eq 'Rte040') { $mutations = @($mutations | Where-Object { $_.odd }) }
+if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
 $saved = @{}
 foreach ($mutation in $mutations) {
     $path = Join-Path $repo $mutation.file
@@ -177,6 +192,14 @@ try {
                     @($batches | Where-Object { $_.group -eq 'rte-odd-pending' -and $_.logicalCases -eq 165888 }).Count -ne 1 -or
                     @($batches | Where-Object { $_.group -eq 'address-error-fetch-040' -and $_.logicalCases -eq 2304 }).Count -ne 1) {
                     throw 'Odd-return mutation did not execute its complete three-batch selection'
+                }
+            }
+            if ($mutation.lpstop) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 2 -or $batches.Count -ne 2 -or
+                    @($batches | Where-Object { $_.model -eq '68060' -and $_.group -eq 'system-lpstop-extensions' -and $_.logicalCases -eq 131070 }).Count -ne 1 -or
+                    @($batches | Where-Object { $_.model -eq '68060' -and $_.group -eq 'system-lpstop-values' -and $_.logicalCases -eq 12160 }).Count -ne 1) {
+                    throw 'LPSTOP mutation did not execute its complete two-batch selection'
                 }
             }
             if ($legacyPresent) {

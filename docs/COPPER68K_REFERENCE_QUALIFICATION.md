@@ -3005,3 +3005,102 @@ their defects. Generator/runner/native-library/manifest pins match the preceding
 record; each model/opcode row retains its status and callback/frame/mask counts.
 This checkpoint neither hides those disagreements nor treats discovery as a
 passing qualification gate.
+
+## LPSTOP encoding and exception-priority qualification — 2026-10-05
+
+The 68060 executor recognized LPSTOP's first word but checked privilege before
+its fixed second opcode word, and then classified malformed second words as
+vector 4. It now recognizes the complete encoding before privilege handling;
+an unrecognized second word takes line-F vector 11 without changing SR or
+entering STOP. Legal LPSTOP's S-clear rejection, trace and stop timing policy
+are retained. No instruction is retried and the public package API is unchanged.
+
+[MC68060UM D-19/20](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+defines `F800 01C0 immediate` and explicitly makes an attempt to clear S a
+privilege violation. Sections 8.2.4/5 distinguish unrecognized F-line encodings
+from recognized privileged instructions, save the original SR, and save the
+instruction's opcode PC. Section 8.2.6 specifies incoming trace and no stopped
+state on a traced LPSTOP. Those manual rules determine the expectations.
+The inspected pinned generators also validate `01C0` before privilege and use
+vector 11 for an invalid word, but retain the previously recorded saved-PC
+disagreement for legal user-mode LPSTOP. They do not override the manual.
+
+| New ordinary-CI group | Passing cases | Reporting batches |
+| --- | ---: | ---: |
+| Every unrecognized 060 second opcode word, both privilege modes | 131,070 | 1 |
+| Encoding/status/CCR/trace cases across eight profiles | 97,280 | 8 |
+| Total new | 228,350 | 9 |
+
+The exhaustive group enumerates all 65,535 non-`01C0` words independently of
+production decoding, with canonical immediate/CCR inputs. The second group
+uses the legal word, each of its sixteen individual bit changes, zero/all ones,
+five SR boundary images, both privilege states, incoming T1/no trace and all
+32 CCRs. It covers model-specific absence, correct vector/frame/PC/SR, all
+registers and stacks, untouched memory and a sentinel which cannot retire while
+stopped. A legal traced LPSTOP takes vector 9 with format 2 and next PC. These
+groups qualify semantic outcomes, not physical prefetch ordering, broadcast bus
+cycles, PST pins, clock quiescence or silicon timing.
+
+Against production `a194c12`, `artifacts/m6-lpstop-before/` records 142,590
+mismatches, 85,760 passing cases and no unsupported/untested new cases. Both
+affected 060 batches fail and the seven other profiles pass. After the correction
+all 228,350 pass; the affected system/model/trace selection passes 81 tests in
+`artifacts/m6-lpstop-after/`.
+
+`./scripts/test-copper68k-synthetic-mutations.ps1 -Scope LowPowerStop`
+requires both complete 060 batches to execute for each control. Vector-4
+substitution fails 142,590 cases and passes 640. An early privilege check fails
+71,295 and passes 71,935. Removing the existing S-clear check fails 128 and
+passes 143,102. All fail semantically; no compiler/selection failure counts as
+proof. Source is restored byte-for-byte and rebuilt. Evidence is
+`artifacts/m6-lpstop-mutations-qualified/mutation-proof.json`; the initial
+mixed-line-ending anchor failure is retained separately and is not execution
+evidence. No old regression is retired.
+
+The 040 chained user-tail SR question remains unresolved: the manual's traced
+user S requirement and documentary WinUAE's prior user SR differ. That finding
+does not turn the required inventory item into passing coverage. Ordinary 060
+STOP's S-clear software disagreement also remains open: the generator labels
+the behavior undocumented, while LPSTOP's S-clear rule is explicit. Existing
+Basic saved-PC, reserved-word and other reference disagreements are retained.
+Milestone 6 and the full goal remain **in progress** with `roadmapComplete=false`.
+
+Private unpublished NuGet `1.5.2-synthetic-dev.57` validates isolated CopperScreen
+at baseline `d9beae8b88be24032221e3482942a249c03c27d3`: Release build has zero
+warnings/errors; host 149 passing/six optional skips, disk 74, separate engine
+diagnostics 1,080, native Workbench boots two and A1200 persistence one pass with
+zero native skips. Four restored assets and four loaded CPU assemblies match
+the package. Package SHA-256 is
+`d6d90ced1bf74824ab4e73a4918d0833689d11c17c55c5ea03c8f4597c60c059`;
+CPU assembly SHA-256 is
+`de37702d5301d7dfddd792b7c2d776434b048c5969537c32115d09c1a143a0a1`.
+Evidence is the consumer's `artifacts/lpstop-identities.json`,
+`artifacts/lpstop-validation/` and separate diagnostic outputs. Root CopperScreen
+dependencies/unrelated changes and published package versions are preserved.
+No package is published.
+
+Final Release CPU validation passes 4,967 tests, eleven optional/opt-in skips and
+zero failures with all four qualified WinUAE presets enabled. The strict gate
+verifies 15,999,318 passing logical cases in 595 reporting batches, plus fresh
+pinned SingleStepTests (312,500 cases / 125 files) and Musashi (536 programs /
+88 explicit exclusions across eight profiles). Evidence is
+`artifacts/m6-lpstop-full/` and `artifacts/m6-lpstop-gate.log`.
+
+Five negative report controls reject their specific defect: missing 060 extension
+enumeration, missing 000 absence profile, empty enumeration, stale value count
+and foreign model. Evidence is `artifacts/m6-lpstop-report-controls/controls.json`.
+The fresh 040 discovery in `artifacts/m6-lpstop-040-discovery/` still executes all
+nineteen cases, passes eighteen and fails its remaining inventory: 1,124,352
+passing phases, zero mismatching/unsupported and 480 explicitly untested. Its
+input/source/assembly identities describe this production checkpoint. Earlier
+thirteen 040 report-corruption proofs remain retained with their original source
+identities; they are not relabeled as freshly rerun here.
+
+Fresh Basic discovery still fails in `artifacts/m6-lpstop-broad/`: 1,326 passing
+directories, 47 mismatching and eight unsupported, with 11,474,194 callbacks,
+1,663,891 frames and 199,327 masked-SR cases. All 32 comparator controls detect
+their defects. Every model/opcode row retains its preceding status and callback/
+frame/mask counts; the generator, runner, native-library and input-manifest pins
+are unchanged. In particular, the first legal user-mode LPSTOP case still exposes
+the reference's opcode-PC-plus-two disagreement. Correcting malformed encodings
+does not normalize that result or make the broad audit passing.

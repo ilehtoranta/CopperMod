@@ -13,10 +13,13 @@ internal partial class M68kAdvancedTimingInterpreter
         {
             if (_profile.Model != M68kAcceleratorModel.M68060)
             { RaiseFormat0Exception(11, pc, M68kInstructionTimingKey.LineFException); return true; }
+            // MC68060UM D-19/20 fixes the second opcode word at 01C0.
+            // Unrecognized F-line encodings take vector 11 (8.2.4), before
+            // the privilege check for a recognized instruction (8.2.5).
+            if (FetchWord() != 0x01c0)
+            { RaiseFormat0Exception(11, pc, M68kInstructionTimingKey.LineFException); return true; }
             if (!State.GetFlag(M68kCpuState.Supervisor))
             { RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation); return true; }
-            if (FetchWord() != 0x01c0)
-            { RaiseFormat0Exception(4, pc, M68kInstructionTimingKey.IllegalInstruction); return true; }
             var immediate = FetchWord();
             if ((immediate & M68kCpuState.Supervisor) == 0)
             { RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation); return true; }
