@@ -1083,3 +1083,32 @@ TRAP trace and AHX pass. Private unpublished .53 passes the isolated CopperScree
 Release build, host/disk/engine tests and all three native Workbench/A1200
 replays, with exact package and loaded-assembly identity checks. Timing policy
 is retained; `roadmapComplete=false` remains unchanged.
+
+The long-arithmetic follow-up qualifies the reserved-extension failures in the
+Basic reference. A separate pinned `LongArithmetic` preset selects documented
+MULL.L/DIVL.L encodings before generating expected results; undefined 64-bit
+multiply register aliases are explicitly excluded while legal divide aliases
+remain. Two copied source patches also qualify 060 vector-61 opcode PCs before
+EA effects and preserve completed divide-by-zero EA updates. The latter is a
+documented interpretation of the manual's group-3 completion rule, not hardware
+qualification. No production CPU or comparison-mask change is made.
+
+The complete advanced-model preset passes twelve groups: 28,418 callbacks,
+4,992 frames and 12,420 model/family/sign/width/EA/register forms. Both signs
+and 32/64-bit selections, including 060 architectural exceptions, are required.
+All 37 corruption/undefined-flag controls pass; eight preflight defects fail.
+Wrong-saved-PC and stale-cardinality mutations detect their intended defects;
+sources are restored. Eighteen independent encoding checks join ordinary CI.
+The original Basic corpus and its reserved-field failures remain intact. No
+specialized test is retired; broader reference and restoration/consolidation
+requirements keep milestone 6 **in progress**.
+
+Final validation passes 4,901 CPU tests with ten optional skips, including the
+three qualified presets. The strict gate retains 14,646,552 logical cases in
+574 batches with fresh pinned SingleStepTests/Musashi. Qualified TRAP trace
+passes separately. The original Basic audit retains exactly its 1,326 passing,
+47 mismatching and eight reserved-encoding unsupported groups; those failures
+remain visible. CPU sources and timing policy are unchanged; no new package or
+consumer modification is needed. Source/input/assembly identities, historical
+failures and limitations are maintained in the reference record. The goal stays
+active with `roadmapComplete=false`.

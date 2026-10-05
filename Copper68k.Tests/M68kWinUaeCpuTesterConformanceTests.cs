@@ -311,6 +311,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		private ushort _corruptSr;
 		private bool _corruptIgnoredSr;
 		private string _integerFamily = "";
+		private bool _qualifyLongArithmetic;
+		private readonly Dictionary<string, int> _longArithmeticForms = new(StringComparer.Ordinal);
 
 		private NativeTester(IntPtr library)
 		{
@@ -354,7 +356,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			bool corruptResult = false,
 			bool corruptFrame = false,
 			ushort corruptSr = 0,
-			bool corruptIgnoredSr = false)
+			bool corruptIgnoredSr = false,
+			bool qualifyLongArithmetic = false)
 		{
 			_callbackException = null;
 			_executedCases = 0;
@@ -370,6 +373,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			_corruptSr = corruptSr;
 			_corruptIgnoredSr = corruptIgnoredSr;
 			_integerFamily = opcode;
+			_qualifyLongArithmetic = qualifyLongArithmetic;
+			_longArithmeticForms.Clear();
 			if (integerProfile is not null && (_destroy is null || _addressingMask is null || _lastOutput is null))
 				throw new XunitException("Multi-model integer audit requires the qualified native bridge exports (destroy, addressing mask and diagnostics).");
 			if (integerProfile is not null && (_definedSr is null || _frameChecks is null || _maskedCases is null))
@@ -454,6 +459,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		public int TerminalCases => _terminalCases;
 		public int TraceInputCases => _traceInputCases;
 		public bool UnsupportedExecution => _callbackException?.InnerException is UnsupportedM68kTimingException;
+		public IReadOnlyDictionary<string, int> LongArithmeticForms => _longArithmeticForms;
 
 		public void Dispose()
 		{
@@ -483,6 +489,13 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 					? new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz)
 					: new M68kInterpreter(bus);
 				_lastCaseSummary = (_integerProfile is null ? "" : $"family={_integerFamily}, ") + FormatCaseSummary(context, registers, bus);
+				if (_qualifyLongArithmetic)
+				{
+					// Inspect immutable fixture bytes; never normalize input in the bridge.
+					var form = QualifyLongArithmeticEncoding(bus.ReadHostWord(registers.Pc),
+						bus.ReadHostWord(registers.Pc + 2), _integerFamily);
+					_longArithmeticForms[form] = _longArithmeticForms.GetValueOrDefault(form) + 1;
+				}
 				bus.CopyStackImage(registers.Regs[15], registers.Ssp, 0x20);
 
 				ApplyRegisters(cpu, registers, _cpuLevel);

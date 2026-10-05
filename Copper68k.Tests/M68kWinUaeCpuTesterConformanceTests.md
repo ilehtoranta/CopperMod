@@ -209,9 +209,11 @@ Other saved-PC and result disagreements remain unclassified pending equivalent
 manual/source audits. No family is excluded and the requested audit remains red.
 
 Schema 2 separates emulator-unsupported callbacks from value/frame mismatches.
-Both fail the gate. The current classifier records 62 mismatching and 15 unsupported
-groups (77 total), with zero untested; frame/masked-case counts and all 32 controls
-are recorded separately from normal callbacks. Older bridges lacking these
+Both fail the gate. The initial schema-2 checkpoint recorded 62 mismatching and
+15 unsupported groups (77 total), with zero untested. The current Basic audit
+records 1,326 passing, 47 mismatching and eight reserved-encoding unsupported
+groups, with zero untested. Frame/masked-case counts and all 32 controls are
+recorded separately from normal callbacks. Older bridges lacking these
 assertions are rejected. Source/adapter/CPU disagreements remain open.
 
 Integer callbacks also stop at an actual STOP/HALT boundary. The adapter does
@@ -262,3 +264,62 @@ results, traced callback counts, frames and controls. Other traced families and
 models, M-mode, fault combinations and advanced restart remain untested by this
 preset. The broad Basic discovery audit retains its separate failures; this
 focused preset cannot make it pass.
+
+## Qualified long multiply/divide preset
+
+`LongArithmetic` independently qualifies MULL.L and DIVL.L on EC020/A1200,
+020, 030, 040 and 060. The original Basic corpus is preserved. Its 020/030
+long-arithmetic cases contain nonzero reserved extension fields, so their
+unsupported execution cannot qualify documented arithmetic semantics.
+
+[M68000PM 4-94/98/136/140](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+marks extension bits 15 and 9..3 as zero. It also declares a 64-bit multiply
+with Dh == Dl undefined. The separate
+[encoding-selection patch](../scripts/winuae/long-arithmetic-encodings.patch)
+clears reserved fields on every applicable model and selects a distinct Dh
+for that undefined multiply form **before reference execution**. Legal divide
+register aliases remain selected. The bridge checks every callback's raw words
+and rejects unqualified inputs; it never changes fixture operands or returned
+CPU results to satisfy the reference.
+
+The pinned generator also synchronizes PC and reads the operand before detecting
+060 unavailable 64-bit operations. Its later rollback path incorrectly restores
+postincrement/predecrement for a completed divide-by-zero trap. The separate
+[060 exception patch](../scripts/winuae/long-arithmetic-unimplemented.patch)
+detects vector 61 before EA effects, saves the causing instruction PC as required
+by [MC68060UM 8.2.4/C.2.2](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf),
+and leaves ordinary divide-by-zero EA effects intact. The latter expectation
+interprets the manual's 8.3 group-3 completion rule with PRM 2.2.4/5 addressing
+semantics; hardware corroboration is not claimed. Copper68k already implements
+these expectations. No production CPU, timing or flag-mask change is required.
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 `
+  -GeneratorSource artifacts/reference-winuae-api `
+  -RunnerSource artifacts/reference-copperline `
+  -VcVars64 '<Visual Studio>/VC/Auxiliary/Build/vcvars64.bat' `
+  -Preset LongArithmetic -OutputDirectory artifacts/winuae-long-arithmetic-inputs
+./scripts/test-copper68k-winuae-long-arithmetic.ps1 `
+  -InputDirectory artifacts/winuae-long-arithmetic-inputs `
+  -OutputDirectory artifacts/winuae-long-arithmetic-report
+```
+
+The audit requires both qualified source/patch identities, the recorded generator
+executable/native bridge, complete profile/family selections, all exact input
+hashes, and pinned per-family callback/frame/masked-CCR/architectural-form counts.
+It executes 28,418 callbacks and 4,992 frames in twelve groups. Every group must
+reject register and defined-X corruption; exception-bearing groups must reject
+frame corruption. DIVL groups must accept changes confined to documented
+undefined flags. All four signed/unsigned and 32/64-bit categories are required,
+including 060 vector-61 outcomes. Coverage reports record 12,420 distinct
+model/family/sign/width/EA/register combinations; this does not imply exhaustive
+external addressing or operand coverage.
+
+`winuae-long-arithmetic-audit.json` keeps passing, mismatching, unsupported,
+untested and explicitly excluded encodings/profiles separate. The standalone
+command restores its environment and fails on missing fixtures, empty/duplicate
+selection, mismatches or incomplete scope. Ordinary CI runs the independent
+encoding checks; this external audit remains opt-in. No new seeded audit,
+trace/bus-fault/MMU/cache/pipeline qualification or old regression retirement is
+claimed. Full current evidence and remaining milestone requirements are in
+[reference qualification](../docs/COPPER68K_REFERENCE_QUALIFICATION.md#long-arithmetic-reference-qualification-2026-10-05).

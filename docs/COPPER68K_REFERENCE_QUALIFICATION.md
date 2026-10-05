@@ -34,17 +34,22 @@ inputs. SHA-256 identities are written to `musashi-inputs.json` and the per-prog
 
 | Profile | Passing programs | Explicit exclusions |
 | --- | ---: | ---: |
-| 68000 | 56 | 22 |
-| 68010 | 56 | 22 |
+| 68000 | 55 | 23 |
+| 68010 | 55 | 23 |
 | 68EC020 | 72 | 6 |
 | 68020 | 72 | 6 |
 | 68030 | 72 | 6 |
 | 68040 | 72 | 6 |
 | 68060 | 66 | 12 |
 | A1200 EC020 | 72 | 6 |
-| Total | 538 | 86 |
+| Total | 536 | 88 |
 
 Four mc68000 fixtures retain the previous invalid-BCD/undefined-DIV-flags caveats.
+000/010 additionally exclude `mc68000/move.bin`: despite its directory, offset
+0x160 encodes 020-only PC-relative CMPI.B (`0C3A`), with no compatible
+unavailable-instruction handler. The current synthetic CMPI and unavailable
+instruction coverage is retained. These are the current audit counts; earlier
+dated checkpoint counts below remain historical evidence.
 000/010 exclude the advanced directory because its programs assume 020+
 instructions without unavailable-instruction handlers. All advanced profiles
 exclude `cmp2.bin`'s conflicting carry assertion and `chk2.bin`: its final
@@ -2230,3 +2235,144 @@ package ZIP entry, and all four assets resolve exactly .53. Evidence:
 `artifacts/fpu-types-production.binlog` and `artifacts/fpu-types-identities.json`.
 Unrelated CopperScreen changes remain untouched; no media/artifacts or package
 publication is included in this source checkpoint.
+
+### Long arithmetic reference qualification (2026-10-05)
+
+The eight Basic DIVL.L/MULL.L unsupported groups on EC020/A1200/020/030
+first fail on extensions such as `0031`, `0084` and `5B2B`. These contain
+reserved fields, not legal long-arithmetic combinations. The pinned WinUAE
+`cputest.cpp`, `handle_specials_extra`, already clears mask `83F8` on 040/060
+but leaves it random on 020/030. [M68000PM 4-94/98/136/140](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+assigns those fields zero; 4-136/140 explicitly labels Dh == Dl with a 64-bit
+multiply result undefined. Matching that software output would not establish
+documented legal execution. The original inputs and their failing results remain
+retained; no CPU guard, comparison mask or Basic family selection is relaxed.
+
+The separate `LongArithmetic` preset patches copies of the pinned sources. Its
+encoding-selection patch clears the reserved fields on all applicable models
+and selects a distinct Dh for the undefined 64-bit multiply alias, before
+computing the expected reference result. Divide-register aliases remain legal
+and selected. Fixed examples validate both families' encodings; each of the
+eight reserved fields, undefined multiply aliases, invalid EAs and wrong-family
+words is independently rejected. All 18 new encoding checks pass in ordinary
+CI. Every native callback is additionally checked without input normalization.
+000/010 long arithmetic remains architecturally unavailable and covered by the
+synthetic suite, not this advanced-model reference preset.
+
+The first generated run passes ten groups but fails both 060 groups: vector 61
+saves opcode PC + 4 in WinUAE, while [MC68060UM 8.2.4/C.2.2](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+requires the causing instruction PC. The source emits operand reads and PC
+synchronization before `m68k_mull`/`m68k_divl` detect the unavailable operation.
+Evidence: `artifacts/m6-long-arithmetic-first/`; ten passing, two mismatching,
+zero unsupported groups. This exploratory run predates the final two-source
+identity gate and is failed-before diagnostic evidence, not qualified success.
+
+After early unimplemented detection, 060 MULL.L passes 3,226 callbacks / 2,018
+frames; DIVL.L reaches callback 2,319. `4C5F 0002`, a 32-bit divide through
+`(A7)+` by zero, retains its four-byte increment in Copper68k but the generator
+undoes it. `needmmufixup` is commented as undoing unavailable-instruction effects;
+the generated false-result branch also applies it to a divide-by-zero exception.
+The second failed run is retained in
+`artifacts/m6-long-arithmetic-qualified-first/`, with eleven passing groups.
+
+The final CPU-generation patch separates these paths. Unavailable 060 64-bit
+operations enter vector 61 before EA reads/effects, with the causing PC.
+Ordinary divide-by-zero retains EA effects. The latter is an explicitly stated
+interpretation of MC68060UM 8.3, which places divide-by-zero in group 3 after
+instruction execution, together with PRM 2.2.4/5 increment/decrement semantics.
+It is also consistent with the source's stated rollback purpose. Hardware
+corroboration is not claimed. No production CPU, timing, arithmetic or flag-mask
+change is required. Additional 060 candidates become valid reference exceptions
+when the generator no longer attempts unavailable operands; they are counted,
+not silently dropped.
+
+Final pinned identities:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Normalized `cputest-long-arithmetic.cpp` | `0012b9bd9cd2a172c4c321a8cf8e9f1095d32f824286518e61c9d4e75bc5eb43` |
+| `long-arithmetic-encodings.patch` | `44e8dacde5a11e9cbd2e15119362a09b35c2e109fbbdbecbefa92929e89b32ea` |
+| Normalized `gencpu-long-arithmetic.cpp` | `f1ec43c3658de9ae99e6e60f8376979f562c3b55d338a92e5d4f4849434b0799` |
+| `long-arithmetic-unimplemented.patch` | `75a9e8d7ce2f534d2b16910dffe436e9d8396b3f470628bc59de9852898e0733` |
+| Final input manifest | `f3340970bb5f014c672ddba27e26f93d434f74270c4efd1ec38ca5b1ab330247` |
+| Final native DLL | `4ae1547993a1c358582bea4ed529bc7455977cb508d66a46a7e9580ca5a679cb` |
+| Final generator executable | `78c8790ba4c9e168320f030d67724fec45c2756f5adcf416dae2cd8616fca47a` |
+
+Generator/runner commits retain `025b999239800357e95065fe5b9a15ea5b300fa7`
+and `7a83745d6c6159bc74ab0471578ffc8bc244e66e`. Source copies, actual
+source hashes, patches, compiler identity, all input hashes and executable/DLL
+identities are in `artifacts/m6-long-arithmetic-final-inputs/manifest.json`.
+Generation uses the pinned xorshift seed initialized to 1 and one Basic-style
+CCR 0/31 round; full EA extensions are enabled. Other seeds, incoming trace,
+fault rounds, physical MMU/cache/pipeline and timing remain unqualified.
+
+Required per-profile callback/frame/masked-SR/form counts:
+
+| Profile | DIVL.L | MULL.L |
+| --- | --- | --- |
+| EC020 and A1200, each | 2,422 / 132 / 686 / 1,054 | 2,456 / 0 / 0 / 1,077 |
+| 020, 030 and 040, each | 2,040 / 214 / 584 / 881 | 2,046 / 0 / 0 / 894 |
+| 060 | 3,178 / 2,068 / 94 / 1,422 | 3,226 / 2,018 / 0 / 1,411 |
+| Total | 14,142 / 2,974 / 3,218 / 6,173 | 14,276 / 2,018 / 0 / 6,247 |
+
+All twelve groups pass, with **28,418 callbacks, 4,992 frames and 12,420
+architectural forms**. Each form identifies model/family, sign, 32/64-bit
+selection, source EA fields and both destination register fields. All four
+sign/width categories are mandatory; this sample does not imply exhaustive
+external coverage of every addressing extension/value. Register and defined-X
+corruption controls are required on all groups, frame corruption on seven
+exception-bearing groups, and undefined-flag-only acceptance on all six DIVL
+groups: **37 controls**. They pass in
+`artifacts/m6-long-arithmetic-final-controls/`.
+
+Eight copied-input preflight controls reject missing manifest/memory,
+empty families/profiles, changed data, duplicate profiles and unqualified
+source/patch identities before native execution. Evidence:
+`artifacts/m6-long-arithmetic-preflight-controls/controls.json`. A production
+saved-PC mutation independently fails both 060 reference groups and 8,972
+boundary / 2,904 addressing synthetic cases. A 2,045-versus-2,046 cardinality
+mutation fails all three 020/030/040 MULL groups, despite the native comparison
+passing. Evidence: `artifacts/m6-long-arithmetic-mutation-controls/`. All source
+mutations are restored before final validation. No specialized regression is
+retired.
+
+The reproducible preparation/audit commands and environment contract are in
+[the adapter guide](../Copper68k.Tests/M68kWinUaeCpuTesterConformanceTests.md#qualified-long-multiplydivide-preset).
+The new audit fails missing/empty/unqualified selections, unsupported legal
+execution, mismatches and incomplete exact counts. The original Basic audit's
+eight reserved-extension unsupported groups remain visible; the new separate
+scope qualifies documented long-arithmetic inputs without making that broad
+audit green. All earlier advanced restoration, other reference disagreements
+and consolidation requirements remain open. Milestone 6 remains in progress.
+
+Final Release validation passes **4,901 tests with ten optional skips**, zero
+failures, in `artifacts/m6-long-arithmetic-full/`, including BKPT, trap/bounds
+and LongArithmetic. Their exact counts and comparator controls pass. The strict
+gate retains **14,646,552 logical cases / 574 batches**, `roadmapComplete=false`,
+and freshly passes pinned SingleStepTests (312,500 cases / 125 files) and Musashi
+(536 programs / 88 exclusions). The opening Musashi table is reconciled to those
+current counts; earlier dated records remain unchanged. Separate qualified TRAP
+trace passes 512 callbacks / 512 frames / six controls in
+`artifacts/m6-long-arithmetic-trace/`. The gate log is
+`artifacts/m6-long-arithmetic-gate.log`.
+
+The unchanged broad Basic audit still fails at exactly 1,326 passing, 47
+mismatching, eight unsupported and zero untested groups: 11,474,194 callbacks,
+1,663,891 frames, 199,327 masked-SR cases, one terminal callback and all 32
+controls. The original manifest/native identities remain unchanged. Evidence:
+`artifacts/m6-long-arithmetic-broad/`. This preserves the 040/060 F400 disagreement
+and the earlier advanced restoration/system/reference requirements.
+
+`artifacts/m6-long-arithmetic-identities.json` records test/script/assembly hashes
+against baseline `2787ebf`. The CPU source tree is unchanged:
+`12753a6d2bb677f36cae03f3193f370828f50a66`. The default CPU assembly is
+`73af4f3eb4ef2e218b89f88b55b8a56f2d759f4d567cdb1bbd9a99165a6c8fce`;
+the adapter is
+`281ac75e9761ea5d23899d8ffb2a41eab2f11c2c78f96e71e222316f5b8b804e`.
+The CPU's informational version now includes `2787ebf`, so its binary hash
+differs from the prior checkpoint's pre-commit build despite unchanged CPU
+source. All final source/assembly identities remain stable after the gate.
+Pinned tracked WinUAE/runner sources are clean. No production CPU, package or
+consumer change is made in this follow-up; the prior isolated .53 consumer
+evidence remains separate. No new package publication or host-performance
+measurement is claimed. Unrelated root CopperScreen changes remain untouched.

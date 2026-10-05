@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $GeneratorSource,
     [Parameter(Mandatory)] [string] $RunnerSource,
     [Parameter(Mandatory)] [string] $VcVars64,
-    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints')] [string] $Preset = 'Basic',
+    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic')] [string] $Preset = 'Basic',
     [string] $OutputDirectory = 'artifacts/winuae-model-inputs'
 )
 $ErrorActionPreference = 'Stop'
@@ -48,17 +48,17 @@ try {
         & ./build68k.exe table68k | Set-Content -Encoding utf8 cpudefs.cpp
         if ($LASTEXITCODE -ne 0) { throw 'Opcode table generation failed' }
         $cpuGeneratorSource = 'gencpu.cpp'
-        if ($Preset -in @('TrapBounds','Breakpoints')) {
+        if ($Preset -in @('TrapBounds','Breakpoints','LongArithmetic')) {
             # TrapBounds: following PC (MC68020UM 6.1.4 / MC68040UM 8.2.3).
             # Breakpoints: opcode PC (illegal exception, UM 6.1.5 / 8.2.4).
             # Patch a copy; Basic keeps the pinned source.
-            $sourceName = if ($Preset -eq 'TrapBounds') {'gencpu-trap-bounds.cpp'} else {'gencpu-breakpoints.cpp'}
-            $patchName = if ($Preset -eq 'TrapBounds') {'trap-bounds-pc.patch'} else {'breakpoint-pc.patch'}
+            $sourceName = switch ($Preset) {'TrapBounds' {'gencpu-trap-bounds.cpp'} 'Breakpoints' {'gencpu-breakpoints.cpp'} 'LongArithmetic' {'gencpu-long-arithmetic.cpp'}}
+            $patchName = switch ($Preset) {'TrapBounds' {'trap-bounds-pc.patch'} 'Breakpoints' {'breakpoint-pc.patch'} 'LongArithmetic' {'long-arithmetic-unimplemented.patch'}}
             $patchPath = Join-Path $PSScriptRoot ('winuae/' + $patchName)
             $patch = [IO.File]::ReadAllText($patchPath).Replace("`r`n", "`n")
             $source = [IO.File]::ReadAllText((Join-Path $generator 'gencpu.cpp')).Replace("`r`n", "`n")
             $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
-            $requiredHunks = if ($Preset -eq 'TrapBounds') {2} else {1}
+            $requiredHunks = switch ($Preset) {'Breakpoints' {1} 'TrapBounds' {2} 'LongArithmetic' {3}}
             if ($hunks.Count -ne $requiredHunks) { throw "Incorrect $Preset patch hunk count" }
             foreach ($hunk in $hunks) {
                 $lines = $hunk.TrimEnd("`n").Split("`n")
@@ -85,6 +85,22 @@ try {
             $testerSource = Join-Path $output 'cputest-trace.cpp'
             [IO.File]::WriteAllText($testerSource, (Patch-Once ([IO.File]::ReadAllText((Join-Path $generator 'cputest.cpp'))) $before $after))
             [IO.File]::WriteAllText((Join-Path $output 'trace-priority.patch'), ([IO.File]::ReadAllText($patchPath)).Replace("`r`n", "`n"))
+        }
+        if ($Preset -eq 'LongArithmetic') {
+            # M68000PM 4-94/98/136/140: reserved extension fields are zero;
+            # Dh == Dl with a 64-bit multiply has undefined results. Select
+            # legal inputs before reference execution, never in the CPU bridge.
+            $patchName = 'long-arithmetic-encodings.patch'
+            $patch = [IO.File]::ReadAllText((Join-Path $PSScriptRoot ('winuae/' + $patchName))).Replace("`r`n", "`n")
+            $source = [IO.File]::ReadAllText((Join-Path $generator 'cputest.cpp')).Replace("`r`n", "`n")
+            $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
+            if ($hunks.Count -ne 1) { throw 'Incorrect LongArithmetic patch hunk count' }
+            $lines = $hunks[0].TrimEnd("`n").Split("`n")
+            $before = (($lines | Where-Object { $_.StartsWith('-') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
+            $after = (($lines | Where-Object { $_.StartsWith('+') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
+            $testerSource = Join-Path $output 'cputest-long-arithmetic.cpp'
+            [IO.File]::WriteAllText($testerSource, (Patch-Once $source $before $after))
+            [IO.File]::WriteAllText((Join-Path $output $patchName), $patch)
         }
         $cpp = @('cpudefs.cpp','cpuemu_90_test.cpp','cpuemu_91_test.cpp','cpuemu_92_test.cpp','cpuemu_93_test.cpp','cpuemu_94_test.cpp','cpuemu_95_test.cpp','cputbl_test.cpp',$testerSource,'cputest_support.cpp','disasm.cpp','fpp.cpp','fpp_softfloat.cpp','ini.cpp','newcpu_common.cpp','readcpu.cpp','softfloat/softfloat.cpp','softfloat/softfloat_decimal.cpp','softfloat/softfloat_fpsp.cpp')
         Run-Compiler (@('/nologo','/O2','/EHsc','/w','/I.','/Iinclude','/Icputest','/I../zlib','/DCPUEMU_90','/DCPUEMU_91','/DCPUEMU_92','/DCPUEMU_93','/DCPUEMU_94','/DCPUEMU_95','/DCPU_TESTER') + $cpp + @('/Fe:cputester.exe')) (Join-Path $output 'cputester-build.log')
@@ -139,6 +155,9 @@ void M68KTester_destroy(M68KTesterContext* context) {
     if ($Preset -eq 'Breakpoints') {
         $baseIni = $baseIni.Replace('[test=Basic]', '[test=Breakpoints]').Replace('mode=all', 'mode=BKPT')
     }
+    if ($Preset -eq 'LongArithmetic') {
+        $baseIni = $baseIni.Replace('[test=Basic]', '[test=LongArithmetic]').Replace('mode=all', 'mode=MULL.L,DIVL.L')
+    }
     foreach ($model in @(
         @{id='68000'; cpu='68000'; width=24}, @{id='68010'; cpu='68010'; width=24},
         @{id='68EC020'; cpu='68020'; width=24}, @{id='68020'; cpu='68020'; width=32},
@@ -147,6 +166,7 @@ void M68KTester_destroy(M68KTesterContext* context) {
         if ($Preset -eq 'TraceTraps' -and $model.id -notin @('68040','68060')) { continue }
         if ($Preset -eq 'TrapBounds' -and $model.id -in @('68000','68010')) { continue }
         if ($Preset -eq 'Breakpoints' -and $model.id -eq '68000') { continue }
+        if ($Preset -eq 'LongArithmetic' -and $model.id -in @('68000','68010')) { continue }
         $profileRoot = Join-Path $output $model.id
         New-Item -ItemType Directory -Path $profileRoot | Out-Null
         # Every invocation uses a fresh generator output path; stale data cannot fill a gap.
@@ -183,6 +203,10 @@ void M68KTester_destroy(M68KTesterContext* context) {
         TrapBoundsPatchSha256=$(if ($Preset -eq 'TrapBounds') {(Get-FileHash -LiteralPath (Join-Path $output 'trap-bounds-pc.patch')).Hash.ToLowerInvariant()} else {$null})
         BreakpointSourceSha256=$(if ($Preset -eq 'Breakpoints') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-breakpoints.cpp')).Hash.ToLowerInvariant()} else {$null})
         BreakpointPatchSha256=$(if ($Preset -eq 'Breakpoints') {(Get-FileHash -LiteralPath (Join-Path $output 'breakpoint-pc.patch')).Hash.ToLowerInvariant()} else {$null})
+        LongArithmeticSourceSha256=$(if ($Preset -eq 'LongArithmetic') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-long-arithmetic.cpp')).Hash.ToLowerInvariant()} else {$null})
+        LongArithmeticPatchSha256=$(if ($Preset -eq 'LongArithmetic') {(Get-FileHash -LiteralPath (Join-Path $output 'long-arithmetic-encodings.patch')).Hash.ToLowerInvariant()} else {$null})
+        LongArithmeticCpuSourceSha256=$(if ($Preset -eq 'LongArithmetic') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-long-arithmetic.cpp')).Hash.ToLowerInvariant()} else {$null})
+        LongArithmeticCpuPatchSha256=$(if ($Preset -eq 'LongArithmetic') {(Get-FileHash -LiteralPath (Join-Path $output 'long-arithmetic-unimplemented.patch')).Hash.ToLowerInvariant()} else {$null})
         NativeLibrarySha256=(Get-FileHash -LiteralPath (Join-Path $output 'm68k_cpu_tester.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
         Compiler=$compiler; GeneratorExecutableSha256=(Get-FileHash -LiteralPath (Join-Path $generator 'cputester.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
         NativeSourceSha256=(Get-FileHash -LiteralPath (Join-Path $output 'winuae-native.c') -Algorithm SHA256).Hash.ToLowerInvariant()
