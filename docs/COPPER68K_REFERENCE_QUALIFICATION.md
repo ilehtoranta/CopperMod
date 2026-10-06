@@ -5121,3 +5121,102 @@ Current source, fixture and assembly identities still match after all checks.
 This qualifies the test-only software-trace checkpoint; no production CPU fix,
 consumer rerun, package release or old-test retirement is included. Milestone 6
 remains **in progress** with the full remaining scope retained.
+
+### 040 user-tail bridge with preserved trace — 2026-10-06
+
+The four `UserTailBridgePreservesTrace` groups compose MC68040UM 2.2.2.1,
+8.1/8.2.1/8.2.6, 8.3, 8.4.2 and 8.4.6.7. The existing fault fixture consumes
+throwaways into USP, rejects one validation read and enters the M-selected
+supervisor stack. Seven real repair stores patch the user frame, build a new
+throwaway bridge and add S to the access return. The new groups retain incoming
+T1/T0 in both the bridge and access return instead of clearing them. The live
+fault handler remains untraced.
+
+The handler's RTE returns to supervisor code with the original trace condition;
+the retried RTE consumes the new bridge and completes the repaired user frame.
+Normal/CM completion traces even if repaired SR clears trace. CT/CU/CP49–55
+instead deliver the pending frame with no extra automatic RTE trace. The
+trace/pending handler return and following BRA/MOVEM independently verify the
+restored trace condition, all stack banks, saved SR/PC/address, exception
+provenance, original pending consumption and CM continuation lifetime.
+
+This is an inference combining documented rules for a synthetic software
+repair program. It is not a hardware measurement or independently executed
+WinUAE oracle for the combined user-tail path. Physical timing, enabled MMU,
+FPU arithmetic and opaque internal restoration are not qualified here.
+
+| Group, each scalar/batch | Phases | Combinations |
+| --- | ---: | ---: |
+| Canonical preserved-trace bridge | 873,984 | 2,304 |
+| Structural validation read bytes | 3,502,080 | 145,920 |
+
+Canonical cases use all 32 CCRs and incoming 0/T1/T0 with alignment zero and
+VBR $10000. Structural cases use CCR 0/31 and incoming T1, reject each byte of
+every validation read, and cross both alignments/VBRs and all initial/middle
+paths. All groups retain both original user M values, every restored
+user/user-M/ISP/MSP state, every restored trace condition, formats 0/2/3,
+invalid 4/15 repaired to 0 and normal/CM/CT/CU/CP49–55. These four ordinary
+groups add 8,752,128 phases. No production CPU or public API change is included.
+
+`artifacts/m6-user-trace-first/` and `artifacts/m6-user-trace-structure/` pass
+all four focused reports with no skips, mismatches, unsupported execution or
+untested phases. All three maintained `UserRteTrace` mutations now detect their
+intended diagnostic in every complete report. Complete 040 acceptance executes
+69 tests (62 reports, seven fixed examples) with all fourteen input identities.
+It reports 32,689,856 passing phases, zero mismatches/unsupported execution and
+480 untested requirements. Its sole failing test rejects that incomplete
+inventory; all 68 other tests pass without skips. Mixed-epoch
+trace provenance, user-tail software trace-service programs and every other
+retained model/reference/consolidation requirement remain open; milestone 6
+stays **in progress**.
+
+The first maintained `UserRteTrace` mutation, `040-user-trace-restored-bits`,
+executes all four complete groups with zero skips or unsupported execution.
+Each canonical route detects 7,168 mismatches, leaves 14,336 dependent phases
+untested and passes 852,480 phases. Each structural route detects 32,768,
+leaves 65,536 dependent phases untested and passes 3,403,776. Every report
+contains the intended retry-RTE PC diagnostic with incoming T1 and repaired
+trace clear. This proves that restored trace bits cannot replace the incoming
+instruction's tracing decision. These deliberate mutation failures are proof
+evidence, not production failures.
+
+The original-CP-vector mutation also executes all four complete groups without
+skips or unsupported execution. Each canonical route detects 27,648 mismatches,
+leaves 55,296 dependent phases untested and passes 791,040 phases. Each
+structural route detects 129,024, leaves 258,048 dependent phases untested and
+passes 3,115,008. All reports include CP50 delivered as vector 49 at retry-RTE;
+the other-vector cases retain their full cardinalities.
+
+The MOVEM handler-consumption mutation completes all four reports with zero
+skips, unsupported execution or dependent untested phases. Each canonical route
+detects 3,072 mismatches and passes 870,912 phases; each structural route detects
+21,504 and passes 3,480,576. The intended following-instruction D0 diagnostic
+shows that the saved EA must survive the trace-handler RTE until MOVEM resumes
+at its recorded PC. No old regression is retired by these proofs.
+
+The script restores production sources byte-for-byte and rebuilds with zero
+warnings/errors. Every current production source hash matches the preceding
+software-trace manifest; the committed CPU tree remains
+`795fd12d6c0237a22a5f92f4a96cc4823e0364c1`. The restored acceptance build starts
+from `e52243255c7dd0d1f608954399915810eaeafd78` plus the recorded fixture changes.
+CPU SHA-256 is
+`51e5454dddc852170e8d44d33ee10834d92f2533c00170892b0356dfd2673963`;
+test/adapter SHA-256 is
+`4eacd6fe96c9918e481bb764dd97ff59eb615880ae9fff6875fca295dbd91902`.
+The fresh full Release CPU selection passes 5,094 tests with eleven optional
+skips and zero failures. All nine qualified WinUAE presets match exact
+selections and current CPU/adapter identities. Strict ordinary reporting
+verifies 47,658,518 logical cases in 652 batches across all eight profiles,
+with `roadmapComplete=false`. Fresh pinned SingleStepTests passes 312,500 cases
+in 125 files; Musashi passes 536 programs with 88 explicit exclusions. Both
+requested adapter tests execute once and pass without skips. Source, fixture
+and assembly identities still match after the reference audits.
+
+All seventeen fresh report/fixture integrity controls reject their specific
+missing, shortened, foreign, redistributed or omitted-fixture corruption.
+Every canonical/structural scalar/batch report is covered; generic inventory
+rejection alone cannot satisfy a control. Current source, fixture and assembly
+identities still match after all checks. This test-only checkpoint is qualified;
+milestone 6 remains **in progress** with all required remaining scope retained.
+No CPU production fix, consumer rerun, package release or old-test retirement
+is included.

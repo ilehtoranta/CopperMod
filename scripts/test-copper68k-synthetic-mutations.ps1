@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','RteUserMaster','RteCpVectors','RteSoftwareTrace','UserRteFault','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','RteUserMaster','RteCpVectors','RteSoftwareTrace','UserRteFault','UserRteTrace','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -425,6 +425,24 @@ foreach ($mutation in $softwareTraceMutations) {
     $mutation.group='SoftwareTraceService'; $mutation.model='68040'; $mutation.milestone=6
     $mutation.softwareTrace=$true; $mutations += $mutation
 }
+$userTraceMutations = @(
+    @{name='040-user-trace-restored-bits'; file=$advanced;
+      before='            if ((trace & 0x8000) != 0 || flow || exception)';
+      after='            if ((State.StatusRegister & 0xc000) != 0 && ((trace & 0x8000) != 0 || flow || exception))';
+      proofCombination='/incoming=8000/align=0/VBR=00010000/result=user/T=0000/'; proofPhase='/retry-RTE'; proofReason='PC expected'},
+    @{name='040-user-trace-original-cp-vector'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs';
+      before='            var vector = continuation == 0x8000 ? pending!.Vector : continuation == 0x4000 ? 11 : 9;';
+      after='            var vector = continuation == 0x8000 ? 49 : continuation == 0x4000 ? 11 : 9;';
+      proofCombination='/CP50/'; proofPhase='/retry-RTE'; proofReason='Expected exception 50, actual 49'},
+    @{name='040-user-trace-movem-handler-consumption'; file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs';
+      before='        if (_m68040MovemContinuation is not { } saved || saved.Pc != State.ProgramCounter) return false;';
+      after='        if (_m68040MovemContinuation is not { } saved) return false;';
+      proofCombination='/CM/'; proofPhase='/following'; proofReason='D0 expected'}
+)
+foreach ($mutation in $userTraceMutations) {
+    $mutation.group='UserTailBridgePreservesTrace'; $mutation.model='68040'; $mutation.milestone=6
+    $mutation.userTrace=$true; $mutations += $mutation
+}
 $instructionMutations = @(
     @{name='040-instruction-short-frame'; before='                    RaiseUnbufferedReadAccessFault(fault, stackedProgramCounter, instruction: true);';
       after='                    RaiseFormat0Exception(VectorBusError, stackedProgramCounter, M68kInstructionTimingKey.IllegalInstruction);'; proofCombination='/instruction/opcode/'},
@@ -502,6 +520,7 @@ if ($Scope -eq 'InstructionFault') { $mutations = @($mutations | Where-Object { 
 if ($Scope -eq 'HandlerPrefetch') { $mutations = @($mutations | Where-Object { $_.handlerPrefetch }) }
 if ($Scope -eq 'EntryPrefetch') { $mutations = @($mutations | Where-Object { $_.entryPrefetch }) }
 if ($Scope -eq 'UserRteFault') { $mutations = @($mutations | Where-Object { $_.userRte }) }
+if ($Scope -eq 'UserRteTrace') { $mutations = @($mutations | Where-Object { $_.userTrace }) }
 if ($Scope -eq 'AccessDoubleFault') { $mutations = @($mutations | Where-Object { $_.doubleFault }) }
 if ($Scope -eq 'BatchFault') { $mutations = @($mutations | Where-Object { $_.batchFault }) }
 if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
@@ -614,15 +633,15 @@ try {
                     throw 'Instruction-fault mutation omitted complete cases or intended semantic failure'
                 }
             }
-            if ($mutation.retryTrace -or $mutation.pendingTrace -or $mutation.userMaster -or $mutation.cpVectors -or $mutation.softwareTrace) {
+            if ($mutation.retryTrace -or $mutation.pendingTrace -or $mutation.userMaster -or $mutation.cpVectors -or $mutation.softwareTrace -or $mutation.userTrace) {
                 [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
                 if ($trx.TestRun.ResultSummary.Counters.executed -ne 4 -or $trx.TestRun.ResultSummary.Counters.failed -ne 4 -or $batches.Count -ne 4) {
                     throw 'Retry-trace mutation omitted its complete four-batch selection'
                 }
                 foreach ($matrix in @('boundaries','chained')) {
                     foreach ($route in @('scalar','batch')) {
-                        $prefix = if ($mutation.softwareTrace) {'rte-software-trace'} elseif ($mutation.cpVectors) {'rte-cp-vectors'} elseif ($mutation.userMaster) {'rte-user-master'} elseif ($mutation.pendingTrace) {'rte-pending-trace'} else {'rte-retry-trace'}
-                        $cases = if ($mutation.softwareTrace) {if ($matrix -eq 'boundaries') {514560} else {3601920}} elseif ($mutation.cpVectors) {if ($matrix -eq 'boundaries') {110592} else {2322432}} elseif ($mutation.userMaster) {if ($matrix -eq 'boundaries') {44736} else {714240}} elseif ($mutation.pendingTrace) {if ($matrix -eq 'boundaries') {41472} else {870912}} else {if ($matrix -eq 'boundaries') {92736} else {1271808}}
+                        $prefix = if ($mutation.userTrace) {'rte-user-trace'} elseif ($mutation.softwareTrace) {'rte-software-trace'} elseif ($mutation.cpVectors) {'rte-cp-vectors'} elseif ($mutation.userMaster) {'rte-user-master'} elseif ($mutation.pendingTrace) {'rte-pending-trace'} else {'rte-retry-trace'}
+                        $cases = if ($mutation.userTrace) {if ($matrix -eq 'boundaries') {873984} else {3502080}} elseif ($mutation.softwareTrace) {if ($matrix -eq 'boundaries') {514560} else {3601920}} elseif ($mutation.cpVectors) {if ($matrix -eq 'boundaries') {110592} else {2322432}} elseif ($mutation.userMaster) {if ($matrix -eq 'boundaries') {44736} else {714240}} elseif ($mutation.pendingTrace) {if ($matrix -eq 'boundaries') {41472} else {870912}} else {if ($matrix -eq 'boundaries') {92736} else {1271808}}
                         $target = @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq "$prefix-$matrix-$route" })
                         if ($target.Count -ne 1 -or $target[0].logicalCases -ne $cases -or
                             @($target[0].failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
@@ -694,7 +713,7 @@ try {
             } elseif ($mutation.entryPrefetch) {
                 @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
                     $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) })[0]
-            } elseif ($mutation.retryTrace -or $mutation.pendingTrace -or $mutation.userMaster -or $mutation.cpVectors -or $mutation.softwareTrace) {
+            } elseif ($mutation.retryTrace -or $mutation.pendingTrace -or $mutation.userMaster -or $mutation.cpVectors -or $mutation.softwareTrace -or $mutation.userTrace) {
                 @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
                     $_.id.EndsWith($mutation.proofPhase, [StringComparison]::Ordinal) -and $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) })[0]
             } elseif ($mutation.userRte) {

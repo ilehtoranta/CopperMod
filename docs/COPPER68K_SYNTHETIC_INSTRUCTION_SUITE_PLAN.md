@@ -1939,3 +1939,41 @@ production source, fixture and assembly identities still match. This test-only
 checkpoint is qualified; milestone 6 remains **in progress** with its required
 scope retained. See the qualification record for the acceptance build identity
 and remaining scope.
+
+### Milestone 6 user-tail bridge preserves trace — 2026-10-06
+
+The next four scalar/batch groups retain incoming trace through the executed
+seven-store user-tail repair. The access return adds S while retaining M/T1/T0;
+the fresh supervisor throwaway restores the original user SR and selects USP.
+The original instruction then completes with its incoming trace condition,
+independently of the repaired SR. Pending CT/CU/CP49–55 conversion suppresses
+an extra automatic RTE trace. Returns and the following BRA/MOVEM verify saved
+SR/PC/address, all stack banks and continuation lifetime without replaying
+consumed throwaways or their discarded PCs.
+
+Canonical groups each require 873,984 phases / 2,304 combinations across all
+CCRs and incoming 0/T1/T0. Structural groups each require 3,502,080 phases /
+145,920 combinations with CCR 0/31, incoming T1, every validation-read byte,
+both alignments/VBRs and all initial/middle paths. Both original user M states
+and all restored user/user-M/ISP/MSP states are retained. These add 8,752,128
+phases; the complete 040 command must execute 69 tests, 62 reports, seven fixed
+examples and fourteen input identities, still retaining its 480-case inventory.
+
+Initial canonical and structural execution passes all four reports without a
+CPU production change. All three maintained mutations now detect their intended
+diagnostic in every complete report; production bytes are restored exactly and
+the implementation rebuilds without warnings/errors. Complete 040 acceptance
+reports 32,689,856 passing phases, zero mismatches/unsupported execution and
+480 untested requirements. All 69 tests execute without skips; its sole failure
+is the retained inventory. Fresh full Release CPU acceptance passes 5,094 tests
+with eleven optional skips and zero failures; all nine qualified WinUAE
+selections match the frozen source/binary identities. Strict ordinary reporting
+verifies 47,658,518 cases in 652 batches. Fresh pinned SingleStepTests and Musashi
+audits pass 312,500 cases / 125 files and 536 programs / 88 explicit exclusions;
+both adapter tests execute without skips. All current identities still match.
+All seventeen fresh report/fixture integrity controls reject their specific
+corruptions; all current identities still match afterward. This test-only
+checkpoint is qualified. Mixed-epoch trace provenance,
+user-tail software trace-service programs, internal restoration and all other
+retained model/reference/consolidation requirements remain required.
+Milestone 6 stays **in progress**, `roadmapComplete=false`.

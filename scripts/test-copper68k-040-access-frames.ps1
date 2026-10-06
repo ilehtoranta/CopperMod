@@ -65,6 +65,10 @@ $expected = [ordered]@{
     'rte-user-fault-batch' = @{cases=168192; combinations=20832}
     'rte-user-repair-scalar' = @{cases=675328; combinations=8224}
     'rte-user-repair-batch' = @{cases=675328; combinations=8224}
+    'rte-user-trace-boundaries-scalar' = @{cases=873984; combinations=2304}
+    'rte-user-trace-boundaries-batch' = @{cases=873984; combinations=2304}
+    'rte-user-trace-chained-scalar' = @{cases=3502080; combinations=145920}
+    'rte-user-trace-chained-batch' = @{cases=3502080; combinations=145920}
     'rte-access-remaining-protocols' = @{cases=480; combinations=15}
 }
 $testExit = 0
@@ -101,9 +105,9 @@ if (-not $ValidateReportsOnly) {
             'Multiple continuation bits are architecturally undefined and excluded',
             'Selected active accurate-batch paths verify counts/callbacks and scalar/batch bus/cycle policy; generic short operand frames do not qualify architectural format-7 data restart',
             'Instruction-fault fixtures use cache-disabled accurate execution and physical-map rejection; speculative deferral, enabled caches/MMU and compiled fetch PC provenance remain unqualified',
-            'Legacy supervisor repair clears saved trace; normal/CM retry traces completion, while pending CT/CU/CP49 and separate CP50-55 delivery suppress extra RTE trace. Executed integer trace service has separate coverage; user-tail/mixed-epoch protocols remain required',
+            'Legacy repair clears saved trace; separate supervisor and user-tail bridge groups preserve incoming trace, check normal/CM completion and pending CT/CU/CP49-55 priority. Executed integer trace service has separate supervisor-tail coverage; mixed-epoch and user-tail software trace-service protocols remain required',
             'User-tail fault expectations compose documented throwaway live-SR rules with general supervisor exception entry; unusual combined hardware behavior has not been observed',
-            'User-tail untouched-trace retry, internal-restoration double faults, cache/MMU/compiled handler-entry prefetch, chained odd-PC SR provenance and physical timing remain unqualified',
+            'Mixed-epoch trace provenance, user-tail software trace service, internal-restoration double faults, cache/MMU/compiled handler-entry prefetch, chained odd-PC SR provenance and physical timing remain unqualified',
             'Direct odd-RTE saved-SR ordering uses documentary WinUAE 5d22d336, not an executed hardware oracle')
     }
     $identity | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'identities.json')
@@ -131,8 +135,8 @@ foreach ($assembly in $identity.assemblies) {
 }
 [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
 $counters = $trx.TestRun.ResultSummary.Counters
-if ([int]$counters.executed -ne 65 -or [int]$counters.total -ne 65 -or [int]$counters.notExecuted -ne 0) {
-    throw '040 access-frame audit did not execute its complete selection (54 batches, 6 fixed examples)'
+if ([int]$counters.executed -ne 69 -or [int]$counters.total -ne 69 -or [int]$counters.notExecuted -ne 0) {
+    throw '040 access-frame audit did not execute its complete selection (62 batches, 7 fixed examples)'
 }
 $totals = [ordered]@{passing=0; mismatching=0; unsupported=0; untested=0}
 foreach ($group in $expected.Keys) {
@@ -153,6 +157,44 @@ foreach ($group in $expected.Keys) {
         foreach ($bank in @('user','ISP','MSP')) {
             foreach ($form in @('frame-validation-fault','odd-PC-chained-SR-provenance','real-access-fault-entry','writeback-handler','CP-context-transferred-vector')) {
                 $expectedCombinations["68040/RTE/format7/$form/bank=$bank"] = 32
+            }
+        }
+    } elseif ($group.StartsWith('rte-user-trace-', [StringComparison]::Ordinal)) {
+        $chained = $group.StartsWith('rte-user-trace-chained-', [StringComparison]::Ordinal)
+        foreach ($start in @('ISP','MSP')) {
+            foreach ($middle in $(if ($chained) { @('none','user','ISP','MSP') } else { @('none') })) {
+                $path = if ($middle -eq 'none') { "$start-user" } else { "$start-$middle-user" }
+                foreach ($master in @($false,$true)) {
+                    foreach ($incoming in $(if ($chained) { @(0x8000) } else { @(0,0x8000,0x4000) })) {
+                        foreach ($alignment in $(if ($chained) { @(0,1) } else { @(0) })) {
+                            foreach ($vbr in $(if ($chained) { @(0,0x10000) } else { @(0x10000) })) {
+                                foreach ($result in @('user','user-M','ISP','MSP')) {
+                                    foreach ($trace in @(0,0x8000,0x4000)) {
+                                        foreach ($form in @('format0','format2','format3','invalid4','invalid15','normal','CM','CT','CU','CP','CP50','CP51','CP52','CP53','CP54','CP55')) {
+                                            $reads = @('0:2')
+                                            if ($chained) {
+                                                $reads += @('2:4','6:2')
+                                                if ($form -notin @('format0','format2','format3','invalid4','invalid15')) { $reads += '12:2' }
+                                                if ($form -notin @('format0','format2','format3','invalid4','invalid15','normal')) { $reads += '8:4' }
+                                            }
+                                            foreach ($read in $reads) {
+                                                $parts = $read.Split(':')
+                                                for ($byte=0; $byte -lt $(if ($chained) {[int]$parts[1]} else {1}); $byte++) {
+                                                    $key = '68040/RTE/user-trace/{0}/{1}/path={2}/M={3}/incoming={4:X4}/align={5}/VBR={6:X8}/result={7}/T={8:X4}/read={9}:{10}/byte={11}' -f $(if ($chained) {'structure'} else {'boundaries'}),$form,$path,$master,$incoming,$alignment,$vbr,$result,$trace,$parts[0],$parts[1],$byte
+                                                    # Seven stores, two RTEs, entry and following; pending
+                                                    # conversion or incoming trace adds one handler return.
+                                                    $pending = $form -in @('CT','CU','CP','CP50','CP51','CP52','CP53','CP54','CP55')
+                                                    $phases = if ($pending -or $incoming -ne 0) {12} else {11}
+                                                    $expectedCombinations[$key] = $(if ($chained) {2} else {32}) * $phases
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     } elseif ($group.StartsWith('rte-user-fault-', [StringComparison]::Ordinal) -or $group.StartsWith('rte-user-repair-', [StringComparison]::Ordinal)) {
@@ -460,8 +502,8 @@ foreach ($group in $expected.Keys) {
         if ($combinationTotals[$status] -ne $report.counts.$status) { throw "$group combination totals differ" }
     }
 }
-$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 65 -and
+$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 69 -and
     ($totals.mismatching + $totals.unsupported + $totals.untested) -eq 0
-@{schema=1; model='68040'; logicalCases=23938208; xunitBatches=58; fixedExamples=7; counts=$totals; passed=$passed; roadmapComplete=$false} |
+@{schema=1; model='68040'; logicalCases=32690336; xunitBatches=62; fixedExamples=7; counts=$totals; passed=$passed; roadmapComplete=$false} |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'audit-summary.json')
 if (-not $passed) { throw "040 access-frame audit incomplete: $($totals | ConvertTo-Json -Compress)" }

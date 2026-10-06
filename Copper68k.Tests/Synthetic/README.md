@@ -709,3 +709,29 @@ The four reports require 514,560 canonical / 3,601,920 chained phases per route,
 8,232,960 total. The complete 040 audit requires 65 tests, 58 reporting batches,
 seven fixed examples and fourteen input identities. The retained 480-case
 inventory continues to fail completion; milestone 6 remains in progress.
+
+### User-tail bridge with preserved incoming trace
+
+`SyntheticM68040UserRteFaultTests.UserTailBridgePreservesTrace*` extends the
+seven-store repair program without replacing its original trace-clearing groups.
+The new bridge and access return retain incoming trace; only the access return
+adds S so privileged RTE can retry. Completion tracing uses incoming 0/T1/T0
+independently of repaired trace. CT/CU/CP49–55 take priority over an automatic
+RTE trace. Every return and following BRA/MOVEM checks all stack banks,
+exception provenance, guarded memory and consumed throwaway effects.
+
+Canonical scalar/batch groups each contain 873,984 phases / 2,304 combinations
+with every CCR. Structural groups each contain 3,502,080 phases / 145,920
+combinations, using CCR 0/31 and incoming T1 at every validation-read byte, both
+alignments/VBRs and every initial/middle user/ISP/MSP path. Both original user M
+values and all restored user/user-M/ISP/MSP states are covered. The four groups
+add 8,752,128 phases to ordinary CI and the complete 040 audit.
+
+Run the focused selection with
+`dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --filter FullyQualifiedName~UserTailBridgePreservesTrace`.
+Use `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope UserRteTrace` for
+restored-bits substitution, original CP-vector loss and premature MOVEM
+continuation consumption. Proof requires the intended diagnostic in all four
+complete reports. Expectations compose MC68040UM trace, throwaway and pending
+exception rules; no hardware execution is claimed. Mixed-epoch provenance,
+user-tail software trace-service programs and internal restoration remain open.
