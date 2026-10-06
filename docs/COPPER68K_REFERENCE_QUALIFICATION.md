@@ -6364,6 +6364,41 @@ base commit and lost completed output. Both fixed regressions remain unchanged
 after fixture strengthening; each mutation restores source byte-for-byte.
 Evidence: `artifacts/m6-010-long-restart-mutations/mutations.json`.
 
+A seventh targeted mutation removes only the memory-source continuation's D2
+write. All 18,432 D2-destination scenarios detect it; the other 147,456 source
+scenarios remain passing, with every combination independently classified.
+This proves that the distinct initial destination values expose the omitted
+write instead of allowing a coincidentally correct register value. Source is
+restored byte-for-byte and normal CPU/test assemblies remain unchanged.
+Evidence: `artifacts/m6-010-long-restart-register-mutation/mutation-identity.json`.
+
+The maintained command below repeats all seven proofs using isolated build
+outputs and temporarily mutates the CPU source in the selected checkout.
+Do not edit that source or build from it concurrently. The command refuses to
+overwrite a concurrently changed source. It checks exact test names and failed
+methods, captured mutation source, source/input/binary/evidence identities, and
+all 648 register-mutation combinations. Frozen validation fails for incomplete
+or altered selections. Its checks are targeted defect proofs, not additional
+passing emulator semantics or permission to retire unrelated regressions.
+
+```powershell
+./scripts/test-copper68k-010-long-move-mutations.ps1 -OutputDirectory artifacts/010-long-move-mutations
+./scripts/test-copper68k-010-long-move-mutations.ps1 -ValidateReportsOnly -OutputDirectory artifacts/010-long-move-mutations
+```
+
+Fresh execution and frozen validation pass at
+`artifacts/m6-010-long-restart-maintained-mutations-final/`: thirteen exact
+executions, comprising twelve fixed regression executions and the complete
+165,888-case source matrix under the register-write mutation. Eight altered
+profile/selection/source/execution/classification controls reject their intended
+error after changed evidence hashes are refreshed. The restoration guard also
+restores the expected mutation and rejects a concurrent edit without overwriting
+it, using an isolated text fixture. Evidence is
+`artifacts/m6-010-long-restart-mutation-controls/controls.json` and
+`artifacts/m6-010-long-restart-mutation-controls/concurrency-guard.json`.
+The preliminary maintained-command output precedes the exact failed-method
+and concurrent-edit guards; it is superseded by this final accepted output.
+
 Pinned external semantic audits pass: SingleStepTests 312,500 cases / 125 files
 at `64b253116a3de04aaac4346c43680960dc9b67e5`, and Musashi 536 passing /
 88 excluded combinations at `72c1d74800f3087b45a0c1a7342601bbed898881`.

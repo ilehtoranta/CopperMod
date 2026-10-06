@@ -2406,8 +2406,11 @@ reject changed identities, empty/wrong selections and redistributed coverage.
 
 The ordinary semantic gate now requires **85,535,254 scenarios / 685 reports**.
 These counts include the new requirements, not proof of pending broad execution.
-The retained 68010 selection passes 21 tests without skips; six production
-mutations detect the targeted continuation defects. Pinned SingleStepTests and
+The retained 68010 selection passes 21 tests without skips; seven production
+mutations detect the targeted continuation defects, including all 18,432 cases
+affected by an omitted destination-register write. A maintained mutation command
+reproduces the proofs with isolated builds, exact execution identities and
+independent combination checks. Pinned SingleStepTests and
 Musashi semantic audits pass. The isolated unpublished `.64` consumer passes
 its Release build, host/disk/engine tests and all three native replays. The first
 full CPU run failed only an obsolete structural-image expectation; that test
