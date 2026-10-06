@@ -1175,3 +1175,14 @@ isolated build directory. Both require fresh report output directories and
 preserve normal CPU/test assembly outputs. All nine scoped presets passed fresh
 audits after pinned input regeneration; see the
 [restoration record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#restored-scoped-winuae-qualification--2026-10-06).
+
+Run independent references without the deterministic matrix through
+`./scripts/test-copper68k-reference-audits.ps1 -SingleStepPath <pinned-checkout>
+-MusashiPath <pinned-checkout> -OutputDirectory <fresh-output>`. Both selections
+are optional individually; at least one reference is required. Builds are
+isolated, complete selections and exact input identities are checked, and
+requested failures remain failures. The broad Basic WinUAE selection requires
+`-WinUaePath`, `-WinUaeGeneratorSource` and `-WinUaeRunnerSource`; its unresolved
+discrepancies intentionally fail the command. See the
+[reference-only command](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#reference-only-audit-command)
+for reproducibility and caveats.

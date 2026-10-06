@@ -6948,3 +6948,100 @@ unavailable, and no new green full-suite run is claimed. SingleStepTests,
 Musashi, broad Basic and consumer/native evidence retain the preceding cleanup
 limitations. Remaining architectural gaps and consolidation work are unchanged;
 milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## Reference-only audit command
+
+`scripts/test-copper68k-reference-audits.ps1` runs the existing independent
+adapters without rerunning the deterministic synthetic matrix. It requires at
+least one requested reference, complete pinned inputs and a fresh output
+directory; every requested test must execute and pass. Builds default to
+`<OutputDirectory>/build`, with optional `-ArtifactsPath` for another isolated
+directory. Source revisions, input bytes/SHA256, command identity, report/TRX
+and isolated CPU/test assembly hashes are retained. The command checks complete
+per-file SingleStepTests coverage and per-model/program Musashi coverage,
+including their documented exclusions, then verifies inputs stayed unchanged.
+It rejects empty selections, wrong pins, missing inputs and orphan WinUAE
+source arguments. It never publishes a package or alters comparator masks.
+
+```powershell
+./scripts/test-copper68k-reference-audits.ps1 `
+  -SingleStepPath <pinned-SingleStepTests-checkout> `
+  -MusashiPath <pinned-Musashi-checkout> `
+  -OutputDirectory <fresh-output>
+
+./scripts/test-copper68k-reference-audits.ps1 `
+  -WinUaePath <prepared-Basic-inputs> `
+  -WinUaeGeneratorSource <pinned-generator-checkout> `
+  -WinUaeRunnerSource <pinned-runner-checkout> `
+  -OutputDirectory <fresh-output>
+```
+
+The second command deliberately fails while the Basic discrepancies remain.
+Its full diagnostics are retained; no passing verification manifest is emitted
+for a failed selection. The native adapter still performs its complete profile,
+directory, binary header, input identity and corruption-probe checks. Basic
+requires the explicit `Basic` preset manifest from the maintained preparation
+command; other scoped presets cannot substitute for broad qualification.
+
+### Restored broad reference evidence — 2026-10-06
+
+Fresh pinned SingleStepTests and Musashi checkouts pass the reference-only
+command's complete selections: **312,500 cases / 125 files** and **536 passing
+model/program combinations / 88 explicit exclusions**, respectively. Both
+facts execute without skips. `audits/IndependentFinal/reference-inputs.json`
+and `reference-verification.json` under the restoration temporary root above
+record all input bytes/hashes, pins, command and report/TRX/assembly identities.
+Each SingleStepTests file passes exactly 2,500 cases; every Musashi profile has
+the documented passing/excluded program distribution. Existing trace-boundary,
+invalid-input, unavailable-instruction and software-reference caveats remain.
+Four preflight controls reject empty selection, wrong source revision, absent
+inputs and orphan WinUAE source arguments in
+`reference-command-controls-final.json`.
+
+The broad Basic corpus is also freshly regenerated at the same generator/runner
+pins. Its manifest SHA256 is
+`b5741ca90fa75d3510ef25bac33d2d36d6a92ab2283f0666e762a5f1853a38ed`,
+native bridge SHA256
+`135d8c7d01137bbef2467e34207444984fd47a9076041a0c251848d2518b32ce`.
+The audit reproduces **1,327 passing / 46 mismatching / eight unsupported /
+zero untested directories**, 11,478,371 callbacks and 1,668,069 exception-frame
+checks. These include partial failing directories, not all-passing coverage.
+All eight profiles execute their complete directory selection and register,
+defined-SR, exception-frame and ignored-undefined-SR controls. The requested
+command fails, retaining original diagnostics. No comparator mask, CPU behavior,
+Basic input or family selection is changed to obtain agreement.
+
+The 54 non-passing model/family rows remain explicit:
+
+| Family | Non-passing rows | Current disposition |
+| --- | ---: | --- |
+| BKPT | 7 | Saved-PC software disagreement; separate qualified Breakpoints preset passes. |
+| CHK2 B/W/L | 15 | Saved-PC software disagreement; separate qualified TrapBounds preset passes. |
+| TRAPcc | 6 | Saved-PC software disagreement; separate qualified TrapBounds preset passes. |
+| DIVL.L / MULL.L | 10 | Eight emulator-unsupported Basic inputs plus two 060 saved-PC disagreements; canonical LongArithmetic qualification passes separately. |
+| DIVU.W | 4 | Overflow flag software disagreement; WordDivision qualification passes separately. |
+| MOVES.B / MOVES.L | 3 | Reserved extension fields/undefined same-An stores; legal-input Moves qualification passes separately. |
+| CAS.W / CAS.L | 2 | 060 saved-PC disagreement; separate Cas qualification passes. |
+| CAS2.W | 1 | 040 compare alias software disagreement; separate Cas2 qualification passes. |
+| LPSTOP | 1 | Privilege-fetch/saved-PC software disagreement; separate LowPowerStop qualification passes. |
+| ILLEGAL | 2 | 040/060 F400 cache encoding software disagreement; separate CacheEncodings qualification passes. |
+| RTE | 1 | 010 format-error CCR disagreement remains required. |
+| STOP | 1 | 060 supervisor-bit-cleared disagreement remains required. |
+| MOVE16 | 1 | 060 Basic failure uses noncanonical extension 6000; legal-input independent qualification remains required. |
+
+The recovered MOVE16 diagnostic is `F626 6000`, user SR 0000, source/destination
+A6 `0087FE9F`. The reference increments A6 while Copper68k raises vector 4.
+[M68000PRM MOVE16](https://www.nxp.com/docs/en/reference-manual/M68000PRM.pdf)
+4-127 requires extension bit 15 set and bits 11..0 clear; the canonical same-A6
+form is `F626 E000`. The pinned generator instead reads only extension bits
+14..12 and does not enforce bit 15. This establishes a noncanonical input,
+not authority for a CPU change or a hardware-defined outcome for every reserved
+extension. A canonical-input MOVE16 audit is the next reference qualification
+slice; original Basic failure remains retained.
+
+This closes the local availability gap for SingleStepTests, Musashi and Basic
+diagnostics with fresh identities. It does not recreate deleted deterministic
+JSON details or consumer/media inputs, reclassify the earlier failed full run,
+or close advanced frame/recovery and consolidation requirements. Production CPU,
+normal assemblies and packages are unchanged. Milestone 6 remains **in
+progress**, `roadmapComplete=false`.

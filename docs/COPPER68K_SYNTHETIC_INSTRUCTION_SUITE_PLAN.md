@@ -2584,3 +2584,15 @@ full run is not reclassified green. See the
 [restoration record](COPPER68K_REFERENCE_QUALIFICATION.md#restored-scoped-winuae-qualification--2026-10-06).
 Other unavailable external evidence and all remaining milestone-6 gaps stay
 explicit. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Pinned SingleStepTests, Musashi and the broad Basic corpus are now restored and
+rerun through a maintained isolated reference-only command. SingleStepTests
+passes 312,500 cases / 125 files; Musashi passes 536 model/program combinations
+with 88 documented exclusions. Basic intentionally fails its preserved 46
+mismatching and eight unsupported rows; fresh diagnostics reproduce the prior
+counts and expose a noncanonical 060 MOVE16 extension for the next legal-input
+qualification. Four command preflight controls reject invalid requests. See the
+[fresh evidence and explicit gap table](COPPER68K_REFERENCE_QUALIFICATION.md#restored-broad-reference-evidence--2026-10-06).
+No production CPU change, regression retirement or package release is included.
+Advanced restoration and remaining consolidation requirements remain open;
+milestone 6 is **in progress**, `roadmapComplete=false`.
