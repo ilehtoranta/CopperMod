@@ -9401,6 +9401,7 @@ namespace Copper68k
             var mask = FetchWord();
             var addressRegister = opcode & 7;
             var address = State.A[addressRegister];
+            var calculatedAddress = address;
             for (var register = 0; register < 8; register++)
             {
                 if ((mask & (1 << register)) == 0)
@@ -9408,7 +9409,7 @@ namespace Copper68k
                     continue;
                 }
 
-                State.D[register] = unchecked((uint)(int)(short)ReadWord(address));
+                State.D[register] = unchecked((uint)(int)(short)ReadMovemSized(address, M68kOperandSize.Word, calculatedAddress));
                 address += 2;
             }
 
@@ -9419,7 +9420,7 @@ namespace Copper68k
                     continue;
                 }
 
-                WriteGeneralRegister(true, register, unchecked((uint)(int)(short)ReadWord(address)));
+                WriteGeneralRegister(true, register, unchecked((uint)(int)(short)ReadMovemSized(address, M68kOperandSize.Word, calculatedAddress)));
                 address += 2;
             }
 
@@ -9438,6 +9439,7 @@ namespace Copper68k
             var mask = FetchWord();
             var addressRegister = opcode & 7;
             var address = State.A[addressRegister];
+            var calculatedAddress = address;
             for (var register = 0; register < 8; register++)
             {
                 if ((mask & (1 << register)) == 0)
@@ -9445,7 +9447,7 @@ namespace Copper68k
                     continue;
                 }
 
-                State.D[register] = ReadLong(address);
+                State.D[register] = ReadMovemSized(address, M68kOperandSize.Long, calculatedAddress);
                 address += 4;
             }
 
@@ -9456,7 +9458,7 @@ namespace Copper68k
                     continue;
                 }
 
-                WriteGeneralRegister(true, register, ReadLong(address));
+                WriteGeneralRegister(true, register, ReadMovemSized(address, M68kOperandSize.Long, calculatedAddress));
                 address += 4;
             }
 
@@ -9474,6 +9476,7 @@ namespace Copper68k
             _ = FetchWord();
             var mask = FetchWord();
             var address = State.A[opcode & 7];
+            var calculatedAddress = address;
             for (var register = 0; register < 8; register++)
             {
                 if ((mask & (1 << register)) == 0)
@@ -9481,7 +9484,7 @@ namespace Copper68k
                     continue;
                 }
 
-                State.D[register] = ReadLong(address);
+                State.D[register] = ReadMovemSized(address, M68kOperandSize.Long, calculatedAddress);
                 address += 4;
             }
 
@@ -9492,7 +9495,7 @@ namespace Copper68k
                     continue;
                 }
 
-                WriteGeneralRegister(true, register, ReadLong(address));
+                WriteGeneralRegister(true, register, ReadMovemSized(address, M68kOperandSize.Long, calculatedAddress));
                 address += 4;
             }
 
@@ -9514,10 +9517,11 @@ namespace Copper68k
             var address = CalculateIndexedOperandAddress(sourceBase, extension, opcode);
             var size = (opcode & 0x40) == 0 ? M68kOperandSize.Word : M68kOperandSize.Long;
             // Latch the EA before loading any base/index register in the mask.
+            var calculatedAddress = address;
             for (var register = 0; register < 16; register++)
             {
                 if ((mask & (1 << register)) == 0) continue;
-                var value = ReadSized(address, size);
+                var value = ReadMovemSized(address, size, calculatedAddress);
                 if (size == M68kOperandSize.Word) value = unchecked((uint)(int)(short)value);
                 WriteGeneralRegister(register >= 8, register & 7, value);
                 address = unchecked(address + (uint)(size == M68kOperandSize.Word ? 2 : 4));
@@ -9539,6 +9543,7 @@ namespace Copper68k
             var baseAddress = pcRelative ? State.ProgramCounter : State.A[opcode & 7];
             var displacement = unchecked((int)(short)FetchWord());
             var address = unchecked((uint)(baseAddress + displacement));
+            var calculatedAddress = address;
             for (var register = 0; register < 8; register++)
             {
                 if ((mask & (1 << register)) == 0)
@@ -9546,7 +9551,7 @@ namespace Copper68k
                     continue;
                 }
 
-                State.D[register] = ReadLong(address);
+                State.D[register] = ReadMovemSized(address, M68kOperandSize.Long, calculatedAddress);
                 address += 4;
             }
 
@@ -9557,7 +9562,7 @@ namespace Copper68k
                     continue;
                 }
 
-                WriteGeneralRegister(true, register, ReadLong(address));
+                WriteGeneralRegister(true, register, ReadMovemSized(address, M68kOperandSize.Long, calculatedAddress));
                 address += 4;
             }
 
@@ -9579,11 +9584,12 @@ namespace Copper68k
             var displacement = indirect ? 0 : unchecked((int)(short)FetchWord());
             var address = unchecked((uint)(baseAddress + displacement));
 
+            var calculatedAddress = address;
             for (var register = 0; register < 8; register++)
             {
                 if ((mask & (1 << register)) != 0)
                 {
-                    State.D[register] = unchecked((uint)(int)(short)ReadWord(address));
+                    State.D[register] = unchecked((uint)(int)(short)ReadMovemSized(address, M68kOperandSize.Word, calculatedAddress));
                     address += 2;
                 }
             }
@@ -9592,7 +9598,7 @@ namespace Copper68k
             {
                 if ((mask & (1 << (8 + register))) != 0)
                 {
-                    WriteGeneralRegister(true, register, unchecked((uint)(int)(short)ReadWord(address)));
+                    WriteGeneralRegister(true, register, unchecked((uint)(int)(short)ReadMovemSized(address, M68kOperandSize.Word, calculatedAddress)));
                     address += 2;
                 }
             }

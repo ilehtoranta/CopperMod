@@ -5,6 +5,17 @@ namespace Copper68k;
 
 internal partial class M68kAdvancedTimingInterpreter
 {
+    private uint ReadMovemSized(uint address, M68kOperandSize size, uint calculatedAddress)
+    {
+        try { return ReadSized(address, size); }
+        catch (M68040MmuFaultException ex) when (_profile.Model == M68kAcceleratorModel.M68040 &&
+            !State.M68040Mmu.Enabled && !ex.Fault.Write && ex.Fault.AccessKind == M68kBusAccessKind.CpuDataRead)
+        {
+            // The address is already calculated. A base/index may have been
+            // loaded before this fault; never decode or read its pointer again.
+            throw new M68040MmuFaultException(ex.Fault with { MovemEffectiveAddress = calculatedAddress });
+        }
+    }
     private bool TryExecuteGeneralMovem(ushort opcode, uint? continuationAddress = null)
     {
         if ((opcode & 0xfb80) != 0x4880) return false;
@@ -33,6 +44,7 @@ internal partial class M68kAdvancedTimingInterpreter
             address = continuationAddress.Value;
         }
         else address = mode is 3 or 4 ? State.A[baseRegister] : ResolveMoveAddress(mode, baseRegister, size, opcode);
+        var calculatedAddress = address;
         for (var bit = 0; bit < 16; bit++)
         {
             if ((mask & (1 << bit)) == 0) continue;
@@ -40,7 +52,7 @@ internal partial class M68kAdvancedTimingInterpreter
             if (mode == 4) address = unchecked(address - (uint)size);
             if (load)
             {
-                var value = ReadSized(address, size);
+                var value = ReadMovemSized(address, size, calculatedAddress);
                 if (size == M68kOperandSize.Word) value = unchecked((uint)(int)(short)value);
                 WriteGeneralRegister(register >= 8, register & 7, value);
             }

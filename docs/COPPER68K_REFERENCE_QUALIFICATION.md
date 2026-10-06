@@ -7251,3 +7251,69 @@ The next fix must correct architectural operand-read frame delivery and preserve
 actual latched MOVEM EA/continuation rules, then qualify executed recovery and
 affected consumers. All other model/reference/consolidation requirements remain
 required. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+### Physical 040 operand-read frame correction — 2026-10-06
+
+The failing operand-read discovery above is retained as before-fix evidence.
+Normal, translation-disabled 040 operand reads now enter the architectural
+60-byte format-7 frame, preserving the instruction PC and live SR and recording
+the actual read size, data modifier and fault address. Exception-entry reads
+are excluded by the instruction boundary/exception sequence checks. Enabled
+MMU delivery and compiled operand side exits retain their separate scope.
+
+MOVEM read faults carry the EA calculated before any transfer. Both advanced
+paths and the shared integer fallback attach it at the failing read; neither
+recalculates an overwritten base/index nor rereads an indirect pointer during
+exception delivery. The frame sets CM and saves this EA. An explicit software
+RTE then resumes through the existing CM path, repeating preceding MOVEM reads
+as required by MC68040UM 8.4.6.7. There is no automatic instruction retry.
+
+The focused command passes **122,880 selected entry cases**, with zero
+mismatches, unsupported cases or missing selected combinations. Its five
+executions include sixteen literal encoding witnesses and two new brief/full
+indexed MOVEM recovery controls. These fault the fourth transfer after D1 and
+A0 have been overwritten, verify the saved EA/CM/PC, execute RTE and complete
+the transfer, and check that the full-format pointer was read exactly once.
+Dropping calculated-EA metadata in an isolated source copy makes both controls
+fail at the CM assertion. Six copied-evidence corruption controls still reject
+their intended errors; exact theory inputs are required by the command.
+
+Cached-batch expectations now require the architectural read frame while
+retaining count, callback, partial-effect and timing-policy checks. Accurate
+fatal-entry coverage expands from eight to all sixty frame bytes for B/W/L
+reads: **1,248 additional scenarios**, making the ordinary required inventory
+**86,098,722 scenarios / 707 reports**. This does not promote the focused entry
+matrix into those ordinary totals or reduce the broad 480-case remaining gate.
+
+Consumer validation uses a clean archive of CopperScreen commit
+`aa1dad5dcc0fb7c970e8e3443a160487add846af` and the isolated, unpublished
+`1.5.2-synthetic-dev.68` NuGet package. Release production build, 171 host tests,
+74 disk tests and 1,080 separately built engine tests pass. Six optional host
+replays are unavailable in that ordinary run. Two explicit native Workbench
+3.1 floppy boots (zero/2 MiB Fast RAM) pass their existing ROM/media, PC, cycle
+and framebuffer fingerprints. The Workbench input was restored from its local
+archive; the previously deleted HDF was not recreated or claimed as replayed.
+Pinned SingleStepTests and Musashi audits also pass independently.
+
+Evidence is retained under the restoration temporary root in
+`audits/OperandReadAcceptance`, `OperandReadAcceptanceIntegrity`,
+`mutations/DropMovemEa`, `audits/OperandReadIndependent`, `consumer-68` and
+`native-68`. The private package is immutable and has SHA256
+`c4d2e75502d9304d249760e9c57356b20b6ad569c45f4fe2786ecdbd35022e28`.
+
+The fresh full CPU run completed on **2026-10-07**: **5,244 passing / zero
+failed / 21 optional or discovery skips / 5,265 total**. All ten enabled
+qualified WinUAE presets pass in this run. The maintained report validator
+accepts all **707 required batches / 86,098,722 scenarios**. Actual passing TRX
+batch summaries are cross-checked against the report contents; the complete
+result roster and report/assembly hashes are retained in
+`audits/OperandReadFull/full-verification.json`. The older cleanup-affected full
+run remains failed historical evidence. These fresh results do not turn skipped
+discovery gates or the original Basic reference disagreements into coverage.
+
+General operand addressing/recovery/trace deferral, MOVEM writes, enabled
+MMU/cache and physical transfer timing remain outside this selected fix.
+Other models' restoration gaps, unresolved software-reference disagreements,
+the original Basic non-passing rows and regression consolidation remain
+required. No public release or regression retirement is included. Milestone 6
+remains **in progress**, `roadmapComplete=false`.

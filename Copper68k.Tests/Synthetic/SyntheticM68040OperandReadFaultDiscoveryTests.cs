@@ -4,7 +4,7 @@ using Xunit.Abstractions;
 namespace Copper68k.Tests.Synthetic;
 
 // MC68040UM 8.4.6/8.4.6.2/8.4.6.7, not scalar/batch agreement.
-// This failing discovery remains outside promoted ordinary-CI coverage.
+// This focused entry gate remains separate from broader restoration coverage.
 public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHelper output)
 {
     internal const string Enable = "COPPER68K_RUN_040_OPERAND_READ_DISCOVERY";
@@ -24,6 +24,54 @@ public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHel
 
     [EnvironmentFact(Enable, "qualify actual 040 operand-read access frames"), Trait("Suite", "ReferenceDiscovery")]
     public void BatchReadFaultsRequireFormat7() => Audit(true);
+
+    [Theory, Trait("Suite", "Synthetic")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ActualMovemFaultRetainsCalculatedEaAcrossLoadedBaseAndIndex(bool full)
+    {
+        var bus = new SyntheticM68040AccessDoubleFaultTests.FaultBus();
+        var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);
+        m.Reset(31); m.Core.State.A[0] = Operand; m.Core.State.D[1] = 0x20;
+        m.InitializePhysical(0x1000, 0x4cf0, 2); // MOVEM.L indexed(A0),D0/D1/A0/A1
+        m.InitializePhysical(0x1002, 0x0303, 2);
+        m.InitializePhysical(0x1004, full ? 0x1922u : 0x1800u, 2);
+        if (full)
+        {
+            m.InitializePhysical(0x1006, 0x0010, 2); m.InitializePhysical(0x1008, 0x0006, 2);
+            m.InitializePhysical(0x4230, 0x5000, 4); // A0 + D1.L + BD, then outer displacement.
+        }
+        var ea = full ? 0x5006u : 0x4220u;
+        uint[] values = [0x11112222, 0x00000040, 0x66667777, 0x88889999];
+        for (var n = 0; n < 4; n++) m.InitializePhysical(ea + (uint)n * 4, values[n], 4);
+        var next = full ? 0x100au : 0x1006u;
+        m.InitializePhysical(next, 0x7e55, 2); m.InitializePhysical(next + 2, 0x4e71, 2);
+        m.InitializePhysical(8, Handler, 4); m.InitializePhysical(Handler, 0x4e73, 2);
+        m.InitializePhysical(Handler + 2, 0x4e71, 2); m.Start();
+        var sequence = m.Core.State.ExceptionSequence;
+        bus.Accesses.Clear(); bus.Arm(ea + 12, M68kBusAccessKind.CpuDataRead);
+        m.Core.ExecuteInstruction();
+        var frame = 0x4700u - 60;
+        Assert.Equal(frame, m.Core.State.A[7]); Assert.Equal(Handler, m.Core.State.ProgramCounter);
+        Assert.Equal(0x7008u, m.PeekPhysical(frame + 6, 2));
+        Assert.Equal(0x1105u, m.PeekPhysical(frame + 12, 2) & 0xff7f);
+        Assert.Equal(ea, m.PeekPhysical(frame + 8, 4)); Assert.Equal(ea + 12, m.PeekPhysical(frame + 20, 4));
+        Assert.Equal(0x1000u, m.PeekPhysical(frame + 2, 4));
+        Assert.Equal(values[0], m.Core.State.D[0]); Assert.Equal(values[1], m.Core.State.D[1]);
+        Assert.Equal(values[2], m.Core.State.A[0]); Assert.Equal(0x4100u, m.Core.State.A[1]);
+        Assert.Single(bus.Rejected);
+        m.Core.ExecuteInstruction(); // Software handler explicitly returns via RTE.
+        Assert.Equal(0x1000u, m.Core.State.ProgramCounter); Assert.Equal(0x4700u, m.Core.State.A[7]);
+        m.Core.ExecuteInstruction(); // CM resumes after EA calculation; preceding MOVEM reads repeat by architecture.
+        Assert.Equal(next, m.Core.State.ProgramCounter); Assert.Equal(values[3], m.Core.State.A[1]);
+        Assert.Equal(values[0], m.Core.State.D[0]); Assert.Equal(values[1], m.Core.State.D[1]);
+        Assert.Equal(values[2], m.Core.State.A[0]); Assert.Equal(0x271f, m.Core.State.StatusRegister);
+        for (var n = 0; n < 3; n++) Assert.Equal(2, bus.Accesses.Count(a => !a.Write && a.Kind == M68kBusAccessKind.CpuDataRead && a.Address == ea + (uint)n * 4));
+        Assert.Single(bus.Accesses.Where(a => !a.Write && a.Kind == M68kBusAccessKind.CpuDataRead && a.Address == ea + 12));
+        if (full) Assert.Single(bus.Accesses.Where(a => !a.Write && a.Kind == M68kBusAccessKind.CpuDataRead && a.Address == 0x4230));
+        Assert.Single(bus.Rejected); Assert.Equal(sequence + 1, m.Core.State.ExceptionSequence);
+        m.Core.ExecuteInstruction(); Assert.Equal(0x55u, m.Core.State.D[7]);
+    }
 
     [Fact, Trait("Suite", "Synthetic")]
     public void FixedManualReadInstructionWitnessesValidateEncodings()

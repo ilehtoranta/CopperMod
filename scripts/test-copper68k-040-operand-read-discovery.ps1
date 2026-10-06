@@ -33,11 +33,15 @@ foreach ($item in $manifest.evidence) { if ((Hash (Join-Path $output $item.path)
 [xml]$trx=Get-Content (Join-Path $output 'audit.trx') -Raw
 $c=$trx.TestRun.ResultSummary.Counters
 $tests=@($trx.TestRun.Results.UnitTestResult)
-if ($c.executed -ne 3 -or $c.notExecuted -ne 0 -or $tests.Count -ne 3 -or @($tests.testId | Sort-Object -Unique).Count -ne 3) { throw 'Incomplete discovery execution' }
+if ($c.executed -ne 5 -or $c.notExecuted -ne 0 -or $tests.Count -ne 5 -or @($tests.testId | Sort-Object -Unique).Count -ne 5) { throw 'Incomplete discovery execution' }
 foreach ($name in @('ScalarReadFaultsRequireFormat7','BatchReadFaultsRequireFormat7','FixedManualReadInstructionWitnessesValidateEncodings')) {
     $selected=@($tests | Where-Object { $_.testName.EndsWith('.'+$name) })
     if ($selected.Count -ne 1 -or ($name.StartsWith('Fixed') -and $selected[0].outcome -ne 'Passed')) { throw "Missing/passing fixture witness: $name" }
 }
+$continuations=@($tests | Where-Object { $_.testName.Contains('.ActualMovemFaultRetainsCalculatedEaAcrossLoadedBaseAndIndex(') })
+if ($continuations.Count -ne 2 -or @($continuations | Where-Object outcome -ne 'Passed').Count -ne 0 -or
+    @($continuations | Where-Object { $_.testName.EndsWith('(full: False)') }).Count -ne 1 -or
+    @($continuations | Where-Object { $_.testName.EndsWith('(full: True)') }).Count -ne 1) { throw 'Incomplete MOVEM continuation controls' }
 # Independent architectural inventory; never calculate expectations with CPU helpers.
 $forms=@(@('MOVE',1,'1010'),@('MOVE',2,'3010'),@('MOVE',4,'2010'),@('MOVEA',2,'3050'),@('MOVEA',4,'2050'),@('ADD',1,'D010'),@('ADD',2,'D050'),@('ADD',4,'D090'),@('CMP',1,'B010'),@('CMP',2,'B050'),@('CMP',4,'B090'),@('TST',1,'4A10'),@('TST',2,'4A50'),@('TST',4,'4A90'),@('MOVEM',2,'4C90'),@('MOVEM',4,'4CD0'))
 $required=@{}

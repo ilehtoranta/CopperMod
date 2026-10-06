@@ -6,7 +6,7 @@ namespace Copper68k.Tests.Synthetic;
 // Architectural validation frames: MC68040UM 8.4.6.7. Cached-block batching,
 // callbacks and cycle equality are emulator execution/timing-policy contracts.
 // MOVE writes and instruction fetch/validation use architectural format 7.
-// Operand reads retain a separate approximate short-frame gap.
+// Normal physical operand reads also use format 7; restart phases are separate.
 public sealed class SyntheticM68040BatchFaultTests(ITestOutputHelper output)
 {
     private const uint Handler = 0x9020;
@@ -182,9 +182,8 @@ public sealed class SyntheticM68040BatchFaultTests(ITestOutputHelper output)
         e.ControlChecks["saved SR"] = (s => s.LastExceptionStatusRegister, savedSr);
         e.ControlChecks["saved PC"] = (s => s.LastExceptionStackedProgramCounter, stackedPc);
         e.ControlChecks["bypass cleared"] = (s => s.M68040Mmu.BypassTranslation ? 1u : 0u, 0);
-        var accessFrame = frame - (write || form is "RTE" or "self-fetch" ? 60u : 8u);
+        var accessFrame = frame - 60u;
         e.A[7] = accessFrame; if (bank == "MSP") e.MasterStackPointer = accessFrame;
-        if (write || form is "RTE" or "self-fetch")
         {
             SyntheticM68040RteValidationFaultTests.ExpectAccessFrame(m, e, accessFrame, savedSr, stackedPc, faultAddress, width);
             if (form == "self-fetch") e.Write(accessFrame + 12, 0x0106, 2, m.Model);
@@ -199,12 +198,6 @@ public sealed class SyntheticM68040BatchFaultTests(ITestOutputHelper output)
                 for (var n = 0; n < 4; n++)
                     e.Memory[accessFrame + 44 + ((faultAddress + (uint)n) & 3)] = (byte)(storeValue >> (8 * (3 - n)));
             }
-        }
-        else
-        {
-            // Existing generic delivery policy, not architectural frame qualification.
-            e.Write(accessFrame, savedSr, 2, m.Model); e.Write(accessFrame + 2, stackedPc, 4, m.Model);
-            e.Write(accessFrame + 6, 8, 2, m.Model);
         }
         var boundary = new FaultBoundary(m.Core, bus, prefix, incomingSr, faultAddress + (uint)faultByte, kind,
             outcome == "fatal-stack" ? accessFrame : outcome == "fatal-vector" ? vbr + 8 : null,

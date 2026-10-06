@@ -12374,9 +12374,20 @@ namespace Copper68k
                 {
                     var readFaultBaseCycles = size == M68kOperandSize.Word ? 8 : 4;
                     AddInstructionCycles(readFaultBaseCycles + ea.EaCycles + (transferred * transferCycles));
-                    var value = size == M68kOperandSize.Word
-                        ? M68kCpuState.SignExtend(ReadWord(current), M68kOperandSize.Word)
-                        : ReadLong(current);
+                    uint value;
+                    try
+                    {
+                        value = size == M68kOperandSize.Word
+                            ? M68kCpuState.SignExtend(ReadWord(current), M68kOperandSize.Word)
+                            : ReadLong(current);
+                    }
+                    catch (M68040MmuFaultException ex) when (!State.M68040Mmu.Enabled &&
+                        !ex.Fault.Write && ex.Fault.AccessKind == M68kBusAccessKind.CpuDataRead)
+                    {
+                        // The 040 integer fallback shares this decoder. Keep
+                        // the original EA even after loading its base/index.
+                        throw new M68040MmuFaultException(ex.Fault with { MovemEffectiveAddress = ea.Address });
+                    }
                     if (register < 8)
                     {
                         State.D[register] = value;

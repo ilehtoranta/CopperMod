@@ -2621,7 +2621,7 @@ Original Basic failures and the full advanced restoration/consolidation scope
 remain required. See the [supervisor-A7 record](COPPER68K_REFERENCE_QUALIFICATION.md#supervisor-a7-move16-reference-completion--2026-10-06).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
 
-The real 040 operand-read gap now has a concrete strict discovery gate: sixteen
+The real 040 operand-read gap gained a concrete strict discovery gate: sixteen
 legal MOVE/MOVEA/ADD/CMP/TST/MOVEM encodings, all CCRs, four stack banks, three
 trace states, lanes and rejected read bytes, independently verified in scalar
 and batch execution. Sixteen literal normal-execution witnesses pass. All
@@ -2632,4 +2632,20 @@ without promotion or reducing the 480-case broad inventory. The next required
 work is architectural read-fault delivery/latched MOVEM continuation, executed
 recovery and affected-consumer qualification. No production edit, package release
 or regression retirement is included. See the [operand-read discovery](COPPER68K_REFERENCE_QUALIFICATION.md#actual-040-operand-read-fault-discovery--2026-10-06).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The subsequent physical-read fix passes that complete selected entry inventory
+and two brief/full indexed MOVEM fourth-transfer recovery controls. Calculated
+EA metadata survives overwritten base/index registers, including the shared
+integer fallback, without repeating pointer resolution. An isolated mutation
+that drops the metadata fails both controls. The strict five-execution gate and
+six evidence-integrity controls pass. Accurate fatal-entry checks now cover all
+60 frame bytes for B/W/L reads, adding 1,248 cases; ordinary requirements become
+86,098,722 scenarios / 707 reports. The fresh full CPU run passes 5,244 tests
+with zero failures and 21 explicit optional/discovery skips; report validation
+accepts every required ordinary batch. Clean CopperScreen consumer build, host/disk/
+engine tests and two native Workbench floppy replays pass via a private NuGet
+package, as do independent pinned SingleStepTests/Musashi audits. Broader
+addressing/recovery/trace and remaining model/reference/consolidation coverage
+stay required. See the [read-frame correction](COPPER68K_REFERENCE_QUALIFICATION.md#physical-040-operand-read-frame-correction--2026-10-06).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.

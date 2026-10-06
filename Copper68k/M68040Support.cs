@@ -1863,7 +1863,9 @@ namespace Copper68k
         int ByteCount = 0,
         bool RteFrameValidation = false,
         uint? WriteValue = null,
-        bool CompletedMoveWrite = false);
+        bool CompletedMoveWrite = false,
+        bool UnbufferedOperandRead = false,
+        uint? MovemEffectiveAddress = null);
 
     internal sealed class UnsupportedM68040InstructionException : M68kEmulationException
     {
@@ -2562,6 +2564,11 @@ namespace Copper68k
                 fault = fault with { StackedProgramCounter = ExecutionBoundaryProgramCounter };
             else if (TryCompleteFaultedMoveWrite(fault))
                 fault = fault with { StackedProgramCounter = State.ProgramCounter, CompletedMoveWrite = true };
+            else if (!State.M68040Mmu.Enabled && !fault.Write &&
+                fault.AccessKind == M68kBusAccessKind.CpuDataRead && fault.ByteCount is 1 or 2 or 4 &&
+                State.ExceptionSequence == ExecutionBoundaryExceptionSequence &&
+                State.LastInstructionProgramCounter == ExecutionBoundaryProgramCounter)
+                fault = fault with { StackedProgramCounter = ExecutionBoundaryProgramCounter, UnbufferedOperandRead = true };
             RaiseMmuFault(fault);
             return true;
         }
@@ -4327,6 +4334,8 @@ namespace Copper68k
                     RaiseUnbufferedReadAccessFault(fault, stackedProgramCounter, instruction: true);
                 else if (fault.CompletedMoveWrite)
                     RaiseCompletedMoveWriteAccessFault(fault, stackedProgramCounter);
+                else if (fault.UnbufferedOperandRead)
+                    RaiseUnbufferedReadAccessFault(fault, stackedProgramCounter, instruction: false);
                 else
                     RaiseFormat0Exception(VectorBusError, stackedProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
             }
@@ -4372,10 +4381,10 @@ namespace Copper68k
 
         private void RaiseUnbufferedReadAccessFault(M68040MmuFault fault, uint instructionPc, bool instruction)
         {
-            // MC68040UM 8.4.6/7: instruction-prefetch faults have no pending
-            // writebacks. Pre-commit RTE validation reads use the same layout,
-            // preserving the original frame; data operand/write restart is a
-            // separate path and must not be implemented by replaying effects.
+            // MC68040UM 8.4.6/7: synchronous reads have no pending writebacks.
+            // Pre-commit RTE validation preserves the original frame. MOVEM
+            // carries its calculated EA for explicit software RTE continuation;
+            // exception delivery itself must never replay operand effects.
             var savedSr = State.StatusRegister;
             State.RecordException(VectorBusError, instructionPc, savedSr);
             State.StatusRegister = (ushort)((savedSr | M68kCpuState.Supervisor) & ~0xc000);
@@ -4387,8 +4396,9 @@ namespace Copper68k
             PushLong(fault.LogicalAddress);
             PushWord(0); PushWord(0); PushWord(0);
             var modifier = ((savedSr & M68kCpuState.Supervisor) != 0 ? 4 : 0) | (instruction ? 2 : 1);
-            PushWord((ushort)(0x0100 | (fault.ByteCount == 2 ? 0x0040 : 0) | modifier));
-            PushLong(0);
+            var size = fault.ByteCount == 1 ? 0x20 : fault.ByteCount == 2 ? 0x40 : 0;
+            PushWord((ushort)(0x0100 | size | modifier | (fault.MovemEffectiveAddress.HasValue ? 0x1000 : 0)));
+            PushLong(fault.MovemEffectiveAddress ?? 0);
             PushWord(0x7008);
             PushLong(instructionPc);
             PushWord(savedSr);
