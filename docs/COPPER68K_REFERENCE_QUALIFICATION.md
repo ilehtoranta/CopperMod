@@ -6894,3 +6894,57 @@ Cleanup subsequently removed the consumer checkout and local replay inputs;
 these results are not described as fresh post-cleanup replays. Source and the
 published dependency pin remain untouched. No public package is published.
 Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+#### Restored scoped WinUAE qualification — 2026-10-06
+
+After cleanup stopped, fresh source checkouts at generator
+`025b999239800357e95065fe5b9a15ea5b300fa7` and runner
+`7a83745d6c6159bc74ab0471578ffc8bc244e66e` regenerated all nine deleted
+qualified presets through `prepare-copper68k-winuae.ps1`. Tracked reference
+sources remain unchanged. The maintained audit commands pass their complete
+selections, including required corruption controls and architectural form
+distributions. Their existing Motorola-qualified patches and reference caveats
+remain applicable; these are software reference results, not silicon timing
+qualification or an unchanged upstream oracle.
+
+| Preset | Passing xUnit executions | Model/family directories | Callbacks | Exception frames |
+| --- | ---: | ---: | ---: | ---: |
+| TrapBounds | 1 | 21 | 951,522 | 476,339 |
+| Breakpoints | 1 | 7 | 224 | 224 |
+| LongArithmetic | 19 | 12 | 28,418 | 4,992 |
+| WordDivision | 15 | 16 | 134,928 | 37,804 |
+| LowPowerStop | 11 | 1 | 245,760 | 245,760 |
+| Moves | 17 | 21 | 110,492 | 86,072 |
+| Cas | 16 | 18 | 49,284 | 2,466 |
+| Cas2 | 12 | 12 | 3,180 | 2,296 |
+| CacheEncodings | 13 | 8 | 2,048 | 2,048 |
+| Total | 105 | 116 | 1,525,856 | 858,001 |
+
+All nine commands have zero failures or skips; all reports have zero
+mismatching, unsupported or untested selected directories. The 105 executions
+include nine native audit facts and 96 encoding controls. Callbacks include
+distinct model/profile executions and are not a count of unique instruction
+encodings. The fresh evidence is under
+`C:/Users/ilkle/AppData/Local/Temp/copper68k-reference-restoration-20261006`:
+`inputs/<Preset>` contains each pinned input manifest, native bridge and source
+identities; `audits/<Preset>` contains TRX, report and isolated assemblies.
+`verify-restoration.ps1` independently checks exact totals, passing outcomes,
+pins, input bytes/hashes, report/manifest/native/assembly identities, row controls
+and unchanged normal assemblies. `restoration-verification.json` records those
+identities. New native binaries and manifests have their own hashes; no deleted
+evidence is relabeled or reconstructed as identical.
+
+Both maintained audit wrappers now pass `--artifacts-path`, defaulting to
+`<OutputDirectory>/build`; optional `-ArtifactsPath` selects another isolated
+build directory. CPU/test normal assembly hashes remain
+`0145566d23551d1dd8793784d2d83b5fdbe9a9ad2db6c9199012b6f9af80308a` and
+`180db7219a99097c9c24d7cae0cff17f5b9aa27798d241861ece75d59f1e8367`.
+This slice changes audit output placement and documentation only, with no
+production CPU or package changes.
+
+These fresh runs resolve the nine missing-input failures independently. The
+earlier full run remains failed, its deleted deterministic JSON details remain
+unavailable, and no new green full-suite run is claimed. SingleStepTests,
+Musashi, broad Basic and consumer/native evidence retain the preceding cleanup
+limitations. Remaining architectural gaps and consolidation work are unchanged;
+milestone 6 remains **in progress**, `roadmapComplete=false`.

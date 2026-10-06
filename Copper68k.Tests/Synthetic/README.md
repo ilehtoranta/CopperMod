@@ -1167,3 +1167,11 @@ Ordinary requirements are 86,097,474 scenarios / 707 reports. Missing external
 fixtures fail requested audits and remain unavailable coverage. Milestone 6 is
 incomplete; see the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#68030-integrated-mmu-user-privilege-qualification--2026-10-06),
 including the concurrent-cleanup limitation on the latest full execution.
+
+The maintained `test-copper68k-winuae-qualified-exceptions.ps1` and
+`test-copper68k-winuae-long-arithmetic.ps1` commands build into
+`<OutputDirectory>/build` by default. Use `-ArtifactsPath` to select another
+isolated build directory. Both require fresh report output directories and
+preserve normal CPU/test assembly outputs. All nine scoped presets passed fresh
+audits after pinned input regeneration; see the
+[restoration record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#restored-scoped-winuae-qualification--2026-10-06).

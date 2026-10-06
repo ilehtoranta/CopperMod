@@ -2573,3 +2573,14 @@ directory. The private `.67` consumer and external reference checks passed befor
 cleanup; their removed local records and replay inputs are not described as
 present or rerun. See the qualification record for this distinction. No public
 package release is performed.
+
+After cleanup stopped, all nine scoped WinUAE presets were regenerated from
+their pinned sources and passed fresh maintained audits: 105 executions without
+failures/skips, 116 model/family directories, 1,525,856 callbacks and 858,001
+exception frames. Exact input/report/binary identities and unchanged normal
+assemblies are independently verified. Audit wrappers now isolate build outputs.
+These runs resolve the missing-input failures separately; the cleanup-affected
+full run is not reclassified green. See the
+[restoration record](COPPER68K_REFERENCE_QUALIFICATION.md#restored-scoped-winuae-qualification--2026-10-06).
+Other unavailable external evidence and all remaining milestone-6 gaps stay
+explicit. Milestone 6 remains **in progress**, `roadmapComplete=false`.

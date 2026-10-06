@@ -4,7 +4,8 @@ param(
     [ValidateSet('TrapBounds','Breakpoints','WordDivision','LowPowerStop','Moves','Cas','Cas2','CacheEncodings')] [string] $Preset = 'TrapBounds',
     [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $InputDirectory,
     [string] $NativeLibrary,
-    [string] $OutputDirectory = 'artifacts/winuae-trap-bounds-audit'
+    [string] $OutputDirectory = 'artifacts/winuae-trap-bounds-audit',
+    [string] $ArtifactsPath
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -14,6 +15,7 @@ $library = (Resolve-Path -LiteralPath $NativeLibrary).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
 if (Test-Path -LiteralPath $output) { throw "Use a fresh output directory: $output" }
 New-Item -ItemType Directory -Path $output | Out-Null
+$build = if ($ArtifactsPath) { [IO.Path]::GetFullPath($ArtifactsPath, $repo) } else { Join-Path $output 'build' }
 $key = switch ($Preset) {'TrapBounds' {'TRAP_BOUNDS'} 'Breakpoints' {'BREAKPOINT'} 'WordDivision' {'WORD_DIVISION'} 'LowPowerStop' {'LPSTOP'} 'Moves' {'MOVES'} 'Cas' {'CAS'} 'Cas2' {'CAS2'} 'CacheEncodings' {'CACHE_ENCODINGS'}}
 $testName = switch ($Preset) {'TrapBounds' {'WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled'} 'Breakpoints' {'WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled'} 'WordDivision' {'WinUaeWordDivisionAcrossSelectedModelsWhenEnabled'} 'LowPowerStop' {'WinUaeLowPowerStopExceptionsWhenEnabled'} 'Moves' {'WinUaeMovesAcrossSelectedModelsWhenEnabled'} 'Cas' {'WinUaeCasAcrossAdvancedModelsWhenEnabled'} 'Cas2' {'WinUaeCas2AcrossAdvancedModelsWhenEnabled'} 'CacheEncodings' {'WinUaeCacheScopeZeroAcrossSelectedModelsWhenEnabled'}}
 $reportName = switch ($Preset) {'TrapBounds' {'winuae-trap-bounds-audit.json'} 'Breakpoints' {'winuae-breakpoint-audit.json'} 'WordDivision' {'winuae-word-division-audit.json'} 'LowPowerStop' {'winuae-lpstop-audit.json'} 'Moves' {'winuae-moves-audit.json'} 'Cas' {'winuae-cas-audit.json'} 'Cas2' {'winuae-cas2-audit.json'} 'CacheEncodings' {'winuae-cache-encodings-audit.json'}}
@@ -55,7 +57,7 @@ try {
         $saved[$name] = [Environment]::GetEnvironmentVariable($name)
         [Environment]::SetEnvironmentVariable($name, $settings[$name])
     }
-    & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --filter $filter --logger 'trx;LogFileName=audit.trx' --results-directory $output
+    & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --artifacts-path $build --filter $filter --logger 'trx;LogFileName=audit.trx' --results-directory $output
     if ($LASTEXITCODE -ne 0) { throw "Qualified $Preset audit failed" }
     [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
     $counts = $trx.TestRun.ResultSummary.Counters

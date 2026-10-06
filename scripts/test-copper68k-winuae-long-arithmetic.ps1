@@ -3,7 +3,8 @@
 param(
     [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $InputDirectory,
     [string] $NativeLibrary,
-    [string] $OutputDirectory = 'artifacts/winuae-long-arithmetic-audit'
+    [string] $OutputDirectory = 'artifacts/winuae-long-arithmetic-audit',
+    [string] $ArtifactsPath
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -13,6 +14,7 @@ $library = (Resolve-Path -LiteralPath $NativeLibrary).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
 if (Test-Path -LiteralPath $output) { throw "Use a fresh output directory: $output" }
 New-Item -ItemType Directory -Path $output | Out-Null
+$build = if ($ArtifactsPath) { [IO.Path]::GetFullPath($ArtifactsPath, $repo) } else { Join-Path $output 'build' }
 $settings = @{
     COPPER68K_RUN_WINUAE_LONG_ARITHMETIC_AUDIT = '1'
     COPPER68K_WINUAE_LONG_ARITHMETIC_PATH = $root
@@ -25,7 +27,7 @@ try {
         $saved[$name] = [Environment]::GetEnvironmentVariable($name)
         [Environment]::SetEnvironmentVariable($name, $settings[$name])
     }
-    & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --filter 'FullyQualifiedName~WinUaeLongArithmeticAcrossAdvancedModelsWhenEnabled|FullyQualifiedName~M68kWinUaeLongArithmeticEncodingTests' --logger 'trx;LogFileName=audit.trx' --results-directory $output
+    & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --artifacts-path $build --filter 'FullyQualifiedName~WinUaeLongArithmeticAcrossAdvancedModelsWhenEnabled|FullyQualifiedName~M68kWinUaeLongArithmeticEncodingTests' --logger 'trx;LogFileName=audit.trx' --results-directory $output
     if ($LASTEXITCODE -ne 0) { throw 'Qualified LongArithmetic audit failed' }
     [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
     $counts = $trx.TestRun.ResultSummary.Counters
