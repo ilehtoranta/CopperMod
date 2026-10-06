@@ -14262,9 +14262,15 @@ namespace Copper68k
 
         private void WriteLongDescending(uint address, uint value)
         {
-            if ((address & 1) != 0) PrepareM68010LongMoveFault(address, value, 4);
-            WriteWord(address + 2, (ushort)value);
-            WriteWord(address, (ushort)(value >> 16));
+            var faultContext = _bus as M68040LogicalBus;
+            faultContext?.BeginDescendingLongWrite(address, value);
+            try
+            {
+                if ((address & 1) != 0) PrepareM68010LongMoveFault(address, value, 4);
+                WriteWord(address + 2, (ushort)value);
+                WriteWord(address, (ushort)(value >> 16));
+            }
+            finally { faultContext?.EndDescendingLongWrite(); }
         }
 
         [DoesNotReturn]

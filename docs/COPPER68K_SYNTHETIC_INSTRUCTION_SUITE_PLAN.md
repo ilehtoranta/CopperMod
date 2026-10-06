@@ -2488,3 +2488,48 @@ frames do not qualify enabled-MMU operation, physical function-code spaces,
 hardware or timing. See the
 [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-supplied-write-back-handler-qualification--2026-10-06).
 Milestone 6 stays **in progress**, `roadmapComplete=false`; no package publication.
+
+### Milestone 6 actual 040 MOVE write faults — 2026-10-06
+
+The production 040 path now constructs a documented format-7 pending-writeback
+frame for ordinary MOVE destination writes rejected by the host physical map,
+with translation disabled. It preserves consumed source/extensions, latched
+store address/data, completed destination base/flags and following PC. The
+integer handler completes WB1 and returns without replaying the MOVE. Retained
+descending long transfers describe the original operand in the fault while
+preserving successful transfer order/widths and existing timing policy. An
+instruction/exception boundary guard prevents a rejected trace-frame store from
+being mistaken for another MOVE operand. No public API changes are made.
+
+Six ordinary scalar/batch matrices pass **61,644 whole-program scenarios /
+43,788 combinations**: every legal memory-destination MOVE opcode, independent
+lane/size/value/CCR/stack boundaries, and full-index structures/aliases/trace.
+All twelve exact executions pass without skips, including six bounded witnesses.
+Every handler instruction, defined frame field/data lane, preserved state,
+ordered store, RTE and following instruction is checked. Seven maintained CPU
+mutations detect operand width, predecrement, lanes, data, CT, N and exception
+boundary defects. Baseline plus mutants execute 48 tests; source restores
+byte-for-byte. Eight report and seven mutation integrity controls reject their
+intended errors, and the isolated restoration guard preserves concurrent edits.
+
+Ordinary requirements become **85,834,306 scenarios / 703 reports**. Complete-040
+requirements become **67,856,332 scenarios / 92 reports and 30 fixed witnesses**,
+with exactly 122 discovered executions. Static requirements/key validation is
+separate from a passing complete audit. Its remaining inventory still fails
+exactly **480 untested cases / fifteen combinations**, retaining all five
+protocol categories. Read/other integer/MOVEM/MOVE16 fault construction,
+trace-entry recovery, nested writebacks and advanced restoration remain open.
+
+A fresh full CPU run passes **5,166 tests / zero failures / nineteen explicitly
+unavailable tests**, total 5,185, with the exact roster/theory expansion/skips and
+nine pinned WinUAE selections verified. Its ordinary semantic gate validates all
+85,834,306 scenarios / 703 reports. Source and normal assemblies are checked
+before/after; documentation follows that execution.
+
+The final pinned SingleStepTests and Musashi audits pass their selected semantic
+cases. The isolated unpublished `.66` package passes the CopperScreen Release
+build, host/disk/engine checks and all three native replays. No regression is
+retired and no public package is published. See the
+[qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-actual-move-write-fault-qualification--2026-10-06)
+for exact identities and reference limitations. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.

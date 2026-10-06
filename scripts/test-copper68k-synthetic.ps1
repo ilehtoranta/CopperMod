@@ -162,6 +162,11 @@ try {
             $expected['system-move-long-restart-invalid'] = 640
         }
         if ($model -eq '68040') {
+            foreach ($route in @('scalar','batch')) {
+                $expected["move-write-fault-opcodes-$route"] = 7350
+                $expected["move-write-fault-boundaries-$route"] = 9216
+                $expected["move-write-fault-indexed-$route"] = 14256
+            }
             foreach ($matrix in @('canonical','structure')) { foreach ($route in @('scalar','batch')) {
                 $expected["rte-writeback-$matrix-$route"] = 36864
             } }
@@ -193,7 +198,7 @@ try {
             $expected['access-fault-batch-dispatch'] = 10368
             $expected['rte-access-entry-double-fault'] = 98304
             $expected['rte-access-handler-refault'] = 3840
-            $expected['access-double-fault-dispatch-accurate'] = 1088
+            $expected['access-double-fault-dispatch-accurate'] = 2336
             $expected['access-double-fault-dispatch-v1'] = 1088
             $expected['access-double-fault-dispatch-v2'] = 1088
             $expected['rte-validation-physical-direct'] = 162816

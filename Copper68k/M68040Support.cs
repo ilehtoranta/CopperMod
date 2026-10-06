@@ -1861,7 +1861,9 @@ namespace Copper68k
         uint Status,
         uint? StackedProgramCounter = null,
         int ByteCount = 0,
-        bool RteFrameValidation = false);
+        bool RteFrameValidation = false,
+        uint? WriteValue = null,
+        bool CompletedMoveWrite = false);
 
     internal sealed class UnsupportedM68040InstructionException : M68kEmulationException
     {
@@ -1918,6 +1920,10 @@ namespace Copper68k
         private PhysicalMapPageCache _instructionMapCache;
         private PhysicalMapPageCache _dataReadMapCache;
         private PhysicalMapPageCache _dataWriteMapCache;
+        private (uint Address, uint Value)? _descendingLongWrite;
+
+        internal void BeginDescendingLongWrite(uint address, uint value) => _descendingLongWrite = (address, value);
+        internal void EndDescendingLongWrite() => _descendingLongWrite = null;
 
         public M68040LogicalBus(IM68kBus physicalBus, M68kCpuState state)
         {
@@ -1972,15 +1978,15 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)
-            => _physicalBus.WriteByte(Translate(address, accessKind, write: true, byteCount: 1), value, ref cycle, accessKind);
+            => _physicalBus.WriteByte(Translate(address, accessKind, write: true, byteCount: 1, writeValue: value), value, ref cycle, accessKind);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
-            => _physicalBus.WriteWord(Translate(address, accessKind, write: true, byteCount: 2), value, ref cycle, accessKind);
+            => _physicalBus.WriteWord(Translate(address, accessKind, write: true, byteCount: 2, writeValue: value), value, ref cycle, accessKind);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void WriteLong(uint address, uint value, ref long cycle, M68kBusAccessKind accessKind)
-            => _physicalBus.WriteLong(Translate(address, accessKind, write: true, byteCount: 4), value, ref cycle, accessKind);
+            => _physicalBus.WriteLong(Translate(address, accessKind, write: true, byteCount: 4, writeValue: value), value, ref cycle, accessKind);
 
         public bool HasHostGateway(uint address)
         {
@@ -2069,7 +2075,7 @@ namespace Copper68k
 
         public bool TryWriteFastByte(uint address, byte value, M68kBusAccessKind accessKind)
         {
-            var physical = Translate(address, accessKind, write: true, byteCount: 1);
+            var physical = Translate(address, accessKind, write: true, byteCount: 1, writeValue: value);
             if (_fastMemoryBus is null || !CanFastWritePhysical(physical))
             {
                 return false;
@@ -2080,7 +2086,7 @@ namespace Copper68k
 
         public bool TryWriteFastWord(uint address, ushort value, M68kBusAccessKind accessKind)
         {
-            var physical = Translate(address, accessKind, write: true, byteCount: 2);
+            var physical = Translate(address, accessKind, write: true, byteCount: 2, writeValue: value);
             if (_fastMemoryBus is null || !CanFastWritePhysical(physical))
             {
                 return false;
@@ -2091,7 +2097,7 @@ namespace Copper68k
 
         public bool TryWriteFastLong(uint address, uint value, M68kBusAccessKind accessKind)
         {
-            var physical = Translate(address, accessKind, write: true, byteCount: 4);
+            var physical = Translate(address, accessKind, write: true, byteCount: 4, writeValue: value);
             if (_fastMemoryBus is null || !CanFastWritePhysical(physical))
             {
                 return false;
@@ -2115,21 +2121,21 @@ namespace Copper68k
 
         [HotPath]
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint Translate(uint address, M68kBusAccessKind accessKind, bool write, int byteCount)
+        private uint Translate(uint address, M68kBusAccessKind accessKind, bool write, int byteCount, uint? writeValue = null)
         {
             var mmu = _mmu;
             if (mmu.BypassTranslation)
             {
                 return _allPhysicalAddressesMapped
                     ? address
-                    : AcceptPhysicalAddress(address, byteCount, accessKind, write);
+                    : AcceptPhysicalAddress(address, byteCount, accessKind, write, writeValue);
             }
 
             if (!mmu.Enabled)
             {
                 return _allPhysicalAddressesMapped
                     ? address
-                    : AcceptPhysicalAddress(address, byteCount, accessKind, write);
+                    : AcceptPhysicalAddress(address, byteCount, accessKind, write, writeValue);
             }
 
             return TranslateEnabled(address, accessKind, write, byteCount);
@@ -2140,14 +2146,15 @@ namespace Copper68k
             uint address,
             int byteCount,
             M68kBusAccessKind accessKind,
-            bool write)
+            bool write,
+            uint? writeValue)
         {
             if (IsPhysicalAddressMapped(address, byteCount, accessKind))
             {
                 return address;
             }
 
-            return ThrowPhysicalAddressFault(address, accessKind, write, byteCount);
+            return ThrowPhysicalAddressFault(address, accessKind, write, byteCount, writeValue);
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -2184,12 +2191,20 @@ namespace Copper68k
             uint address,
             M68kBusAccessKind accessKind,
             bool write,
-            int byteCount)
+            int byteCount,
+            uint? writeValue)
         {
             var supervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
+            var fault = CreatePhysicalAddressFault(address, accessKind, write, supervisor) with { ByteCount = byteCount, WriteValue = writeValue };
+            // The existing integer fallback writes predecrement longs as two
+            // descending words. Preserve its transfers, while describing the
+            // original operand in the 040 fault rather than one bus fragment.
+            if (write && accessKind == M68kBusAccessKind.CpuDataWrite && _descendingLongWrite is { } operand &&
+                unchecked(address - operand.Address) < 4)
+                fault = fault with { LogicalAddress = operand.Address, ByteCount = 4, WriteValue = operand.Value };
             throw new M68040MmuFaultException(
                 WithStackedProgramCounter(
-                    CreatePhysicalAddressFault(address, accessKind, write, supervisor) with { ByteCount = byteCount },
+                    fault,
                     address,
                     accessKind));
         }
@@ -2545,7 +2560,43 @@ namespace Copper68k
             // half of an aligned long. Restart the executing instruction.
             if (!State.M68040Mmu.Enabled && fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
                 fault = fault with { StackedProgramCounter = ExecutionBoundaryProgramCounter };
+            else if (TryCompleteFaultedMoveWrite(fault))
+                fault = fault with { StackedProgramCounter = State.ProgramCounter, CompletedMoveWrite = true };
             RaiseMmuFault(fault);
+            return true;
+        }
+
+        private bool TryCompleteFaultedMoveWrite(M68040MmuFault fault)
+        {
+            // A normal MOVE has one destination store. At this point its source
+            // and extensions have already been consumed; latch the actual store
+            // data/address rather than decoding or executing any operand again.
+            // This is not a MOVEM/MOVE16/MMU or arbitrary write restart policy.
+            var opcode = State.LastOpcode;
+            var top = opcode >> 12;
+            var mode = (opcode >> 6) & 7;
+            var register = (opcode >> 9) & 7;
+            var width = top == 1 ? 1 : top == 3 ? 2 : 4;
+            var sourceMode = (opcode >> 3) & 7;
+            if (State.ExceptionSequence != ExecutionBoundaryExceptionSequence ||
+                State.LastInstructionProgramCounter != ExecutionBoundaryProgramCounter ||
+                State.M68040Mmu.Enabled || !fault.Write || fault.WriteValue is not uint value ||
+                fault.AccessKind != M68kBusAccessKind.CpuDataWrite || top is < 1 or > 3 ||
+                mode < 2 || mode == 7 && register > 1 || fault.ByteCount != width ||
+                top == 1 && sourceMode == 1 || sourceMode == 7 && (opcode & 7) > 4)
+                return false;
+            if (mode is 3 or 4)
+            {
+                var next = mode == 4 ? fault.LogicalAddress :
+                    unchecked(fault.LogicalAddress + (uint)(width == 1 && register == 7 ? 2 : width));
+                if (register == 7) State.SetActiveStackPointer(next);
+                else State.A[register] = next;
+            }
+            var mask = width == 1 ? 0xffu : width == 2 ? 0xffffu : uint.MaxValue;
+            var sign = width == 1 ? 0x80u : width == 2 ? 0x8000u : 0x80000000u;
+            value &= mask;
+            State.StatusRegister = (ushort)((State.StatusRegister & 0xfff0) |
+                (value == 0 ? 4 : 0) | ((value & sign) != 0 ? 8 : 0));
             return true;
         }
 
@@ -4274,6 +4325,8 @@ namespace Copper68k
                     RaiseRteValidationAccessFault(fault, stackedProgramCounter);
                 else if (!State.M68040Mmu.Enabled && fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
                     RaiseUnbufferedReadAccessFault(fault, stackedProgramCounter, instruction: true);
+                else if (fault.CompletedMoveWrite)
+                    RaiseCompletedMoveWriteAccessFault(fault, stackedProgramCounter);
                 else
                     RaiseFormat0Exception(VectorBusError, stackedProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
             }
@@ -4290,6 +4343,32 @@ namespace Copper68k
 
         private void RaiseRteValidationAccessFault(M68040MmuFault fault, uint instructionPc)
             => RaiseUnbufferedReadAccessFault(fault, instructionPc, instruction: false);
+
+        private void RaiseCompletedMoveWriteAccessFault(M68040MmuFault fault, uint nextPc)
+        {
+            // MC68040UM 8.4.6.5/7: physical normal write -> valid WB1, FA=WB1A,
+            // memory-aligned data. RTE resumes at the following instruction.
+            var savedSr = State.StatusRegister;
+            var size = fault.ByteCount == 1 ? 0x20 : fault.ByteCount == 2 ? 0x40 : 0;
+            var modifier = (savedSr & M68kCpuState.Supervisor) != 0 ? 5 : 1;
+            var trace = (savedSr & 0x8000) != 0; // MOVE does not trigger T0.
+            uint data = fault.WriteValue!.Value;
+            if (fault.ByteCount == 1) data = (data & 0xff) << 24;
+            else if (fault.ByteCount == 2) data = (data & 0xffff) << 16;
+            var shift = (int)(fault.LogicalAddress & 3) * 8;
+            if (shift != 0) data = (data >> shift) | (data << (32 - shift));
+            State.RecordException(VectorBusError, nextPc, savedSr);
+            State.StatusRegister = (ushort)((savedSr | M68kCpuState.Supervisor) & ~0xc000);
+            for (var n = 0; n < 3; n++) PushLong(0); // Undefined push data.
+            PushLong(data); PushLong(fault.LogicalAddress);
+            for (var n = 0; n < 4; n++) PushLong(0); // No WB2/WB3 in this synchronous path.
+            PushLong(fault.LogicalAddress);
+            PushWord((ushort)(0x80 | size | modifier)); PushWord(0); PushWord(0);
+            PushWord((ushort)((trace ? 0x2000 : 0) | size | modifier));
+            PushLong(trace ? State.LastInstructionProgramCounter : 0);
+            PushWord(0x7008); PushLong(nextPc); PushWord(savedSr);
+            EnterAccessErrorHandler();
+        }
 
         private void RaiseUnbufferedReadAccessFault(M68040MmuFault fault, uint instructionPc, bool instruction)
         {
@@ -4313,6 +4392,11 @@ namespace Copper68k
             PushWord(0x7008);
             PushLong(instructionPc);
             PushWord(savedSr);
+            EnterAccessErrorHandler();
+        }
+
+        private void EnterAccessErrorHandler()
+        {
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + 8);
             DiscardInstructionPrefetch();
             if ((State.ProgramCounter & 1) != 0)

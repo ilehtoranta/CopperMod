@@ -23,7 +23,7 @@ public sealed class SyntheticM68040AccessDoubleFaultTests(ITestOutputHelper outp
         foreach (var ccr in new[] { 0, 31 })
         foreach (var alignment in new uint[] { 0, 1 })
         foreach (var stage in new[] { "stack", "vector" })
-        for (var faultByte = 0; faultByte < (stage == "vector" ? 4 : form == "RTE" ? 60 : 8); faultByte++)
+        for (var faultByte = 0; faultByte < (stage == "vector" ? 4 : form == "RTE" || engine == "accurate" && form.EndsWith("write") ? 60 : 8); faultByte++)
         {
             var opcode = form switch { "RTE" => 0x4e73, "MOVE.B.read" => 0x1010, "MOVE.W.read" => 0x3010,
                 "MOVE.L.read" => 0x2010, "MOVE.B.write" => 0x1080, "MOVE.W.write" => 0x3080, _ => 0x2080 };
@@ -60,9 +60,10 @@ public sealed class SyntheticM68040AccessDoubleFaultTests(ITestOutputHelper outp
                 var sideExits = core is M68kJitCore j2 ? j2.Counters.SideExits : 0;
                 bus.Arm(form == "RTE" ? frame : 0x4200 + alignment,
                     write ? M68kBusAccessKind.CpuDataWrite : M68kBusAccessKind.CpuDataRead);
-                // The existing generic MOVE fault path uses an approximate short
-                // frame. Only its fatal-entry behavior is qualified here.
-                var stackStart = frame - (form == "RTE" ? 60u : 8u);
+                // Accurate MOVE writes now create format 7. Read and compiled
+                // operand paths retain their separate short-frame gap; only
+                // fatal entry is qualified for those routes here.
+                var stackStart = frame - (form == "RTE" || engine == "accurate" && write ? 60u : 8u);
                 bus.Arm(stage == "vector" ? 8 + (uint)faultByte : stackStart + (uint)faultByte,
                     stage == "vector" ? M68kBusAccessKind.CpuDataRead : M68kBusAccessKind.CpuDataWrite);
                 Execute(core);

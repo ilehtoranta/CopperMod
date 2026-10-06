@@ -6636,3 +6636,147 @@ full handler/reference/hardware qualification remain required. Other advanced
 restoration and software disagreements are unchanged. No production fix,
 regression retirement, new consumer replay or package publication is included.
 Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+## 040 actual MOVE write-fault qualification — 2026-10-06
+
+The 040 interpreter previously stacked a short generic bus-error frame when a
+normal MOVE destination write failed. Its source/extensions were already consumed,
+but the frame lacked the pending data needed to finish the store. Production now
+captures the actual store address/value/width, completes the destination base and
+MOVE flags, and stacks the consumed following PC in a 60-byte format-7 frame.
+WB1 contains valid SIZE/TM, FA=WB1A and memory-aligned WB1D. WB2/WB3 are invalid;
+undefined fields use the existing zero convention. Incoming T1 sets CT and the
+instruction EA; MOVE does not trigger T0. Expectations follow
+[MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf), 8.4.6,
+8.4.6.2, 8.4.6.5/table 8-5 and 8.4.6.7. Retained local manual SHA256:
+`93741393f70656941e413beb232c060a5e4e0218ea2adc2f5b392f9165454a7f`.
+
+Eligibility is limited to legal ordinary MOVE operand writes rejected by the
+physical address map, with translation disabled and the same instruction and
+exception boundary. The fallback's descending word transfers retain their
+existing order/widths; an internal context preserves the full original long
+operand in the fault. No operand is decoded or executed again. The boundary
+guard prevents a trace-frame store fault from completing an already-retired
+MOVE a second time. Handler entry, double-fault routing and existing timing
+policy are retained. No public API changes are made.
+
+Independent MOVE fixtures choose final registers, operand address/value and
+following PC. Actual physical-map rejection enters the handler; no supplied
+fault exception substitutes for the instruction. The shared integer handler
+normalizes WB1, executes MOVES, clears validity, restores registers/DFC and RTEs.
+Every instruction checks state and memory. The final store is compared with the
+independently intended operand, not with production frame data. Defined frame
+fields/data lanes are independently checked first; undefined bytes then become
+opaque handler inputs. A completed fallback low-word store is checked separately
+and preserved. T1 cases exercise format-2 trace conversion, trace-handler RTE and
+the following traced sentinel; T0 cases verify normal MOVE continuation.
+
+| Group, each scalar/batch route | Programs | Combinations | Weight |
+| --- | ---: | ---: | ---: |
+| All legal memory-destination MOVE opcodes | 7,350 | 7,350 | 1 |
+| Lanes/sizes/values/CCR/stack banks | 9,216 | 288 | 32 CCRs |
+| Full-index structures/aliases/trace | 14,256 | 14,256 | 1 |
+| Both routes | **61,644** | **43,788** | |
+
+Boundary cases cover B/W/L, four lanes, six values, all CCRs, user/user-M/ISP/MSP
+and A7 byte stride. Indexed cases cover all 66 legal full-format structures,
+sizes, register 0/7, four banks, trace 0/T1/T0 and source/destination/dual forms.
+Opcode cases include source/destination register aliases. Six bounded executions
+protect postincrement widths, aliased predecrement, indexed CT and trace-frame
+fault routing. The trace-frame witness qualifies preservation/routing only;
+its full nested exception-frame/recovery protocol remains open.
+
+Maintained commands:
+
+```powershell
+./scripts/test-copper68k-040-operand-writes.ps1 -OutputDirectory artifacts/040-operand-writes
+./scripts/test-copper68k-040-operand-writes.ps1 -ValidateReportsOnly -OutputDirectory artifacts/040-operand-writes
+./scripts/test-copper68k-040-operand-write-mutations.ps1 -OutputDirectory artifacts/040-operand-write-mutations
+./scripts/test-copper68k-040-operand-write-mutations.ps1 -ValidateReportsOnly -OutputDirectory artifacts/040-operand-write-mutations
+```
+
+Fresh/frozen qualification at `artifacts/m6-real-write-qualified-final-v3/` passes
+all twelve exact executions without skips. Inputs are captured before execution;
+source, binary, evidence, exact selection and independent keys/weights must match.
+Seven maintained CPU mutations at `artifacts/m6-real-write-mutations-final/` detect
+lost original width, omitted predecrement, wrong bus lanes, lost data, missing CT,
+missing N and missing exception-boundary qualification. The six-test baseline
+and seven six-test mutants produce 48 exact executions; expected methods/reasons
+are checked. Original source bytes and normal assemblies are restored/preserved.
+No old regression is retired.
+
+Eight positive-evidence and seven mutation-evidence controls are recorded in
+`artifacts/m6-real-write-controls-final/controls.json` and
+`artifacts/m6-real-write-mutation-controls-final/controls.json`. They reject
+wrong profiles, empty/duplicate inputs, missing reports, foreign executions,
+substituted keys, redistributed weights, hidden unsupported results and altered
+mutation source/method/reason/status. Evidence hashes are refreshed before
+semantic rejection. The isolated `concurrency-guard.json` verifies restoration
+and refusal to overwrite a concurrent edit.
+
+The fresh full run at `artifacts/m6-real-write-full-qualified/` passes **5,166
+tests / zero failures / nineteen explicitly unavailable tests**, total 5,185,
+in 48 minutes 37 seconds. Independent verification matches the 5,153 discovered
+methods, the retained 33-row theory expansion, exact nineteen skip names and all
+nine pinned WinUAE presets. The ordinary gate validates **85,834,306 scenarios /
+703 reports**. Source/fixture/script identities are captured before execution and
+checked afterward; normal CPU/test binaries remain unchanged. `before.json`,
+`after.json`, `full-identity.json` and `summary.json` preserve the evidence.
+Final isolated CPU SHA256:
+`00dece901073a2918cb370410bd049f8f39bddbbb27890a133fd2d3f72a14604`;
+test adapter:
+`ac030d21cbf4fd2820723ff7b81f9c43f1beb734e5bf08ca369abe8b3d2ad941`.
+WinUAE generator pin `025b999239800357e95065fe5b9a15ea5b300fa7` and runner pin
+`7a83745d6c6159bc74ab0471578ffc8bc244e66e`, native/input/source fingerprints and
+callback/frame counts match the retained qualification presets. These selected
+software comparisons do not qualify a physical write-fault pipeline. The records
+below are documentation added after that verified execution; CPU/test/script
+source is unchanged.
+
+Final software-semantic audits at `artifacts/m6-real-write-external-final/` use
+the same CPU/test assemblies as the final full run. SingleStepTests pin
+`64b253116a3de04aaac4346c43680960dc9b67e5` passes 312,500 cases / 125 files.
+Musashi pin `72c1d74800f3087b45a0c1a7342601bbed898881` passes 536 combinations,
+with 88 explicitly excluded from 624 rows. These references do not provide an
+external physical 040 write-fault/frame or timing oracle.
+
+The immutable unpublished `1.5.2-synthetic-dev.66` package has SHA256
+`d33a5b2c55a44acfa3370666351f6eb5ec6a5b76e04f29d5b1ceec8e4e22d24f`.
+The isolated CopperScreen consumer builds Release with zero warnings/errors;
+host tests pass 149 with six optional unavailable tests, disk 74, separate engine
+diagnostics 1,080, and native boot/persistence replays all three without skips.
+Four restore assets select `.66`; all four loaded CPU DLLs match packed CPU SHA256
+`1ded1424442ebc6f58145ddfc86440d6949bd97e2872731505c630aee177d33e`.
+`artifacts/m6-real-write-consumer-final-identity.json` records package/assets/DLLs,
+TRX identities and native inputs. Pinned native SHA256 values:
+
+- Kickstart 3.1 A500: `8c8a0cf04f91b88eaf0c4f1126041987067e2286a8ee590bdbae447a8000c5ee`.
+- Workbench 3.1 ADF: `a8f167bad2897e8c7f2cfe73de7a9f8dad10c7a5b1f78ca17f818ab17278b985`.
+- Kickstart 3.0 A1200 ZIP: `eb63ba9ceff1ac12bb025389434946101ae71dd064b8a830e8ae8fe111c1be39`.
+- Pristine AGA probe HDF: `3bbab58c135844aad802ce937d49ec5da26d6407303c9d9fc543fc6cc63e9c85`.
+
+The two Workbench rows use 0/2 MiB Fast RAM; the A1200 row checks eight-plane
+display and persistence through desktop reopen. Media stays local. Earlier
+private `.64`/`.65` packages remain immutable. Root CopperScreen changes and its
+published dependency pin are untouched; no public release is performed.
+
+Ordinary requirements are **85,834,306 scenarios / 703 reports**. Complete-040
+requirements are **67,856,332 scenarios / 92 reports and 30 fixed witnesses**,
+with exactly 122 discovered executions. Static requirements and new key-branch
+checks are recorded in `artifacts/m6-real-write-complete-audit-requirements.json`,
+`artifacts/m6-real-write-complete-audit-key-check.json` and
+`artifacts/m6-real-write-complete-discovery.json`. No passing complete-040 run is
+claimed. Fresh remaining-inventory execution intentionally fails one exact
+method for **480 untested cases / fifteen combinations**, retaining every prior
+category (`artifacts/m6-real-write-remaining-inventory/verified-inventory.json`).
+Actual normal MOVE writes are now partial coverage within that inventory;
+other reads/integer/MOVEM/MOVE16, nested writebacks, mixed-epoch repair, CP/CM and
+trace-entry recovery remain required. Enabled MMU, FPU arithmetic, physical
+pipeline/cache timing and OS compatibility remain outside this roadmap.
+
+Initial bounded failures, incomplete matrix drafts, failed mutation expectations
+and two stopped full attempts remain separate historical evidence under
+`artifacts/m6-real-write-*`. One stopped full attempt exposed the obsolete short
+MOVE-frame expectation; the next was superseded by the trace-entry boundary fix.
+Neither is a complete-suite success. Final manifests are not applied retroactively
+to them. Milestone 6 remains **in progress**, `roadmapComplete=false`.

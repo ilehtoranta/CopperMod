@@ -35,11 +35,11 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
                 form == "frame-validation-fault"
                     ? "Validation, preserved-trace repair/software service, successful mixed-epoch chains and mixed-epoch validation fault capture have separate software coverage; mixed-epoch repair/retry, original trace suspension/resumption and internal restoration remain required. Physical/hardware behavior is separately unqualified"
                     : form == "real-access-fault-entry"
-                        ? "Cache-disabled accurate instruction-fetch frames/restart are covered separately; data fault/writeback restart, enabled-cache deferral and compiled instruction-PC provenance remain required"
+                        ? "Cache-disabled accurate instruction-fetch restart and actual legal MOVE memory-destination faults through WB1 handler/RTE are covered separately; other integer/read/MOVEM/MOVE16 faults, enabled-cache deferral and compiled fault pipelines remain required"
                     : form == "odd-PC-chained-SR-provenance"
                         ? "Chained format0/2/3 and format7 normal/CM SR handoff, stack consumption and header reads have separate generated WinUAE software coverage; access-frame validation/no-replay checks are synthetic. Separate composed-entry and executed-MMU-entry CM lifetime discovery profiles disagree after odd-PC fault/repair; the executed profile also exposes stacked-SR disagreement. Neither qualifies the full run loop or hardware. CT/CU/CP pending/foreign-context chains, full reference exception qualification and hardware behavior remain unqualified"
                     : form == "writeback-handler"
-                        ? "Executed normal B/W/L supplied-frame handler separately covers validity, WB1 lane alignment, WB1/2/3 order, overlap, DFC and restored trace/stacks; nested WB2/3 faults, cache-push/MOVE16 line cleanup and actual data-fault construction remain required. Physical function-code spaces and hardware timing are unqualified"
+                        ? "Executed supplied normal B/W/L handler covers validity, WB1 lane alignment, WB1/2/3 order, overlap, DFC and restored trace/stacks; actual legal MOVE destination faults exercise WB1 through handler/RTE. Nested WB2/3, cache-push/MOVE16 lines and other data-fault construction remain required. Physical function-code spaces and hardware timing are unqualified"
                         : "Required fault/context protocol has no independently qualified execution fixture yet");
         report.Complete(output);
     }

@@ -9,13 +9,14 @@ internal sealed class SyntheticM68040WritebackProgram
     internal const uint Entry = SyntheticMachine.Code;
     internal readonly List<Instruction> Instructions = [];
     internal readonly Dictionary<string, uint> Labels = [];
-    private uint pc = Entry;
+    private uint pc;
     internal static int StatusOffset(int slot) => 20 - 2 * slot;
     internal static int AddressOffset(int slot) => 48 - 8 * slot;
     internal static int DataOffset(int slot) => AddressOffset(slot) + 4;
 
-    internal SyntheticM68040WritebackProgram()
+    internal SyntheticM68040WritebackProgram(uint entry = Entry)
     {
+        pc = entry;
         Emit("save", 0, [0x48e7, 0xf0c0]); // MOVEM.L D0-D3/A0-A1,-(A7)
         Emit("frame", 0, [0x43ef, 24]); // LEA 24(A7),A1
         Emit("save-DFC", 0, [0x4e7a, 0x3001]);

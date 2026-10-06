@@ -1113,3 +1113,32 @@ Frame entry is composed;
 full native exception/trace processing, physical bus timing and long-frame restart
 remain unqualified. No production fix or regression retirement follows from this
 software discrepancy. Details are in `docs/COPPER68K_REFERENCE_QUALIFICATION.md`.
+
+### 68040 actual MOVE write faults
+
+`SyntheticM68040OperandWriteFaultTests` rejects actual destination stores through
+the host physical map, with translation disabled. Six ordinary scalar/batch
+matrices check fault entry, an integer WB1 completion handler, RTE and the
+following instruction. They cover all 7,350 legal memory-destination MOVE
+opcodes per route, 9,216 lane/size/value/CCR/stack scenarios and 14,256 full-index,
+alias and trace scenarios. Total: 61,644 programs / 43,788 combinations.
+Defined format-7 fields and memory lanes are checked independently; undefined
+frame bytes are opaque handler inputs. A separate witness checks that a rejected
+trace-frame store cannot change the completed MOVE destination.
+
+```powershell
+./scripts/test-copper68k-040-operand-writes.ps1 -OutputDirectory artifacts/040-operand-writes
+./scripts/test-copper68k-040-operand-writes.ps1 -ValidateReportsOnly -OutputDirectory artifacts/040-operand-writes
+./scripts/test-copper68k-040-operand-write-mutations.ps1 -OutputDirectory artifacts/040-operand-write-mutations
+./scripts/test-copper68k-040-operand-write-mutations.ps1 -ValidateReportsOnly -OutputDirectory artifacts/040-operand-write-mutations
+```
+
+The commands require exact source/binary/evidence identities, twelve nonempty
+executions and independently enumerated keys/weights. Seven production mutations
+run six bounded witnesses each, after a six-test baseline; precise failing
+methods/reasons are mandatory and source restoration preserves concurrent edits.
+Successful transfer order/access widths and existing timing policy are retained;
+the faulted instruction is never retried. This qualifies normal MOVE writes,
+not other integer/read/MOVEM/MOVE16 faults, nested writeback recovery, enabled MMU
+or physical timing. The complete-040 gate retains its 480 untested scenarios;
+milestone 6 remains incomplete. See `docs/COPPER68K_REFERENCE_QUALIFICATION.md`.

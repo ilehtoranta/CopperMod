@@ -5,8 +5,8 @@ namespace Copper68k.Tests.Synthetic;
 
 // Architectural validation frames: MC68040UM 8.4.6.7. Cached-block batching,
 // callbacks and cycle equality are emulator execution/timing-policy contracts.
-// Generic operand/fetch faults still use an approximate short frame: this audit
-// does not promote it as architectural format-7 restart coverage.
+// MOVE writes and instruction fetch/validation use architectural format 7.
+// Operand reads retain a separate approximate short-frame gap.
 public sealed class SyntheticM68040BatchFaultTests(ITestOutputHelper output)
 {
     private const uint Handler = 0x9020;
@@ -167,23 +167,38 @@ public sealed class SyntheticM68040BatchFaultTests(ITestOutputHelper output)
         bus.Accesses.Clear();
         var e = ArchitecturalExpectation.Capture(m);
         var savedSr = (ushort)((bank == "MSP" ? 0x3000 : 0x2000) | trace | ccr);
+        var incomingSr = savedSr;
+        var write = form.EndsWith("store");
+        var storeValue = form == "partial-store" ? 0x12345678u : m.Core.State.D[0];
+        if (write) savedSr = (ushort)((savedSr & 0xfff0) | (storeValue == 0 ? 4 : 0) | ((storeValue & 0x80000000) != 0 ? 8 : 0));
         e.Sr = (ushort)(savedSr & ~0xc000); e.Pc = Handler; e.ExceptionVector = 2;
         e.D[7] += form == "self-fetch" ? 0u : (uint)(prefix - (mixed && prefix > 0 ? 1 : 0));
         if (form == "partial-store") { e.A[0] += 4; e.A[1] -= 4; }
         var kind = form == "self-fetch" ? M68kBusAccessKind.CpuInstructionFetch : form.EndsWith("store") ? M68kBusAccessKind.CpuDataWrite : M68kBusAccessKind.CpuDataRead;
         var faultAddress = form == "RTE" ? frame + offset : form == "self-fetch" ? 0x1004u : form.EndsWith("store") ? 0x4300 + alignment : 0x4200 + alignment;
-        var stackedPc = faultPc;
+        var stackedPc = write ? faultPc + (form == "partial-store" ? 2u : 6u) : faultPc;
         var sequence = m.Core.State.ExceptionSequence;
         e.ControlChecks["single exception"] = (s => s.ExceptionSequence, sequence + 1);
         e.ControlChecks["saved SR"] = (s => s.LastExceptionStatusRegister, savedSr);
-        e.ControlChecks["saved PC (generic short-frame policy where applicable)"] = (s => s.LastExceptionStackedProgramCounter, stackedPc);
+        e.ControlChecks["saved PC"] = (s => s.LastExceptionStackedProgramCounter, stackedPc);
         e.ControlChecks["bypass cleared"] = (s => s.M68040Mmu.BypassTranslation ? 1u : 0u, 0);
-        var accessFrame = frame - (form is "RTE" or "self-fetch" ? 60u : 8u);
+        var accessFrame = frame - (write || form is "RTE" or "self-fetch" ? 60u : 8u);
         e.A[7] = accessFrame; if (bank == "MSP") e.MasterStackPointer = accessFrame;
-        if (form is "RTE" or "self-fetch")
+        if (write || form is "RTE" or "self-fetch")
         {
-            SyntheticM68040RteValidationFaultTests.ExpectAccessFrame(m, e, accessFrame, savedSr, faultPc, faultAddress, width);
+            SyntheticM68040RteValidationFaultTests.ExpectAccessFrame(m, e, accessFrame, savedSr, stackedPc, faultAddress, width);
             if (form == "self-fetch") e.Write(accessFrame + 12, 0x0106, 2, m.Model);
+            if (write)
+            {
+                var modifier = bank == "MSP" || bank == "ISP" ? 5u : 1u;
+                e.Write(accessFrame + 12, modifier, 2, m.Model);
+                e.Write(accessFrame + 18, 0x80 | modifier, 2, m.Model);
+                e.Write(accessFrame + 40, faultAddress, 4, m.Model);
+                for (uint n = 18; n < 20; n++) e.MemoryMasks[accessFrame + n] = 255;
+                for (uint n = 40; n < 48; n++) e.MemoryMasks[accessFrame + n] = 255;
+                for (var n = 0; n < 4; n++)
+                    e.Memory[accessFrame + 44 + ((faultAddress + (uint)n) & 3)] = (byte)(storeValue >> (8 * (3 - n)));
+            }
         }
         else
         {
@@ -191,7 +206,7 @@ public sealed class SyntheticM68040BatchFaultTests(ITestOutputHelper output)
             e.Write(accessFrame, savedSr, 2, m.Model); e.Write(accessFrame + 2, stackedPc, 4, m.Model);
             e.Write(accessFrame + 6, 8, 2, m.Model);
         }
-        var boundary = new FaultBoundary(m.Core, bus, prefix, savedSr, faultAddress + (uint)faultByte, kind,
+        var boundary = new FaultBoundary(m.Core, bus, prefix, incomingSr, faultAddress + (uint)faultByte, kind,
             outcome == "fatal-stack" ? accessFrame : outcome == "fatal-vector" ? vbr + 8 : null,
             outcome == "fatal-stack" ? M68kBusAccessKind.CpuDataWrite : M68kBusAccessKind.CpuDataRead);
         return new(e, boundary, frame, faultAddress, sequence);
