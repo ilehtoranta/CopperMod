@@ -2682,3 +2682,18 @@ package, as do independent pinned SingleStepTests/Musashi audits. Broader
 addressing/recovery/trace and remaining model/reference/consolidation coverage
 stay required. See the [read-frame correction](COPPER68K_REFERENCE_QUALIFICATION.md#physical-040-operand-read-frame-correction--2026-10-06).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+On 2026-10-07, actual 040 MOVEM write-fault discovery executes every legal
+store EA opcode with a selected D0/D1/A0/A1 list, word/long sizes, every rejected
+transfer/byte, and separate canonical CCR/stack-bank/trace combinations. All
+112,224 selected entries fail the required format-7 gate; retained diagnostics
+show the current short format-0 delivery. The independent literal encoding
+witness and 136 fault-free MOVEM/sentinel programs pass. Seven evidence-integrity
+controls reject their intended corruptions. This is preserved failing discovery,
+not promoted coverage or a production correction. Calculated-EA/CM write metadata,
+normal WB1 construction and executed handler/RTE/resumption remain required;
+full indexed/mask, alignment and nested write-fault protocols also remain open.
+The broad 480-case inventory is not reduced, no regression is retired, and no
+new package or consumer qualification is claimed. See the
+[MOVEM write discovery](COPPER68K_REFERENCE_QUALIFICATION.md#actual-040-movem-write-fault-discovery--2026-10-07).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

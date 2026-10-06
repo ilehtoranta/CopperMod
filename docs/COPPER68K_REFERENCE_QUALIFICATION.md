@@ -7484,3 +7484,81 @@ change. Production source, package bytes and protected normal assemblies remain
 unchanged; no new full CPU/consumer run or package release is claimed. Other
 consolidation/reference/restoration requirements remain open. Milestone 6 is
 still **in progress**, `roadmapComplete=false`.
+
+## Actual 040 MOVEM write-fault discovery — 2026-10-07
+
+This slice exposes a production gap; it does **not** close it. MC68040UM
+8.4.6.2/5/7 requires a normal physical write's format-7 frame, valid
+memory-aligned WB1, FA/WB1A and the original MOVEM calculated EA with CM set.
+The saved PC identifies the interrupted MOVEM. A handler completes WB1 before
+RTE; CM continuation repeats preceding MOVEM operand accesses. Exception entry
+must not automatically retry a partly executed instruction. These are software
+architectural requirements, separate from physical pipeline/cache qualification.
+Primary source: [MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf).
+
+`SyntheticM68040MovemWriteFaultDiscoveryTests` uses the public CPU factory,
+sparse recording memory, existing independent addressing/stack fixtures and a
+one-shot physical-map rejection. Selected instructions store D0/D1/A0/A1 with
+mask `0303`, or reverse mask `C0C0` for predecrement. It separately executes:
+
+- All 34 legal store EA/register encodings, word/long sizes, each of four
+  transfers and every rejected byte: **816 cases per execution route**.
+- Six canonical forms across four stack states, T1/T0/clear trace, all 32 CCRs,
+  both sizes and every transfer/rejected byte: **55,296 cases per route**.
+
+Scalar and batch execution each contain **56,112 cases / 2,544 weighted keys**.
+All **112,224 fault-entry cases mismatch**, with zero unsupported or untested
+cases in this *selected* inventory. Retained failure diagnostics show
+`format/vector expected 7008, actual 0008`, with an eight-byte frame rather than
+60 bytes (ISP example `A7 expected 000046C4, actual 000046F8`). Production routing
+handles completed normal MOVE writes specially, but MOVEM writes fall through
+to the generic format-0 bus exception. MOVEM store paths also lack calculated-EA
+fault metadata. This identifies the required correction without claiming a
+validated fix.
+
+The literal opcode/brief-extension witness passes. Independent fault-free
+controls execute all 34 forms at both sizes in scalar and batch routes:
+**136 passing MOVEM/following-MOVEQ programs**, checking register preservation,
+flags, memory, exact next PC, predecrement bases (including base/list aliases),
+A7 and stack state. The discovery run has **three passing executions and two
+failing executions**, no skips. Successful controls establish the selected
+fixture encodings; they do not validate fault frames or recovery.
+
+Reproduce with the explicit strict command:
+
+```powershell
+./scripts/test-copper68k-040-movem-write-discovery.ps1 -OutputDirectory artifacts/movem-write-discovery
+```
+
+It currently exits nonzero for the genuine frame mismatches. Use a fresh output
+directory. `-ValidateReportsOnly` checks the frozen evidence without rebuilding
+and must also reject this failing acceptance cohort. The verifier pins source,
+script, assembly, report and TRX identities; requires the exact five-execution
+roster, both independently enumerated weighted fault rosters and both 68-key
+passing fixture rosters; and checks protected normal DLL hashes. Missing inputs,
+empty selections and mismatches cannot be accepted. Seven copied-evidence
+controls reject missing/changed source, missing report, empty execution, changed
+weight, missing key and a false fixture-control weight at the intended checks.
+An initial control harness expected different missing-file wording; that
+provisional run is retained separately from the completed seven-control proof.
+
+Evidence under the restoration temporary root:
+`audits/MovemWriteDiscoveryFinalV2` (manifest SHA-256
+`dcf627ceea945aed7326637427a88f96a843aae43ac54baaedd28744e4f5df8e`),
+`MovemWriteDiscoveryIntegrityFinal`, and `audits/MovemWriteOrdinaryControlsFinal`.
+The latter runs the new controls and existing fixed MOVEM operand/pointer-read
+recovery witnesses: **eight passing executions, zero failures, six explicit
+opt-in matrix skips**. Those skips are unavailable coverage in this invocation;
+they do not override the explicit write-discovery failures. Earlier discovery
+iterations remain historical, with their own frozen source identities.
+
+Next required work is latched MOVEM write metadata across fast/general/shared
+fallback routes, correct normal-write WB1/CM entry, and executed handler/RTE/
+resumption/sentinel verification, including trace and partial-write ordering.
+Full indexed structures, arbitrary masks, alignment, nested write faults and
+other physical write families remain untested by this slice. No promoted gate,
+480-case broad inventory or ordinary 707-report requirement is reduced. No
+production source change, regression retirement, new full CPU/consumer run or
+package publication is claimed. Normal CPU/test assemblies and unrelated
+CopperScreen edits remain untouched. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
