@@ -14,7 +14,9 @@ public sealed class SyntheticLineFEncodingTests(ITestOutputHelper output)
         // MC68020UM 7.2.3.3/4, 7.5.2.2/3; MC68030UM 10.2.3.3/4,
         // 10.5.2.2/3 (CpID 0 belongs to the internal MMU, not external CIRs).
         // M68000PM 6-13/16; MC68060UM D-15/18 and 8.3:
-        // invalid first words are line-F, not privileged state transfers.
+        // Invalid external state-transfer words are line-F. MC68030UM
+        // 8.1.5/6 gives user-mode CpID 0 privilege priority even for undefined
+        // integrated-MMU patterns, independently of the external EA rules.
         var opcodes = (from cpId in Enumerable.Range(0, 8)
                        from restore in new[] { false, true }
                        from ea in Enumerable.Range(0, 64)
@@ -43,7 +45,7 @@ public sealed class SyntheticLineFEncodingTests(ITestOutputHelper output)
             // supervisor coprocessor/FPU state execution is a separate protocol,
             // not counted as passing exception coverage or silently simulated.
             if (supervisor && recognized && legalEa) continue;
-            var vector = recognized && legalEa ? 8 : 11;
+            var vector = modelId == "68030" && item.CpId == 0 && !supervisor || recognized && legalEa ? 8 : 11;
             var form = item.Mode == 7 && item.Register > 4 ? $"unassigned-EA(7,{item.Register})" : $"EA({item.Mode},{item.Register})";
             for (var ccr = 0; ccr < 32; ccr++)
                 InvalidOperandScenario.Run(machine, report, item.Opcode,

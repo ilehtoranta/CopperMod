@@ -6780,3 +6780,117 @@ and two stopped full attempts remain separate historical evidence under
 MOVE-frame expectation; the next was superseded by the trace-entry boundary fix.
 Neither is a complete-suite success. Final manifests are not applied retroactively
 to them. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## 68030 integrated-MMU user privilege qualification — 2026-10-06
+
+The unchanged pinned WinUAE Basic corpus exposed a real 68030 exception-priority
+defect: user-mode CpID-0 words raised Line-F instead of privilege violation.
+[MC68030UM part 2](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf),
+8.1.5/6 and 9.8, requires privilege violation in user mode even for undefined
+integrated-MMU patterns. The CPU now checks this before extension/operand handling
+and Line-F delivery. Other models, supervisor-mode invalid words and external
+coprocessor handling retain their existing behavior and timing policy.
+
+`SyntheticM68030PmmuPrivilegeTests` passes **263,168 whole-program scenarios /
+9,216 independently checked report keys** in four scalar/batch reports, with **47 fixed
+controls**, all 51 exact executions passing without skips. The opcode group covers
+every first word F000–F1FF. Separate status groups combine eight primary formats,
+eight secondary-word boundaries, every defined user SR image (trace, M, IPL and
+CCR) and both execution routes. The fixture checks complete format-0 frames,
+vector provenance, registers, SFC/DFC, stack banks and surrounding memory. Entry
+must not read operand data. A literal integer handler edits the stacked PC to
+skip both fixture words, then RTE restores state and a MOVEQ sentinel verifies
+continuation and applicable trace delivery. This software skip does not define
+PMMU instruction length or retry a partially executed instruction.
+
+The retained Line-F matrix had 4,096 obsolete 030 expectations; its expectation
+now includes the documented integrated-MMU priority. All 25 retained tests pass. The general system matrix also corrects 32 user-mode F1C0 expectations; its eight-profile selection passes.
+No old regression is retired. Four maintained production mutations prove that
+the controls detect missing priority and incorrect CpID/model/mode boundaries;
+baseline plus mutations execute **235 tests** with exact failing names/reasons.
+Original CPU bytes and protected normal assemblies are preserved. Eight report
+integrity controls reject profile/input/report/key/weight/status corruption. Seven mutation-evidence controls reject their intended errors; an isolated restoration guard preserves concurrent edits.
+
+```powershell
+./scripts/test-copper68k-030-pmmu-privilege.ps1 -OutputDirectory artifacts/030-pmmu-privilege
+./scripts/test-copper68k-030-pmmu-privilege.ps1 -ValidateReportsOnly -OutputDirectory artifacts/030-pmmu-privilege
+./scripts/test-copper68k-030-pmmu-privilege-mutations.ps1 -OutputDirectory artifacts/030-pmmu-privilege-mutations
+./scripts/test-copper68k-030-pmmu-privilege-mutations.ps1 -ValidateReportsOnly -OutputDirectory artifacts/030-pmmu-privilege-mutations
+```
+
+The commands require exact source/binary/evidence selections and independently
+enumerated architectural keys and weights. Original focused evidence was written under
+`artifacts/m6-pmmu-privilege-qualified-final`,
+`artifacts/m6-pmmu-privilege-mutations-final-v2` and
+`artifacts/m6-pmmu-privilege-controls` and `artifacts/m6-pmmu-mutation-controls-v3`. See the final validation note for the subsequent cleanup and regenerated records. Earlier incomplete matrix identifiers and
+incorrect mutation expectations remain excluded historical evidence.
+
+The unchanged broad Basic audit improves from **1,326 passing / 47 mismatching /
+8 unsupported directories** to **1,327 / 46 / 8**, with no untested directories;
+the 030 MMUOP030 directory passes 4,178 callbacks. Both broad runs intentionally
+fail their remaining selections. Total callbacks (11,474,194 before and
+11,478,371 after) include partially executed failing directories and are not
+all-passing architectural coverage. The before/after records are
+`artifacts/m6-basic-current-audit` and `artifacts/m6-basic-pmmu-after-audit`.
+Both use generator `025b999239800357e95065fe5b9a15ea5b300fa7`, runner
+`7a83745d6c6159bc74ab0471578ffc8bc244e66e`, manifest SHA256
+`37cd8ddae8b61ac60e3a49ba835362fbf80d418f48c2539338e6541c9d85e31f`
+and native library SHA256
+`75f0c11352d4a8c1e84f32a49a5347ae4cb5bd9128f1501a33d843e6f99cb057`.
+No failing Basic family is silently excluded to make this audit pass.
+
+Ordinary requirements become **86,097,474 scenarios / 707 reports**.
+Complete-040 requirements remain 67,856,332 scenarios / 92 reports plus 30 fixed
+witnesses, with the required 480 untested cases / fifteen combinations retained.
+No passing complete-040 audit is claimed. Legal supervisor PMMU semantics,
+advanced exception restoration and remaining milestone-6 protocols stay open;
+enabled MMU translation, FPU arithmetic and physical timing remain outside the
+roadmap. Nonzero CpID controls here cover general coprocessor words, not every
+external state-transfer privilege rule. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
+
+
+#### Final validation and concurrent artifact cleanup
+
+A concurrent cleanup removed ignored reports and pinned external inputs during
+the full run. The retained TRX records **5,208 passing / nine failed / nineteen
+optional skipped tests**, total 5,236. All nine failures are
+`DirectoryNotFoundException` for deleted WinUAE preset manifests, not semantic
+mismatches. This is **not a green full run** and those audits are unavailable
+until their pinned inputs are restored. No missing audit is relabeled passing.
+
+The actual retained TRX contains all **707 deterministic batch summaries /
+86,097,474 scenarios**. Independent verification matches every model/group,
+expected case count, passing outcome and zero mismatch/unsupported/untested
+counts against the maintained gate requirements. This recovers execution/count
+evidence; it does not recreate deleted JSON key details or claim the original
+JSON report gate completed. The preserved record is
+`C:/Users/ilkle/AppData/Local/Temp/copper68k-030-pmmu-20261006/full-verification.json`,
+with the original TRX and extracted summaries beside it.
+
+After cleanup stopped, both maintained PMMU commands were rerun under that
+temporary root: `qualification` passes all 51 executions / 263,168 scenarios /
+9,216 independently checked report keys; `mutations` proves all four defects in
+235 executions, preserving original CPU bytes and normal assemblies. Their
+complete fresh source/binary/evidence manifests supersede the deleted local
+focused records. Earlier report/mutation integrity controls and the independent
+Basic audit were observed before cleanup; their original local records are no
+longer available and are not retrospectively recreated.
+
+Before cleanup, pinned SingleStepTests passed 312,500 cases / 125 files and
+Musashi 536 combinations with 88 explicit exclusions against final full-build
+CPU SHA256 `43fffbd564c89c1ec98d4d2e1e1793c47a2435a157a4a0809a9bd6a9f8369514`
+and test SHA256 `2a9af80b3c770db7fb93d53d228dc4a66e55a0bd65dbccbab66f55f6a2ef8a92`.
+These remain observed execution results; their deleted local manifests are not
+claimed to be present.
+
+The immutable private `1.5.2-synthetic-dev.67` package remains present with SHA256
+`fed1a90ced4a7a11429bbfc1a0ddfe33fd38cf4aded33332c9d1dc31e759e6ea`.
+Before cleanup, its CopperScreen Release build completed without warnings/errors;
+host 149 passing / six optional skips, disk 74, separate engine diagnostics 1,080
+and all three native replays passed. Four restore assets and loaded DLLs matched
+packed CPU SHA256 `ebc62e354bd95cb85ad7d8809775bd7db8dba66739b371b0eb6cb51e8d776006`.
+Cleanup subsequently removed the consumer checkout and local replay inputs;
+these results are not described as fresh post-cleanup replays. Source and the
+published dependency pin remain untouched. No public package is published.
+Milestone 6 stays **in progress**, `roadmapComplete=false`.

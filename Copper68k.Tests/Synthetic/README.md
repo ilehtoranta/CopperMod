@@ -1142,3 +1142,28 @@ the faulted instruction is never retried. This qualifies normal MOVE writes,
 not other integer/read/MOVEM/MOVE16 faults, nested writeback recovery, enabled MMU
 or physical timing. The complete-040 gate retains its 480 untested scenarios;
 milestone 6 remains incomplete. See `docs/COPPER68K_REFERENCE_QUALIFICATION.md`.
+
+## 030 integrated-MMU user privilege
+
+The self-contained scalar/batch suite checks privilege priority for all CpID-0
+primary words and separate defined user SR / secondary-word boundaries. It
+verifies complete exception frames, state/stack preservation, no operand reads,
+a software handler/RTE and the following sentinel/trace. Legal supervisor PMMU
+semantics and enabled translation are separate requirements.
+
+```powershell
+./scripts/test-copper68k-030-pmmu-privilege.ps1 -OutputDirectory artifacts/030-pmmu-privilege
+./scripts/test-copper68k-030-pmmu-privilege.ps1 -ValidateReportsOnly -OutputDirectory artifacts/030-pmmu-privilege
+./scripts/test-copper68k-030-pmmu-privilege-mutations.ps1 -OutputDirectory artifacts/030-pmmu-privilege-mutations
+./scripts/test-copper68k-030-pmmu-privilege-mutations.ps1 -ValidateReportsOnly -OutputDirectory artifacts/030-pmmu-privilege-mutations
+```
+
+The focused gate requires 263,168 scenarios, four reports and 47 fixed controls,
+with independently enumerated keys/weights and exact source/binary/evidence
+identities. Four production mutations run 47 controls each after a baseline,
+with precise failed methods/reasons and guarded byte restoration. The general
+system and retained Line-F expectations include documented 030 CpID-0 priority.
+Ordinary requirements are 86,097,474 scenarios / 707 reports. Missing external
+fixtures fail requested audits and remain unavailable coverage. Milestone 6 is
+incomplete; see the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#68030-integrated-mmu-user-privilege-qualification--2026-10-06),
+including the concurrent-cleanup limitation on the latest full execution.

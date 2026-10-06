@@ -2533,3 +2533,43 @@ retired and no public package is published. See the
 [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-actual-move-write-fault-qualification--2026-10-06)
 for exact identities and reference limitations. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
+
+### 68030 integrated-MMU user privilege qualification — 2026-10-06
+
+The pinned unchanged WinUAE Basic audit exposed user-mode CpID-0 words raising
+Line-F instead of privilege violation. The documented 030 priority now precedes
+extension/operand handling, including undefined MMU patterns. Other models and
+external coprocessor rules are preserved. A shared scalar/batch fixture checks
+all primary words and separate status/secondary-word boundaries, full exception
+frames, preserved registers/memory/stacks/SFC/DFC, software frame edit/RTE and
+following sentinel/trace behavior without replaying the privileged instruction.
+
+The focused gate passes **263,168 programs / 9,216 report keys / four reports**,
+with 47 fixed controls and all 51 exact executions passing without skips. Four
+maintained production mutations detect missing priority and incorrect
+CpID/model/mode boundaries in 235 executions. Eight report and seven mutation
+integrity controls reject corruption; an isolated restoration guard preserves
+concurrent edits. The retained Line-F matrix corrects 4,096 obsolete expectations
+and passes all 25 tests; the general system matrix corrects 32 F1C0 expectations
+and passes its eight-profile selection. No old regression is retired.
+
+Ordinary requirements become **86,097,474 scenarios / 707 reports**. Complete-040
+requirements and its required 480 untested cases / fifteen combinations remain.
+The unchanged broad Basic audit still fails 46 mismatching and eight unsupported
+directories; the 030 MMUOP030 directory now passes 4,178 callbacks. These findings
+are recorded separately from passing scoped reference presets. Legal supervisor
+PMMU semantics and other milestone-6 requirements remain open; enabled MMU
+translation and physical timing remain outside this roadmap. See the
+[qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#68030-integrated-mmu-user-privilege-qualification--2026-10-06).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The final full execution records 5,208 passing tests, nineteen optional skips and
+nine WinUAE failures for pinned input manifests removed by concurrent cleanup;
+it is not a green full run. The preserved TRX independently verifies all 707
+ordinary batch/count summaries and 86,097,474 scenarios, while deleted JSON
+report details remain unavailable. After cleanup stopped, the focused PMMU and
+mutation commands pass again with complete fresh identities outside the cleaned
+directory. The private `.67` consumer and external reference checks passed before
+cleanup; their removed local records and replay inputs are not described as
+present or rerun. See the qualification record for this distinction. No public
+package release is performed.

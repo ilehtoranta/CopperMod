@@ -5762,6 +5762,16 @@ namespace Copper68k
                 case M68020OpcodeKind.LineFException:
                     BeginInstruction(opcode);
                     _ = FetchWord();
+                    // MC68030UM 8.1.5/6 and 9.8: the integrated MMU's CpID 0
+                    // is privileged, including undefined subsequent encodings.
+                    // Check before extension/EA handling or Line-F delivery.
+                    if (_profile.Model == M68kAcceleratorModel.M68030 &&
+                        (opcode & 0x0E00) == 0 &&
+                        (State.StatusRegister & M68kCpuState.Supervisor) == 0)
+                    {
+                        RaiseFormat0Exception(8, State.LastInstructionProgramCounter, M68kInstructionTimingKey.PrivilegeViolation);
+                        return true;
+                    }
                     // MC68020UM 7.5.2.2/3; MC68030UM 10.1, 10.5.2.2/3:
                     // legal cpSAVE/cpRESTORE checks privilege before accessing
                     // an absent coprocessor. 030 CpID 0 is the internal MMU.

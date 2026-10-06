@@ -142,6 +142,12 @@ try {
             $expected['system-pcr-reserved-policy'] = 6144
             $expected['system-pcr-reset'] = 24576
         }
+        if ($model -eq '68030') {
+            foreach ($route in @('scalar','batch')) {
+                $expected["system-pmmu-privilege-opcodes-$route"] = 512
+                $expected["system-pmmu-privilege-status-$route"] = 131072
+            }
+        }
         if ($model -eq '68010') {
             $expected['system-010-movec-pairs'] = 688128
             $expected['system-010-movec-masks'] = 1007616
