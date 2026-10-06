@@ -7696,3 +7696,70 @@ cycle-coverage difference, without weakening or moving their assertions. Those
 cycle counts describe the existing execution policy; they do not establish
 physical MC68020 bus/pipeline timing. This audit changes documentation only,
 retires no further regression and leaves the wider consolidation scope open.
+
+## 020/030 address-frame entry discovery — 2026-10-07
+
+The next restoration audit starts with real exception entry rather than invented
+internal-state images. MC68020UM 6.1.3 and MC68030UM 8.1.3 require a short or long
+bus-fault frame for an odd instruction prefetch, with vector offset 12 and no bus
+access to the odd instruction address. The short/long choice depends on saved
+execution context; the discovery therefore accepts either format A or B, without
+forcing one physical pipeline implementation.
+
+`SyntheticM68020AddressFrameDiscoveryTests` uses the public factory and sparse
+recording bus for EC020, A1200, 020 and 030. Both execution routes cover four
+stack states, all 32 CCRs, incoming T0/T1/no trace and low/high odd addresses.
+The strict command executes **6,144 cases / eight discovery reports**, with
+**zero passing / 6,144 mismatching / zero unsupported / zero untested** in this
+selected entry matrix. Every case currently delivers format `000C`, a normal
+eight-byte frame. The first EC020 user witness reaches handler `9030` with
+SP `46F8`, instead of delivering a bus-fault frame. Accepted cases must also
+pass the common header/vector and no-odd-fetch checks; failure at the format
+check does not verify those subsequent requirements.
+
+All **512 fault-free controls / four reports** pass shared register, stack,
+PC and surrounding-memory verification. The complete strict roster has four
+passing control executions and two failing matrix executions, zero skips.
+The ordinary invocation passes the four controls and explicitly skips the two
+opt-in discovery matrices. They are not promoted architectural coverage.
+
+```powershell
+./scripts/test-copper68k-020-address-frame-discovery.ps1 -OutputDirectory artifacts/020-address-frames
+```
+
+A fresh directory is required. The command currently fails acceptance.
+`-ValidateReportsOnly` freezes source/binary/report identities and verifies the
+exact roster, all twelve actual TRX summaries and independently enumerated
+combination weights. Four copied-evidence controls reject a missing report,
+changed weight, empty execution and changed source identity at their intended
+checks. Evidence: `audits/AddressFrameDiscoveryFinalV2` under the restoration
+temporary root; manifest SHA-256
+`c308c348ccd55a98196f8b9a0b1a8a69d355651c4de7bd91349c97e490d1b68e`.
+Integrity evidence is in `AddressFrameDiscoveryIntegrityFinal`. Provisional
+compiler/helper failures remain separate from this verified discovery.
+
+The pinned generator `025b999239800357e95065fe5b9a15ea5b300fa7` also exposes a
+reference limitation: its non-MMU RTE branch only pops 20/32/92 bytes for
+formats 9/A/B. Its 030 MMU branch calls separate restoration helpers. Agreement
+with the simple pop branch cannot qualify opaque saved state or recovery.
+Inspected `gencpu/gencpu.cpp` SHA-256:
+`8215f4fee33b1410a7476dec2bce1fc40c4272fdcd2ef5dbca3262ba706e011d`.
+
+The required implementation/qualification sequence remains:
+
+1. Produce real A/B frames with defined SSW, saved PC/SR and resumable integer
+   context; retain partial operand effects without implicit retries.
+2. Validate both ends before loading state, including long-frame version at
+   SP+36 hex. Distinguish validation exceptions from fatal state-load faults.
+3. Execute repair handlers and RTE for software-completed and rerun data cycles,
+   instruction stages and read-modify-write operations, preserving stack,
+   trace, boundary and existing timing policy. Check exact following execution.
+4. Qualify format-9 coprocessor context transport separately; frame deallocation
+   alone does not restore it. Enabled MMU and physical pipeline qualification
+   remain outside the roadmap.
+
+The existing legal 9/A/B exclusions are not relabeled invalid or removed.
+This slice adds tests, a strict command and documentation only. It fixes no
+production behavior, retires no regression and creates no package. The preceding
+full CPU/consumer evidence applies to the MOVEM correction, not a fresh full run
+of this new fixture. Milestone 6 remains **in progress**, `roadmapComplete=false`.

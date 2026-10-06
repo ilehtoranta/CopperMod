@@ -2722,3 +2722,16 @@ reasons and exact asserted counts are recorded; no further regression is retired
 and no replacement/mutation proof is claimed. See the
 [retention audit](COPPER68K_REFERENCE_QUALIFICATION.md#transfer-timing-regression-retention-audit--2026-10-07).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The subsequent 020/030 restoration audit establishes a real exception-entry
+defect: all 6,144 selected odd-prefetch cases on EC020/A1200/020/030 deliver
+normal format 0 rather than the documented A/B bus-fault frame. All 512
+fault-free controls pass; four evidence-integrity controls reject intended
+corruption. The strict maintained command fails acceptance and preserves all
+model/stack/CCR/trace/address combinations. Pinned reference inspection shows
+that its non-MMU RTE path merely pops advanced frame sizes and cannot establish
+internal recovery correctness. Real fault-context generation, validation,
+executed repair/RTE continuation and separate format-9 transport remain required.
+No CPU fix, package or regression retirement is claimed. See the
+[address-frame discovery](COPPER68K_REFERENCE_QUALIFICATION.md#020030-address-frame-entry-discovery--2026-10-07).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
