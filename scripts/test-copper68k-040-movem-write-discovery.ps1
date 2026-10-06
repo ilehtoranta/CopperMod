@@ -11,6 +11,7 @@ function Hash([string] $Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA2
 $manifestPath = Join-Path $output 'inputs.json'
 $sources = @(@(& git -C $repo ls-files 'Copper68k/*.cs' 'Copper68k/*.csproj' 'Copper68k.Tests/*.cs' 'Copper68k.Tests/*.csproj') + @(
     'Copper68k.Tests/Synthetic/SyntheticM68040MovemWriteFaultDiscoveryTests.cs',
+    'Copper68k.Tests/Synthetic/SyntheticM68040MovemWriteRecoveryTests.cs',
     'scripts/test-copper68k-040-movem-write-discovery.ps1') | Sort-Object -Unique)
 $evidence = @('audit.trx','68040-movem-write-fault-discovery-scalar.json','68040-movem-write-fault-discovery-batch.json',
     '68040-movem-write-fixture-control-scalar.json','68040-movem-write-fixture-control-batch.json',

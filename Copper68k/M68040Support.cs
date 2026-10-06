@@ -2564,6 +2564,11 @@ namespace Copper68k
                 fault = fault with { StackedProgramCounter = ExecutionBoundaryProgramCounter };
             else if (TryCompleteFaultedMoveWrite(fault))
                 fault = fault with { StackedProgramCounter = State.ProgramCounter, CompletedMoveWrite = true };
+            else if (!State.M68040Mmu.Enabled && fault.Write && fault.MovemEffectiveAddress.HasValue &&
+                fault.AccessKind == M68kBusAccessKind.CpuDataWrite &&
+                State.ExceptionSequence == ExecutionBoundaryExceptionSequence &&
+                State.LastInstructionProgramCounter == ExecutionBoundaryProgramCounter)
+                fault = fault with { StackedProgramCounter = ExecutionBoundaryProgramCounter };
             else if (!State.M68040Mmu.Enabled && !fault.Write &&
                 fault.AccessKind == M68kBusAccessKind.CpuDataRead && fault.ByteCount is 1 or 2 or 4 &&
                 State.ExceptionSequence == ExecutionBoundaryExceptionSequence &&
@@ -4332,8 +4337,9 @@ namespace Copper68k
                     RaiseRteValidationAccessFault(fault, stackedProgramCounter);
                 else if (!State.M68040Mmu.Enabled && fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
                     RaiseUnbufferedReadAccessFault(fault, stackedProgramCounter, instruction: true);
-                else if (fault.CompletedMoveWrite)
-                    RaiseCompletedMoveWriteAccessFault(fault, stackedProgramCounter);
+                else if (fault.CompletedMoveWrite || (!State.M68040Mmu.Enabled && fault.Write &&
+                    fault.MovemEffectiveAddress.HasValue && fault.AccessKind == M68kBusAccessKind.CpuDataWrite))
+                    RaiseNormalWriteAccessFault(fault, stackedProgramCounter);
                 else if (fault.UnbufferedOperandRead)
                     RaiseUnbufferedReadAccessFault(fault, stackedProgramCounter, instruction: false);
                 else
@@ -4353,29 +4359,31 @@ namespace Copper68k
         private void RaiseRteValidationAccessFault(M68040MmuFault fault, uint instructionPc)
             => RaiseUnbufferedReadAccessFault(fault, instructionPc, instruction: false);
 
-        private void RaiseCompletedMoveWriteAccessFault(M68040MmuFault fault, uint nextPc)
+        private void RaiseNormalWriteAccessFault(M68040MmuFault fault, uint stackedPc)
         {
             // MC68040UM 8.4.6.5/7: physical normal write -> valid WB1, FA=WB1A,
-            // memory-aligned data. RTE resumes at the following instruction.
+            // memory-aligned data. A completed MOVE resumes at its following
+            // instruction. MOVEM remains suspended with CM and its original EA;
+            // software completes WB1 before RTE repeats operand transfers.
             var savedSr = State.StatusRegister;
             var size = fault.ByteCount == 1 ? 0x20 : fault.ByteCount == 2 ? 0x40 : 0;
             var modifier = (savedSr & M68kCpuState.Supervisor) != 0 ? 5 : 1;
-            var trace = (savedSr & 0x8000) != 0; // MOVE does not trigger T0.
+            var trace = fault.CompletedMoveWrite && (savedSr & 0x8000) != 0; // MOVE does not trigger T0.
             uint data = fault.WriteValue!.Value;
             if (fault.ByteCount == 1) data = (data & 0xff) << 24;
             else if (fault.ByteCount == 2) data = (data & 0xffff) << 16;
             var shift = (int)(fault.LogicalAddress & 3) * 8;
             if (shift != 0) data = (data >> shift) | (data << (32 - shift));
-            State.RecordException(VectorBusError, nextPc, savedSr);
+            State.RecordException(VectorBusError, stackedPc, savedSr);
             State.StatusRegister = (ushort)((savedSr | M68kCpuState.Supervisor) & ~0xc000);
             for (var n = 0; n < 3; n++) PushLong(0); // Undefined push data.
             PushLong(data); PushLong(fault.LogicalAddress);
             for (var n = 0; n < 4; n++) PushLong(0); // No WB2/WB3 in this synchronous path.
             PushLong(fault.LogicalAddress);
             PushWord((ushort)(0x80 | size | modifier)); PushWord(0); PushWord(0);
-            PushWord((ushort)((trace ? 0x2000 : 0) | size | modifier));
-            PushLong(trace ? State.LastInstructionProgramCounter : 0);
-            PushWord(0x7008); PushLong(nextPc); PushWord(savedSr);
+            PushWord((ushort)((trace ? 0x2000 : fault.MovemEffectiveAddress.HasValue ? 0x1000 : 0) | size | modifier));
+            PushLong(fault.MovemEffectiveAddress ?? (trace ? State.LastInstructionProgramCounter : 0));
+            PushWord(0x7008); PushLong(stackedPc); PushWord(savedSr);
             EnterAccessErrorHandler();
         }
 

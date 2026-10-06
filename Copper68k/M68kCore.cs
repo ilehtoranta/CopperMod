@@ -12312,6 +12312,24 @@ namespace Copper68k
             return true;
         }
 
+        private void WriteMovemOperand(uint address, uint value, M68kOperandSize size, uint calculatedAddress, bool descending)
+        {
+            try
+            {
+                if (size == M68kOperandSize.Word) WriteWord(address, (ushort)value);
+                else if (descending) WriteLongDescending(address, value);
+                else WriteLong(address, value);
+            }
+            catch (M68040MmuFaultException ex) when (!State.M68040Mmu.Enabled &&
+                ex.Fault.Write && ex.Fault.AccessKind == M68kBusAccessKind.CpuDataWrite)
+            {
+                // The 040 fallback shares this decoder. Preserve its existing
+                // split-store order and the original operand size/data latched
+                // by the logical bus; add only MOVEM's calculated EA for CM.
+                throw new M68040MmuFaultException(ex.Fault with { MovemEffectiveAddress = calculatedAddress });
+            }
+        }
+
         private void DecodeMovem(ushort opcode)
         {
             var size = (opcode & 0x0040) == 0 ? M68kOperandSize.Word : M68kOperandSize.Long;
@@ -12323,6 +12341,7 @@ namespace Copper68k
             if (!directionMemoryToRegisters && mode == 4)
             {
                 var address = State.A[reg];
+                var calculatedAddress = address;
                 _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
                 var predecrementTransferCycles = size == M68kOperandSize.Long ? 8 : 4;
                 var predecrementTransferred = 0;
@@ -12339,14 +12358,7 @@ namespace Copper68k
                     if (_useM68020BriefIndexedAddressing && register == reg + 8)
                         value = unchecked(value - (uint)size);
                     AddInstructionCycles(12 + (predecrementTransferred * predecrementTransferCycles));
-                    if (size == M68kOperandSize.Word)
-                    {
-                        WriteWord(address, (ushort)value);
-                    }
-                    else
-                    {
-                        WriteLongDescending(address, value);
-                    }
+                    WriteMovemOperand(address, value, size, calculatedAddress, descending: true);
 
                     predecrementTransferred++;
                 }
@@ -12402,14 +12414,7 @@ namespace Copper68k
                     var writeFaultBaseCycles = size == M68kOperandSize.Word ? 8 : 4;
                     AddInstructionCycles(writeFaultBaseCycles + ea.EaCycles + (transferred * transferCycles));
                     var value = register < 8 ? State.D[register] : State.A[register - 8];
-                    if (size == M68kOperandSize.Word)
-                    {
-                        WriteWord(current, (ushort)value);
-                    }
-                    else
-                    {
-                        WriteLong(current, value);
-                    }
+                    WriteMovemOperand(current, value, size, ea.Address, descending: false);
                 }
 
                 current += (uint)size;

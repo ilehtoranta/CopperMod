@@ -7562,3 +7562,137 @@ production source change, regression retirement, new full CPU/consumer run or
 package publication is claimed. Normal CPU/test assemblies and unrelated
 CopperScreen edits remain untouched. Milestone 6 remains **in progress**,
 `roadmapComplete=false`.
+
+## Physical 040 MOVEM write-frame correction — 2026-10-07
+
+The working correction addresses the preceding actual-write discovery. Fast,
+general and shared-fallback MOVEM store paths retain the original calculated EA
+only when an operand write faults. Pre-EA pointer reads and exception-frame
+writes cannot acquire that MOVEM write metadata. Existing operand ordering,
+predecrement register-list semantics and timing-plan placement remain unchanged;
+the shared fallback keeps its descending split-word long stores and the logical
+bus's original operand address/size/data latch.
+
+Normal physical MOVEM write faults now use format 7, original instruction PC,
+CM/original EA and a valid memory-aligned WB1. The shared normal-write builder
+retains completed MOVE's distinct following-PC/CT behavior. MOVEM remains
+suspended: exception delivery never retries it, software completes WB1, then
+RTE explicitly resumes the MOVEM. Enabled MMU/cache/pipeline behavior and other
+physical-write families are not promoted by this correction.
+
+Fresh focused evidence:
+
+- The complete original selected entry gate passes **112,224 cases**, zero
+  mismatches/unsupported/untested selections, plus its literal witness and
+  **136 fault-free controls**. Five executions pass with no skips. Manifest
+  `audits/MovemWriteEntryAcceptance/inputs.json` SHA-256:
+  `6bef57d174ba6e083f3fc32b056ee427d2ec62c8d5c40c959fb5dd985f9d494f`.
+- Executed writeback-handler/RTE/resumption qualification passes **143,512
+  whole programs / six reports / six executions**, zero selected gaps. Each
+  route has 816 store-opcode cases, 64,512 canonical stack/CCR/trace cases and
+  6,336 full-format structural cases, plus 68 canonical witnesses and 24
+  self-overwriting-pointer witnesses. The full-format cohort independently
+  covers all 66 legal structures with signed W/L D1 and signed/scaled A0/D1
+  index variants. Status cases include predecrement A7 in all four stack states.
+- Actual handler instructions preserve/restore scratch registers and DFC,
+  complete WB1 with MOVES, clear its valid flag, and execute RTE. The resumed
+  MOVEM repeats all four operand writes in order. A pointer overwritten by an
+  earlier store is not resolved again. Exact following-instruction boundaries,
+  T1 completion trace, deferred T0 flow trace, registers, defined frame/CCR
+  fields, surrounding memory and partial pre-fault stores are checked.
+- Discarding shared-fallback write-EA metadata in an owned copy produces **40
+  intended frame mismatches / 96 unchanged passing witnesses**. Recalculating
+  the address instead of consuming CM's saved EA produces **48 intended
+  resumed-MOVEM mismatches**, exposing the overwritten pointer. Both routes
+  fail, with exact phase diagnostics. Proof: `mutations/MovemWriteCorrection`.
+- Seven copied-evidence corruption controls pass for each current entry and
+  recovery gate: missing/changed source, missing report, empty execution,
+  changed weight, lost key and false witness weight. Source, binary, report,
+  exact TRX roster and independent weighted combination inventories are frozen.
+
+Reproduce whole-program recovery with:
+
+```powershell
+./scripts/test-copper68k-040-movem-write-recovery.ps1 -OutputDirectory artifacts/movem-write-recovery
+```
+
+A fresh output is required. `-ValidateReportsOnly` checks frozen identities and
+coverage without rebuilding. Missing fixtures, empty selections, mismatches or
+unsupported execution fail. The entry command from the preceding section now
+passes its unchanged architectural requirements. Recovery evidence is retained
+in `audits/MovemWriteRecoveryAcceptance` (manifest SHA-256
+`2a5717f542d817e2b39d59520335252046266af575bcc90abe6d4dad61f518af`),
+`MovemWriteRecoveryIntegrity` and `MovemWriteEntryAcceptanceIntegrity`.
+The first recovery witness run revealed a fixture initialization error: reset
+cleared DFC before handler execution. DFC/SFC are now set after reset and checked
+explicitly. That provisional failing run is retained separately.
+
+Fresh independent audits under `audits/MovemWriteIndependent` pass **312,500
+SingleStepTests cases / 125 files**, with the established TAS/TRAPV exclusions,
+and **536 Musashi model/program combinations / 88 explicit exclusions**. Pinned
+sources and caveats remain unchanged. These software references do not qualify
+physical bus timing or the new fault protocol by themselves.
+
+Clean CopperScreen commit `aa1dad5dcc0fb7c970e8e3443a160487add846af` builds with
+zero warnings/errors using private **1.5.2-synthetic-dev.69** through its existing
+NuGet boundary. **171 host**, **74 disk**, and separate **1,080 engine** tests pass;
+six optional host replays remain unavailable in that ordinary invocation.
+Two explicitly supplied native Workbench 3.1 floppy replays, zero/2 MiB Fast RAM,
+pass the retained ROM/media, PC, cycle and framebuffer fingerprints. Actual app,
+host-test and engine-test CPU DLLs match the exact package. Evidence:
+`consumer-69-final/consumer-verification.json`; package SHA-256
+`eed6baf7d1c2dfae99f83825904cc1e729ee2f4ad985a45fd43c3ef65f9c70e1`;
+packaged CPU DLL SHA-256
+`5528cb66670a6afc92fe4ddadb2c20425146995a4de63098b27845b174dc1c65`.
+The package was created once and is immutable. A lock-file property error and
+an external helper's command-name collision affected provisional owned validation
+attempts; the completed consumer uses a fresh clean archive and the original
+package. No source repository or previously published package was overwritten.
+No HD replay is claimed and no public package is published.
+
+The fresh full CPU run in `audits/MovemWriteFull` passes **5,255 tests**, zero
+failures, with **29 explicit optional/discovery skips / 5,284 total** in
+**56 minutes 43 seconds**. All ten previously qualified WinUAE presets execute
+and pass. The maintained ordinary inventory and a separate actual-TRX audit
+verify **707 required reports / 86,098,722 passing deterministic scenarios**,
+including complete combination weights and passing execution identities.
+The full run's opt-in write-entry/recovery skips are qualified separately by
+the fresh focused commands above; remaining skipped coverage is not promoted.
+Exact skip names are retained in `full-verification.json`. Source manifest
+SHA-256: `7acedd9c5c632e10b9e7ee7ba6130a18d88b01106147d5bff3f785d56df840ce`;
+TRX SHA-256: `c596190315220d8cb7ebeea51b93505b8f82b88c3cb2d8ee2c3b8ef92d541078`.
+`ordinary-trx-verification.json` records every required report's hash, actual
+test identity, scenario count and combination count. This is fresh passing
+evidence for the correction, distinct from the prior read-only full run.
+Normal CPU/test assemblies and unrelated CopperScreen changes are preserved.
+The ordinary 707-report inventory is unchanged. Arbitrary MOVEM masks, broader
+write-fault/nested/writeback protocols, the 480-case broad advanced inventory,
+original Basic failures, other-model restoration and remaining consolidation
+requirements stay open. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
+
+## Transfer timing-regression retention audit — 2026-10-07
+
+Six neighboring `M68020InterpreterTests` transfer facts were reviewed after the
+pure EXTB semantic duplicate was retired. They remain required. The shared
+`SyntheticTransferTests.RegisterTransferFamilies` matrix checks EXT.W/EXT.L,
+SWAP and all EXG register forms semantically, but does not assert the named
+accelerator profiles' native/machine-cycle policy. Semantic overlap alone is
+insufficient replacement coverage.
+
+| Retained fact | Selected profile | Additional timing assertion |
+| --- | --- | --- |
+| `ExtLongDataRegisterSignExtendsWordToLong` | `OcsAccelerator14Mhz` | 4 native / 2 machine cycles |
+| `ExtWordDataRegisterSignExtendsByteToWord` | `A1200Ec02014Mhz` | 2 native / 1 machine cycle |
+| `SwapDataRegisterSwapsWordsAndSetsFlags` | `OcsAccelerator14Mhz` | 4 native / 2 machine cycles |
+| `ExgDataAddressSwapsRegistersAndPreservesFlags` | `OcsAccelerator14Mhz` | 4 native / 2 machine cycles |
+| `ExgDataDataSwapsRegistersAndPreservesFlags` | `A1200Ec02014Mhz` | 4 native / 2 machine cycles |
+| `ExgAddressAddressSwapsRegistersAndPreservesFlags` | `A1200Ec02014Mhz` | 4 native / 2 machine cycles |
+
+The EXT/SWAP facts also use specific boundary/upper-register values, and the EXG
+facts use specific register values. No exact-case replacement or original-defect
+mutation proof is claimed for these six facts. They are retained on the concrete
+cycle-coverage difference, without weakening or moving their assertions. Those
+cycle counts describe the existing execution policy; they do not establish
+physical MC68020 bus/pipeline timing. This audit changes documentation only,
+retires no further regression and leaves the wider consolidation scope open.

@@ -9140,6 +9140,7 @@ namespace Copper68k
             var mask = FetchWord();
             var addressRegister = opcode & 7;
             var address = State.A[addressRegister];
+            var calculatedAddress = address;
             var dataSnapshot = new uint[8];
             var addressSnapshot = new uint[8];
             Array.Copy(State.D, dataSnapshot, dataSnapshot.Length);
@@ -9158,7 +9159,7 @@ namespace Copper68k
                     ? addressSnapshot[7 - bit]
                     : dataSnapshot[15 - bit];
                 address -= 4;
-                WriteLong(address, value);
+                WriteMovemSized(address, value, M68kOperandSize.Long, calculatedAddress);
             }
 
             WriteGeneralRegister(true, addressRegister, address);
@@ -9176,6 +9177,7 @@ namespace Copper68k
             var mask = FetchWord();
             var addressRegister = opcode & 7;
             var address = State.A[addressRegister];
+            var calculatedAddress = address;
             var dataSnapshot = new uint[8];
             var addressSnapshot = new uint[8];
             Array.Copy(State.D, dataSnapshot, dataSnapshot.Length);
@@ -9194,7 +9196,7 @@ namespace Copper68k
                     ? addressSnapshot[7 - bit]
                     : dataSnapshot[15 - bit];
                 address = unchecked(address - 2u);
-                WriteWord(address, (ushort)value);
+                WriteMovemSized(address, value, M68kOperandSize.Word, calculatedAddress);
             }
 
             WriteGeneralRegister(true, addressRegister, address);
@@ -9212,6 +9214,7 @@ namespace Copper68k
             var addressRegister = opcode & 7;
             var displacement = unchecked((int)(short)FetchWord());
             var address = unchecked((uint)(State.A[addressRegister] + displacement));
+            var calculatedAddress = address;
             var dataSnapshot = new uint[8];
             var addressSnapshot = new uint[8];
             Array.Copy(State.D, dataSnapshot, dataSnapshot.Length);
@@ -9221,7 +9224,7 @@ namespace Copper68k
             {
                 if ((mask & (1 << register)) != 0)
                 {
-                    WriteWord(address, (ushort)dataSnapshot[register]);
+                    WriteMovemSized(address, dataSnapshot[register], M68kOperandSize.Word, calculatedAddress);
                     address += 2;
                 }
             }
@@ -9230,7 +9233,7 @@ namespace Copper68k
             {
                 if ((mask & (1 << (8 + register))) != 0)
                 {
-                    WriteWord(address, (ushort)addressSnapshot[register]);
+                    WriteMovemSized(address, addressSnapshot[register], M68kOperandSize.Word, calculatedAddress);
                     address += 2;
                 }
             }
@@ -9249,6 +9252,7 @@ namespace Copper68k
             var mask = FetchWord();
             var addressRegister = opcode & 7;
             var address = State.A[addressRegister];
+            var calculatedAddress = address;
             var dataSnapshot = new uint[8];
             var addressSnapshot = new uint[8];
             Array.Copy(State.D, dataSnapshot, dataSnapshot.Length);
@@ -9258,7 +9262,7 @@ namespace Copper68k
             {
                 if ((mask & (1 << register)) != 0)
                 {
-                    WriteLong(address, dataSnapshot[register]);
+                    WriteMovemSized(address, dataSnapshot[register], M68kOperandSize.Long, calculatedAddress);
                     address += 4;
                 }
             }
@@ -9267,7 +9271,7 @@ namespace Copper68k
             {
                 if ((mask & (1 << (8 + register))) != 0)
                 {
-                    WriteLong(address, addressSnapshot[register]);
+                    WriteMovemSized(address, addressSnapshot[register], M68kOperandSize.Long, calculatedAddress);
                     address += 4;
                 }
             }
@@ -9287,6 +9291,7 @@ namespace Copper68k
             var addressRegister = opcode & 7;
             var displacement = unchecked((int)(short)FetchWord());
             var address = unchecked((uint)(State.A[addressRegister] + displacement));
+            var calculatedAddress = address;
             var dataSnapshot = new uint[8];
             var addressSnapshot = new uint[8];
             Array.Copy(State.D, dataSnapshot, dataSnapshot.Length);
@@ -9296,7 +9301,7 @@ namespace Copper68k
             {
                 if ((mask & (1 << register)) != 0)
                 {
-                    WriteLong(address, dataSnapshot[register]);
+                    WriteMovemSized(address, dataSnapshot[register], M68kOperandSize.Long, calculatedAddress);
                     address += 4;
                 }
             }
@@ -9305,7 +9310,7 @@ namespace Copper68k
             {
                 if ((mask & (1 << (8 + register))) != 0)
                 {
-                    WriteLong(address, addressSnapshot[register]);
+                    WriteMovemSized(address, addressSnapshot[register], M68kOperandSize.Long, calculatedAddress);
                     address += 4;
                 }
             }
@@ -9325,6 +9330,7 @@ namespace Copper68k
             var addressRegister = opcode & 7;
             var extension = FetchWord();
             var address = CalculateIndexedOperandAddress(addressRegister, extension, opcode);
+            var calculatedAddress = address;
             var dataSnapshot = new uint[8];
             var addressSnapshot = new uint[8];
             Array.Copy(State.D, dataSnapshot, dataSnapshot.Length);
@@ -9334,7 +9340,7 @@ namespace Copper68k
             {
                 if ((mask & (1 << register)) != 0)
                 {
-                    WriteLong(address, dataSnapshot[register]);
+                    WriteMovemSized(address, dataSnapshot[register], M68kOperandSize.Long, calculatedAddress);
                     address += 4;
                 }
             }
@@ -9343,7 +9349,7 @@ namespace Copper68k
             {
                 if ((mask & (1 << (8 + register))) != 0)
                 {
-                    WriteLong(address, addressSnapshot[register]);
+                    WriteMovemSized(address, addressSnapshot[register], M68kOperandSize.Long, calculatedAddress);
                     address += 4;
                 }
             }
@@ -9361,6 +9367,7 @@ namespace Copper68k
             _ = FetchWord();
             var mask = FetchWord();
             var address = absoluteWord ? unchecked((uint)(int)(short)FetchWord()) : FetchLong();
+            var calculatedAddress = address;
             var dataSnapshot = new uint[8];
             var addressSnapshot = new uint[8];
             Array.Copy(State.D, dataSnapshot, dataSnapshot.Length);
@@ -9370,7 +9377,7 @@ namespace Copper68k
             {
                 if ((mask & (1 << register)) != 0)
                 {
-                    WriteLong(address, dataSnapshot[register]);
+                    WriteMovemSized(address, dataSnapshot[register], M68kOperandSize.Long, calculatedAddress);
                     address += 4;
                 }
             }
@@ -9379,7 +9386,7 @@ namespace Copper68k
             {
                 if ((mask & (1 << (8 + register))) != 0)
                 {
-                    WriteLong(address, addressSnapshot[register]);
+                    WriteMovemSized(address, addressSnapshot[register], M68kOperandSize.Long, calculatedAddress);
                     address += 4;
                 }
             }

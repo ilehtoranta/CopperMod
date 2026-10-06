@@ -2697,3 +2697,28 @@ The broad 480-case inventory is not reduced, no regression is retired, and no
 new package or consumer qualification is claimed. See the
 [MOVEM write discovery](COPPER68K_REFERENCE_QUALIFICATION.md#actual-040-movem-write-fault-discovery--2026-10-07).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The 2026-10-07 MOVEM physical-write correction now passes the selected 112,224
+entry cases and 143,512 executed handler/RTE/resumption programs, including all
+66 full-format structures, signed/scaled indexes, four stack states, CCRs,
+predecrement A7, trace and self-overwritten pointers. Two owned mutations detect
+lost shared write metadata and inappropriate EA recalculation. Seven integrity
+controls pass for each current gate. Fresh pinned SingleStepTests/Musashi audits
+and clean CopperScreen private-package .69 build, host/disk/engine tests and two
+native floppy replays pass. Fresh full CPU validation passes 5,255 tests with
+zero failures and 29 explicit optional/discovery skips (5,284 total), including
+all ten qualified WinUAE presets. All 707 required ordinary reports and actual
+passing TRX summaries verify 86,098,722 deterministic scenarios and complete
+combination weights. Opt-in write-entry/recovery gates pass separately; other
+skipped coverage remains unpromoted. Broader masks/fault/restoration/reference/consolidation requirements and
+the broad 480-case inventory remain required. See the
+[write-frame correction](COPPER68K_REFERENCE_QUALIFICATION.md#physical-040-movem-write-frame-correction--2026-10-07).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+A follow-up transfer retention audit reviews six EXT.W/EXT.L/SWAP/EXG facts in
+`M68020InterpreterTests`. All retain native/machine-cycle assertions for named
+OCS/A1200 profiles that the semantic matrix does not replace. Their retention
+reasons and exact asserted counts are recorded; no further regression is retired
+and no replacement/mutation proof is claimed. See the
+[retention audit](COPPER68K_REFERENCE_QUALIFICATION.md#transfer-timing-regression-retention-audit--2026-10-07).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

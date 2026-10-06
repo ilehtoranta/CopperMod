@@ -16,6 +16,18 @@ internal partial class M68kAdvancedTimingInterpreter
             throw new M68040MmuFaultException(ex.Fault with { MovemEffectiveAddress = calculatedAddress });
         }
     }
+    private void WriteMovemSized(uint address, uint value, M68kOperandSize size, uint calculatedAddress)
+    {
+        try { WriteSized(address, value, size); }
+        catch (M68040MmuFaultException ex) when (_profile.Model == M68kAcceleratorModel.M68040 &&
+            !State.M68040Mmu.Enabled && ex.Fault.Write && ex.Fault.AccessKind == M68kBusAccessKind.CpuDataWrite)
+        {
+            // CM belongs to a MOVEM operand fault, not address calculation or
+            // exception-frame writes. Keep the EA before any store can alter
+            // memory used by indexed addressing. No instruction replay here.
+            throw new M68040MmuFaultException(ex.Fault with { MovemEffectiveAddress = calculatedAddress });
+        }
+    }
     private bool TryExecuteGeneralMovem(ushort opcode, uint? continuationAddress = null)
     {
         if ((opcode & 0xfb80) != 0x4880) return false;
@@ -62,7 +74,7 @@ internal partial class M68kAdvancedTimingInterpreter
                 // M68000PM MOVEM: 020+ stores the initial base minus ONE
                 // operand size when the predecrement base is in the list.
                 if (mode == 4 && register == baseRegister + 8) value = unchecked(value - (uint)size);
-                WriteSized(address, value, size);
+                WriteMovemSized(address, value, size, calculatedAddress);
             }
             if (mode != 4) address = unchecked(address + (uint)size);
         }
