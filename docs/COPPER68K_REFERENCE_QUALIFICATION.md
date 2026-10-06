@@ -7317,3 +7317,65 @@ Other models' restoration gaps, unresolved software-reference disagreements,
 the original Basic non-passing rows and regression consolidation remain
 required. No public release or regression retirement is included. Milestone 6
 remains **in progress**, `roadmapComplete=false`.
+
+## Executed 040 MOVEM read recovery — 2026-10-07
+
+The selected software recovery qualification now executes a complete fault,
+handler RTE, resumed MOVEM and following-instruction program. Expectations use
+MC68040UM 8.2.6 and 8.4.6.2/7: CM retains the calculated EA; resumed MOVEM repeats
+preceding operand transfers without recalculating that EA; an aborted
+instruction's trace is deferred until completion. This is architectural software
+qualification with translation and instruction caching disabled, not physical
+pipeline or cache timing qualification.
+
+Run the complete selected inventory with:
+
+```powershell
+./scripts/test-copper68k-040-movem-read-recovery.ps1 -OutputDirectory artifacts/040-movem-recovery-audit
+```
+
+`-ValidateReportsOnly` verifies frozen source/report/assembly/TRX identities,
+the exact five-execution roster and independently expanded combination keys and
+weights. Both routes pass **114,912 matrix programs plus 72 fixed source programs**:
+**229,968 whole programs**, zero mismatches, unsupported executions or missing
+selected combinations. Logical counts represent complete programs, not individual
+instructions or xUnit tests. Per route the matrix comprises:
+
+- 864 source-encoding programs: all 36 legal memory-source encodings, W/L,
+  four rejected transfer positions and every byte of the rejected access.
+- 12,672 structure programs: 66 legal full-format structures, four signed/scaled
+  data/address-index variants, address-register/PC bases, W/L and every rejection
+  position/byte.
+- 101,376 status programs: eleven canonical source forms, four stack/SR profiles,
+  T0/T1/off, all 32 CCR states, W/L and every rejection position/byte.
+
+The transfer list is deliberately D0/D1/A0/A1, exercising overwritten bases and
+indexes. Registers, stack banks, saved SR/PC, defined format-7 fields, partial
+effects, exact next PC, surrounding memory, operand-read repetition, pointer-read
+count and following MOVEQ/branch trace sentinels are checked. Two literal fixture
+examples additionally verify PC self-reference encodings. Null PC displacement
+can place an operand or pointer in the instruction stream; fixture setup preserves
+those bytes and derives their values from the test-owned encoded stream.
+
+Evidence is retained in `audits/MovemReadRecoveryAcceptance` under the restoration
+temporary root. Six copied-evidence controls reject missing source/report,
+changed weight, foreign key and empty selection/execution. Discarding calculated
+EA metadata in an isolated shared-fallback source copy produces **31 expected
+frame-EA mismatches per route**, while 41 programs per route still pass through
+unmutated execution paths. The earlier selected 122,880-case read-entry gate also
+passes again against the current sources. Failed provisional fixture runs remain
+separate historical evidence.
+
+The existing MOVE extension/alias, MOVEM mask/base-alias and LEA/PEA fixture
+checks pass across all eight model/profile selections: 25 executions, 24 reports
+and 145,816 logical scenarios, retained in `audits/MovemRecoverySharedFixtures`.
+
+No production CPU code changes or new package are part of this extension.
+The prior full CPU/consumer results above qualify the unchanged production
+implementation; they are not claimed as a fresh full-suite run of these new tests.
+The ordinary required 707-report inventory remains separate from this focused
+reference command. Other MOVEM masks, MOVEM writes, pointer-fetch faults, nested
+recovery, enabled MMU/cache and physical timing still need their applicable
+qualification. The broad 480-case remaining gate and the other model/reference/
+consolidation work remain open. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.

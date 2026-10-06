@@ -1922,6 +1922,17 @@ provenance, internal restoration, data/writeback/context transfer, other models'
 restoration and broader independent qualification/consolidation remain required.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
 
+On 2026-10-07 the executed 040 MOVEM read-recovery gate passes 229,968 complete
+fault/RTE/resumption/sentinel programs across scalar and batch execution. It
+covers every legal memory-source encoding, all legal full-format structures in
+selected index variants, transfer-byte faults and canonical stack/CCR/trace
+profiles, using the D0/D1/A0/A1 list to expose base/index aliases. Six evidence
+integrity controls reject their intended corruptions; dropping saved-EA metadata
+in an isolated shared fallback causes 62 expected frame-EA mismatches. The prior
+read-entry gate passes again with current test sources. This test-only extension
+does not close the broad remaining gate, other models or consolidation and does
+not authorize a release. See [executed MOVEM recovery](COPPER68K_REFERENCE_QUALIFICATION.md#executed-040-movem-read-recovery--2026-10-07).
+
 The three maintained software-trace mutations are detected in each complete
 scalar/batch canonical/chained report with their intended semantic diagnostic.
 Production bytes are restored exactly and the clean implementation rebuilds
