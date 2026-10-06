@@ -2349,3 +2349,34 @@ Physical function-code spaces, bus ordering and advanced 010 restoration are
 not qualified by MOVEC register tests. All remaining CM/restoration, STOP/PCR,
 independent-model and consolidation requirements remain required. Milestone 6
 stays **in progress**, `roadmapComplete=false`.
+
+### Milestone 6 rejected 68010 RTE format discovery
+
+Two gated scalar/batch audits execute 573,440 cases / 125,440 combinations each.
+Every invalid format word is enumerated with CCR 0/31 and both privilege states;
+a separate canonical-offset matrix covers all CCRs, incoming trace, both privilege
+states, eight stacked SR images and four even/odd/high-address PC images.
+
+Untouched generic and compatible WinUAE 68010 RTE functions at the existing
+modern pin both change N/Z/V before format rejection. Copper68k preserves these
+bits. Each route records 336,896 passing and 236,544 mismatching cases, with zero
+unsupported or untested cases. Every other register/defined bit, stack bank,
+original frame byte and exception-header field is checked even on CCR mismatch;
+both named tests fail without skips. The command independently verifies all keys,
+weights, rows and classifications and executes frozen observer replay. Separate
+surrounding-state outcomes must pass on every row, even on CCR disagreement. Native
+exception entry is composed, and the manual does not settle the failure-path
+flags; this is software discovery, not an architectural CPU-fix gate.
+
+Fresh execution and frozen revalidation explicitly fail the 473,088 combined
+CCR discrepancies. Twenty-three integrity controls reject incomplete or altered
+fixtures, identities, selections, classifications, initial stack banks and hidden
+surrounding-state failures. Original evidence and production source remain intact.
+
+The ordinary 68010 retained selection passes 25 tests without skips, comprising
+2,404,896 cases / twelve reports plus thirteen fixed examples. Production CPU
+source, timing policy, public API, ordinary CI requirements, complete-040 counts
+and packages remain unchanged. No regression is retired. Rejected RTE CCR
+architecture, long/RMW/foreign format8 continuation, full exception/trace entry,
+and all other reference/consolidation requirements remain required. Milestone 6
+stays **in progress**, `roadmapComplete=false`.

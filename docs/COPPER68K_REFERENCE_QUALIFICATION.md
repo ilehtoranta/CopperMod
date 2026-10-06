@@ -6137,3 +6137,135 @@ Advanced 010/020/030 restoration, full CM/fault lifetime, STOP/PCR disagreement,
 broader model audits and consolidation remain required. Milestone 6 stays **in
 progress**, `roadmapComplete=false`; no production fix, consumer replay or
 package publication is included.
+
+### Rejected 68010 RTE format software-reference discovery (2026-10-06)
+
+The remaining invalid-RTE CCR/trace work now has an executed discovery rather
+than an inferred decoder expectation. `M68010RteFormatDiscoveryTests` exercises
+scalar and one-instruction batch execution through the public 68010 factory.
+`scripts/test-copper68k-010-rte-format-discovery.ps1` generates, extracts and
+executes untouched WinUAE generic `op_4e73_4_ff` and compatible
+`op_4e73_11_ff`, together with original MakeSR / MakeFromSR helpers, at pin
+`5d22d33632646efc3f747f03e82d28353e52722e`.
+
+The [pinned generator](https://github.com/tonioni/WinUAE/blob/5d22d33632646efc3f747f03e82d28353e52722e/gencpu.cpp#L7012)
+sets N from the sign of an invalid format word, clears Z/V and preserves X/C
+before its vector-14 callback. Copper68k instead preserves all incoming CCR
+bits. Generic and compatible functions agree on these flags, privilege precedence,
+callback PC, unconsumed stack and unchanged registers. They share generator
+provenance, so agreement between them is not two independent hardware oracles.
+
+[MC68000UM section 6.4](https://www.nxp.com/docs/en/reference-manual/MC68000UM.pdf)
+defines format rejection before the stack is consumed. Section 6.3.7 defines
+privilege rejection and section 6.3.8 describes trace/aborted-instruction rules.
+These passages do not specifically establish N/Z/V on an invalid-format failure.
+The executed software result is therefore an unresolved architectural qualification
+question; no CPU fix is selected solely from this discrepancy.
+
+Each route executes the following separate deterministic groups within one batch:
+
+| Matrix | Selection | Cases / combinations |
+| --- | --- | ---: |
+| Words | All 57,344 words with format nibble 1–7 or 9–F, user/supervisor, CCR 0/31, fixed stacked A71F and odd FFFF6001 target | 229,376 / 114,688 |
+| CCR/header | Fourteen invalid formats, offsets 000/004/024/3FC/7FC/FFF, user/supervisor, incoming T clear/set, eight stacked SRs, four even/odd/high-address target PCs and every incoming CCR | 344,064 / 10,752 |
+| Total, each route | Both matrices | **573,440 / 125,440** |
+
+Incoming IPL is 7. The CCR/header matrix's stacked SRs are 0000/001F,
+2000/201F, 8000/801F and A000/A01F; targets are 00006000/00006001 and
+FFFF6000/FFFF6001. Entire invalid words include reserved low fields, but this
+does not assert behavior for otherwise valid reserved-format encodings. Valid
+format0/8 words and version/internal format8 restoration are outside this matrix.
+
+Each route reports **336,896 passing / 236,544 mismatching / zero unsupported /
+zero untested cases**. Both named tests execute and fail without skips. Every
+user-mode row rejects with vector8 and unchanged CCR. Supervisor rows reject
+with vector14 and expose only the N/Z/V disagreement. For example incoming
+271F, format1000, stacked A71F and targetFFFF6001 yields software saved SR2711
+versus Copper68k271F, with saved PC1000, handler90E0 and SP46F8 on both sides.
+Changing stacked S/T/CCR or the target never bypasses rejection.
+
+All other SR bits, D/A registers, stack banks, execution state, control-stack
+configuration, original frame bytes and surroundings are compared even when
+N/Z/V mismatch. Raw stacked SR must equal the CPU's recorded saved SR, and
+the current SR must follow exception-entry clearing. Repository header read sets
+are checked separately, and the rejected target must never be fetched. There is
+no retry, dependent sentinel or partially abandoned operand phase.
+
+Every row exports a separate surrounding-state result before the CCR comparison;
+all **573,440 results per route pass**. The native observer and report validator
+require that result independently, so a CCR mismatch cannot conceal a register,
+frame, callback, stack-bank or access invariant failure.
+
+The native observer checks unconsumed stack/registers at the exception callback.
+Generic physical transport reads SR, both PC words and format; compatible source
+reads SR, format and PC high before rejection. This difference is retained and
+explicitly checked, not normalized into a physical bus-order claim. Native
+exception-frame entry, trace/IRQ run-loop delivery and timing are not executed;
+the format0 frame and vector fixtures are compositions in the full CPU comparison.
+Long-frame version checks, restart, prefetch fault sequencing and bus errors are
+not qualified by these generated functions. Eight literal controls per observer
+invocation check low/high format rejection, user privilege and valid short returns
+on both implementations.
+
+Fresh execution in `artifacts/m6-010-rte-format-qualified` completes all synthetic
+and native rows and returns exit1 explicitly for **473,088 combined discrepancies**.
+Report-only revalidation also executes the frozen observer and requires identical
+outputs. The command verifies the exact two named executions, all pinned source /
+generated / fixture / CPU/test binary / evidence identities, every independently
+enumerated key and weight, all fixture row ordering and all per-combination
+classifications. Missing or empty fixtures/selections cannot pass. The preliminary
+`artifacts/m6-010-rte-format-first` observer transport failed its literal controls
+because wrapper long-read evaluation order was unspecified; it is excluded.
+Sequential transport reads fixed that wrapper, leaving extracted functions intact.
+
+The second preliminary audit recorded the same counts but initialized the native
+inactive SSP to 4700 in user mode, while the CPU fixture uses 8000. This bank was
+not consumed before callback, but the final audit aligns and exports both initial
+stack banks and independently verifies them on every row. The extracted RTE
+hash remains unchanged. Preliminary reports are not the accepted final identities.
+
+The retained ordinary `system-rte` group's invalid-010 CCR preservation assertion
+remains a repository behavior check; it is not independent flag qualification.
+This separate gated discovery keeps the software disagreement visible and failing.
+
+Twenty-three integrity controls in `artifacts/m6-010-rte-format-integrity-proof`
+reject missing manifests/inputs/fixtures/reports, duplicate identities, wrong
+profiles/models/named or empty selections, changed keys/weights/classifications,
+reordered rows, altered native SR, wrong initial stack banks and failed
+surrounding-state outcomes. Native controls additionally reject missing/empty
+inputs, valid-format substitution, wrong declared SR/saved PC, wrong stack-bank
+images and hidden surrounding-state failure. Content changes refresh evidence
+hashes before validation, so these exercise semantic gates rather than merely
+detecting changed hashes. All subprocess statuses and expected reasons are checked;
+the control harness itself completes with exit0. Original evidence stays intact.
+
+Retained evidence is `artifacts/m6-010-rte-format-retained-qualified`: **25 passing tests /
+zero failures / zero skips**, with **2,404,896 passing cases / twelve reports**
+and thirteen fixed examples. Selection includes all current MOVEC, format8,
+word-MOVE restart and `M68010InterpreterTests` cases. No full CPU or consumer
+replay is claimed for this test/observer-only change. Fresh Release build has
+zero .NET warnings/errors; native extracted code emits conversion, unused-variable
+and unreachable-branch warnings on the bounded throw-on-outside-profile transport.
+
+Frozen source starts at `90e3afa55bb56a5db3c580133b30606a84249b3c` plus the
+recorded test/observer inputs. Committed production CPU tree remains
+`795fd12d6c0237a22a5f92f4a96cc4823e0364c1`.
+CPU SHA256: `d3ce6efdd0d54539e788d3eb8b3bc5ca092732352e067470d4ba0e55eccad157`.
+Test SHA256: `54dca077898ab6f7e75bced71b4b01f409cf5cee7ae8c70612494766139304c8`.
+Extracted instruction SHA256: `23ddb060c814ba5f4c6ee9d79e26ba0a036f0787229c8fdf1f6efa36f473da4f`.
+Observer SHA256: `40c73a34417c8238d3472f5e09957cbeba6b13db02734fb89869e232f10caa20`.
+
+```powershell
+./scripts/test-copper68k-010-rte-format-discovery.ps1 -OutputDirectory artifacts/010-rte-format-discovery
+./scripts/test-copper68k-010-rte-format-discovery.ps1 -ValidateReportsOnly -OutputDirectory artifacts/010-rte-format-discovery
+```
+
+Both requested commands fail for the preserved mismatch. This discovery stays
+outside ordinary synthetic CI and complete-040 selection. Ordinary requirements
+remain 85,191,062 cases / 680 reports, not a fresh broad-suite result. Complete-040
+and its 480-case untested inventory remain unchanged. No regression is retired,
+production CPU/timing/API changed, private consumer package refreshed or public
+package published. Invalid-RTE flag architecture, long/RMW/foreign 010 restoration,
+020/030 advanced frames, full CM/fault lifetime, STOP/PCR discrepancies, broader
+independent model audits and consolidation remain required. Milestone 6 stays
+**in progress**, `roadmapComplete=false`.

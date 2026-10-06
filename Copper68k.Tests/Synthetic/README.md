@@ -1009,3 +1009,25 @@ with original/replacement detection before and after the demonstrated retirement
 of three duplicate methods. The qualification record maps each original to its
 replacement; factory, exception, interrupt and specialized regressions remain.
 The broader roadmap is still incomplete.
+
+### 68010 rejected RTE format discovery
+
+`M68010RteFormatDiscoveryTests` is a gated software-reference audit, outside
+ordinary synthetic CI and promoted coverage. Run:
+
+```powershell
+./scripts/test-copper68k-010-rte-format-discovery.ps1 -ReferenceDirectory artifacts/reference-winuae-rte-modern -OutputDirectory artifacts/010-rte-format-discovery
+./scripts/test-copper68k-010-rte-format-discovery.ps1 -ValidateReportsOnly -OutputDirectory artifacts/010-rte-format-discovery
+```
+
+Both commands currently fail on rejected-format CCR disagreement. Each scalar/
+batch route executes every invalid format word plus a separate CCR/trace/header
+matrix. The native observer executes untouched generic and compatible 68010 RTE
+to their exception callback, at the existing modern WinUAE pin. Eight literal
+controls include valid short-frame returns. Exact input order, combination keys,
+weights, classifications and frozen replay are mandatory. Surrounding-state
+agreement is recorded independently on every row, even on CCR mismatch.
+Frame entry is composed;
+full native exception/trace processing, physical bus timing and long-frame restart
+remain unqualified. No production fix or regression retirement follows from this
+software discrepancy. Details are in `docs/COPPER68K_REFERENCE_QUALIFICATION.md`.
