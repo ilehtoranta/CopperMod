@@ -5671,3 +5671,86 @@ repair/retry, internal/data/writeback restoration, broader model reference
 qualification and consolidation remain required. Milestone 6 stays **in
 progress**, `roadmapComplete=false`. No CPU source change, package publication
 or additional regression retirement is included.
+
+### Executed 68040 CM lifetime discovery across odd-PC repair
+
+The documentary CM difference above is now exercised rather than inferred from
+source alone. `scripts/test-copper68k-040-cm-lifetime-discovery.ps1` builds the
+unchanged full WinUAE generator at `5d22d33632646efc3f747f03e82d28353e52722e`.
+Strict extraction retains original generated `op_4e73_31_ff`, MOVE.W immediate
+through A7, MOVE.L immediate to 2(A7), PC-relative MOVEM.L and NOP. The original
+`m68k_do_rte_mmu040` from `cpummu.cpp` and cputest SR helpers are also unchanged.
+No function body is rewritten or replaced with Copper68k arithmetic/EA helpers.
+
+Four literal normal/CM × even/odd controls execute a fixed program. The return
+target is 6000/6001; the format7 CM EA is 4200; MOVEM's encoded PC base 6004 plus
+0FFC selects ordinary 7000. Those addresses contain different D0/D1 values.
+An odd return reaches an address-error boundary, writes the intended SR and
+even PC into the frame with real instructions, returns, then executes MOVEM.
+In this software model the helper arms CM before the odd-PC callback, both
+repair stores and handler RTE leave it armed, and MOVEM uses 4200 and clears CM.
+Every selected generated instruction is checked against a literal opcode at
+its PC; sparse physical transport rejects uninitialized reads.
+
+The crucial boundary remains explicit: the adapter composes documented
+format-2 address-error entry after the callback. It does **not** execute full
+WinUAE `Exception_mmu` or the run loop, enabled translation, IRQ/trace delivery,
+cache/pipeline behavior or physical timing. The pinned MMU and non-MMU exception
+paths have different SR handling; this harness must not certify their full
+equivalence or establish hardware continuation lifetime. `newcpu.cpp` is pinned
+as source context, not claimed as executed exception processing.
+
+The CPU discovery varies entry ISP/MSP, restored user/user-M/ISP/MSP, normal/CM,
+even/odd PC, stack alignment 0/1, VBR 0/10000 and every initial CCR. Each scalar
+and batch route has 4,096 scenarios, 576 phase combinations and 18,432 logical
+phases. All registers, physical stack pointers, PC/SR, exception metadata,
+guarded memory and selected validation/operand read order are checked. Batched
+steps require exactly one instruction and both boundary callbacks. Prerequisite
+failure is recorded as untested later execution; no instruction is retried.
+
+| Current discovery route | Passing | Mismatching | Unsupported | Untested |
+| --- | ---: | ---: | ---: | ---: |
+| Scalar | 16,384 | 1,024 | 0 | 1,024 |
+| Batch | 16,384 | 1,024 | 0 | 1,024 |
+| Total | 32,768 | 2,048 | 0 | 2,048 |
+
+Both tests execute without skips and correctly fail. Every mismatch is the
+odd-PC CM MOVEM phase: D0 expected 89ABCDEF from saved 4200, actual DEADBEEF from
+recomputed 7000. Only those scenarios' following NOPs are untested. Normal and
+even-PC CM controls, address-error entry composition, repair stores and handler
+returns agree at their observed boundaries. Native comparison of all public
+register/PC/SR/stack snapshots gives exactly the same phase classifications.
+This is a localized executed software-reference discrepancy, not a proven
+architectural production defect. No guessed continuation latch is added.
+
+Fresh final evidence is `artifacts/m6-cm-lifetime-final/`; command exit 1 is the
+expected current discovery failure. Release build has zero .NET warnings/errors;
+native warnings are retained only in untouched generated source. The command
+records complete current CPU/fixture, pinned source, generated/extracted code,
+binary and row/evidence hashes. It independently enumerates all keys, 32-CCR
+weights and 4,096 ordered fixture rows per route. Report-only revalidation also
+executes the frozen native observer and requires byte-identical reference
+results. Thirteen integrity controls reject missing identity/fixture identity,
+empty selection, missing combination, wrong weight, duplicated fixture,
+missing reference row, altered reference summary, native missing/empty inputs,
+empty required selection, out-of-scope fixture and reordered index. They are
+recorded in `artifacts/m6-cm-lifetime-integrity-final/controls.json`.
+
+Eight retained tests pass without skips: six fixed saved-SR examples and both
+existing CM MOVEM matrices, totalling 235,008 passing generated cases. The fresh
+required inventory has one expected failing test without skips and retains
+480 untested cases / fifteen combinations. Its explanation now names the
+unqualified lifetime discrepancy. Ordinary synthetic/complete-040 selections
+exclude the two gated discovery tests and their previous counts remain
+requirements; older broad suites/consumer results are not relabeled as rerun.
+
+Frozen build starts at `826351ff0709d2e990b6b62692f068038e06af75` plus these
+test/command inputs. Production tree remains
+`795fd12d6c0237a22a5f92f4a96cc4823e0364c1`.
+CPU SHA256: `89cefdfbcc27b2d64e0d5fc7dc764f02402406883ac2b21a5b88978553bd1c78`.
+Adapter SHA256: `d31a06c3ca60d1644433acef41ffe826509f8bac376494064bffad3da5f00315`.
+The frozen identities, rather than current post-commit build output, identify
+this run. Full CM fault/repair lifetime, pending/foreign contexts, original-trace
+retry, internal/data/writeback restoration, broader model reference coverage
+and consolidation remain required. Milestone 6 stays **in progress**,
+`roadmapComplete=false`; no CPU fix, package release or regression retirement.

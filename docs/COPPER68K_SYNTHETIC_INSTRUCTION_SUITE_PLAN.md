@@ -2195,3 +2195,32 @@ software repair, pending/foreign-context odd-return chains,
 original-trace fault/retry, internal/data/writeback restoration, broader model
 reference audits and consolidation remain required. Milestone 6 stays **in
 progress**, `roadmapComplete=false`; no CPU fix, release or regression retirement.
+
+### Milestone 6 CM continuation lifetime software discovery
+
+The previous documentary MMU/non-MMU difference now has executed evidence.
+A dedicated gated scalar/batch matrix runs normal/CM format7 returns, even/odd
+PCs, actual SR/PC repair stores, handler RTE, PC-relative MOVEM.L and a following
+sentinel. Each route covers 4,096 scenarios / 18,432 phases / 576 combinations:
+every CCR, entry ISP/MSP, all restored banks including user-M, alignments 0/1
+and VBR 0/10000. Full architectural/guarded-memory checks accompany snapshots.
+
+`scripts/test-copper68k-040-cm-lifetime-discovery.ps1` executes untouched full
+generated WinUAE MMU RTE/MOVE/MOVEM/NOP, the original CM helper and SR helpers
+from pin `5d22d33632646efc3f747f03e82d28353e52722e`. Four literal controls
+distinguish saved and recomputed addresses. The adapter composes address-error
+entry, so this is not a complete external exception or hardware oracle.
+Per route: 16,384 passing, 1,024 mismatching, zero unsupported and 1,024 untested
+phases. Every mismatch is the odd-PC CM MOVEM's D0: saved 89ABCDEF versus
+recomputed DEADBEEF; its following sentinel remains untested. Earlier repair
+phases, normal controls and even-PC CM agree. This localizes a software-reference
+discrepancy without proving which continuation lifetime hardware requires.
+
+The audit records pinned source/input/generated/binary/evidence identities,
+independently enumerates keys/weights/rows, executes frozen native replay during
+report revalidation and correctly fails the discrepancy. Required coverage is
+not reduced: ordinary/complete-040 counts remain unchanged, the 480-case
+inventory remains explicitly untested, and broader reference/consolidation work
+remains required. This discovery is excluded from ordinary synthetic CI and
+the complete-040 promoted selection. Milestone 6 stays **in progress**,
+`roadmapComplete=false`; no CPU fix, package publication or regression retirement.

@@ -893,3 +893,39 @@ WinUAE helper arms CM before the odd-PC check, whereas this non-MMU observer
 skips that helper. Its passing header comparison does not settle CM lifetime
 across address-error delivery/software repair. That protocol remains required
 reference research, as recorded in the qualification document and plan.
+
+### CM continuation lifetime discovery
+
+`M68040CmLifetimeDiscoveryTests` follows a normal/CM format7 return through an
+odd-PC address error, two executed repair stores, handler RTE, PC-relative
+MOVEM.L and a following NOP. Even-PC controls omit the repair path. Every CCR,
+entry ISP/MSP, restored user/user-M/ISP/MSP, both stack alignments and both VBRs
+produce 4,096 scenarios / 18,432 phases / 576 phase combinations per route.
+All registers, stack pointers, guarded memory and selected operand read order
+are checked. A failed prerequisite leaves later phases explicitly untested.
+
+Run `./scripts/test-copper68k-040-cm-lifetime-discovery.ps1` with the same pristine
+WinUAE pin and MSVC options as the handoff command. This builds the original
+full generator with CPU_TESTER=0, then extracts unchanged `_31` RTE, repair
+MOVE, MOVEM and NOP functions, the original `m68k_do_rte_mmu040` helper and
+cputest SR helpers. Four literal normal/CM, even/odd controls validate the
+program and saved-versus-recomputed addresses. Sparse physical transport
+rejects uninitialized reads. The adapter composes address-error entry; it
+does **not** execute full WinUAE `Exception_mmu`, enabled MMU, trace/interrupt
+delivery, physical timing or hardware behavior.
+
+The current scalar/batch routes each contain 16,384 passing, 1,024 mismatching,
+zero unsupported and 1,024 untested phases. Only odd-PC CM MOVEM disagrees:
+Copper68k loads DEADBEEF from recomputed 7000; the reference retains CM through
+repair and loads 89ABCDEF from saved 4200. Following sentinels in those scenarios
+remain untested. All earlier repair phases, even-PC CM and normal controls agree.
+This is an executed software discrepancy, not a promoted architectural defect.
+No continuation latch or production edit is introduced to force agreement.
+
+The command records pinned source, fixture, generated-code, binary and evidence
+identities; independently checks all phase keys, CCR weights and fixture rows;
+and fails on mismatches, unsupported/untested execution or missing/empty inputs.
+`-ValidateReportsOnly -OutputDirectory` also executes the frozen native observer
+and compares its regenerated results. Ordinary synthetic and complete-040
+selections exclude these gated `ReferenceDiscovery` tests. The 480-case required
+inventory and broader milestone 6 scope remain intact.
