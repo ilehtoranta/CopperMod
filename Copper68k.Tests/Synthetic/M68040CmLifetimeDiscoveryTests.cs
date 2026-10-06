@@ -26,6 +26,7 @@ public sealed class M68040CmLifetimeDiscoveryTests(ITestOutputHelper output)
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"));
         var export = Environment.GetEnvironmentVariable("COPPER68K_040_CM_LIFETIME_EXPORT");
         using var rows = string.IsNullOrWhiteSpace(export) ? null : new StreamWriter(Path.Combine(export, group + ".rows"));
+        using var frameRows = string.IsNullOrWhiteSpace(export) ? null : new StreamWriter(Path.Combine(export, group + ".frames"));
         uint index = 0;
         foreach (var start in new[] { "ISP", "MSP" })
         foreach (var result in Banks)
@@ -86,6 +87,12 @@ public sealed class M68040CmLifetimeDiscoveryTests(ITestOutputHelper output)
             }
             else { M68040StackFixture.SetStacks(e, pointers, resultSr); e.Pc = 0x6000; }
             Phase("initial-RTE", 0x4e73);
+            if (frameRows != null)
+            {
+                var sp = m.Core.State.A[7];
+                uint[] frameActual = odd ? [index, sp, m.PeekPhysical(sp, 2), m.PeekPhysical(sp + 2, 4), m.PeekPhysical(sp + 6, 2), m.PeekPhysical(sp + 8, 4)] : [index, 0, 0, 0, 0, 0];
+                frameRows.WriteLine(string.Join(' ', frameActual.Select(Hex)));
+            }
             e.ControlChecks.Remove("format7 validation order");
             if (odd)
             {

@@ -5754,3 +5754,77 @@ this run. Full CM fault/repair lifetime, pending/foreign contexts, original-trac
 retry, internal/data/writeback restoration, broader model reference coverage
 and consolidation remain required. Milestone 6 stays **in progress**,
 `roadmapComplete=false`; no CPU fix, package release or regression retirement.
+
+### Scoped MMU exception entry executed during CM lifetime discovery
+
+The CM command adds `-MmuExceptionEntry` to replace its composed native boundary
+with unchanged exception code from the same WinUAE pin. In addition to generated
+RTE/repair/MOVEM/NOP and the original CM helper, this profile extracts native
+`newcpu.cpp` MakeSR/MakeFromSR, exception3 handling, `Exception`/`ExceptionX`,
+`Exception_mmu`, trace clearing, and `newcpu_common.cpp`'s frame builder. The
+original `fill_prefetch` executes its `cpu_compatible=0` early return. No function
+body is edited. The selected frame's physical writes and vector fetch are real
+reference operations; the adapter supplies memory, cycle and disabled-feature
+transport. Other exception, interrupt and compatible-cache paths fail explicitly.
+It is scoped software entry coverage, not enabled translation, complete run-loop,
+trace-delivery, cache/pipeline, timing or hardware qualification.
+
+Four literal controls still distinguish normal/CM and even/odd returns. The
+native CM state survives actual exception entry, both repair stores and handler
+RTE, then selects saved 4200 for MOVEM and clears. The fixture now additionally
+exports raw frame SP/SR/PC/format/fault address immediately after the initial
+return, before the repair stores erase evidence. Native execution compares these
+bytes independently of the existing CPU fixture's composed frame expectation.
+
+Both scalar/batch tests execute without skips, with 4,096 scenarios / 18,432
+instruction phases / 576 combinations per route. Their phase classifications
+remain 16,384 passing, 1,024 mismatching, zero unsupported and 1,024 untested;
+only odd-PC CM MOVEM's D0 disagrees and its following sentinel is untested.
+The new raw-frame comparison additionally checks 2,048 actual odd frames per
+route. All differ only in saved SR: the MMU reference stacks restored SR;
+Copper68k stacks the incoming secondary SR. All SP/PC/format/fault-address fields
+agree, including both alignments and VBRs. Even scenarios export zero placeholders
+and are not counted as actual frame comparisons. Total instruction phases remain
+36,864; 4,096 frame comparisons/mismatches are reported separately.
+
+The source paths therefore disagree in a way a register-only comparison cannot
+reveal. The previous composed reference and the retained non-MMU handoff path
+must not be relabeled as this MMU exception execution. Nor should a software-path
+vote override processor documentation. The [MC68040 addendum](https://www.nxp.com/docs/en/reference-manual/MC68040UMAD.pdf),
+general-operation item 3, describes the traced-user-return saved-S correction;
+this no-trace matrix does not qualify its complete interaction with CM. The
+[MC68040 manual](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf),
+8.4.6.2/7, specifies saved-EA MOVEM restart but does not settle every intervening
+odd-return fault/repair lifetime in this composition. The saved-SR difference
+and continuation persistence remain software discovery, not confirmed CPU defects.
+
+Final executed-entry evidence is
+`artifacts/m6-cm-exception-comparison-final/`; the shared default profile is
+freshly rerun in `artifacts/m6-cm-exception-default-final/`. Both requested
+commands correctly exit 1. The default's unchanged instruction classifications
+have zero raw frame comparisons, explicitly distinguished from agreement on
+frames. Release builds have zero .NET warnings/errors; native warnings are
+retained at untouched source sites. Source/input/generated/extracted/binary/
+evidence identities and the profile are mandatory. Report-only revalidation
+executes the frozen observer and requires identical reference outputs. Supplying
+the wrong profile fails before qualification can be inferred.
+
+Thirteen retained default controls and eight new executed-entry controls reject
+invalid evidence. The latter cover wrong profile, missing frame identity,
+truncated exported frame rows, altered reference frame bytes, and native missing,
+empty, reordered or extra frame inputs. Fresh final controls are
+`artifacts/m6-cm-exception-default-controls/controls.json` and
+`artifacts/m6-cm-exception-entry-controls/controls.json`. Preliminary failed
+harness builds/controls are not acceptance evidence. No current full CPU or
+consumer rerun is claimed for these test/adapter-only changes.
+
+Frozen source starts at `b88f95016bab947eaee92b04282d0dee2bd399b4` plus the
+recorded fixture/adapter/command changes. Production tree remains
+`795fd12d6c0237a22a5f92f4a96cc4823e0364c1`.
+CPU SHA256: `5bada3aedb413d5c9df20214fb7112e0edd8b4bc5d2977c89b61dc5b1070f20b`.
+Adapter SHA256: `cdd945f93cb27493982fd5164834b10dc0b309b2307b53ba47156f22b3672201`.
+The 480-case required inventory, ordinary/complete-040 requirements, other model
+audits and consolidation scope remain intact. Full CM lifetime, pending/foreign
+contexts, original-trace retry and internal/data/writeback restoration remain
+required. Milestone 6 stays **in progress**, `roadmapComplete=false`; no production
+CPU fix, package publication or regression retirement is included.

@@ -929,3 +929,22 @@ and fails on mismatches, unsupported/untested execution or missing/empty inputs.
 and compares its regenerated results. Ordinary synthetic and complete-040
 selections exclude these gated `ReferenceDiscovery` tests. The 480-case required
 inventory and broader milestone 6 scope remain intact.
+
+Use `-MmuExceptionEntry` for the additional executed-entry profile. It replaces
+the composed native boundary with unchanged `newcpu.cpp` SR helpers, the
+odd-PC callback and exception dispatch, `Exception_mmu`, trace clearing and
+`newcpu_common.cpp` frame construction. The original `fill_prefetch` executes
+its compatibility-disabled early return. Physical transport records the actual
+frame; unavailable exception, interrupt and compatible-cache paths fail.
+Translation, run-loop behavior, trace delivery and hardware remain unqualified.
+This profile requires the matching switch during report revalidation.
+
+The fixture exports raw frame SP/SR/PC/format/fault address immediately after
+the initial return, before repair can overwrite them. In the current executed
+MMU profile all 2,048 odd frames per route differ only in saved SR: the reference
+stacks the restored SR, while Copper68k stacks the secondary incoming SR. All
+other frame fields agree. CM still survives the native entry and repair, so
+the MOVEM phase classifications remain unchanged. Both discoveries fail their
+requested audit; neither software path's answer is promoted to hardware truth.
+The passing handoff qualification and current continuation policy remain
+separate from this raw-frame/CM lifetime research.

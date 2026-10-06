@@ -2224,3 +2224,29 @@ inventory remains explicitly untested, and broader reference/consolidation work
 remains required. This discovery is excluded from ordinary synthetic CI and
 the complete-040 promoted selection. Milestone 6 stays **in progress**,
 `roadmapComplete=false`; no CPU fix, package publication or regression retirement.
+
+### Milestone 6 executed MMU exception entry and CM lifetime
+
+The CM command adds an explicit `-MmuExceptionEntry` profile. It executes
+untouched pinned WinUAE native SR helpers, exception3 callback/dispatch,
+`Exception_mmu`, frame builder and trace clearing. Original `fill_prefetch`
+executes its compatibility-disabled return; physical transport does not enable
+translation, caches or a run-loop/IRQ/trace/hardware oracle. Normal/CM, even/odd,
+CCR/bank/alignment/VBR selections remain complete at their stated scope.
+
+Raw frames are captured before either repair store. Per route, all 2,048 odd
+frames disagree only in stacked SR: the MMU path stacks the restored image;
+Copper68k stacks the incoming secondary image. SP, stacked PC, format and fault
+address agree. The MMU path still retains CM through exception entry and repair,
+and the 18,432 instruction-phase classifications per route remain 16,384 passing,
+1,024 mismatching, zero unsupported and 1,024 untested. These raw-frame
+comparisons are reported separately from logical instruction counts.
+
+The default composed profile is rerun with unchanged classifications. Both
+requested audits fail, and report revalidation executes the frozen native code.
+The new profile is explicit in source/binary/evidence identities; eight dedicated
+frame/profile integrity controls and thirteen retained default controls reject
+invalid inputs. No software path is selected as hardware truth by majority or
+compatibility. Full CM lifetime, pending/foreign contexts and every broader
+reference/consolidation requirement remain required. Milestone 6 stays **in
+progress**; ordinary and complete-040 coverage requirements are unchanged.
