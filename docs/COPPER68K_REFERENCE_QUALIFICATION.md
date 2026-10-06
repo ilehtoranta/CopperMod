@@ -5426,3 +5426,56 @@ Expanded 040/ordinary requirements are recorded in the plan. Trace
 deferral/resumption, repair/retry, internal restoration and every remaining
 model/reference/consolidation requirement stay open. No CPU fix, consumer
 rerun, package release or additional regression retirement is included.
+
+### Mixed-epoch RTE retry discovery — unresolved trace composition
+
+The previous repaired-chain fixtures reused incoming trace in every throwaway,
+so they could not distinguish original-instruction trace deferral from tracing
+a fresh retry with the last committed SR. The new `M68040MixedEpochRetryDiscoveryTests`
+passes independent first/second trace values to the shared test-only repair
+fixture. Physical PC-read rejection, saved live SR/PC, committed stack pointers,
+three real repair stores, handler return and the original RTE retry are executed.
+The matrix includes one/two throwaways, all intermediate aliases including
+user M=1, supervisor fault tails, all restored banks, CCR 0/31 and format0/normal/CM.
+
+| Each scalar/batch report | Phases |
+| --- | ---: |
+| Passing | 220,896 |
+| Mismatching | 14,976 |
+| Unsupported | 0 |
+| Untested after a failed prerequisite | 22,464 |
+| Total / combinations | 258,336 / 16,848 |
+
+Both tests execute and fail with zero skips. The current core traces the retry
+using its entry SR, which contains the last committed throwaway trace. Applying
+MC68040UM 8.2.6's original-instruction deferral rule instead predicts the opposite
+outcome when the trace classifications differ: original T1/T0 with a cleared
+throwaway loses the predicted trace; original zero with a traced throwaway gains
+one. Both directions and the second-throwaway diagnostic are retained in both
+reports. Equal classifications pass and mismatch counts localize the divergence
+to retry. The interaction of the general deferral rule with RTE validation
+restart remains an unqualified composition, not confirmed hardware behavior.
+MC68040UM 8.4.2/8.4.6.7 and the addendum do not establish an extra private trace
+latch here. Documentary WinUAE source was inspected, not executed as a fault
+oracle. No CPU fix or guessed CT/latch behavior is introduced.
+
+The explicit `test-copper68k-040-mixed-retry-discovery.ps1` command validates every
+combination and phase weight using literal independent enumeration. It retains
+the failed summary with `architecturallyQualified=false`, `passed=false` and
+`roadmapComplete=false`. Five negative integrity controls reject missing
+identities/fixture identity, empty selection, missing report and missing
+combination for their intended reasons. Three retained boundary/encoding tests
+pass with zero skips. Release build has zero warnings/errors.
+
+Frozen build starts from `78d6dceb5d3577f5f6cc9ca7a0c268916f7d507d` plus these
+test changes; production tree remains `795fd12d6c0237a22a5f92f4a96cc4823e0364c1`.
+CPU SHA256: `084d3c734d22aa40271c5700a67a385041dd5c27448832777f9b3161a0c14cec`.
+Adapter SHA256: `978a24ef1123392a681b9eff9d12ff77fbe00dd293396c7b2f24df95de12d87f`.
+`artifacts/m6-mixed-retry-discovery-final/identities.json` records production and
+fixture/command/assembly identities; the corresponding summary retains all
+counts. These build identities are not relabeled after commit. No previous
+broader qualification is rerun or relabeled. Ordinary/complete-040 coverage
+requirements remain those of the preceding checkpoint; these separately gated
+discovery cases do not replace its 480-case inventory. Independent trace
+qualification, complete executed mixed-epoch repair/retry, internal restoration,
+all other model/reference gaps and consolidation remain required.

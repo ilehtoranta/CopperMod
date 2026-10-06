@@ -806,3 +806,31 @@ structural groups. The lost-T1 probe additionally requires second-throwaway
 trace diagnostics in both structural reports. Shared test-only stack/status
 fixtures retain independent fixed SR examples. Failed initial fixture evidence
 is not qualification evidence.
+
+### Mixed-epoch repair/retry discovery
+
+`M68040MixedEpochRetryDiscoveryTests` executes physical PC-read rejection,
+three real repair stores, handler RTE, retry and following instruction. Initial,
+first/second throwaway and repaired trace values vary independently; supervisor
+tails include one/two throwaways, user/user-M intermediate aliases, every
+restored stack bank, CCR 0/31 and format0/normal/CM. Its expectation applies
+MC68040UM 8.2.6's original-instruction trace deferral to validation retry. That
+composition still needs independent qualification. This discovery is not a
+promoted family or a confirmed production defect; the existing required
+inventory remains intact.
+
+Run `./scripts/test-copper68k-040-mixed-retry-discovery.ps1` explicitly. It
+requires two executed tests without skips, records current source/binary
+identities, independently validates all 16,848 combinations and 258,336 phases
+per route, and fails on mismatches, unsupported execution, untested phases or
+missing inputs/reports/selections. Use `-ValidateReportsOnly -OutputDirectory`
+with recorded outputs to validate them again. Ordinary synthetic CI excludes
+these `ReferenceDiscovery` cases; an optional skip is unavailable coverage.
+
+The current scalar/batch selections each contain 220,896 passing, 14,976
+mismatching, zero unsupported and 22,464 untested phases. Retry uses the last
+committed trace state where the hypothesis requires the original state. Both
+lost and newly introduced trace directions, including second throwaways, are
+retained. No private trace latch, guessed CT flag or production change is
+introduced to force agreement. See the qualification record for scope and
+independent-reference caveats.

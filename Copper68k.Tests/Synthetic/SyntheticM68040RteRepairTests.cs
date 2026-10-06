@@ -130,9 +130,10 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         report.Complete(output);
     }
 
-    private static void Run(SyntheticMachine m, SyntheticM68040RteValidationFaultTests.ValidationFaultBus bus,
+    internal static void Run(SyntheticMachine m, SyntheticM68040RteValidationFaultTests.ValidationFaultBus bus,
         CoverageBatch report, string[] path, string result, ushort incoming, ushort restoredTrace,
-        uint alignment, uint vbr, int ccr, string form, uint offset, int width, int faultByte, bool keepTrace, bool batch, bool pendingTrace, bool userMaster, bool cpVectors, bool traceService, bool clearServiceTrace)
+        uint alignment, uint vbr, int ccr, string form, uint offset, int width, int faultByte, bool keepTrace, bool batch, bool pendingTrace, bool userMaster, bool cpVectors, bool traceService, bool clearServiceTrace,
+        (ushort First, ushort Second)? throwawayTraces = null)
     {
         bus.Disarm(); m.Reset(ccr);
         var pointers = new Dictionary<string, uint> { ["user"] = 0x7800 + alignment, ["ISP"] = 0x4700 + alignment, ["MSP"] = 0x7400 + alignment };
@@ -141,11 +142,13 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         var discarded = new List<uint>();
         for (var n = 0; n < path.Length - 1; n++)
         {
-            var at = pointers[path[n]]; discarded.Add(at);
-            m.InitializePhysical(at, Status(path[n + 1], incoming, ccr ^ 31), 2);
+            var bank = M68040StackFixture.PhysicalBank(path[n]);
+            var at = pointers[bank]; discarded.Add(at);
+            var trace = throwawayTraces is { } epochs ? n == 0 ? epochs.First : epochs.Second : incoming;
+            m.InitializePhysical(at, Status(path[n + 1], trace, ccr ^ 31), 2);
             m.InitializePhysical(at + 2, 0xdead0001u + (uint)n * 2, 4);
             m.InitializePhysical(at + 6, 0x1024, 2);
-            pointers[path[n]] += 8;
+            pointers[bank] += 8;
         }
         var tail = path[^1]; var frame = pointers[tail]; var accessFrame = frame - 60;
         var format = form.StartsWith("format") ? int.Parse(form[6..]) : form.StartsWith("invalid") ? int.Parse(form[7..]) : 7;
@@ -155,7 +158,8 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         var continuation = post ? 0x8000 : unimplemented ? 0x4000 : form switch { "CM" => 0x1000, "CT" => 0x2000, _ => 0 };
         var vector = post ? form == "CP" ? 49 : int.Parse(form[2..]) : unimplemented ? 11 : form == "CT" ? 9 : 0;
         var savedSr = Status(result, restoredTrace, ccr ^ 31);
-        var priorSr = Status(tail, incoming, path.Length > 1 ? ccr ^ 31 : ccr);
+        var committedTrace = throwawayTraces is { } live ? path.Length == 2 ? live.First : live.Second : incoming;
+        var priorSr = Status(tail, committedTrace, path.Length > 1 ? ccr ^ 31 : ccr);
         // Every repair changes SR and PC. Invalid formats are repaired to format 0.
         m.InitializePhysical(frame, 0x801fu ^ (uint)ccr, 2);
         m.InitializePhysical(frame + 2, Target + 2, 4);
@@ -222,6 +226,8 @@ public sealed class SyntheticM68040RteRepairTests(ITestOutputHelper output)
         else if (vector != 0) phases.Add("pending-return");
         phases.Add("following");
         var id = $"68040/RTE/{(traceService ? "software-trace" : cpVectors ? "cp-vectors" : userMaster ? "user-master" : pendingTrace ? "pending-trace" : keepTrace ? "retry-trace" : "repair")}/{form}/path={string.Join('-', path)}/result={result}/incoming={incoming:X4}/T={restoredTrace:X4}/align={alignment}/VBR={vbr:X8}/read={offset}:{width}/fault-byte={faultByte}{(traceService ? $"/clear={clearServiceTrace}" : "")}/op=4E73/ccr={ccr:X2}";
+        if (throwawayTraces is { } mixed)
+            id = $"68040/RTE/mixed-retry-discovery/{form}/path={string.Join('-', path)}/result={result}/incoming={incoming:X4}/first={mixed.First:X4}/second={(path.Length == 2 ? "none" : mixed.Second.ToString("X4"))}/T={restoredTrace:X4}/align={alignment}/VBR={vbr:X8}/read={offset}:{width}/fault-byte={faultByte}/op=4E73/ccr={ccr:X2}";
         var phase = 0;
         bool Step()
         {

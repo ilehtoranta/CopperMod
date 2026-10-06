@@ -2108,3 +2108,31 @@ Expectations compose MC68040UM 8.1, 8.2.5/6, 8.3, 8.4.2 and 8.4.6.7. Trace
 suspension/resumption across differing epochs, executed repair/retry, internal
 restoration, all earlier data/context/model/reference and consolidation scope
 remain required. Milestone 6 stays in progress; no CPU defect or release is claimed.
+
+### Milestone 6 original-trace retry discovery — unresolved
+
+A dedicated discovery command now distinguishes original incoming tracing from
+the trace state installed by consumed throwaways. It executes physical PC-read
+faults, three repair stores, access-handler return, retry and following
+instruction. One/two-throwaway paths cover supervisor tails, all intermediate
+stack aliases and all restored banks; format0/normal/CM, CCR 0/31 and independent
+initial/first/second/final trace values are explicit.
+
+Both scalar/batch selections execute without skips and each report 258,336
+phases / 16,848 independently enumerated combinations: 220,896 passing,
+14,976 mismatching, zero unsupported and 22,464 untested phases. Current retry
+tracing follows the last committed state, disagreeing in both directions with
+the original-instruction deferral hypothesis composed from MC68040UM 8.2.6.
+Equal trace classifications pass; failure is localized to the retry boundary.
+The composition is still independently unqualified. No architectural CPU defect
+or physical trace result is claimed, and no trace latch/CT workaround is added.
+
+`scripts/test-copper68k-040-mixed-retry-discovery.ps1` records source/binary
+identities, verifies complete selections and every combination/phase weight,
+and correctly fails this current result. Five integrity controls reject missing
+identities, a missing fixture identity, an empty selection, a missing report and
+a missing combination. Three retained boundary/encoding tests pass. This is
+discovery evidence rather than promoted ordinary-CI coverage; complete 040 and
+ordinary counts from the preceding checkpoint remain unchanged. The existing
+480-case inventory and every unresolved data/context/model/reference and
+consolidation requirement remain required. Milestone 6 stays **in progress**.
