@@ -2405,7 +2405,7 @@ and weights; fresh and frozen validations pass. Fourteen integrity controls
 reject changed identities, empty/wrong selections and redistributed coverage.
 
 The ordinary semantic gate now requires **85,535,254 scenarios / 685 reports**.
-These counts include the new requirements, not proof of pending broad execution.
+The corrected full run validates these counts; its scope precedes the later EXG addition.
 The retained 68010 selection passes 21 tests without skips; seven production
 mutations detect the targeted continuation defects, including all 18,432 cases
 affected by an omitted destination-register write. A maintained mutation command
@@ -2415,9 +2415,43 @@ Musashi semantic audits pass. The isolated unpublished `.64` consumer passes
 its Release build, host/disk/engine tests and all three native replays. The first
 full CPU run failed only an obsolete structural-image expectation; that test
 now checks explicit private-image examples and passes its retained selection.
-The corrected full rerun is pending at this commit. See the reference document
+The corrected full rerun passes 5,129 tests, with zero failures and nineteen
+unavailable tests, including nine pinned WinUAE selections. See the reference document
 for identities, exclusions and preserved failed evidence. No regression is
 retired or public package published. Long non-MOVE, foreign hardware images, RMW and external bus errors
 remain required, along with all other milestone-6 reference/consolidation gaps.
 This private continuation is not hardware-internal or physical timing
 qualification. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+### Milestone 6 EXG wide-register qualification and consolidation — 2026-10-06
+
+The original shared register-transfer matrix used small An values and could
+not detect word truncation. A new ordinary EXG matrix adds 88,704 scenarios /
+10,584 independently checked combinations across eight profiles. It separates
+all DD/AA/AD register bindings from eight value boundaries/all CCRs, including
+self aliases, A7 and every supported active stack bank. Full register values,
+unchanged flags, exact PC, untouched registers/banks/memory, absence of operand
+bus transfers and a following NOP are checked. Three fixed examples validate
+fixture encoding against M68000PM EXG 4-105.
+
+Fresh and frozen qualification pass all eleven named tests without skips.
+Word-truncation and lost-latched-input mutations fail both the old fact and
+complete 68000 replacement before retirement, and the replacement afterward.
+Only `ExgAddressRegistersSwapsFullLongValues` is retired, mapped to
+`68000/EXG.L/AA/bank=ISP/r6->r2/boundaries/pair=0/op=C54E/ccr=00`.
+The replacement uses the same opcode/values and stronger preservation checks.
+Twelve integrity controls reject their intended errors. CPU source restores
+byte-for-byte, and normal CPU/test assemblies remain unchanged.
+
+Ordinary requirements become 85,623,958 scenarios / 693 reports. The preceding
+full run passes 5,129 tests / zero failures / nineteen unavailable tests and
+validates its 85,535,254 scenarios / 685 reports, including nine pinned WinUAE
+selections. Later EXG tests execute separately in isolated outputs. Combined
+report validation is not a fresh broad run of the expanded test source.
+See the [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#exg-wide-register-qualification-and-consolidation--2026-10-06)
+for scoped identities, exact retirement proof and rejected preliminary evidence.
+Specialized hardware/timing/prefetch/bus/JIT/native regressions remain. No CPU
+behavior, timing policy, public API or package changes are made in this slice.
+The complete-040 inventory still retains 480 untested cases, and all broader
+restoration, reference disagreements and consolidation requirements remain.
+Milestone 6 stays **in progress**, `roadmapComplete=false`.

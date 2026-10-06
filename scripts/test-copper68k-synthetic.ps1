@@ -65,6 +65,7 @@ try {
             'move-register-overlap'=$(if ($model -in @('68000','68010')) {1801} else {2593});
             'move-address-boundary'=$(if ($model -in @('68000','68010')) {44} else {60});
             'transfer-registers'=17624; 'transfer-addresses'=$(if ($model -in @('68000','68010')) {8064} else {9252});
+            'transfer-exg-wide'=$(if ($model -in @('68000','68010','68060')) {8448} else {12672});
             'transfer-moveq-unassigned-words'=131072;
             'transfer-movep'=3708; 'transfer-movem'=$(if ($model -in @('68000','68010')) {3196} else {3592});
             'transfer-movem-invalid-operands'=6400;

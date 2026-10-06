@@ -3587,19 +3587,6 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x3000u, cpu.State.A[7]);
 	}
 	[Fact]
-	public void ExgAddressRegistersSwapsFullLongValues()
-	{
-		var bus = new TestBus();
-		Write(bus.Memory, 0x1000, 0xC5, 0x4E); // EXG A2,A6
-		var cpu = new M68kInterpreter(bus);
-		cpu.Reset(0x1000, 0x3000);
-		cpu.State.A[2] = 0x0000_0040;
-		cpu.State.A[6] = 0x00C0_0276;
-		cpu.ExecuteInstruction();
-		Assert.Equal(0x00C0_0276u, cpu.State.A[2]);
-		Assert.Equal(0x0000_0040u, cpu.State.A[6]);
-	}
-	[Fact]
 	public void AbcdDataRegisterUsesStickyZeroAndDecimalCarry()
 	{
 		var bus = new TestBus();

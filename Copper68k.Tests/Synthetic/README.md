@@ -112,6 +112,38 @@ address boundaries, invalid opwords and alignment. Full indexed fixtures cover
 LEA/PEA and MOVEM, and cover spaced MOVEP bytes, masks, aliases, model exceptions,
 register encodings and preserved CCR bits.
 
+The `transfer-exg-wide` group adds **88,704 scenarios / 10,584 combinations**
+across eight profiles. DD/AA/AD exchanges exercise every register binding with
+wide values, then eight value pairs and all 32 CCRs for canonical bindings,
+self aliases and A7. User/ISP banks apply on every model; 020/030/040 and A1200
+also cover MSP. Architectural An values remain full 32-bit values even on a
+24-bit bus. Registers, SR, exact PC, inactive stack banks, unchanged memory,
+absence of operand transfers and a following NOP are checked independently.
+Three fixed opcode examples validate fixture encoding.
+
+```powershell
+./scripts/test-copper68k-exg.ps1 -OutputDirectory artifacts/exg-wide
+./scripts/test-copper68k-exg.ps1 -ValidateReportsOnly -OutputDirectory artifacts/exg-wide
+./scripts/test-copper68k-exg-mutations.ps1 -OutputDirectory artifacts/exg-mutations
+./scripts/test-copper68k-exg-mutations.ps1 -ValidateReportsOnly -OutputDirectory artifacts/exg-mutations
+```
+
+The positive command checks exact model/test selections, source/binary/evidence
+identities and independently enumerated keys and weights. The mutation command
+temporarily modifies only AA exchange source, builds in isolated outputs and
+restores original bytes; do not edit that source or build from it concurrently.
+It detects word truncation and lost latched input with exact per-key outcomes.
+`-IncludeHistoricalRegression` is for a pre-retirement source containing the
+old `ExgAddressRegistersSwapsFullLongValues` method; it must fail on a checkout
+where that method is absent. The exact retirement witness and before/after
+proofs are recorded in the
+[qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#exg-wide-register-qualification-and-consolidation--2026-10-06).
+
+The expanded ordinary gate requires **85,623,958 scenarios / 693 reports**.
+The preceding full CPU run and this scoped EXG execution have separate source
+and assembly identities; combined report validation does not imply a fresh
+full-suite execution of the expanded source. Milestone 6 remains incomplete.
+
 ## Seeded and external audits
 
 ```powershell

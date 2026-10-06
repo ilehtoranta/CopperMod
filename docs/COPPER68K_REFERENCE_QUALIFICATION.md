@@ -6411,10 +6411,17 @@ The first full CPU run records 5,128 passing, one failing and nineteen skipped
 tests (`artifacts/m6-010-long-restart-full/`). Its sole failure was the structural
 test's obsolete zero-internal-image expectation described above. This failed
 run remains intact and is not accepted as a passing semantic gate. The corrected
-full rerun, including nine pinned WinUAE selections, is still pending at this
-commit (`artifacts/m6-010-long-restart-full-final/`). Discovery lists 5,116 test
+full rerun passes 5,129 tests with zero failures and nineteen unavailable tests
+(`artifacts/m6-010-long-restart-full-final/`). Exact method/theory/skip selection,
+all nine pinned WinUAE input/CPU/adapter identities and the ordinary semantic
+gate pass strict verification (`full-identity.json`). Discovery lists 5,116 test
 descriptors; one theory expands into 33 runtime rows, giving 5,148 executions.
-The ordinary gate now requires 85,535,254 scenarios / 685 reports.
+This run validates 85,535,254 scenarios / 685 reports. It precedes the later EXG
+fixture and retirement, which receive separate scoped execution below; it is
+not a broad run of that subsequently expanded test source. The source snapshot
+in `artifacts/m6-010-long-restart-full-final-inputs.json` was captured while the
+run was active, not before execution. Its recorded normal assemblies remained
+unchanged throughout the run and subsequent isolated EXG builds.
 
 An isolated CopperScreen consumer at `d9beae8b88be24032221e3482942a249c03c27d3`
 passes its Release build, host tests (149 passing / six optional skips), disk
@@ -6436,3 +6443,90 @@ No regression is retired, public package published, hardware timing qualified,
 or full format-8 restart claimed. Non-MOVE/foreign/RMW/external-BERR restoration,
 rejected-RTE CCR architecture and all other reference/consolidation gaps remain
 required. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+### EXG wide-register qualification and consolidation — 2026-10-06
+
+M68000PM EXG 4-105 specifies long-register DD/AA/DA exchanges with unchanged
+CCR ([manual](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)).
+Architectural address registers retain all 32 bits independently of external
+bus width. The existing shared register-transfer matrix used An values below
+64 KiB, so it did not prove replacement coverage for the old full-long fact.
+The added `SyntheticExgRegisterTests` fixture fills that gap without changing
+production CPU behavior or consulting production expectation helpers.
+
+| Scope | Scenarios per profile | Combinations per profile |
+| --- | ---: | ---: |
+| 68000, 68010, 68060: user and ISP | 8,448 | 1,008 |
+| 68EC020, 68020, 68030, 68040, A1200: user, ISP and MSP | 12,672 | 1,512 |
+| All eight profiles | **88,704** | **10,584** |
+
+Each bank separately enumerates every DD/AA/AD register binding with two wide
+value pairs (384 scenarios) and five canonical/alias/A7 bindings with eight
+pairs and every CCR (3,840). Register snapshots independently determine results,
+including self aliases. Checks cover full architectural values, unchanged
+SR/CCR, exact PC, every untouched register/inactive stack bank, guarded memory,
+no operand bus transfers or exception entry, and a following NOP. Counts are
+scenarios, not twice-counted sentinel phases. Three fixed encodings include
+`C54E`, the historical exchange word.
+
+```powershell
+./scripts/test-copper68k-exg.ps1 -OutputDirectory artifacts/exg-wide
+./scripts/test-copper68k-exg.ps1 -ValidateReportsOnly -OutputDirectory artifacts/exg-wide
+./scripts/test-copper68k-exg-mutations.ps1 -OutputDirectory artifacts/exg-mutations
+./scripts/test-copper68k-exg-mutations.ps1 -ValidateReportsOnly -OutputDirectory artifacts/exg-mutations
+```
+
+Fresh and frozen positive qualification pass eleven exact executions without
+skips at `artifacts/m6-exg-wide-qualified-final/`. Source inputs are captured
+before execution and checked afterward. CPU, test, report/TRX/log identities,
+model/group selection and every independently enumerated key/weight must match.
+Isolated CPU SHA256 is
+`f71d94abe6be78af6eb966c605fdde04fac79f5fdfa745714f1d68a4a3b139c9`;
+test adapter is
+`3e8779eda6a8740c5e75278652e0e4c2b3474506afbd2456f600d6f5c26b99bd`.
+Isolated build identities differ from the recorded normal/consumer outputs;
+they do not imply different production source behavior.
+
+Only `M68kInterpreterCoreBehaviorTests.ExgAddressRegistersSwapsFullLongValues`
+is retired. Its exact replacement is
+`68000/EXG.L/AA/bank=ISP/r6->r2/boundaries/pair=0/op=C54E/ccr=00`,
+with the same opcode and values, supervisor SR `2700` and stronger preservation
+checks. Both full 68000 matrix and historical fact detect both targeted mutations:
+
+| Mutation in AA exchange | Mismatching / passing replacement scenarios |
+| --- | ---: |
+| Truncate both results to a word | 2,096 / 6,352 |
+| Read the already-overwritten register instead of latched input | 1,568 / 6,880 |
+
+Pre-retirement positive evidence passes twelve tests at
+`artifacts/m6-exg-wide-before-retirement-final/`. Pre-retirement proofs at
+`artifacts/m6-exg-wide-mutations-before/` execute two failing tests per mutation;
+post-retirement proofs at `artifacts/m6-exg-wide-mutations-after/` execute one.
+Each command requires every one of 1,008 keys with the expected classification,
+all failure identifiers and the exact historical witness. Fresh and frozen
+validation pass before and after retirement. The command captures mutation
+source, restores original bytes and rejects concurrent edits without overwriting
+them. Normal CPU/test assemblies retain the identities recorded above for the
+full run. No unrelated regression is retired.
+
+Twelve controls in `artifacts/m6-exg-wide-controls-final/controls.json` reject
+wrong profiles, empty input/mutation selections, missing reports, foreign test
+selection, wrong keys/weights, altered mutation source, wrong classifications
+and a missing historical witness. Altered evidence hashes are refreshed so
+semantic checks must reject the content itself. Original evidence is retained.
+The preliminary scripted positive run failed a test-name array-construction
+check despite passing emulator tests; the preliminary controls stopped on a
+single-result XML indexing error. Both are excluded and superseded by the final
+outputs. Frozen positive validation attempted while mutation source was active
+correctly rejected the changed input; it passes after source restoration.
+
+The ordinary gate now requires **85,623,958 scenarios / 693 reports**. Combined
+report validation in `artifacts/m6-exg-wide-combined-reports/` uses the prior
+strictly verified 685-report full run plus eight freshly qualified EXG reports;
+it is not a fresh full-suite run of the changed test source. The historical
+full run, long-continuation audits and pre-retirement proofs retain their original
+input identities; they are not rehashed to pretend to execute later source.
+No new consumer execution or package publication is needed for this test-only
+slice. The complete-040 inventory's 480 untested cases, all broader restoration
+and software disagreements, independent coverage and further consolidation
+remain required. Milestone 6 stays **in progress**, `roadmapComplete=false`.
