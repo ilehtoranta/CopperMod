@@ -1943,6 +1943,18 @@ in an isolated source copy makes all sixteen fixed pointer programs fail.
 No production or package change is needed. The full milestone remains open;
 see [pre-EA pointer faults](COPPER68K_REFERENCE_QUALIFICATION.md#pre-ea-movem-indirect-pointer-faults--2026-10-07).
 
+EXTB consolidation on 2026-10-07 retires the pure semantic
+`M68020ExecutesM68020OnlyExtbLong` fact after the existing exact synthetic case
+and original both detect a targeted zero-extension mutation. A maintained command
+restores only the pinned historical fact in isolated source copies and verifies
+the same proof after retirement: 140,992 clean scenarios across eight profiles,
+6,144 intended EXTB mismatches across six implementing profiles, complete weighted
+keys and exact diagnostics. Six corrupted-evidence controls are rejected. All
+462 retained 68020 class tests pass; timing and specialized regressions remain.
+The ordinary scenario inventory and production package are unchanged. See the
+[EXTB retirement proof](COPPER68K_REFERENCE_QUALIFICATION.md#extb-semantic-regression-consolidation--2026-10-07).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
 The three maintained software-trace mutations are detected in each complete
 scalar/batch canonical/chained report with their intended semantic diagnostic.
 Production bytes are restored exactly and the clean implementation rebuilds

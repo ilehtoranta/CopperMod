@@ -7426,3 +7426,61 @@ full-suite and consumer results remain historical evidence for that production
 implementation, not a fresh run of these new tests. The broad remaining gate,
 other model/reference disagreements and consolidation remain open. Milestone 6
 remains **in progress**, `roadmapComplete=false`.
+
+## EXTB semantic regression consolidation — 2026-10-07
+
+`M68020InterpreterTests.M68020ExecutesM68020OnlyExtbLong` is retired only after
+proving replacement coverage. Its critical inputs are opcode `49C0`, D0 `$80`,
+CCR zero and supervisor SR `$2700`. It checks the sign-extended D0, next PC and
+N/Z/V/C, with no timing, bus-order, prefetch, cache or integration assertions.
+The exact existing replacement is
+`68020/EXTB.L/D0/boundary-ccr/op=49C0/v=00000080/ccr=00` in
+`SyntheticTransferTests.RegisterTransferFamilies`. Shared expectations also
+check X/other SR bits, all untouched registers/stacks/memory, execution state
+and a following NOP sentinel. Other CCR/value/register selections and all eight
+profiles remain covered by that matrix, including the unavailable instruction's
+architectural outcome on 000/010.
+
+[M68000PRM EXT/EXTB, 4-106](https://www.nxp.com/docs/en/reference-manual/M68000PRM.pdf)
+defines EXTB as copying bit 7 into bits 31..8. The targeted production mutation
+replaces that sign extension with zero extension in an isolated source copy.
+Before retirement, both the original fact and the replacement fail in the same
+run. The original reports expected `$FFFFFF80`, actual `$80`; the exact
+replacement reports expected SR `$2708`, actual `$2700`, catching the resulting
+incorrect N flag first. There are **1,024 intended EXTB mismatches on each of
+six implementing profiles / 6,144 total**. The 000/010 unavailable-instruction
+checks and every other transfer combination still pass.
+
+The maintained command makes this proof repeatable after retirement:
+
+```powershell
+./scripts/test-copper68k-extb-consolidation.ps1 -OutputDirectory artifacts/extb-consolidation-proof
+```
+
+It requires the exact original fact from pinned commit
+`4863f449816115b536b21f9faa7c73539ecaabcb`, inserts it only into owned source
+copies, and runs clean/mutated comparisons. Missing historical fixtures or empty
+selections fail. The gate checks source, fixture, assembly, report and TRX
+identities, the exact nine-test roster in each run, the original diagnostic,
+the exact replacement case, and all **232 independently enumerated weighted
+combination keys per model**. Both pre- and post-retirement clean comparisons
+pass **140,992 logical scenarios / eight reports plus the historical fact**.
+The mutated run has precisely seven failed executions and two passing ones.
+`-ValidateReportsOnly` verifies the frozen proof without rebuilding.
+
+Evidence is retained under the restoration temporary root in
+`audits/ExtbConsolidationBeforeFinal`, `audits/ExtbConsolidationAfter` and
+`ExtbConsolidationIntegrity`. Six copied-evidence controls reject missing source,
+altered pinned fixture, empty execution, wrong weight, lost exact replacement
+case and wrong historical diagnostic. Initial verifier defects remain retained
+as provisional evidence, not accepted proof.
+
+All **462 remaining M68020InterpreterTests executions** pass with no failures or
+skips, retained in `audits/ExtbRetained020Tests`. Nearby LEA/MOVEQ and other
+timing-policy tests remain: their cycle assertions are not replaced by the
+semantic matrix. Specialized exception, bus, cache/prefetch, JIT and native
+regressions are not retired. The ordinary 707-report scenario inventory does not
+change. Production source, package bytes and protected normal assemblies remain
+unchanged; no new full CPU/consumer run or package release is claimed. Other
+consolidation/reference/restoration requirements remain open. Milestone 6 is
+still **in progress**, `roadmapComplete=false`.
