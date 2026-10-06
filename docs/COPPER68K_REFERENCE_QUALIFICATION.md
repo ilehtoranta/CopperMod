@@ -5479,3 +5479,111 @@ requirements remain those of the preceding checkpoint; these separately gated
 discovery cases do not replace its 480-case inventory. Independent trace
 qualification, complete executed mixed-epoch repair/retry, internal restoration,
 all other model/reference gaps and consolidation remain required.
+
+### Chained odd-PC short-frame SR handoff — executed software reference
+
+The required odd-PC provenance work now has an executed reference for chained
+format0/2/3 tails. `SyntheticM68040ChainedOddReturnTests` prepares independent
+frame addresses and raw words, one/two throwaways, every stack and user M=1
+alias, independent incoming/first/second/final trace states, all canonical CCRs
+and structural CCR 0/31, alignment 0/1, VBR 0/0x10000 and low/high odd PCs.
+Full architectural register/memory checks retain surrounding frame guards,
+consumed USP/ISP/MSP, validation reads in order, non-fetch of discarded/odd PCs,
+the saved RTE PC/SR and format-2 fault address. Scalar and one-instruction batch
+execution share the public factory and retained batch boundary checks.
+
+| Fresh report | Passing cases | Combinations | Per-combination CCR weight |
+| --- | ---: | ---: | ---: |
+| Canonical scalar | 82,944 | 2,592 | 32 |
+| Canonical batch | 82,944 | 2,592 | 32 |
+| Structural scalar | 539,136 | 269,568 | 2 |
+| Structural batch | 539,136 | 269,568 | 2 |
+| Total | 1,244,160 | 544,320 | — |
+
+Fresh Release build succeeds with zero .NET warnings/errors. Four tests execute
+and pass with zero skips; every report has zero mismatches, unsupported or
+untested cases. The native reference independently compares every row and
+agrees in all 1,244,160 cases. Literal PowerShell enumeration verifies every
+architectural combination and weight, separately from xUnit counts.
+
+`scripts/test-copper68k-040-rte-handoff.ps1` requires a pristine official WinUAE
+checkout at `5d22d33632646efc3f747f03e82d28353e52722e`. It compiles the original
+opcode builder and generator, with the single CPU_TESTER configuration change,
+then extracts the untouched generated `op_4e73_94_test_ff` and original
+`MakeFromSR_x`, `MakeFromSR_T0`, `MakeFromSR` from `cputest.cpp`. The transport
+implements sparse initialized memory, read recording, flags and the odd-PC
+callback. Unexpected reads/exceptions, out-of-scope frames, missing/malformed
+rows and empty selections fail. No Copper68k decoder, EA, arithmetic or timing
+helper produces reference outcomes. Two literal native controls discriminate
+one/two-throwaway SR provenance and consumed stacks independently of exported
+CPU fixtures.
+
+The generated function passes its last committed throwaway SR as the secondary
+image to odd-PC entry, while the restored SR governs live flags/stack selection.
+The observer stops at that callback. Its tuple is composed with architectural
+format-2 entry and the traced-user saved-S correction described in the
+[MC68040 addendum](https://www.nxp.com/docs/en/reference-manual/MC68040UMAD.pdf),
+general-operation item 3 (page 2). This validates software handoff/read/stack
+agreement and the explicitly composed frame expectation. It does **not** execute
+WinUAE's full exception engine or establish hardware, cache, MMU, bus fault,
+trace-retry or physical timing behavior. The pinned
+[tester limitations](https://raw.githubusercontent.com/tonioni/WinUAE/5d22d33632646efc3f747f03e82d28353e52722e/cputest/readme.txt)
+remain relevant. In particular, the generated 040 RTE lacks validation-read
+bus-fault handling and cannot qualify the unresolved original-trace retry
+discovery. No latch/CT workaround or CPU correction is inferred from this audit.
+
+The native generator uses the upstream Unicode configuration and MSVC
+19.51.36260 x64. One unused `oldpc` warning arises in untouched generated RTE;
+it is retained in the native build log. Initial generator attempts used the
+wrong table input or missing Unicode/link configuration and are not accepted
+reference results. Initial C# fixture compilation used the wrong batch API/helper
+name; those errors were corrected before any successful execution. The initial
+maintained reference invocation also inherited MSVC's `Platform=x64` in its
+.NET build; that preliminary comparison is not the acceptance record. The final
+command restores compiler environment before building/testing the regular
+Release assemblies. It records exact pristine source, extracted/generated
+inputs, compiler, assemblies, fixture rows, native outputs, reports and TRX hashes.
+
+`ChainedOddRte` mutation proofs execute both complete canonical routes per probe:
+
+| Probe | Mismatches per scalar/batch report | Required diagnostic |
+| --- | ---: | --- |
+| Substitute final restored SR | 82,944 | Saved SR expected 0000, actual 001F |
+| Lose committed throwaway trace | 55,296 | Saved SR expected 8000, actual 0000 |
+| Omit traced-user saved S | 13,824 | Saved SR expected 2000, actual 0000 |
+
+Each probe executes two failing tests, zero skips and 82,944 complete cases /
+2,592 combinations per route. The runner requires the intended provenance
+diagnostic and restores every production byte; the restored build succeeds.
+The seven retained direct-return/fixed-SR tests pass without skips. The required
+format7 protocol inventory is separately rerun: one expected failing test,
+zero skips, exactly 480 untested cases / fifteen combinations. Its chained
+odd-PC entry now identifies short-frame reference coverage while retaining
+normal/CM and pending/foreign-context work.
+
+Seven integrity controls reject missing identities/fixture identity, an empty
+xUnit selection, a missing combination, a wrong combination weight, and native
+missing/empty fixture inputs for their intended reasons. Output checksums are
+updated only in the isolated semantic-corruption controls so checksum rejection
+cannot stand in for the deeper combination/selection checks. The complete-040
+gate's new branches are separately exercised against all four accepted reports;
+its 78-report / 66,816,544-case requirement sum is checked without claiming a
+fresh execution of the older complete selection.
+
+Frozen acceptance build begins at `72102e90c3a78dd6538a4c6eca2d564e5bcad116`
+plus these test/command changes. Production tree remains
+`795fd12d6c0237a22a5f92f4a96cc4823e0364c1`; no production CPU byte changes.
+CPU SHA256: `ac077d65570a3fc72972b0e3521a456f90838f925b1f9a3314e16d3977eda545`.
+Adapter SHA256: `6f01ae15524f2d3cee820a632d91e146b9317e1efbc0b03dffedafe5f7c8b1db`.
+`artifacts/m6-chained-odd-reference-final/identities.json` and
+`qualification-summary.json` retain exact input/evidence hashes and counts;
+build identities are not relabeled after commit. Mutation and retained/inventory
+evidence stays in separate `m6-chained-odd-*` directories. Older broad CPU,
+complete-040, external adapter and consumer qualifications are not rerun or
+relabeled by this test-only change. Expanded requirement counts are in the plan.
+
+Format7 chained odd-PC continuation/foreign-context provenance, original-trace
+repair/retry, internal restoration, real data/writeback restart, earlier model
+reference gaps and consolidation remain required. Milestone 6 stays **in
+progress**, `roadmapComplete=false`. No old regression is retired, public API
+changed, consumer dependency advanced or package published.

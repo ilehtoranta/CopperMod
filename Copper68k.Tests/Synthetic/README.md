@@ -834,3 +834,41 @@ lost and newly introduced trace directions, including second throwaways, are
 retained. No private trace latch, guessed CT flag or production change is
 introduced to force agreement. See the qualification record for scope and
 independent-reference caveats.
+
+### Chained odd-PC short-frame SR handoff
+
+`SyntheticM68040ChainedOddReturnTests` adds four ordinary synthetic batches for
+format0/2/3 tails following one/two throwaways. Canonical scalar/batch groups
+each execute 82,944 cases / 2,592 combinations with every initial CCR; structural
+groups each execute 539,136 cases / 269,568 combinations with CCR 0/31, both
+alignments, both VBRs, low/high odd PCs, independent incoming/first/second/final
+trace states, every stack and the user M=1 alias. Full register/memory checks,
+consumed pointers, discarded/odd PC non-fetch, validation-read order and the
+format-2 address-error image are checked.
+
+Run `./scripts/test-copper68k-040-rte-handoff.ps1` with a pristine WinUAE checkout
+at `5d22d33632646efc3f747f03e82d28353e52722e` passed as `-ReferenceDirectory`.
+The default location is `artifacts/reference-winuae-rte-modern`; the command
+requires PowerShell 7 and MSVC (override `-VcVars` for a different installation).
+It builds the pinned generator with CPU_TESTER enabled, extracts the untouched
+generated 040 RTE and cputest SR helpers, and executes their secondary-SR
+handoff in a transport harness. Two literal controls distinguish the original,
+last-throwaway and final SR. The handoff/live state and frame reads are compared
+with CPU results; documented format-2 entry and the traced-user S-bit correction
+are composed separately. This is an executed software handoff reference, not
+a complete WinUAE exception engine or a hardware/timing qualification.
+
+The command requires four executed tests without skips, exact independently
+enumerated combinations, every reference row, current source/binary identities
+and zero mismatches/unsupported/untested cases. Missing inputs, empty selections
+and out-of-scope reference operations fail. Recheck frozen outputs using
+`-ValidateReportsOnly -OutputDirectory`. Never substitute this observer for a
+validation bus-fault oracle: the generated 040 test RTE does not handle that
+fault protocol. Format7 continuations/foreign context and the original-trace
+retry discovery remain explicit requirements.
+
+`./scripts/test-copper68k-synthetic-mutations.ps1 -Scope ChainedOddRte` proves
+that both complete canonical batches detect substitution of the final SR,
+loss of the committed trace bits and omission of the traced-user S correction.
+It requires the intended saved-SR diagnostics and restores/rebuilds production
+source. No old hardware/integration regression is retired by this qualification.

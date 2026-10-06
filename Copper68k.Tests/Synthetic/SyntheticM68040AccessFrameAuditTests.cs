@@ -36,6 +36,8 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
                     ? "Validation, preserved-trace repair/software service, successful mixed-epoch chains and mixed-epoch validation fault capture have separate software coverage; mixed-epoch repair/retry, original trace suspension/resumption and internal restoration remain required. Physical/hardware behavior is separately unqualified"
                     : form == "real-access-fault-entry"
                         ? "Cache-disabled accurate instruction-fetch frames/restart are covered separately; data fault/writeback restart, enabled-cache deferral and compiled instruction-PC provenance remain required"
+                    : form == "odd-PC-chained-SR-provenance"
+                        ? "Chained format0/2/3 SR handoff, stack consumption and reads have a separate generated WinUAE software reference; format7 normal/CM and pending/foreign-context chains remain required. Full reference exception entry and hardware behavior remain unqualified"
                     : "Required fault/context protocol has no independently qualified execution fixture yet");
         report.Complete(output);
     }

@@ -2136,3 +2136,33 @@ discovery evidence rather than promoted ordinary-CI coverage; complete 040 and
 ordinary counts from the preceding checkpoint remain unchanged. The existing
 480-case inventory and every unresolved data/context/model/reference and
 consolidation requirement remain required. Milestone 6 stays **in progress**.
+
+### Milestone 6 chained odd-PC short-frame software handoff
+
+Four ordinary scalar/batch matrices cover one/two throwaways before format0/2/3
+odd-PC returns. Independent trace epochs, all stack/user-M aliases, every CCR
+in canonical groups and structural CCR boundaries/alignments/VBRs/high PCs
+produce 1,244,160 cases: 82,944 / 2,592 combinations per canonical route and
+539,136 / 269,568 combinations per structural route.
+
+An explicit native reference command executes untouched generated WinUAE 040
+RTE and cputest SR helpers from pin `5d22d33632646efc3f747f03e82d28353e52722e`.
+The observed secondary SR comes from the last committed throwaway; restored SR
+selects live flags and stacks. Architectural format-2 entry and the addendum's
+traced-user saved-S correction are composed independently of CPU helpers.
+Two literal native controls, three canonical mutation probes and strict
+source/binary/row/combination checks protect this scoped software qualification.
+The harness stops at the address-error callback: full external exception entry,
+validation-fault behavior and hardware/timing are not qualified by it.
+
+Expanded ordinary requirements are 81,784,726 cases / 668 batches. The complete
+040 selection now requires 91 tests / 78 reports / thirteen fixed examples,
+66,816,544 phases including the unchanged 480-case remaining-protocol inventory,
+and fifteen fixture/command input identities. These expanded requirements do
+not relabel older broad suite results as current execution.
+
+The inventory retains format7 chained odd-PC normal/CM/pending/foreign-context
+requirements, mixed-epoch repair/retry and original-instruction trace deferral,
+internal restoration, data/writeback restart, broader model reference audits
+and consolidation. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+No production CPU fix, package publication or regression retirement is included.
