@@ -310,6 +310,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 		private bool _corruptFrame;
 		private bool _corruptSavedPc;
 		private bool _corruptCas2CompareAlias;
+		private bool _corruptMove16Memory;
 		private ushort _corruptSr;
 		private bool _corruptIgnoredSr;
 		private string _integerFamily = "";
@@ -368,7 +369,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			Func<ushort, ushort, ushort, ushort, string>? fixtureWordsClassifier = null,
 			bool corruptSavedPc = false,
 			Func<ushort, ushort, ushort, ushort, IReadOnlyList<uint>, string>? fixtureRegisterClassifier = null,
-			bool corruptCas2CompareAlias = false)
+			bool corruptCas2CompareAlias = false,
+			bool corruptMove16Memory = false)
 		{
 			_callbackException = null;
 			_executedCases = 0;
@@ -383,6 +385,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 			_corruptFrame = corruptFrame;
 			_corruptSavedPc = corruptSavedPc;
 			_corruptCas2CompareAlias = corruptCas2CompareAlias;
+			_corruptMove16Memory = corruptMove16Memory;
 			_corruptSr = corruptSr;
 			_corruptIgnoredSr = corruptIgnoredSr;
 			_integerFamily = opcode;
@@ -527,6 +530,15 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 					_fixtureForms[form] = _fixtureForms.GetValueOrDefault(form) + 1;
 				}
 				bus.CopyStackImage(registers.Regs[15], registers.Ssp, 0x20);
+				uint? corruptDestination = null;
+				if (_corruptMove16Memory)
+				{
+					var inputRegisters = (uint[])registers.Regs.Clone();
+					if ((registers.Sr & 0x2000) != 0) inputRegisters[15] = registers.Ssp;
+					corruptDestination = Move16Operands(_integerProfile!, bus.ReadHostWord(registers.Pc),
+						bus.ReadHostWord(registers.Pc + 2), bus.ReadHostWord(registers.Pc + 4),
+						(ushort)registers.Sr, inputRegisters, _integerFamily).Destination & ~15u;
+				}
 				if (_fixtureRegisterClassifier is not null)
 				{
 					// The native input stores USP in slot A7 even when S is set.
@@ -648,6 +660,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 					if (_corruptIgnoredSr) registers.Sr ^= (uint)(~mask & 31);
 				}
 				if (_corruptResult) registers.Regs[0] ^= 1;
+				if (corruptDestination.HasValue && cpu.State.LastExceptionVector < 0)
+					bus.WriteHostWord(corruptDestination.Value, (ushort)(bus.ReadHostWord(corruptDestination.Value) ^ 1));
 				registers.Sr ^= _corruptSr;
 				if (_corruptFrame && cpu.State.LastExceptionVector >= 0)
 				{

@@ -7045,3 +7045,71 @@ JSON details or consumer/media inputs, reclassify the earlier failed full run,
 or close advanced frame/recovery and consolidation requirements. Production CPU,
 normal assemblies and packages are unchanged. Milestone 6 remains **in
 progress**, `roadmapComplete=false`.
+
+### Canonical MOVE16 reference qualification — 2026-10-06
+
+The maintained `Move16` preset independently executes all five documented
+MOVE16 forms on 68040 and 68060. Preparation patches a copy of the pinned
+WinUAE generator: set the canonical post-post extension before effective-address
+construction, serialize valid address-register inputs before reference execution,
+and enumerate all eight destination registers in sixteen low-nibble rounds.
+Production decoding/execution and the original Basic corpus remain unchanged.
+The architectural basis is [M68000PRM 4-125..127](https://www.nxp.com/docs/en/reference-manual/M68000PRM.pdf).
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 -Preset Move16 -GeneratorSource <pinned-generator> -RunnerSource <pinned-runner> -VcVars64 <vcvars64.bat> -OutputDirectory <fresh-inputs>
+./scripts/test-copper68k-winuae-qualified-exceptions.ps1 -Preset Move16 -InputDirectory <fresh-inputs> -OutputDirectory <fresh-audit>
+```
+
+The pins remain generator `025b999239800357e95065fe5b9a15ea5b300fa7` and runner
+`7a83745d6c6159bc74ab0471578ffc8bc244e66e`. Normalized copied generator SHA256 is
+`b201915e70fa2c7cc7c87cbfef588eb910bf3e655ea02bbff0955e42bc4e2e55`;
+patch SHA256 `c23761b715a1eb8abc01f4293710ffda73bb48f9a4867f1d0087c462eaa7ed12`.
+The final input manifest SHA256 is
+`244611bbd2dd6afcc81c192e8c9478211651a251da106887c73c2692da5b5846` and native bridge
+SHA256 `819bbafbeba54f065a8eed396502dd98094cd90e7ea5aac6672cd5ae2a7bc1e0`.
+
+Fresh acceptance passes **22 executions / zero skips**, with **83,712 callbacks**
+(41,856 per model), no exception frames or masked SR bits, and zero selected
+mismatches/unsupported/untested rows. There are **25,260 weighted form keys per
+model**, 50,520 summed across profiles. Each model's ordinal `key=weight\n`
+distribution hashes to
+`143e6c025a7451664853b10bfe94651dae28860263dad370a98ad6a33c77d236`.
+Keys distinguish five forms, registers, aliases, line overlap, low address bits
+and initial SR. Register, defined-SR and actual destination-memory corruption
+are detected independently on both models. Fixed manual encoding examples,
+rejected foreign/reserved encodings, weight redistribution and missing-reference
+classification execute without optional inputs.
+
+The native selection covers all 64 post-post register pairs in user mode and
+49 non-A7 pairs in supervisor mode, with CCR 0/31. Absolute forms cover all eight
+address registers in user mode and seven non-A7 registers in supervisor mode.
+An independent 384-combination form/register/SR inventory reports **38 absent
+supervisor-A7 combinations per model / 76 total**: thirty post-post and eight
+absolute combinations per model. Full missing keys remain in `ReferenceGaps`;
+`unavailableReferenceCombinations` is distinct from passing selected callbacks.
+These combinations require independent reference follow-up. Ordinary synthetic
+MOVE16 coverage retains both stacks; it does not substitute for missing native
+reference evidence. No incoming trace, faults, physical burst/bus ordering,
+cache allocation or physical timing qualification is claimed.
+
+Evidence is under the restoration temporary root in
+`audits/Move16GapQualifiedFinal` and `move16-cohort-verification.json`. Copied-input
+controls in `Move16IntegrityFinal/controls.json` reject missing profiles, changed
+source, foreign families and changed fixture bytes. An isolated copied test
+changes only the expected weighted-map hash: all 83,712 callbacks and their
+counts pass, while both profile gates fail `formDistributionMatches=False`.
+All five controls execute exactly one failing native fact without skips and
+retain the intended diagnostic. Earlier exploratory preparations and the first
+incorrect integrity invocation are preserved separately and excluded from this
+acceptance.
+
+The shared adapter also passes all nine existing qualified presets again:
+105 executions, 116 directories, 1,525,856 callbacks and 858,001 frames, with no
+skips. Synthetic MOVE16/breakpoint, input-validation and architectural-flag
+controls pass 28 executions. Normal CPU/test assemblies retain their protected
+identities. This test-only slice requires no CPU fix, consumer replay, package
+release or old-test retirement. The original Basic MOVE16 failure and its full
+54 non-passing rows remain retained. The supervisor-A7 reference gaps, complete
+480-case advanced-040 inventory and all other retained milestone-6 requirements
+remain open; milestone 6 stays **in progress**, `roadmapComplete=false`.

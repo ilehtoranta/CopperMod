@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $GeneratorSource,
     [Parameter(Mandatory)] [string] $RunnerSource,
     [Parameter(Mandatory)] [string] $VcVars64,
-    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Moves','Cas','Cas2','CacheEncodings')] [string] $Preset = 'Basic',
+    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Moves','Cas','Cas2','CacheEncodings','Move16')] [string] $Preset = 'Basic',
     [string] $OutputDirectory = 'artifacts/winuae-model-inputs'
 )
 $ErrorActionPreference = 'Stop'
@@ -105,23 +105,27 @@ try {
             [IO.File]::WriteAllText($testerSource, (Patch-Once ([IO.File]::ReadAllText((Join-Path $generator 'cputest.cpp'))) $before $after))
             [IO.File]::WriteAllText((Join-Path $output 'trace-priority.patch'), ([IO.File]::ReadAllText($patchPath)).Replace("`r`n", "`n"))
         }
-        if ($Preset -in @('LongArithmetic','Moves','Cas','Cas2')) {
+        if ($Preset -in @('LongArithmetic','Moves','Cas','Cas2','Move16')) {
             # M68000PM 4-94/98/136/140: reserved extension fields are zero;
             # Dh == Dl with a 64-bit multiply has undefined results. MOVES
             # 6-24/25/26 similarly fixes reserved fields and excludes undefined
             # same-An postincrement/predecrement store values. CAS 4-67 allows
             # only Du/Dc extension fields. Select
             # legal inputs before reference execution, never in the CPU bridge.
-            $patchName = switch ($Preset) {'Moves' {'moves-encodings.patch'} 'Cas' {'cas-encodings.patch'} 'Cas2' {'cas2-overlap-inputs.patch'} default {'long-arithmetic-encodings.patch'}}
+            $patchName = switch ($Preset) {'Moves' {'moves-encodings.patch'} 'Cas' {'cas-encodings.patch'} 'Cas2' {'cas2-overlap-inputs.patch'} 'Move16' {'move16-encodings.patch'} default {'long-arithmetic-encodings.patch'}}
             $patch = [IO.File]::ReadAllText((Join-Path $PSScriptRoot ('winuae/' + $patchName))).Replace("`r`n", "`n")
             $source = [IO.File]::ReadAllText((Join-Path $generator 'cputest.cpp')).Replace("`r`n", "`n")
             $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
-            if ($hunks.Count -ne 1) { throw "Incorrect $Preset input patch hunk count" }
-            $lines = $hunks[0].TrimEnd("`n").Split("`n")
-            $before = (($lines | Where-Object { $_.StartsWith('-') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
-            $after = (($lines | Where-Object { $_.StartsWith('+') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
-            $testerSource = Join-Path $output $(switch ($Preset) {'Moves' {'cputest-moves.cpp'} 'Cas' {'cputest-cas.cpp'} 'Cas2' {'cputest-cas2.cpp'} default {'cputest-long-arithmetic.cpp'}})
-            [IO.File]::WriteAllText($testerSource, (Patch-Once $source $before $after))
+            $requiredInputHunks = if ($Preset -eq 'Move16') { 3 } else { 1 }
+            if ($hunks.Count -ne $requiredInputHunks) { throw "Incorrect $Preset input patch hunk count" }
+            foreach ($hunk in $hunks) {
+                $lines = $hunk.TrimEnd("`n").Split("`n")
+                $before = (($lines | Where-Object { $_.StartsWith('-') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
+                $after = (($lines | Where-Object { $_.StartsWith('+') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
+                $source = Patch-Once $source $before $after
+            }
+            $testerSource = Join-Path $output $(switch ($Preset) {'Moves' {'cputest-moves.cpp'} 'Cas' {'cputest-cas.cpp'} 'Cas2' {'cputest-cas2.cpp'} 'Move16' {'cputest-move16.cpp'} default {'cputest-long-arithmetic.cpp'}})
+            [IO.File]::WriteAllText($testerSource, $source)
             [IO.File]::WriteAllText((Join-Path $output $patchName), $patch)
         }
         $cpp = @('cpudefs.cpp','cpuemu_90_test.cpp','cpuemu_91_test.cpp','cpuemu_92_test.cpp','cpuemu_93_test.cpp','cpuemu_94_test.cpp','cpuemu_95_test.cpp','cputbl_test.cpp',$testerSource,'cputest_support.cpp','disasm.cpp','fpp.cpp','fpp_softfloat.cpp','ini.cpp','newcpu_common.cpp','readcpu.cpp','softfloat/softfloat.cpp','softfloat/softfloat_decimal.cpp','softfloat/softfloat_fpsp.cpp')
@@ -200,6 +204,10 @@ void M68KTester_destroy(M68KTesterContext* context) {
     if ($Preset -eq 'CacheEncodings') {
         $baseIni = $baseIni.Replace('[test=Basic]', '[test=CacheEncodings]').Replace('mode=all', 'mode=ILLEGAL').Replace('feature_sr_mask=0x0000', 'feature_sr_mask=0x2000')
     }
+    if ($Preset -eq 'Move16') {
+        # The pinned generator runs an initial round plus test_rounds repeats.
+        $baseIni = $baseIni.Replace('[test=Basic]', '[test=Move16]').Replace('mode=all', 'mode=MOVE16').Replace('feature_sr_mask=0x0000', 'feature_sr_mask=0x2000').Replace('test_rounds=1','test_rounds=15')
+    }
     foreach ($model in @(
         @{id='68000'; cpu='68000'; width=24}, @{id='68010'; cpu='68010'; width=24},
         @{id='68EC020'; cpu='68020'; width=24}, @{id='68020'; cpu='68020'; width=32},
@@ -212,6 +220,7 @@ void M68KTester_destroy(M68KTesterContext* context) {
         if ($Preset -eq 'LowPowerStop' -and $model.id -ne '68060') { continue }
         if ($Preset -eq 'Moves' -and $model.id -eq '68000') { continue }
         if ($Preset -in @('Cas','Cas2') -and $model.id -in @('68000','68010')) { continue }
+        if ($Preset -eq 'Move16' -and $model.id -notin @('68040','68060')) { continue }
         $profileRoot = Join-Path $output $model.id
         New-Item -ItemType Directory -Path $profileRoot | Out-Null
         # Every invocation uses a fresh generator output path; stale data cannot fill a gap.
@@ -258,6 +267,8 @@ void M68KTester_destroy(M68KTesterContext* context) {
         LowPowerStopPatchSha256=$(if ($Preset -eq 'LowPowerStop') {(Get-FileHash -LiteralPath (Join-Path $output 'lpstop-fetch-pc.patch')).Hash.ToLowerInvariant()} else {$null})
         MovesSourceSha256=$(if ($Preset -eq 'Moves') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-moves.cpp')).Hash.ToLowerInvariant()} else {$null})
         MovesPatchSha256=$(if ($Preset -eq 'Moves') {(Get-FileHash -LiteralPath (Join-Path $output 'moves-encodings.patch')).Hash.ToLowerInvariant()} else {$null})
+        Move16SourceSha256=$(if ($Preset -eq 'Move16') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-move16.cpp')).Hash.ToLowerInvariant()} else {$null})
+        Move16PatchSha256=$(if ($Preset -eq 'Move16') {(Get-FileHash -LiteralPath (Join-Path $output 'move16-encodings.patch')).Hash.ToLowerInvariant()} else {$null})
         Cas2InputSourceSha256=$(if ($Preset -eq 'Cas2') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-cas2.cpp')).Hash.ToLowerInvariant()} else {$null})
         CacheEncodingsSourceSha256=$(if ($Preset -eq 'CacheEncodings') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-cache-encodings.cpp')).Hash.ToLowerInvariant()} else {$null})
         CacheEncodingsPatchSha256=$(if ($Preset -eq 'CacheEncodings') {(Get-FileHash -LiteralPath (Join-Path $output 'cache-encodings.patch')).Hash.ToLowerInvariant()} else {$null})
@@ -272,7 +283,7 @@ void M68KTester_destroy(M68KTesterContext* context) {
         Compiler=$compiler; GeneratorExecutableSha256=(Get-FileHash -LiteralPath (Join-Path $generator 'cputester.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
         NativeSourceSha256=(Get-FileHash -LiteralPath (Join-Path $output 'winuae-native.c') -Algorithm SHA256).Hash.ToLowerInvariant()
         IntegerValidationSha256=(Get-FileHash -LiteralPath (Join-Path $output 'integer_validation.h') -Algorithm SHA256).Hash.ToLowerInvariant()
-        Seed="Pinned generator xorshift state initialized to 1 per test set; one $Preset round"
+        Seed=$(if ($Preset -eq 'Move16') {'Pinned generator xorshift state initialized to 1 per test set; sixteen explicit valid-address rounds'} else {"Pinned generator xorshift state initialized to 1 per test set; one $Preset round"})
     } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $output 'manifest.json') -Encoding utf8
     Write-Host "Prepared input manifest and native bridge: $output"
 } finally {

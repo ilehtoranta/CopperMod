@@ -2596,3 +2596,15 @@ qualification. Four command preflight controls reject invalid requests. See the
 No production CPU change, regression retirement or package release is included.
 Advanced restoration and remaining consolidation requirements remain open;
 milestone 6 is **in progress**, `roadmapComplete=false`.
+
+Canonical MOVE16 reference qualification now passes 83,712 callbacks on 040/060
+in 22 executions without skips. All five forms, all user-mode register pairs,
+sixteen low-nibble rounds and explicit weighted architectural keys are checked.
+Native register/SR/memory corruption and five input/weighted-map controls detect
+their intended errors. The native reference explicitly lacks 76 supervisor-A7
+form/register/SR combinations; those remain required independent qualification.
+The existing nine presets and 28 shared/synthetic controls pass again. Original
+Basic failures, advanced restoration and all consolidation requirements remain
+open. No production CPU change, regression retirement or package release is
+included. See the [MOVE16 qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#canonical-move16-reference-qualification--2026-10-06).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

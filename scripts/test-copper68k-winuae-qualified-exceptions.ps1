@@ -1,7 +1,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('TrapBounds','Breakpoints','WordDivision','LowPowerStop','Moves','Cas','Cas2','CacheEncodings')] [string] $Preset = 'TrapBounds',
+    [ValidateSet('TrapBounds','Breakpoints','WordDivision','LowPowerStop','Moves','Cas','Cas2','CacheEncodings','Move16')] [string] $Preset = 'TrapBounds',
     [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $InputDirectory,
     [string] $NativeLibrary,
     [string] $OutputDirectory = 'artifacts/winuae-trap-bounds-audit',
@@ -19,8 +19,17 @@ $build = if ($ArtifactsPath) { [IO.Path]::GetFullPath($ArtifactsPath, $repo) } e
 $key = switch ($Preset) {'TrapBounds' {'TRAP_BOUNDS'} 'Breakpoints' {'BREAKPOINT'} 'WordDivision' {'WORD_DIVISION'} 'LowPowerStop' {'LPSTOP'} 'Moves' {'MOVES'} 'Cas' {'CAS'} 'Cas2' {'CAS2'} 'CacheEncodings' {'CACHE_ENCODINGS'}}
 $testName = switch ($Preset) {'TrapBounds' {'WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled'} 'Breakpoints' {'WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled'} 'WordDivision' {'WinUaeWordDivisionAcrossSelectedModelsWhenEnabled'} 'LowPowerStop' {'WinUaeLowPowerStopExceptionsWhenEnabled'} 'Moves' {'WinUaeMovesAcrossSelectedModelsWhenEnabled'} 'Cas' {'WinUaeCasAcrossAdvancedModelsWhenEnabled'} 'Cas2' {'WinUaeCas2AcrossAdvancedModelsWhenEnabled'} 'CacheEncodings' {'WinUaeCacheScopeZeroAcrossSelectedModelsWhenEnabled'}}
 $reportName = switch ($Preset) {'TrapBounds' {'winuae-trap-bounds-audit.json'} 'Breakpoints' {'winuae-breakpoint-audit.json'} 'WordDivision' {'winuae-word-division-audit.json'} 'LowPowerStop' {'winuae-lpstop-audit.json'} 'Moves' {'winuae-moves-audit.json'} 'Cas' {'winuae-cas-audit.json'} 'Cas2' {'winuae-cas2-audit.json'} 'CacheEncodings' {'winuae-cache-encodings-audit.json'}}
+if ($Preset -eq 'Move16') {
+    $key = 'MOVE16'
+    $testName = 'WinUaeMove16AcrossSupportedModelsWhenEnabled'
+    $reportName = 'winuae-move16-audit.json'
+}
 $filter = "FullyQualifiedName~$testName"
 $expectedTests = 1
+if ($Preset -eq 'Move16') {
+    $filter += '|FullyQualifiedName~M68kWinUaeMove16EncodingTests'
+    $expectedTests = 22
+}
 if ($Preset -eq 'WordDivision') {
     $filter += '|FullyQualifiedName~M68kWinUaeWordDivisionEncodingTests'
     $expectedTests = 15

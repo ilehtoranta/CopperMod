@@ -1186,3 +1186,20 @@ requested failures remain failures. The broad Basic WinUAE selection requires
 discrepancies intentionally fail the command. See the
 [reference-only command](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#reference-only-audit-command)
 for reproducibility and caveats.
+
+## Canonical MOVE16 independent reference
+
+Prepare pinned WinUAE inputs with `prepare-copper68k-winuae.ps1 -Preset Move16`,
+then run `test-copper68k-winuae-qualified-exceptions.ps1 -Preset Move16
+-InputDirectory <inputs> -OutputDirectory <fresh-output>`. The maintained gate
+requires 22 executions without skips, 41,856 callbacks and 25,260 weighted form
+keys on each of 040/060, with exact source/input identities and distribution
+hashes. Native controls prove register, SR and destination-memory comparison.
+Fixed encoding, fingerprint and gap controls run without native fixtures.
+
+Selected native cases pass, while `ReferenceGaps` explicitly retains 38 missing
+supervisor-A7 combinations per model / 76 total. Ordinary synthetic MOVE16
+semantics include both stack modes; missing independent evidence remains
+required. The original Basic failures stay visible and milestone 6 remains
+incomplete. See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#canonical-move16-reference-qualification--2026-10-06)
+for the exact selection, integrity controls and reproduction commands.

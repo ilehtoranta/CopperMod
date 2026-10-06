@@ -100,11 +100,16 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
                 var ignored = preset.ArithmeticFlagControls ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptIgnoredSr: true) : default;
                 var ignoredAccepted = !preset.ArithmeticFlagControls || (ignored.Passed && ignored.ExecutedCases > 0 && tester.MaskedCases > 0);
                 detected &= carryDetected && ignoredAccepted;
+                var memory = preset.MemoryControls ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptMove16Memory: true) : default;
+                var memoryDetected = !preset.MemoryControls || (!memory.Passed && memory.ExecutedCases > 0 &&
+                    memory.Detail.Contains("Memory", StringComparison.Ordinal));
+                detected &= memoryDetected;
                 probes.Add(new(model.Id, family, detected, register.ExecutedCases, sr.ExecutedCases, frame.ExecutedCases,
                     preset.ArithmeticFlagControls, carryDetected, carry.ExecutedCases, ignoredAccepted, ignored.ExecutedCases,
                     frameRequired, frameDetected, pcRequired, pcDetected, pc.ExecutedCases,
                     pcRequired ? pc.Detail : null, aliasRequired, aliasDetected, alias.ExecutedCases,
-                    aliasRequired ? alias.Detail : null));
+                    aliasRequired ? alias.Detail : null, preset.MemoryControls, memoryDetected, memory.ExecutedCases,
+                    preset.MemoryControls ? memory.Detail : null));
                 var result = tester.Run(path, family, fixture.CpuLevel, false, false, model,
                     fixtureClassifier: preset.ClassifyForm is null ? null : (opcode, inputSr) => preset.ClassifyForm(opcode, inputSr, family),
                     fixtureWordsClassifier: preset.ClassifyWords is null ? null : (opcode, extension, followingWord, inputSr) => preset.ClassifyWords(model, opcode, extension, followingWord, inputSr, family),
@@ -112,13 +117,17 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
                 var forms = new SortedDictionary<string, int>(tester.FixtureForms.ToDictionary(x => x.Key, x => x.Value), StringComparer.Ordinal);
                 var expectedForms = preset.FormCounts?.Invoke(model, family) ?? 0;
                 var formDistributionMatches = preset.ExpectedForms is null || forms.SequenceEqual(preset.ExpectedForms(model, family).OrderBy(x => x.Key, StringComparer.Ordinal));
+                var formDistributionSha256 = WinUaeFormDistributionSha256(forms);
+                if (preset.ExpectedFormHash is not null)
+                    formDistributionMatches &= formDistributionSha256 == preset.ExpectedFormHash(model, family);
                 var expectedMasked = preset.MaskedCounts?.Invoke(model, family) ?? (family.StartsWith("CHK2.", StringComparison.Ordinal) ? (uint)expected.Cases : 0);
                 var passing = detected && result.Passed && result.ExecutedCases == expected.Cases &&
                     tester.FrameChecks == expected.Frames && tester.MaskedCases == expectedMasked &&
                     forms.Count == expectedForms && formDistributionMatches && ((preset.ClassifyForm is null && preset.ClassifyWords is null && preset.ClassifyRegisters is null) || forms.Values.Sum() == result.ExecutedCases);
                 var detail = $"{result.Detail} Expected/actual callbacks={expected.Cases}/{result.ExecutedCases}, frames={expected.Frames}/{tester.FrameChecks}, masked={expectedMasked}/{tester.MaskedCases}, forms={expectedForms}/{forms.Count}, formDistributionMatches={formDistributionMatches}.";
+                var referenceGaps = preset.ReferenceGaps?.Invoke(forms) ?? [];
                 rows.Add(new(model.Id, family, passing ? "passing" : tester.UnsupportedExecution ? "unsupported" : result.ExecutedCases == 0 ? "untested" : "mismatching",
-                    result.ExecutedCases, tester.FrameChecks, tester.MaskedCases, detected, forms, detail));
+                    result.ExecutedCases, tester.FrameChecks, tester.MaskedCases, detected, forms, detail, formDistributionSha256, referenceGaps));
                 _output.WriteLine($"{model.Id}/{family}: {result.ExecutedCases} callbacks, {tester.FrameChecks} frames; controls={detected}.");
             }
         }
@@ -138,6 +147,7 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
             untested = rows.Count(x => x.Status == "untested"),
             exceptionFrames = rows.Sum(x => (long)x.ExceptionFrames), maskedSrCases = rows.Sum(x => (long)x.MaskedSrCases),
             architecturalForms = rows.Sum(x => x.Forms.Count),
+            unavailableReferenceCombinations = rows.Sum(x => x.ReferenceGaps.Count),
             probes, rows
         }, new JsonSerializerOptions { WriteIndented = true }));
         Assert.True(rows.All(x => x.Status == "passing"), string.Join(Environment.NewLine,
@@ -167,14 +177,25 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
         Func<ModelSpec, string, IReadOnlyDictionary<string, int>>? ExpectedForms = null,
         QualifiedInputIdentity? InputIdentity = null, bool AllowFrameFreeFamilies = false, bool SavedPcControls = false,
         Func<ModelSpec, ushort, ushort, ushort, ushort, IReadOnlyList<uint>, string, string>? ClassifyRegisters = null,
-        Func<ModelSpec, string, bool>? CompareAliasControls = null);
+        Func<ModelSpec, string, bool>? CompareAliasControls = null, bool MemoryControls = false,
+        Func<ModelSpec, string, string>? ExpectedFormHash = null,
+        Func<IReadOnlyDictionary<string, int>, IReadOnlyList<string>>? ReferenceGaps = null);
     private sealed record QualifiedInputIdentity(string SourceName, string PatchName, string SourceHash, string PatchHash);
     private sealed record WinUaeQualifiedExceptionRow(string Model, string Family, string Status, int ExecutedCases,
-        uint ExceptionFrames, uint MaskedSrCases, bool Controls, SortedDictionary<string, int> Forms, string Detail);
+        uint ExceptionFrames, uint MaskedSrCases, bool Controls, SortedDictionary<string, int> Forms, string Detail,
+        string FormDistributionSha256, IReadOnlyList<string> ReferenceGaps);
     private sealed record WinUaeQualifiedExceptionProbe(string Model, string Family, bool Detected,
         int RegisterCases, int SrCases, int FrameCases, bool ArithmeticFlagControls,
         bool CarryDetected, int CarryCases, bool IgnoredAccepted, int IgnoredCases,
         bool FrameControlRequired, bool FrameDetected, bool SavedPcControlRequired,
         bool SavedPcDetected, int SavedPcCases, string? SavedPcDetail,
-        bool CompareAliasControlRequired, bool CompareAliasDetected, int CompareAliasCases, string? CompareAliasDetail);
+        bool CompareAliasControlRequired, bool CompareAliasDetected, int CompareAliasCases, string? CompareAliasDetail,
+        bool MemoryControlRequired, bool MemoryDetected, int MemoryCases, string? MemoryDetail);
+
+    internal static string WinUaeFormDistributionSha256(IReadOnlyDictionary<string, int> forms)
+    {
+        var text = string.Concat(forms.OrderBy(x => x.Key, StringComparer.Ordinal)
+            .Select(x => $"{x.Key}={x.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n"));
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+    }
 }
