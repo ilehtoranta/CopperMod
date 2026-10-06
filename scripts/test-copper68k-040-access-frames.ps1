@@ -69,6 +69,10 @@ $expected = [ordered]@{
     'rte-user-trace-boundaries-batch' = @{cases=873984; combinations=2304}
     'rte-user-trace-chained-scalar' = @{cases=3502080; combinations=145920}
     'rte-user-trace-chained-batch' = @{cases=3502080; combinations=145920}
+    'rte-user-software-trace-boundaries-scalar' = @{cases=1360896; combinations=2592}
+    'rte-user-software-trace-boundaries-batch' = @{cases=1360896; combinations=2592}
+    'rte-user-software-trace-chained-scalar' = @{cases=6350848; combinations=193536}
+    'rte-user-software-trace-chained-batch' = @{cases=6350848; combinations=193536}
     'rte-access-remaining-protocols' = @{cases=480; combinations=15}
 }
 $testExit = 0
@@ -105,9 +109,9 @@ if (-not $ValidateReportsOnly) {
             'Multiple continuation bits are architecturally undefined and excluded',
             'Selected active accurate-batch paths verify counts/callbacks and scalar/batch bus/cycle policy; generic short operand frames do not qualify architectural format-7 data restart',
             'Instruction-fault fixtures use cache-disabled accurate execution and physical-map rejection; speculative deferral, enabled caches/MMU and compiled fetch PC provenance remain unqualified',
-            'Legacy repair clears saved trace; separate supervisor and user-tail bridge groups preserve incoming trace, check normal/CM completion and pending CT/CU/CP49-55 priority. Executed integer trace service has separate supervisor-tail coverage; mixed-epoch and user-tail software trace-service protocols remain required',
+            'Legacy repair clears saved trace; separate supervisor and user-tail bridge groups preserve incoming trace, check normal/CM completion and pending CT/CU/CP49-55 priority. Executed integer trace service has separate supervisor/user-tail coverage; mixed-epoch trace protocols remain required',
             'User-tail fault expectations compose documented throwaway live-SR rules with general supervisor exception entry; unusual combined hardware behavior has not been observed',
-            'Mixed-epoch trace provenance, user-tail software trace service, internal-restoration double faults, cache/MMU/compiled handler-entry prefetch, chained odd-PC SR provenance and physical timing remain unqualified',
+            'Mixed-epoch trace provenance, internal-restoration double faults, cache/MMU/compiled handler-entry prefetch, chained odd-PC SR provenance and physical timing remain unqualified',
             'Direct odd-RTE saved-SR ordering uses documentary WinUAE 5d22d336, not an executed hardware oracle')
     }
     $identity | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'identities.json')
@@ -135,8 +139,8 @@ foreach ($assembly in $identity.assemblies) {
 }
 [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
 $counters = $trx.TestRun.ResultSummary.Counters
-if ([int]$counters.executed -ne 69 -or [int]$counters.total -ne 69 -or [int]$counters.notExecuted -ne 0) {
-    throw '040 access-frame audit did not execute its complete selection (62 batches, 7 fixed examples)'
+if ([int]$counters.executed -ne 73 -or [int]$counters.total -ne 73 -or [int]$counters.notExecuted -ne 0) {
+    throw '040 access-frame audit did not execute its complete selection (66 batches, 7 fixed examples)'
 }
 $totals = [ordered]@{passing=0; mismatching=0; unsupported=0; untested=0}
 foreach ($group in $expected.Keys) {
@@ -159,8 +163,9 @@ foreach ($group in $expected.Keys) {
                 $expectedCombinations["68040/RTE/format7/$form/bank=$bank"] = 32
             }
         }
-    } elseif ($group.StartsWith('rte-user-trace-', [StringComparison]::Ordinal)) {
-        $chained = $group.StartsWith('rte-user-trace-chained-', [StringComparison]::Ordinal)
+    } elseif ($group.StartsWith('rte-user-trace-', [StringComparison]::Ordinal) -or $group.StartsWith('rte-user-software-trace-', [StringComparison]::Ordinal)) {
+        $userSoftwareTrace = $group.StartsWith('rte-user-software-trace-', [StringComparison]::Ordinal)
+        $chained = $group.Contains('-chained-', [StringComparison]::Ordinal)
         foreach ($start in @('ISP','MSP')) {
             foreach ($middle in $(if ($chained) { @('none','user','ISP','MSP') } else { @('none') })) {
                 $path = if ($middle -eq 'none') { "$start-user" } else { "$start-$middle-user" }
@@ -170,7 +175,8 @@ foreach ($group in $expected.Keys) {
                             foreach ($vbr in $(if ($chained) { @(0,0x10000) } else { @(0x10000) })) {
                                 foreach ($result in @('user','user-M','ISP','MSP')) {
                                     foreach ($trace in @(0,0x8000,0x4000)) {
-                                        foreach ($form in @('format0','format2','format3','invalid4','invalid15','normal','CM','CT','CU','CP','CP50','CP51','CP52','CP53','CP54','CP55')) {
+                                        foreach ($form in $(if ($userSoftwareTrace) { @('CU-linear','CU-flow','CP49','CP50','CP51','CP52','CP53','CP54','CP55') } else { @('format0','format2','format3','invalid4','invalid15','normal','CM','CT','CU','CP','CP50','CP51','CP52','CP53','CP54','CP55') })) {
+                                          foreach ($clear in $(if ($userSoftwareTrace) { @($false,$true) } else { @($false) })) {
                                             $reads = @('0:2')
                                             if ($chained) {
                                                 $reads += @('2:4','6:2')
@@ -180,14 +186,26 @@ foreach ($group in $expected.Keys) {
                                             foreach ($read in $reads) {
                                                 $parts = $read.Split(':')
                                                 for ($byte=0; $byte -lt $(if ($chained) {[int]$parts[1]} else {1}); $byte++) {
-                                                    $key = '68040/RTE/user-trace/{0}/{1}/path={2}/M={3}/incoming={4:X4}/align={5}/VBR={6:X8}/result={7}/T={8:X4}/read={9}:{10}/byte={11}' -f $(if ($chained) {'structure'} else {'boundaries'}),$form,$path,$master,$incoming,$alignment,$vbr,$result,$trace,$parts[0],$parts[1],$byte
+                                                    $key = '68040/RTE/user-{0}/{1}/{2}/path={3}/M={4}/incoming={5:X4}/align={6}/VBR={7:X8}/result={8}/T={9:X4}/read={10}:{11}/byte={12}' -f $(if ($userSoftwareTrace) {'software-trace'} else {'trace'}),$(if ($chained) {'structure'} else {'boundaries'}),$form,$path,$master,$incoming,$alignment,$vbr,$result,$trace,$parts[0],$parts[1],$byte
                                                     # Seven stores, two RTEs, entry and following; pending
                                                     # conversion or incoming trace adds one handler return.
                                                     $pending = $form -in @('CT','CU','CP','CP50','CP51','CP52','CP53','CP54','CP55')
                                                     $phases = if ($pending -or $incoming -ne 0) {12} else {11}
+                                                    if ($userSoftwareTrace) {
+                                                        $key += "/clear=$clear"
+                                                        # Literal program transitions; do not call fixture Phases().
+                                                        $phases = 14
+                                                        if ($form.StartsWith('CU')) { $phases++ }
+                                                        if ($form -eq 'CU-flow' -and $trace -ne 0x8000) { $phases += 2 }
+                                                        if ($trace -eq 0x8000 -or ($form -eq 'CU-flow' -and $trace -eq 0x4000)) {
+                                                            $phases += 5
+                                                            if ($clear) { $phases++ }
+                                                        }
+                                                    }
                                                     $expectedCombinations[$key] = $(if ($chained) {2} else {32}) * $phases
                                                 }
                                             }
+                                          }
                                         }
                                     }
                                 }
@@ -502,8 +520,8 @@ foreach ($group in $expected.Keys) {
         if ($combinationTotals[$status] -ne $report.counts.$status) { throw "$group combination totals differ" }
     }
 }
-$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 69 -and
+$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 73 -and
     ($totals.mismatching + $totals.unsupported + $totals.untested) -eq 0
-@{schema=1; model='68040'; logicalCases=32690336; xunitBatches=62; fixedExamples=7; counts=$totals; passed=$passed; roadmapComplete=$false} |
+@{schema=1; model='68040'; logicalCases=48113824; xunitBatches=66; fixedExamples=7; counts=$totals; passed=$passed; roadmapComplete=$false} |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'audit-summary.json')
 if (-not $passed) { throw "040 access-frame audit incomplete: $($totals | ConvertTo-Json -Compress)" }

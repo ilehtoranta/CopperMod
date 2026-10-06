@@ -1977,3 +1977,50 @@ checkpoint is qualified. Mixed-epoch trace provenance,
 user-tail software trace-service programs, internal restoration and all other
 retained model/reference/consolidation requirements remain required.
 Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+### Milestone 6 user-tail software trace service — 2026-10-06
+
+Four new `UserTailSoftwareTraceService` scalar/batch groups compose the existing
+seven-store user-tail repair bridge with the shared executed integer trace
+service. CU linear/flow cases and CP49–55 inspect repaired saved T1/T0, adjust
+the supplied CU completion PC, convert the pending frame, fetch vector 9 and
+call the trace handler through a temporary stack/RTS target. The handler writes
+its marker once and either retains or clears saved trace before a real RTE.
+The following BRA checks resumed hardware tracing independently of the software
+call; hardware exception sequence and provenance must remain unchanged during
+the integer software service. No FPU opcode or arithmetic is executed.
+
+Canonical groups each require 1,360,896 phases / 2,592 combinations; structural
+groups each require 6,350,848 phases / 193,536 combinations. Canonical cases
+cross all CCRs and incoming 0/T1/T0; structural cases use CCR 0/31, incoming T1,
+all fourteen validation-read bytes, both alignments/VBRs and all initial/middle
+paths. Both original user M values, all restored user/user-M/ISP/MSP states,
+restored trace conditions and trace-service return choices are covered.
+
+These four groups add 15,423,488 phases. The maintained complete 040 command
+must execute 73 tests, 66 reports, seven fixed examples and fourteen input
+identities, with 48,113,344 passing phases plus the retained 480-case inventory.
+Independent PowerShell command enumeration matches every new combination count
+and preserves the earlier user-tail bridge counts. Initial canonical execution
+passes two tests without a production CPU change. Fresh report-producing
+canonical and structural runs pass all four groups, 15,423,488 total phases,
+with no skips, mismatches, unsupported execution or untested phases. These
+initial-build focused results are not final restored-build acceptance. The maintained
+`UserRteSoftwareTrace` mutation scope requires inverted saved-SR BTST, a short
+format-2 return and original CP-vector loss to produce their intended diagnostic
+in all four complete reports, then restores production bytes exactly. The
+three-probe command detects every intended defect in all four complete reports
+and restores production source bytes exactly. Fresh full Release acceptance
+passes 5,098 tests with eleven optional skips and zero failures; all nine
+qualified WinUAE presets match exact selections and assembly identities.
+Strict reporting verifies 63,082,006 logical cases / 656 batches. Fresh
+SingleStepTests passes 312,500 cases / 125 files; Musashi passes 536 programs
+with 88 explicit exclusions. The complete 040 command executes all 73 tests,
+passes 72 and fails only its retained 480-case inventory, with 48,113,344 passing
+phases and zero mismatches or unsupported execution. Seventeen integrity
+controls reject their specific corruption. Current source, fixture/input and
+assembly identities still match after all checks.
+
+This test-only checkpoint is qualified. Mixed-epoch provenance,
+internal restoration, all earlier model/reference/consolidation requirements
+and the complete roadmap remain required; milestone 6 stays **in progress**.

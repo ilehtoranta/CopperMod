@@ -735,3 +735,28 @@ continuation consumption. Proof requires the intended diagnostic in all four
 complete reports. Expectations compose MC68040UM trace, throwaway and pending
 exception rules; no hardware execution is claimed. Mixed-epoch provenance,
 user-tail software trace-service programs and internal restoration remain open.
+
+### Executed software trace service after user-tail repair
+
+`SyntheticM68040UserRteFaultTests.UserTailSoftwareTraceService*` combines the
+seven-store bridge with the shared integer service program. CU linear/flow and
+CP49–55 cases test repaired saved trace, supplied completion-PC adjustment,
+frame conversion, vector-9 lookup, direct call, marker once, optional saved-trace
+clear, real RTE and the following BRA. Both original user M values and every
+restored user/user-M/ISP/MSP bank are covered. This composes documented rules;
+no hardware or FPU arithmetic qualification is claimed.
+
+Canonical scalar/batch reports each require 1,360,896 phases / 2,592 combinations;
+structural reports each require 6,350,848 phases / 193,536 combinations. These
+add 15,423,488 phases. The complete 040 selection requires 73 tests, 66 reports,
+seven fixed examples and fourteen input identities; its retained 480-case
+inventory still fails completion. This test-only checkpoint is qualified by
+fresh full Release, strict reporting, reference audits and seventeen report
+integrity controls; milestone 6 remains in progress. Production CPU source is
+unchanged. See the plan and qualification record for exact evidence and limits.
+
+Use `--filter FullyQualifiedName~UserTailSoftwareTraceService` for focused
+execution and `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope UserRteSoftwareTrace`
+for all four complete groups under each mutation. Intended BTST, return-length
+and CP-vector diagnostics are required; unrelated failures do not qualify a
+proof. Mixed-epoch trace provenance and internal restoration remain open.

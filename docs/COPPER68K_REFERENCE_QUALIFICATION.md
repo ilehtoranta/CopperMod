@@ -5220,3 +5220,100 @@ identities still match after all checks. This test-only checkpoint is qualified;
 milestone 6 remains **in progress** with all required remaining scope retained.
 No CPU production fix, consumer rerun, package release or old-test retirement
 is included.
+
+### 040 user-tail executed software trace service — 2026-10-06
+
+The new four `UserTailSoftwareTraceService` groups reuse the fixed-reference
+integer program from supervisor-tail qualification after the seven-store
+user-tail repair bridge. Expectations compose MC68040UM 2.2.2.1, 8.1/8.2.1,
+8.2.6, 8.3 and 8.4.2/8.4.6.7. Pending CU/CP suppresses automatic RTE tracing;
+the software inspects repaired saved T1/T0, adjusts the supplied CU completion
+PC, converts the frame and fetches/calls vector 9 through a real stack/RTS
+sequence. Its marker is written exactly once when eligible. Trace-retaining
+and trace-clearing returns execute real RTE, followed by BRA to distinguish
+software service from subsequent hardware tracing.
+
+The fixture verifies registers, all three stack banks, guarded memory,
+exception sequence and saved PC/SR at each instruction. Original pending CP
+vectors 49–55 must survive deliberately conflicting FPCR/FPSR/FPIAR values.
+The temporary direct-call stack word is not an exception frame. No FPU opcode
+or arithmetic is executed, and no combined user-tail hardware oracle is claimed.
+
+| Group, each scalar/batch | Phases | Combinations |
+| --- | ---: | ---: |
+| Canonical user-tail software service | 1,360,896 | 2,592 |
+| Structural validation read bytes | 6,350,848 | 193,536 |
+
+Canonical cases cross every CCR and incoming 0/T1/T0. Structural cases use
+CCR 0/31 and incoming T1, every validation-read byte, both alignments/VBRs and
+all eight initial/middle paths. Both original user M values, every restored
+user/user-M/ISP/MSP state and all three restored trace conditions are retained.
+Each combination independently selects a trace-retaining/clearing service.
+The maintained PowerShell command independently enumerates the literal program
+transitions and matches all new counts; the earlier bridge counts are unchanged.
+
+Initial canonical execution passes both tests without a production CPU fix.
+Fresh report-producing canonical and structural runs now pass all four reports
+with zero skips, mismatches, unsupported execution or untested phases. Their
+15,423,488 total phases and exact combination counts match the independent
+command enumeration. These are focused results from the initial build, not
+final restored-build acceptance. The maintained
+`UserRteSoftwareTrace` scope adds saved-SR BTST inversion, short format-2 return
+and original CP-vector loss, requiring intended diagnostics in each of four
+complete reports. All three probes are detected in all four complete reports;
+every production source byte matches the preceding qualified manifest after
+restoration. Fresh acceptance below qualifies this test-only checkpoint. No package
+release or test retirement is included. Mixed-epoch trace provenance, internal
+restoration and all other required model/reference/consolidation scope remain
+open; milestone 6 stays **in progress**.
+
+The first maintained probe, `040-user-software-trace-bit-test`, executes all
+four complete groups with zero skips or unsupported execution. Each canonical
+route detects 82,944 mismatches, leaves 430,080 dependent phases untested and
+passes 847,872 phases. Each structural route detects 387,072, leaves 2,007,040
+dependent phases untested and passes 3,956,736. Every report contains the
+intended CU-linear `test-T1` SR diagnostic. This qualifies the probe's ability
+to detect a wrong saved-SR bit test; these deliberate failures are not
+production failures.
+
+The short-format-2-return probe also executes all four complete reports with
+zero skips or unsupported execution. Each canonical route detects 39,936
+mismatches, leaves 39,936 dependent phases untested and passes 1,281,024 phases.
+Each structural route detects 186,368, leaves 186,368 dependent phases untested
+and passes 5,978,112. Every report contains the intended CU-linear
+`pending-return` inactive-stack-pointer diagnostic. This distinguishes the
+required 12-byte pop from a wrong 8-byte return, including inactive stack banks.
+The original-vector probe executes all four complete reports with zero skips
+or unsupported execution. Each canonical route detects 55,296 mismatches,
+leaves 322,560 dependent phases untested and passes 983,040 phases. Each
+structural route detects 258,048 mismatches, leaves 1,505,280 dependent phases
+untested and passes 4,587,520. Every report contains the intended CP50
+`retry-RTE` diagnostic, expected exception 50 versus actual 49.
+
+The restored acceptance build records CPU SHA256
+`c427185573ad05ef6feca134d067ce41951f06c18002c429f73589ac306298cc`
+and adapter SHA256
+`459397c204b6b221b1dad6dbb5aba28ea91ca13713f4b4ee29a7fd00b3930111`.
+Its source checkpoint is `47d6400a29002f86b96dc73afa6d10f82c0d8c62`
+plus the recorded fixture/command changes; these binaries are not relabeled as
+the later commit containing this record.
+
+Fresh full Release validation in `artifacts/m6-user-service-full/` passes
+**5,098 tests**, with eleven optional skips and zero failures. All nine qualified
+WinUAE presets match their exact selections and both assembly identities.
+Strict ordinary reporting verifies **63,082,006 logical cases / 656 batches**,
+with `roadmapComplete=false`. Fresh pinned SingleStepTests passes 312,500 cases
+from 125 files; Musashi passes 536 programs with 88 explicit exclusions and
+624 total rows. Both explicit reference selections execute one test with no skip.
+
+The complete 040 command in `artifacts/m6-user-service-audit/` executes all
+**73 tests: 72 pass and the sole failure is the required 480-case inventory**.
+Its 66 reports contain **48,113,344 passing phases**, zero mismatches or
+unsupported execution, and 480 named untested requirements. Seven fixed
+examples and fourteen fixture/command identities are retained. Seventeen fresh
+controls reject their specific missing, shortened, foreign, redistributed or
+omitted-fixture corruption. All production source, fixture/input and assembly
+identities still match after reference and integrity checks. Milestone 6 remains
+**in progress**; mixed-epoch provenance, internal restoration and all retained
+model/reference/consolidation scope remain required. No CPU production fix,
+package release, consumer rerun or old-test retirement is included.

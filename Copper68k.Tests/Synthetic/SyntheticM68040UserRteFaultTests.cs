@@ -31,11 +31,21 @@ public sealed class SyntheticM68040UserRteFaultTests(ITestOutputHelper output)
     [Fact, Trait("Suite", "Synthetic")]
     public void UserTailBridgePreservesTraceChainedBatch() => Audit(true, true, true, true);
 
-    private void Audit(bool repair, bool batch, bool keepTrace = false, bool chained = false)
+    [Fact, Trait("Suite", "Synthetic")]
+    public void UserTailSoftwareTraceServiceBoundariesScalar() => Audit(true, false, true, false, true);
+    [Fact, Trait("Suite", "Synthetic")]
+    public void UserTailSoftwareTraceServiceBoundariesBatch() => Audit(true, true, true, false, true);
+    [Fact, Trait("Suite", "Synthetic")]
+    public void UserTailSoftwareTraceServiceChainedScalar() => Audit(true, false, true, true, true);
+    [Fact, Trait("Suite", "Synthetic")]
+    public void UserTailSoftwareTraceServiceChainedBatch() => Audit(true, true, true, true, true);
+
+    private void Audit(bool repair, bool batch, bool keepTrace = false, bool chained = false, bool traceService = false)
     {
         var bus = new SyntheticM68040RteValidationFaultTests.ValidationFaultBus();
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);
-        var report = new CoverageBatch("68040", keepTrace ? $"rte-user-trace-{(chained ? "chained" : "boundaries")}-{(batch ? "batch" : "scalar")}" : $"rte-user-{(repair ? "repair" : "fault")}-{(batch ? "batch" : "scalar")}");
+        var traceGroup = traceService ? "rte-user-software-trace" : "rte-user-trace";
+        var report = new CoverageBatch("68040", keepTrace ? $"{traceGroup}-{(chained ? "chained" : "boundaries")}-{(batch ? "batch" : "scalar")}" : $"rte-user-{(repair ? "repair" : "fault")}-{(batch ? "batch" : "scalar")}");
         foreach (var matrix in keepTrace ? new[] { chained ? "structure" : "boundaries" } : ["boundaries", "structure"])
         foreach (var start in new[] { "ISP", "MSP" })
         foreach (var middle in matrix == "structure" ? new[] { "none", "user", "ISP", "MSP" } : ["none"])
@@ -48,20 +58,22 @@ public sealed class SyntheticM68040UserRteFaultTests(ITestOutputHelper output)
         foreach (var vbr in keepTrace && !chained ? new uint[] { 0x10000 } : [0, 0x10000])
         foreach (var result in keepTrace ? new[] { "user", "user-M", "ISP", "MSP" } : repair && matrix == "boundaries" ? ["user", "ISP", "MSP"] : ["ISP"])
         foreach (var restoredTrace in keepTrace || repair && matrix == "boundaries" ? new ushort[] { 0, 0x8000, 0x4000 } : [0])
-        foreach (var form in keepTrace ? Forms.Concat(["CP50", "CP51", "CP52", "CP53", "CP54", "CP55"]) : Forms)
+        foreach (var form in traceService ? new[] { "CU-linear", "CU-flow", "CP49", "CP50", "CP51", "CP52", "CP53", "CP54", "CP55" }
+            : keepTrace ? Forms.Concat(["CP50", "CP51", "CP52", "CP53", "CP54", "CP55"]) : Forms)
+        foreach (var clearServiceTrace in traceService ? new[] { false, true } : [false])
         foreach (var (offset, width) in matrix == "structure" ? SyntheticM68040RteValidationFaultTests.Reads(form) : [(0u, 2)])
         for (var faultByte = 0; faultByte < (matrix == "structure" ? width : 1); faultByte++)
         {
             var path = middle == "none" ? new[] { start, "user" } : [start, middle, "user"];
             Run(m, bus, report, repair, batch, matrix, path, userMaster, ccr, incoming, alignment, vbr,
-                result, restoredTrace, form, offset, width, faultByte, keepTrace);
+                result, restoredTrace, form, offset, width, faultByte, keepTrace, traceService, clearServiceTrace);
         }
         report.Complete(output);
     }
 
     private static void Run(SyntheticMachine m, SyntheticM68040RteValidationFaultTests.ValidationFaultBus bus,
         CoverageBatch report, bool repair, bool batch, string matrix, string[] path, bool userMaster, int ccr,
-        ushort incoming, uint alignment, uint vbr, string result, ushort restoredTrace, string form, uint offset, int width, int faultByte, bool keepTrace)
+        ushort incoming, uint alignment, uint vbr, string result, ushort restoredTrace, string form, uint offset, int width, int faultByte, bool keepTrace, bool traceService, bool clearServiceTrace)
     {
         bus.Disarm(); m.Reset(ccr);
         var pointers = new Dictionary<string, uint> { ["user"] = 0x7800 + alignment, ["ISP"] = 0x4700 + alignment, ["MSP"] = 0x7400 + alignment };
@@ -83,8 +95,9 @@ public sealed class SyntheticM68040UserRteFaultTests(ITestOutputHelper output)
         var format = form.StartsWith("format") ? int.Parse(form[6..]) : form.StartsWith("invalid") ? int.Parse(form[7..]) : 7;
         var repairedFormat = form.StartsWith("invalid") ? 0 : format;
         var post = form.StartsWith("CP", StringComparison.Ordinal);
-        var continuation = post ? 0x8000 : form switch { "CM" => 0x1000, "CT" => 0x2000, "CU" => 0x4000, _ => 0 };
-        var vector = post ? form == "CP" ? 49 : int.Parse(form[2..]) : form switch { "CT" => 9, "CU" => 11, _ => 0 };
+        var unimplemented = form.StartsWith("CU", StringComparison.Ordinal);
+        var continuation = post ? 0x8000 : unimplemented ? 0x4000 : form switch { "CM" => 0x1000, "CT" => 0x2000, _ => 0 };
+        var vector = post ? form == "CP" ? 49 : int.Parse(form[2..]) : unimplemented ? 11 : form == "CT" ? 9 : 0;
         var savedSr = Status(result, restoredTrace, ccr ^ 31);
         var handlerSr = (ushort)((priorSr | 0x2000) & ~0xc000);
         var retrySr = keepTrace ? (ushort)(priorSr | 0x2000) : handlerSr;
@@ -125,19 +138,35 @@ public sealed class SyntheticM68040UserRteFaultTests(ITestOutputHelper output)
         m.InitializePhysical(vbr + 8, Handler, 4); m.InitializePhysical(vbr + 32, PrivilegeHandler, 4);
         foreach (var v in new[] { 9, 11, 49 }) m.InitializePhysical(vbr + (uint)v * 4, PendingHandler, 4);
         if (post) m.InitializePhysical(vbr + (uint)vector * 4, PendingHandler, 4);
+        var service = traceService ? new SyntheticM68040SoftwareTraceProgram(form, clearServiceTrace, PendingHandler, Target, vbr) : null;
+        service?.Initialize(m);
         _ = SyntheticExecution.Prepare(m, [0x4e73]);
         m.Core.State.SetUserStackPointer(0x7800 + alignment); m.Core.State.SetInterruptStackPointer(0x4700 + alignment);
         m.Core.State.SetMasterStackPointer(0x7400 + alignment); m.Core.State.StatusRegister = Status(path[0], incoming, ccr);
         m.Core.State.VectorBaseRegister = vbr;
-        if (form == "CU") m.Core.State.M68040PendingFpuExceptions.Begin(2, 11, Target);
+        if (unimplemented) m.Core.State.M68040PendingFpuExceptions.Begin(2, 11, Target);
         if (post) m.Core.State.M68040PendingFpuExceptions.Begin(3, vector, Target);
+        if (traceService)
+        {
+            // The recorded pending event must survive conflicting FPU registers.
+            // These inputs exercise integer delivery only, not FPU arithmetic.
+            m.Core.State.M68040Fpu.Fpcr = 0;
+            m.Core.State.M68040Fpu.Fpsr = 0x08008198;
+            m.Core.State.M68040Fpu.Fpiar = 0x1234abcd;
+        }
         var e = ArchitecturalExpectation.Capture(m); var sequence = m.Core.State.ExceptionSequence;
+        if (traceService)
+        {
+            e.ControlChecks["FPCR preserved"] = (s => s.M68040Fpu.Fpcr, 0);
+            e.ControlChecks["FPSR preserved"] = (s => s.M68040Fpu.Fpsr, 0x08008198);
+            e.ControlChecks["FPIAR preserved"] = (s => s.M68040Fpu.Fpiar, 0x1234abcd);
+        }
         e.ControlChecks["one rejection"] = (_ => (uint)bus.Rejected.Count, 1);
         e.ControlChecks["original read address"] = (_ => bus.Rejected.Count == 1 ? bus.Rejected[0].Address : uint.MaxValue, frame + offset);
         e.ControlChecks["original read width"] = (_ => bus.Rejected.Count == 1 ? (uint)bus.Rejected[0].Width : 0, (uint)width);
         e.ControlChecks["discarded PCs not fetched"] = (_ => bus.Accesses.Any(a => a.Address is 0xdead0001 or 0xdead0003 or 0xdead0005) ? 1u : 0u, 0);
         e.ControlChecks["sentinel not executed"] = (s => s.D[7], e.D[7]);
-        if (form == "CU" || post) e.ControlChecks["pending delivery"] = (s => s.M68040PendingFpuExceptions.Find(form == "CU" ? 2 : 3) == null ? 0u : 1u, 1);
+        if (unimplemented || post) e.ControlChecks["pending delivery"] = (s => s.M68040PendingFpuExceptions.Find(unimplemented ? 2 : 3) == null ? 0u : 1u, 1);
         pointers[exceptionBank] = accessFrame; SetStacks(e, pointers, handlerSr); e.Pc = Handler; e.ExceptionVector = 2;
         Provenance(e, sequence + 1, SyntheticMachine.Code, priorSr);
         SyntheticM68040RteValidationFaultTests.ExpectAccessFrame(m, e, accessFrame, priorSr, SyntheticMachine.Code, frame + offset, width);
@@ -145,8 +174,14 @@ public sealed class SyntheticM68040UserRteFaultTests(ITestOutputHelper output)
         var phases = repair ? new List<string> { "fault-entry", "repair-SR", "repair-PC", "repair-format", "bridge-SR", "bridge-PC", "bridge-format", "repair-return-SR", "handler-return", "retry-RTE" }
             : new List<string> { "fault-entry", "bare-return", "privilege" };
         var retryTrace = keepTrace && incoming != 0 && vector == 0;
-        if (repair) { if (retryTrace) phases.Add("retry-trace-return"); if (vector != 0) phases.Add("pending-return"); phases.Add("following"); }
-        var id = $"68040/RTE/user-{(keepTrace ? "trace" : repair ? "repair" : "fault")}/{matrix}/{form}/path={string.Join('-', path)}/M={userMaster}/incoming={incoming:X4}/align={alignment}/VBR={vbr:X8}/result={result}/T={restoredTrace:X4}/read={offset}:{width}/byte={faultByte}/op=4E73/ccr={ccr:X2}";
+        if (repair)
+        {
+            if (retryTrace) phases.Add("retry-trace-return");
+            if (service != null) phases.AddRange(service.Phases(restoredTrace));
+            else if (vector != 0) phases.Add("pending-return");
+            phases.Add("following");
+        }
+        var id = $"68040/RTE/user-{(traceService ? "software-trace" : keepTrace ? "trace" : repair ? "repair" : "fault")}/{matrix}/{form}/path={string.Join('-', path)}/M={userMaster}/incoming={incoming:X4}/align={alignment}/VBR={vbr:X8}/result={result}/T={restoredTrace:X4}/read={offset}:{width}/byte={faultByte}{(traceService ? $"/clear={clearServiceTrace}" : "")}/op=4E73/ccr={ccr:X2}";
         var phase = 0;
         bool Step()
         {
@@ -193,7 +228,7 @@ public sealed class SyntheticM68040UserRteFaultTests(ITestOutputHelper output)
         if (vector != 0)
         {
             Pending(m, e, pointers, savedSr, vector, Target, Operand, sequence + 2);
-            if (form == "CU" || post) e.ControlChecks["pending delivery"] = (s => s.M68040PendingFpuExceptions.Find(form == "CU" ? 2 : 3) == null ? 0u : 1u, 0);
+            if (unimplemented || post) e.ControlChecks["pending delivery"] = (s => s.M68040PendingFpuExceptions.Find(unimplemented ? 2 : 3) == null ? 0u : 1u, 0);
         }
         // The retried instruction begins with incoming trace, even if the
         // repaired SR clears it. CT/CU/CP conversion wins over RTE tracing;
@@ -201,6 +236,22 @@ public sealed class SyntheticM68040UserRteFaultTests(ITestOutputHelper output)
         if (retryTrace) Pending(m, e, pointers, savedSr, 9, Target, SyntheticMachine.Code, sequence + 2);
         if (!Step()) return;
         e.ControlChecks.Remove("old throwaways not reread");
+        if (service != null)
+        {
+            var bank = ExceptionBank(savedSr);
+            if (!service.Run(m, e, pointers[bank], savedSr, Step)) return;
+            pointers[bank] += 12;
+            var returnedSr = service.ReturnedSr(savedSr);
+            SetStacks(e, pointers, returnedSr); e.Pc = service.ResumePc; e.ExceptionVector = null;
+            if (!Step()) return;
+            if ((returnedSr & 0xc000) != 0)
+            {
+                Pending(m, e, pointers, returnedSr, 9, service.ResumePc, service.ResumePc, sequence + 3);
+                e.Pc = SyntheticM68040SoftwareTraceProgram.TraceHandler;
+            }
+            Step();
+            return;
+        }
         if (vector != 0 || retryTrace)
         {
             pointers[ExceptionBank(savedSr)] += 12; SetStacks(e, pointers, savedSr); e.Pc = Target; e.ExceptionVector = null;
