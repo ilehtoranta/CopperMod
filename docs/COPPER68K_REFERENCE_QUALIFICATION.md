@@ -7176,3 +7176,78 @@ noncanonical MOVE16 stop is preserved separately from this legal-input audit.
 The advanced 480-case 040 inventory, other-model restoration, software reference
 disagreements and all remaining consolidation requirements stay open.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+### Actual 040 operand-read fault discovery — 2026-10-06
+
+The remaining real data-fault requirement now has a self-contained, strict
+failing gate. `SyntheticM68040OperandReadFaultDiscoveryTests` executes sixteen
+fixed legal read encodings: MOVE B/W/L, MOVEA W/L, ADD/CMP/TST B/W/L and MOVEM W/L.
+The memory operand is `(A0)`; MOVEM selects D0 and rejects its first transfer.
+The expectation source is [MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+8.4.6, 8.4.6.2 and 8.4.6.7: format-7 data access frames, fault address, read/size/
+modifier fields, MOVEM CM/calculated EA and absent pending writes before the
+first operand read. Undefined EA/push/writeback data and SSW X are masked only
+where the architecture leaves them undefined. No CPU decoding/arithmetic/EA
+helper supplies expected results.
+
+Each scalar/batch route executes **61,440 cases / 1,920 combinations** covering
+all 32 initial CCR values, user/user-M/ISP/MSP banks, no/T1/T0 incoming trace,
+four operand address lanes and every byte of the rejected original-width read.
+The gate checks original PC/SR, complete defined frame fields, one exception,
+stack selection/consumption, registers, surrounding memory and translation
+bypass restoration. Each case attempts its faulting instruction exactly once;
+there is no retry after a mismatch or partial effects. No hardware timing,
+enabled cache/MMU, arbitrary addressing, later MOVEM transfers, handler/RTE
+recovery or physical split-transfer ordering is qualified by this entry fixture.
+
+Fresh execution passes the single fixed witness fact's **sixteen literal
+normal-execution examples**, but both fault-entry batches fail without skips:
+**zero passing / 122,880 mismatching / zero unsupported / zero untested**
+selected cases. Captured detailed failures first differ at A7: an eight-byte
+frame is consumed instead of sixty, leaving the stack 52 bytes above the required
+boundary. Current `RaiseMmuFault` explicitly falls back to format 0 for these
+operand reads. Further defined frame checks remain unmet prerequisites; these
+failed cases are not described as qualified passing coverage.
+
+```powershell
+./scripts/test-copper68k-040-operand-read-discovery.ps1 -OutputDirectory <fresh-output>
+./scripts/test-copper68k-040-operand-read-discovery.ps1 -ValidateReportsOnly -OutputDirectory <existing-output>
+```
+
+The maintained command requires the three exact executions (one passing witness,
+two complete entry selections), with no skips, complete CPU/test source identities,
+report/TRX/isolated-assembly hashes and an independently expanded 1,920-key /
+32-weight inventory for each route. It records all classifications before failing
+for any mismatch/unsupported/untested case. Frozen validation checks identities
+and complete report/TRX content; it does not rerun the CPU. Missing fixtures,
+empty selections and changed evidence cannot become passing audit coverage.
+Six copied-evidence controls reject missing source/report identities, changed
+weights, foreign keys, empty combinations and empty execution. Content controls
+refresh altered report hashes so they exercise semantic checks as well as hashing.
+
+Fresh evidence is under the restoration temporary root in
+`audits/OperandReadDiscoveryFinal` (three executions: one pass, two fail),
+`OperandReadIntegrityFinal/controls.json` and `operand-read-discovery-final.log`.
+Input manifest SHA256:
+`5102bcba25b93795b8266de1c0c6efa37619edb795d4c6ac3b126cce01a7b6a1`.
+Preliminary wrapper output failed an incorrect PowerShell property-count check;
+its captured CPU failures remain separate from final verified acceptance.
+The first integrity invocation used an overly specific missing-file diagnostic
+string; final six controls require the observed intended errors. These attempts
+are preserved and excluded from final validation claims.
+
+A separate documentary recheck finds no ordinary STOP S-clear clarification in
+[NXP M68000PRMER revision 1](https://www.nxp.com/docs/en/reference-manual/M68000PRMER.pdf)
+or [MC68060UMAD revision 0.1](https://www.nxp.com/docs/en/reference-manual/MC68060UMAD.pdf).
+The existing 060 STOP software-reference disagreement remains unresolved; no
+CPU restriction is inferred from absence of an erratum.
+
+No production CPU edit, regression retirement, consumer replay or package release
+is included. Ordinary scenario/report requirements remain 86,097,474 / 707;
+the sixteen-example fixed witness is separate from those batch totals. The
+480-case advanced-040 inventory remains intact: this is a failing concrete
+qualification prerequisite, not closure of its broad real-access-fault row.
+The next fix must correct architectural operand-read frame delivery and preserve
+actual latched MOVEM EA/continuation rules, then qualify executed recovery and
+affected consumers. All other model/reference/consolidation requirements remain
+required. Milestone 6 stays **in progress**, `roadmapComplete=false`.

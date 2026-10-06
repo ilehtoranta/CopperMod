@@ -1206,3 +1206,19 @@ fault/cache/trace requirements remain separate. Original Basic failures remain
 visible and milestone 6 remains incomplete. See the
 [supervisor-A7 qualification](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#supervisor-a7-move16-reference-completion--2026-10-06)
 for the exact selection, integrity controls and reproduction commands.
+
+## Actual 040 operand-read fault discovery
+
+Run `test-copper68k-040-operand-read-discovery.ps1 -OutputDirectory <fresh-output>`
+for the self-contained legal read-instruction witnesses and scalar/batch fault
+entry. Each route requires 61,440 cases / 1,920 combinations / all 32 CCRs, with
+exact source/report/assembly identities and independent key/weight expansion.
+`-ValidateReportsOnly` checks retained frozen evidence without CPU execution.
+Both modes currently fail 122,880 architectural frame mismatches; the sixteen
+literal normal-execution witnesses pass. Missing/empty/changed evidence fails.
+
+The processor currently delivers format 0 for operand reads where the manual
+requires format 7. Actual recovery, broader addressing/MOVEM phases and all
+remaining fault protocols are required work. The discovery remains outside
+promoted ordinary-CI batch counts; no inventory gap is removed. See the
+[qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#actual-040-operand-read-fault-discovery--2026-10-06).

@@ -2620,3 +2620,16 @@ No production CPU fix, regression retirement or package release is included.
 Original Basic failures and the full advanced restoration/consolidation scope
 remain required. See the [supervisor-A7 record](COPPER68K_REFERENCE_QUALIFICATION.md#supervisor-a7-move16-reference-completion--2026-10-06).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The real 040 operand-read gap now has a concrete strict discovery gate: sixteen
+legal MOVE/MOVEA/ADD/CMP/TST/MOVEM encodings, all CCRs, four stack banks, three
+trace states, lanes and rejected read bytes, independently verified in scalar
+and batch execution. Sixteen literal normal-execution witnesses pass. All
+122,880 selected fault-entry cases fail the required format-7 stack boundary;
+current delivery uses an eight-byte format-0 frame. Six evidence-integrity
+controls reject intended corruption. These failing cases remain discovery,
+without promotion or reducing the 480-case broad inventory. The next required
+work is architectural read-fault delivery/latched MOVEM continuation, executed
+recovery and affected-consumer qualification. No production edit, package release
+or regression retirement is included. See the [operand-read discovery](COPPER68K_REFERENCE_QUALIFICATION.md#actual-040-operand-read-fault-discovery--2026-10-06).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
