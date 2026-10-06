@@ -2380,3 +2380,41 @@ and packages remain unchanged. No regression is retired. Rejected RTE CCR
 architecture, long/RMW/foreign format8 continuation, full exception/trace entry,
 and all other reference/consolidation requirements remain required. Milestone 6
 stays **in progress**, `roadmapComplete=false`.
+
+### 68010 long MOVE/MOVEA continuation — 2026-10-06
+
+Generated private format-8 images now continue long transfers as two pending
+word cycles. A completed source read is not repeated; postincrement commits
+after both source words, and descending destination predecrement commits after
+both writes. Input/output buffers and independent RR choices apply per word.
+The frame retains accumulated input, full output, original operand address,
+extension PC and completed prefetch. Redirecting one pending word leaves the
+other word's original address intact; this is an explicit private convention.
+Copied/nested images need no side table. Normal successful transfer ordering,
+public API and existing timing policy remain unchanged.
+
+The two bounded failures reproduce before the fix. Five ordinary groups add
+344,192 scenarios / 1,516 combinations: source 165,888; destination 172,032;
+copied/nested/alias/prefetch/trace 5,120; user A7 512; malformed images 640.
+All seven named tests pass without skips. Source and destination fixtures are
+independent of production decoding, including extension words, 24-bit physical
+addresses, final flags, saved values, untouched registers and surrounding memory.
+Each canonical scenario checks the second fault, completed transfer and sentinel.
+The dedicated command independently checks identities, exact selections, keys
+and weights; fresh and frozen validations pass. Fourteen integrity controls
+reject changed identities, empty/wrong selections and redistributed coverage.
+
+The ordinary semantic gate now requires **85,535,254 scenarios / 685 reports**.
+These counts include the new requirements, not proof of pending broad execution.
+The retained 68010 selection passes 21 tests without skips; six production
+mutations detect the targeted continuation defects. Pinned SingleStepTests and
+Musashi semantic audits pass. The isolated unpublished `.64` consumer passes
+its Release build, host/disk/engine tests and all three native replays. The first
+full CPU run failed only an obsolete structural-image expectation; that test
+now checks explicit private-image examples and passes its retained selection.
+The corrected full rerun is pending at this commit. See the reference document
+for identities, exclusions and preserved failed evidence. No regression is
+retired or public package published. Long non-MOVE, foreign hardware images, RMW and external bus errors
+remain required, along with all other milestone-6 reference/consolidation gaps.
+This private continuation is not hardware-internal or physical timing
+qualification. Milestone 6 stays **in progress**, `roadmapComplete=false`.

@@ -76,9 +76,26 @@ nested/alias/prefetch/trace edges 640; user A7 192; malformed private images 224
 RR=0 retries only the stacked word cycle; RR=1 uses the input image or accepts
 a software-completed write. Earlier operand reads and register effects are never
 replayed. The private image contains continuation phase and completed prefetch
-words, so copied frames need no side table. Long transfers, non-MOVE families,
-foreign hardware internal images, RMW, external BERR and physical restart timing
-remain unqualified; this is not full format-8 restart qualification.
+words, so copied frames need no side table.
+
+Five `system-move-long-restart-*` groups add 344,192 scenarios: source 165,888;
+destination 172,032; copied/nested/alias/prefetch/trace edges 5,120; user A7 512;
+malformed images 640. Two fixed regressions additionally reproduce the original
+missing continuation. The source/destination matrices use eight long boundaries,
+all CCRs, both privilege modes and independent RR choices for each word. Each
+scenario verifies the next fault, completed transfer and following sentinel.
+Descending writes preserve the pending base until both words complete. Completed
+source data, the original operand address and remaining phase live in the frame.
+Redirecting one stacked cycle affects just that word; the next word retains its
+original address, and overlapping redirected writes obey transfer order. This
+address convention and the `C110` internal marker are private emulator encodings.
+
+Run `scripts/test-copper68k-010-long-move-restart.ps1` for source/binary/evidence
+identities and independently enumerated combination weights; `-ValidateReportsOnly`
+requires the same inputs and exact seven named executions. The ordinary synthetic
+gate requires the five reports. Non-MOVE families, foreign hardware internal
+images, RMW, external BERR and physical restart timing remain unqualified; this
+is not full format-8 restart qualification or an executed external restart oracle.
 
 Reports contain per-scenario identifiers and counts for passing, mismatching,
 unsupported and untested outcomes. `integer-inventory.json` lists all integer

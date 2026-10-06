@@ -6269,3 +6269,135 @@ package published. Invalid-RTE flag architecture, long/RMW/foreign 010 restorati
 020/030 advanced frames, full CM/fault lifetime, STOP/PCR discrepancies, broader
 independent model audits and consolidation remain required. Milestone 6 stays
 **in progress**, `roadmapComplete=false`.
+
+### 68010 private long MOVE/MOVEA continuation — 2026-10-06
+
+[MC68000UM](https://www.nxp.com/docs/en/reference-manual/MC68000UM.pdf)
+6.3.9.2, 6.3.10 and 6.4 require continuation from restored internal state rather
+than decoding the instruction again. The transfer buffers in figure 6-8 are
+16 bits. RR chooses a processor rerun or software-completed transfer, with
+DF/IF selecting the read buffer. This supports per-word continuation of a long
+operand. It does not specify the silicon's internal word encoding. Locked RMW
+has separate whole-cycle semantics; TAS is byte sized and cannot be qualified
+using alignment faults. External non-MMU BERR signaling remains unavailable
+through the current public bus contract.
+
+The new `M68010LongMoveResumeFrame` image is explicitly **private**, alongside
+the existing `C010` word image. Its `C110` marker identifies these internal words:
+
+| Internal words | Meaning |
+| --- | --- |
+| 0–3 | Version zero, marker, original opcode, read/write direction |
+| 4–10 | Extension PC, prefetch address, two prefetched words, queue count |
+| 11 | Phase 0/1 source high/low; 2/3 ascending write high/low; 4/5 descending write low/high |
+| 12–13 | Accumulated source input or complete source output |
+| 14–15 | Original logical operand base |
+
+The stacked fault address identifies only the pending word. A handler redirect
+does not change the subsequent word's original address. Mixed RR choices can
+therefore produce overlapping destinations; the later word wins byte by byte.
+This address convention is a repository choice, not inferred silicon behavior.
+Only generated odd-alignment MOVE/MOVEA images are promoted. Unsupported private
+images reject before frame consumption; foreign unmarked images retain existing
+structural compatibility and remain unqualified for continuation.
+
+The core records a long read fault before the first word and an ascending or
+descending write fault before its first word. RTE loads the marked image and
+continues word cycles directly. It never repeats source reads, operand decoding
+or already committed EA effects. A successful source transfer increments once;
+a successful destination transfer commits postincrement or delayed predecrement
+once. MOVEA preserves flags; MOVE uses the completed 32-bit source. New capture
+hooks run only on odd long accesses. Successful long paths retain their original
+access widths/order and timing policy. The pending context clears before further
+prefetch/operand work or the next instruction. No public API changes.
+
+`SyntheticM68010LongMoveRestartTests` adds five ordinary reports:
+
+| Group | Scenarios | Architectural combinations |
+| --- | ---: | ---: |
+| Source faults | 165,888 | 648 |
+| Destination faults | 172,032 | 672 |
+| Copied/nested/alias/prefetch/trace | 5,120 | 160 |
+| User A7 | 512 | 16 |
+| Invalid private images | 640 | 20 |
+| Total | **344,192** | **1,516** |
+
+Counts describe multi-phase scenarios, not individual bus cycles or xUnit test
+counts. Two fixed regressions additionally demonstrate the old missing source
+continuation and descending-write continuation. Both failed at the first RTE
+before the fix (`artifacts/m6-010-long-restart-before/before.trx`). Seven named
+tests now pass without skips. Canonical matrices use nine memory sources, seven
+memory destinations, legal register/immediate alternatives, eight long values,
+32 CCRs, both privilege states and four independent two-word RR combinations.
+They check initial register effects, the next complete frame/register/memory
+state, completed instruction state and a following MOVEQ sentinel. Completed
+sources are changed by the handler to expose accidental re-reads. Existing
+initial fault-flag/PC policy is retained; no new independent silicon oracle is
+claimed for initial fault flags or instruction-space bus signaling.
+
+```powershell
+./scripts/test-copper68k-010-long-move-restart.ps1 -OutputDirectory artifacts/010-long-move-restart
+./scripts/test-copper68k-010-long-move-restart.ps1 -ValidateReportsOnly -OutputDirectory artifacts/010-long-move-restart
+```
+
+Accepted scoped evidence is `artifacts/m6-010-long-restart-qualified-current/`.
+Source identity is frozen before execution and rechecked afterward. CPU, test
+assembly and every report/TRX identity must match. Validation independently
+enumerates all combinations and weights and requires the exact seven methods.
+Fresh and frozen validations pass. All fourteen controls in
+`artifacts/m6-010-long-restart-controls-current/controls.json` reject their intended
+identity, selection or report error; altered report hashes are refreshed so
+semantic errors cannot hide behind hash rejection. Original evidence is intact.
+
+Register destinations start with distinct values when the source is memory;
+the fixture cannot conceal an omitted register write. Preserved SR bits and
+MOVEA flags are checked against the independent initial SR. The retained
+format-8 structural test now checks fixed `C110` image examples instead of
+expecting obsolete zero internal words, while retaining all header, reserved-hole,
+surrounding-memory and bus-write checks.
+
+The retained selection passes 21 tests without skips: 133,152 scenarios / eight
+reports plus thirteen fixed examples (`artifacts/m6-010-long-restart-retained-final/`).
+Six isolated production mutations detect disabled capture, lost source high word,
+repeated source increment, wrong remaining address, premature/wrong descending
+base commit and lost completed output. Both fixed regressions remain unchanged
+after fixture strengthening; each mutation restores source byte-for-byte.
+Evidence: `artifacts/m6-010-long-restart-mutations/mutations.json`.
+
+Pinned external semantic audits pass: SingleStepTests 312,500 cases / 125 files
+at `64b253116a3de04aaac4346c43680960dc9b67e5`, and Musashi 536 passing /
+88 excluded combinations at `72c1d74800f3087b45a0c1a7342601bbed898881`.
+Accepted evidence is `artifacts/m6-010-long-restart-external-qualified/`; it uses
+the same production CPU and the earlier test adapter, recorded separately.
+These audits do not supply an external long-continuation oracle. AHX retains
+18 passing tests without skips (`artifacts/m6-010-long-restart-ahx/`).
+
+The first full CPU run records 5,128 passing, one failing and nineteen skipped
+tests (`artifacts/m6-010-long-restart-full/`). Its sole failure was the structural
+test's obsolete zero-internal-image expectation described above. This failed
+run remains intact and is not accepted as a passing semantic gate. The corrected
+full rerun, including nine pinned WinUAE selections, is still pending at this
+commit (`artifacts/m6-010-long-restart-full-final/`). Discovery lists 5,116 test
+descriptors; one theory expands into 33 runtime rows, giving 5,148 executions.
+The ordinary gate now requires 85,535,254 scenarios / 685 reports.
+
+An isolated CopperScreen consumer at `d9beae8b88be24032221e3482942a249c03c27d3`
+passes its Release build, host tests (149 passing / six optional skips), disk
+tests (74), separate engine diagnostics (1,080), and three native boot/persistence
+replays without native skips. Private unpublished package
+`1.5.2-synthetic-dev.64` SHA256 is
+`b84e9328c6a74618aaa9d0ed54c13e89019b970496029cd5029bbf9439453bb7`.
+Its CPU and all four loaded consumer assemblies match
+`0145566d23551d1dd8793784d2d83b5fdbe9a9ad2db6c9199012b6f9af80308a`;
+the final scoped test adapter is
+`180db7219a99097c9c24d7cae0cff17f5b9aa27798d241861ece75d59f1e8367`.
+Consumer evidence is under the isolated checkout's
+`artifacts/010-long-restart-validation/` and
+`artifacts/010-long-restart-identities.json`. Root CopperScreen changes and its
+dependency pin remain untouched. This is correctness evidence, not throughput
+or physical timing qualification.
+
+No regression is retired, public package published, hardware timing qualified,
+or full format-8 restart claimed. Non-MOVE/foreign/RMW/external-BERR restoration,
+rejected-RTE CCR architecture and all other reference/consolidation gaps remain
+required. Milestone 6 stays **in progress**, `roadmapComplete=false`.

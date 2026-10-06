@@ -220,7 +220,7 @@ namespace Copper68k
 
         // MC68000UM 6.4: validate before changing SP, then probe the final
         // word before loading the rest. Unmarked images retain structural-only
-        // compatibility; marked images carry the private word-MOVE continuation.
+        // compatibility; marked images carry private word/long-MOVE continuations.
         protected override bool ValidateRteFrame(ushort format, uint framePointer)
         {
             _rteInternalWords = null;
@@ -246,20 +246,24 @@ namespace Copper68k
                 }
             }
             if (words[1] == M68010WordMoveResumeFrame.Marker && !M68010WordMoveResumeFrame.IsValid(words)) return false;
+            if (words[1] == M68010LongMoveResumeFrame.Marker && !M68010LongMoveResumeFrame.IsValid(words)) return false;
             _rteInternalWords = words;
             return true;
         }
 
         protected override bool TryResumeRteFrame(ushort format, uint framePointer, ushort statusRegister, uint programCounter)
         {
-            if ((format & 0xF000) != 0x8000 || _rteInternalWords is not { } words || words[1] != M68010WordMoveResumeFrame.Marker) return false;
+            if ((format & 0xF000) != 0x8000 || _rteInternalWords is not { } words ||
+                words[1] is not (M68010WordMoveResumeFrame.Marker or M68010LongMoveResumeFrame.Marker)) return false;
             var specialStatus = _rteSpecialStatus; var faultAddress = _rteFaultAddress;
             var output = _rteDataOutput; var input = _rteDataInput; var instructionInput = _rteInstructionInput;
             _rteInternalWords = null;
             State.SetActiveStackPointer(framePointer + 58);
             State.StatusRegister = statusRegister;
             AddInstructionCycles(20); // Retained RTE policy; physical restart timing is unqualified.
-            ResumeM68010WordMove(words, programCounter, faultAddress, specialStatus, output, input, instructionInput);
+            if (words[1] == M68010LongMoveResumeFrame.Marker)
+                ResumeM68010LongMove(words, programCounter, faultAddress, specialStatus, output, input, instructionInput);
+            else ResumeM68010WordMove(words, programCounter, faultAddress, specialStatus, output, input, instructionInput);
             return true;
         }
 
@@ -281,13 +285,14 @@ namespace Copper68k
             bool useDataAccessStackedProgramCounter,
             ushort dataOutput)
         {
-            var internalWords = CaptureM68010WordMoveResumeFrame(isWrite, accessKind, useDataAccessStackedProgramCounter);
+            var internalWords = CaptureM68010LongMoveResumeFrame(isWrite, accessKind, useDataAccessStackedProgramCounter)
+                ?? CaptureM68010WordMoveResumeFrame(isWrite, accessKind, useDataAccessStackedProgramCounter);
             var stackedProgramCounter = State.LastInstructionProgramCounter;
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(3, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
             // Figure 6-8: 58 bytes, 26 information words, three unwritten
-            // reserved words. Only marked word-MOVE images encode continuation;
+            // reserved words. Only marked word/long-MOVE images encode continuation;
             // other internal/input state remains structurally unqualified.
             for (var i = 15; i >= 0; i--) PushWord(internalWords?[i] ?? 0);
             PushWord(0); // instruction input buffer (unqualified)

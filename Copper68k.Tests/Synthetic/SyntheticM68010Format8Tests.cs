@@ -85,12 +85,13 @@ public sealed class SyntheticM68010Format8Tests(ITestOutputHelper output)
                 var faultAddress = kind == "pre-write" ? 0xab004003u : 0xab004001u;
                 var ssw = (uint)((kind == "fetch" ? 0x2002 : 0x1001) | (write ? 0 : 0x0100) | (supervisor ? 4 : 0));
                 e.Write(fp + 8, ssw, 2, m.Model); e.Write(fp + 10, faultAddress, 4, m.Model);
-                // Input/internal words are implementation placeholders, not qualified restart state.
+                // Input buffers remain placeholders. Marked private word/long
+                // images have their own continuation gate; foreign state is unqualified.
                 e.Write(fp + 16, write ? kind == "write-long" ? 0x8001u : 0x1234u : 0, 2, m.Model);
                 e.Write(fp + 20, 0, 2, m.Model); e.Write(fp + 24, 0, 2, m.Model);
                 for (uint offset = 26; offset < 58; offset += 2)
                 {
-                    if (kind is "read-word" or "write-word" or "movea-word" or "pre-read")
+                    if (kind is "read-word" or "write-word" or "movea-word" or "pre-read" or "read-long" or "write-long" or "pre-write")
                     {
                         // Private continuation contents have their own restart gate.
                         e.MemoryMasks[m.Model.Physical(fp + offset)] = 0;
@@ -101,6 +102,17 @@ public sealed class SyntheticM68010Format8Tests(ITestOutputHelper output)
                 m.Core.ExecuteInstruction();
                 var mismatch = e.Verify(m);
                 if (mismatch != null) return mismatch;
+                if (m.PeekPhysical(fp + 26, 2) != 0) return "Generated internal image version must be zero";
+                if (kind is "read-long" or "write-long" or "pre-write")
+                {
+                    // Independent fixed encoding examples. Prefetch queue contents
+                    // are checked functionally by the dedicated continuation suite.
+                    var phase = kind == "read-long" ? 0u : kind == "pre-write" ? 4u : 2u;
+                    if (m.PeekPhysical(fp + 28, 2) != 0xc110 || m.PeekPhysical(fp + 30, 2) != opcode ||
+                        m.PeekPhysical(fp + 32, 2) != (write ? 1u : 0u) || m.PeekPhysical(fp + 34, 4) != 0x1002 ||
+                        m.PeekPhysical(fp + 48, 2) != phase || m.PeekPhysical(fp + 50, 4) != (write ? 0x80011234u : 0u) ||
+                        m.PeekPhysical(fp + 54, 4) != 0xab004001) return "Incorrect private long continuation image";
+                }
                 var writes = m.Bus.Accesses.Where(a => a.Write).ToArray();
                 if (writes.Length != 26 || writes.Any(a => a.Width != 2 || a.Address < fp || a.Address >= fp + 58))
                     return "Frame must write exactly 26 information words";

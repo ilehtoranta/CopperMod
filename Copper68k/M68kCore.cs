@@ -9189,6 +9189,92 @@ namespace Copper68k
 
         protected virtual bool TryResumeRteFrame(ushort format, uint framePointer, ushort statusRegister, uint programCounter) => false;
 
+        private bool _m68010LongMovePending;
+        private ushort _m68010LongMovePhase;
+        private uint _m68010LongMoveValue, _m68010LongMoveAddress;
+
+        private void PrepareM68010LongMoveFault(uint address, uint value, ushort phase)
+        {
+            if (!UsesFormatWordExceptionFrames || _useM68020BriefIndexedAddressing ||
+                !M68010LongMoveResumeFrame.IsOpcodeSupported(State.LastOpcode, phase >= 2)) return;
+            _m68010LongMovePending = true; _m68010LongMovePhase = phase;
+            _m68010LongMoveValue = value; _m68010LongMoveAddress = address;
+        }
+
+        protected ushort[]? CaptureM68010LongMoveResumeFrame(bool isWrite, M68kBusAccessKind accessKind, bool dataOperand)
+        {
+            if (!_m68010LongMovePending || (isWrite != (_m68010LongMovePhase >= 2)) ||
+                !M68010LongMoveResumeFrame.IsOpcodeSupported(State.LastOpcode, isWrite) ||
+                (accessKind == M68kBusAccessKind.CpuInstructionFetch && !dataOperand)) return null;
+            var words = new ushort[16]; words[1] = M68010LongMoveResumeFrame.Marker;
+            words[2] = State.LastOpcode; words[3] = (ushort)(isWrite ? 1 : 0);
+            M68010WordMoveResumeFrame.Long(words, 4, State.ProgramCounter);
+            M68010WordMoveResumeFrame.Long(words, 6, _prefetchAddress);
+            words[8] = _prefetchWord0; words[9] = _prefetchWord1; words[10] = (ushort)_prefetchCount;
+            words[11] = _m68010LongMovePhase;
+            M68010WordMoveResumeFrame.Long(words, 12, _m68010LongMoveValue);
+            M68010WordMoveResumeFrame.Long(words, 14, _m68010LongMoveAddress);
+            return words;
+        }
+
+        // Resume pending word cycles from the frame. No decoder replay, source
+        // re-read or repeated EA side effects; successful long paths stay intact.
+        protected void ResumeM68010LongMove(ushort[] words, uint instructionPc, uint faultAddress,
+            ushort specialStatus, ushort dataOutput, ushort dataInput, ushort instructionInput)
+        {
+            var opcode = words[2];
+            State.LastOpcode = opcode; State.LastInstructionProgramCounter = instructionPc;
+            _activeInstructionProgramCounter = instructionPc;
+            State.ProgramCounter = M68010WordMoveResumeFrame.Long(words, 4);
+            FlushPrefetch();
+            _prefetchAddress = M68010WordMoveResumeFrame.Long(words, 6);
+            _prefetchWord0 = words[8]; _prefetchWord1 = words[9]; _prefetchCount = words[10];
+            _prefetchCompletedCycle0 = _prefetchCompletedCycle1 = State.Cycles;
+            _instructionTracePending = State.GetFlag(M68kCpuState.Trace);
+            _dataAccessStackedProgramCounter = instructionPc;
+            _dataReadFaultAccessKind = (specialStatus & 0x2000) != 0 ? M68kBusAccessKind.CpuInstructionFetch : M68kBusAccessKind.CpuDataRead;
+            _m68010LongMovePending = true; _m68010LongMovePhase = words[11];
+            _m68010LongMoveValue = M68010WordMoveResumeFrame.Long(words, 12);
+            _m68010LongMoveAddress = M68010WordMoveResumeFrame.Long(words, 14);
+            var softwareCompleted = (specialStatus & 0x8000) != 0;
+            var destinationMode = (opcode >> 6) & 7; var destinationRegister = (opcode >> 9) & 7;
+            if (_m68010LongMovePhase >= 2)
+            {
+                if (!softwareCompleted) WriteWord(faultAddress, dataOutput);
+                if (_m68010LongMovePhase is 2 or 4)
+                {
+                    var descending = _m68010LongMovePhase == 4;
+                    _m68010LongMovePhase++;
+                    WriteWord(descending ? _m68010LongMoveAddress : unchecked(_m68010LongMoveAddress + 2),
+                        (ushort)(descending ? _m68010LongMoveValue >> 16 : _m68010LongMoveValue));
+                }
+                _m68010LongMovePending = false;
+                if (destinationMode == 3) SetAddressRegister(destinationRegister, State.A[destinationRegister] + 4);
+                if (destinationMode == 4) SetAddressRegister(destinationRegister, _m68010LongMoveAddress);
+                SetLogicFlags(_m68010LongMoveValue, M68kOperandSize.Long);
+                PrefetchFallthroughAfterMemoryWriteback();
+                return;
+            }
+
+            var pending = softwareCompleted ? (specialStatus & 0x1000) != 0 ? dataInput : instructionInput : ReadWord(faultAddress);
+            if (_m68010LongMovePhase == 0)
+            {
+                _m68010LongMoveValue = (uint)pending << 16;
+                _m68010LongMovePhase = 1;
+                pending = ReadWord(unchecked(_m68010LongMoveAddress + 2));
+            }
+            var value = _m68010LongMoveValue | pending;
+            _m68010LongMovePending = false;
+            if (((opcode >> 3) & 7) == 3) SetAddressRegister(opcode & 7, State.A[opcode & 7] + 4);
+            var memoryDestination = destinationMode >= 2;
+            if (!memoryDestination || destinationMode == 4) PrefetchFallthroughAfterMoveSourceRead();
+            var destination = ResolvePlannedEaWithoutPrefetchTopUp(destinationMode, destinationRegister, M68kOperandSize.Long, write: true);
+            if (destinationMode != 1) SetLogicFlags(value, M68kOperandSize.Long);
+            if (memoryDestination && MoveDestinationHasExtensionWord(destinationMode, destinationRegister)) PrefetchNextOpcodeBeforeMoveMemoryWriteback();
+            WritePlannedEaValue(in destination, value);
+            if (memoryDestination && destinationMode != 4) PrefetchFallthroughAfterMemoryWriteback();
+        }
+
         protected ushort[]? CaptureM68010WordMoveResumeFrame(bool isWrite, M68kBusAccessKind accessKind, bool dataOperand)
         {
             if (!M68010WordMoveResumeFrame.IsOpcodeSupported(State.LastOpcode, isWrite) ||
@@ -14033,6 +14119,7 @@ namespace Copper68k
             }
             if (!_useM68020BriefIndexedAddressing && (address & 1) != 0)
             {
+                PrepareM68010LongMoveFault(address, 0, 0);
                 ThrowOddAddressAccess(address, isWrite: false, _dataReadFaultAccessKind, useDataAccessStackedProgramCounter: true);
             }
 
@@ -14149,6 +14236,7 @@ namespace Copper68k
             }
             if (!_useM68020BriefIndexedAddressing && (address & 1) != 0)
             {
+                PrepareM68010LongMoveFault(address, value, 2);
                 ThrowOddAddressAccess(address, isWrite: true, M68kBusAccessKind.CpuDataWrite, dataOutput: (ushort)(value >> 16));
             }
 
@@ -14174,6 +14262,7 @@ namespace Copper68k
 
         private void WriteLongDescending(uint address, uint value)
         {
+            if ((address & 1) != 0) PrepareM68010LongMoveFault(address, value, 4);
             WriteWord(address + 2, (ushort)value);
             WriteWord(address, (ushort)(value >> 16));
         }
@@ -14541,6 +14630,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void BeginInstructionCycleFloor(long startCycle)
         {
+            _m68010LongMovePending = false;
             // MC68000 UM 6.3.8: sample before executing, not from the resulting SR.
             _instructionTracePending = ArchitecturalTraceEnabled && (State.StatusRegister & M68kCpuState.Trace) != 0;
             // Reaching the next instruction proves that any previous DBcc

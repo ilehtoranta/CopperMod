@@ -154,6 +154,11 @@ try {
             $expected['system-move-word-restart-edges'] = 640
             $expected['system-move-word-restart-a7'] = 192
             $expected['system-move-word-restart-invalid'] = 224
+            $expected['system-move-long-restart-source'] = 165888
+            $expected['system-move-long-restart-destination'] = 172032
+            $expected['system-move-long-restart-edges'] = 5120
+            $expected['system-move-long-restart-a7'] = 512
+            $expected['system-move-long-restart-invalid'] = 640
         }
         if ($model -eq '68040') {
             $expected['instruction-fault-frame'] = 36864
@@ -327,7 +332,7 @@ try {
     foreach ($row in $inventory.combinations) {
         if ($row.Milestone -le 5) { $row.status = 'passing'; $row.note = 'Passing named semantic scenario batches; consult qualification boundaries for untested physical/internal protocols.' }
     }
-    $inventory | Add-Member -NotePropertyName qualificationBoundaries -NotePropertyValue @('RTE fault restart/internal formats remain untested: 010 long/non-MOVE/foreign frame8 restart, 020/030 frames9/A/B, 040 frame7 CP context transfer and detailed access-fault restoration', 'BKPT external replacement responder is unavailable', 'MOVES physical function-code spaces and LPSTOP CPU-space broadcast are unqualified', 'CALLM/RTM type1 protocol uses an internal synthetic responder; normal public buses have none', '060 HALT debug-port restart, PULSE PST pins and debug pipeline commands are unavailable')
+    $inventory | Add-Member -NotePropertyName qualificationBoundaries -NotePropertyValue @('RTE fault restart/internal formats remain untested: 010 non-MOVE/foreign frame8 restart, 020/030 frames9/A/B, 040 frame7 CP context transfer and detailed access-fault restoration', 'BKPT external replacement responder is unavailable', 'MOVES physical function-code spaces and LPSTOP CPU-space broadcast are unqualified', 'CALLM/RTM type1 protocol uses an internal synthetic responder; normal public buses have none', '060 HALT debug-port restart, PULSE PST pins and debug pipeline commands are unavailable')
     $inventory | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $output 'qualified-inventory.json')
     @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=$logicalBatches; moveGate='passing'; transferGate='passing'; arithmeticGate='passing'; logicalGate='passing'; controlGate='passing'; m68040DisabledMmuInstructionGate='passing'; m68000AddressErrorDoubleFaultGate='passing'; m68010Format8StructureGate='passing'; m68010WordMoveRestartGate='passing'; roadmapComplete=$false;
         seeded=$(if ($Deep) {@{seed=$Seed; samplesPerModel=$Samples; models=$Models}} else {$null});
@@ -353,9 +358,9 @@ try {
         m68040BatchFaultScope=@{logicalCases=139392; batches=2; translationEnabled=$false; paths=@('cold','cached','model-specific cached','self-branch cached'); limits=@('instruction cap','boundary denial','cycle deadline'); architectural='Supervisor RTE validation frames, unbuffered self-branch instruction-fault frame and fatal second-fault halt'; policy='Generic short operand frames, scalar/batch bus order and machine/native cycle equality'; qualification='Dedicated discovery enumerates independent combinations; BatchFault scope proves four delivery paths, count, callback and retry defects'; remaining='General data format-7 restart, other entry paths and internal-restoration faults'};
         m68060LowPowerStopScope='Every unrecognized second opcode word in both privilege modes; fixed encoding, status, CCR and incoming trace cases across all profiles. Opcode-PC exception frames follow MC68060UM 8.2.4/5; physical broadcast, pins and ordinary STOP S-clear software disagreement remain unqualified';
         cacheInstructionEncodingScope='Every F4xx opcode, all CCRs and both privilege states across eight profiles; scope zero is illegal on 040/060, including neither-cache forms, before privilege effects. Empty fixture caches qualify architectural state and exception outcomes, not physical invalidation, writeback, bus faults or timing';
-        m68010Format8Scope='58-byte address-error frame, reserved holes, version validation and tail probe, alignment double-fault halt/reset; marked private word-MOVE/MOVEA images resume their faulted cycle; other opaque restart/input state, long transfers, RMW and physical timing remain unqualified';
+        m68010Format8Scope='58-byte address-error frame, reserved holes, version validation and tail probe, alignment double-fault halt/reset; marked private word/long-MOVE/MOVEA images resume pending word cycles without replay; non-MOVE/foreign restart/input state, external BERR, RMW and physical timing remain unqualified';
         m68000DoubleFaultScope='Address-error entry/handler faults; reset-only recovery; external BERR/reset-vector faults unavailable through the current public bus API';
-        unavailableSystemCoverage=@('010 long/non-MOVE/external bus-fault restart and 020/030 internal restart', '020/030 coprocessor midinstruction restoration', '040 access-fault CP context transfer, detailed frame-validation/fault entry and writeback-handler qualification', 'External BKPT replacement responder', 'Physical MOVES function-code spaces and LPSTOP CPU-space broadcast', '060 HALT debug-port restart, PULSE PST pins and debug pipeline commands');
+        unavailableSystemCoverage=@('010 non-MOVE/external bus-fault restart and 020/030 internal restart', '020/030 coprocessor midinstruction restoration', '040 access-fault CP context transfer, detailed frame-validation/fault entry and writeback-handler qualification', 'External BKPT replacement responder', 'Physical MOVES function-code spaces and LPSTOP CPU-space broadcast', '060 HALT debug-port restart, PULSE PST pins and debug pipeline commands');
         timing='Semantic gate; timing policy and physical qualification remain separate'} |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'summary.json')
     Write-Host "Synthetic milestones 1-5 semantic gates: $logicalCases logical cases; reports at $output"
