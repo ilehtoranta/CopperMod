@@ -142,6 +142,10 @@ try {
             $expected['system-pcr-reset'] = 24576
         }
         if ($model -eq '68010') {
+            $expected['system-010-movec-pairs'] = 688128
+            $expected['system-010-movec-masks'] = 1007616
+            $expected['system-010-movec-reads'] = 48128
+            $expected['system-010-movec-encodings'] = 527872
             $expected['system-format8-entry'] = 1024
             $expected['system-format8-rte'] = 4096
             $expected['system-format8-double-fault'] = 256

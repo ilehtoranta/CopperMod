@@ -2313,3 +2313,39 @@ inventory remain unchanged. Ordinary STOP's S-clear architectural rule, full
 CM lifetime, advanced restoration, PCR disagreement, broader independent model
 qualification and consolidation all remain required. Milestone 6 stays **in
 progress**, `roadmapComplete=false`; no regression retirement or release.
+
+### Milestone 6 68010 MOVEC qualification and consolidation
+
+Four ordinary matrices add 2,271,744 cases: every legal control/source/readback
+register pair, complete function-code masks/initial images, raw full-width
+USP/VBR images, every undefined selector and all legal user forms. All canonical
+CCRs are covered; undefined selectors use CCR 0/31. Incoming trace is clear and
+IPL is 7. Expectations use MC68000UM figure 2-3 / 6.3.6/7 and M68000PM MOVEC
+6-22/23 independently of production helpers. All registers, stack banks, SR,
+exact PC, controls and memory are compared, including following sentinels and
+dependent untested phases after a failed prerequisite.
+
+The shared MOVEC fixture gains distinct readback registers, USP handling and
+independent control/vector initialization. It now preserves SFC/DFC/VBR during
+other transfers and explicitly expects the 010 stack model. Every new case and
+independently enumerated combination passes the identity/selection/weight gate;
+frozen report validation also passes. Ten malformed-report controls are rejected.
+Sixty-nine retained tests pass without skips, comprising 1,633,168 cases /
+thirty reports and 39 fixed examples.
+
+Six maintained mutations detect masks, VBR width/bit 10, saved A7-bank state
+and wrong stack-model configuration. Each fails both the original and complete
+replacement before retirement, and the replacement afterward. Only three
+documented duplicate MOVEC methods (five xUnit cases) are retired. Factory,
+privilege, exception-frame, interrupt, restart, prefetch and other specialized
+regressions remain. Mutation sources are restored byte-for-byte; no CPU behavior,
+timing policy, public API or package release changes.
+
+Ordinary coverage requirements become 85,191,062 cases / 680 reports; this is
+not a new broad-suite execution claim. Complete-040 requirements stay intact.
+Its remaining inventory now accurately names both composed and executed MMU
+entry discoveries, and still fails with 480 untested cases / fifteen combinations.
+Physical function-code spaces, bus ordering and advanced 010 restoration are
+not qualified by MOVEC register tests. All remaining CM/restoration, STOP/PCR,
+independent-model and consolidation requirements remain required. Milestone 6
+stays **in progress**, `roadmapComplete=false`.

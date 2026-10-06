@@ -6024,3 +6024,116 @@ S-clear rule, full external trace/exception/IRQ qualification and PCR's software
 manual disagreement are still open. Milestone 6 stays **in progress**,
 `architecturallyQualified=false`, `roadmapComplete=false`. No CPU fix, regression
 retirement, consumer replay or package release is included.
+
+### 68010 MOVEC register qualification and consolidation (2026-10-06)
+
+`SyntheticM68010MovecTests` adds **2,271,744 passing logical cases / four
+ordinary-CI batches**. Independent specifications come from
+[MC68000UM ninth edition](https://www.nxp.com/docs/en/reference-manual/MC68000UM.pdf),
+figure 2-3 and 6.3.6/7, and
+[M68000PM MOVEC](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf),
+6-22/23. MC68010 legal selectors are SFC 000, DFC 001, USP 800 and VBR 801.
+Function codes have three implemented bits; USP/VBR retain all 32 register
+bits despite the external 24-bit address bus. Transfers preserve CCR. Incoming
+user privilege takes vector 8; undefined selectors in supervisor state take
+vector 4, both saving opcode PC in an eight-byte format-zero frame.
+
+| Group | Logical cases | Combinations | Selection |
+| --- | ---: | ---: | --- |
+| `system-010-movec-pairs` | 688,128 | 21,504 | Four controls, every source/readback register pair, seven values, both privilege states and all CCRs |
+| `system-010-movec-masks` | 1,007,616 | 31,488 | Both function codes, all eight initial images, 41 low-bit/high-bit/pattern samples, every register, privilege and CCR |
+| `system-010-movec-reads` | 48,128 | 1,504 | All eight function-code images and 39 full-width USP/VBR images, every register and CCR |
+| `system-010-movec-encodings` | 527,872 | 262,016 | All 4,092 undefined selectors, register encodings and directions in both privilege states at CCR 0/31; all legal user forms at every CCR |
+
+The shared MOVEC fixture supports distinct write/read registers, USP effects,
+independent vector-memory/control initialization and grouped CCR weights. It
+now also preserves SFC, DFC and VBR when another control is transferred. Source
+setup follows control initialization, so a user-mode A7 source has the intended
+USP alias. Expectations capture setup before execution; result masks and legal
+selectors never use production decoders, arithmetic or timing helpers. Every
+general register, active/inactive stack, defined SR bit, exact PC, unchanged
+control, initialized memory and new memory write is checked. Successful
+readbacks include a following NOP; a failed write leaves readback untested and
+is never retried. Read phases identify their actual 4E7A opcode separately.
+The 010 stack-model check expects false independently of its observed value.
+
+These are nontraced IPL7 register/encoding semantics, not qualification of
+physical function-code spaces, exception bus ordering, prefetch, format-8
+restart, interrupts or timing. Diagnostic 010 coverage does not establish
+desktop readiness. Existing specialized tests for these protocols remain.
+No newly executed external CPU or hardware oracle is claimed by this manual
+qualification. Existing independent model audits remain separately recorded.
+
+The dedicated command checks exact fixture/CPU/command sources, binaries and
+evidence identities, exactly four named passing tests with no skips, and
+independently enumerated combination keys and weights. Requested execution
+and report revalidation reject missing inputs, empty selections, mismatches,
+unsupported execution and untested cases. Ten integrity controls reject missing
+manifests, wrong profiles, missing/duplicate sources, missing reports, empty
+execution, wrong keys/weights/models and substituted test names. Content
+controls refresh the changed evidence hash; originals remain unchanged.
+
+```powershell
+./scripts/test-copper68k-010-movec.ps1 -OutputDirectory artifacts/m6-010-movec-qualified-final
+./scripts/test-copper68k-010-movec.ps1 -ValidateReportsOnly -OutputDirectory artifacts/m6-010-movec-qualified-final
+./scripts/test-copper68k-synthetic-mutations.ps1 -Scope Movec010
+```
+
+Retirement is limited to three methods in `M68010InterpreterTests`:
+`MovecTransfersVectorBaseRegister`, `MovecTransfersSupportedControlRegisters`
+(three theory rows), and `MovecVectorBaseToA7UpdatesActiveSupervisorStackPointer`.
+These five xUnit cases have explicit replacements:
+
+- D0→VBR→D1, value 00000400: the pairs matrix's VBR/R0/read-R1 write/read.
+- D0→SFC→D1, FFFFFFFE→6; D0→DFC→D1, FFFFFFFD→5; D0→VBR→D1,
+  12345678: corresponding pairs cases, plus the complete mask/read matrices.
+- VBR→A7, 00004800: reads matrix VBR/read-R15/internal=00004800.
+- The old no-020-stack assertion: the independent 010 stack-model check in
+  every shared transfer, plus the retained public factory regression.
+
+The fixed old encodings 4E7B/0801, 4E7A/1801 and 4E7A/F801 correspond to those
+generated cases. Six maintained mutations fail both the original regression
+and its complete replacement before retirement, and still fail afterward:
+
+| Mutation | Original witness | Replacement mismatching / dependent untested |
+| --- | --- | ---: |
+| SFC ignores its three-bit mask | Supported-control SFC theory row | 135,168 / 135,168 |
+| DFC ignores its three-bit mask | Supported-control DFC theory row | 135,168 / 135,168 |
+| VBR truncated to 24 bits | Supported-control VBR theory row | 32,768 / 32,768 |
+| VBR loses bit 10 | Vector-base transfer fact | 40,960 / 40,960 |
+| A7 loses saved SSP synchronization | VBR-to-A7 fact | 3,008 / 0 |
+| Wrong 020 stack model enabled | Vector-base transfer fact | 458,752 / 229,376 |
+
+Before retirement each theory probe executes four tests: two fail, two pass;
+each fact probe executes two failing tests. After retirement each executes
+one failing replacement test. No probe skips execution or counts compilation
+failure as detection. Production sources are restored byte-for-byte and the
+restored Release build has zero warnings/errors. Preliminary proof attempts
+had an overbroad legacy-name selection and an inaccessible setter in the
+stack-model mutation; those failed commands are excluded. Final proof is in
+`artifacts/m6-010-movec-mutations-before-final` and
+`artifacts/m6-010-movec-mutations-after-final`.
+
+Fresh command execution and frozen report revalidation both pass all four
+matrices, with zero mismatches/unsupported/untested cases and no skips, in
+`artifacts/m6-010-movec-qualified-final`. All **69 retained tests pass without
+skips**, including **1,633,168 cases / thirty reports** and 39 fixed 010/060
+examples, in `artifacts/m6-010-movec-retained`. This covers every other shared
+MOVEC fixture family and the old model-control inventory. Integrity evidence
+is in `artifacts/m6-010-movec-integrity`.
+
+Source starts at `e2c456bcf140196497807baa3a7f44569eca64a3` plus recorded test/
+command changes. Production tree remains
+`795fd12d6c0237a22a5f92f4a96cc4823e0364c1`.
+CPU SHA256: `d151cb2e5d3ab78e5b118cfe7e8f69f01db38a345b1fd2baabc61c995a013fe5`.
+Test SHA256: `a36059542a07a006749d14b98f1aea479c5698e7c50a419f09bbaac115ea6396`.
+Ordinary CI now requires **85,191,062 cases / 680 reports**; this is an expanded
+requirement, not a fresh full-suite execution result. Complete-040 requirements
+remain unchanged. Its updated inventory wording recognizes both composed and
+executed MMU-entry CM discoveries; neither becomes hardware qualification.
+Fresh inventory execution still fails with exactly **480 untested cases /
+fifteen combinations**, without skips, in `artifacts/m6-010-movec-inventory-final`.
+Advanced 010/020/030 restoration, full CM/fault lifetime, STOP/PCR disagreement,
+broader model audits and consolidation remain required. Milestone 6 stays **in
+progress**, `roadmapComplete=false`; no production fix, consumer replay or
+package publication is included.

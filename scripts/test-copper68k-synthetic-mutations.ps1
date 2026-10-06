@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','ChainedOddRte','ChainedOddAccessRte','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','RteUserMaster','RteCpVectors','RteSoftwareTrace','UserRteFault','UserRteTrace','UserRteSoftwareTrace','MixedEpochRte','MixedEpochFault','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings','ProcessorConfiguration')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','ChainedOddRte','ChainedOddAccessRte','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','RteUserMaster','RteCpVectors','RteSoftwareTrace','UserRteFault','UserRteTrace','UserRteSoftwareTrace','MixedEpochRte','MixedEpochFault','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings','ProcessorConfiguration','Movec010')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -606,6 +606,46 @@ $mutations += @(
       expectedGroup='system-pcr-reset'; expectedCases=24576; milestone=6;
       legacyTest='ProcessorIdentificationIsReadOnlyAndResetClearsControls'; legacyFile='Copper68k.Tests/M68060InterpreterTests.cs'}
 )
+foreach ($mutation in @(
+    @{name='010-movec-sfc-mask'; before='State.SourceFunctionCode = value & 0x7;'; after='State.SourceFunctionCode = value;';
+      group='Movec010FunctionCodeMasksFromEveryInitialImage'; expectedGroup='system-010-movec-masks'; expectedCases=1007616;
+      legacyTest='MovecTransfersSupportedControlRegisters'; legacyCases=3; proofReason='SFC expected '},
+    @{name='010-movec-dfc-mask'; before='State.DestinationFunctionCode = value & 0x7;'; after='State.DestinationFunctionCode = value;';
+      group='Movec010FunctionCodeMasksFromEveryInitialImage'; expectedGroup='system-010-movec-masks'; expectedCases=1007616;
+      legacyTest='MovecTransfersSupportedControlRegisters'; legacyCases=3; proofReason='DFC expected '},
+    @{name='010-movec-vbr-width'; before='State.VectorBaseRegister = value;'; after='State.VectorBaseRegister = value & 0x00ffffff;';
+      group='Movec010EveryLegalControlRegisterPairPrivilegeAndCcr'; expectedGroup='system-010-movec-pairs'; expectedCases=688128;
+      legacyTest='MovecTransfersSupportedControlRegisters'; legacyCases=3; proofReason='VBR expected '},
+    @{name='010-movec-vbr-bit10'; before='State.VectorBaseRegister = value;'; after='State.VectorBaseRegister = value & ~0x400u;';
+      group='Movec010EveryLegalControlRegisterPairPrivilegeAndCcr'; expectedGroup='system-010-movec-pairs'; expectedCases=688128;
+      legacyTest='MovecTransfersVectorBaseRegister'; legacyCases=1; proofReason='VBR expected '},
+    @{name='010-movec-a7-bank'; before='State.SetActiveStackPointer(value);'; after='State.A[register] = value;';
+      group='Movec010RawControlImagesPreserveAllBitsAndActiveStack'; expectedGroup='system-010-movec-reads'; expectedCases=48128;
+      legacyTest='MovecVectorBaseToA7UpdatesActiveSupervisorStackPointer'; legacyCases=1; proofReason='Active SSP expected '},
+    @{name='010-movec-stack-model'; before=@'
+        public M68010Interpreter(IM68kBus bus)
+            : base(
+                CreateBus(bus),
+                default,
+                opcodePlanDispatch: M68kCoreFactory.M68000OpcodePlanDispatch)
+        {
+        }
+'@; after=@'
+        public M68010Interpreter(IM68kBus bus)
+            : base(
+                CreateBus(bus),
+                default,
+                opcodePlanDispatch: M68kCoreFactory.M68000OpcodePlanDispatch)
+        {
+            State.EnableM68020StackMode();
+        }
+'@; group='Movec010EveryLegalControlRegisterPairPrivilegeAndCcr'; expectedGroup='system-010-movec-pairs'; expectedCases=688128;
+      legacyTest='MovecTransfersVectorBaseRegister'; legacyCases=1; proofReason='010 stack model expected '}
+)) {
+    $mutation.file='Copper68k/M68010Interpreter.cs';$mutation.movec010=$true;$mutation.milestone=6
+    $mutation.legacyFile='Copper68k.Tests/M68010InterpreterTests.cs';$mutations+=$mutation
+}
+if ($Scope -eq 'Movec010') { $mutations = @($mutations | Where-Object { $_.movec010 }) }
 if ($Scope -eq 'ProcessorConfiguration') { $mutations = @($mutations | Where-Object { $_.pcr }) }
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
@@ -657,7 +697,7 @@ try {
             [IO.File]::WriteAllText($path, $text.Replace($before, $after), [Text.UTF8Encoding]::new($false))
             $model = $(if ($mutation.model) { $mutation.model } elseif ($mutation.name -eq '060-divide-frame') { '68060' } else { '68020' })
             $filter = "FullyQualifiedName~$($mutation.group)&DisplayName~$model"
-            if ($mutation.pcr) { $filter = "FullyQualifiedName~$($mutation.group)" }
+            if ($mutation.pcr -or $mutation.movec010) { $filter = "FullyQualifiedName~$($mutation.group)" }
             if ($mutation.repair) {
                 # Keep the original repair proof's two complete batches; the
                 # new retained-trace facts have their own four-route gate.
@@ -665,7 +705,8 @@ try {
             }
             $legacyPresent = $mutation.legacyTest -and [IO.File]::ReadAllText((Join-Path $repo $mutation.legacyFile)).Contains("void $($mutation.legacyTest)(")
             if ($legacyPresent) {
-                $filter += "|FullyQualifiedName~$($mutation.legacyTest)"
+                $legacyFilter = if ($mutation.movec010) { "Copper68k.Tests.M68010InterpreterTests.$($mutation.legacyTest)" } else { $mutation.legacyTest }
+                $filter += "|FullyQualifiedName~$legacyFilter"
                 if ($mutation.legacyModel) { $filter += "&DisplayName~$($mutation.legacyModel)" }
             }
             & dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --no-restore --filter $filter --logger "trx;LogFileName=mutation.trx" --results-directory $directory *> (Join-Path $directory 'run.log')
@@ -891,6 +932,18 @@ try {
                     $batches[0].counts.mismatching -le 0 -or
                     @($batches[0].failures | Where-Object { $_.reason.StartsWith('PCR expected ', [StringComparison]::Ordinal) }).Count -eq 0) {
                     throw 'PCR mutation did not execute and detect its complete declared matrix'
+                }
+            }
+            if ($mutation.movec010) {
+                [xml]$movecTrx=Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                $c=$movecTrx.TestRun.ResultSummary.Counters
+                $expectedTests=1+$(if($legacyPresent){$mutation.legacyCases}else{0})
+                if($c.total -ne $expectedTests -or $c.executed -ne $expectedTests -or $c.failed -ne (1+[int][bool]$legacyPresent) -or
+                    $c.notExecuted -ne 0 -or $batches.Count -ne 1 -or $batches[0].model -cne '68010' -or
+                    $batches[0].group -cne $mutation.expectedGroup -or $batches[0].logicalCases -ne $mutation.expectedCases -or
+                    $batches[0].counts.unsupported -ne 0 -or
+                    @($batches[0].failures|Where-Object{$_.status -ceq 'mismatching' -and $_.reason.StartsWith($mutation.proofReason,[StringComparison]::Ordinal)}).Count -eq 0){
+                    throw '010 MOVEC mutation omitted its complete selection or intended semantic diagnostic'
                 }
             }
             if ($legacyPresent) {

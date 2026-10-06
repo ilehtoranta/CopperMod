@@ -37,7 +37,7 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
                     : form == "real-access-fault-entry"
                         ? "Cache-disabled accurate instruction-fetch frames/restart are covered separately; data fault/writeback restart, enabled-cache deferral and compiled instruction-PC provenance remain required"
                     : form == "odd-PC-chained-SR-provenance"
-                        ? "Chained format0/2/3 and format7 normal/CM SR handoff, stack consumption and header reads have separate generated WinUAE software coverage; access-frame validation/no-replay checks are synthetic. Separate MMU-path CM lifetime discovery disagrees after odd-PC fault/repair; its exception entry is composed, not a full architectural oracle. CT/CU/CP pending/foreign-context chains, full reference exception entry and hardware behavior remain unqualified"
+                        ? "Chained format0/2/3 and format7 normal/CM SR handoff, stack consumption and header reads have separate generated WinUAE software coverage; access-frame validation/no-replay checks are synthetic. Separate composed-entry and executed-MMU-entry CM lifetime discovery profiles disagree after odd-PC fault/repair; the executed profile also exposes stacked-SR disagreement. Neither qualifies the full run loop or hardware. CT/CU/CP pending/foreign-context chains, full reference exception qualification and hardware behavior remain unqualified"
                     : "Required fault/context protocol has no independently qualified execution fixture yet");
         report.Complete(output);
     }

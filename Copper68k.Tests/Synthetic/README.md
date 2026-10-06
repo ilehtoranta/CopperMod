@@ -990,3 +990,22 @@ then reruns the frozen observer. Both commands currently fail explicitly on
 The qualification document records thirteen integrity controls and retained
 test evidence. Discovery does not promote coverage into ordinary CI or
 complete-040, retire regressions or complete milestone 6.
+
+68010 MOVEC uses `SyntheticM68010MovecTests` and the shared control-register
+fixture. Four ordinary groups cover all legal source/readback register pairs,
+function-code masks from every initial image, all raw register bits, every
+undefined selector and legal user-mode transfers. All registers, active/inactive
+stacks, SR/CCR, PC, preserved controls and memory are checked. USP initialization
+and A7 source aliases are explicit. Failed writes leave readbacks untested;
+successful reads include a following NOP. This is nontraced IPL7 register
+qualification, separate from physical function-code spaces, restart and timing.
+
+`./scripts/test-copper68k-010-movec.ps1` runs four matrices (2,271,744 cases) and
+checks exact input/binary/evidence identities, named test selection and
+independently enumerated combination keys/weights. `-ValidateReportsOnly`
+requires the same complete output and inputs. Ten report integrity controls
+reject malformed selections. `-Scope Movec010` adds six maintained mutations,
+with original/replacement detection before and after the demonstrated retirement
+of three duplicate methods. The qualification record maps each original to its
+replacement; factory, exception, interrupt and specialized regressions remain.
+The broader roadmap is still incomplete.
