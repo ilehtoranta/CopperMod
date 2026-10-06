@@ -2024,3 +2024,45 @@ assembly identities still match after all checks.
 This test-only checkpoint is qualified. Mixed-epoch provenance,
 internal restoration, all earlier model/reference/consolidation requirements
 and the complete roadmap remain required; milestone 6 stays **in progress**.
+
+### Milestone 6 successful mixed-epoch throwaway chains — focused qualification
+
+Four `SyntheticM68040ThrowawayTests.MixedEpochTrace*` groups independently vary
+the instruction's incoming trace, the first and (where present) second
+throwaway trace, and the final restored trace. Each uses states 0/T1/T0.
+Short formats 0/2/3 and format-7 normal/CM/CT/CU/CP49–55 cover every initial
+ISP/MSP, intermediate/tail user/user-M/ISP/MSP and restored bank. Canonical
+one-throwaway cases use every CCR; structural cases use CCR 0/31, one/two
+throwaways, both alignments and VBRs, including aliases of USP with different
+user M values. Scalar and one-instruction batch routes check every phase,
+registers/stack banks, guarded memory and exception provenance. The CM program
+returns a MOVEM trace and executes BRA, separating the incoming RTE trace from
+restored-state instruction tracing and saved-EA lifetime. Pending vectors retain
+the original event despite conflicting FPU registers; no FPU opcode is executed.
+
+After mutation restoration, fresh focused Release execution passes ten tests
+without skips: four complete reports plus six independent SR encoding examples.
+Canonical reports each pass 1,152,000 phases / 12,096 combinations; structural
+reports each pass 3,744,000 phases / 628,992 combinations. All 9,792,000 phases
+pass without mismatches, unsupported execution or untested phases. Independent
+command enumeration checks every combination and weight. All four complete
+mutation probes detect their intended semantic defect, including second-throwaway
+SR provenance in both structural reports. Exact production bytes are restored.
+The original two throwaway reports retain their identifiers/cardinalities and
+passed the initial focused selection.
+
+The complete 040 command now requires 83 tests, 70 reports, thirteen fixed
+examples and 57,905,824 phases including the retained 480-case inventory.
+A fresh inventory selection still fails its one executed test with exactly
+480 untested cases / fifteen combinations and no skips. Expanded ordinary
+coverage requires 72,874,006 cases / 660 batches. These are complete-selection
+requirements; prior broader qualification is retained as separate evidence,
+not represented as a freshly rerun complete suite. Frozen source/binary
+identities and scope are recorded in `COPPER68K_REFERENCE_QUALIFICATION.md`.
+
+Expectations compose MC68040UM 8.2.6, 8.3, 8.4.2 and 8.4.6.7. Successful chains
+do not qualify mixed epochs during validation faults, repair/retry, internal
+restoration or chained odd-PC saved-SR provenance. All earlier data/restart,
+context-transfer, model/reference/consolidation requirements remain required.
+Milestone 6 stays **in progress**, with `roadmapComplete=false`. This is a
+test-only checkpoint; no package release or old-test retirement is included.

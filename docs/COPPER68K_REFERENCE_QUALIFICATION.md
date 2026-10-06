@@ -5317,3 +5317,58 @@ identities still match after reference and integrity checks. Milestone 6 remains
 **in progress**; mixed-epoch provenance, internal restoration and all retained
 model/reference/consolidation scope remain required. No CPU production fix,
 package release, consumer rerun or old-test retirement is included.
+
+### 040 successful mixed-epoch throwaway chains — focused qualification
+
+The four `SyntheticM68040ThrowawayTests.MixedEpochTrace*` groups independently
+select incoming, first/second throwaway and final restored trace states 0/T1/T0.
+Expectations compose MC68040UM 8.2.6, 8.3, 8.4.2 and 8.4.6.7; no combined
+hardware capture or FPU arithmetic oracle is claimed. User M=1 and aliases of
+USP with distinct M values are explicit. Pending CT/CU/CP49–55 retains priority
+and the original vector despite conflicting FPU registers. The CM route checks
+the saved EA through an RTE-completion trace, MOVEM, its optional trace return
+and a following BRA. Registers, all stack banks, guarded memory, discarded PCs,
+saved PC/SR and exception sequence are checked at each scalar/batch phase.
+
+| Group, each scalar/batch | Phases | Combinations |
+| --- | ---: | ---: |
+| Canonical one-throwaway, every CCR | 1,152,000 | 12,096 |
+| Structural one/two-throwaway, CCR 0/31 | 3,744,000 | 628,992 |
+
+After mutation restoration, fresh focused Release execution passes ten tests
+with zero skips: these four complete reports and six independent fixed SR
+encoding examples. All 9,792,000 phases pass with zero mismatches, unsupported
+execution or untested phases. Every combination and its weight is checked
+against the maintained command's independent literal PowerShell enumeration.
+The original throwaway groups retain their identifiers and 82,944 / 428,544
+phases; both passed the initial focused selection.
+
+Four complete `MixedEpochRte` mutation probes detect intended restored-bits,
+T0, MOVEM-lifetime and intermediate-SR defects in every report. Both structural
+reports additionally retain the second-throwaway SR diagnostic. The T1-leak
+probe targets trace-cleared final SR to keep both one/two-throwaway diagnostics
+within bounded failure recording; the initial broader probe exhausted that
+recording and was rejected, not credited. The rerun qualifies all four probes.
+Every production source byte matches the preceding qualified manifest afterward.
+
+Frozen build starts from `53251330d7cb04fe7cb0e5d970da30002dbadfc5` plus these
+test changes; production tree remains `795fd12d6c0237a22a5f92f4a96cc4823e0364c1`.
+CPU SHA256: `1061e146cbf1507df3fb83ce9aa3fdb9157234f4e470bb172ff396cef79be710`.
+Adapter SHA256: `592ffd91de0848bc6e49b13f87734eaec66fefc7c5c938483761634573fd48f3`.
+`artifacts/m6-mixed-epoch-restored/qualification.json` records all seven current
+fixture/command/assembly identities. These identities are not relabeled after
+commit. The fresh inventory selection executes one failing test, with no skips,
+retaining exactly 480 untested cases / fifteen combinations.
+
+The expanded complete 040 command requires 83 tests, 70 reports, thirteen fixed
+examples and fourteen input identities: 57,905,824 phases including that
+480-case inventory. Ordinary reporting requires 72,874,006 cases / 660 batches.
+Those are expanded selection requirements, not a fresh complete-suite result.
+The preceding full-suite, complete 040, external-reference and report-integrity
+qualification remains separate historical evidence; it was not rerun or
+relabeled for this test-only checkpoint.
+
+Mixed epochs during validation faults, repair/retry and internal restoration
+remain required, alongside every retained data/context/model/reference and
+consolidation requirement. Milestone 6 stays **in progress**. No production
+CPU fix, package release, consumer rerun or regression retirement is included.

@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','RteUserMaster','RteCpVectors','RteSoftwareTrace','UserRteFault','UserRteTrace','UserRteSoftwareTrace','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','RteUserMaster','RteCpVectors','RteSoftwareTrace','UserRteFault','UserRteTrace','UserRteSoftwareTrace','MixedEpochRte','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -341,6 +341,27 @@ foreach ($mutation in $retryTraceMutations) {
     $mutation.group='RepairWithUntouchedIncomingTrace'; $mutation.model='68040'; $mutation.milestone=6
     $mutation.retryTrace=$true; $mutations += $mutation
 }
+$mixedEpochMutations = @()
+foreach ($template in $retryTraceMutations) {
+    $mutation = $template.Clone()
+    $mutation.Remove('retryTrace')
+    $mutation.name = $template.name.Replace('040-retry-trace-', '040-mixed-epoch-')
+    $mutation.proofCombination = if ($template.name -like '*restored-bits') {'/incoming=8000/first=0000/second=none/T=0000/'}
+        elseif ($template.name -like '*t0-rte') {'/incoming=4000/first=0000/second=none/T=0000/'} else {'/CM/'}
+    $mutation.proofPhase = if ($template.proofPhase -eq '/retry-RTE') {'/RTE'} else {$template.proofPhase}
+    $mixedEpochMutations += $mutation
+}
+$mixedEpochMutations += @{name='040-mixed-epoch-intermediate-final-sr'; file=$advanced;
+    before='                State.StatusRegister = restoredStatus;';
+    # Isolate a leaked intermediate T1 into a trace-cleared final SR. Mutating
+    # every trace difference exhausts bounded diagnostics before two throwaways.
+    after='                State.StatusRegister = format == 1 || (priorSr & 0xc000) != 0x8000 || (restoredStatus & 0xc000) != 0 ? restoredStatus : (ushort)(restoredStatus | 0x8000);';
+    proofCombination='/incoming=0000/first=8000/second=none/T=0000/'; proofPhase='/RTE'; proofReason='SR expected';
+    proofSecondCombination='/middle=user/tail=user/result=user/incoming=0000/first=0000/second=8000/T=0000/'}
+foreach ($mutation in $mixedEpochMutations) {
+    $mutation.group='MixedEpochTrace'; $mutation.model='68040'; $mutation.milestone=6
+    $mutation.mixedEpoch=$true; $mutations += $mutation
+}
 $pendingTraceMutations = @(
     @{name='040-pending-trace-extra-rte-trace'; file=$advanced;
       before='            if (exception && (_profile.Model is M68kAcceleratorModel.M68040 or M68kAcceleratorModel.M68060 ||';
@@ -530,6 +551,7 @@ if ($Scope -eq 'EntryPrefetch') { $mutations = @($mutations | Where-Object { $_.
 if ($Scope -eq 'UserRteFault') { $mutations = @($mutations | Where-Object { $_.userRte }) }
 if ($Scope -eq 'UserRteTrace') { $mutations = @($mutations | Where-Object { $_.userTrace }) }
 if ($Scope -eq 'UserRteSoftwareTrace') { $mutations = @($mutations | Where-Object { $_.userSoftwareTrace }) }
+if ($Scope -eq 'MixedEpochRte') { $mutations = @($mutations | Where-Object { $_.mixedEpoch }) }
 if ($Scope -eq 'AccessDoubleFault') { $mutations = @($mutations | Where-Object { $_.doubleFault }) }
 if ($Scope -eq 'BatchFault') { $mutations = @($mutations | Where-Object { $_.batchFault }) }
 if ($Scope -eq 'LowPowerStop') { $mutations = @($mutations | Where-Object { $_.lpstop }) }
@@ -642,6 +664,27 @@ try {
                     throw 'Instruction-fault mutation omitted complete cases or intended semantic failure'
                 }
             }
+            if ($mutation.mixedEpoch) {
+                [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                if ($trx.TestRun.ResultSummary.Counters.executed -ne 4 -or $trx.TestRun.ResultSummary.Counters.failed -ne 4 -or
+                    $trx.TestRun.ResultSummary.Counters.notExecuted -ne 0 -or $batches.Count -ne 4) {
+                    throw 'Mixed-epoch mutation omitted complete four-batch execution'
+                }
+                foreach ($matrix in @('canonical','structure')) { foreach ($route in @('scalar','batch')) {
+                    $target = @($batches | Where-Object { $_.model -ceq '68040' -and $_.group -ceq "rte-mixed-epoch-$matrix-$route" })
+                    $cases = if ($matrix -eq 'canonical') {1152000} else {3744000}
+                    if ($target.Count -ne 1 -or $target[0].logicalCases -ne $cases -or $target[0].counts.unsupported -ne 0 -or
+                        @($target[0].failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
+                            $_.id.EndsWith($mutation.proofPhase, [StringComparison]::Ordinal) -and $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) }).Count -eq 0) {
+                        throw 'Mixed-epoch mutation omitted complete cases or intended semantic diagnostic'
+                    }
+                    if ($matrix -eq 'structure' -and $mutation.proofSecondCombination -and
+                        @($target[0].failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofSecondCombination, [StringComparison]::Ordinal) -and
+                            $_.id.EndsWith($mutation.proofPhase, [StringComparison]::Ordinal) -and $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) }).Count -eq 0) {
+                        throw 'Mixed-epoch mutation omitted its second-throwaway provenance diagnostic'
+                    }
+                } }
+            }
             if ($mutation.retryTrace -or $mutation.pendingTrace -or $mutation.userMaster -or $mutation.cpVectors -or $mutation.softwareTrace -or $mutation.userTrace -or $mutation.userSoftwareTrace) {
                 [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
                 if ($trx.TestRun.ResultSummary.Counters.executed -ne 4 -or $trx.TestRun.ResultSummary.Counters.failed -ne 4 -or $batches.Count -ne 4) {
@@ -722,7 +765,7 @@ try {
             } elseif ($mutation.entryPrefetch) {
                 @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
                     $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) })[0]
-            } elseif ($mutation.retryTrace -or $mutation.pendingTrace -or $mutation.userMaster -or $mutation.cpVectors -or $mutation.softwareTrace -or $mutation.userTrace -or $mutation.userSoftwareTrace) {
+            } elseif ($mutation.mixedEpoch -or $mutation.retryTrace -or $mutation.pendingTrace -or $mutation.userMaster -or $mutation.cpVectors -or $mutation.softwareTrace -or $mutation.userTrace -or $mutation.userSoftwareTrace) {
                 @($failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination, [StringComparison]::Ordinal) -and
                     $_.id.EndsWith($mutation.proofPhase, [StringComparison]::Ordinal) -and $_.reason.StartsWith($mutation.proofReason, [StringComparison]::Ordinal) })[0]
             } elseif ($mutation.userRte) {

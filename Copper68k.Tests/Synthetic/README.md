@@ -760,3 +760,21 @@ execution and `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope UserRteSo
 for all four complete groups under each mutation. Intended BTST, return-length
 and CP-vector diagnostics are required; unrelated failures do not qualify a
 proof. Mixed-epoch trace provenance and internal restoration remain open.
+
+### Successful mixed-epoch throwaway chains
+
+`SyntheticM68040ThrowawayTests.MixedEpochTrace*` independently crosses incoming,
+first/second throwaway and final trace states 0/T1/T0. It includes user M=1,
+all stack aliases, short frames and every defined access continuation. Incoming
+trace controls completion of the original RTE; pending CT/CU/CP has priority.
+CM also executes MOVEM, its optional trace return and a following BRA.
+
+Canonical scalar/batch reports each require 1,152,000 phases / 12,096 combinations;
+structural reports each require 3,744,000 phases / 628,992 combinations. The
+`MixedEpochRte` mutation scope requires intended provenance, T0 and MOVEM-lifetime
+diagnostics in all four complete reports, including a second-throwaway SR
+diagnostic in both structural reports. Focused restored-build qualification passes
+all four reports and six independent SR encoding examples, with zero skips.
+The separate current inventory still fails its 480 required cases. Previous
+broader qualification remains a separate checkpoint. Mixed epochs
+during validation faults, repair/retry and internal restoration remain required.

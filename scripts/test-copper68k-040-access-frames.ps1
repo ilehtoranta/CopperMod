@@ -17,6 +17,10 @@ $expected = [ordered]@{
     'rte-access-fpu-post' = @{cases=96768; combinations=1008}
     'rte-throwaway-controls' = @{cases=82944; combinations=1296}
     'rte-throwaway-access' = @{cases=428544; combinations=4752}
+    'rte-mixed-epoch-canonical-scalar' = @{cases=1152000; combinations=12096}
+    'rte-mixed-epoch-canonical-batch' = @{cases=1152000; combinations=12096}
+    'rte-mixed-epoch-structure-scalar' = @{cases=3744000; combinations=628992}
+    'rte-mixed-epoch-structure-batch' = @{cases=3744000; combinations=628992}
     'rte-odd-normal' = @{cases=69120; combinations=720}
     'rte-odd-pending' = @{cases=165888; combinations=1296}
     'address-error-fetch-040' = @{cases=2304; combinations=72}
@@ -109,9 +113,9 @@ if (-not $ValidateReportsOnly) {
             'Multiple continuation bits are architecturally undefined and excluded',
             'Selected active accurate-batch paths verify counts/callbacks and scalar/batch bus/cycle policy; generic short operand frames do not qualify architectural format-7 data restart',
             'Instruction-fault fixtures use cache-disabled accurate execution and physical-map rejection; speculative deferral, enabled caches/MMU and compiled fetch PC provenance remain unqualified',
-            'Legacy repair clears saved trace; separate supervisor and user-tail bridge groups preserve incoming trace, check normal/CM completion and pending CT/CU/CP49-55 priority. Executed integer trace service has separate supervisor/user-tail coverage; mixed-epoch trace protocols remain required',
+            'Legacy repair clears saved trace; separate supervisor and user-tail bridge groups preserve incoming trace, check normal/CM completion and pending CT/CU/CP49-55 priority. Executed integer trace service and successful mixed-epoch throwaway chains have separate coverage; mixed epochs during faults, repair/retry and internal restoration remain required',
             'User-tail fault expectations compose documented throwaway live-SR rules with general supervisor exception entry; unusual combined hardware behavior has not been observed',
-            'Mixed-epoch trace provenance, internal-restoration double faults, cache/MMU/compiled handler-entry prefetch, chained odd-PC SR provenance and physical timing remain unqualified',
+            'Mixed epochs during validation faults and repair/retry, internal-restoration double faults, cache/MMU/compiled handler-entry prefetch, chained odd-PC SR provenance and physical timing remain unqualified',
             'Direct odd-RTE saved-SR ordering uses documentary WinUAE 5d22d336, not an executed hardware oracle')
     }
     $identity | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'identities.json')
@@ -139,8 +143,8 @@ foreach ($assembly in $identity.assemblies) {
 }
 [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
 $counters = $trx.TestRun.ResultSummary.Counters
-if ([int]$counters.executed -ne 73 -or [int]$counters.total -ne 73 -or [int]$counters.notExecuted -ne 0) {
-    throw '040 access-frame audit did not execute its complete selection (66 batches, 7 fixed examples)'
+if ([int]$counters.executed -ne 83 -or [int]$counters.total -ne 83 -or [int]$counters.notExecuted -ne 0) {
+    throw '040 access-frame audit did not execute its complete selection (70 batches, 13 fixed examples)'
 }
 $totals = [ordered]@{passing=0; mismatching=0; unsupported=0; untested=0}
 foreach ($group in $expected.Keys) {
@@ -437,6 +441,24 @@ foreach ($group in $expected.Keys) {
                 } } }
             } } } }
         }
+    } elseif ($group.StartsWith('rte-mixed-epoch-', [StringComparison]::Ordinal)) {
+        $structure = $group.Contains('-structure-', [StringComparison]::Ordinal)
+        foreach ($start in @('ISP','MSP')) { foreach ($tail in @('user','user-M','ISP','MSP')) {
+        foreach ($middle in $(if ($structure) {@('none','user','user-M','ISP','MSP')} else {@('none')})) {
+        foreach ($result in @('user','user-M','ISP','MSP')) { foreach ($incoming in @(0,0x8000,0x4000)) {
+        foreach ($first in @(0,0x8000,0x4000)) { foreach ($second in $(if ($middle -eq 'none') {@(0)} else {@(0,0x8000,0x4000)})) {
+        foreach ($trace in @(0,0x8000,0x4000)) { foreach ($alignment in $(if ($structure) {@(0,1)} else {@(0)})) {
+        foreach ($vbr in $(if ($structure) {@(0,0x10000)} else {@(0x10000)})) {
+        foreach ($form in @('format0','format2','format3','normal','CM','CT','CU','CP49','CP50','CP51','CP52','CP53','CP54','CP55')) {
+            $secondName = if ($middle -eq 'none') {'none'} else {'{0:X4}' -f $second}
+            $key = '68040/RTE/mixed-epoch/{0}/{1}/start={2}/middle={3}/tail={4}/result={5}/incoming={6:X4}/first={7:X4}/second={8}/T={9:X4}/align={10}/VBR={11:X8}' -f $(if ($structure) {'structure'} else {'canonical'}),$form,$start,$middle,$tail,$result,$incoming,$first,$secondName,$trace,$alignment,$vbr
+            # Literal executed program: RTE, optional exception return, following
+            # operation; CM additionally returns its T1 trace and executes BRA.
+            $phases = 2
+            if ($incoming -ne 0 -or $form -in @('CT','CU') -or $form.StartsWith('CP')) {$phases++}
+            if ($form -eq 'CM') {$phases++; if ($trace -eq 0x8000) {$phases++}}
+            $expectedCombinations[$key] = $(if ($structure) {2} else {32}) * $phases
+        } } } } } } } } } } }
     } elseif ($group -in @('rte-throwaway-controls','rte-throwaway-access')) {
         $forms = if ($group -eq 'rte-throwaway-controls') { @('format0','format2','format3') } else { @('normal','CM','CT','CU','CP49','CP50','CP51','CP52','CP53','CP54','CP55') }
         foreach ($start in @('ISP','MSP')) { foreach ($tail in @('user','ISP','MSP')) { foreach ($middle in @('none','user','ISP','MSP')) {
@@ -520,8 +542,8 @@ foreach ($group in $expected.Keys) {
         if ($combinationTotals[$status] -ne $report.counts.$status) { throw "$group combination totals differ" }
     }
 }
-$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 73 -and
+$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 83 -and
     ($totals.mismatching + $totals.unsupported + $totals.untested) -eq 0
-@{schema=1; model='68040'; logicalCases=48113824; xunitBatches=66; fixedExamples=7; counts=$totals; passed=$passed; roadmapComplete=$false} |
+@{schema=1; model='68040'; logicalCases=57905824; xunitBatches=70; fixedExamples=13; counts=$totals; passed=$passed; roadmapComplete=$false} |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'audit-summary.json')
 if (-not $passed) { throw "040 access-frame audit incomplete: $($totals | ConvertTo-Json -Compress)" }

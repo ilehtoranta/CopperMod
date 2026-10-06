@@ -17,6 +17,52 @@ public sealed class SyntheticM68040ThrowawayTests(ITestOutputHelper output)
     [Fact, Trait("Suite", "Synthetic")]
     public void ChainedThrowawaysSelectEveryStackBeforeAccessContinuations() => Audit(true);
 
+    [Fact, Trait("Suite", "Synthetic")]
+    public void MixedEpochTraceCanonicalScalar() => AuditMixedEpoch(false, false);
+    [Fact, Trait("Suite", "Synthetic")]
+    public void MixedEpochTraceCanonicalBatch() => AuditMixedEpoch(false, true);
+    [Fact, Trait("Suite", "Synthetic")]
+    public void MixedEpochTraceStructuralScalar() => AuditMixedEpoch(true, false);
+    [Fact, Trait("Suite", "Synthetic")]
+    public void MixedEpochTraceStructuralBatch() => AuditMixedEpoch(true, true);
+
+    private readonly record struct Epochs(ushort Incoming, ushort First, ushort Second, string Matrix, uint Vbr);
+    private static readonly ushort[] TraceStates = [0, 0x8000, 0x4000];
+    private static readonly string[] MixedBanks = ["user", "user-M", "ISP", "MSP"];
+
+    [Theory]
+    [InlineData("user", 0, 0, 0x0000)]
+    [InlineData("user", 0x8000, 31, 0x801f)]
+    [InlineData("user-M", 0, 0, 0x1000)]
+    [InlineData("user-M", 0x8000, 31, 0x901f)]
+    [InlineData("ISP", 0x4000, 0, 0x6000)]
+    [InlineData("MSP", 0x4000, 31, 0x701f)]
+    public void FixtureStatusHasIndependentReferenceExamples(string bank, int trace, int ccr, int expected) =>
+        Assert.Equal((ushort)expected, Status(bank, (ushort)trace, ccr));
+
+    private void AuditMixedEpoch(bool structural, bool batch)
+    {
+        var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"));
+        var matrix = structural ? "structure" : "canonical";
+        var report = new CoverageBatch("68040", $"rte-mixed-epoch-{matrix}-{(batch ? "batch" : "scalar")}");
+        foreach (var start in new[] { "ISP", "MSP" })
+        foreach (var tail in MixedBanks)
+        foreach (var middle in structural ? new[] { "none", "user", "user-M", "ISP", "MSP" } : ["none"])
+        foreach (var result in MixedBanks)
+        foreach (var incoming in TraceStates)
+        foreach (var first in TraceStates)
+        foreach (var second in middle == "none" ? new ushort[] { 0 } : TraceStates)
+        foreach (var trace in TraceStates)
+        foreach (var alignment in structural ? new uint[] { 0, 1 } : [0])
+        foreach (var vbr in structural ? new uint[] { 0, 0x10000 } : [0x10000])
+        foreach (var form in new[] { "format0", "format2", "format3", "normal", "CM", "CT", "CU",
+            "CP49", "CP50", "CP51", "CP52", "CP53", "CP54", "CP55" })
+        foreach (var ccr in structural ? new[] { 0, 31 } : Enumerable.Range(0, 32))
+            Run(m, report, start, tail, middle, result, trace, alignment, form, ccr,
+                !form.StartsWith("format", StringComparison.Ordinal), new Epochs(incoming, first, second, matrix, vbr), batch);
+        report.Complete(output);
+    }
+
     private void Audit(bool access)
     {
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"));
@@ -36,7 +82,7 @@ public sealed class SyntheticM68040ThrowawayTests(ITestOutputHelper output)
     }
 
     private static void Run(SyntheticMachine m, CoverageBatch report, string start, string tail, string middle,
-        string result, ushort trace, uint alignment, string form, int ccr, bool access)
+        string result, ushort trace, uint alignment, string form, int ccr, bool access, Epochs? epochs = null, bool batch = false)
     {
         m.Reset(ccr);
         var pointers = new Dictionary<string, uint> { ["user"] = 0x7800 + alignment, ["ISP"] = 0x4700 + alignment, ["MSP"] = 0x7400 + alignment };
@@ -45,14 +91,16 @@ public sealed class SyntheticM68040ThrowawayTests(ITestOutputHelper output)
         var path = middle == "none" ? new[] { start, tail } : new[] { start, middle, tail };
         for (var n = 0; n < path.Length - 1; n++)
         {
-            var at = pointers[path[n]];
+            var at = pointers[PhysicalBank(path[n])];
             // The discarded PC is odd and must never become an instruction fetch.
-            m.InitializePhysical(at, Status(path[n + 1], trace == 0x8000 ? (ushort)0x4000 : (ushort)0x8000, ccr), 2);
+            var throwawayTrace = epochs is { } mixed ? n == 0 ? mixed.First : mixed.Second
+                : trace == 0x8000 ? (ushort)0x4000 : (ushort)0x8000;
+            m.InitializePhysical(at, Status(path[n + 1], throwawayTrace, ccr), 2);
             m.InitializePhysical(at + 2, 0xdead0001u + (uint)n * 2, 4);
             m.InitializePhysical(at + 6, 0x1024, 2);
-            pointers[path[n]] += 8;
+            pointers[PhysicalBank(path[n])] += 8;
         }
-        var frame = pointers[tail];
+        var frame = pointers[PhysicalBank(tail)];
         var savedSr = Status(result, trace, ccr ^ 31);
         var format = access ? 7 : form == "format0" ? 0 : form == "format2" ? 2 : 3;
         var vector = form == "CT" ? 9 : form == "CU" ? 11 : form.StartsWith("CP") ? int.Parse(form[2..]) : 0;
@@ -77,17 +125,31 @@ public sealed class SyntheticM68040ThrowawayTests(ITestOutputHelper output)
         }
         else m.InitializePhysical(Target, 0x60fe, 2);
         m.InitializePhysical(Handler, 0x4e73, 2); m.InitializePhysical(Handler + 2, 0x4e71, 2);
-        const uint vbr = 0x10000;
+        var vbr = epochs?.Vbr ?? 0x10000;
         foreach (var v in new[] { 9, 11, 49, 50, 51, 52, 53, 54, 55 }) m.InitializePhysical(vbr + (uint)v * 4, Handler, 4);
         _ = SyntheticExecution.Prepare(m, [0x4e73]);
         m.Core.State.SetUserStackPointer(0x7800 + alignment);
         m.Core.State.SetInterruptStackPointer(0x4700 + alignment);
         m.Core.State.SetMasterStackPointer(0x7400 + alignment);
-        m.Core.State.StatusRegister = Status(start, 0, ccr);
+        m.Core.State.StatusRegister = Status(start, epochs?.Incoming ?? 0, ccr);
         m.Core.State.VectorBaseRegister = vbr;
         if (continuation == 0x8000) m.Core.State.M68040PendingFpuExceptions.Begin(3, vector, Target);
         if (continuation == 0x4000) m.Core.State.M68040PendingFpuExceptions.Begin(2, 11, Target);
+        if (epochs != null)
+        {
+            // Context inputs intentionally disagree with the original event;
+            // no FPU instruction or arithmetic is executed by these fixtures.
+            m.Core.State.M68040Fpu.Fpcr = 0;
+            m.Core.State.M68040Fpu.Fpsr = 0x08008198;
+            m.Core.State.M68040Fpu.Fpiar = 0x1234abcd;
+        }
         var e = ArchitecturalExpectation.Capture(m);
+        if (epochs != null)
+        {
+            e.ControlChecks["FPCR preserved"] = (s => s.M68040Fpu.Fpcr, 0);
+            e.ControlChecks["FPSR preserved"] = (s => s.M68040Fpu.Fpsr, 0x08008198);
+            e.ControlChecks["FPIAR preserved"] = (s => s.M68040Fpu.Fpiar, 0x1234abcd);
+        }
         e.OperandAccessAddresses.UnionWith(new uint[] { 0x3218, 0x3220, 0x3228 });
         e.ExpectedOperandTransfers = [];
         foreach (var pc in new uint[] { 0xdead0001, 0xdead0003 }) e.ForbiddenOperandReads.Add(pc);
@@ -97,32 +159,62 @@ public sealed class SyntheticM68040ThrowawayTests(ITestOutputHelper output)
             e.ControlChecks["pending delivery consumed"] = (s => s.M68040PendingFpuExceptions.Find(vector == 11 ? 2 : 3) == null ? 0u : 1u, 0);
         var sequence = m.Core.State.ExceptionSequence;
         e.ControlChecks["exception entries"] = (s => s.ExceptionSequence, sequence);
-        pointers[tail] += access ? 60u : format == 0 ? 8u : 12u;
+        pointers[PhysicalBank(tail)] += access ? 60u : format == 0 ? 8u : 12u;
         SetStacks(e, pointers, savedSr); e.Pc = Target;
         var id = $"68040/RTE/throwaway/{form}/start={start}/middle={middle}/tail={tail}/result={result}/T={trace:X4}/align={alignment}/op=4E73/ccr={ccr:X2}";
-        if (vector != 0) ExpectException(m, e, pointers, savedSr, vector, Target, Operand, sequence + 1);
-        if (!SyntheticM68040AccessFrameAuditTests.Step(m, e, report, id + "/RTE"))
+        if (epochs is { } epoch)
+            id = $"68040/RTE/mixed-epoch/{epoch.Matrix}/{form}/start={start}/middle={middle}/tail={tail}/result={result}/incoming={epoch.Incoming:X4}/first={epoch.First:X4}/second={(middle == "none" ? "none" : epoch.Second.ToString("X4"))}/T={trace:X4}/align={alignment}/VBR={vbr:X8}/op=4E73/ccr={ccr:X2}";
+        // MC68040UM 8.2.6: the incoming instruction trace condition is latched
+        // before any throwaway installs SR. Pending delivery wins (8.3/8.4.6.7).
+        var rteTrace = vector == 0 && epochs is { Incoming: not 0 };
+        var phases = new List<string> { "RTE" };
+        if (vector != 0 || rteTrace) phases.Add("handler-return");
+        phases.Add("following");
+        if (epochs != null && form == "CM")
         {
-            if (vector != 0) report.Record(id + "/handler-return", "untested", "RTE prerequisite failed");
-            report.Record(id + "/following", "untested", "RTE prerequisite failed"); return;
+            if (trace == 0x8000) phases.Add("movem-trace-return");
+            phases.Add("following-BRA");
         }
-        if (vector != 0)
+        var phase = 0;
+        bool Step()
+        {
+            var current = phases[phase++];
+            if (ExecuteStep(m, e, report, id + "/" + current, batch)) return true;
+            foreach (var remaining in phases.Skip(phase))
+                report.Record(id + "/" + remaining, "untested", "Earlier mixed-epoch/throwaway phase failed");
+            return false;
+        }
+        if (vector != 0) ExpectException(m, e, pointers, savedSr, vector, Target, Operand, sequence + 1);
+        else if (rteTrace) ExpectException(m, e, pointers, savedSr, 9, Target, SyntheticMachine.Code, sequence + 1);
+        if (!Step()) return;
+        if (vector != 0 || rteTrace)
         {
             pointers[ExceptionBank(savedSr)] += 12;
             SetStacks(e, pointers, savedSr); e.Pc = Target; e.ExceptionVector = null;
-            if (!SyntheticM68040AccessFrameAuditTests.Step(m, e, report, id + "/handler-return"))
-            { report.Record(id + "/following", "untested", "Handler return prerequisite failed"); return; }
+            if (!Step()) return;
         }
         e.Pc = form == "CM" ? Target + 4 : Target;
         if (form == "CM") { e.D[0] = 0x89abcdef; e.D[1] = 0x12345678; }
         if (trace == 0x8000 || trace == 0x4000 && form != "CM")
-            ExpectException(m, e, pointers, savedSr, 9, e.Pc, Target, sequence + (vector != 0 ? 2u : 1u));
-        SyntheticM68040AccessFrameAuditTests.Step(m, e, report, id + "/following");
+            ExpectException(m, e, pointers, savedSr, 9, e.Pc, Target, sequence + (vector != 0 || rteTrace ? 2u : 1u));
+        if (!Step() || epochs == null || form != "CM") return;
+        var exceptions = sequence + (rteTrace ? 1u : 0u);
+        if (trace == 0x8000)
+        {
+            exceptions++;
+            pointers[ExceptionBank(savedSr)] += 12;
+            SetStacks(e, pointers, savedSr); e.Pc = Target + 4; e.ExceptionVector = null;
+            if (!Step()) return;
+        }
+        e.Pc = Target + 4;
+        if (trace != 0) ExpectException(m, e, pointers, savedSr, 9, Target + 4, Target + 4, exceptions + 1);
+        Step();
     }
 
     private static ushort Status(string bank, ushort trace, int ccr) =>
-        (ushort)((bank == "ISP" ? 0x2000 : bank == "MSP" ? 0x3000 : 0) | trace | ccr);
-    private static string ExceptionBank(ushort sr) => (sr & 0x3000) == 0x3000 ? "MSP" : "ISP";
+        (ushort)((bank == "ISP" ? 0x2000 : bank == "MSP" ? 0x3000 : bank == "user-M" ? 0x1000 : 0) | trace | ccr);
+    private static string PhysicalBank(string bank) => bank == "user-M" ? "user" : bank;
+    private static string ExceptionBank(ushort sr) => (sr & 0x1000) != 0 ? "MSP" : "ISP";
     private static void SetStacks(ArchitecturalExpectation e, Dictionary<string, uint> pointers, ushort sr)
     {
         e.Sr = sr;
@@ -146,5 +238,27 @@ public sealed class SyntheticM68040ThrowawayTests(ITestOutputHelper output)
         e.Write(stack, sr, 2, m.Model); e.Write(stack + 2, pc, 4, m.Model);
         e.Write(stack + 6, (uint)((vector >= 49 ? 3 : 2) << 12 | vector * 4), 2, m.Model);
         e.Write(stack + 8, address, 4, m.Model);
+    }
+
+    private static bool ExecuteStep(SyntheticMachine m, ArchitecturalExpectation e, CoverageBatch report, string id, bool batch)
+    {
+        if (!batch) return SyntheticM68040AccessFrameAuditTests.Step(m, e, report, id);
+        try
+        {
+            var boundary = new Boundary();
+            var count = ((IM68kBatchCore)m.Core).ExecuteInstructions(1, m.Core.State.Cycles + 1000, boundary);
+            var mismatch = count != 1 || boundary.Before != 1 || boundary.After != 1
+                ? $"Batch count/callbacks differ: {count}/{boundary.Before}/{boundary.After}" : e.Verify(m);
+            report.Record(id, mismatch == null ? "passing" : "mismatching", mismatch);
+            return mismatch == null;
+        }
+        catch (NotSupportedException ex) { report.Record(id, "unsupported", ex.Message); return false; }
+        catch (Exception ex) { report.Record(id, "mismatching", ex.Message); return false; }
+    }
+    private sealed class Boundary : IM68kInstructionBoundary
+    {
+        public int Before, After;
+        public bool BeforeInstruction() { Before++; return true; }
+        public void AfterInstruction(long previousCycle, long currentCycle) => After++;
     }
 }
