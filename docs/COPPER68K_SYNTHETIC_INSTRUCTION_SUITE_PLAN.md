@@ -2280,3 +2280,36 @@ complete-040 requirements and the 480-case untested inventory stay intact. No
 new broad-suite result, production CPU fix, consumer replay or package release
 is claimed. Full CM lifetime, advanced restoration, broader reference audits
 and remaining consolidation are still required; milestone 6 stays **in progress**.
+
+### Milestone 6 68060 ordinary STOP discovery
+
+Two gated discovery matrices cover every defined target SR image and all
+canonical input/target CCR combinations, incoming user/supervisor stacks,
+initial/new M and T1, target IPLs and inert stopped attempts. Incoming IPL is
+fixed at 7. Scalar and batch each execute 184,320 logical cases / 720
+combinations: 143,360 passing, 40,960 mismatching, zero unsupported/untested.
+Both named tests execute without skips. All discrepancies are supervisor STOP
+with a new S-clear image.
+
+Untouched pinned WinUAE generated STOP and native SR/stop helpers reject these
+operands before SR transfer. That source calls the behavior undocumented;
+MC68060UM explicitly states it for LPSTOP but does not settle ordinary STOP.
+The observer executes the native privilege callback, composes incoming trace
+and normalizes stopped PC; full external exception/frame/IRQ/run-loop/hardware
+qualification is not claimed. No production CPU behavior is changed.
+
+The command validates exact identities, independently generated keys/weights,
+fixture ordering, SR selection and canonical initial registers/stacks, then
+replays frozen native code. Both fresh execution and report revalidation fail
+with the same 81,920 combined software-reference mismatches. Thirteen integrity
+controls reject malformed/missing/empty selections. Seventy-five retained tests
+pass without skips, covering 331,582 cases / 25 reports and fifty fixed checks.
+The corrected fixture preserves the existing batch idle-step convention;
+preliminary fixture failures are excluded from final evidence.
+
+This remains an explicitly unqualified discovery outside ordinary CI and the
+promoted complete-040 selection. Their counts and the 480-case required untested
+inventory remain unchanged. Ordinary STOP's S-clear architectural rule, full
+CM lifetime, advanced restoration, PCR disagreement, broader independent model
+qualification and consolidation all remain required. Milestone 6 stays **in
+progress**, `roadmapComplete=false`; no regression retirement or release.

@@ -5920,3 +5920,107 @@ requirements and the 480-case remaining inventory are unchanged. Full CM
 lifetime, advanced exception/restoration and broader model audits/consolidation
 remain required. Milestone 6 stays **in progress**, `roadmapComplete=false`.
 No production CPU fix, consumer replay or package publication is included.
+
+### 68060 ordinary STOP software-reference discovery (2026-10-06)
+
+`M68060StopDiscoveryTests` compares scalar and batch execution with untouched
+pinned WinUAE `5d22d33632646efc3f747f03e82d28353e52722e`. The original
+`gencpu.cpp` STOP section labels the target-S-clear behavior undocumented:
+68060 rejects it immediately, before transferring the new SR. Copper68k
+currently transfers that SR and either stops or delivers incoming trace.
+This is a software-reference discrepancy, not a qualified architectural fix.
+
+[M68000PM](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf), STOP,
+6-85, describes SR transfer, advancing PC and stopping execution when the
+incoming processor state is supervisor. [MC68060UM revision 1](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf),
+8.2.5 and 8.2.6, supplies incoming privilege and trace rules and format-zero/
+format-two boundaries. Its LPSTOP entry D-19 explicitly rejects a new S-clear
+status image; that statement is not an explicit ordinary-STOP rule. These
+manual sections do not settle the undocumented ordinary-STOP discrepancy.
+No guessed production restriction or timing change is introduced.
+
+Each route enumerates 163,840 STOP scenarios: 32,768 target-status image cases
+and 131,072 canonical CCR cases. Target images use defined mask B71F; both
+incoming stacks, initial/new M and T1, all target IPLs in the image group and
+IPL 0/7 in the CCR group are covered. Incoming IPL is fixed at 7. The image
+group uses input CCR 0/31; the CCR group covers all 32 by 32 combinations.
+Successful nontraced STOP adds 20,480 inert attempts, giving **184,320 logical
+cases / 720 combinations / one xUnit batch per route**.
+
+All registers, stack pointers, PC, SR/CCR, stopped state, exception boundaries,
+guarded memory and preserved PCR are checked independently. Privilege saves
+original SR/opcode PC; trace saves loaded SR/next PC. The batch API counts an
+idle attempt as one logical step, with one before/after callback. This is an
+existing API convention, not physical instruction retirement. Inert attempts
+must leave architectural state unchanged and never execute the following NOP.
+There is no instruction retry after partial effects.
+
+The observer executes unchanged generated `op_4e72_33_ff` from CPU_TESTER=0,
+and original `MakeSR`, `MakeFromSR_x`, `MakeFromSR_STOP`, `m68k_set_stop` and
+`do_cycles_stop` functions. Four literal accepted, incoming-user, target-S-clear
+and incoming-trace controls guard transport. The original native stopped PC
+remains at the opcode until resume; comparison explicitly normalizes the
+architectural next PC to 1004. Incoming trace is a composed boundary, not
+native trace/run-loop execution. Privilege is an observed native callback;
+native exception entry and frame writes are not executed. The native helper's
+stopped reentry is checked separately from Copper68k's inert architectural
+state. No IRQ, enabled MMU, cache, bus-cycle or hardware oracle is claimed.
+
+| Route | Passing | Mismatching | Unsupported | Untested |
+| --- | ---: | ---: | ---: | ---: |
+| Scalar | 143,360 | 40,960 | 0 | 0 |
+| Batch | 143,360 | 40,960 | 0 | 0 |
+
+Both tests execute and fail without skips. Every mismatch has incoming
+supervisor state and a target S-clear image; incoming trace does not override
+the reference's privilege rejection. Per route the native observer executes
+163,840 rows, reporting 122,880 matching and 40,960 mismatching boundaries;
+the extra 20,480 passing logical cases are Copper68k inert attempts. These
+different denominators are intentional. Full frame checks belong to the
+synthetic manual expectation, not to the native boundary-only comparison.
+
+```powershell
+./scripts/test-copper68k-060-stop-discovery.ps1 -OutputDirectory artifacts/m6-stop-discovery-final
+./scripts/test-copper68k-060-stop-discovery.ps1 -ValidateReportsOnly -OutputDirectory artifacts/m6-stop-discovery-final
+```
+
+Both commands terminate with the explicit **81,920 software-reference
+mismatches** failure after validating and replaying both routes. They record
+pristine pinned sources, exact fixture/CPU sources, generated/extracted code,
+binaries and evidence identities. Validation independently enumerates keys,
+weights, fixture ordering, defined SR selections and canonical registers/
+stacks; it requires both named tests with no skips. Frozen report validation
+executes the observer again and requires byte-identical outputs. Missing,
+empty or malformed native selections fail rather than count as coverage.
+
+Thirteen integrity controls reject missing manifests, wrong profiles, missing
+source identities/fixtures/reports, empty execution, substituted keys, altered
+weights, wrong registers and reordered rows, plus missing/empty/wrong-register
+native fixtures. Semantic controls refresh the altered evidence hash to test
+content validation as well as identity validation. Originals remain unchanged.
+Evidence is under `artifacts/m6-stop-discovery-final`,
+`artifacts/m6-stop-discovery-revalidate.log` and `artifacts/m6-stop-integrity`.
+Preliminary `m6-stop-discovery-first` had a fixture build error; `initial` and
+`debug` incorrectly expected zero batch idle steps. These attempts are excluded
+from the final classifications; no production defect is inferred from them.
+
+Fresh Release build has zero .NET warnings/errors. The observer has two
+warnings in unchanged extracted reference code (SR narrowing and unused
+opcode). Retained STOP/LPSTOP, system privilege, trace, idle-batch and 68060
+coverage passes **75 tests without skips**, containing **331,582 cases / 25
+reports** and fifty fixed examples, under `artifacts/m6-stop-retained-final`.
+Source starts at `a71460dcecd219a751556f8070b26ee44beca7aa` plus recorded fixture/
+observer/command changes; production tree stays
+`795fd12d6c0237a22a5f92f4a96cc4823e0364c1`.
+CPU SHA256: `424896b6ca007b4f6294c25e6672b6a560ceee4ef5b2cf6afa17a5e8e4cdc1cd`.
+Test SHA256: `4f34672737725504a906666ad6abef23653b25e976a12036e7415bb510cb9043`.
+
+The discovery remains outside ordinary synthetic CI and promoted complete-040
+coverage. Their requirements stay **82,919,318 cases / 676 reports** and
+**95 tests / 82 reports / thirteen fixed examples / 67,645,984 phases including
+inventory** respectively. The 480 untested inventory cases and all broader
+qualification/consolidation requirements remain. Ordinary STOP's architectural
+S-clear rule, full external trace/exception/IRQ qualification and PCR's software/
+manual disagreement are still open. Milestone 6 stays **in progress**,
+`architecturallyQualified=false`, `roadmapComplete=false`. No CPU fix, regression
+retirement, consumer replay or package release is included.

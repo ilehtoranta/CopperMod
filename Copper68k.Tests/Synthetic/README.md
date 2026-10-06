@@ -965,3 +965,28 @@ same output directory and identities. Three `-Scope ProcessorConfiguration`
 mutations prove the replacements detect the retired PCR identification/reset
 fact's defects. The qualification document records before/after proof, scope and
 remaining requirements; the whole roadmap remains incomplete.
+
+`M68060StopDiscoveryTests` is a gated `ReferenceDiscovery` selection for ordinary
+68060 STOP. Run `./scripts/test-copper68k-060-stop-discovery.ps1` with the same
+pristine WinUAE pin and MSVC setup as the CM command. Scalar/batch each cover
+163,840 defined-status/CCR scenarios plus 20,480 inert attempts, with exact
+register, stack, PC, SR, memory and exception-boundary checks. Incoming IPL is
+fixed at 7; target status images cover all defined bits. Batch idle steps use
+the existing API count of one, without retiring the following instruction.
+
+The observer executes unchanged generated `_33` STOP and native SR/stop helpers.
+It observes privilege callbacks, normalizes stopped PC to the architectural
+next PC and composes incoming trace; native exception frames, run-loop trace,
+IRQ and hardware timing are outside scope. Four literal controls protect the
+transport. The pinned source calls its S-clear privilege rule undocumented;
+it disagrees with Copper68k on 40,960 cases per route. Each route otherwise has
+143,360 passing cases, zero unsupported and zero untested cases. No CPU fix is
+selected from this software disagreement.
+
+`-ValidateReportsOnly -OutputDirectory` checks the same exact identities,
+independently enumerated keys/weights/fixture rows and both named test executions,
+then reruns the frozen observer. Both commands currently fail explicitly on
+81,920 combined discrepancies. Missing/empty/malformed inputs must also fail.
+The qualification document records thirteen integrity controls and retained
+test evidence. Discovery does not promote coverage into ordinary CI or
+complete-040, retire regressions or complete milestone 6.
