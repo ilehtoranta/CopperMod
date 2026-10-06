@@ -1933,6 +1933,16 @@ read-entry gate passes again with current test sources. This test-only extension
 does not close the broad remaining gate, other models or consolidation and does
 not authorize a release. See [executed MOVEM recovery](COPPER68K_REFERENCE_QUALIFICATION.md#executed-040-movem-read-recovery--2026-10-07).
 
+The same gate subsequently adds pre-EA full-format pointer faults: 31,504 new
+whole programs verify CM-clear format-7 entry, no preceding operand transfers,
+normal RTE restart, pointer resolution and restored trace behavior. All 54 legal
+indirect structures and canonical stack/CCR/trace profiles are covered in the
+selected variants. The combined command requires 261,472 passing programs,
+eight reports and nine executions. Six integrity controls pass; premature CM
+in an isolated source copy makes all sixteen fixed pointer programs fail.
+No production or package change is needed. The full milestone remains open;
+see [pre-EA pointer faults](COPPER68K_REFERENCE_QUALIFICATION.md#pre-ea-movem-indirect-pointer-faults--2026-10-07).
+
 The three maintained software-trace mutations are detected in each complete
 scalar/batch canonical/chained report with their intended semantic diagnostic.
 Production bytes are restored exactly and the clean implementation rebuilds

@@ -7,7 +7,7 @@ $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
 function Hash([string] $Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 $manifestPath = Join-Path $output 'inputs.json'
 $sources = @(@(& git -C $repo ls-files 'Copper68k/*.cs' 'Copper68k/*.csproj' 'Copper68k.Tests/*.cs' 'Copper68k.Tests/*.csproj') + @('scripts/test-copper68k-040-movem-read-recovery.ps1','Copper68k.Tests/Synthetic/SyntheticM68040MovemReadRecoveryTests.cs') | Sort-Object -Unique)
-$reports = @('witness-scalar','witness-batch','discovery-scalar','discovery-batch') | ForEach-Object { "68040-movem-read-recovery-$_.json" }
+$reports = @(foreach ($kind in @('read','pointer')) { foreach ($name in @('witness-scalar','witness-batch','discovery-scalar','discovery-batch')) { "68040-movem-$kind-recovery-$name.json" } })
 $evidence = @('audit.trx','build/bin/Copper68k/release/Copper68k.dll','build/bin/Copper68k.Tests/release/Copper68k.Tests.dll') + $reports
 if (-not $ValidateReportsOnly) {
     if (Test-Path -LiteralPath $output) { throw "Use a fresh output directory: $output" }
@@ -31,8 +31,9 @@ foreach ($item in $manifest.evidence) { if ((Hash (Join-Path $output $item.path)
 [xml]$trx=Get-Content (Join-Path $output 'audit.trx') -Raw
 $tests=@($trx.TestRun.Results.UnitTestResult)
 $prefix='Copper68k.Tests.Synthetic.SyntheticM68040MovemReadRecoveryTests.'
-$names=@('ScalarRecoveryMatrix','BatchRecoveryMatrix','FixedLegalSourceRecoveryWitnesses(batch: False)','FixedLegalSourceRecoveryWitnesses(batch: True)','FixedPcSelfReferenceEncodings') | ForEach-Object { $prefix+$_ }
-if ($tests.Count -ne 5 -or @(Compare-Object ($tests.testName | Sort-Object) ($names | Sort-Object)).Count -ne 0 -or @($tests.testId | Sort-Object -Unique).Count -ne 5) { throw 'Incomplete recovery execution roster' }
+$names=@('ScalarRecoveryMatrix','BatchRecoveryMatrix','FixedLegalSourceRecoveryWitnesses(batch: False)','FixedLegalSourceRecoveryWitnesses(batch: True)','FixedPcSelfReferenceEncodings',
+    'ScalarPointerRecoveryMatrix','BatchPointerRecoveryMatrix','FixedIndirectPointerFaultWitnesses(batch: False)','FixedIndirectPointerFaultWitnesses(batch: True)') | ForEach-Object { $prefix+$_ }
+if ($tests.Count -ne 9 -or @(Compare-Object ($tests.testName | Sort-Object) ($names | Sort-Object)).Count -ne 0 -or @($tests.testId | Sort-Object -Unique).Count -ne 9) { throw 'Incomplete recovery execution roster' }
 # Expand the architectural inventory independently from the C# generator.
 function SourceId([int] $Mode, [int] $Register, [string] $Index='brief-default') { "mode=$Mode/reg=$Register/index=$Index" }
 $forms=@(foreach ($mode in @(2,3,5,6)) { foreach ($reg in 0..7) { SourceId $mode $reg } }; foreach ($reg in 0..3) { SourceId 7 $reg })
@@ -63,12 +64,36 @@ $structures=@(foreach ($spec in $full) { foreach ($ix in @('D1/W/scale=1','D1/L/
 } })
 AddKeys $required 'structure' $structures @('ISP') @('0000') $false
 AddKeys $required 'status' $canonical @('user','user-M','ISP','MSP') @('0000','8000','4000') $false
+$pointerCanonical=@(foreach ($form in @(@(6,0),@(7,3))) { foreach ($iis in @(2,7)) { SourceId $form[0] $form[1] "full/bs=False/is=False/bd=2/iis=$iis/ix=D1/L/scale=1" } })
+$pointerStructures=@(foreach ($spec in $full | Where-Object { -not $_.EndsWith('/iis=0') }) { foreach ($ix in @('D1/W/scale=1','D1/L/scale=1','D1/W/scale=8','A0/W/scale=4')) {
+    SourceId 6 1 "$spec/ix=$ix"; SourceId 7 3 "$spec/ix=$ix"
+} })
+function AddPointerKeys($Map, [string] $Cohort, [string[]] $Forms, [string[]] $Banks, [string[]] $Traces, [bool] $Witness) {
+    foreach ($form in $Forms) { foreach ($width in @(2,4)) { foreach ($bank in $Banks) { foreach ($trace in $Traces) {
+        $bytes=if ($Witness) { @(3) } else { @(0,1,2,3) }
+        foreach ($byte in $bytes) {
+            $key="68040/MOVEM/read-recovery/$Cohort/size=$width/$form/bank=$bank/T=$trace/transfer=0/byte=$byte"
+            if ($Map.ContainsKey($key)) { throw "Duplicate independent combination: $key" }
+            $Map[$key]=if ($Cohort -eq 'pointer-status') { 32 } else { 1 }
+        }
+    } } } }
+}
+$pointerWitness=@{}; $pointerRequired=@{}
+AddPointerKeys $pointerWitness 'pointer-witness' $pointerCanonical @('ISP') @('0000') $true
+AddPointerKeys $pointerRequired 'pointer-structure' $pointerStructures @('ISP') @('0000') $false
+AddPointerKeys $pointerRequired 'pointer-status' $pointerCanonical @('user','user-M','ISP','MSP') @('0000','8000','4000') $false
 $rows=@()
+foreach ($kind in @('read','pointer')) {
 foreach ($name in @('witness-scalar','witness-batch','discovery-scalar','discovery-batch')) {
-    $report=Get-Content (Join-Path $output "68040-movem-read-recovery-$name.json") -Raw | ConvertFrom-Json
-    $inventory=if ($name.StartsWith('witness')) { $witness } else { $required }
-    $expected=if ($name.StartsWith('witness')) { 72 } else { 114912 }
-    if ($report.schema -ne 1 -or $report.model -ne '68040' -or $report.group -ne "movem-read-recovery-$name" -or $report.logicalCases -ne $expected -or $report.xunitBatches -ne 1 -or @($report.combinations.psobject.Properties).Count -ne $inventory.Count) { throw "Incomplete recovery report: $name" }
+    $report=Get-Content (Join-Path $output "68040-movem-$kind-recovery-$name.json") -Raw | ConvertFrom-Json
+    if ($kind -eq 'pointer') {
+        $inventory=if ($name.StartsWith('witness')) { $pointerWitness } else { $pointerRequired }
+        $expected=if ($name.StartsWith('witness')) { 8 } else { 15744 }
+    } else {
+        $inventory=if ($name.StartsWith('witness')) { $witness } else { $required }
+        $expected=if ($name.StartsWith('witness')) { 72 } else { 114912 }
+    }
+    if ($report.schema -ne 1 -or $report.model -ne '68040' -or $report.group -ne "movem-$kind-recovery-$name" -or $report.logicalCases -ne $expected -or $report.xunitBatches -ne 1 -or @($report.combinations.psobject.Properties).Count -ne $inventory.Count) { throw "Incomplete recovery report: $kind/$name" }
     $sum=@{passing=0;mismatching=0;unsupported=0;untested=0}
     foreach ($combination in $report.combinations.psobject.Properties) {
         if (-not $inventory.ContainsKey($combination.Name)) { throw "Foreign recovery combination: $($combination.Name)" }
@@ -80,8 +105,9 @@ foreach ($name in @('witness-scalar','witness-batch','discovery-scalar','discove
         if ($weight -ne $inventory[$combination.Name]) { throw "Changed recovery combination weight: $($combination.Name)" }
     }
     foreach ($status in $sum.Keys) { if ($sum[$status] -ne $report.counts.$status) { throw "Recovery totals disagree: $name/$status" } }
-    $rows+=@{group=$name;wholePrograms=$expected;combinations=$inventory.Count;counts=$sum}
+    $rows+=@{group="$kind/$name";wholePrograms=$expected;combinations=$inventory.Count;counts=$sum}
 }
-@{schema=1;rows=$rows;wholePrograms=229968;roadmapComplete=$false;inputManifestSha256=(Hash $manifestPath)} | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $output 'verification.json')
+}
+@{schema=1;rows=$rows;wholePrograms=261472;roadmapComplete=$false;inputManifestSha256=(Hash $manifestPath)} | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $output 'verification.json')
 if (@($tests | Where-Object outcome -ne 'Passed').Count -gt 0 -or $manifest.testExit -ne 0 -or @($rows | Where-Object { $_.counts.mismatching + $_.counts.unsupported + $_.counts.untested -gt 0 }).Count -gt 0) { throw "040 MOVEM recovery fails. Retained evidence: $output" }
-Write-Host '040 MOVEM recovery passes 229,968 whole programs across scalar/batch execution; milestone 6 remains open.'
+Write-Host '040 MOVEM operand/pointer recovery passes 261,472 whole programs across scalar/batch execution; milestone 6 remains open.'

@@ -7379,3 +7379,50 @@ recovery, enabled MMU/cache and physical timing still need their applicable
 qualification. The broad 480-case remaining gate and the other model/reference/
 consolidation work remain open. Milestone 6 remains **in progress**,
 `roadmapComplete=false`.
+
+### Pre-EA MOVEM indirect-pointer faults — 2026-10-07
+
+The same maintained recovery command now also requires the pre-EA fault path.
+A full-format indirect-pointer read faults before any MOVEM operand transfer.
+The selected expectation is format 7 with CM clear, a long read's attributes,
+the pointer address in FA, no valid pending writebacks and the original PC/SR.
+EA is undefined with no continuation bits and is deliberately not compared.
+RTE returns to the original instruction; address calculation resolves the pointer
+once successfully, then all four operand transfers complete. T1 is deferred to
+resumed completion; T0 is checked by the following branch sentinel. Partial
+register/stack/memory state, exact instruction length, original-width rejection
+and absence of operand reads before pointer recovery are verified.
+
+This distinguishes a fault during address calculation from a fault after the
+calculated EA has been retained for MOVEM. The expectation derives from
+MC68040UM 8.4.6.2/7. Source-level corroboration uses pinned generator
+`025b999239800357e95065fe5b9a15ea5b300fa7`: `genmovemel` emits `genamode` before
+`movem_mmu040`, which emits the runtime continuation flag and saved EA after
+address calculation. This inspection is not an executed native fault oracle or
+hardware observation; its source hash and caveat are recorded separately.
+
+Each route adds **15,744 matrix programs plus eight fixed programs**:
+
+- 3,456 structure programs: 54 legal indirect full-format structures, four
+  signed/scaled index variants, address-register/PC bases, W/L MOVEM and each
+  byte of the four-byte pointer read.
+- 12,288 status programs: pre/post indirection with address-register/PC bases,
+  W/L, four stack/SR profiles, T0/T1/off, all 32 CCR states and every pointer byte.
+
+Together with the unchanged selected operand-fault coverage, the command requires
+**261,472 passing whole programs / eight reports / nine executions**. It rejects
+missing pointer reports or test selections rather than silently omitting them.
+Evidence is retained in `audits/MovemPointerRecoveryAcceptance`; six corruption
+controls pass in `MovemPointerRecoveryIntegrity`. An isolated mutation which sets
+CM before EA calculation makes all **16 fixed pointer programs** fail at the SSW
+continuation assertion, retained in `mutations/PointerFaultPrematureCm`.
+
+These are transient physical read failures with the existing one-shot bus fixture;
+the handler executes RTE, without editing the pointer or completing a writeback.
+The transfer list remains D0/D1/A0/A1. Other transfer masks, pointer-editing handlers,
+nested recovery, MOVEM writes, enabled MMU/cache and physical timing are not
+qualified by this slice. Production CPU/package bytes are unchanged. The previous
+full-suite and consumer results remain historical evidence for that production
+implementation, not a fresh run of these new tests. The broad remaining gate,
+other model/reference disagreements and consolidation remain open. Milestone 6
+remains **in progress**, `roadmapComplete=false`.

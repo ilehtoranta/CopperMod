@@ -53,6 +53,54 @@ public sealed class SyntheticM68040MovemReadRecoveryTests(ITestOutputHelper outp
     [EnvironmentFact(Enable, "qualify actual MOVEM read faults and software RTE recovery"), Trait("Suite", "ReferenceDiscovery")]
     public void BatchRecoveryMatrix() => Audit(true);
 
+    [Theory, Trait("Suite", "ReferenceDiscovery")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FixedIndirectPointerFaultWitnesses(bool batch)
+    {
+        var report = new CoverageBatch("68040", "movem-pointer-recovery-witness-" + Route(batch));
+        foreach (var source in PointerSources())
+        foreach (var width in new[] { 2, 4 })
+            Case(report, batch, "pointer-witness", source, width, 0, 3, "ISP", 0, 31, pointerFault: true);
+        report.Complete(output);
+    }
+
+    [EnvironmentFact(Enable, "qualify pre-EA indirect-pointer faults and normal RTE restart"), Trait("Suite", "ReferenceDiscovery")]
+    public void ScalarPointerRecoveryMatrix() => AuditPointers(false);
+
+    [EnvironmentFact(Enable, "qualify pre-EA indirect-pointer faults and normal RTE restart"), Trait("Suite", "ReferenceDiscovery")]
+    public void BatchPointerRecoveryMatrix() => AuditPointers(true);
+
+    private static IEnumerable<Source> PointerSources()
+    {
+        foreach (var form in new[] { new OperandForm(6, 0), new OperandForm(7, 3) })
+        foreach (var indirect in new[] { 2, 7 })
+            yield return new(form, new(Full: true, IndexRegister: 1, LongIndex: true, BaseSize: 2, Indirect: indirect));
+    }
+
+    private void AuditPointers(bool batch)
+    {
+        var report = new CoverageBatch("68040", "movem-pointer-recovery-discovery-" + Route(batch));
+        foreach (var spec in IndexFixture.FullStructures().Where(x => x.Indirect != 0))
+        foreach (var index in new[] {
+            spec with { IndexRegister = 1, LongIndex = false, Scale = 0 },
+            spec with { IndexRegister = 1, LongIndex = true, Scale = 0 },
+            spec with { IndexRegister = 1, LongIndex = false, Scale = 3 },
+            spec with { AddressIndex = true, IndexRegister = 0, LongIndex = false, Scale = 2 } })
+        foreach (var form in new[] { new OperandForm(6, 1), new OperandForm(7, 3) })
+        foreach (var width in new[] { 2, 4 })
+        for (var faultByte = 0; faultByte < 4; faultByte++)
+            Case(report, batch, "pointer-structure", new(form, index), width, 0, faultByte, "ISP", 0, 31, pointerFault: true);
+        foreach (var source in PointerSources())
+        foreach (var width in new[] { 2, 4 })
+        foreach (var bank in new[] { "user", "user-M", "ISP", "MSP" })
+        foreach (var trace in new ushort[] { 0, 0x8000, 0x4000 })
+        for (var ccr = 0; ccr < 32; ccr++)
+        for (var faultByte = 0; faultByte < 4; faultByte++)
+            Case(report, batch, "pointer-status", source, width, 0, faultByte, bank, trace, ccr, pointerFault: true);
+        report.Complete(output);
+    }
+
     private void Audit(bool batch)
     {
         var report = new CoverageBatch("68040", "movem-read-recovery-discovery-" + Route(batch));
@@ -105,7 +153,7 @@ public sealed class SyntheticM68040MovemReadRecoveryTests(ITestOutputHelper outp
     }
 
     private static void Case(CoverageBatch report, bool batch, string cohort, Source source,
-        int width, int transfer, int faultByte, string bank, ushort trace, int ccr)
+        int width, int transfer, int faultByte, string bank, ushort trace, int ccr, bool pointerFault = false)
     {
         var opcode = (ushort)(0x4c80 | (width == 4 ? 0x40 : 0) | source.Form.Mode << 3 | source.Form.Register);
         var id = $"68040/MOVEM/read-recovery/{cohort}/size={width}/{source.Id}/bank={bank}/T={trace:X4}/transfer={transfer}/byte={faultByte}/op={opcode:X4}/ccr={ccr:X2}";
@@ -170,18 +218,27 @@ public sealed class SyntheticM68040MovemReadRecoveryTests(ITestOutputHelper outp
             e.ControlChecks["bypass cleared"] = (s => s.M68040Mmu.BypassTranslation ? 1u : 0u, 0);
             for (uint n = 8; n < 60; n++) e.MemoryMasks[frame + n] = 0;
             Define(m, e, frame, sr, 2); Define(m, e, frame + 2, 0x1000, 4);
-            Define(m, e, frame + 6, 0x7008, 2); Define(m, e, frame + 8, ea, 4);
-            Define(m, e, frame + 12, (uint)(0x1100 | (width == 2 ? 0x40 : 0) | ((sr & 0x2000) == 0 ? 1 : 5)), 2);
+            Define(m, e, frame + 6, 0x7008, 2);
+            if (!pointerFault) Define(m, e, frame + 8, ea, 4);
+            var accessWidth = pointerFault ? 4 : width;
+            var faultAddress = pointerFault
+                ? fixture.SourcePointerAddress ?? throw new InvalidOperationException("Missing indirect pointer fixture")
+                : unchecked(ea + (uint)(transfer * width));
+            Define(m, e, frame + 12, (uint)(0x0100 | (pointerFault ? 0 : 0x1000) |
+                (accessWidth == 2 ? 0x40 : 0) | ((sr & 0x2000) == 0 ? 1 : 5)), 2);
             e.MemoryMasks[frame + 13] = 0x7f;
             foreach (var offset in new uint[] { 14, 16, 18 })
             {
                 e.Write(frame + offset, 0, 2, m.Model);
                 e.MemoryMasks[frame + offset + 1] = 0x80;
             }
-            Define(m, e, frame + 20, unchecked(ea + (uint)(transfer * width)), 4);
-            bus.Accesses.Clear(); bus.Arm(unchecked(ea + (uint)(transfer * width + faultByte)), M68kBusAccessKind.CpuDataRead);
+            Define(m, e, frame + 20, faultAddress, 4);
+            bus.Accesses.Clear(); bus.Arm(unchecked(faultAddress + (uint)faultByte), M68kBusAccessKind.CpuDataRead);
             phase = "entry"; Step(m, e, batch);
-            if (bus.Rejected.Count != 1 || bus.Rejected[0].Width != width) throw new InvalidOperationException("Wrong original-width read rejection");
+            if (bus.Rejected.Count != 1 || bus.Rejected[0].Width != accessWidth) throw new InvalidOperationException("Wrong original-width read rejection");
+            if (pointerFault && bus.Accesses.Any(a => !a.Write && a.Kind == M68kBusAccessKind.CpuDataRead &&
+                Enumerable.Range(0, 4).Any(n => a.Address == unchecked(ea + (uint)(n * width)))))
+                throw new InvalidOperationException("MOVEM operand accessed before pointer recovery");
             pointers[exceptionBank] += 60; M68040StackFixture.SetStacks(e, pointers, sr);
             e.Pc = 0x1000;
             phase = "handler-RTE"; Step(m, e, batch);
@@ -203,7 +260,7 @@ public sealed class SyntheticM68040MovemReadRecoveryTests(ITestOutputHelper outp
             }
             if (fixture.SourcePointerAddress is { } pointer &&
                 bus.Accesses.Count(a => !a.Write && a.Kind == M68kBusAccessKind.CpuDataRead && a.Address == pointer && a.Width == 4) != 1)
-                throw new InvalidOperationException("Indirect pointer repeated on CM recovery");
+                throw new InvalidOperationException(pointerFault ? "Indirect pointer not resolved once after RTE restart" : "Indirect pointer repeated on CM recovery");
             if (bus.Rejected.Count != 1) throw new InvalidOperationException("Faulting read automatically retried");
             if (trace == 0x8000) { phase = "trace-handler"; ClearTraceAndReturn(m, e, pointers, sr, next, batch); resumedSr &= 0x3fff; }
             e.D[7] = 0x55; e.Sr = (ushort)(resumedSr & 0xfff0); e.Pc = next + 2;
