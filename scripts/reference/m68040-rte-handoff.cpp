@@ -88,6 +88,15 @@ void fixedControls() {
     if (callbackCount!=1 || handoffSr!=0x5000 || regs.sr!=0x301f || regs.a[7]!=0x7409 ||
         regs.usp!=0x7809 || regs.isp!=0x4709 || faultPc!=0xff002003 || reads.size()!=18)
         throw std::runtime_error("Fixed two-throwaway handoff failed");
+    regs={}; memory.clear(); reads.clear(); callbackCount=0;
+    regs.sr=0x201f; regs.s=1; regs.a[7]=regs.isp=0x4700;
+    regs.usp=0x7800; regs.msp=0x7400; regs.pc=0x1000;
+    put(0x4700,0x501f,2); put(0x4702,0xdead0001,4); put(0x4706,0x1024,2);
+    put(0x7800,0x301f,2); put(0x7802,0xff002003,4); put(0x7806,0x7008,2);
+    op_4e73_94_test_ff(0x4e73);
+    if (callbackCount!=1 || handoffSr!=0x501f || regs.sr!=0x301f || regs.a[7]!=0x7400 ||
+        regs.usp!=0x783c || regs.isp!=0x4708 || reads.size()!=12)
+        throw std::runtime_error("Fixed access-frame handoff failed");
 }
 
 int main(int argc,char** argv) {
@@ -103,8 +112,14 @@ int main(int argc,char** argv) {
             const auto delimiter=line.find(" | ");
             if (delimiter==std::string::npos) throw std::runtime_error("Missing actual-state delimiter");
             const auto fixture=parse(line.substr(0,delimiter)), actual=parse(line.substr(delimiter+3));
-            if (fixture.size()<7 || fixture[0]!=count || fixture[6]<2 || fixture[6]>3 || fixture.size()!=7+4*fixture[6])
+            if (fixture.size()<15 || fixture[0]!=count || fixture[6]<2 || fixture[6]>3)
                 throw std::runtime_error("Missing, reordered or invalid fixture");
+            const size_t headerEnd=7+4*fixture[6];
+            if (fixture.size()<headerEnd) throw std::runtime_error("Missing reference frame header");
+            const bool access=(fixture[headerEnd-1]>>12)==7;
+            if (fixture.size()!=headerEnd+(access?2:0)) throw std::runtime_error("Unexpected reference frame payload");
+            if (access && fixture[headerEnd]!=0x0105 && fixture[headerEnd]!=0x1005)
+                throw std::runtime_error("Out-of-scope continuation: pending/undefined frames need a full restoration oracle");
             regs={}; memory.clear(); reads.clear(); callbackCount=traceActivations=0;
             flag_SPCFLAG_TRACE=cpu_stopped=0;
             regs.sr=static_cast<uint16_t>(fixture[1]);
@@ -112,9 +127,9 @@ int main(int argc,char** argv) {
             regs.t0=(regs.sr>>14)&1; regs.t1=(regs.sr>>15)&1; regs.intmask=(regs.sr>>8)&7;
             regs.usp=fixture[2]; regs.isp=fixture[3]; regs.msp=fixture[4]; regs.pc=fixture[5];
             regs.a[7]=regs.s ? regs.m ? regs.msp : regs.isp : regs.usp;
-            for (size_t n=7;n<fixture.size();n+=4) {
+            for (size_t n=7;n<headerEnd;n+=4) {
                 const auto format=fixture[n+3]>>12;
-                if ((n+4<fixture.size() && format!=1) || (n+4==fixture.size() && format!=0 && format!=2 && format!=3))
+                if ((n+4<headerEnd && format!=1) || (n+4==headerEnd && format!=0 && format!=2 && format!=3 && format!=7))
                     throw std::runtime_error("Out-of-scope reference frame");
                 put(fixture[n],fixture[n+1],2); put(fixture[n]+2,fixture[n+2],4); put(fixture[n]+6,fixture[n+3],2);
             }
@@ -143,9 +158,9 @@ int main(int argc,char** argv) {
         if (count!=required) throw std::runtime_error("Missing reference rows");
         std::ofstream summary(argv[4]);
         if (!summary) throw std::runtime_error("Missing summary output");
-        summary<<"{\"cases\":"<<count<<",\"mismatches\":"<<mismatches<<",\"fixedControls\":2,\"fullExceptionOracle\":false,\"hardwareQualified\":false}\n";
+        summary<<"{\"cases\":"<<count<<",\"mismatches\":"<<mismatches<<",\"fixedControls\":3,\"fullExceptionOracle\":false,\"hardwareQualified\":false}\n";
         if (mismatches) return 1;
-        std::cout<<"Compared "<<count<<" handoffs; 0 mismatches; 2 fixed controls\n";
+        std::cout<<"Compared "<<count<<" handoffs; 0 mismatches; 3 fixed controls\n";
         return 0;
     } catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 2; }
 }

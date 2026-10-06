@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','ChainedOddRte','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','RteUserMaster','RteCpVectors','RteSoftwareTrace','UserRteFault','UserRteTrace','UserRteSoftwareTrace','MixedEpochRte','MixedEpochFault','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','ChainedOddRte','ChainedOddAccessRte','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','RteUserMaster','RteCpVectors','RteSoftwareTrace','UserRteFault','UserRteTrace','UserRteSoftwareTrace','MixedEpochRte','MixedEpochFault','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -569,13 +569,37 @@ foreach ($mutation in @(
     $mutation.group='ChainedOddShortFrameCanonical'; $mutation.model='68040'; $mutation.milestone=6
     $mutation.chainedOdd=$true; $mutations += $mutation
 }
+foreach ($mutation in @(
+    @{name='chained-access-odd-final-sr'; before='if (TryRaiseM68040RteAddressError(pc, priorSr, State.LastInstructionProgramCounter)) return true;';
+      after='if (TryRaiseM68040RteAddressError(pc, sr, State.LastInstructionProgramCounter)) return true;';
+      proofCombination='/normal/path=ISP-user/result=user/incoming=0000/first=0000/second=none/T=0000/'; proofReason='saved SR provenance'},
+    @{name='chained-access-odd-lost-trace'; before='        var priorSr = State.StatusRegister;';
+      after='        var priorSr = (ushort)(State.StatusRegister & ~0xc000);';
+      proofCombination='/normal/path=ISP-user/result=user/incoming=0000/first=8000/second=none/T=0000/'; proofReason='saved SR provenance'},
+    @{name='chained-access-odd-user-s'; before='            priorSr |= M68kCpuState.Supervisor;'; after='            priorSr |= 0;';
+      proofCombination='/normal/path=ISP-user/result=user/incoming=0000/first=0000/second=none/T=8000/'; proofReason='saved SR provenance'},
+    @{name='chained-access-odd-missing-ea-read'; before='        var address = continuation == 0 ? 0u : ReadRteFrameLong(frame + 8);';
+      after='        var address = 0u;'; proofCombination='/CM/path=ISP-user/result=user/incoming=0000/first=0000/second=none/T=0000/'; proofReason='frame validation read order'},
+    @{name='chained-access-odd-premature-movem'; before=@'
+            if (TryRaiseM68040RteAddressError(pc, priorSr, State.LastInstructionProgramCounter)) return true;
+            if (continuation == 0x1000) _m68040MovemContinuation = (pc, address);
+'@; after=@'
+            if (continuation == 0x1000) _m68040MovemContinuation = (pc, address);
+            if (TryRaiseM68040RteAddressError(pc, priorSr, State.LastInstructionProgramCounter)) return true;
+'@; proofCombination='/CM/path=ISP-user/result=user/incoming=0000/first=0000/second=none/T=0000/'; proofReason='no MOVEM continuation after odd return'}
+)) {
+    $mutation.file='Copper68k/M68kAdvancedTimingInterpreter.Rte.cs'
+    $mutation.group='ChainedOddAccessFrameCanonical'; $mutation.model='68040'; $mutation.milestone=6
+    $mutation.chainedOdd=$true; $mutation.chainedOddAccess=$true; $mutations += $mutation
+}
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
 if ($Scope -eq 'Control') { $mutations = @($mutations | Where-Object { $_.milestone -eq 5 }) }
 if ($Scope -eq 'Consolidation') { $mutations = @($mutations | Where-Object { $_.milestone -eq 6 }) }
 if ($Scope -eq 'Rte040') { $mutations = @($mutations | Where-Object { $_.odd }) }
-if ($Scope -eq 'ChainedOddRte') { $mutations = @($mutations | Where-Object { $_.chainedOdd }) }
+if ($Scope -eq 'ChainedOddRte') { $mutations = @($mutations | Where-Object { $_.chainedOdd -and -not $_.chainedOddAccess }) }
+if ($Scope -eq 'ChainedOddAccessRte') { $mutations = @($mutations | Where-Object { $_.chainedOddAccess }) }
 if ($Scope -eq 'RteValidationFault') { $mutations = @($mutations | Where-Object { $_.validationFault }) }
 if ($Scope -eq 'RteRepair') { $mutations = @($mutations | Where-Object { $_.repair }) }
 if ($Scope -eq 'RteRetryTrace') { $mutations = @($mutations | Where-Object { $_.retryTrace }) }
@@ -637,11 +661,15 @@ try {
                 [xml]$trx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
                 $c=$trx.TestRun.ResultSummary.Counters
                 if ($c.total -ne 2 -or $c.executed -ne 2 -or $c.failed -ne 2 -or $c.notExecuted -ne 0 -or $batches.Count -ne 2) { throw 'Chained odd mutation omitted complete selections' }
+                $prefix=if($mutation.chainedOddAccess){'rte-chained-odd-access-canonical'}else{'rte-chained-odd-canonical'}
+                $cases=if($mutation.chainedOddAccess){55296}else{82944}
+                $combinations=if($mutation.chainedOddAccess){1728}else{2592}
+                $reason=if($mutation.proofReason){$mutation.proofReason}else{'saved SR provenance'}
                 foreach ($route in @('scalar','batch')) {
-                    $r=@($batches | Where-Object group -CEQ "rte-chained-odd-canonical-$route")
-                    if ($r.Count -ne 1 -or $r[0].logicalCases -ne 82944 -or @($r[0].combinations.PSObject.Properties).Count -ne 2592 -or
+                    $r=@($batches | Where-Object group -CEQ "$prefix-$route")
+                    if ($r.Count -ne 1 -or $r[0].logicalCases -ne $cases -or @($r[0].combinations.PSObject.Properties).Count -ne $combinations -or
                         @($r[0].failures | Where-Object { $_.status -ceq 'mismatching' -and $_.id.Contains($mutation.proofCombination,[StringComparison]::Ordinal) -and
-                            $_.reason.StartsWith('saved SR provenance',[StringComparison]::Ordinal) }).Count -eq 0) { throw "Missing intended chained odd $route diagnostic" }
+                            $_.reason.StartsWith($reason,[StringComparison]::Ordinal) }).Count -eq 0) { throw "Missing intended chained odd $route diagnostic" }
                 }
             }
             if ($mutation.throwaway) {

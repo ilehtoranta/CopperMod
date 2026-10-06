@@ -4,6 +4,7 @@ param(
     [string]$ReferenceDirectory='artifacts/reference-winuae-rte-modern',
     [string]$OutputDirectory='artifacts/040-rte-handoff',
     [string]$VcVars='C:/Program Files/Microsoft Visual Studio/18/Community/VC/Auxiliary/Build/vcvars64.bat',
+    [switch]$AccessFrames,
     [switch]$ValidateReportsOnly
 )
 $ErrorActionPreference='Stop'
@@ -24,6 +25,12 @@ $groups=[ordered]@{
     'rte-chained-odd-structure-scalar'=@{cases=539136;combinations=269568;weight=2}
     'rte-chained-odd-structure-batch'=@{cases=539136;combinations=269568;weight=2}
 }
+if($AccessFrames){$groups=[ordered]@{
+    'rte-chained-odd-access-canonical-scalar'=@{cases=55296;combinations=1728;weight=32}
+    'rte-chained-odd-access-canonical-batch'=@{cases=55296;combinations=1728;weight=32}
+    'rte-chained-odd-access-structure-scalar'=@{cases=359424;combinations=179712;weight=2}
+    'rte-chained-odd-access-structure-batch'=@{cases=359424;combinations=179712;weight=2}
+}}
 function Hash($path) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function FunctionText([string]$text,[string]$signature) {
     $at=$text.IndexOf($signature,[StringComparison]::Ordinal)
@@ -41,10 +48,10 @@ function CombinationKeys([bool]$structural) {
     foreach($first in @(0,0x8000,0x4000)){foreach($second in $(if($middle -eq 'none'){@(0)}else{@(0,0x8000,0x4000)})){
     foreach($trace in @(0,0x8000,0x4000)){foreach($target in $(if($structural){@(0x6001,0xff002003u)}else{@(0x6001)})){
     foreach($alignment in $(if($structural){@(0,1)}else{@(0)})){foreach($vbr in $(if($structural){@(0,0x10000)}else{@(0x10000)})){
-    foreach($format in @(0,2,3)){
+    foreach($form in $(if($AccessFrames){@('normal','CM')}else{@('format0','format2','format3')})){
         $path=if($middle -eq 'none'){"$start-$tail"}else{"$start-$middle-$tail"}
         $secondName=if($middle -eq 'none'){'none'}else{'{0:X4}' -f $second}
-        $key='68040/RTE/chained-odd/format{0}/path={1}/result={2}/incoming={3:X4}/first={4:X4}/second={5}/T={6:X4}/target={7:X8}/align={8}/VBR={9:X8}' -f $format,$path,$result,$incoming,$first,$secondName,$trace,$target,$alignment,$vbr
+        $key='68040/RTE/chained-odd/{0}/path={1}/result={2}/incoming={3:X4}/first={4:X4}/second={5}/T={6:X4}/target={7:X8}/align={8}/VBR={9:X8}' -f $form,$path,$result,$incoming,$first,$secondName,$trace,$target,$alignment,$vbr
         if(-not $keys.Add($key)){throw 'Duplicated independent combination'}
     }}}}}}}}}}}}
     # Avoid PowerShell enumerating this collection into separate return values.
@@ -89,7 +96,8 @@ if(-not $ValidateReportsOnly) {
     $saved=@{}
     try {
         foreach($name in @('COPPER68K_SYNTHETIC_REPORT_DIR','COPPER68K_040_RTE_HANDOFF_EXPORT')){$saved[$name]=[Environment]::GetEnvironmentVariable($name);[Environment]::SetEnvironmentVariable($name,$output)}
-        & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --no-build --no-restore --filter 'FullyQualifiedName~SyntheticM68040ChainedOddReturnTests' --logger 'trx;LogFileName=handoff.trx' --results-directory $output *> (Join-Path $output 'run.log')
+        $filter=if($AccessFrames){'FullyQualifiedName~ChainedOddAccessFrame'}else{'FullyQualifiedName~ChainedOddShortFrame'}
+        & dotnet test (Join-Path $repo 'Copper68k.Tests/Copper68k.Tests.csproj') -c Release --no-build --no-restore --filter $filter --logger 'trx;LogFileName=handoff.trx' --results-directory $output *> (Join-Path $output 'run.log')
         $testExit=$LASTEXITCODE
     } finally {foreach($name in $saved.Keys){[Environment]::SetEnvironmentVariable($name,$saved[$name])}}
     foreach($group in $groups.Keys) {
@@ -98,7 +106,7 @@ if(-not $ValidateReportsOnly) {
     }
     $identity=@{schema=1;sourceCommit=(& git -C $repo rev-parse HEAD);cpuCommittedTree=(& git -C $repo rev-parse HEAD:Copper68k);
         reference='WinUAE-generated-040-RTE-SR-handoff';referenceCommit=$pin;referenceDirectory=$source;
-        softwareReferenceExecuted=$true;fullExceptionOracle=$false;hardwareQualified=$false;roadmapComplete=$false;
+        softwareReferenceExecuted=$true;fullExceptionOracle=$false;hardwareQualified=$false;roadmapComplete=$false;accessFrames=[bool]$AccessFrames;
         compiler=$compiler;compilerFlags='/O2 /EHsc /DWIN32 /DUNICODE /D_UNICODE; observer /W4';
         extraction='Untouched generated op_4e73_94_test_ff and cputest MakeFromSR_x/T0/MakeFromSR; CPU_TESTER configuration only';
         manual='https://www.nxp.com/docs/en/reference-manual/MC68040UMAD.pdf';manualRule='General operation item 3, traced user return saved S bit';inputs=@();referenceInputs=@();generated=@();evidence=@()}
@@ -113,6 +121,7 @@ $identity=Get-Content (Join-Path $output 'identities.json') -Raw|ConvertFrom-Jso
 if($identity.schema -ne 1 -or $identity.reference -cne 'WinUAE-generated-040-RTE-SR-handoff' -or $identity.referenceCommit -cne $pin -or
     $identity.softwareReferenceExecuted -ne $true -or $identity.fullExceptionOracle -ne $false -or $identity.hardwareQualified -ne $false -or
     $identity.sourceCommit -notmatch '^[a-f0-9]{40}$' -or $identity.cpuCommittedTree -notmatch '^[a-f0-9]{40}$'){throw 'Incomplete reference identity'}
+if($identity.accessFrames -ne [bool]$AccessFrames){throw 'Reference profile differs; specify -AccessFrames for format7 outputs'}
 $required=@(& git -C $repo ls-files 'Copper68k/*') + $fixtures
 if(@($identity.inputs).Count -ne $required.Count -or @(Compare-Object ($required|Sort-Object) ($identity.inputs.file|Sort-Object)).Count){throw 'Missing fixture/CPU identity'}
 foreach($row in $identity.inputs){if((Hash (Join-Path $repo $row.file)) -cne $row.sha256){throw "Changed fixture/CPU input: $($row.file)"}}
@@ -131,7 +140,7 @@ if([int]$c.total -ne 4 -or [int]$c.executed -ne 4 -or [int]$c.passed -ne 4 -or [
 $total=0
 $canonicalKeys=CombinationKeys $false
 $structuralKeys=CombinationKeys $true
-if($canonicalKeys.Count -ne 2592 -or $structuralKeys.Count -ne 269568){throw 'Independent combination enumeration differs'}
+if($canonicalKeys.Count -ne $(if($AccessFrames){1728}else{2592}) -or $structuralKeys.Count -ne $(if($AccessFrames){179712}else{269568})){throw 'Independent combination enumeration differs'}
 foreach($group in $groups.Keys) {
     $r=Get-Content (Join-Path $output "68040-$group.json") -Raw|ConvertFrom-Json -AsHashtable
     $expected=$groups[$group]
@@ -141,12 +150,12 @@ foreach($group in $groups.Keys) {
     if($group.Contains('structure')){$keys=$structuralKeys}
     foreach($key in $r.combinations.Keys){$statuses=$r.combinations[$key];if(-not $keys.Contains($key) -or $statuses.Count -ne 1 -or $statuses.passing -ne $expected.weight){throw "Incomplete combination: $key"}}
     $reference=Get-Content (Join-Path $output "$group.reference.json") -Raw|ConvertFrom-Json
-    if($reference.cases -ne $expected.cases -or $reference.mismatches -ne 0 -or $reference.fixedControls -ne 2 -or $reference.fullExceptionOracle -ne $false -or $reference.hardwareQualified -ne $false){throw 'Incomplete reference comparison'}
+    if($reference.cases -ne $expected.cases -or $reference.mismatches -ne 0 -or $reference.fixedControls -ne 3 -or $reference.fullExceptionOracle -ne $false -or $reference.hardwareQualified -ne $false){throw 'Incomplete reference comparison'}
     $total+=$r.logicalCases
 }
 @{schema=1;logicalCases=$total;batches=4;passing=$total;mismatching=0;unsupported=0;untested=0;
     softwareReferenceExecuted=$true;referenceCommit=$pin;fullExceptionOracle=$false;hardwareQualified=$false;roadmapComplete=$false;
-    scope='Chained odd-PC format 0/2/3 SR handoff, stack consumption and read order; architectural format-2/S-bit composition';
+    accessFrames=[bool]$AccessFrames;scope=$(if($AccessFrames){'Chained odd-PC normal/CM format7 SR handoff, 60-byte consumption and header reads; SSW/EA validation, no CM/writeback replay and address-error frame checked synthetically'}else{'Chained odd-PC format 0/2/3 SR handoff, stack consumption and read order; architectural format-2/S-bit composition'});
     remaining='Format-7 pending/foreign context, original-trace fault/retry, internal/data restart and broader model reference/consolidation'}|
     ConvertTo-Json -Depth 5|Set-Content (Join-Path $output 'qualification-summary.json')
 Write-Output "Qualified $total software handoffs in four batches; full exception/hardware qualification and roadmap remain incomplete."

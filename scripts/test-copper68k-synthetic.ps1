@@ -190,6 +190,10 @@ try {
             $expected['rte-chained-odd-canonical-batch'] = 82944
             $expected['rte-chained-odd-structure-scalar'] = 539136
             $expected['rte-chained-odd-structure-batch'] = 539136
+            $expected['rte-chained-odd-access-canonical-scalar'] = 55296
+            $expected['rte-chained-odd-access-canonical-batch'] = 55296
+            $expected['rte-chained-odd-access-structure-scalar'] = 359424
+            $expected['rte-chained-odd-access-structure-batch'] = 359424
             $expected['rte-odd-pending'] = 165888
             $expected['address-error-fetch-040'] = 2304
             $expected['rte-throwaway-controls'] = 82944

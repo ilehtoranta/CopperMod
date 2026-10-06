@@ -852,7 +852,7 @@ The default location is `artifacts/reference-winuae-rte-modern`; the command
 requires PowerShell 7 and MSVC (override `-VcVars` for a different installation).
 It builds the pinned generator with CPU_TESTER enabled, extracts the untouched
 generated 040 RTE and cputest SR helpers, and executes their secondary-SR
-handoff in a transport harness. Two literal controls distinguish the original,
+handoff in a transport harness. Three literal controls distinguish the original,
 last-throwaway and final SR. The handoff/live state and frame reads are compared
 with CPU results; documented format-2 entry and the traced-user S-bit correction
 are composed separately. This is an executed software handoff reference, not
@@ -864,7 +864,7 @@ and zero mismatches/unsupported/untested cases. Missing inputs, empty selections
 and out-of-scope reference operations fail. Recheck frozen outputs using
 `-ValidateReportsOnly -OutputDirectory`. Never substitute this observer for a
 validation bus-fault oracle: the generated 040 test RTE does not handle that
-fault protocol. Format7 continuations/foreign context and the original-trace
+fault protocol. Format7 pending/foreign context and the original-trace
 retry discovery remain explicit requirements.
 
 `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope ChainedOddRte` proves
@@ -872,3 +872,24 @@ that both complete canonical batches detect substitution of the final SR,
 loss of the committed trace bits and omission of the traced-user S correction.
 It requires the intended saved-SR diagnostics and restores/rebuilds production
 source. No old hardware/integration regression is retired by this qualification.
+
+Use `-AccessFrames` to execute the four normal/CM format7 groups: canonical
+scalar/batch each 55,296 cases / 1,728 combinations, structural scalar/batch
+each 359,424 / 179,712. The observer qualifies SR handoff, 60-byte consumption
+and header reads. It receives declared SSW/EA inputs and rejects CT/CU/CP or
+undefined continuation flags, because its generated RTE skips their protocol.
+Separate synthetic checks cover SSW/CM-EA validation order, writeback guards,
+the address-error image and absence of an armed MOVEM continuation after the
+odd return. These checks do not acquire a full external continuation oracle
+merely by agreeing on the header handoff.
+
+Revalidation of access-profile outputs also requires `-AccessFrames`.
+`-Scope ChainedOddAccessRte` adds five maintained complete canonical probes:
+final-SR substitution, lost committed trace, omitted saved S, skipped CM EA
+read and premature MOVEM continuation before address-error delivery. Pending
+and foreign-context odd-return chains remain in the 480-case required inventory.
+The no-continuation assertion preserves Copper68k's existing policy; the MMU
+WinUAE helper arms CM before the odd-PC check, whereas this non-MMU observer
+skips that helper. Its passing header comparison does not settle CM lifetime
+across address-error delivery/software repair. That protocol remains required
+reference research, as recorded in the qualification document and plan.

@@ -5587,3 +5587,87 @@ repair/retry, internal restoration, real data/writeback restart, earlier model
 reference gaps and consolidation remain required. Milestone 6 stays **in
 progress**, `roadmapComplete=false`. No old regression is retired, public API
 changed, consumer dependency advanced or package published.
+
+### Chained odd-PC normal/CM access-frame handoff
+
+The same fixture now covers normal and CM format7 tails. Source/destination
+stack aliases and all independent trace epochs retain the short-frame matrix;
+the access frame additionally populates guarded WB status/data, checks SSW and
+CM saved-EA validation order, consumes sixty bytes and takes the composed
+format-2 address error without replaying software-owned writebacks. The existing
+Copper68k policy of not retaining a MOVEM continuation after an odd return is
+checked separately; the native observer cannot qualify that continuation lifetime.
+
+| Fresh access report | Passing cases | Combinations |
+| --- | ---: | ---: |
+| Canonical scalar | 55,296 | 1,728 |
+| Canonical batch | 55,296 | 1,728 |
+| Structural scalar | 359,424 | 179,712 |
+| Structural batch | 359,424 | 179,712 |
+| Total | 829,440 | 362,880 |
+
+Release build succeeds with zero .NET warnings/errors. Four access tests execute
+and pass, with zero skips; every report has zero mismatches, unsupported or
+untested cases. Canonical combinations have all 32 initial CCRs, structural
+combinations have CCR 0/31. Every combination and weight is independently
+enumerated. All 829,440 observed header/SR/stack handoffs agree with pinned
+generated WinUAE. The current short profile is also rerun after the fixture/
+observer changes: four tests pass without skips and all 1,244,160 cases agree.
+Together the two current profiles contain 2,073,600 passing software cases.
+Native compilation retains the unused `oldpc` warning from untouched source.
+
+The explicit `-AccessFrames` profile records its identity and accepts only
+declared normal/CM SSW values. The generated test RTE skips the SSW/EA protocol,
+so the observer compares only its header reads and SR/stack handoff. Synthetic
+validation/no-replay checks and documented frame/S-bit composition remain
+separate. No SSW helper or production continuation calculation is injected into
+the reference. Three literal native controls include one/two-throwaway short
+frames and the sixty-byte access tail. CT/CU/CP and undefined continuation
+inputs are rejected; wrong-profile report revalidation is also rejected.
+
+This boundary matters for CM lifetime. The pinned MMU RTE generator calls
+`m68k_do_rte_mmu040` before checking the odd return; that helper arms its MOVEM
+restart state when CM is set. The non-MMU test generator used by this observer
+does not call it. This documentary difference is retained as required
+continuation/fault-lifetime research, not hidden by a passing header comparison
+or classified as a proven non-MMU CPU defect. Full external restoration,
+CM state across software repair, hardware behavior and physical timing are not
+qualified by this observer. Enabled-MMU operation remains outside the roadmap.
+
+Five maintained `ChainedOddAccessRte` probes each execute both complete
+canonical groups (55,296 cases / 1,728 combinations per route) with two failing
+tests, zero skips and the intended diagnostic:
+
+| Probe | Mismatches per route | Diagnostic |
+| --- | ---: | --- |
+| Substitute final restored SR | 55,296 | Saved SR 0000 versus 001F |
+| Lose committed trace | 36,864 | Saved SR 8000 versus 0000 |
+| Omit traced-user saved S | 9,216 | Saved SR 2000 versus 0000 |
+| Skip CM saved-EA validation | 27,648 | Validation read order |
+| Arm MOVEM before odd-PC delivery | 27,648 | Retained continuation policy |
+
+Production source bytes are restored and rebuilt. Twelve intended negative
+controls reject missing identity/fixture identity, empty xUnit selection,
+missing combination, wrong weight, native missing/empty fixtures, CT/CU/CP/
+undefined SSWs and mismatched profile. The required inventory executes one
+expected failing test, zero skips, retaining 480 untested cases / fifteen
+combinations. Its odd-PC entry distinguishes qualified header/SR coverage from
+the pending/foreign-context and full continuation behavior still required.
+
+Frozen acceptance source starts at `2f66bcaa03d9e34efa82df80634003f2bfbf8c96`
+plus these test/command changes; production tree remains
+`795fd12d6c0237a22a5f92f4a96cc4823e0364c1`.
+CPU SHA256: `141b6fc84c140873d46e4f6bf49f909ac8d6b86ba506b3efcbffac92c0fb4db8`.
+Adapter SHA256: `e84d20e2e3c49a73bc976091c415f3327363e1780fa76ef9174c3f2bf19e126e`.
+`artifacts/m6-chained-access-reference-final/identities.json` and its summary
+record current fixture/source/extracted-code/binary/row/evidence identities and
+the explicit access profile. Current short-profile evidence is separately
+`artifacts/m6-chained-access-short-retained/`; earlier snapshots are not relabeled.
+Expanded ordinary/complete-040 requirements are recorded in the plan; older
+broad CPU, complete selection and consumer results are not newly rerun here.
+
+Pending/foreign odd-return context, CM fault/repair lifetime, original-trace
+repair/retry, internal/data/writeback restoration, broader model reference
+qualification and consolidation remain required. Milestone 6 stays **in
+progress**, `roadmapComplete=false`. No CPU source change, package publication
+or additional regression retirement is included.

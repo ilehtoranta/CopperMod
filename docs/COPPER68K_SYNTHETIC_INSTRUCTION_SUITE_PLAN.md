@@ -2166,3 +2166,32 @@ requirements, mixed-epoch repair/retry and original-instruction trace deferral,
 internal restoration, data/writeback restart, broader model reference audits
 and consolidation. Milestone 6 stays **in progress**, `roadmapComplete=false`.
 No production CPU fix, package publication or regression retirement is included.
+
+### Milestone 6 chained odd-PC normal/CM access frames
+
+Four additional ordinary matrices extend one/two-throwaway odd returns to
+normal and CM format7 tails: canonical scalar/batch each require 55,296 cases /
+1,728 combinations; structural scalar/batch each require 359,424 / 179,712.
+All banks/user-M aliases, independent trace epochs, canonical CCRs, structural
+CCR boundaries/alignments/VBRs/low-high odd PCs remain covered. The added
+829,440 cases check 60-byte consumption, SSW/CM-EA validation ordering, guarded
+writebacks, last committed saved-SR provenance and no MOVEM continuation after
+odd-PC delivery.
+
+The native handoff command gains an explicit `-AccessFrames` profile. It observes
+only generated WinUAE SR/stack/header behavior and composes address-error entry
+with documented rules. The generated test RTE skips SSW/EA continuation work;
+therefore it rejects CT/CU/CP and undefined forms, and never certifies full
+format7 restoration or hardware behavior. Three literal native controls and
+five complete canonical mutation probes protect the qualified and synthetic
+portions separately. Profile identity is mandatory on report revalidation.
+
+Ordinary coverage now requires 82,614,166 cases / 672 batches. The complete 040
+gate requires 95 tests / 82 reports / thirteen fixed examples and 67,645,984
+phases including the unchanged 480-case inventory; fifteen fixture/command
+identities remain mandatory. Expanded counts are requirements, not a relabeling
+of earlier broad executions. CM continuation lifetime across odd-return fault/
+software repair, pending/foreign-context odd-return chains,
+original-trace fault/retry, internal/data/writeback restoration, broader model
+reference audits and consolidation remain required. Milestone 6 stays **in
+progress**, `roadmapComplete=false`; no CPU fix, release or regression retirement.

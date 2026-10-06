@@ -26,6 +26,10 @@ $expected = [ordered]@{
     'rte-chained-odd-canonical-batch' = @{cases=82944; combinations=2592}
     'rte-chained-odd-structure-scalar' = @{cases=539136; combinations=269568}
     'rte-chained-odd-structure-batch' = @{cases=539136; combinations=269568}
+    'rte-chained-odd-access-canonical-scalar' = @{cases=55296; combinations=1728}
+    'rte-chained-odd-access-canonical-batch' = @{cases=55296; combinations=1728}
+    'rte-chained-odd-access-structure-scalar' = @{cases=359424; combinations=179712}
+    'rte-chained-odd-access-structure-batch' = @{cases=359424; combinations=179712}
     'rte-odd-pending' = @{cases=165888; combinations=1296}
     'address-error-fetch-040' = @{cases=2304; combinations=72}
     'rte-validation-physical-direct' = @{cases=162816; combinations=2544}
@@ -151,8 +155,8 @@ foreach ($assembly in $identity.assemblies) {
 }
 [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
 $counters = $trx.TestRun.ResultSummary.Counters
-if ([int]$counters.executed -ne 91 -or [int]$counters.total -ne 91 -or [int]$counters.notExecuted -ne 0) {
-    throw '040 access-frame audit did not execute its complete selection (78 batches, 13 fixed examples)'
+if ([int]$counters.executed -ne 95 -or [int]$counters.total -ne 95 -or [int]$counters.notExecuted -ne 0) {
+    throw '040 access-frame audit did not execute its complete selection (82 batches, 13 fixed examples)'
 }
 $totals = [ordered]@{passing=0; mismatching=0; unsupported=0; untested=0}
 foreach ($group in $expected.Keys) {
@@ -177,16 +181,17 @@ foreach ($group in $expected.Keys) {
         }
     } elseif ($group.StartsWith('rte-chained-odd-', [StringComparison]::Ordinal)) {
         $structural=$group.Contains('structure',[StringComparison]::Ordinal)
+        $access=$group.Contains('access-',[StringComparison]::Ordinal)
         foreach($start in @('ISP','MSP')){foreach($tail in @('user','user-M','ISP','MSP')){
         foreach($middle in $(if($structural){@('none','user','user-M','ISP','MSP')}else{@('none')})){
         foreach($result in @('user','user-M','ISP','MSP')){foreach($incoming in @(0,0x8000,0x4000)){
         foreach($first in @(0,0x8000,0x4000)){foreach($second in $(if($middle -eq 'none'){@(0)}else{@(0,0x8000,0x4000)})){
         foreach($trace in @(0,0x8000,0x4000)){foreach($target in $(if($structural){@(0x6001,0xff002003u)}else{@(0x6001)})){
         foreach($alignment in $(if($structural){@(0,1)}else{@(0)})){foreach($vbr in $(if($structural){@(0,0x10000)}else{@(0x10000)})){
-        foreach($format in @(0,2,3)){
+        foreach($form in $(if($access){@('normal','CM')}else{@('format0','format2','format3')})){
             $path=if($middle -eq 'none'){"$start-$tail"}else{"$start-$middle-$tail"}
             $secondName=if($middle -eq 'none'){'none'}else{'{0:X4}' -f $second}
-            $key='68040/RTE/chained-odd/format{0}/path={1}/result={2}/incoming={3:X4}/first={4:X4}/second={5}/T={6:X4}/target={7:X8}/align={8}/VBR={9:X8}' -f $format,$path,$result,$incoming,$first,$secondName,$trace,$target,$alignment,$vbr
+            $key='68040/RTE/chained-odd/{0}/path={1}/result={2}/incoming={3:X4}/first={4:X4}/second={5}/T={6:X4}/target={7:X8}/align={8}/VBR={9:X8}' -f $form,$path,$result,$incoming,$first,$secondName,$trace,$target,$alignment,$vbr
             $expectedCombinations[$key]=$(if($structural){2}else{32})
         }}}}}}}}}}}}
     } elseif ($group.StartsWith('rte-user-trace-', [StringComparison]::Ordinal) -or $group.StartsWith('rte-user-software-trace-', [StringComparison]::Ordinal)) {
@@ -590,8 +595,8 @@ foreach ($group in $expected.Keys) {
         if ($combinationTotals[$status] -ne $report.counts.$status) { throw "$group combination totals differ" }
     }
 }
-$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 91 -and
+$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 95 -and
     ($totals.mismatching + $totals.unsupported + $totals.untested) -eq 0
-@{schema=1; model='68040'; logicalCases=66816544; xunitBatches=78; fixedExamples=13; counts=$totals; passed=$passed; roadmapComplete=$false} |
+@{schema=1; model='68040'; logicalCases=67645984; xunitBatches=82; fixedExamples=13; counts=$totals; passed=$passed; roadmapComplete=$false} |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'audit-summary.json')
 if (-not $passed) { throw "040 access-frame audit incomplete: $($totals | ConvertTo-Json -Compress)" }
