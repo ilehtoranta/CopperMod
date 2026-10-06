@@ -162,6 +162,9 @@ try {
             $expected['system-move-long-restart-invalid'] = 640
         }
         if ($model -eq '68040') {
+            foreach ($matrix in @('canonical','structure')) { foreach ($route in @('scalar','batch')) {
+                $expected["rte-writeback-$matrix-$route"] = 36864
+            } }
             $expected['instruction-fault-frame'] = 36864
             $expected['instruction-fault-restart'] = 79872
             $expected['rte-repair-boundaries'] = 143424

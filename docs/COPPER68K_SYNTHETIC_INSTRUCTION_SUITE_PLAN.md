@@ -2455,3 +2455,36 @@ behavior, timing policy, public API or package changes are made in this slice.
 The complete-040 inventory still retains 480 untested cases, and all broader
 restoration, reference disagreements and consolidation requirements remain.
 Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+### Milestone 6 supplied 040 write-back handler — 2026-10-06
+
+Four ordinary matrices add 147,456 whole-program scenarios / 39,168 combinations
+for scalar and one-instruction batch routes. The handler executes register saves,
+validity/size/DFC decoding, WB1 memory-lane normalization, ordered WB1→WB2→WB3
+MOVES stores, valid-bit clearing, register/DFC restoration and RTE. Canonical
+cases cover every slot, B/W/L size, address lane, four values, all CCRs and
+handler/restored banks. Structural cases cover all valid masks, uniform/mixed
+sizes, distinct/equal/overlapping operands, frame alignment and restored trace.
+Every instruction checks state and memory; final operands/order are independently
+chosen. Header examples distinguish normal writes, supplied write-page-fault
+images and reads according to MC68040UM table 8-6.
+
+Fresh and frozen qualification pass fifteen exact executions without skips,
+including nine fixed examples and two bounded witnesses. Lost WB1 rotation and
+reversed stage order are detected by independently chosen results/order; baseline
+and mutated execution identities, exact failing methods/reasons and restoration
+are checked. Eight positive and seven mutation integrity controls reject their
+intended errors; an isolated restoration-guard check preserves concurrent edits.
+No CPU source or normal assemblies change, and no regression is retired.
+
+Ordinary requirements become 85,771,414 scenarios / 697 reports. Complete-040
+requirements become 67,793,440 cases / 86 reports and 24 fixed controls/witnesses;
+its discovery selection lists exactly 110 executions. These are expanded
+requirements, not a passing fresh complete-040 run. Fresh remaining-inventory
+execution fails exactly 480 untested cases / fifteen combinations. Nested WB2/3
+faults, push/MOVE16 line cleanup and actual data-fault construction remain required,
+along with all other advanced restoration/reference/consolidation gaps. Supplied
+frames do not qualify enabled-MMU operation, physical function-code spaces,
+hardware or timing. See the
+[qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-supplied-write-back-handler-qualification--2026-10-06).
+Milestone 6 stays **in progress**, `roadmapComplete=false`; no package publication.

@@ -139,10 +139,43 @@ where that method is absent. The exact retirement witness and before/after
 proofs are recorded in the
 [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#exg-wide-register-qualification-and-consolidation--2026-10-06).
 
-The expanded ordinary gate requires **85,623,958 scenarios / 693 reports**.
+At the EXG checkpoint the ordinary gate required **85,623,958 scenarios / 693 reports**.
 The preceding full CPU run and this scoped EXG execution have separate source
 and assembly identities; combined report validation does not imply a fresh
 full-suite execution of the expanded source. Milestone 6 remains incomplete.
+
+### Supplied 040 write-back handler
+
+Four `rte-writeback-{canonical|structure}-{scalar|batch}` groups add **147,456
+whole-program scenarios / 39,168 combinations**. A real integer handler saves
+scratch registers, reads validity/size/function-code fields, aligns WB1 data,
+completes WB1→WB2→WB3 using MOVES, clears each valid bit, restores DFC/registers
+and executes RTE. Every instruction is checked, including untouched state and
+memory, operand writes, invalid-slot skips, restored stacks and following trace.
+Bounded witnesses expose a missing lane rotation and reversed stage order.
+
+```powershell
+./scripts/test-copper68k-040-writebacks.ps1 -OutputDirectory artifacts/040-writebacks
+./scripts/test-copper68k-040-writebacks.ps1 -ValidateReportsOnly -OutputDirectory artifacts/040-writebacks
+./scripts/test-copper68k-040-writeback-mutations.ps1 -OutputDirectory artifacts/040-writeback-mutations
+./scripts/test-copper68k-040-writeback-mutations.ps1 -ValidateReportsOnly -OutputDirectory artifacts/040-writeback-mutations
+```
+
+The mutation command temporarily modifies the test handler program, builds in
+isolated outputs and restores original bytes. Do not edit that program or build
+from it concurrently. It verifies a passing baseline, exact failure methods and
+reasons, source/input/binary/evidence identities and preservation of normal
+assemblies. These are handler-fixture proofs; no CPU defect or retirement is
+claimed. The positive command independently validates all keys and weights.
+
+Frames are supplied inputs consistent with MC68040UM table 8-6. No real data
+fault or enabled-MMU operation creates them. Cache pushes/MOVE16 lines, nested
+WB2/3 faults, actual data-fault construction and physical function-code spaces
+remain unqualified. The complete-040 gate retains all 480 remaining cases and
+now requires 67,793,440 cases / 86 reports and 24 fixed controls/witnesses. The
+ordinary gate requires **85,771,414 scenarios / 697 reports**. Combined frozen
+report validation is separate from fresh broad execution. See the
+[qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-supplied-write-back-handler-qualification--2026-10-06).
 
 ## Seeded and external audits
 

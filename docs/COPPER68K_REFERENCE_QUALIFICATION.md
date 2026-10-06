@@ -6530,3 +6530,109 @@ No new consumer execution or package publication is needed for this test-only
 slice. The complete-040 inventory's 480 untested cases, all broader restoration
 and software disagreements, independent coverage and further consolidation
 remain required. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+### 040 supplied write-back handler qualification — 2026-10-06
+
+[MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+8.4.6.3/5/7, tables 8-5/6, define the frame's write-back validity, transfer size,
+function code, alignment and handler obligations. The audited local manual
+(`artifacts/mc68040um-1993-entry-audit.pdf`) SHA256 is
+`93741393f70656941e413beb232c060a5e4e0218ea2adc2f5b392f9165454a7f`.
+WB1 bytes occupy memory lanes; WB2/WB3 byte/word values occupy low register bits.
+Software must complete pending stores in WB1→WB2→WB3 order before returning.
+RTE does not perform these stores for the handler.
+
+`SyntheticM68040WritebackProgram` executes a generic integer handler: save
+D0–D3/A0–A1, retain the supplied frame pointer and original DFC, inspect each
+valid bit, load its data/address, select DFC, normalize WB1 lanes, select B/W/L
+MOVES, clear that valid bit, restore DFC/registers and RTE. It branches on actual
+frame bytes. Instruction transitions, flags, registers, all stack banks, memory
+and bus writes are checked independently after every step. Following BRA and
+trace-handler RTE check restored T1/T0, SR, exception provenance and stacks.
+Invalid slots must not read their pointer/data fields. Overlaps expose store
+ordering; final address/size/data/order expectations come from intended operands,
+independently of the program's normalization calculations.
+
+| Group, each scalar/batch route | Program scenarios | Combinations | Weight |
+| --- | ---: | ---: | ---: |
+| Canonical | 36,864 | 1,152 | 32 CCRs |
+| Structural | 36,864 | 18,432 | CCR 0/31 |
+| Both groups, both routes | **147,456** | **39,168** | |
+
+Canonical cases cover both handler banks, four restored banks, all three slots,
+B/W/L sizes, four address lanes and four value images. Structural cases cover
+all eight valid masks, four uniform/mixed-size patterns, distinct/equal/overlapping
+destinations, four address lanes, both frame alignments, two value images and
+restored trace 0/T1/T0. Handler trace is clear. Initial/restored CCRs differ;
+scratch registers and original DFC must survive. FPCR/FPSR/FPIAR are preserved,
+but no floating-point operation or context transfer is performed. Counts describe
+whole programs; checked instructions and following sentinels are not counted again.
+
+Supplied headers follow table 8-6: valid WB1 implies a normal write with
+FA=WB1A; WB2 without WB1 uses a supplied write-page-fault image; reads have
+neither WB1 nor WB2. Invalid statuses are zero. The earlier test-only draft used
+read status for all masks and is excluded from architectural qualification.
+These frames are initialization, not CPU-generated data faults. Translation
+and caches are disabled during handler execution; the test does not execute an
+enabled-MMU page fault or qualify its construction.
+
+```powershell
+./scripts/test-copper68k-040-writebacks.ps1 -OutputDirectory artifacts/040-writebacks
+./scripts/test-copper68k-040-writebacks.ps1 -ValidateReportsOnly -OutputDirectory artifacts/040-writebacks
+./scripts/test-copper68k-040-writeback-mutations.ps1 -OutputDirectory artifacts/040-writeback-mutations
+./scripts/test-copper68k-040-writeback-mutations.ps1 -ValidateReportsOnly -OutputDirectory artifacts/040-writeback-mutations
+```
+
+Accepted fresh/frozen qualification at `artifacts/m6-writeback-qualified-final/`
+passes all fifteen exact executions without skips: four report batches, nine
+fixed encoding/alignment/header examples and two bounded program witnesses.
+Source inputs are captured before execution and checked afterward; source,
+binary, report/TRX/log identities and exact names/keys/weights must match.
+Isolated CPU SHA256 is
+`bd11ad1ad39668a80582d4458fe707be63c44880d15b2a380950b2c3edb17caf`;
+test adapter is
+`e17c25b909f390cfd718796eaae4a9eeb338ae3f60a004581f7684a09df234e1`.
+These isolated build identities differ from previous normal/consumer assemblies;
+production CPU source and normal assemblies are unchanged.
+
+Two maintained test-handler mutations qualify discrimination at
+`artifacts/m6-writeback-mutations-final/`. A two-test baseline passes. Replacing
+WB1's lane rotation with NOP fails both witnesses at the checked rotation
+transition; reversing stage order fails only the overlapping mixed-width witness,
+whose independent final store-order check catches the defect. Exact failures,
+methods and reasons are required, not merely a nonzero test exit. Mutation source,
+input, CPU/test and TRX/log identities are captured; original program bytes and
+normal assemblies are restored/preserved. This mutates the test handler, not the
+CPU, and supplies no historical CPU-defect or regression-retirement claim.
+
+Eight controls at `artifacts/m6-writeback-controls-final/controls.json` reject
+wrong profile, empty/duplicate inputs, missing reports, foreign test selection,
+substituted keys, redistributed weights and hidden unsupported execution.
+Seven mutation controls at `artifacts/m6-writeback-mutation-controls/controls.json`
+reject wrong profile, empty inputs/mutations, altered source, wrong failed method,
+wrong failure reason and wrong execution status. Changed evidence hashes are
+refreshed, requiring semantic rejection. The isolated `concurrency-guard.json`
+proves expected restoration and refusal to overwrite a concurrent edit.
+The first run's absolute exception-counter expectation was a fixture error
+(Reset retains that counter); its failed evidence is preserved and excluded.
+
+Ordinary requirements become **85,771,414 scenarios / 697 reports**. Combined
+validation at `artifacts/m6-writeback-combined-reports/` uses the preceding
+strictly verified full run, separately qualified EXG reports and these four new
+reports. It is not a fresh broad run of the expanded source. Complete-040
+requirements now contain **67,793,440 cases / 86 reports and 24 fixed
+controls/witnesses**, with exactly 110 discovered executions. Static requirement
+verification is recorded in `artifacts/m6-writeback-complete-audit-requirements.json`;
+the new complete-audit enumeration branch separately matches every qualified key
+and weight (`artifacts/m6-writeback-complete-audit-key-check.json`). No passing
+fresh complete-040 execution is claimed.
+
+Fresh inventory execution at `artifacts/m6-writeback-remaining-inventory/`
+fails its one exact method without skips, retaining **480 untested cases /
+fifteen combinations**, independently verified. Its write-back entry now states
+this partial coverage accurately. Nested WB2/3 faults, cache pushes/MOVE16 line
+cleanup, actual data-fault creation/restart, physical function-code spaces and
+full handler/reference/hardware qualification remain required. Other advanced
+restoration and software disagreements are unchanged. No production fix,
+regression retirement, new consumer replay or package publication is included.
+Milestone 6 stays **in progress**, `roadmapComplete=false`.
