@@ -778,3 +778,31 @@ all four reports and six independent SR encoding examples, with zero skips.
 The separate current inventory still fails its 480 required cases. Previous
 broader qualification remains a separate checkpoint. Mixed epochs
 during validation faults, repair/retry and internal restoration remain required.
+
+### Mixed-epoch validation fault capture
+
+`SyntheticM68040RteValidationFaultTests.MixedEpochFaultCapture*` crosses
+independent incoming and committed throwaway trace states, all stack banks and
+user M values. Canonical cases cross final trace/CCR values at the PC read;
+structural cases reject every validation-transfer byte in one/two-throwaway
+chains, including aliases. Each phase checks the last committed SR, saved PC,
+registers, guarded memory, stack banks, exact rejected access and retained
+pending CP vector. Bare handler return and user-tail privilege failure are
+executed; supervisor retry and original trace resumption remain unqualified.
+
+Canonical scalar/batch reports each require 276,480 phases / 3,456 combinations;
+structural reports each require 3,556,800 phases / 711,360 combinations. The
+complete 040 selection now requires 87 tests / 74 reports / thirteen fixed
+examples, including its retained 480-case failing inventory. Expectations
+compose MC68040UM exception and RTE rules; no combined hardware capture is
+claimed. See the qualification record for the executed validation scope.
+
+Use `--filter FullyQualifiedName~MixedEpochFaultCapture` for focused execution
+and `./scripts/test-copper68k-synthetic-mutations.ps1 -Scope MixedEpochFault`
+for lost live T1, premature CCR installation and skipped aliased-USP fixture
+probes. CPU probes must fail all four complete groups with the intended saved-SR
+diagnostic; the fixture probe must preserve both canonical groups and fail both
+structural groups. The lost-T1 probe additionally requires second-throwaway
+trace diagnostics in both structural reports. Shared test-only stack/status
+fixtures retain independent fixed SR examples. Failed initial fixture evidence
+is not qualification evidence.

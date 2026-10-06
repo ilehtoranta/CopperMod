@@ -5372,3 +5372,57 @@ Mixed epochs during validation faults, repair/retry and internal restoration
 remain required, alongside every retained data/context/model/reference and
 consolidation requirement. Milestone 6 stays **in progress**. No production
 CPU fix, package release, consumer rerun or regression retirement is included.
+
+### Mixed-epoch validation fault capture — qualified checkpoint
+
+`SyntheticM68040RteValidationFaultTests.MixedEpochFaultCapture*` extends physical
+read rejection to independent incoming/first/second trace states and all stack
+banks, including aliases of user/user-M. Canonical cases cross final trace/CCR
+and reject the PC read; structural cases hold final T1 and reject every transfer
+byte. Source SR/PC/format and continuation reads are real bus operations.
+Expectations compose MC68040UM 8.1, 8.2.5/6, 8.3, 8.4.2 and 8.4.6.7; they are
+software qualification, not a hardware capture of combined fault behavior.
+
+Every phase checks register/stack/memory preservation, saved live SR, fault PC,
+exact access width, original pending CP vector and preserved FPU registers. A
+bare return is followed by a privilege failure on user tails; supervisor retry
+is not executed and original trace deferral is not inferred. Structural tests
+caught a test-fixture bug: USP had been initialized after pointer construction,
+skipping an aliased throwaway. The input base now remains unconsumed; failed
+initial evidence is retained separately and not credited.
+
+| Group, each scalar/batch | Phases | Combinations |
+| --- | ---: | ---: |
+| Canonical PC-read boundaries | 276,480 | 3,456 |
+| Structural validation bytes | 3,556,800 | 711,360 |
+
+Corrected initial focused reports pass all 7,666,560 phases. Three complete
+`MixedEpochFault` probes qualify lost live T1, premature CCR installation and
+the aliased-USP fixture error. CPU probes fail all four groups; the fixture
+probe preserves both canonical groups and fails both structural groups. Intended
+saved-SR diagnostics, including second-throwaway provenance in both structural
+reports, are required. Every production source byte is restored against the
+preceding qualified manifest.
+
+Fresh restored Release build succeeds with zero warnings/errors. Focused
+execution passes ten tests with zero skips: four complete reports contain
+7,666,560 passing phases, with zero mismatches, unsupported execution or
+untested phases, plus six fixed SR encodings. Every new combination and its
+weight matches independent literal PowerShell enumeration. Fourteen retained
+tests passed before the fixture correction, which only affects new mixed-epoch
+cases; that evidence remains separate. A fresh inventory selection executes
+one expected failing test with zero skips, retaining 480 untested requirements
+/ fifteen combinations.
+
+Frozen build starts from `5e90768279da33092d2da3f14e870a6a7881da44` plus these
+test changes; production tree remains `795fd12d6c0237a22a5f92f4a96cc4823e0364c1`.
+CPU SHA256: `e553a838521fb957c377ecfa65cab36c31f0d651e8d3ec705fb68963465ed41a`.
+Adapter SHA256: `da2b8dd9d5e1263563a64486703b89ccba3e203d1d1a81de0dfc99141c880425`.
+`artifacts/m6-mixed-fault-restored/qualification.json` records all eight current
+fixture/command/assembly identities. Build identities are not relabeled after
+commit. Broader full-suite, complete 040 and external-reference qualification
+retains its original checkpoint; it was not rerun for this test-only slice.
+Expanded 040/ordinary requirements are recorded in the plan. Trace
+deferral/resumption, repair/retry, internal restoration and every remaining
+model/reference/consolidation requirement stay open. No CPU fix, consumer
+rerun, package release or additional regression retirement is included.

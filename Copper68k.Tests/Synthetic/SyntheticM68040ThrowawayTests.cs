@@ -212,19 +212,11 @@ public sealed class SyntheticM68040ThrowawayTests(ITestOutputHelper output)
     }
 
     private static ushort Status(string bank, ushort trace, int ccr) =>
-        (ushort)((bank == "ISP" ? 0x2000 : bank == "MSP" ? 0x3000 : bank == "user-M" ? 0x1000 : 0) | trace | ccr);
-    private static string PhysicalBank(string bank) => bank == "user-M" ? "user" : bank;
-    private static string ExceptionBank(ushort sr) => (sr & 0x1000) != 0 ? "MSP" : "ISP";
-    private static void SetStacks(ArchitecturalExpectation e, Dictionary<string, uint> pointers, ushort sr)
-    {
-        e.Sr = sr;
-        e.A[7] = pointers[(sr & 0x2000) == 0 ? "user" : ExceptionBank(sr)];
-        e.InactiveStackPointer = pointers[(sr & 0x2000) == 0 ? "ISP" : "user"];
-        e.MasterStackPointer = pointers["MSP"];
-        e.ControlChecks["USP"] = (s => s.UserStackPointer, pointers["user"]);
-        e.ControlChecks["ISP"] = (s => s.InterruptStackPointer, pointers["ISP"]);
-        e.ControlChecks["MSP"] = (s => s.MasterStackPointer, pointers["MSP"]);
-    }
+        M68040StackFixture.Status(bank, trace, ccr);
+    private static string PhysicalBank(string bank) => M68040StackFixture.PhysicalBank(bank);
+    private static string ExceptionBank(ushort sr) => M68040StackFixture.ExceptionBank(sr);
+    private static void SetStacks(ArchitecturalExpectation e, Dictionary<string, uint> pointers, ushort sr) =>
+        M68040StackFixture.SetStacks(e, pointers, sr);
     private static void ExpectException(SyntheticMachine m, ArchitecturalExpectation e, Dictionary<string, uint> pointers,
         ushort sr, int vector, uint pc, uint address, uint sequence)
     {
@@ -241,6 +233,28 @@ public sealed class SyntheticM68040ThrowawayTests(ITestOutputHelper output)
     }
 
     private static bool ExecuteStep(SyntheticMachine m, ArchitecturalExpectation e, CoverageBatch report, string id, bool batch)
+        => M68040StackFixture.Step(m, e, report, id, batch);
+}
+
+// Shared test-only stack/status fixtures. Fixed literal examples above validate
+// the encoding independently; no production stack or exception helper is used.
+internal static class M68040StackFixture
+{
+    internal static ushort Status(string bank, ushort trace, int ccr) =>
+        (ushort)((bank == "ISP" ? 0x2000 : bank == "MSP" ? 0x3000 : bank == "user-M" ? 0x1000 : 0) | trace | ccr);
+    internal static string PhysicalBank(string bank) => bank == "user-M" ? "user" : bank;
+    internal static string ExceptionBank(ushort sr) => (sr & 0x1000) != 0 ? "MSP" : "ISP";
+    internal static void SetStacks(ArchitecturalExpectation e, Dictionary<string, uint> pointers, ushort sr)
+    {
+        e.Sr = sr;
+        e.A[7] = pointers[(sr & 0x2000) == 0 ? "user" : ExceptionBank(sr)];
+        e.InactiveStackPointer = pointers[(sr & 0x2000) == 0 ? "ISP" : "user"];
+        e.MasterStackPointer = pointers["MSP"];
+        e.ControlChecks["USP"] = (s => s.UserStackPointer, pointers["user"]);
+        e.ControlChecks["ISP"] = (s => s.InterruptStackPointer, pointers["ISP"]);
+        e.ControlChecks["MSP"] = (s => s.MasterStackPointer, pointers["MSP"]);
+    }
+    internal static bool Step(SyntheticMachine m, ArchitecturalExpectation e, CoverageBatch report, string id, bool batch)
     {
         if (!batch) return SyntheticM68040AccessFrameAuditTests.Step(m, e, report, id);
         try

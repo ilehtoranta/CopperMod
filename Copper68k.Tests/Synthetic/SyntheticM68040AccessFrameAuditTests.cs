@@ -33,7 +33,7 @@ public sealed class SyntheticM68040AccessFrameAuditTests(ITestOutputHelper outpu
             "real-access-fault-entry", "writeback-handler", "CP-context-transferred-vector" })
             report.Record($"68040/RTE/format7/{form}/bank={bank}/op=4E73/ccr={ccr:X2}", "untested",
                 form == "frame-validation-fault"
-                    ? "Validation, preserved-trace repair/software service and successful mixed-epoch throwaway chains have separate software coverage; mixed epochs during validation faults, repair/retry and internal restoration remain required. Physical/hardware behavior is separately unqualified"
+                    ? "Validation, preserved-trace repair/software service, successful mixed-epoch chains and mixed-epoch validation fault capture have separate software coverage; mixed-epoch repair/retry, original trace suspension/resumption and internal restoration remain required. Physical/hardware behavior is separately unqualified"
                     : form == "real-access-fault-entry"
                         ? "Cache-disabled accurate instruction-fetch frames/restart are covered separately; data fault/writeback restart, enabled-cache deferral and compiled instruction-PC provenance remain required"
                     : "Required fault/context protocol has no independently qualified execution fixture yet");

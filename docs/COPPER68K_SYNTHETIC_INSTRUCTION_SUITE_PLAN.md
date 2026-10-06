@@ -2066,3 +2066,45 @@ restoration or chained odd-PC saved-SR provenance. All earlier data/restart,
 context-transfer, model/reference/consolidation requirements remain required.
 Milestone 6 stays **in progress**, with `roadmapComplete=false`. This is a
 test-only checkpoint; no package release or old-test retirement is included.
+
+### Milestone 6 mixed-epoch validation fault capture — qualified checkpoint
+
+Four `MixedEpochFaultCapture*` groups reuse the real physical rejection bus,
+frame expectations and a shared test-only stack/status/batch fixture. Initial
+instruction, first and second throwaway trace states are independent. Canonical
+one-throwaway cases cross every final trace and CCR while rejecting the PC read;
+structural one/two-throwaway cases hold the uncommitted final SR at T1 and reject
+every byte of every validation transfer at both alignments/VBRs. Every stack
+bank, user M value and alias participates. Short/invalid formats and all defined
+format-7 continuations, including CP49–55, preserve original pending vectors
+and conflicting FPU registers. Fault entry, bare handler return and user-tail
+privilege failure check the last committed SR, source-frame preservation, exact
+PC, stack banks, rejected access/width and exception sequence. These cases do
+not execute supervisor retry or infer a private original-instruction trace latch.
+
+Canonical scalar/batch reports each contain 276,480 phases / 3,456 combinations;
+structural reports each contain 3,556,800 phases / 711,360 combinations. All
+7,666,560 initial phases pass after correcting an aliased-USP initialization
+error in the test fixture; the earlier failed structural reports are not credited.
+Independent maintained-command enumeration matches the counts. Fourteen retained
+tests, including six fixed SR encodings, passed before that fixture correction;
+the correction only affects new mixed-epoch cases. Three complete probes qualify
+lost live T1, premature CCR installation and the aliased-USP fixture error, with
+the intended diagnostics and exact production source byte restoration. Fresh
+restored Release build succeeds with zero warnings/errors; focused execution
+passes ten tests with zero skips, comprising four complete new reports and six
+fixed SR encodings. All 7,666,560 phases pass with zero mismatches, unsupported
+execution or untested phases. Every combination and weight matches independent
+literal enumeration. The fresh inventory selection executes one expected
+failing test with zero skips and retains 480 untested / fifteen combinations.
+Frozen identities and exact scope are recorded in the qualification document;
+previous broad CPU/reference results remain separate historical evidence.
+Expanded complete 040 requirements are 87 tests / 74 reports / thirteen fixed
+examples and 65,572,384 phases including the retained 480-case inventory.
+Expanded ordinary requirements are 80,540,566 phases / 664 batches. These are
+requirements, not claims of fresh complete-suite execution.
+
+Expectations compose MC68040UM 8.1, 8.2.5/6, 8.3, 8.4.2 and 8.4.6.7. Trace
+suspension/resumption across differing epochs, executed repair/retry, internal
+restoration, all earlier data/context/model/reference and consolidation scope
+remain required. Milestone 6 stays in progress; no CPU defect or release is claimed.

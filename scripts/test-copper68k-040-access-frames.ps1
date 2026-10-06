@@ -26,6 +26,10 @@ $expected = [ordered]@{
     'address-error-fetch-040' = @{cases=2304; combinations=72}
     'rte-validation-physical-direct' = @{cases=162816; combinations=2544}
     'rte-validation-physical-chained' = @{cases=61056; combinations=15264}
+    'rte-mixed-fault-canonical-scalar' = @{cases=276480; combinations=3456}
+    'rte-mixed-fault-canonical-batch' = @{cases=276480; combinations=3456}
+    'rte-mixed-fault-structure-scalar' = @{cases=3556800; combinations=711360}
+    'rte-mixed-fault-structure-batch' = @{cases=3556800; combinations=711360}
     'rte-access-entry-double-fault' = @{cases=98304; combinations=3072}
     'rte-access-handler-refault' = @{cases=3840; combinations=120}
     'access-double-fault-dispatch-accurate' = @{cases=1088; combinations=544}
@@ -115,7 +119,7 @@ if (-not $ValidateReportsOnly) {
             'Instruction-fault fixtures use cache-disabled accurate execution and physical-map rejection; speculative deferral, enabled caches/MMU and compiled fetch PC provenance remain unqualified',
             'Legacy repair clears saved trace; separate supervisor and user-tail bridge groups preserve incoming trace, check normal/CM completion and pending CT/CU/CP49-55 priority. Executed integer trace service and successful mixed-epoch throwaway chains have separate coverage; mixed epochs during faults, repair/retry and internal restoration remain required',
             'User-tail fault expectations compose documented throwaway live-SR rules with general supervisor exception entry; unusual combined hardware behavior has not been observed',
-            'Mixed epochs during validation faults and repair/retry, internal-restoration double faults, cache/MMU/compiled handler-entry prefetch, chained odd-PC SR provenance and physical timing remain unqualified',
+            'Mixed-epoch fault entry/bare return and user-tail privilege failure have separate coverage; mixed-epoch repair/retry and original trace suspension/resumption, internal-restoration double faults, cache/MMU/compiled handler-entry prefetch, chained odd-PC SR provenance and physical timing remain unqualified',
             'Direct odd-RTE saved-SR ordering uses documentary WinUAE 5d22d336, not an executed hardware oracle')
     }
     $identity | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'identities.json')
@@ -143,8 +147,8 @@ foreach ($assembly in $identity.assemblies) {
 }
 [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw
 $counters = $trx.TestRun.ResultSummary.Counters
-if ([int]$counters.executed -ne 83 -or [int]$counters.total -ne 83 -or [int]$counters.notExecuted -ne 0) {
-    throw '040 access-frame audit did not execute its complete selection (70 batches, 13 fixed examples)'
+if ([int]$counters.executed -ne 87 -or [int]$counters.total -ne 87 -or [int]$counters.notExecuted -ne 0) {
+    throw '040 access-frame audit did not execute its complete selection (74 batches, 13 fixed examples)'
 }
 $totals = [ordered]@{passing=0; mismatching=0; unsupported=0; untested=0}
 foreach ($group in $expected.Keys) {
@@ -398,6 +402,32 @@ foreach ($group in $expected.Keys) {
                 }
             } } }
         }
+    } elseif ($group.StartsWith('rte-mixed-fault-', [StringComparison]::Ordinal)) {
+        $structure = $group.Contains('-structure-', [StringComparison]::Ordinal)
+        foreach ($start in @('ISP','MSP')) { foreach ($tail in @('user','user-M','ISP','MSP')) {
+        foreach ($middle in $(if ($structure) {@('none','user','user-M','ISP','MSP')} else {@('none')})) {
+        foreach ($incoming in @(0,0x8000,0x4000)) { foreach ($first in @(0,0x8000,0x4000)) {
+        foreach ($second in $(if ($middle -eq 'none') {@(0)} else {@(0,0x8000,0x4000)})) {
+        foreach ($final in $(if ($structure) {@(0x8000)} else {@(0,0x8000,0x4000)})) {
+        foreach ($alignment in $(if ($structure) {@(0,1)} else {@(0)})) {
+        foreach ($vbr in $(if ($structure) {@(0,0x10000)} else {@(0x10000)})) {
+        foreach ($form in @('format0','format2','format3','invalid4','invalid15','normal','CM','CT','CU','CP49','CP50','CP51','CP52','CP53','CP54','CP55')) {
+            # Literal validation transfer ranges, independent of C# fixtures.
+            $reads = @('2:4')
+            if ($structure) {
+                $reads = @('0:2','2:4','6:2')
+                if ($form -in @('normal','CM','CT','CU') -or $form.StartsWith('CP')) {$reads += '12:2'}
+                if ($form -in @('CM','CT','CU') -or $form.StartsWith('CP')) {$reads += '8:4'}
+            }
+            $path = if ($middle -eq 'none') {"$start-$tail"} else {"$start-$middle-$tail"}
+            $secondName = if ($middle -eq 'none') {'none'} else {'{0:X4}' -f $second}
+            foreach ($read in $reads) { for ($byte=0; $byte -lt $(if ($structure) {[int]$read.Split(':')[1]} else {1}); $byte++) {
+                $key = '68040/RTE/mixed-epoch-validation/{0}/{1}/path={2}/incoming={3:X4}/first={4:X4}/second={5}/final={6:X4}/align={7}/VBR={8:X8}/read={9}/fault-byte={10}' -f $(if ($structure) {'structure'} else {'canonical'}),$form,$path,$incoming,$first,$secondName,$final,$alignment,$vbr,$read,$byte
+                # Fault entry and bare return; a user tail then attempts RTE
+                # in user mode, producing the documented privilege exception.
+                $expectedCombinations[$key] = $(if ($structure) {2} else {32}) * $(if ($tail.StartsWith('user')) {3} else {2})
+            } }
+        } } } } } } } } } }
     } elseif ($group -in @('rte-validation-physical-direct','rte-validation-physical-chained')) {
         $chained = $group -eq 'rte-validation-physical-chained'
         $paths = if ($chained) { @('ISP-ISP','ISP-ISP-ISP','ISP-MSP-ISP','ISP-MSP','ISP-ISP-MSP','ISP-MSP-MSP',
@@ -542,8 +572,8 @@ foreach ($group in $expected.Keys) {
         if ($combinationTotals[$status] -ne $report.counts.$status) { throw "$group combination totals differ" }
     }
 }
-$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 83 -and
+$passed = $testExit -eq 0 -and [int]$counters.failed -eq 0 -and [int]$counters.passed -eq 87 -and
     ($totals.mismatching + $totals.unsupported + $totals.untested) -eq 0
-@{schema=1; model='68040'; logicalCases=57905824; xunitBatches=70; fixedExamples=13; counts=$totals; passed=$passed; roadmapComplete=$false} |
+@{schema=1; model='68040'; logicalCases=65572384; xunitBatches=74; fixedExamples=13; counts=$totals; passed=$passed; roadmapComplete=$false} |
     ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'audit-summary.json')
 if (-not $passed) { throw "040 access-frame audit incomplete: $($totals | ConvertTo-Json -Compress)" }
