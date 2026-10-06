@@ -5828,3 +5828,95 @@ audits and consolidation scope remain intact. Full CM lifetime, pending/foreign
 contexts, original-trace retry and internal/data/writeback restoration remain
 required. Milestone 6 stays **in progress**, `roadmapComplete=false`; no production
 CPU fix, package publication or regression retirement is included.
+
+### 68060 PCR qualification and consolidation (2026-10-06)
+
+`SyntheticPcrTests` adds four ordinary-CI batches and **305,152 logical cases**.
+Expectations come from [MC68060UM revision 1](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf),
+3.2.2.5 / figure 3-5, 11.1.2.1.1 and D-22. Identification is 0430, the selected
+first-revision byte is zero, EDEBUG is bit 7, DFP bit 1 and ESS bit 0. The
+identification/revision fields ignore writes; the defined controls clear on
+reset. The [1998 addendum](https://www.nxp.com/docs/en/reference-manual/MC68060UMAD.pdf)
+does not amend this register diagram.
+
+| Group | Logical cases | Architectural combinations | Qualification |
+| --- | ---: | ---: | --- |
+| `system-pcr-defined` | 102,400 | 102,400 | All eight initial/control images, sixteen general registers, all CCRs, supervisor writes/readback and user privilege rejection; all defined raw read images |
+| `system-pcr-identification` | 172,032 | 172,032 | Every read-only bit, all-set/alternating high patterns, all eight control images, registers and both stacks, CCR 0/31 |
+| `system-pcr-reserved-policy` | 6,144 | 6,144 | Existing repository mask policy for reserved writes; explicitly excluded from architectural qualification |
+| `system-pcr-reset` | 24,576 | 768 | Actual write, external API reset and instruction readback, all defined control images, incoming stacks, registers and CCRs |
+
+The reusable MOVEC register fixture gains optional CCR selections and guards the
+PCR during other control transfers. Tests check all architectural registers,
+exact PC, SR/CCR, stack state, execution state, unchanged controls and memory.
+Successful readbacks include a following NOP. Failed writes/reset prerequisites
+leave dependent phases explicitly untested; no partially executed instruction
+is retried. Initial control images are fixture setup, not decoder-derived
+expectations. Reset register clearing and the saved MSP initialization are
+public API conventions, distinguished from the processor's PCR/SR reset rules.
+
+The manual requires reserved bits 6..2 to remain zero. Moreover,
+[MC68060DE rev 4.0](https://www.nxp.com/docs/en/errata/MC68060DE.pdf), I14/I15,
+assign bit 5 to a bypass workaround on specified masksets. Reserved writes
+therefore remain a named repository-policy batch, never promoted as proof that
+every physical maskset ignores these bits. Physical debug output, superscalar
+timing, pending-FPU synchronization and FPU arithmetic are not qualified here.
+The fixtures start with no outstanding floating-point work.
+
+Pinned WinUAE `5d22d33632646efc3f747f03e82d28353e52722e` still writes EDEBUG using
+bit 6 in `newcpu_common.cpp` lines 172-173. Its unchanged source SHA256 is
+`ef87202a97c0135128e7367a0fc09c627d29fc606d5de7fc06ad5f49d8bb9cbc`.
+This software/manual disagreement remains open. No reference mask, production
+CPU behavior or original Basic discrepancy is changed to obtain agreement.
+Ordinary STOP's S-clear disagreement also remains required.
+
+The dedicated command independently enumerates every combination and its
+weight, verifies exactly four executed tests, rejects failed/unsupported/untested
+cases, and records exact production/fixture/command, binary and evidence input
+identities. Report revalidation checks the same source/binary identities and
+selection. Eight integrity controls reject missing manifests, wrong profiles,
+missing/duplicate source identities, missing reports, empty execution, incorrect
+weights and substituted combinations. None changes the original accepted files.
+
+```powershell
+./scripts/test-copper68k-060-pcr.ps1 -OutputDirectory artifacts/m6-pcr-qualified-final
+./scripts/test-copper68k-060-pcr.ps1 -ValidateReportsOnly -OutputDirectory artifacts/m6-pcr-qualified-final
+./scripts/test-copper68k-synthetic-mutations.ps1 -Scope ProcessorConfiguration
+```
+
+Retirement: `M68060InterpreterTests.ProcessorIdentificationIsReadOnlyAndResetClearsControls`
+is replaced only after all three mutations fail both the original fact and the
+complete replacement matrix. Before retirement each selection executes two
+failed tests without skips; afterward each executes the replacement without skips.
+
+| Mutation | Replacement witness | Mismatching / dependent untested |
+| --- | --- | ---: |
+| EDEBUG moved to bit 6 | `PCR/R0/initial=00000000/value=00000080/super=True/ccr=00/write` | 16,384 / 16,384 |
+| Identification writable | `PCR/R0/initial=00000000/value=00000000/super=True/ccr=00/write` | 57,344 / 57,344 |
+| Reset retains controls | `PCR/reset/R0/super=False/image=00000001/reset/op=4E7B/ccr=00` | 7,168 / 7,168 |
+
+The old all-ones write is retained explicitly in the reserved-policy matrix
+(`R0/initial=00000000/value=FFFFFFFF/super=True/ccr=00/write` and `/read`);
+reset/readback from its resulting image 83 is covered for every destination,
+including R1. No specialized instruction, cache, bus, JIT or native regression
+is retired. Mutation sources are restored byte-for-byte and rebuilt successfully.
+
+Fresh acceptance: four PCR tests pass with no skips, **305,152 cases** and no
+mismatches/unsupported/untested cases. Retained shared-fixture/control coverage
+passes **46 tests**, including **1,236,864 cases / fifteen reports** plus 31
+fixed 68060 checks, with no skips. Evidence is in `artifacts/m6-pcr-qualified-final`,
+`artifacts/m6-pcr-retained`, `artifacts/m6-pcr-mutations-before-retirement`,
+`artifacts/m6-pcr-mutations-after-retirement` and `artifacts/m6-pcr-integrity`.
+The first reset attempt had an incorrect fixture MSP expectation and is excluded
+from acceptance; its trace remains under `artifacts/m6-pcr-first` in test outputs.
+
+Source starts at `11124e9a24fb13c832ed569626ec2b76f6242696` plus recorded test/command
+changes. Production tree remains `795fd12d6c0237a22a5f92f4a96cc4823e0364c1`.
+CPU SHA256: `a44b20aed377d1789607415ed50fde48a8ebea38cbc49cc50a08cc0ad4a0aff8`.
+Test assembly SHA256: `0ebdff1cff679ada0488fd29735e99e10a705ef33ca3f8798ecfe838706a554f`.
+The ordinary CI requirement grows to **82,919,318 cases / 676 reports**; this
+is an expanded requirement, not a new broad-suite execution claim. Complete-040
+requirements and the 480-case remaining inventory are unchanged. Full CM
+lifetime, advanced exception/restoration and broader model audits/consolidation
+remain required. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+No production CPU fix, consumer replay or package publication is included.

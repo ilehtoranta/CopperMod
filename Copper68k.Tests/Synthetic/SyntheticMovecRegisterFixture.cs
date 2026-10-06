@@ -17,15 +17,16 @@ internal sealed record SyntheticMovecRegisterFixture(int Control, string Name, u
         ("DTT1", s => s.M68040Mmu.DataTransparentTranslation1),
         ("URP", s => s.M68040Mmu.UserRootPointer),
         ("SRP", s => s.M68040Mmu.SupervisorRootPointer),
-        ("BUSCR", s => s.M68060BusControl)
+        ("BUSCR", s => s.M68060BusControl),
+        ("PCR", s => s.M68060ProcessorConfiguration)
     ];
 
-    internal void WritesAndReadback(SyntheticMachine m, CoverageBatch report, IEnumerable<uint> values, int storeRegisters = 16, uint initial = 0)
+    internal void WritesAndReadback(SyntheticMachine m, CoverageBatch report, IEnumerable<uint> values, int storeRegisters = 16, uint initial = 0, IEnumerable<int>? conditionCodes = null)
     {
         foreach (var value in values)
         for (var general = 0; general < storeRegisters; general++)
         foreach (var supervisor in new[] { false, true })
-        for (var ccr = 0; ccr < 32; ccr++)
+        foreach (var ccr in conditionCodes ?? Enumerable.Range(0, 32))
         {
             m.Reset(ccr, supervisor);
             if (general < 8) m.Core.State.D[general] = value;

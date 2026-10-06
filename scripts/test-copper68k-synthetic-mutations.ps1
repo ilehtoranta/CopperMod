@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','ChainedOddRte','ChainedOddAccessRte','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','RteUserMaster','RteCpVectors','RteSoftwareTrace','UserRteFault','UserRteTrace','UserRteSoftwareTrace','MixedEpochRte','MixedEpochFault','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings')] [string]$Scope = 'All')
+param([string]$OutputDirectory = 'artifacts/synthetic-mutations', [ValidateSet('All','Move','Arithmetic','Logical','Control','Consolidation','Rte040','ChainedOddRte','ChainedOddAccessRte','RteValidationFault','RteRepair','RteRetryTrace','RtePendingTrace','RteUserMaster','RteCpVectors','RteSoftwareTrace','UserRteFault','UserRteTrace','UserRteSoftwareTrace','MixedEpochRte','MixedEpochFault','InstructionFault','HandlerPrefetch','EntryPrefetch','AccessDoubleFault','BatchFault','LowPowerStop','CacheEncodings','ProcessorConfiguration')] [string]$Scope = 'All')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -592,6 +592,21 @@ foreach ($mutation in @(
     $mutation.group='ChainedOddAccessFrameCanonical'; $mutation.model='68040'; $mutation.milestone=6
     $mutation.chainedOdd=$true; $mutation.chainedOddAccess=$true; $mutations += $mutation
 }
+$mutations += @(
+    @{name='060-pcr-edebug-position'; file='Copper68k/M68060Interpreter.cs'; before='State.M68060ProcessorConfiguration = 0x0430_0000 | (value & 0x83);';
+      after='State.M68060ProcessorConfiguration = 0x0430_0000 | (value & 0x43);'; group='PcrDefinedControlsAllRegistersPrivilegeAndCcr'; pcr=$true;
+      expectedGroup='system-pcr-defined'; expectedCases=102400; milestone=6;
+      legacyTest='ProcessorIdentificationIsReadOnlyAndResetClearsControls'; legacyFile='Copper68k.Tests/M68060InterpreterTests.cs'},
+    @{name='060-pcr-writable-identification'; file='Copper68k/M68060Interpreter.cs'; before='State.M68060ProcessorConfiguration = 0x0430_0000 | (value & 0x83);';
+      after='State.M68060ProcessorConfiguration = value & 0xffffff83;'; group='PcrIdentificationAndRevisionWritesAreIgnored'; pcr=$true;
+      expectedGroup='system-pcr-identification'; expectedCases=172032; milestone=6;
+      legacyTest='ProcessorIdentificationIsReadOnlyAndResetClearsControls'; legacyFile='Copper68k.Tests/M68060InterpreterTests.cs'},
+    @{name='060-pcr-reset-retains-controls'; file='Copper68k/M68060Interpreter.cs'; before='State.M68060ProcessorConfiguration = 0x0430_0000; // First revision, ESS/DFP clear.';
+      after='// Mutant: reset retains previous PCR controls.'; group='PcrResetClearsDefinedControlsFromBothStacks'; pcr=$true;
+      expectedGroup='system-pcr-reset'; expectedCases=24576; milestone=6;
+      legacyTest='ProcessorIdentificationIsReadOnlyAndResetClearsControls'; legacyFile='Copper68k.Tests/M68060InterpreterTests.cs'}
+)
+if ($Scope -eq 'ProcessorConfiguration') { $mutations = @($mutations | Where-Object { $_.pcr }) }
 if ($Scope -eq 'Move') { $mutations = @($mutations | Where-Object { -not $_.milestone }) }
 if ($Scope -eq 'Arithmetic') { $mutations = @($mutations | Where-Object { $_.milestone -eq 3 }) }
 if ($Scope -eq 'Logical') { $mutations = @($mutations | Where-Object { $_.milestone -eq 4 }) }
@@ -642,6 +657,7 @@ try {
             [IO.File]::WriteAllText($path, $text.Replace($before, $after), [Text.UTF8Encoding]::new($false))
             $model = $(if ($mutation.model) { $mutation.model } elseif ($mutation.name -eq '060-divide-frame') { '68060' } else { '68020' })
             $filter = "FullyQualifiedName~$($mutation.group)&DisplayName~$model"
+            if ($mutation.pcr) { $filter = "FullyQualifiedName~$($mutation.group)" }
             if ($mutation.repair) {
                 # Keep the original repair proof's two complete batches; the
                 # new retained-trace facts have their own four-route gate.
@@ -862,6 +878,19 @@ try {
                     @($batches | Where-Object { $_.model -eq '68040' -and $_.group -eq 'system-cache-encodings' -and $_.logicalCases -eq 16384 }).Count -ne 1 -or
                     ($legacyPresent -and @($batches | Where-Object { $_.model -eq '68040' -and $_.group -eq 'system-model' -and $_.logicalCases -eq 12800 }).Count -ne 1)) {
                     throw 'Cache mutation did not execute its complete selection'
+                }
+            }
+            if ($mutation.pcr) {
+                [xml]$pcrTrx = Get-Content -LiteralPath (Join-Path $directory 'mutation.trx') -Raw
+                $expectedTests = 1 + [int][bool]$legacyPresent
+                if ($pcrTrx.TestRun.ResultSummary.Counters.executed -ne $expectedTests -or
+                    $pcrTrx.TestRun.ResultSummary.Counters.failed -ne $expectedTests -or
+                    $pcrTrx.TestRun.ResultSummary.Counters.notExecuted -ne 0 -or $batches.Count -ne 1 -or
+                    $batches[0].model -cne '68060' -or $batches[0].group -cne $mutation.expectedGroup -or
+                    $batches[0].logicalCases -ne $mutation.expectedCases -or $batches[0].counts.unsupported -ne 0 -or
+                    $batches[0].counts.mismatching -le 0 -or
+                    @($batches[0].failures | Where-Object { $_.reason.StartsWith('PCR expected ', [StringComparison]::Ordinal) }).Count -eq 0) {
+                    throw 'PCR mutation did not execute and detect its complete declared matrix'
                 }
             }
             if ($legacyPresent) {

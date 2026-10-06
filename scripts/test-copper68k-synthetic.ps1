@@ -136,6 +136,10 @@ try {
             $expected['system-bus-control-state'] = 2064
             $expected['system-bus-control-interrupts'] = 4096
             $expected['system-movec-control-encodings'] = 536832
+            $expected['system-pcr-defined'] = 102400
+            $expected['system-pcr-identification'] = 172032
+            $expected['system-pcr-reserved-policy'] = 6144
+            $expected['system-pcr-reset'] = 24576
         }
         if ($model -eq '68010') {
             $expected['system-format8-entry'] = 1024

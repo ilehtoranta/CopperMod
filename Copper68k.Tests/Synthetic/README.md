@@ -948,3 +948,20 @@ the MOVEM phase classifications remain unchanged. Both discoveries fail their
 requested audit; neither software path's answer is promoted to hardware truth.
 The passing handoff qualification and current continuation policy remain
 separate from this raw-frame/CM lifetime research.
+
+68060 PCR fields use `SyntheticPcrTests` and the shared MOVEC register fixture.
+All defined EDEBUG/DFP/ESS combinations, read-only identification/revision probes,
+privilege, general registers, CCR preservation and actual reset/readback are
+covered. `system-pcr-reserved-policy` separately retains the old invalid-reserved
+write mask convention; it is not architectural maskset qualification. MC68060DE
+I14/I15's bit-5 workarounds and the pinned WinUAE bit-6 EDEBUG disagreement remain
+explicit. Physical debug output, superscalar timing and pending-FPU behavior
+are outside these register-field checks.
+
+`./scripts/test-copper68k-060-pcr.ps1` runs four matrices (305,152 cases) and checks
+source/binary/evidence identities, exact nonempty test selection, independently
+enumerated combination keys and weights. `-ValidateReportsOnly` requires the
+same output directory and identities. Three `-Scope ProcessorConfiguration`
+mutations prove the replacements detect the retired PCR identification/reset
+fact's defects. The qualification document records before/after proof, scope and
+remaining requirements; the whole roadmap remains incomplete.

@@ -2250,3 +2250,33 @@ invalid inputs. No software path is selected as hardware truth by majority or
 compatibility. Full CM lifetime, pending/foreign contexts and every broader
 reference/consolidation requirement remain required. Milestone 6 stays **in
 progress**; ordinary and complete-040 coverage requirements are unchanged.
+
+### Milestone 6 68060 PCR fields and demonstrated consolidation
+
+Four new ordinary matrices add 305,152 cases: 102,400 defined-field transfers,
+172,032 identification/revision writes, 6,144 explicitly nonarchitectural
+reserved-write policy cases, and 24,576 actual write/reset/read phases. The
+selected first-revision PCR and writable bit positions come from MC68060UM
+3.2.2.5 / figure 3-5. Registers, stacks, all canonical CCRs, privilege, exact PC,
+readback/sentinels, untouched controls and memory remain checked. Read-only
+bit probes and reserved-policy samples use CCR 0/31 as a separate group.
+
+The shared MOVEC fixture now preserves PCR during other control transfers. All
+four new tests and 46 retained tests pass without skips; retained shared-fixture
+coverage adds 1,236,864 passing cases in fifteen reporting batches. The new
+audit command checks identities, precise architectural keys/weights and exactly
+four executed tests. Eight negative report controls reject incomplete inputs.
+
+Three maintained PCR mutations fail both the original identification/reset fact
+and its complete replacements before retirement, and still fail afterward.
+Only that demonstrated duplicate is removed; its all-ones write remains in an
+explicit repository-policy batch. The original manual requires reserved bits
+zero; maskset errata give bit 5 a physical workaround role. This policy batch
+does not establish maskset behavior or debug/FPU/superscalar timing correctness.
+
+The pinned WinUAE bit-6 EDEBUG/software disagreement and ordinary STOP S-clear
+rule remain open. Ordinary coverage now requires 82,919,318 cases / 676 reports;
+complete-040 requirements and the 480-case untested inventory stay intact. No
+new broad-suite result, production CPU fix, consumer replay or package release
+is claimed. Full CM lifetime, advanced restoration, broader reference audits
+and remaining consolidation are still required; milestone 6 stays **in progress**.

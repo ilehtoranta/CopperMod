@@ -45,21 +45,9 @@ public sealed class M68060InterpreterTests
         }
     }
 
-    [Fact]
-    public void ProcessorIdentificationIsReadOnlyAndResetClearsControls()
-    {
-        var bus = new Copper68kTestBus(0x10000);
-        bus.WriteWords(0x1000, 0x4E7B, 0x0808, 0x4E7A, 0x1808);
-        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
-        cpu.Reset(0x1000, 0x7000);
-        cpu.State.D[0] = uint.MaxValue;
-        cpu.ExecuteInstruction(); cpu.ExecuteInstruction();
-        Assert.Equal(0x04300083u, cpu.State.D[1]);
-        cpu.Reset(0x1004, 0x7000);
-        cpu.ExecuteInstruction();
-        Assert.Equal(0x04300000u, cpu.State.D[1]);
-        Assert.Equal(0x2700, cpu.State.StatusRegister);
-    }
+    // PCR identification/reset regression consolidated into SyntheticPcrTests.
+    // Replacement cases and three before/after mutation proofs are recorded in
+    // docs/COPPER68K_REFERENCE_QUALIFICATION.md (68060 PCR qualification).
 
     [Theory]
     [InlineData(0x802)] // No CAAR, MSP, ISP or MMUSR.
