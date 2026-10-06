@@ -2608,3 +2608,15 @@ Basic failures, advanced restoration and all consolidation requirements remain
 open. No production CPU change, regression retirement or package release is
 included. See the [MOVE16 qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#canonical-move16-reference-qualification--2026-10-06).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The subsequent supervisor-A7 MOVE16 qualification closes all 76 previously
+missing form/register/SR combinations. Copied generator restrictions are fixed;
+independent active A-register assertions cover the native format's final SSP
+blind spot. The maintained gate now passes 24 executions, 87,712 callbacks and
+51,348 summed profile form keys, requiring all 384 form/register/SR combinations
+on each of 040/060 with zero gaps. Six corruption/integrity controls reject their
+intended errors. All nine existing presets and 28 shared controls pass again.
+No production CPU fix, regression retirement or package release is included.
+Original Basic failures and the full advanced restoration/consolidation scope
+remain required. See the [supervisor-A7 record](COPPER68K_REFERENCE_QUALIFICATION.md#supervisor-a7-move16-reference-completion--2026-10-06).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

@@ -7113,3 +7113,66 @@ release or old-test retirement. The original Basic MOVE16 failure and its full
 54 non-passing rows remain retained. The supervisor-A7 reference gaps, complete
 480-case advanced-040 inventory and all other retained milestone-6 requirements
 remain open; milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+### Supervisor-A7 MOVE16 reference completion — 2026-10-06
+
+The previous 76 missing form/register/SR combinations are now independently
+executed. The pinned generator excluded writes to its reserved supervisor-stack
+area and discarded instructions that changed supervisor A7. Two additional
+input-generator patch hunks permit selected MOVE16 stack-line accesses,
+including subsequent write-history validation, and retain MOVE16 A7 changes.
+No production CPU or original Basic/reference source is modified.
+
+The native output format restores USP into register slot A7 and cannot compare
+the completed active SSP. The adapter therefore independently derives all eight
+expected architectural address registers from documented MOVE16 fields and the
+initial active stack, then asserts them before converting output registers.
+Same-register post-post increments once; non-postincrement forms preserve their
+address registers. Fixed controls cover A7 aliasing, wraparound and low-bit
+preservation. A copied adapter deliberately flips active supervisor A7 before
+conversion; both models fail the new assertion at position seven. No reference
+expected result is changed or masked to obtain agreement.
+
+The maintained `Move16` command now requires **24 executions without skips**,
+**43,856 callbacks / 25,674 weighted form keys per model**: **87,712 callbacks /
+51,348 summed profile keys**. All five forms, all 64 post-post register pairs,
+all eight registers in the four absolute forms, CCR 0/31 and both user/supervisor
+modes execute. An independent inventory requires **all 384 form/register/SR
+combinations per model with zero missing combinations**; missing required
+reference coverage now fails the selected gate. Sixteen user-register low-bit
+rounds remain; the native supervisor A7 starts at its fixed aligned SSP. This
+closes the recorded form/register/SR gap, without claiming every supervisor
+low-bit pairing, trace/fault, cache or physical timing behavior is qualified.
+
+The final normalized copied source SHA256 is
+`04ecd41c994ccdcb06a6dc08607f54d2fa5b219e8b821be8760c2022aea990a4`;
+patch SHA256 `fe407db40dca22a0258a0a689133fa581588117d22ca631cb2c8e52a15932caa`.
+Input manifest SHA256 is
+`7797be5f1621a24e1e8e27cd655bfc44c27f78ad78c7360f6366ad34610f3eac`;
+native SHA256 `1877ea62f605efd2701f13653bfc862d84632e1009849507ee9b857958164eae`.
+Each ordinal weighted form distribution hashes to
+`560bf286786ac671980a481728c812f977cd08c376ced187da599fd1238487c3`.
+Generator/runner pins and the existing preparation/audit commands are unchanged.
+Native register, SR and actual destination-memory corruption are detected on
+both models. Five copied-input/weighted-map integrity controls and the active
+supervisor-stack corruption control reject their precise intended errors.
+
+Fresh evidence under the restoration temporary root is
+`inputs/Move16SupervisorSerialization`, `audits/Move16SupervisorQualifiedFinal`,
+`Move16SupervisorIntegrity/controls.json`,
+`Move16SupervisorStackControl/control.json` and
+`move16-supervisor-cohort-verification.json`. The initial stack-generator
+attempt failed because inactive write-history validation still rejected its
+stack region; its outputs remain excluded. The exploratory successful execution
+retained the old count/hash expectations and correctly failed the gate before
+final coverage identities were fixed. Neither failed run is reclassified green.
+All nine existing qualified presets pass again (105 executions / 116 directories /
+1,525,856 callbacks / 858,001 frames), together with 28 shared/synthetic controls.
+Normal CPU/test outputs remain unchanged. No consumer replay, package release
+or old-regression retirement is performed in this test-only slice.
+
+The original Basic corpus and its 54 non-passing rows remain unchanged; its
+noncanonical MOVE16 stop is preserved separately from this legal-input audit.
+The advanced 480-case 040 inventory, other-model restoration, software reference
+disagreements and all remaining consolidation requirements stay open.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

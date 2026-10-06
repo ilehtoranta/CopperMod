@@ -1191,15 +1191,18 @@ for reproducibility and caveats.
 
 Prepare pinned WinUAE inputs with `prepare-copper68k-winuae.ps1 -Preset Move16`,
 then run `test-copper68k-winuae-qualified-exceptions.ps1 -Preset Move16
--InputDirectory <inputs> -OutputDirectory <fresh-output>`. The maintained gate
-requires 22 executions without skips, 41,856 callbacks and 25,260 weighted form
-keys on each of 040/060, with exact source/input identities and distribution
-hashes. Native controls prove register, SR and destination-memory comparison.
-Fixed encoding, fingerprint and gap controls run without native fixtures.
+-InputDirectory <inputs> -OutputDirectory <fresh-output>`. The gate requires
+24 executions without skips, 43,856 callbacks / 25,674 weighted form keys per
+040/060 profile, exact source/input/distribution identities and all 384
+form/register/SR combinations per profile with zero gaps. Native controls prove
+register, SR and destination-memory comparison. Fixed encoding, fingerprint,
+active-A7 effects and gap controls run without native fixtures.
 
-Selected native cases pass, while `ReferenceGaps` explicitly retains 38 missing
-supervisor-A7 combinations per model / 76 total. Ordinary synthetic MOVE16
-semantics include both stack modes; missing independent evidence remains
-required. The original Basic failures stay visible and milestone 6 remains
-incomplete. See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#canonical-move16-reference-qualification--2026-10-06)
+Copied supervisor-stack generator restrictions are corrected. An independent
+architectural address-register assertion checks final active SSP before native
+output conversion; all 76 prior missing combinations now execute. Supervisor
+A7 starts at the fixed aligned native SSP; synthetic low-bit/stack coverage and
+fault/cache/trace requirements remain separate. Original Basic failures remain
+visible and milestone 6 remains incomplete. See the
+[supervisor-A7 qualification](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#supervisor-a7-move16-reference-completion--2026-10-06)
 for the exact selection, integrity controls and reproduction commands.

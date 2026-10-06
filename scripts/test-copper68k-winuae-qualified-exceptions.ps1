@@ -28,7 +28,7 @@ $filter = "FullyQualifiedName~$testName"
 $expectedTests = 1
 if ($Preset -eq 'Move16') {
     $filter += '|FullyQualifiedName~M68kWinUaeMove16EncodingTests'
-    $expectedTests = 22
+    $expectedTests = 24
 }
 if ($Preset -eq 'WordDivision') {
     $filter += '|FullyQualifiedName~M68kWinUaeWordDivisionEncodingTests'

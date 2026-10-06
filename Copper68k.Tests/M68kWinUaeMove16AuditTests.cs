@@ -8,13 +8,13 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
     [EnvironmentFact("COPPER68K_RUN_WINUAE_MOVE16_AUDIT", "audit canonical WinUAE MOVE16 encodings and line transfers")]
     public void WinUaeMove16AcrossSupportedModelsWhenEnabled() => RunQualifiedExceptionPreset(new(
         "Move16", "MOVE16", "cputest-move16.cpp", "move16-encodings.patch", "Move16",
-        "b201915e70fa2c7cc7c87cbfef588eb910bf3e655ea02bbff0955e42bc4e2e55", "c23761b715a1eb8abc01f4293710ffda73bb48f9a4867f1d0087c462eaa7ed12",
+        "04ecd41c994ccdcb06a6dc08607f54d2fa5b219e8b821be8760c2022aea990a4", "fe407db40dca22a0258a0a689133fa581588117d22ca631cb2c8e52a15932caa",
         "winuae-move16-audit.json", ["68040", "68060"], ["68040", "68060"],
-        _ => ["MOVE16"], (_, _) => (41856, 0),
-        "M68000PRM 4-125..127: five canonical forms, aligned 16-byte line copy, low address bits retained in postincrements, same register increments once, CCR unchanged. Copied input generator fixes extension bits before EA construction, serializes explicit valid An addresses, and enumerates every Ay in sixteen low-nibble rounds. Original Basic inputs/failures remain unchanged. CCR 0/31; all 64 post-post register pairs in user mode and 49 non-A7 pairs in supervisor mode are independently executed. Thirty supervisor A7 post-post pair/CCR and eight absolute-form A7/CCR combinations per model are absent from this reference selection and remain required reference follow-up; their ordinary synthetic semantics are retained. Four absolute forms include user/supervisor. No incoming trace/faults, cache allocation, physical burst/bus order or timing qualification. Unavailable models retain synthetic Line-F coverage.",
-        FormCounts: (_, _) => 25260, ClassifyRegisters: QualifyMove16Encoding,
-        ExpectedFormHash: (_, _) => "143e6c025a7451664853b10bfe94651dae28860263dad370a98ad6a33c77d236",
-        AllowFrameFreeFamilies: true, MemoryControls: true, ReferenceGaps: Move16ReferenceGaps));
+        _ => ["MOVE16"], (_, _) => (43856, 0),
+        "M68000PRM 4-125..127: five canonical forms, aligned 16-byte line copy, low address bits retained in postincrements, same register increments once, CCR unchanged. Copied input generator fixes extension bits before EA construction, serializes explicit valid An addresses, and enumerates every Ay in sixteen low-nibble rounds. Original Basic inputs/failures remain unchanged. CCR 0/31; all 64 post-post register pairs and all eight registers in four absolute forms execute in user/supervisor mode. Copied generator allows selected MOVE16 reads/writes of its supervisor-stack fixture and retains instructions that modify supervisor A7. All 384 form/register/SR combinations are mandatory per model. The native format hides final active SSP, so an independent architectural A-register check precedes output conversion. Supervisor A7 starts aligned at the fixed native SSP; all sixteen user A7 low bits remain covered. No incoming trace/faults, cache allocation, physical burst/bus order or timing qualification. Unavailable models retain synthetic Line-F coverage.",
+        FormCounts: (_, _) => 25674, ClassifyRegisters: QualifyMove16Encoding,
+        ExpectedFormHash: (_, _) => "560bf286786ac671980a481728c812f977cd08c376ced187da599fd1238487c3",
+        AllowFrameFreeFamilies: true, MemoryControls: true, ReferenceGaps: Move16ReferenceGaps, RequireCompleteReferenceCoverage: true));
 
     internal static IReadOnlyList<string> Move16ReferenceGaps(IReadOnlyDictionary<string, int> forms)
     {
@@ -36,6 +36,20 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
             if (!seen.Contains(key)) missing.Add("MOVE16/" + key);
         }
         return missing;
+    }
+
+    internal static uint[] Move16ExpectedAddressRegisters(ushort opcode, ushort extension, IReadOnlyList<uint> input)
+    {
+        var result = input.Skip(8).ToArray();
+        var form = (opcode >> 3) & 7;
+        var primary = opcode & 7;
+        if (form is 0 or 1 or 4) result[primary] = unchecked(result[primary] + 16);
+        if (form == 4)
+        {
+            var secondary = (extension >> 12) & 7;
+            if (secondary != primary) result[secondary] = unchecked(result[secondary] + 16);
+        }
+        return result;
     }
 
     // Decode only documented immutable fields and input registers; never call
@@ -72,6 +86,31 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 public sealed class M68kWinUaeMove16EncodingTests
 {
     private static uint[] Registers() => Enumerable.Range(0, 16).Select(x => 0x1000u + (uint)(x * 0x101)).ToArray();
+
+    [Fact]
+    public void SupervisorA7PostincrementPreservesLowBitsAndIncrementsOnceForAlias()
+    {
+        var input = Registers();
+        input[15] = 0xfffffff7;
+        var expected = input.Skip(8).ToArray();
+        expected[7] = 7;
+        Assert.Equal(expected, M68kWinUaeCpuTesterConformanceTests.Move16ExpectedAddressRegisters(0xf627, 0xf000, input));
+        expected[0] += 16;
+        Assert.Equal(expected, M68kWinUaeCpuTesterConformanceTests.Move16ExpectedAddressRegisters(0xf620, 0xf000, input));
+    }
+
+    [Fact]
+    public void AbsoluteFormsIncrementOnlyTheirDocumentedRegister()
+    {
+        var input = Registers();
+        var preserved = input.Skip(8).ToArray();
+        Assert.Equal(preserved, M68kWinUaeCpuTesterConformanceTests.Move16ExpectedAddressRegisters(0xf617, 0, input));
+        Assert.Equal(preserved, M68kWinUaeCpuTesterConformanceTests.Move16ExpectedAddressRegisters(0xf61f, 0, input));
+        var changed = (uint[])preserved.Clone();
+        changed[7] += 16;
+        Assert.Equal(changed, M68kWinUaeCpuTesterConformanceTests.Move16ExpectedAddressRegisters(0xf607, 0, input));
+        Assert.Equal(changed, M68kWinUaeCpuTesterConformanceTests.Move16ExpectedAddressRegisters(0xf60f, 0, input));
+    }
 
     [Theory]
     [InlineData("68040", 0xf600, 0, 0x221f, 0, "MOVE16/form=post-abs/A=0:abs/sameRegister=False/offset=8:15/sameLine=False/sr=0000")]

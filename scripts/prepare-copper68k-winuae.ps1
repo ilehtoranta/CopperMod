@@ -116,7 +116,7 @@ try {
             $patch = [IO.File]::ReadAllText((Join-Path $PSScriptRoot ('winuae/' + $patchName))).Replace("`r`n", "`n")
             $source = [IO.File]::ReadAllText((Join-Path $generator 'cputest.cpp')).Replace("`r`n", "`n")
             $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
-            $requiredInputHunks = if ($Preset -eq 'Move16') { 3 } else { 1 }
+            $requiredInputHunks = if ($Preset -eq 'Move16') { 5 } else { 1 }
             if ($hunks.Count -ne $requiredInputHunks) { throw "Incorrect $Preset input patch hunk count" }
             foreach ($hunk in $hunks) {
                 $lines = $hunk.TrimEnd("`n").Split("`n")

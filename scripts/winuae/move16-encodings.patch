@@ -34,3 +34,17 @@
 +					}
  
  					if (isconstant_src < 0 || isconstant_dst < 0) {
+@@
+ 	if (addr >= super_stack_memory - RESERVED_SUPERSTACK && addr + size < super_stack_memory) {
++		// MOVE16 explicitly tests supervisor A7 line reads and writes.
++		// The selected reference has no trace/exception stack traffic.
++		if ((testing_active_opcode & 0xffc0) == 0xf600) {
++			test_memory_accessed = 1;
++			return 1;
++		}
+ 		// allow only instructions that have to access super stack, for example RTE
+@@
+ 		// Supervisor mode and A7 was modified and not RTE+stack mode: skip this test round.
+-		if (s && regs.regs[15] != a7 && (dp->mnemo != i_RTE || feature_usp < 3)) {
++		if (s && regs.regs[15] != a7 && dp->mnemo != i_MOVE16 && (dp->mnemo != i_RTE || feature_usp < 3)) {
+ 			// but not if RTE

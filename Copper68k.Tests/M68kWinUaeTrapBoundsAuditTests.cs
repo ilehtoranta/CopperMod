@@ -121,11 +121,11 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
                 if (preset.ExpectedFormHash is not null)
                     formDistributionMatches &= formDistributionSha256 == preset.ExpectedFormHash(model, family);
                 var expectedMasked = preset.MaskedCounts?.Invoke(model, family) ?? (family.StartsWith("CHK2.", StringComparison.Ordinal) ? (uint)expected.Cases : 0);
+                var referenceGaps = preset.ReferenceGaps?.Invoke(forms) ?? [];
                 var passing = detected && result.Passed && result.ExecutedCases == expected.Cases &&
                     tester.FrameChecks == expected.Frames && tester.MaskedCases == expectedMasked &&
-                    forms.Count == expectedForms && formDistributionMatches && ((preset.ClassifyForm is null && preset.ClassifyWords is null && preset.ClassifyRegisters is null) || forms.Values.Sum() == result.ExecutedCases);
+                    forms.Count == expectedForms && formDistributionMatches && (!preset.RequireCompleteReferenceCoverage || referenceGaps.Count == 0) && ((preset.ClassifyForm is null && preset.ClassifyWords is null && preset.ClassifyRegisters is null) || forms.Values.Sum() == result.ExecutedCases);
                 var detail = $"{result.Detail} Expected/actual callbacks={expected.Cases}/{result.ExecutedCases}, frames={expected.Frames}/{tester.FrameChecks}, masked={expectedMasked}/{tester.MaskedCases}, forms={expectedForms}/{forms.Count}, formDistributionMatches={formDistributionMatches}.";
-                var referenceGaps = preset.ReferenceGaps?.Invoke(forms) ?? [];
                 rows.Add(new(model.Id, family, passing ? "passing" : tester.UnsupportedExecution ? "unsupported" : result.ExecutedCases == 0 ? "untested" : "mismatching",
                     result.ExecutedCases, tester.FrameChecks, tester.MaskedCases, detected, forms, detail, formDistributionSha256, referenceGaps));
                 _output.WriteLine($"{model.Id}/{family}: {result.ExecutedCases} callbacks, {tester.FrameChecks} frames; controls={detected}.");
@@ -179,7 +179,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
         Func<ModelSpec, ushort, ushort, ushort, ushort, IReadOnlyList<uint>, string, string>? ClassifyRegisters = null,
         Func<ModelSpec, string, bool>? CompareAliasControls = null, bool MemoryControls = false,
         Func<ModelSpec, string, string>? ExpectedFormHash = null,
-        Func<IReadOnlyDictionary<string, int>, IReadOnlyList<string>>? ReferenceGaps = null);
+        Func<IReadOnlyDictionary<string, int>, IReadOnlyList<string>>? ReferenceGaps = null,
+        bool RequireCompleteReferenceCoverage = false);
     private sealed record QualifiedInputIdentity(string SourceName, string PatchName, string SourceHash, string PatchHash);
     private sealed record WinUaeQualifiedExceptionRow(string Model, string Family, string Status, int ExecutedCases,
         uint ExceptionFrames, uint MaskedSrCases, bool Controls, SortedDictionary<string, int> Forms, string Detail,

@@ -552,6 +552,17 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 				}
 
 				ApplyRegisters(cpu, registers, _cpuLevel);
+				// Native corpus serialization restores USP into slot A7 and
+				// cannot independently compare the completed active SSP value.
+				// Keep an architectural assertion before copying output registers.
+				uint[]? move16ExpectedAddresses = null;
+				if (_integerFamily == "MOVE16" && _fixtureRegisterClassifier is not null)
+				{
+					var input = (uint[])registers.Regs.Clone();
+					input[15] = cpu.State.A[7];
+					move16ExpectedAddresses = Move16ExpectedAddressRegisters(bus.ReadHostWord(registers.Pc),
+						bus.ReadHostWord(registers.Pc + 2), input);
+				}
 				uint? corruptAliasValue = null;
 				var corruptAliasRegister = 0;
 				var corruptAliasWidth = 0;
@@ -648,6 +659,8 @@ public sealed partial class M68kWinUaeCpuTesterConformanceTests
 					RestoreUnobservableFpuRead(cpu.State, bus, registers);
 				}
 
+				if (move16ExpectedAddresses is not null)
+					Assert.Equal(move16ExpectedAddresses, cpu.State.A);
 				CopyRegisters(cpu.State, bus, _cpuLevel, ref registers);
 				if (corruptAliasValue.HasValue && cpu.State.LastExceptionVector < 0 && (registers.Sr & 4) == 0)
 					registers.Regs[corruptAliasRegister] = corruptAliasWidth == 2
