@@ -5032,3 +5032,92 @@ inventory rejection. Current source, fixture and assembly identities still
 match after all checks. No production CPU fix, consumer rerun, package release
 or old-test retirement is needed for this test-only addition. Milestone 6
 remains **in progress**.
+
+### 040 executed pending software trace service — 2026-10-06
+
+The four `SoftwareTraceService` reports extend the real validation-fault and
+three-store repair fixture with executed integer CU/CP trace-service programs.
+Expectations compose MC68040UM 8.2.6, 8.3 and 8.4.6.2/7: the pending condition
+has priority, and software must inspect the saved trace condition and adjust
+the frame before directly calling the trace handler. These are software-handler
+protocol tests with supplied instruction-completion metadata, not an FPU
+arithmetic emulator or observed hardware fault.
+
+CU cases supply linear or taken-flow completion, adjusting saved PC to target+2
+or target+4. CP cases supply a completed two-word FMOVE starting at target−4,
+with its next PC already saved. T1 requests trace service; T0 requests it only
+for taken-flow CU, since post-instruction CP is FMOVE-to-memory. Live handler
+trace bits are clear, so the executed BTSTs must inspect the stacked SR byte.
+The handler converts the format/vector word to $2024, supplies the original
+instruction address, reads vector 9 through VBR, pushes the target and uses RTS
+for a direct software call. This temporary call target is not an exception
+frame. Every step preserves all registers and checks all three stack banks.
+
+The trace handler writes one marker, optionally clears stacked trace bits and
+executes RTE. The software path does not change the hardware exception counter,
+vector or saved-provenance registers. A following self-BRA checks hardware
+tracing from the returned SR separately. Canonical cases cross all 32 CCRs,
+incoming/restored 0/T1/T0, all four restored banks and CU/CP49–55. Structural
+cases use CCR 0/31, incoming T1, every validation-read byte, all twelve supervisor
+paths, both alignments/VBRs and all restored traces/vectors/service policies.
+
+| Group, each scalar/batch | Phases | Combinations |
+| --- | ---: | ---: |
+| Canonical service programs | 514,560 | 1,296 |
+| Chained service programs | 3,601,920 | 145,152 |
+
+The maintained `RteSoftwareTrace` scope requires intended saved-SR-bit-test,
+short-format-2-return and original-vector diagnostics in all four reports.
+Golden fixed program words audit instruction encodings separately. The complete
+040 selection requires 65 tests, 58 reports, seven fixed examples and fourteen
+fixture/command identities. User-tail trace bridges, mixed-epoch provenance,
+internal restoration and the other retained model/reference/consolidation gaps
+remain required. The 480-case inventory is retained and still prevents milestone
+completion. No production CPU fix, public API change, package release or old-test
+retirement is included at this implementation stage.
+
+All three maintained mutations in `artifacts/m6-software-trace-mutations/` are
+detected with the intended diagnostic in all four complete reports. Counts below
+are per route, canonical/chained respectively; unsupported execution is zero:
+
+| Mutation | Mismatching | Dependent phases untested | Required diagnostic |
+| --- | ---: | ---: | --- |
+| Invert the saved-SR BTST result | 41,472 / 290,304 | 215,040 / 1,505,280 | CU-linear test-T1 SR mismatch |
+| Pop only eight bytes for format 2 | 19,968 / 139,776 | 19,968 / 139,776 | CU-linear return has wrong inactive stack pointer |
+| Replace original CP vector with 49 | 27,648 / 193,536 | 161,280 / 1,128,960 | CP50 retry delivers 49 |
+
+The script restores exact production bytes and rebuilds successfully with zero
+warnings/errors. Every production source hash matches the preceding CP-vector
+manifest. Deliberate mutation failures and dependent untested phases are proof
+evidence, not production gaps. The restored acceptance build starts from
+`635ecde475695a1744cde826c8ad5bc20c2ea497` plus the recorded fixture changes:
+CPU SHA-256 is
+`60748e5e34c12f541b1dcaa16928459c58211b041f33bffe029e38ed15d39139`;
+test/adapter SHA-256 is
+`5d4a79638b0b266e82234c305dbeef28c449b8a3c0bd256ac06542ed224d5384`.
+The complete 040 run in `artifacts/m6-software-trace-audit/` executes all
+**65 tests: 64 pass, one required inventory failure, zero skips**. All 58 reports,
+seven fixed examples and fourteen input identities are present. Independent
+combination enumeration verifies **23,937,728 passing phases**, zero mismatches
+or unsupported execution and exactly **480 untested requirements** (23,938,208
+total). The command rejects precisely that inventory after all selection and
+identity checks; it is not a passing completion gate. All current source,
+fixture and binary hashes match the acceptance manifest.
+
+The fresh full Release selection in `artifacts/m6-software-trace-full/` passes
+**5,090 tests**, with eleven optional skips and zero failures. All nine qualified
+WinUAE presets match their exact directory/callback/frame selections and the
+CPU/adapter identities above. Strict reporting verifies **38,906,390 logical
+cases in 648 batches** across all eight profiles. Fresh pinned SingleStepTests
+passes **312,500 cases in 125 files**; Musashi passes **536 programs with 88
+explicit exclusions**. Each requested adapter executes one passing test with
+zero skips. All current acceptance source/input/binary identities match after
+those references. All **17 fresh controls** in
+`artifacts/m6-software-trace-controls/` reject their specific missing, shortened,
+foreign, redistributed or omitted-fixture corruption. All four software-trace
+reports and the new fixture identity are covered; each control requires its
+intended diagnostic rather than accepting the generic inventory rejection.
+Current source, fixture and assembly identities still match after all checks.
+This qualifies the test-only software-trace checkpoint; no production CPU fix,
+consumer rerun, package release or old-test retirement is included. Milestone 6
+remains **in progress** with the full remaining scope retained.

@@ -1890,3 +1890,52 @@ diagnostics in all four reports. Seventeen fresh report/fixture controls reject
 their specific corruptions. Restored production source bytes and current
 acceptance identities match; this is a test-only checkpoint. Milestone 6 remains
 **in progress**, with the full required scope retained above.
+
+### Milestone 6 pending software trace-service programs — 2026-10-06
+
+Four `SoftwareTraceService` reports add executed CU/CP integer trace-service
+programs after validation fault, repair and pending-frame conversion. All four
+restored banks, CU linear/taken-flow completion metadata and original CP49–55
+vectors are explicit. The handler checks the stacked T1/T0 condition, advances
+the CU PC when required, sets trace format/address and directly calls vector 9
+through a real table read and stack/RTS sequence. The trace handler writes one
+marker, preserves or clears saved trace and returns using RTE. A software call
+must not masquerade as a hardware exception entry.
+
+Canonical cases cover all CCRs and incoming/restored traces. Structural cases
+use CCR 0/31 and incoming T1, retaining every validation-read byte, all twelve
+supervisor paths, both alignments/VBRs and all restored traces/vectors/service
+policies. Separate grouping avoids repeating the canonical incoming-trace
+cross product at every structural read. The expected counts are 514,560 /
+3,601,920 phases and 1,296 / 145,152 combinations per scalar/batch route.
+
+Golden instruction words audit the program fixture separately. Maintained
+mutation probes target the saved-SR bit test, format-2 return size and original
+pending vector, requiring intended diagnostics in each of the four reports.
+The complete 040 command now requires 65 tests, 58 reports, seven fixed examples
+and fourteen input identities, including the new test-internal program helper.
+The 480-case remaining-protocol inventory is retained unchanged in cardinality.
+
+CU/CP completion metadata is synthetic input; actual FPU emulation/arithmetic
+and hardware observations are not claimed. User-tail trace bridges, mixed-epoch
+provenance, internal restoration, data/writeback/context transfer, other models'
+restoration and broader independent qualification/consolidation remain required.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The three maintained software-trace mutations are detected in each complete
+scalar/batch canonical/chained report with their intended semantic diagnostic.
+Production bytes are restored exactly and the clean implementation rebuilds
+without warnings/errors. Fresh complete 040 acceptance executes 65 tests (64
+passing, one required inventory failure), checks 58 reports/seven fixed examples
+and all fourteen fixture/command identities. It verifies 23,937,728 passing phases,
+zero mismatches/unsupported execution and exactly 480 untested requirements.
+Full Release CPU acceptance passes 5,090 tests with eleven optional skips and
+zero failures. All nine qualified WinUAE selections and identities match; strict
+reporting checks 38,906,390 cases in 648 batches. Fresh requested SingleStepTests
+and Musashi adapters execute without skips, passing 312,500 cases / 125 files
+and 536 programs / 88 explicit exclusions respectively. All seventeen fresh
+report/fixture integrity controls reject their specific corruptions. Current
+production source, fixture and assembly identities still match. This test-only
+checkpoint is qualified; milestone 6 remains **in progress** with its required
+scope retained. See the qualification record for the acceptance build identity
+and remaining scope.

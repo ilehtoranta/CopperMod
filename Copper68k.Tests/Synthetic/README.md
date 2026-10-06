@@ -674,3 +674,38 @@ user-tail trace bridges, mixed-epoch provenance and the earlier context/internal
 data/writeback/reference gaps remain required.
 
 See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md) for identities, proofs and remaining scope.
+
+### Executed pending-exception software trace service
+
+`SoftwareTraceService` adds separate scalar/batch canonical and chained reports.
+After the real validation fault and three-store repair, a CU/CP handler executes
+BTST/BNE on the saved SR. Synthetic CU metadata selects linear or taken-flow PC
+completion; post-instruction CP metadata selects a completed two-word FMOVE.
+T1 always requests service, while T0 requests service only for CU taken flow.
+The handler adjusts the PC when required, converts format 3 to format 2, supplies
+the original instruction address and reads vector 9 from the relocated table.
+It pushes that software call target and executes RTS, preserving all registers
+and leaving the trace frame on the selected exception stack.
+
+The trace handler writes one marker, optionally clears stacked trace bits and
+executes RTE. Every instruction checks state, guarded memory and all stack banks;
+software calls preserve the hardware exception counter and provenance. The
+following BRA independently checks resumed hardware tracing. Canonical cases
+cross all CCRs, incoming/restored traces, four restored banks and CU/CP49–55.
+Structural cases cover every validation-read byte, all twelve supervisor paths,
+both alignments/VBRs and CCR 0/31, with incoming T1 and all restored traces.
+
+The nominal CU/CP instruction completion metadata is an input to this integer
+handler protocol. Actual FPU emulation/arithmetic and hardware fault observations
+remain outside the qualified scope. User-tail and mixed-epoch trace bridges,
+internal restoration and all other retained restoration/reference gaps remain
+required. Fixed golden program words audit the fixture encodings separately.
+
+```powershell
+./scripts/test-copper68k-synthetic-mutations.ps1 -Scope RteSoftwareTrace -OutputDirectory artifacts/rte-software-trace-mutations
+```
+
+The four reports require 514,560 canonical / 3,601,920 chained phases per route,
+8,232,960 total. The complete 040 audit requires 65 tests, 58 reporting batches,
+seven fixed examples and fourteen input identities. The retained 480-case
+inventory continues to fail completion; milestone 6 remains in progress.
