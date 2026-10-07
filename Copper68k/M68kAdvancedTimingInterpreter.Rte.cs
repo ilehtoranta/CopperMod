@@ -8,6 +8,7 @@ internal partial class M68kAdvancedTimingInterpreter
 
     private ushort ReadRteFrameWord(uint address)
     {
+        if (Has020AccessFrames) return (ushort)ReadRteState020(address, 2);
         try { return ReadWord(address); }
         catch (M68040MmuFaultException ex) when (IsM68040PhysicalRteValidationFault(ex.Fault))
         {
@@ -17,6 +18,7 @@ internal partial class M68kAdvancedTimingInterpreter
 
     private uint ReadRteFrameLong(uint address)
     {
+        if (Has020AccessFrames) return ReadRteState020(address, 4);
         try { return ReadLong(address); }
         catch (M68040MmuFaultException ex) when (IsM68040PhysicalRteValidationFault(ex.Fault))
         {

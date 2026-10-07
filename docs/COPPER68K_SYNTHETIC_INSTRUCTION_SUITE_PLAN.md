@@ -1922,6 +1922,8 @@ provenance, internal restoration, data/writeback/context transfer, other models'
 restoration and broader independent qualification/consolidation remain required.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
 
+
+
 On 2026-10-07 the executed 040 MOVEM read-recovery gate passes 229,968 complete
 fault/RTE/resumption/sentinel programs across scalar and batch execution. It
 covers every legal memory-source encoding, all legal full-format structures in
@@ -2755,3 +2757,52 @@ A/B data continuation, foreign images, format-9
 transport and wider restoration/consolidation remain required. See the
 [prefetch correction](COPPER68K_REFERENCE_QUALIFICATION.md#020030-instruction-prefetch-recovery-correction--2026-10-07).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The subsequent RTE validation/load-fault slice passes 36,096 selected complete
+programs across EC020/A1200/020/030. It preserves completed validation reads,
+resumes only through explicit handler RTE, supports DF-cleared software input,
+and halts on state-load or exception-entry failures. The maintained command
+checks all 104 reports against their actual 22 executions and independently
+enumerated cases. Mutation proofs, the archived failing baseline, independent
+audits and clean private-package .71 consumer/native floppy checks pass. That
+snapshot's unfinished full run was cancelled when the subsequent wrapping
+correction was identified; final corrected-source results are recorded below.
+Broader data continuation, foreign images, format-9 transport
+and consolidation remain required. See the
+[RTE fault correction](COPPER68K_REFERENCE_QUALIFICATION.md#020030-rte-validation-and-state-load-faults--2026-10-07).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The next address-transport qualification catches and fixes an EC020 wrapper
+map-query bug at the 24-bit wrap. The maintained gate passes 32,256 normal-frame
+RTE programs at seven low/high/boundary stack addresses, including real
+validation-fault handlers and high VBR, with independently verified coverage
+and four integrity controls. The original 36,096-case RTE gate also passes
+against the corrected source. The isolated baseline retains 1,024 intended
+wrap failures; 25 affected mapping/cache tests pass with the correction. The
+older unfinished full run is preserved as cancelled evidence. Private .72 clean
+consumer/native floppy qualification passes; fresh final full CPU validation
+passes 5,291 tests with zero failures and 33 optional/discovery skips (5,324
+total). The maintained inventory and separate actual-TRX audit verify all 707
+ordinary reports, 86,098,722 deterministic scenarios and complete combination
+weights. Wider private
+load/entry fault transport, foreign images, data continuation and consolidation
+remain required. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Isolated development now passes 43,008 selected ordinary MOVE read-entry
+cases and, in a subsequent snapshot, 43,008 explicit RTE-rerun programs;
+each also passes 18,432 fault-free controls. Saved addresses, extension PC and
+pipe words allow the selected register-destination suffix to finish without
+instruction replay. These prototypes remain unimported and unpromoted pending
+software-input/refault, handler-modification, alias/A7/index, mutation and
+retained-control qualification. Broader instruction/operand continuations and
+consolidation remain required. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
+
+The subsequent frozen prototype passes 129,024 software-input, persistent
+refault and handler-modification recovery programs. Three source mutations
+detect 43,008, 50,176 and 21,504 intended mismatches, preserving the unaffected
+passing cohorts. All 68,352 retained RTE programs and 25 mapping/cache/optional
+controls pass. This remains unimported and unpromoted pending operation-origin
+discrimination, saved-pipe, A7/alias/index, trace/interrupt, return-SR/stack,
+high-address and integrity qualification. Broader continuation and consolidation
+remain required. Milestone 6 remains **in progress**, `roadmapComplete=false`.

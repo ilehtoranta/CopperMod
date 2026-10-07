@@ -37,19 +37,21 @@ internal partial class M68kAdvancedTimingInterpreter
         CompleteTiming(M68kInstructionTimingKey.IllegalInstruction);
     }
 
-    private bool TryRestoreM68020AccessFrame(uint frame, ushort format, ushort sr, uint pc)
+    private bool TryRestoreM68020AccessFrame(uint frame, ushort format, ushort sr, uint pc, bool validated = false)
     {
         if (!Has020AccessFrames || format is not (10 or 11)) return false;
         var size = format == 10 ? 32u : 92u;
         // Check the far end and long-frame version before loading state.
-        if (format == 11 && (ReadRteFrameWord(frame + 0x36) >> 12) != 0)
+        if (!validated && format == 11 && (ReadRteFrameWord(frame + 0x36) >> 12) != 0)
         {
             RaiseFormat0Exception(14, State.LastInstructionProgramCounter, M68kInstructionTimingKey.FormatError);
             return true;
         }
-        _ = ReadRteFrameWord(unchecked(frame + size - 2));
+        if (!validated) _ = ReadRteFrameWord(unchecked(frame + size - 2));
         var context = ReadRteFrameWord(frame + 8);
         var ssw = ReadRteFrameWord(frame + 10);
+        if (format == 11 && context == RteValidationContext020)
+            return RestoreRteValidation020(frame, sr, pc, ssw);
         // Data faults and foreign opaque images remain implementation gaps.
         // Never silently consume them as ordinary frame-size pops.
         if (format != 11 || context != InstructionPrefetchContext020 || (ssw & 0xcf00) != 0)

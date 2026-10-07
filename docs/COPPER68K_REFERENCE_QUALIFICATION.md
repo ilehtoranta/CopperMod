@@ -7841,3 +7841,269 @@ Broader A/B data recovery, foreign
 images, format-9 transport, nested fault/load-failure qualification and remaining
 reference/consolidation work stay required. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. No regression is retired or public package published.
+
+## 020/030 RTE validation and state-load faults — 2026-10-07
+
+The next correction distinguishes a rejected frame-validation read from a
+rejected internal-state load on EC020, A1200, 020 and 030. The architectural
+expectations come from [MC68020UM](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf)
+6.1.12 and [MC68030UM](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+8.1.13. A validation fault creates a format-B bus-error frame below the intact
+original frame. A failure once state loading starts halts without writing a
+second exception image. An inaccessible write or vector read during validation
+exception entry also halts after the already-completed prefix.
+
+The interpreter serializes its pending validation phase and previously read
+values in a private opaque format-B continuation. An explicit handler RTE
+resumes the rejected phase, retaining completed reads. Clearing DF selects the
+right-justified software input buffer; leaving DF set retries only the pending
+read. Repeated rejection delivers a fresh bus-error image after deallocating
+the old one. An incompatible software-supplied version produces format error
+before further state loading. No implicit replay or frame-address side table is
+used, and no public API changes are introduced.
+
+`SyntheticM68020RteFaultTests` passes **36,096 complete programs / 104 reports /
+22 executions**, zero mismatches, unsupported forms or skips in this selected
+matrix. Tests cover scalar/batch dispatch, each selected validation/load request
+and byte lane, all CCRs, four stack states, T0/T1 returns, software-supplied
+header/version reads, preservation of an already-read SR after handler writes,
+explicit repeated faults, exception-entry failures, and normal/throwaway-chain
+headers. All registers, PC, status, stacks and surrounding memory are checked
+at instruction boundaries. Opaque bytes are checked for preservation, never
+presented as independently known silicon state.
+
+```powershell
+./scripts/test-copper68k-020-rte-faults.ps1 -OutputDirectory artifacts/020-rte-faults
+```
+
+The command requires fresh output and rejects missing fixtures, empty/partial
+execution and changed source/binary/report identities. `-ValidateReportsOnly`
+checks the exact 22-test roster, all 104 actual TRX summaries and independently
+enumerated case identifiers and weights. Evidence: `audits/Rte020FaultAcceptanceV3`,
+source/evidence manifest SHA-256
+`8a5f585c884dff3783add8f1c3a65d8e87e2c0a5b1b3d04ccfaa52bf46906ad1`.
+Earlier verifier attempts are retained as failed provisional evidence, not
+relabeled accepted runs. Four copied-evidence integrity controls reject missing
+reports, changed weights, empty execution and changed source identity under
+`Rte020FaultIntegrity`.
+
+The pinned pre-fix archive at `4837ce900acaea77467e310c50e4e725abdc6a56`
+fails all **64 original witnesses / 16 reports / four executions** at the
+intended missing-read-rejection check. The baseline's source, binaries, exact
+case roster, diagnostics and actual TRX summaries are independently recorded
+under `audits/Rte020BaselineReplay`. The current strict prefetch gate still
+passes 8,960 programs and frame-entry qualification passes 6,144 cases plus
+512 controls (`audits/Rte020Prefetch`, `audits/Rte020Entry`). Fresh pinned
+SingleStepTests and Musashi audits also pass (`audits/Rte020Independent`).
+
+Three isolated production mutations detect replayed validation phases (448
+mismatches), discarded software input (320 mismatches, 128 unaffected passing
+cases), and ignored state-load rejection (32 mismatches). The proof checks
+source snapshots, binaries, exact passing/failing execution rosters, case
+identities/weights, diagnostic phases and actual TRX summaries. Evidence:
+`mutations/Rte020FaultsVerified`, verification SHA-256
+`dec7b05946c9206042c3b605abe13447a52167ae30a31578ec714e06aa76df41`.
+Earlier failed proof-verifier attempts remain provisional evidence.
+
+A clean CopperScreen archive at `aa1dad5dcc0fb7c970e8e3443a160487add846af`
+builds with zero warnings/errors through isolated private package
+`1.5.2-synthetic-dev.71`. Host 171, disk 74 and separate engine 1,080 tests pass,
+with six unavailable optional host replays. Two explicit native Workbench 3.1
+floppy boots pass; the app and test CPU assemblies match the exact package DLL.
+No HD replay or public release is claimed. Evidence: `consumer-71-final`;
+immutable package SHA-256
+`ca953178b2a5b29f3a5fbf933db368765079723ce4fe63bc530f45a7f1aa99a8`.
+
+The initial snapshot's unfinished full run was cancelled when the subsequent
+wrapping correction was identified. Final corrected-source full-suite and
+actual-TRX qualification is recorded below; earlier full-suite evidence is not
+substituted. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The host's internal physical-address map rejects logical requests before the
+ordinary bus access. This is not a physical port-width/BERR-cycle oracle.
+Physical pipeline timing and halted internal register images are not qualified
+here. High-address/wrapping validation-fault transport, migrated/foreign private
+images, general A/B operand fault generation and data continuation, format-9
+coprocessor context transport, wider nested-fault protocols and remaining
+reference/consolidation work stay required. Existing timing policy is retained;
+no regression is retired or public package published.
+
+### High and wrapped RTE validation transport
+
+A subsequent isolated discovery checks seven low/high/24-bit/32-bit boundary
+stack addresses, ISP/MSP, all CCRs, scalar/batch dispatch, each normal-frame
+header read and byte lane, and a high VBR. Fault-free frames and a real handler
+RTE followed by MOVEQ are verified against independent register/status/stack/PC
+and surrounding-memory expectations. On EC020/A1200, 1,024 selected cases
+initially failed because the wrapper masked only the start of a map query and
+missed a denied physical byte after the 24-bit wrap. The baseline passes the
+other 31,232 programs, including all selected 020/030 cases. Evidence:
+`audits/Rte020AddressDiscovery`; exact failures and source/TRX/report identities
+are independently verified.
+
+The correction queries each physical span at the existing wrap, retaining
+optional-interface fallbacks and the original timed byte/word/long accesses.
+The isolated corrected tree passes all **32,256 programs / 16 reports / four
+executions**, plus 25 retained address-map, optional-interface and cache tests.
+Only `M68EC020Interpreter.cs` differs between those production snapshots;
+all fixture and other CPU source identities match. Evidence:
+`audits/Rte020AddressFix/proof.json`, SHA-256
+`c81fc9d0dba3a04fe3b8a54950ec99b345e3567a6c2fdfee1c9056ba274b4c92`.
+
+The correction and fixture are now imported. The maintained mainline command
+passes all 32,256 programs with exact source/binary/report identities, execution
+roster, independently enumerated cases/weights and actual TRX summaries:
+
+```powershell
+./scripts/test-copper68k-020-rte-address-transport.ps1 -OutputDirectory artifacts/020-rte-address-transport
+```
+
+Evidence: `audits/Rte020AddressAcceptance`; manifest SHA-256
+`b3e02251d176e67bbea201f76536bcb96a1f8eaffcc194948540bb58d65103f7`.
+Four copied-evidence controls reject missing reports, changed weights, empty
+execution and changed source identity (`Rte020AddressIntegrity`). The original
+36,096-case RTE gate also passes against this corrected source, including its
+four fresh integrity controls (`audits/Rte020FinalFaultAcceptance`,
+`Rte020FinalFaultIntegrity`); manifest SHA-256
+`c2912e8877678ca52d883a4d862e13419bea1f2db4fc97db55eeb46568661b81`.
+
+The older `audits/Rte020Full` run was deliberately stopped after this necessary
+production correction was identified. Its partial outputs and cancellation
+reason remain preserved; it is not accepted full-suite evidence. Fresh final
+CPU validation under `audits/Rte020FullFinal` passes **5,291 tests**, zero
+failures and **33 explicit optional/discovery skips** (5,324 total), in
+46 minutes 19 seconds. Both new RTE matrices and all ten qualified WinUAE
+presets are explicitly enabled. The maintained inventory and separate actual-TRX
+audit verify all **707 ordinary reports / 86,098,722 deterministic scenarios**
+and complete combination weights. Actual-TRX verification SHA-256:
+`85f48a39cfc90485fb85876f44d6dfaf006cce4d41a4e54ee2dc64ee1e5eb279`.
+Source manifest SHA-256:
+`2db5aa39d79ac190a21182238c10744468f40c2056187acd9d8fd797e3d458f1`;
+TRX SHA-256:
+`c73a6e4e1e54de0a3ea5ed4c8c8fe449278fff74326c6dbe89285ccc8fc9c7e2`.
+Clean private .72 consumer qualification passes the
+production build with zero warnings/errors, 171 host, 74 disk and 1,080 separate
+engine tests, and two explicit native Workbench 3.1 floppy boots. Six optional
+host replays remain unavailable, with no HD replay claimed. Runtime app/test
+CPU DLLs match the exact package. Evidence: `consumer-72-final`; immutable
+package SHA-256
+`aab23ec350f487e7baaaa93b943f16c98457e1af815a80a4f10a1b923d12a8f3`;
+validated CPU DLL SHA-256
+`8ef14985fe1393d4e42ae7faebc1b45ab218533674aa4ebef22050643b439e43`.
+.71 is not repacked or substituted for the corrected source. Fresh final
+prefetch (8,960 programs), entry (6,144 cases plus 512 controls), SingleStepTests
+and Musashi gates also pass against this source (`audits/Rte020FinalPrefetch`,
+`audits/Rte020FinalEntry`, `audits/Rte020FinalIndependent`). All three original
+RTE production mutations are re-proved after the mapping correction: 448,
+320 and 32 intended mismatches respectively, with the same 128 unaffected
+software-input controls. Evidence: `mutations/Rte020FinalFaults`, verification
+SHA-256 `7bb9c19b6537053e80fe3002ab8d84292e7821bd8e68838d4d1a3db9733d5fd4`.
+The final shipping validation commands are cleaned before commit: the fault
+command's extra trailing blank line is removed and the address command's
+baseline-only branches are removed. Both commands rerun successfully against
+the unchanged CPU source, with four fresh corruption controls each. Current
+command evidence: `audits/Rte020FinalFaultCleanCommand`, manifest SHA-256
+`0641c7d138b165e47edbee3bf87a0c9397403ba39abbeebe410770fdcd65e88b`;
+`audits/Rte020AddressCleanCommand`, manifest SHA-256
+`1f470977dd122d647297470d8185bd705d3bc3cb8b90b46c6e05ab3a3dedd849`.
+Their integrity controls are retained under `Rte020FinalFaultCleanCommandIntegrity`
+and `Rte020AddressCleanCommandIntegrity`. Earlier command runs retain their own
+producer identities; they are not substituted for these final command gates.
+No public package is published. Wider high-address private-frame load/entry faults,
+transferred/foreign images and general A/B continuation remain required;
+milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+### Next required data-read discovery (isolated source)
+
+While the RTE correction's full suite runs against frozen source, an isolated
+archive plus that exact correction reproduces the remaining ordinary operand
+read gap. Six literal MOVE source forms (indirect, postincrement, predecrement,
+displacement, absolute word and absolute long), byte/word/long sizes, all CCRs,
+four stack states, scalar/batch routes and all four 020/030 profiles pass
+**18,432 fault-free control programs**, including exact next PC, a following
+MOVEQ sentinel, all registers/status/stacks and surrounding memory.
+The same fixtures produce **43,008 intended mismatches** when the internal map
+rejects an operand request: the ordinary read route never queries/rejects it.
+No case is labeled passing or an architectural exception merely because the
+instruction silently completes. The selected data-read expectation is format B,
+with DF/read/size/function-code information and the operand fault address,
+per MC68020UM 6.2 and MC68030UM 8.2.
+
+Evidence: `audits/Operand020Discovery` (16 reports, four executions: two passing
+controls and two failing discovery batches). Its independent verifier checks
+frozen source/binary identities, exact case keys and weights, all diagnostic
+reasons and actual TRX summaries. The fixture remains in that isolated archive
+until the current full-run source freeze ends; this is discovery evidence, not
+a promoted mainline gate or a completed data-continuation implementation.
+The next correction must capture pending operation state and evaluated EAs,
+preserve partial effects, and resume only the rejected operation through
+explicit RTE; replaying the instruction is not an acceptable replacement.
+Full-format pointer stages, writes, other integer families and broader A/B
+transport remain required coverage. Milestone 6 remains **in progress**.
+
+#### Isolated read-entry and RTE-rerun development
+
+The next isolated source prototype now rejects the selected operand requests
+before ordinary bus access and serializes the pending logical address, consumed
+extension PC, opcode, stack and instruction-pipe words in an interpreter-private
+format-B context. Both shared scalar reads and the direct fast long
+postincrement read are covered. The initial prototype's missed fast route is
+retained as failed provisional evidence (`audits/Operand020ReadFixV2`).
+
+Read-entry qualification passes all **43,008 selected fault cases** plus
+**18,432 fault-free controls**, with exact sources, four executions, all 16
+reports, independently enumerated keys/weights and actual TRX summaries
+(`audits/Operand020ReadFixV3/verification.json`, SHA-256
+`a7a9bfaa855c9db5ee62a82af6fb41acd3f2dcaccaa65795f171ddd490c268f6`).
+
+A further isolated prototype implements explicit RTE rerun for these simple
+memory-source/register-destination MOVE forms. It restores the pending pipe,
+reads the saved operand address and finishes the register/flag suffix without
+beginning the instruction, consuming extensions or calculating the source EA
+again. All **43,008 selected whole recovery programs** and **18,432 controls**
+pass, checking the final architectural state, surrounding memory and a
+following MOVEQ sentinel. Strict evidence:
+`audits/Operand020ReadFixV4/verification.json`, SHA-256
+`4c57ba682ae147a5b06bdb68c7115c2ca6da4eda2123619e43c08f0e0075c795`.
+
+Neither prototype is imported or a promoted mainline gate. Software-buffer
+repair, persistent refaults, handler-modified operands/extensions, saved-pipe
+mutations, A7/alias/index combinations and retained controls still require
+qualification before promotion. Full-format pointer stages, memory destinations,
+other instruction families and wider A/B transport remain required. The
+existing full-suite source remains frozen while this development proceeds;
+milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The next frozen prototype (`audits/Operand020ReadFixV5`) passes **129,024
+whole handler-recovery programs / 24 reports / six executions**. Real handlers
+supply a different value through DIB and clear DF, persistently reject the
+pending read before allowing it, or modify the source base, original opcode and
+consumed extension words. Every CCR, selected size/form, stack state and byte
+lane runs through scalar/batch dispatch. Complete architectural state and
+surrounding memory are checked after each handler instruction, resumption and
+following sentinel. Software input causes no ordinary source read; explicit
+rerun completes exactly one successful read. Strict verification SHA-256:
+`439c7e3dd73b4b877e066af7a37ab23afdff2ae156853a9d46c6b007b4a41913`.
+
+Three isolated mutations produce exactly **43,008** software-input mismatches,
+**50,176** saved-address mismatches and **21,504** repeated-predecrement
+mismatches, with the remaining 86,016, 78,848 and 107,520 programs respectively
+still passing. The proof checks the sole mutated CPU source, unchanged fixtures,
+exact execution outcomes, every failing CCR identifier and diagnostic phase,
+coverage weights and actual TRX summaries. Evidence:
+`mutations/Operand020ReadHandlers/verification.json`, SHA-256
+`71f5d52b125c3df5bddc2312f678035791beb373045d3296ac80d34cc253d250`.
+All **51 retained executions** pass: the 68,352 previously qualified RTE
+programs produce byte-identical reports with matching actual TRX summaries,
+and all 25 mapping/cache/optional-interface controls pass. Evidence:
+`audits/Operand020ReadFixV5/retained/verification.json`, SHA-256
+`6eb70887a60d448fde5d20966ea5a412693fc24a87cf0f9eaeaba99d682f2ad0`.
+
+The prototype remains unimported and unpromoted. Before promotion, pending-read
+origin must be distinguished from a later exception/vector read rather than
+inferred solely from the retained opcode; that distinction is not yet qualified.
+Saved-pipe mutations, A7/alias/index combinations, trace/interrupt and changed
+return-SR/stack behavior, high-address transport and evidence-integrity controls
+also remain required. Broader pointer, memory-destination and other-family
+continuation stays open. No private consumer package is built for this prototype;
+the next such version remains .73. Milestone 6 remains **in progress**.

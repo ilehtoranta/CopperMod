@@ -8708,6 +8708,8 @@ namespace Copper68k
                 return;
             }
 
+            if (Has020AccessFrames) { ExecuteRte020(); return; }
+
             while (true)
             {
                 var framePointer = State.A[7];
