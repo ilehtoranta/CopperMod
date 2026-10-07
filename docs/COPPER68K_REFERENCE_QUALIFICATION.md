@@ -8668,3 +8668,60 @@ pipes, provenance/transport, other read origins, trace/interrupt, changed
 return-SR/stack, memory destinations, other families and remaining reference/
 consolidation gates stay required. Milestone 6 remains **in progress**,
 `roadmapComplete=false`.
+
+
+#### Three-word private pipe transport — 2026-10-07
+
+The unchanged isolated prototype passes **1,003,520 programs / 160 reports /
+40 executions** for a following three-word MOVE.L. Real handlers replace its
+backing opcode and both immediate words, then supply a private saved pipe of
+length **0, 1, 2 or 3**, with unchanged words or an edit at each retained
+position. The expected instruction combines the supplied prefix with the
+changed memory suffix; its destination, complete long value, flags, next PC
+and following NOP distinguish each position and fetch boundary. MOVE encoding
+and flag expectations use the test-internal specification and literal cases;
+architectural semantics follow the [programmer reference's MOVE description](https://www.nxp.com/docs/en/reference-manual/M68000PRM.pdf).
+
+The matrix crosses indirect/postincrement/predecrement, displacement,
+absolute-word/long and PC-displacement sources; byte/word/long operand reads;
+all four stack states, all 32 initial CCR states, every read lane, scalar/batch
+execution, cold/warm host-reader preparation and EC020/A1200/020/030 profiles.
+An actual odd-prefetch exception and software RTE prepare the stream before
+the operand fault. Originally captured entries are checked for address/content;
+the handler-supplied pipe is checked through subsequent execution. Completed
+operand effects, stack selection, original PC/SR, operand read count/width,
+architectural registers and memory remain verified. This qualifies interpreter-
+private software frame transport, not three-word silicon capture or physical
+pipeline/cache timing. Wider indexed/chained pipes remain required.
+
+The first three-source-form matrix separately passes **430,080 programs**.
+Its extended fixture incorrectly expected a zero extension-word write to clear
+CCR.Z. The original extended snapshot retains **860,160 passing programs /
+143,360 precisely identified invalid-fixture failures**; a fresh repair changes
+only that expectation, preserving the failed snapshot and unchanged CPU source.
+No production defect is inferred from that fixture error.
+
+Two sole CPU mutations corrupt the saved middle and final words during RTE.
+The repaired fixture detects exactly **702,464 middle-word failures / 301,056
+unaffected passes** and **401,408 final-word failures / 602,112 unaffected
+passes**. Every failure identifier and wrong-register-value reason is audited;
+the mutations do not change fixtures. Complete 220-file source inventories,
+actual TRX rosters/summaries, independently enumerated architectural keys and
+weights, and five integrity controls pass. Those controls reject omitted or
+changed fixtures, wrong producers, empty executions and incorrect weights.
+
+Evidence: `audits/Operand020MultiwordPipe`,
+`audits/Operand020MultiwordPipeExtended`,
+`audits/Operand020MultiwordPipeExtendedV2`,
+`mutations/Operand020MultiwordPipeExtended/Middle` and
+`mutations/Operand020MultiwordPipeExtended/Last`; aggregate
+`operand020-multiword-pipe-proof.json`, SHA-256 `43f3034390925f06d8cd2eceefb18c74ee29187ee82ef3218a08493dc70b0a0f`.
+The proof pins all five executions, sources, binaries, producer/verifier
+identities, fixture-only repair, sole mutations, integrity rejections and the
+preceding chained-structure proof. Existing source-specific retention is reused;
+no fresh replay is claimed. Protected normal assemblies, production source,
+API/packages and regression retirement remain unchanged. The prototype stays
+isolated, unimported and unpromoted. Wider pipes, nested PC/SR provenance,
+transport, other read origins, trace/interrupt, changed return-SR/stack, memory
+destinations, other families and remaining reference/consolidation gates stay
+required. Milestone 6 remains **in progress**, `roadmapComplete=false`.

@@ -2951,3 +2951,19 @@ change or regression retirement occurs. Wider pipes, provenance/transport and
 remaining continuation/reference/consolidation gates remain required;
 milestone 6 stays **in progress**, `roadmapComplete=false`.
 See the [all-structure chained qualification](COPPER68K_REFERENCE_QUALIFICATION.md#all-structure-chained-indexed-faults--2026-10-07).
+
+
+Three-word private pipe transport now passes 1,003,520 programs across seven
+source forms, operand sizes, stack states, all CCR/read lanes, scalar/batch and
+cold/warm host-reader preparation. Real handlers supply pipe lengths 0..3 and
+edit each retained position against different backing opcode/extensions; the
+following MOVE.L and NOP verify values and fetch boundaries. Middle/final word
+mutations detect exactly 702,464 / 401,408 intended failures while unaffected
+cases pass. Complete source/key/weight/TRX audits and five integrity controls
+pass. The earlier extended fixture's 143,360 zero-word CCR expectation failures
+remain separate invalid evidence, with a fixture-only repair. This qualifies
+private software frame transport; broader indexed/chained pipes, provenance,
+transport and remaining continuation/reference/consolidation stay required.
+No production import, package change or regression retirement occurs;
+milestone 6 stays **in progress**, `roadmapComplete=false`.
+See the [three-word pipe qualification](COPPER68K_REFERENCE_QUALIFICATION.md#three-word-private-pipe-transport--2026-10-07).
