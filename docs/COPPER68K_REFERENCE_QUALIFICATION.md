@@ -8956,3 +8956,53 @@ assemblies are unchanged; no fresh full CPU/consumer replay is claimed.
 Indexed/chained private pipe execution remains a separate pending gate.
 All remaining reference/continuation/consolidation requirements stay open;
 milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+#### Full-format indexed and chained private pipe transport — 2026-10-07
+
+The isolated operand-read continuation prototype now passes **4,692,480
+programs / 1,920 reports / 480 executions**: 1,098,240 source-fault programs
+across all 66 full-format structural combinations, and 3,594,240
+pointer-to-operand chains across the 54 pointer-bearing combinations. The 12
+direct forms are explicitly excluded from pointer chains and remain covered
+by source faults. An/PC bases, MOVE byte/word/long and MOVEA word/long, four
+stack states, CCR `00/1F`, every selected pointer/operand byte lane and
+scalar/batch execution are included. Canonical indexes use signed `D2.W=-8`;
+the separate retained register and signed-boundary gates provide their own
+broader index coverage.
+
+Real handlers supply software pipe prefixes of zero through three words,
+change all three backing words and optionally edit each retained word. Chained
+faults must preserve the prefix through pointer recovery and the subsequent
+operand fault. Independent literal checks verify each saved word, original
+instruction provenance, completed access order/width and the following
+MOVE.L/NOP result and exact next PC. Existing full-indexed timing policy is
+checked separately. This qualifies interpreter-private software transport;
+it does not establish physical three-word capture or cache/pipeline timing.
+
+Two sole CPU-file mutations retain every fixture unchanged. Corrupting the
+third word during capture detects exactly **1,437,696 failures**, leaving
+3,254,784 programs passing. Corrupting it during restoration detects exactly
+**1,876,992 failures**, leaving 2,815,488 passing. Every failure identifier and
+reason is independently enumerated, including chained saved-word failures
+and source-only following-register differences. No unrelated failures count
+as mutation detection.
+
+The strict verifier checks all 224 source/project inputs against the frozen
+parent, exact mutation text, all 480 actual TRX results and their per-test
+output, every weighted report key, logical totals and all failure reasons.
+Five integrity controls precisely reject omitted or changed fixtures, a wrong
+producer, an empty selection and a changed logical weight. Aggregate proof:
+`operand020-indexed-pipe-proof.json`, SHA-256
+`0cf31520cc9b5e21cb4093f42baa42a5a19e7bcb689b63f82dd805dc172aafe0`.
+Evidence roots are `audits/Operand020IndexedPipe` and
+`mutations/Operand020IndexedPipe/{CaptureThird,RestoreThird}` under the
+retained reference-restoration evidence directory. The parent frame-fault
+proof and all 223 preexisting inputs remain unchanged.
+
+Production CPU source/packages and protected normal assemblies are unchanged;
+the prototype remains isolated and unimported. No fresh full CPU/consumer
+replay or regression retirement is claimed. Future import must preserve the
+already-delivered CMPM retirements instead of replacing tests from an older
+snapshot. Indexed/chained nested trace-vector provenance, foreign frames,
+other origins and the remaining reference/continuation/consolidation gates
+remain required. Milestone 6 remains **in progress**, `roadmapComplete=false`.

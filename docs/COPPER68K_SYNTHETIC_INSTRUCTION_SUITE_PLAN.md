@@ -3028,3 +3028,18 @@ separate pending gate. All remaining reference/continuation/consolidation
 requirements stay open; milestone 6 remains **in progress**,
 `roadmapComplete=false`.
 See the [CMPM replacement mapping](COPPER68K_REFERENCE_QUALIFICATION.md#cmpm-alias-and-a7-semantic-consolidation--2026-10-07).
+
+The full-format indexed/chained private pipe gate now passes 4,692,480 programs
+across 1,920 reports and 480 executions. All 66 structures are covered by source
+faults and all 54 pointer-bearing structures by pointer-to-operand chains;
+the 12 direct forms remain explicit chain exclusions. Software prefixes of
+zero through three words and each retained-word edit survive real handler
+changes and selected scalar/batch recovery. Sole capture/restore mutations
+detect exactly 1,437,696 / 1,876,992 intended failures, with unchanged fixtures.
+Complete source/key/weight/TRX/reason audits and five integrity controls pass.
+This is private transport qualification, not physical pipe/cache timing.
+Production source/packages and CMPM retirements remain unchanged; the prototype
+is unimported. Wider indexed/chained nested provenance, foreign frames, other
+origins and remaining roadmap gates stay required. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.
+See the [indexed/chained pipe qualification](COPPER68K_REFERENCE_QUALIFICATION.md#full-format-indexed-and-chained-private-pipe-transport--2026-10-07).
