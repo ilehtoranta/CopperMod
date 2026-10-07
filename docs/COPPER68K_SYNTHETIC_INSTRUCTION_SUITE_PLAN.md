@@ -2822,3 +2822,18 @@ trace/interrupt, changed return-SR/stack and wider transport qualification.
 Broader continuation, reference gaps and consolidation remain required.
 Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
 [typed trace-vector continuation](COPPER68K_REFERENCE_QUALIFICATION.md#typed-trace-vector-read-continuation--2026-10-07).
+
+The unchanged isolated typed-read source now passes 196,608 A7/MOVEA programs
+(21,504 controls; 175,104 repair/software-input/refault programs) and 86,016
+captured private-pipe programs. A7 byte stride and aliased MOVEA ordering mutations
+detect exactly 3,072 and 18,432 failures, preserving unaffected cases. A real
+prefetch-handler/RTE sequence supplies the pipe words; cold and explicitly
+batch-warmed dispatch respect saved/software-edited words. Pipe-loss and
+edited-word mutations detect 86,016 and 43,008 failures respectively. Complete
+source/producer/input inventories and ten deliberate integrity controls pass.
+This remains unimported and unpromoted. Wider aliases/indexing, extension-bearing
+and multiword pipes, other read origins, nested-PC provenance, trace/interrupt,
+changed return-SR/stack, transport and general continuation stay required.
+No CPU source/package change or regression retirement is included; milestone 6
+stays **in progress**, `roadmapComplete=false`. See the
+[A7 and private-pipe qualification](COPPER68K_REFERENCE_QUALIFICATION.md#a7movea-and-captured-private-pipe-qualification--2026-10-07).

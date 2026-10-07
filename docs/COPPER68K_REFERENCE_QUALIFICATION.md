@@ -8169,3 +8169,62 @@ changed return SR/stacks, wider fault transport, memory destinations and
 other-family continuation remain required. Existing reference and consolidation
 gaps remain open. No package is built or published; the next private consumer
 version remains .73. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+#### A7/MOVEA and captured private-pipe qualification — 2026-10-07
+
+Two new isolated fixtures qualify the unchanged typed-read CPU source above.
+The A7 fixture passes **196,608 programs / 32 reports / eight executions**:
+**21,504 fault-free controls** and **175,104 explicit repair, software-input
+and persistent-refault programs**. EC020/A1200/020/030 run scalar/batch routes,
+indirect/postincrement/predecrement sources, MOVE byte/word/long, MOVEA word/long
+to A0 and aliased A7, four stack states, all CCRs and all operand fault byte
+lanes. Literal expected strides include two bytes for A7 byte operations;
+MOVEA.W sign extension, flag preservation and destination-after-source ordering
+are independent of production helpers. All architectural registers/status,
+active and inactive stacks, defined bus-error fields, surrounding memory,
+exception/read counts and a following MOVEQ sentinel are checked after each
+handler and recovery instruction. Changing the resumed byte stride to one
+causes exactly **3,072 mismatches / 193,536 unaffected passes**. Moving the
+source update after an aliased MOVEA destination write causes exactly
+**18,432 mismatches / 178,176 unaffected passes**.
+
+The captured-pipe fixture passes **86,016 programs / 32 reports / eight
+executions**. A real instruction-prefetch error and handler/RTE repair supply
+the opcode and following word; the subsequent ordinary MOVE fault genuinely
+captures that remaining word. Real handlers write a different following opcode
+to memory, and separately replace the saved private pipe word. This covers
+three extension-free source forms, three operand sizes, four stack states,
+all CCRs/operand byte lanes, both routes and cold/warmed dispatch on all four
+profiles. Warming uses batch dispatch and requires host-code-reader use;
+recovery then uses the selected scalar or batch route. The original saved word
+and software-edited word both override different memory/cached candidates.
+Discarding the pipe causes **86,016 mismatches**; ignoring the edited pipe word
+causes **43,008 mismatches / 43,008 unaffected passes**. These checks qualify
+interpreter-private continuation and existing execution policy, not physical
+cache/pipeline contents or timing.
+
+Each strict case verifier checks exact executions, every combination/CCR weight,
+precise mutation failure identifiers/reasons and matching actual TRX summaries.
+A separate complete-input audit independently enumerates all CPU/test C# and
+project sources, checks every file hash, pins the execution helper/base inputs
+and links the selected-case proof to its TRX. **Ten separate integrity controls**
+(five per gate) reject omitted fixtures, changed source, altered producer
+identities, empty execution selections and wrong combination weights. Mutation
+fixtures are byte-identical to their accepted parent; only the intended private
+operand-continuation CPU file changes.
+
+Evidence: `audits/Operand020StackRead`, `audits/Operand020PipeReadV4`,
+`mutations/Operand020StackRead`, `mutations/Operand020PipeRead`; aggregate proof
+`operand020-stack-pipe-proof.json`, SHA-256 `2d6b57c4a244c8efea96902886e2889d10b2e5c586b08351dc631da706d7b432`. Its six entries pin
+all case and input-integrity verifiers; it also pins the ten corruption controls.
+The earlier pipe fixture's assumption of an initially non-empty pipe, a tuple
+compile error and incorrect scalar cache priming remain separate failed
+fixture evidence. None is relabeled as a production CPU defect or passing run.
+
+No production CPU source, timing policy, package or regression retirement changes.
+The isolated prototype remains unimported and unpromoted. Broader register/index
+aliases, extension-bearing and multiword captured pipes, nested-PC provenance,
+other read origins, trace/interrupt and changed return-SR/stack combinations,
+wider fault transport, memory destinations and other-family continuation remain
+required alongside all existing reference/consolidation gaps. Milestone 6 stays
+**in progress**, `roadmapComplete=false`.
