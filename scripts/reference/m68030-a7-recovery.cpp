@@ -76,7 +76,7 @@ uaecptr m68k_getpc(){return regs.pc;}uaecptr m68k_getpci(){return regs.pc;}
 void m68k_setpci(uaecptr x){regs.pc=x;}void m68k_incpci(int n){regs.pc+=n;}
 void mmu030_hardware_bus_error(uaecptr,uae_u32,bool,bool,int);
 uae_u32 read(uaecptr a,int w){
- 
+
  uae_u32 v=0;for(int n=0;n<w;n++){auto it=mem.find(a+n);if(it==mem.end())throw std::runtime_error("Uninitialized read");v=(v<<8)|it->second;}return v;
 }
 void put(uaecptr a,uae_u32 v,int w){for(int n=0;n<w;n++)mem[a+n]=uae_u8(v>>(8*(w-1-n)));}
