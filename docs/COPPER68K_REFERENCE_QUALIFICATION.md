@@ -8780,3 +8780,54 @@ pipes and provenance, frame transport, other read origins, trace/interrupt,
 changed return-SR/stack, memory destinations, other families and remaining
 reference/consolidation gates stay required. Milestone 6 remains **in progress**,
 `roadmapComplete=false`.
+
+
+#### High and wrapped private operand frames — 2026-10-07
+
+The unchanged isolated prototype passes **94,080 programs / 1,680 reports /
+420 executions** for nominal private operand-frame entry and RTE transport.
+Frame starts are `00004700`, `10004700`, `00FFFFA4`, `00FFFFD0`, `FFFFFFA4`,
+`FFFFFFD0`, `FFFFFFFF`, `01000001`, `00100001` and `10004701`. They include
+high/odd addresses, exact boundary ends and crossings of the 24-/32-bit address
+boundaries. Seven source forms, MOVE byte/word/long, four stack states, all
+operand fault lanes, CCR 00/1F, input/refault/alias handlers, both routes and
+EC020/A1200/020/030 profiles remain represented. Earlier canonical groups
+retain all-CCR evidence; this address group avoids repeating that Cartesian
+product. [MC68020UM](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf)
+distinguishes the MC68020's 32-bit and EC020's 24-bit external address spaces;
+logical register addresses retain their full width.
+
+A relocated VBR keeps vector entries clear of wrapping frames. Full-address
+models poison the low 24-bit mirror wherever it is disjoint from the real
+frame/guards. Defined/private fields independently verify original PC/SR,
+consumed next PC, opcode, operand width, source address, guest stack and pending
+kind. Entry writes match the descending logical word sequence mapped through
+the selected model, including EC020 split bytes at its address-space boundary.
+Map predicates reject requests outside that physical domain. Guards, untouched
+mirrors, architectural registers/stacks and memory, exact exception/read counts,
+real handler changes and the following sentinel pass.
+
+A sole mutation truncates the logical stack on RTE: **47,040 intended failures /
+47,040 unaffected passes**. Repeated faults additionally expose the resulting
+wrong logical frame, with precise A7 failure reasons. A sole mutation truncates
+frame-entry write addresses: **32,928 intended failures / 61,152 unaffected
+passes**; the EC020 profiles already apply that external mapping and remain
+unaffected. Both mutations preserve fixtures. Complete 222-file inventories,
+actual TRX rosters, independently enumerated case keys/weights and five
+corruption controls pass.
+
+Evidence: `audits/Operand020FrameTransport`,
+`mutations/Operand020FrameTransport/StackMask` and
+`mutations/Operand020FrameTransport/EntryMask`; aggregate
+`operand020-frame-transport-proof.json`, SHA-256
+`72fa89495653d9f02af0babffb958bd27388e79db19cbdde62003b253ba93c74`.
+The proof pins three executions, complete source/producer/verifier/binary
+identities, sole mutations, integrity rejections and the preceding trace proof.
+Existing source-specific retention is reused; no fresh replay is claimed.
+This qualifies nominal private transport, not physical port widths/timing or
+silicon-private frame contents. Faults during frame entry/state loading,
+wider indexed/chained pipes/provenance, other origins, changed return-SR/stack,
+memory destinations, other families and remaining reference/consolidation stay
+required. Production source/packages and protected normal assemblies remain
+unchanged; no regression is retired and the prototype stays isolated/unpromoted.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

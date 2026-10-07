@@ -2983,3 +2983,16 @@ reference/consolidation gates remain required. No production import, package
 change or regression retirement occurs; milestone 6 stays **in progress**,
 `roadmapComplete=false`.
 See the [nested trace qualification](COPPER68K_REFERENCE_QUALIFICATION.md#nested-operand-and-trace-vector-provenance--2026-10-07).
+
+
+Nominal high/wrapped private operand frames now pass 94,080 programs at ten
+frame addresses, including odd and 24-/32-bit crossings. Seven source forms,
+sizes, stack states, all operand lanes, CCR 00/1F and real input/refault/alias
+handlers verify full logical stacks, physical entry ordering/domain, guards,
+poisoned mirrors and continued effects. Stack/entry truncation mutations detect
+exactly 47,040 / 32,928 intended failures, preserving unaffected cases.
+Complete source/key/weight/TRX audits and five integrity controls pass. Frame
+entry/state-load faults and remaining wider continuation/reference/consolidation
+gates remain required; no production import, package change or test retirement
+occurs. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+See the [private frame transport qualification](COPPER68K_REFERENCE_QUALIFICATION.md#high-and-wrapped-private-operand-frames--2026-10-07).
