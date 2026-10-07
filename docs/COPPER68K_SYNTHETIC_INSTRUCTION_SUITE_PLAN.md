@@ -3055,3 +3055,17 @@ continues separately; foreign/cross-profile frames, broader return-SR/stack
 and alias behavior, full CPU/consumer validation and remaining roadmap gates
 stay required. Milestone 6 remains **in progress**, `roadmapComplete=false`.
 See the [private-frame relocation evidence](COPPER68K_REFERENCE_QUALIFICATION.md#copied-private-frame-and-selected-stack-relocation--2026-10-07).
+
+The isolated relocation correction now passes 139,776 stack/CCR alias programs
+across 192 reports and 48 executions: A0/A7 indirect/postincrement/predecrement,
+MOVE to D0/D7, MOVEA to A0/A7, four stack states, copied/unmoved frames, real
+CCR edits, all operand lanes and scalar/batch. Canonical A7 postincrement
+covers all 32 CCR values. Stride/X mutations detect exactly 8,192 / 69,888
+intended failures; complete source/TRX/key/weight/reason and six corruption
+controls pass. The 256 earlier overlap/read-count fixture failures and exact
+fixture-only repair remain retained. CPU source is unchanged from the isolated
+relocation correction and is unimported. Nested indexed trace continues on its
+separate parent; privilege/bank/trace edits, foreign frames, other origins,
+full CPU/consumers and remaining roadmap gates stay required. Milestone 6
+remains **in progress**, `roadmapComplete=false`.
+See the [A7 alias and CCR record](COPPER68K_REFERENCE_QUALIFICATION.md#private-recovery-with-a7-aliases-and-edited-ccr--2026-10-07).

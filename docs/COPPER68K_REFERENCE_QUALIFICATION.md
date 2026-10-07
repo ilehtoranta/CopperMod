@@ -9050,3 +9050,58 @@ CPU source. Broader qualification, fresh full CPU validation and affected
 consumers remain required before importing the correction. Production CPU
 source/packages, protected normal assemblies and CMPM retirements are
 unchanged. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+#### Private recovery with A7 aliases and edited CCR — 2026-10-07
+
+The separately corrected private-frame relocation prototype passes
+**139,776 programs / 192 reports / 48 executions** for A0/A7 indirect,
+postincrement and predecrement sources, MOVE byte/word/long to D0/D7 and
+MOVEA word/long to A0/A7. Four stack states, unmoved/copied frames, real
+keep/CCR-edit handlers, every operand byte lane and scalar/batch are included.
+CCR `00/1F` covers all forms; the canonical A7 postincrement selection covers
+all 32 CCR values separately. The handlers copy the complete private image,
+select A7 with LEA and optionally invert all five saved CCR bits. Privilege,
+bank and trace bits remain unchanged in this gate.
+
+Independently chosen operand locations remain fixed through relocation and
+source/destination aliasing. The test checks completed predecrement effects,
+the pending postincrement suffix, destination A7 overrides, word MOVEA sign
+extension, partial data registers, untouched state/memory, returned CCR
+preservation and the following MOVEQ sentinel. A7 byte strides and MOVE/MOVEA
+flag expectations follow
+[M68000PM sections 2.2.4/2.2.5 and the instruction definitions](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf).
+The exact literal RTE validation/load prefix already qualified by the frame
+fault gate precedes exactly one pending operand read.
+
+An initial fixture records **139,520 passing / 256 mismatching cases**. The
+relocated MSP frame overlaps the user-M predecrement word operand: legitimate
+frame validation/load word reads share its address and width. Counting all
+address matches as operand reads incorrectly labels those cases as replay.
+A fresh fixture-only repair compares the entire independently qualified
+59-read frame prefix followed by one operand read. Every original failure
+identifier/reason and the exact fixture repair remain pinned; no CPU change
+or acceptance-scope reduction resolves the invalid counting assumption.
+
+Sole CPU-file mutations retain the repaired fixture unchanged. Giving byte A7
+a one-byte postincrement detects exactly **8,192 failures**, retaining 131,584
+passing programs. Clearing the returned X flag detects exactly **69,888
+failures**, retaining 69,888 passing programs. Independent expectations check
+each failing A7 or SR value, including overlapping-frame zero operands and
+MOVEA's unchanged CCR. All 226 source/project inputs, actual TRX results/output,
+weighted keys and precise reasons are audited. Six corruption controls reject
+missing/changed fixtures, wrong producers, empty selections, changed weights
+and unrelated failure reasons. Aggregate proof:
+`operand020-stack-alias-proof.json`, SHA-256
+`1b1888711fe5f23ab9c8cd47b38da00093f5ada1dade7fad4de7a7b2e1686716`.
+
+Evidence: `audits/Operand020StackAliasV2` and
+`mutations/Operand020StackAlias/{Stride,Extend}`. The earlier invalid fixture
+remains `audits/Operand020StackAlias`. CPU and all preexisting sources are
+unchanged from the separately qualified relocation correction; its fresh
+frame-fault retention remains applicable without claiming a new full replay.
+The indexed/chained nested-trace run remains separate on unchanged older CPU
+source. Returned privilege/bank/trace changes, foreign/cross-profile frames,
+other origins and remaining roadmap gates still require qualification before
+production import and fresh full CPU/consumer validation. Production CPU
+source/packages, protected normal assemblies and CMPM retirements remain
+unchanged. Milestone 6 remains **in progress**, `roadmapComplete=false`.
