@@ -71,6 +71,20 @@ public sealed class SyntheticM68020MoveWriteFaultTests(ITestOutputHelper output)
                         bus.ExcludeFrameReads(frame); e.ExceptionVector = 2; Step(m, batch);
                     }
                     e.Write(destination, value, width, model); e.Pc = 0x1002; Check(m, e);
+                    // Existing approximate execution policy, not physical cycles.
+                    var key = (post, width) switch
+                    {
+                        (false, 1) => M68kInstructionTimingKey.MoveByteAddressIndirectToAddressIndirect,
+                        (false, 2) => M68kInstructionTimingKey.MoveWordAddressIndirectToAddressIndirect,
+                        (false, _) => M68kInstructionTimingKey.MoveLongAddressIndirectToAddressIndirect,
+                        (true, 1) => M68kInstructionTimingKey.MoveBytePostIncrementToAddressIndirect,
+                        (true, 2) => M68kInstructionTimingKey.MoveWordPostIncrementToAddressIndirect,
+                        _ => M68kInstructionTimingKey.MoveLongPostIncrementToAddressIndirect
+                    };
+                    var plan = ((M68kAdvancedTimingInterpreter)m.Core).Timing.LastInstructionTiming.Plan;
+                    if (plan.Key != key || plan.NativeCycles != 8 || plan.Barriers != M68kTimingBarrier.None ||
+                        plan.UsesHeadTail != (model.Id == "68030") || plan.HeadCycles != (model.Id == "68030" ? 1 : 0) || plan.TailCycles != (model.Id == "68030" ? 1 : 0))
+                        throw new InvalidOperationException($"Final-write timing policy differs: {plan.Key}/{plan.NativeCycles}/{plan.HeadCycles}/{plan.TailCycles}");
                     // Frame traffic can overlap A7 source guards; distinguish the
                     // intended operand widths/value from frame word transfers.
                     if (bus.SuccessfulSourceReads != 1 || bus.SuccessfulDestinationWrites != 1 || bus.Rejected != (fault ? 1 : 0))
@@ -119,7 +133,7 @@ public sealed class SyntheticM68020MoveWriteFaultTests(ITestOutputHelper output)
         internal void ExcludeFrameReads(uint frame) => frameReadStart = frame;
         private void BeforeRead(uint address, int size, M68kBusAccessKind kind)
         {
-            if (address == 0x4200 && size == operandWidth && kind == M68kBusAccessKind.CpuDataRead &&
+            if (address is >= 0x41f8 and < 0x4210 && size == operandWidth && kind == M68kBusAccessKind.CpuDataRead &&
                 !(frameReadStart is { } frame && address >= frame && address + (uint)size <= frame + 32)) SuccessfulSourceReads++;
         }
         byte IM68kBus.ReadByte(uint a, ref long c, M68kBusAccessKind k) { BeforeRead(a, 1, k); return base.ReadByte(a, ref c, k); }

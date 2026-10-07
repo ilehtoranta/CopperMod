@@ -3378,3 +3378,18 @@ continuation still require implementation, mutation/retention and integration
 proof. No production CPU/package change occurs. Milestone 6 remains **in
 progress**, `roadmapComplete=false`. See the
 [native widths/final-write evidence and failing private probe](COPPER68K_REFERENCE_QUALIFICATION.md#native-move-widths-and-final-write-fault-discovery--2026-10-08).
+
+The selected pending final-write path now has an isolated private implementation:
+all 12,288 new scenarios pass, including 6,144 formerly failing recoveries, with
+143,360 exact previous read-recovery results retained. Five deliberate defects
+are detected while direct controls remain passing. The strengthened fixture
+checks source guard reads and existing specialized timing policy; fresh unchanged
+parent discovery preserves the original 6,144 mapping failures. Production
+direct controls pass separately; its private recovery batches remain unavailable.
+Short-frame software edits/refaults, saved pipe variants, foreign/frame faults,
+trace/changed stacks, byte/word source-read memory destinations and read-to-write
+chains remain unqualified. Full integration and consumer gates are still required
+before importing this private candidate. Hardware is unavailable, so unresolved
+reference disagreements remain open. No production CPU/package change or test
+retirement occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+See the [private final-write implementation and bounded evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-final-move-write-continuation--2026-10-08).

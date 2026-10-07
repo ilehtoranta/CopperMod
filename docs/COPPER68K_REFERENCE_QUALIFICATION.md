@@ -10450,7 +10450,7 @@ frame fields/whole-memory/bank checks; V5 pins the actual byte-stride table.
 Only V5 is the final current proof. Compiler warnings in unchanged extracted
 native code remain recorded. Production CPU source is untouched.
 
-The current private CPU fails a new independent write-fault fixture:
+At the initial discovery, the private CPU fails a new independent write-fault fixture:
 **6,144 denied destination writes bypass its physical-address map**, while all
 **6,144 direct controls pass**. `SyntheticM68020MoveWriteFaultTests` covers all
 three widths, A0/A7, indirect/postincrement, separate/aliased destinations,
@@ -10499,4 +10499,72 @@ interrupts, physical timing/cache behavior, changed handler registers/S/M,
 other EAs, unaligned/partial writes, nested/frame faults and broader origins
 remain open. Earlier complete-suite/combined/consumer gates retain their old
 source scope. No CPU import, package publication or regression retirement
+occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+### Private final MOVE write continuation — 2026-10-08
+
+An isolated candidate now corrects the selected final-write mapping bypass and
+implements the pending write after RTE. The production interpreter is unchanged:
+`scripts/reference/m68020-final-write-candidate.cs` is copied into an audit
+snapshot only. Its distinct private marker `C023` uses a 32-byte format-A image
+with next PC, completed MOVE flags, write SSW/address/output, original opcode
+and saved instruction words. It resumes only the pending write, without fetching
+or executing the original instruction again. Normal mapped execution retains
+its existing flag/write order; a denied final write saves the completed flags.
+Original function code and the specialized execution timing policy are retained.
+
+The fixture now counts reads at the source and its surrounding guards, exposing
+replays at a postincremented address, and independently checks the existing
+six specialized timing keys, native-cycle policy and 030 head/tail policy.
+These are execution-policy checks, not physical timing qualification. The fresh
+unchanged-parent discovery still records 6,144 mapping mismatches and 6,144
+passing controls. Its V3 verification SHA-256 is
+`ba86f8dae54eab0037eda191195e4c79e714ce2fb4b118929c8b69eeb8326594`.
+The older V1 discovery and production-control hashes above are historical,
+source-specific evidence from commit `23f9e8d`; current fixture producers must
+use fresh outputs rather than relabel those records.
+
+The candidate passes **12,288 selected scenarios**, including 6,144 final-write
+recoveries, and retains the exact **143,360** previous register/memory-destination
+read-recovery results and coverage keys: 155,648 logical cases / 12 xUnit
+executions / 48 reports, with zero selected mismatches, unsupported cases or
+unavailable batches. Five isolated defects produce the expected mismatches:
+source replay 6,144; repeated postincrement 3,072; address substituted for output
+value 5,760; omitted completed flags 5,376; changed suffix timing 6,144. Each
+retains all 6,144 direct controls; unaffected recovery cases also remain passing.
+The maintained audit verifies complete input inventories, producer/parent
+identities, exact commands and output hashes, actual TRX rosters/counters/stdout,
+every case key/weight, mutation witnesses and all retained report contents.
+
+```powershell
+python scripts/test-copper68k-final-move-write-candidate.py `
+  --qualified-parent-directory <restoration-root>/audits/MemoryDestinationPrivateV4 `
+  --discovery-directory <current-write-discovery-output> `
+  --output <fresh-candidate-output>
+# Recheck the same evidence with --validate-only.
+```
+
+Evidence `audits/MoveFinalWriteCandidateV2/proof.json` SHA-256:
+`c1a5a156f5922a8d33fe6260eebd6edb61ddba3b309a392337e3772d537445a7`.
+Twelve independent copied-evidence controls reject changed producers, missing
+fixtures/output identities, empty or reweighted selections, missing witnesses,
+wrong causal reasons/commands/counters, changed mutation source plus manifest,
+altered retained results and a false completion flag. The original proof then
+revalidates. Controls are recorded in `final-write-candidate-controls-v2.json`.
+Separate current-production direct controls pass 22,528 scenarios / four batches;
+four optional private recovery batches remain unavailable. Their V2 verification
+SHA-256 is `c5da8e56e568ab47fea88313215ce8e49429e3e2f76f0dc8069ad6668b945d78`.
+Existing private-test compiler warnings remain recorded.
+
+This gate covers byte/word/long simple indirect and postincrement source forms
+with indirect destinations, A0/A7, aliases, four stack states/values, CCR 0/31
+and scalar/batch execution on EC020, 020, 030 and A1200 profiles. It does not
+qualify the whole short-frame protocol: saved-pipe lengths 0–3, software DF-clear
+or edited output, repeated pending-write faults, changed return SR/stacks,
+foreign/moved/invalid images, entry/load faults and trace still require their
+own checks. Returned T1/T0 is explicitly unsupported here. Byte/word
+memory-destination source-read continuation, read-to-write fault chains, broader
+EAs/origins and full integration/isolated consumers remain required before import.
+Hardware is unavailable; the earlier trace and A7 software disagreements remain
+open. No production CPU import, package publication or regression retirement
 occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
