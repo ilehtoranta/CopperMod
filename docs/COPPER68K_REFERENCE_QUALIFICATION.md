@@ -9902,3 +9902,53 @@ before promoting changed-bank A7 postincrement behavior. Neither successful
 software agreement nor changing the expected bank closes that requirement.
 No CPU fix/import, package publication or regression retirement occurs.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## Native 030 returned-A7 observer discovery — 2026-10-07
+
+The pinned generic WinUAE 030 observer now executes the actual `(A7)+` MOVE.L
+operation, real postincrement fixup serialization/restoration, generated
+format-B exception entry, guest saved-S/M edit and RTE in the existing complete
+MMU retry loop. The extracted `op_2018_32_ff`, `mmu030fixupreg`,
+`mmu030fixupmod` and `cpu_restore_fixup` functions are byte-equivalent text
+from reference commit `5d22d33632646efc3f747f03e82d28353e52722e`.
+Previously qualified frame/RTE/access/run-loop fragments remain unchanged.
+Transport is flat physical memory; enabled translation, cache, IRQ, timing
+and hardware behavior are not qualified. Trace is disabled.
+
+All **16 fault/frame/RTE bank pairs and four direct controls** execute. Each
+fault has exactly two operand attempts and one successful source read; each
+direct control has one attempt/read. Source address, destination value,
+following MOVEQ, final PC and exception/handler events are checked. The
+observer verifies that only saved-SR bytes change in the 92-byte native frame.
+Raw USP/ISP/MSP fields are recorded as software storage fields; the active
+A7 alias is not silently normalized into them.
+
+The reference does **not** resolve the architectural A7 policy: its two
+unchanged-bank user-mode fault cases leave A7=`4208`, while all four direct
+controls leave A7=`4204`. Other fault cases show different bank adjustments.
+These are recorded software observations, not expected hardware behavior.
+The ordinary postincrement rule in
+[MC68030UM-P1 section 2.4.4](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P1.pdf)
+does not justify selecting that eight-byte result. Reviewing the restoration
+and recovery sections in
+[MC68030UM-P2 sections 8.1.10 and 8.2](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+also did not establish the changed-S/M physical-bank update in this experiment.
+The observer or the reference recovery/fixup interaction requires further
+investigation before it can be an oracle for that case.
+
+Two sole observer mutations are rejected precisely: an extra actual source
+read fails the attempt/successful-read guard, and leaked operand context fails
+when an RTE stack read is mistaken for an operand read. Native functions stay
+unchanged in both. Failed V1..V7 exploratory adapters remain retained: line
+comment/header build errors, unsupported user FC transport, and address-only
+read counters that confused overlapping RTE stack and operand accesses.
+V8 distinguishes transport origin and resets context on every dispatch exit;
+no count expectation or native source function is weakened to obtain completion.
+
+Evidence: `reference/ReturnedA7Native030V8` and
+`mutations/ReturnedA7ObserverV1` in the restoration temporary root.
+`native-returned-a7-discovery-proof-v8.json` SHA-256:
+`386737febabb5a4b9ac81108b01c2653d273a546e28db6f3f39b45e548d2189d`. This is observer/software discovery, not a passing architectural
+gate or a replacement for either retained A7 hypothesis. No production CPU
+change, import, package publication or regression retirement occurs.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

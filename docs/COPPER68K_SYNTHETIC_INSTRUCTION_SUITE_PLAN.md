@@ -3270,3 +3270,11 @@ weights, failure IDs and test outcomes are verified. This remains unqualified
 architectural behavior; changing an expectation is not a CPU fix or completion.
 Milestone 6 stays **in progress**. See the
 [returned A7 discovery record](COPPER68K_REFERENCE_QUALIFICATION.md#returned-a7-bank-selection-discovery--2026-10-07).
+
+The native 030 A7 observer now executes sixteen fault bank pairs and four
+direct controls using unchanged postincrement/fixup/frame/RTE/run-loop source.
+Its same-bank user fault cases disagree with the ordinary four-byte update;
+the architectural question remains open. Two observer provenance/replay guards
+pass, and failed exploratory adapters remain retained. No CPU change or
+architectural promotion occurs. See the
+[native A7 discovery record](COPPER68K_REFERENCE_QUALIFICATION.md#native-030-returned-a7-observer-discovery--2026-10-07).
