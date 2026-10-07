@@ -3348,3 +3348,18 @@ destinations; implementation and broader model/EA/fault coverage stay required.
 No production CPU/package change occurs. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See the
 [native memory-destination evidence and scope](COPPER68K_REFERENCE_QUALIFICATION.md#native-source-read-recovery-before-a-memory-destination--2026-10-07).
+
+The observed indirect-memory MOVE.L destination now has a bounded private
+source-read recovery implementation. Original private source rejects 65,536
+recoveries while retaining 16,384 direct controls; the isolated suffix passes
+all 81,920 new scenarios and 61,440 existing register-destination scenarios.
+Read replay, alias address, flag and timing mutations fail precisely; eleven
+evidence-corruption controls are rejected and original evidence revalidates. Production
+direct coverage passes separately; two optional private recovery batches remain
+unavailable there. The maintained command pins the complete private parent and
+verifies exact inputs, rosters, coverage keys/weights and outcomes. Existing
+specialized timing policies and operand order are preserved. Broader fault/EA,
+trace/hardware, full integration and consumer gates remain open before any CPU
+import. No production CPU/package change occurs. Milestone 6 remains **in
+progress**, `roadmapComplete=false`. See the
+[private memory-destination suffix and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-memory-destination-read-recovery-suffix--2026-10-07).

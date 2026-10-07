@@ -10305,3 +10305,88 @@ bounded failing test and suffix-only implementation for the newly observed
 memory destination, followed by retention/full integration and consumers before
 any import. No CPU source/package/regression retirement changes. Milestone 6
 remains **in progress**, `roadmapComplete=false`.
+
+### Private memory-destination read-recovery suffix — 2026-10-07
+
+The bounded continuation following the native observation is implemented only
+in a fresh private snapshot. Production CPU source and packages remain unchanged.
+`SyntheticM68020MemoryDestinationRecoveryTests` uses literal `2290`, `2298`,
+`2090`, `2098` encodings: MOVE.L from indirect/postincrement A0 to indirect A1
+or A0. Independent addresses are source `4200`, separate destination `4400`,
+postincrement alias destination `4204`, and indirect alias destination `4200`.
+Four values, every initial CCR, four unchanged stack states, scalar/batch
+execution and all four rejected logical-request lanes are selected.
+
+The original private CPU produces exactly **65,536 unsupported recoveries**
+and retains **16,384 passing direct controls**. The candidate completes all
+**81,920 scenarios**, zero mismatches/unsupported/untested selected cases, plus
+**61,440 existing register-destination continuation/control scenarios**.
+Each recovery completes only its pending read, source update, destination write
+and flags. It never restarts the instruction or recomputes the source EA.
+The test verifies full registers/defined SR, stack banks, next PC, one successful
+source read, one destination write in order, no opcode replay, untouched memory
+and guards, opaque frame retention and a following MOVEQ sentinel.
+
+Existing timing policies are kept separately: both selected forms have eight
+native policy cycles, with their original specialized timing keys; 030 uses
+head/tail 1/1 and 020/EC020 flat timing. These are execution-policy checks, not
+physical timing qualification. The first two exploratory snapshots had an
+incorrect general-MOVE timing expectation. V3 corrected the expectation but
+its verifier also counted aggregate TRX stdout, rejecting duplicate summaries.
+V4 reads only per-test stdout and passes the exact deterministic audit. Those
+failed explorations remain recorded, not credited as passing qualification.
+
+Four sole private CPU mutations are detected:
+
+| Defect | Mismatching new cases | Retained new controls |
+| --- | ---: | ---: |
+| Repeat completed source read | 65,536 | 16,384 |
+| Write postincrement alias at the old source address | 16,384 | 65,536 |
+| Preserve old flags instead of completing MOVE flags | 61,440 | 20,480 |
+| Substitute general six-cycle flat suffix timing | 65,536 | 16,384 |
+
+The maintained command requires the frozen 230-file private parent, pins its
+manifest and CPU file, copies all inputs, and applies the bounded patch only
+inside the new output directory. It checks exact complete source inventories,
+both producer identities, command selections, TRX test rosters/counters/stdout,
+every coverage key and weight, failures and output identities. Empty/missing
+inputs and mismatches fail the audit. No pack/publication/import occurs.
+
+```powershell
+python scripts/test-copper68k-memory-destination-recovery.py `
+  --parent-directory <restoration-root>/audits/Operand020CombinedRefaultV1 `
+  --output <fresh-output-directory>
+python scripts/test-copper68k-memory-destination-recovery.py `
+  --parent-directory <restoration-root>/audits/Operand020CombinedRefaultV1 `
+  --output <same-output-directory> --validate-only
+```
+
+The private parent manifest SHA-256 is
+`943288fe579f746468f9df7ecdfd11833e2862e9db058039476aa8768aa61a9a`;
+its operand continuation CPU file is
+`b93d2ef4b2801b544313c1efad29d4cc47254f7a38897ee1a7b61a3f7e556a0d`.
+Evidence `audits/MemoryDestinationPrivateV4/proof.json` SHA-256:
+`003bb1a07053f298c395e143afc93d725926bf11712cfb19f2bfac99ac3488fc`.
+Eleven independent copied-evidence controls reject wrong producer, missing
+fixture/output identity, empty selection, wrong weight, missing witness, wrong
+mutation cause/command/TRX counters, changed mutation with an updated manifest,
+and changed aggregate verification. Original evidence then revalidates.
+`memory-destination-private-controls-v4.json` SHA-256:
+`1c7517d6226964d4aac645ad1d56cd9485ac74d61b42e59f5a8ffe3e1ef99335`.
+Separate production-source direct coverage passes 16,384 scenarios / two
+batches, with two private recovery batches explicitly unavailable; its isolated
+verification SHA-256 is
+`5a429f1c5bea80f25b0231adcaedd666088fbe870035a6d97241d6f2bc9e28d3`.
+
+Native agreement is scoped to the prior **030 software observation**. The
+020/EC020/A1200 runs establish private software behavior and retention; they do
+not add an independent processor reference. This addition is aligned long
+source-read recovery with unchanged handler registers/S/M, no trace/interrupt,
+and a mapped indirect memory destination. Byte/word, other source/destination
+EAs, A7/changed-bank cases, indexed/pointer sources, destination-write faults,
+handler modifications and general fault origins remain required. The earlier
+complete CPU/combined/consumer evidence has its original source identity and
+does not qualify this new candidate. Full integration and consumers are still
+required before import. Hardware is unavailable; the trace disagreements remain
+open. No regression retirement or public release occurs. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.
