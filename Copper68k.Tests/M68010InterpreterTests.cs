@@ -156,22 +156,5 @@ public sealed class M68010InterpreterTests
 		Assert.Equal(0x800Cu, bus.ReadWord(0x2FCC));
 	}
 
-	[Fact]
-	public void RejectsM68020OnlyExtbLong()
-	{
-		var bus = new ZeroWaitCodeBus();
-		WriteWords(bus, CodeBase, 0x49C0); // EXTB.L D0
-		bus.WriteLong(4u * 4u, 0x0000_2000);
-		var cpu = new M68010Interpreter(bus);
-		cpu.Reset(CodeBase, 0x3000);
-		cpu.State.D[0] = 0x0000_0080;
-		cpu.ExecuteInstruction();
-		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
-		Assert.Equal(0x0000_0080u, cpu.State.D[0]);
-		Assert.Equal(0x2FF8u, cpu.State.A[7]);
-		Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
-		Assert.Equal(4 * 4, bus.ReadWord(0x2FFE));
-	}
-
 	private const uint CodeBase = 0x1000;
 }

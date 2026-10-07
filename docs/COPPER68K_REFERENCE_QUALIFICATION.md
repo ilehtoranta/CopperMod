@@ -9478,3 +9478,55 @@ separate. Production assemblies retain protected hashes; no CPU fix, package
 publication or full CPU/consumer claim occurs. Handler-edited T1 remains
 unresolved; neither software delay is a replacement architecture rule.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## EXTB availability regression consolidation — 2026-10-07
+
+Retire only `M68010InterpreterTests.RejectsM68020OnlyExtbLong` in favor of
+`SyntheticTransferTests.RegisterTransferFamilies`. The exact replacement
+anchor is `68010/EXTB.L/D0/boundary-ccr/op=49C0/v=00000080/ccr=00`.
+The shared family verifies the documented illegal-instruction outcome on
+68000/68010 and legal execution on the later models, including A1200.
+It checks registers, saved PC/SR, format/vector word, stack and surrounding
+memory; all eight registers, eight boundary values and 32 CCR states cover
+2,048 EXTB scenarios per profile. This retirement concerns semantics only.
+The seven other 68010 tests and all timing, prefetch, cache, JIT, bus-ordering
+and native regressions remain.
+
+The isolated audit restores the exact original class from commit
+`1d4339e686a56abd5260a49e8cdbd72ed4eec512` and copies 204 source/project
+inputs. Its clean selection passes 16 executions, including the original
+witness, seven retained 68010 tests and eight complete shared batches.
+The shared batches pass **140,992 logical scenarios**, with zero mismatches,
+unsupported or untested selected cases. A targeted mutation accepts EXTB
+as an empty operation only in the 68010 model-specific dispatch. Both the
+original witness and precisely **2,048 shared EXTB scenarios** detect it;
+the other 138,944 shared scenarios and seven retained 68010 tests pass.
+The mutated CPU file is the only changed audit input; no production CPU
+change is made. The reduced repository selection separately passes all
+15 executions, with no skips.
+
+Six corruption checks reject a missing fixture, wrong producer, empty test
+selection, incorrect weights, unrelated failure reason and a changed CPU
+baseline even when its manifest hash is updated. Validation checks exact
+source inventories, pinned original fixture, test rosters/outcomes, complete
+report keys/weights, all failure identifiers/reasons and TRX agreement.
+Normal assemblies retain their protected identities.
+
+Run the maintained audit with Python 3 and dotnet available:
+
+```powershell
+python ./scripts/test-copper68k-extb-consolidation.py --output <fresh-directory>
+python ./scripts/test-copper68k-extb-consolidation.py --output <same-directory> --validate-only
+```
+
+Evidence: `audits/ExtbConsolidationV2/proof.json`, SHA-256
+`f0a5eec4601d67e973fdccde2182f56a1c84abbdec6da2ce5659f8383fdfb044`;
+`audits/ExtbConsolidationCurrent/current.trx`, SHA-256
+`f3d5846051cc40e1f35f66487c92d3f0135443b82d4932a5ab35eb7ecd5e3e9b`,
+records the reduced selection. V1 passed its clean execution but failed
+fixture-identity validation because Python's Windows newline conversion
+changed the frozen file bytes. V2 fixes only the audit writer and reruns
+into a fresh directory; V1 is not qualified evidence. No new full CPU,
+consumer or physical timing qualification is claimed. The 030 trace
+disagreement remains open. Milestone 6 remains **in progress**,
+`roadmapComplete=false`; no package publication occurs.

@@ -3163,3 +3163,15 @@ unresolved, and no production CPU behavior is changed. Observer word-width
 repairs and failed exploratory runs are recorded separately. Milestone 6
 remains **in progress**, `roadmapComplete=false`. See the
 [compatible pipeline/reference gate record](COPPER68K_REFERENCE_QUALIFICATION.md#compatible-030-pipeline-reference-and-failing-agreement-gate--2026-10-07).
+
+The pure semantic 68010 EXTB rejection regression is now replaced by the
+shared register-transfer suite after an isolated proof restores its exact
+original fixture. All 140,992 shared scenarios pass across eight profiles;
+an intentional 68010 acceptance defect fails both the original witness and
+exactly 2,048 shared EXTB scenarios. Seven other 68010 tests pass unchanged,
+six evidence corruption checks reject altered inputs, and all 15 executions
+in the reduced repository selection pass without skips. Timing and hardware
+regressions remain. This completes only the EXTB consolidation slice;
+remaining reference gaps, including the 030 trace disagreement, stay open.
+Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
+[EXTB consolidation record](COPPER68K_REFERENCE_QUALIFICATION.md#extb-availability-regression-consolidation--2026-10-07).
