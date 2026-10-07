@@ -3241,3 +3241,13 @@ presets. Both full CPU and combined private recovery executions are pending;
 input qualification is not execution completion. No production import or
 publication occurs. Milestone 6 stays **in progress**, `roadmapComplete=false`.
 See the [current-tests/private-CPU full replay record](COPPER68K_REFERENCE_QUALIFICATION.md#current-tests-on-latest-private-cpu--full-replay-started-2026-10-07).
+
+The latest returned-bank/scoped-FC private CPU now completes the unchanged
+five-selection combined gate: 11,109,248 scenarios / 5,744 reports / 1,436
+passing executions, zero skips, with exact original coverage and seven full
+integrity controls. This supersedes provisional evidence for that selection.
+Full current CPU/consumer qualification and broader roadmap gates remain
+required. Hardware is unavailable and the trace boundary stays unresolved;
+no production import/publication or architectural trace promotion occurs.
+Milestone 6 stays **in progress**, `roadmapComplete=false`. See the
+[complete corrected combined record](COPPER68K_REFERENCE_QUALIFICATION.md#latest-refault-corrected-combined-replay-complete--2026-10-07).

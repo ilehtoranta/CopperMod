@@ -9791,3 +9791,38 @@ Full execution/integrity, wider recovery/reference gates and consumers stay
 required. No production import, package publication, architectural trace or
 physical timing qualification occurs. Milestone 6 remains **in progress**,
 `roadmapComplete=false`.
+
+## Latest refault-corrected combined replay complete — 2026-10-07
+
+The complete five-selection integration gate now passes on the latest private
+returned-bank and scoped-original-FC CPU: **11,109,248 scenarios / 5,744 reports /
+1,436 executions**, with zero mismatches, unsupported forms or untested selected
+combinations and no skipped executions. All 230 source/project inputs remain
+identical to the qualified indexed returned-bank parent. Exact report keys,
+weights and outcomes match the five original independently pinned selections;
+TRX names, outcomes and per-report summaries agree with those reports. This
+supersedes the provisional observations only for this complete selected gate.
+
+Seven full evidence controls reject omitted/changed fixtures, wrong parent
+proof, altered weights, wrong producer, empty execution selection and changed
+requested selection. Both protected normal assemblies remain unchanged.
+Evidence is `audits/Operand020CombinedRefaultV1` and
+`integrity/Operand020CombinedRefaultV1/Full` in the restoration temporary root.
+Aggregate `combined-refault-complete-proof.json` SHA-256:
+`8e0f69acef6ee982175952a438c17bd0b097888cbf1ddba53b1c64117bf09a21`.
+
+Trace cases here retain the private software policy; passing them does not
+resolve the separate 030 manual/reference disagreement. The current-tests
+full CPU replay remains pending, as do consumer qualification, broader fault
+origins/recovery and the other reference/consolidation requirements. No
+production import, package publication or physical timing qualification occurs.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Hardware availability was explicitly confirmed unavailable by the user.
+A source-only inspection of [Moira](https://github.com/dirkwhoffmann/Moira/tree/ce28239b0507ebfe1bf2ad2b9c9252dc2f2cc031)
+at commit `ce28239b0507ebfe1bf2ad2b9c9252dc2f2cc031` excludes it as a 030/040
+fault-recovery trace oracle: `MoiraTypes.h` labels those models disassembler-only,
+and the 020 format-B RTE path in `MoiraExec_cpp.h` discards saved recovery words
+before restoring SR/PC and refilling prefetch. No reference cases were executed
+or credited. The source hashes and inspection scope are retained separately in
+`moira-capability-v1.json`; the architectural trace question stays unresolved.
