@@ -2806,3 +2806,19 @@ controls pass. This remains unimported and unpromoted pending operation-origin
 discrimination, saved-pipe, A7/alias/index, trace/interrupt, return-SR/stack,
 high-address and integrity qualification. Broader continuation and consolidation
 remain required. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Typed pending-read development now distinguishes trace-vector suspension from
+an already-completed MOVE source. The isolated corrected matrix passes 92,160
+trace/control programs; removing its trace continuation causes exactly 73,728
+failures while preserving 18,432 controls. Another 73,728 canonical-indirect
+programs cover software-supplied vector targets, persistent refault and changed
+VBR, both with and without an earlier source fault. Two mutations each detect
+24,576 intended mismatches with 49,152 unaffected passes. Three evidence-integrity
+controls reject missing reports, empty executions and incorrect weights.
+All 129,024 previous handler programs and 68,352 RTE programs plus 25 retained
+controls pass against the typed source. The prototype remains isolated and
+unpromoted pending nested-PC provenance, other read origins, pipeline/A7/index,
+trace/interrupt, changed return-SR/stack and wider transport qualification.
+Broader continuation, reference gaps and consolidation remain required.
+Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
+[typed trace-vector continuation](COPPER68K_REFERENCE_QUALIFICATION.md#typed-trace-vector-read-continuation--2026-10-07).

@@ -8107,3 +8107,65 @@ return-SR/stack behavior, high-address transport and evidence-integrity controls
 also remain required. Broader pointer, memory-destination and other-family
 continuation stays open. No private consumer package is built for this prototype;
 the next such version remains .73. Milestone 6 remains **in progress**.
+
+#### Typed trace-vector read continuation — 2026-10-07
+
+The next isolated discovery distinguishes a pending exception read from a
+completed MOVE source read. With T1 set, a repaired MOVE completes its register
+and flag effects, creates the format-2 trace frame, then encounters a rejected
+vector-9 read. The V5 opcode-only recovery path incorrectly treats that vector
+as another source operand. The independent fixture retains **18,432 passing
+controls**, **24,576 long-size mismatches** and **49,152 byte/word unsupported
+programs**; these failed discovery batches are not promoted coverage.
+The documented ordering is in [MC68020UM](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf)
+6.1.11 and [MC68030UM](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+8.1.12: a bus fault during trace processing must be handled before that
+processing finishes.
+
+The frozen corrected prototype serializes a typed pending-read kind and the
+pending indexed timing-policy state. A trace-vector continuation retries only
+its saved read (or accepts DF-cleared DIB input), then finishes the existing
+exception timing policy. It neither reexecutes MOVE nor pushes another trace
+frame. Unknown read origins remain explicitly unsupported on return. All
+**92,160 selected programs / 16 reports / four executions** pass across
+EC020/A1200/020/030, scalar/batch routes, six source forms, three sizes, four
+stack states, every CCR and all vector-read byte lanes. Removing the trace
+continuation produces exactly **73,728 mismatches**, with **18,432 unchanged
+controls** passing. The strict proof checks both changed CPU files, unchanged
+fixtures, precise failure identifiers/reasons, combination weights and actual
+TRX summaries. Evidence:
+`audits/Operand020TraceVectorFixV2/proof.json`, SHA-256 `c5168b47442dcd246c206b0d784596d603c463e9504a0fd3bd109d4d67f6e5d2`;
+fixed verification SHA-256 `f4cd4ac39c04d200a9d73137d2e1ac2183f15e1332199e87ba6c1728c17392d8`.
+
+An additional canonical-indirect fixture passes **73,728 complete programs /
+48 reports / 12 executions**, with and without the earlier source fault.
+Real handlers supply a different trace target through DIB, persistently refault
+before allowing the pending read, or change VBR through MOVEC. All code is
+prepared before execution; the source handler installs the subsequent bus-error
+handler with a real memory write. Per-instruction architectural state, all
+stacks, trace-frame fields, surrounding memory, exception counts, source/vector
+read counts and the following sentinel are checked. A VBR change preserves
+the already-evaluated pending vector address. Ignoring DIB and recalculating
+that address from VBR each produce **24,576 precise mismatches**, with **49,152
+unaffected programs** passing. Evidence:
+`audits/Operand020TraceVectorHandlersV2/verification.json`, SHA-256 `6277bbd11424c486d6e0c2e1ad12d451fa196f41e7cb72e3d6a3840175931bf6`;
+mutation verification SHA-256 `dc882d0f264639ffa4049c0546f1f48e46fe6fa2eedaff2a7729aa5aa18b283d` and `85982c02016c89b78c3da8cc300ffd6cb6fa5741a15d716967553ffb131c82b0`.
+The strict verifier also rejects a missing report, an empty execution selection
+and an incorrect per-combination weight; its separate controls do not count as
+CPU programs.
+
+Fresh corrected-source retention passes all **129,024 earlier handler programs**
+and all **51 retained executions**: **68,352 RTE programs** have byte-identical
+reports and matching actual TRX summaries, plus **25 mapping/cache/optional
+interface controls**. These source-specific gates validate the typed prototype;
+the delivered production full-suite/private .72 results apply to the earlier
+RTE/map correction, not this prototype. The failed initial handler fixture
+compile attempt is retained separately and supplies no passing coverage.
+
+This development remains isolated, unimported and unpromoted. Independent
+nested vector-frame PC provenance, T0/interrupt interactions, other exception
+read origins, saved-pipe mutation and warm dispatch, A7/aliases/indexing,
+changed return SR/stacks, wider fault transport, memory destinations and
+other-family continuation remain required. Existing reference and consolidation
+gaps remain open. No package is built or published; the next private consumer
+version remains .73. Milestone 6 remains **in progress**, `roadmapComplete=false`.
