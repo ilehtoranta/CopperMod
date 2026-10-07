@@ -2904,3 +2904,19 @@ unpromoted, with no package change or test retirement. Register/index aliases,
 all-structure chained faults and broader continuation/reference/consolidation
 gates stay required. Milestone 6 remains **in progress**, `roadmapComplete=false`.
 See the [all-structure read qualification](COPPER68K_REFERENCE_QUALIFICATION.md#all-legal-full-indexed-read-structures--2026-10-07).
+
+Separate indexed register and index-size/scale/alias groups now pass 768,000
+programs on the unchanged isolated prototype. All An/PC base, destination and
+D/A-index register selections use canonical index settings; rotated alias
+layouts additionally cover word/long indexes and all four scales. A7 sources,
+indexes and MOVEA destinations remain included, with ISP updates verified.
+Real handlers alter participating registers, consumed code and completed
+pointers. A saved-offset mutation detects exactly 153,600 intended failures
+while preserving 614,400 unaffected programs; six fixed encoding examples,
+complete source/key/weight/TRX checks and five corruption controls pass. Two
+invalid-fixture snapshots remain audited separately; their repairs change only
+the test file. Negative address-index/value boundaries, all-structure chained
+faults and broader continuation/reference/consolidation remain required. The
+prototype stays unimported and unpromoted, with no package change or test
+retirement; milestone 6 stays **in progress**, `roadmapComplete=false`.
+See the [indexed register qualification](COPPER68K_REFERENCE_QUALIFICATION.md#indexed-register-index-size-scale-and-alias-groups--2026-10-07).

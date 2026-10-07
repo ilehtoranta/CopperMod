@@ -8472,3 +8472,70 @@ wider captured pipes and provenance/transport, other read origins,
 trace/interrupt, return-SR/stack, memory destinations, other families and
 remaining reference/consolidation gates stay required. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
+
+#### Indexed register, index-size, scale and alias groups — 2026-10-07
+
+The unchanged isolated prototype passes **768,000 programs / 256 reports / 65
+executions** with zero mismatching, unsupported or untested cases in this
+selection. Six fixed opcode/extension examples validate the shared
+`MoveSpecification`/`IndexFixture` encodings. Two separate deterministic groups
+complement the preceding 66-structure matrix:
+
+- **460,800 register programs:** all eight An bases plus PC, all eight
+  destinations, all eight D/A indexes, at canonical word-index/scale-one
+  settings. This includes source/destination/index register aliases.
+- **307,200 index programs:** word/long indexes and scales 1/2/4/8 across
+  distinct, base/destination, destination/index, base/index and all-register
+  aliases, plus PC-relative destination/index aliases, rotated through all
+  register numbers.
+
+Both groups cover brief addressing, full direct, full preindexed and full
+postindexed canonical structures, MOVE byte/word/long and MOVEA word/long,
+four 020/030 models/profiles and scalar/batch routes. The selected state is ISP,
+CCR 1F, with one canonical fault lane; other stack/CCR/read-lane combinations
+remain covered by their preceding matrices. There are **307,200 controls** and
+**460,800 real alias-handler programs**. D-index input `1000FFF8` distinguishes
+negative word indexes from high long indexes; An inputs retain the fixture's
+positive address/stack values. Negative address-index values and wider numeric
+boundaries remain a separate required group.
+
+Real handlers change participating D and A0-A6 registers, rewrite consumed
+opcode/extensions, and change already-completed pointers. They preserve A7
+while it addresses the active handler frame. A7 source/index cases and MOVEA
+A7 destinations remain included; architectural checks verify ISP changes along
+with the resulting A7 value. Expected EAs/index offsets are established before
+CPU execution without production helpers. A resumed source reads current
+expected memory after real handler writes, including a self-code operand.
+All registers, defined flags, PC, stacks, memory guards, exception fields,
+ordered read widths/counts and the following sentinel are checked.
+
+A sole CPU mutation drops the saved outer/post-index offset during pointer
+recovery. Every one of the **153,600 intended failures** has its exact
+identifier and register/flag mismatch verified; **614,400 unaffected programs
+pass**. Five corruption controls reject omitted/changed fixtures, wrong
+producers, empty executed selections and wrong weights. Independent source,
+execution-roster, architectural-key and logical-weight checks pass.
+
+The first two snapshots remain distinct invalid-fixture evidence: the first
+has **744,656 passes / 23,344 expectation failures** from self-code data changes
+and stale ISP expectations; the second has **744,960 passes / 23,040 stale-ISP
+expectation failures**. Their complete failure identifiers/reasons are audited.
+Fresh repairs modify only the fixture, never the CPU or an executed snapshot.
+No CPU defect is inferred from those failures.
+
+Evidence: `audits/Operand020IndexedRegisters`,
+`audits/Operand020IndexedRegistersV2`, `audits/Operand020IndexedRegistersV3`,
+`mutations/Operand020IndexedRegisters/DiscardOffset`; aggregate
+`operand020-indexed-registers-proof.json`, SHA-256
+`ba6093c39caf7695c6933f7c3de537304c3fbf781b5a2d086b26b4c07ca04fd5`.
+It pins all four selected executions, complete 217-file source inventories,
+verifier/binary identities, fixture-only repairs, the sole CPU mutation, five
+corruption controls and the previous unchanged-source proof. Existing
+source-specific retention/timing evidence is reused; no fresh retention or
+all-structure timing gate is claimed. Protected normal assemblies, production
+source, API/packages and regression retirement remain unchanged; the prototype
+stays isolated and unpromoted. Signed address-index/value boundaries,
+all-structure chained faults, broader pipes/provenance/transport, other read
+origins, trace/interrupt, return-SR/stack, memory destinations, other families
+and existing reference/consolidation work remain required. Milestone 6 stays
+**in progress**, `roadmapComplete=false`.
