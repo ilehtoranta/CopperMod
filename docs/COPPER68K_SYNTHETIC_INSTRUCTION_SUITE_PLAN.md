@@ -2920,3 +2920,19 @@ faults and broader continuation/reference/consolidation remain required. The
 prototype stays unimported and unpromoted, with no package change or test
 retirement; milestone 6 stays **in progress**, `roadmapComplete=false`.
 See the [indexed register qualification](COPPER68K_REFERENCE_QUALIFICATION.md#indexed-register-index-size-scale-and-alias-groups--2026-10-07).
+
+Signed D/A-index boundary qualification now passes 1,638,400 programs on the
+unchanged isolated prototype. Eight fixed raw values, all register numbers,
+word/long indexes, all scales and four An/PC alias layouts complement the prior
+structure/register matrices. A7 uses user-stack values with a separate handler
+frame; MOVEA A7 updates USP and its register expectation together. Sixty-four
+fixed address examples anchor the shared fixture. A suspended self-code pointer
+reads handler-updated bytes at its saved pointer address with its saved offset;
+a fixture-only repair preserves 640 earlier expectation failures as invalid
+evidence. The offset mutation detects exactly 327,680 intended failures,
+including 640 same-value cases exposed by access checks, while 1,310,720 cases
+remain passing. Complete source/key/weight/TRX audits and five integrity controls
+pass. No production import, package change or regression retirement occurs.
+All-structure chained faults and wider continuation/reference/consolidation
+remain required; milestone 6 stays **in progress**, `roadmapComplete=false`.
+See the [signed index boundary qualification](COPPER68K_REFERENCE_QUALIFICATION.md#signed-index-boundaries-and-user-stack-a7--2026-10-07).

@@ -8539,3 +8539,70 @@ all-structure chained faults, broader pipes/provenance/transport, other read
 origins, trace/interrupt, return-SR/stack, memory destinations, other families
 and existing reference/consolidation work remain required. Milestone 6 stays
 **in progress**, `roadmapComplete=false`.
+
+#### Signed index boundaries and user-stack A7 — 2026-10-07
+
+The unchanged isolated prototype passes **1,638,400 programs / 1,024 reports /
+257 executions**, with zero mismatching, unsupported or untested cases in the
+selected matrix. **64 fixed address examples** independently anchor D/A word
+and long indexes at scales one/eight; execution covers all four scales. Word
+sign extension and scale encodings follow [M68000PM table 2-1](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf).
+The eight fixed raw register values are `80000000`, `80007FFF`, `80008000`,
+`8000FFFF`, `7FFFFFFF`, `FFFFFFFF`, `1000FFF8` and zero. They distinguish low-word
+sign boundaries from complete long values and exercise scaling/32-bit wrapping.
+
+The separate deterministic group rotates destination/index, base/index,
+all-register and PC-relative aliases through every D/A index register. It
+crosses word/long indexes, scales 1/2/4/8, brief/full-direct/pre/post canonical
+structures, MOVE byte/word/long and MOVEA word/long, four 020/030 models/profiles
+and both execution routes. There are **655,360 controls** and **983,040 real
+alias-handler programs**, at user CCR 1F and a canonical fault lane. Other
+stack/CCR/lane combinations retain their preceding evidence; this is not an
+all-structure/value Cartesian product.
+
+A7 address-index inputs use the selected raw value as the user stack pointer,
+including zero, high/negative and odd values, with a separate supervisor handler
+frame. MOVEA A7 updates USP and the architectural register together. Handlers
+alter participating D and A0-A6 registers, consumed opcode/extensions and
+completed pointers while preserving their active frame pointer. Operand/pointer
+access spans are asserted disjoint from handler and exception-frame regions;
+setup protects code through the model's physical address mapping. Expected
+addresses and evaluated offsets use the shared test fixture, never production
+EA helpers. Architectural state, logical fault addresses/function codes,
+ordered read widths/counts, memory guards and the following sentinel pass.
+
+A full preindexed PC case deliberately reads its own extension words as a
+pointer. Recovery reads the real pointer bytes after handler writes at the
+**saved pointer address**, retaining the already-evaluated outer/index offset.
+Final-operand recovery similarly retains its saved EA when the handler changes
+a completed pointer. The first snapshot incorrectly expected an unchanged
+pointer value: **1,637,760 other programs pass / 640 fixture-expectation failures**
+remain distinct audited invalid evidence. A fresh repair changes only that
+fixture, not CPU source or an executed snapshot.
+
+A sole CPU mutation discards the saved offset at pointer recovery. Exact
+identifiers/reasons verify all **327,680 intended failures**, with **1,310,720
+unaffected passes**. Of those failures, **640** still produce the same zero
+register/flag result and are detected by the access-order/count checks; the
+other **327,040** produce the expected register/flag mismatches. Five deliberate
+integrity controls reject omitted/changed fixtures, wrong producer identities,
+empty executed selections and incorrect weights. Complete source inventories,
+actual test rosters/TRX summaries and independently enumerated architectural
+keys/logical weights pass.
+
+Evidence: `audits/Operand020IndexedBoundaries`,
+`audits/Operand020IndexedBoundariesV2`,
+`mutations/Operand020IndexedBoundaries/DiscardOffset`; aggregate
+`operand020-indexed-boundaries-proof.json`, SHA-256
+`9252f8f0c37250b07224ad2e2ef90defedd19e238fbb4faba77c293acad982a7`.
+It pins three complete selected executions, 218-file source inventories,
+verifier/binary identities, fixture-only repair, the sole CPU mutation, five
+corruption controls and the preceding unchanged-source proof. Accepted
+source-specific retention/timing evidence is reused; no fresh retention replay
+or physical/all-structure timing qualification is claimed. Protected normal
+assemblies, production CPU source, API/packages and regression retirement
+remain unchanged. The prototype stays isolated and unpromoted. All-structure
+chained faults, broader captured pipes/provenance/transport, other read origins,
+trace/interrupt, changed return-SR/stack, memory destinations, other families
+and remaining reference/consolidation work stay required. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.
