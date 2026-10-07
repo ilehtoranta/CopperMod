@@ -9257,3 +9257,66 @@ other origins and remaining roadmap gates stay required, as does fresh full
 CPU/consumer validation before import. Production CPU/packages, normal
 assemblies and CMPM retirements remain unchanged. No package is published.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+#### Private returned-trace policy and unresolved architectural outcomes — 2026-10-07
+
+On the unchanged refault-corrected private CPU, **188,416 programs / 512
+reports / 128 executions** pass the prototype's resumed-suffix trace policy.
+The selection combines all sixteen original/returned S/M pairs and all four
+initial/returned T1 pairs with copied/control private frames, MOVE byte/word/
+long and MOVEA word/long `(A0)`, source/vector fault lanes and scalar/batch.
+CCR `00/1F` covers all forms; a separate canonical MOVE.L selection covers
+all 32 CCR values. Real source handlers install the nested vector handler,
+overwrite the original opcode, optionally copy the complete frame and edit
+its saved SR. Returned trace-off cases finish without a trace-vector read.
+Trace-on cases use real buffer/refault/VBR handlers, check post-suffix saved
+SR/next PC/original instruction address, complete source reads exactly once,
+recover the saved vector access and run a following sentinel.
+
+Sole CPU-file mutations suppress tracing or give the trace-vector fault user
+data FC. Each detects exactly **175,104 mismatches**, retaining **13,312
+trace-off controls**. All fixtures are unchanged; complete 230-source
+inventories, actual execution rosters/output, weighted keys and every precise
+failure identifier/reason are verified. Six corruption controls reject
+missing/changed fixtures, wrong producers, empty selections, altered weights
+and unrelated reasons. An initial control runner correctly rejected the
+wrong producer but expected an inherited diagnostic spelling; the fresh V2
+changes only runner expectations/output location and retains that rejection.
+The report label `T0` means T1=false, not hardware T0. The producer's scope
+text is inherited from its refault predecessor; its pinned actual filter,
+fixture, complete TRX roster and case keys define this trace selection.
+
+**This is not completion of changed-T1 architectural qualification.**
+[MC68030UM-P2 section 8.1.7](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+selects tracing at instruction start and defers a pending trace across a bus
+fault until the suspended instruction completes. The prototype instead uses
+the returned SR for its resumed suffix. Whether a handler's edited T1 should
+change tracing of that suspended instruction requires a targeted independent
+reference; ordinary RTE/SR code inspection does not settle that distinction.
+Exactly **86,528** selected programs leave T1 unchanged and **101,888** change
+it. The latter remain explicitly **reference-unresolved** despite passing
+their private expectations. The verifiers and aggregate proof require
+`editedT1HardwareQualified=false` and
+`architecturalChangedTraceGatePassed=false`; these rows cannot count as a
+completed architectural gate.
+
+The next discriminating reference must cause a genuine operand bus fault,
+preserve the reference processor's own internal frame, edit only stacked T1
+before RTE and observe trace before the following instruction for all four
+initial/returned T1 combinations. Keep privilege, operands, fault repair and
+other frame fields fixed first. Neither injecting the private `C022` image
+into another CPU nor replaying the prototype's expected results qualifies
+this behavior. Broader bank/frame/trace-vector cases follow the resolved
+canonical result; hardware T0 and physical pipeline behavior remain separate.
+
+Evidence: `audits/Operand020ReturnTrace`,
+`mutations/Operand020ReturnTrace/{Suppress,VectorFc}` and
+`integrity/Operand020ReturnTraceV2`. Private-policy proof:
+`operand020-return-trace-proof.json`, SHA-256
+`febb36a5e0c9c119b44be4f232c1952bbba5176ee1ca2d397799a91042d58544`.
+CPU/preexisting sources are unchanged from the separately qualified refault
+candidate; its affected retention remains separately identified. No new full
+CPU/consumer replay, production import or publication is claimed. The earlier
+large combined run uses its preceding source snapshot. Indexed/alias/foreign
+origins and all remaining roadmap gates stay required. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.

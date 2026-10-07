@@ -3111,3 +3111,19 @@ wider aliases/indexed chains, foreign origins and full CPU/consumer gates
 remain required; production source/packages remain unchanged. Milestone 6
 remains **in progress**, `roadmapComplete=false`. See the
 [changed-privilege repeated-fault record](COPPER68K_REFERENCE_QUALIFICATION.md#private-recovery-with-changed-privilege-and-repeated-faults--2026-10-07).
+
+Returned-trace private-policy coverage passes 188,416 programs across 512
+reports and 128 executions on unchanged refault-corrected CPU source.
+Suppression/user-vector-FC mutations each detect 175,104 failures, retaining
+13,312 trace-off controls; complete audits and six corruption controls pass.
+This does **not** complete architectural changed-T1 qualification: 86,528
+cases preserve T1 and 101,888 edit it, with the latter explicitly reference-
+unresolved. The manual selects tracing at instruction start; the prototype
+uses the returned SR for its resumed suffix. A genuine reference-generated
+fault/frame with only stacked T1 edited must settle the four canonical trace
+combinations before promoting that behavior. The proof requires the hardware
+qualification flag to remain false. Hardware T0, wider indexed/alias/foreign
+cases, full CPU/consumers and remaining gates stay required. No production
+import or publication is claimed. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. See the
+[returned-trace policy and reference-gap record](COPPER68K_REFERENCE_QUALIFICATION.md#private-returned-trace-policy-and-unresolved-architectural-outcomes--2026-10-07).
