@@ -10642,3 +10642,91 @@ byte/word memory-destination source-read continuation, read-to-write fault
 chains, complete integration and isolated consumers remain required before
 import. No production CPU change, publication or regression retirement occurs.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+### Native pending-write handler comparison — 2026-10-08
+
+`scripts/test-copper68k-030-write-handlers.py` executes **61,440** native 030
+programs using the same pristine WinUAE commit
+`5d22d33632646efc3f747f03e82d28353e52722e`. Generated MOVE/RTE/MOVEQ, access,
+frame construction, fixup and retry-loop fragments remain unchanged. The native
+`unalign_clear` helper is now extracted unchanged for software DF-clear handling;
+it is not replaced by a no-op. Width constants are independently checked against
+the pinned definitions. Host handler edits are explicit fixture writes; they
+do not count as CPU transfers. For an FC-bearing logical denial during native
+RTE, the adapter supplies the received FC to native `mmu030_page_fault`.
+This tests software state/recovery, without enabling address translation or
+emulating physical function-code spaces.
+
+The three non-refault operations agree with the private protocol:
+**12,288 unchanged-frame / 12,288 output-edit / 12,288 DF-clear programs pass**.
+Each covers all widths, A0/A7, indirect/postincrement, separate/aliased
+destinations, four stack states/values and all initial CCRs. Checks include
+original frame fields, exact reads/write attempts/writes, final registers/banks,
+flags before and after the sentinel, whole memory and event order. Native output
+edits change the pending data without recomputing returned flags. DF-clear
+software completion emits no CPU destination write.
+
+Both repeated-write-fault operations disagree: **24,576 comparisons mismatch**.
+The second short frame saves the RTE handler PC `5000`, whereas the private
+protocol expects restored continuation PC `1002`. Native code preserves the
+pending address/output/returned SR/FC, completes the write once on the next RTE,
+then returns to `5000` and attempts another RTE. The original MOVEQ sentinel is
+not reached. The observer records the subsequent unsupported exception path or
+uninitialized frame read; it does not pretend that downstream execution completed.
+The primary second-frame PC mismatch is observed before that downstream limitation.
+These are private-protocol disagreements, not an architectural verdict that either
+implementation is correct. No affected case is excluded or relabelled passing.
+
+The retained trace exposes the cause: normal generated MOVE sets
+`regs.instruction_pc` to the following PC before its final write; native RTE
+restores `regs.pc` before the pending transfer but leaves the fault-origin PC at
+the handler address. The retry-loop fault catch then restores that handler PC,
+which native exception construction saves. One isolated **adapter-state
+intervention**, setting the fault-origin PC from the stacked continuation before
+calling native RTE, makes all 61,440 comparisons pass, retaining all 36,864
+previously passing cases. Every extracted native fragment stays byte-identical.
+This is causal diagnostic evidence, not a patched reference oracle, hardware
+qualification or a proposed production correction. Two negative adapter defects
+independently make all 12,288 DF-clear or all 12,288 output-edit cases fail,
+retaining 24,576 passing cases and the original 24,576 refault disagreements.
+
+The [MC68030 manual, sections 8.1.2, 8.1.13 and 8.2.3](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+distinguishes faults while reading a restoration image from faults while
+rerunning its pending cycle. For the latter it requires deallocation of the
+old frame followed by a new exception frame. This supports the tested stack
+transition, but the cited description alone does not resolve the precise saved-PC
+and internal continuation-state disagreement. Hardware remains unavailable;
+further independent evidence is required before architectural promotion.
+
+```powershell
+python scripts/test-copper68k-030-write-handlers.py `
+  --reference-directory <pristine-pinned-WinUAE-checkout> `
+  --output <fresh-native-handler-output>
+# Ordinary execution and --validate-only fail the disagreement gate.
+# Add --discovery-only to explicitly record the same failing observations.
+```
+
+The audit checks every deterministic case/field and separately records each
+difference. It pins producers, reference inputs, all extracted native fragments,
+source/binary/build/log identities and verification contents. Validation executes
+the frozen observer again and requires identical rows and trace. Eight independent
+corrupted-evidence controls reject missing fixtures/producers/output identities,
+changed observer/native helper with updated manifests, empty rows, altered
+refault PC with an updated manifest, and a false agreement flag. Original frozen
+replay matches; the ordinary agreement gate correctly returns failure.
+
+Evidence `reference/WriteHandlers030V1/verification.json` SHA-256:
+`f1fc9bf9408eff4ab916749546463d4ee0b7a83913c197a9f66af4124202c1c0`.
+Diagnostics `native-write-handlers-diagnostics-v1.json` SHA-256:
+`dba067fb90b1e0dfcea123d4ef9c9e504d599ce0d3dcdc1fabfa441444f24e13`.
+Combined `native-write-handlers-proof-v1.json` SHA-256:
+`99e875fa065af5f9a63fe37362f5019d3d72b3086196c968e7399e871ee88ff1`.
+Existing native compiler warnings are retained in logs. These observations do
+not qualify other models, changed S/M/stacks, trace/interrupts, physical timing,
+enabled MMU, partial transfers, other origins or broader short-frame protocols.
+The private 647,168-case proof retains its software-contract scope; refaults are
+not independently architecturally qualified. Byte/word source-read destination
+continuation, read-to-write chains, saved-pipe/frame/fault variants and complete
+integration/isolated consumers remain required. No production or private CPU
+source correction, package publication or regression retirement occurs.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

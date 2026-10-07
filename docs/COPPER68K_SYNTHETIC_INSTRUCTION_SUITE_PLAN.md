@@ -3408,3 +3408,21 @@ reference evidence, alongside the remaining short-frame, source-read/chained,
 trace and integration/consumer gates. No production CPU/package change or test
 retirement occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
 See [pending-write handler scope and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-handler-protocols--2026-10-08).
+
+The pinned native 030 observer now independently agrees with unchanged frames,
+edited output and DF-clear completion: 36,864 programs pass. All 24,576 refault
+comparisons remain mismatching because the native short frame saves the RTE
+handler PC and subsequent recovery does not reach the original continuation.
+One adapter-state intervention isolates the fault-PC origin and makes all 61,440
+software comparisons pass without changing native fragments; this diagnostic
+does not establish hardware behavior or an authoritative CPU correction. Negative
+DF/output defects are detected, eight evidence corruptions are rejected, and
+frozen rows/trace replay exactly. The ordinary agreement gate correctly fails;
+discovery-only records the failures without promotion. Manual recovery/deallocation
+rules do not by themselves settle the saved-PC/internal-state distinction.
+Hardware is unavailable. New external evidence qualifies only the stated 030
+non-refault software scope; the private refault protocol remains unqualified
+architecturally. Broader source-read/chained, short-frame, trace, integration and
+consumer requirements remain open. No CPU/package change or test retirement
+occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
+[native handler agreement, disagreement and causal diagnostic](COPPER68K_REFERENCE_QUALIFICATION.md#native-pending-write-handler-comparison--2026-10-08).
