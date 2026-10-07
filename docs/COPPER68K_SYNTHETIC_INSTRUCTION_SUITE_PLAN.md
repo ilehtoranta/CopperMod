@@ -3297,3 +3297,14 @@ architectural outcomes remain explicitly untested. Hardware is unavailable;
 no CPU change, promotion or publication occurs. Milestone 6 remains
 **in progress**, `roadmapComplete=false`. See the
 [maintained A7 command and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#maintained-native-a7-discovery-command--2026-10-07).
+
+Shared SUBA indirect coverage now passes 12,288 word/long, alias, stack and
+all-CCR scenarios across all eight profiles. An isolated two-path word
+zero-extension mutation produces exactly 3,072 shared mismatches and detects
+the original word witness, retaining 9,216 controls and the original long case.
+Eight evidence-corruption controls are precisely rejected; the maintained
+command supports fresh generation and strict validate-only replay. The old
+method remains: its separate long-width witness and remaining class need
+replacement/retention proof before retirement. No production CPU change or
+publication occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+See the [SUBA indirect proof and remaining gate](COPPER68K_REFERENCE_QUALIFICATION.md#suba-indirect-shared-replacement-proof-retirement-pending--2026-10-07).

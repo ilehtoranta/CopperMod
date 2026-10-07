@@ -10037,3 +10037,55 @@ Evidence is `reference/ReturnedA7MaintainedV3` and
 Hardware is unavailable. No production CPU change, import, publication,
 regression retirement or architectural promotion occurs. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
+
+## SUBA indirect shared replacement proof, retirement pending — 2026-10-07
+
+`SyntheticSubaIndirectTests.IndirectSubaSignExtensionAliasesAndPreservedFlags`
+adds 12,288 ordinary-CI scenarios: all eight model/profiles, word/long sources
+through A3, destinations A0/A3/A7, both user/supervisor stacks, four source
+boundaries per width and all 32 CCR states. It reuses the independent operand
+fixture and common architectural/memory verifier. The A3 destination aliases
+the source base; A7 checks the selected stack bank. Word inputs include `FFFE`
+and `8000`; long inputs include `2`, `80000000` and `7FFFFFFF`.
+
+The maintained command builds isolated copies and retains both historical
+`SubaIndirectSignExtendsWordsAndLeavesCcrUntouched` cases from source pin
+`073d1f4ea604f8f4db1b5b42a647c1fb942f3fd7`. It checks complete source identities,
+all twelve coverage keys per profile and their exact 128-case weights,
+register/CCR/PC/memory results, exact xUnit selection/outcomes and report/stdout
+agreement. Normal assemblies are protected. No production CPU is edited.
+
+```powershell
+python scripts/test-copper68k-suba-indirect-consolidation.py --output artifacts/suba-indirect-fresh
+python scripts/test-copper68k-suba-indirect-consolidation.py --output artifacts/suba-indirect-fresh --validate-only
+```
+
+Clean execution passes **12,288 scenarios / eight profile reports** and both
+historical cases: ten xUnit executions, zero failures/skips. A sole semantic
+mutation zero-extends word indirect operands in both the base and advanced
+execution paths. It produces exactly **3,072 shared mismatches**, with the
+expected IDs and address-register result differences, and retains **9,216
+passing controls**. All eight shared profile batches fail; the original word
+case fails with expected `4098` / actual `4294905858`. The original long case
+passes. Validate-only independently rechecks this complete evidence.
+
+Eight corruption controls are precisely rejected: missing fixture, wrong
+producer, empty selection, missing historical witnesses, wrong coverage weight,
+wrong failure reason, changed CPU mutation with updated manifest and missing
+protected assembly identity. They verify evidence handling, not hardware timing.
+
+Evidence: `audits/SubaIndirectConsolidationV1` and
+`integrity/SubaIndirectConsolidationV1` in the restoration temporary root.
+`proof.json` SHA-256:
+`3dec11fa433d2bdd11f483f4e871f939f0da57daa61db11e3019c0373e4cee59`;
+`suba-indirect-controls-v1.json` SHA-256:
+`acea27e4912a154dc9bd718ace2b324bbb9d821fa7aed7f20cc55815852d5f3f`.
+The replacement anchor is
+`68EC020/SUBA/2/(A3)/r0/indirect-sign-alias-all-CCR/brief/super=True/op=90D3/s=0000FFFE/d=00001000/ccr=1F`.
+
+**No retirement yet:** the original method contains a separate long-width
+witness. A discriminating long-width mutation and unchanged remainder-of-class
+retention are still required before removing that method. Earlier full CPU
+results do not include this new group. Timing, prefetch, native media and other
+specialized regressions remain retained. No CPU import/publication occurs;
+milestone 6 remains **in progress**, `roadmapComplete=false`.
