@@ -9350,3 +9350,69 @@ CPU/consumer validation and the remaining roadmap gates stay required.
 Production CPU source and packages are unchanged; preserve the production
 CMPM retirements on any future import. Milestone 6 remains **in progress**,
 `roadmapComplete=false`.
+
+#### Executed 030 returned-trace reference disagreement — 2026-10-07
+
+The maintained `scripts/test-copper68k-030-return-trace-reference.ps1` and
+`scripts/reference/m68030-return-trace.cpp` now execute four canonical
+initial/returned T1 combinations plus two direct controls against pinned
+WinUAE source `5d22d33632646efc3f747f03e82d28353e52722e`. They use unchanged
+hardware-bus-error/page-fault helpers, format-B frame construction, SR/trace
+helpers, generated `_32` MOVE/RTE/MOVEQ instructions, access-history macros
+and the complete previous MMU030 retry loop. Physical transport faults once
+on the aligned MOVE.L `(A0)` read. A guest MOVE.W changes only stacked T1;
+every other byte of the reference-generated 92-byte frame is checked unchanged.
+RTE repairs the access, reuses its completed value and completes MOVE with
+exactly two attempted reads and one successful read. No Copper68k private
+frame is injected. A following MOVEQ writes D7=`2A` as the trace-order marker.
+
+| Initial T1 | Returned T1 | Executed software-reference observation |
+| --- | --- | --- |
+| 0 | 0 | No trace before the bounded stopping point |
+| 0 | 1 | Trace at PC `1004`, after following MOVEQ; D7=`2A` |
+| 1 | 0 | No trace before the bounded stopping point |
+| 1 | 1 | Trace at PC `1004`, after following MOVEQ; D7=`2A` |
+
+The initial trace-on boundary is already scheduled (`DOTRACE`). Its direct
+no-fault control traces at PC `1002`, immediately after MOVE, with D7 still
+zero; the trace-off direct control executes both sentinels without tracing.
+These controls distinguish fault-recovery scheduling from a general observer
+delay. Fresh execution and a native replay reproduce all six exact outcomes.
+Seven corruption controls reject missing fixtures, altered extracted functions,
+incomplete identities, wrong producers, empty results, altered outcomes and
+false architectural-qualification flags. An initial control runner expected
+PowerShell's wrong missing-file diagnostic spelling; its genuine rejection is
+retained, and V2 corrects only that runner expectation/output location.
+
+This is **software-reference disagreement, not architectural qualification**.
+Returned trace-on recovery differs from the prototype's immediate post-suffix
+trace, including unchanged T1=1. Therefore agreement for unchanged T1 cannot
+be inferred from this reference either. The earlier private-policy counts
+remain recorded; their passing outcomes must not be promoted as a trace
+architecture gate. The manual's instruction-start/deferred-trace rule and
+handler-edited T1 still need a reconciled independent reference or hardware
+observation. Do not change the CPU to imitate this software delay.
+
+The observer is explicitly limited to supervisor ISP, CCR=0, aligned MOVE.L
+`(A0)`, one repaired physical read and this previous MMU030 loop. It executes
+the exact trace portion of `do_specialties`, not the complete host/IRQ routine.
+Unavailable transport paths fail; translation, caches, physical pipeline/timing,
+interrupts and hardware are unqualified. Compiler warnings and initial build
+repairs remain in the exploratory outputs. Production normal assemblies retain
+their protected hashes; no production CPU edit or full CPU/consumer claim occurs.
+
+Run with a fresh output directory:
+
+```powershell
+./scripts/test-copper68k-030-return-trace-reference.ps1 -OutputDirectory <fresh-directory>
+./scripts/test-copper68k-030-return-trace-reference.ps1 -OutputDirectory <same-directory> -ValidateReportsOnly
+```
+
+The required pinned checkout and MSVC toolchain must be present; missing
+inputs, empty selections and changed outcomes fail. Evidence:
+`reference/ReturnedTrace030MaintainedV2`,
+`integrity/ReturnedTrace030ReferenceV2`, proof
+`returned-trace-reference-proof.json`, SHA-256 `401a50583f96d5253c3f5304319f143ae546975052c97eda17058150abbe6f32`.
+The next gate must reconcile the trace point before widening the canonical
+case to other banks, operands and frame origins. No publication or production
+import occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.

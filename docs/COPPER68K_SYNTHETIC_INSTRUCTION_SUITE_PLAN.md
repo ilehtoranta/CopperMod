@@ -3138,3 +3138,15 @@ foreign frames and remaining roadmap gates are still required. No production
 CPU import or publication occurs. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See the
 [combined recovery record](COPPER68K_REFERENCE_QUALIFICATION.md#complete-combined-private-recovery-replay--2026-10-07).
+
+A maintained native 030 observer now executes reference-generated operand
+fault/frame/RTE recovery for all four initial/returned T1 pairs, with two
+direct controls, native replay and seven corruption controls. Returned T1=1
+traces after the following MOVEQ in the previous WinUAE MMU030 loop, while
+the direct trace-on control traces immediately after MOVE. This disagrees
+with immediate resumed-suffix tracing, including unchanged T1=1; it does not
+qualify that private policy or establish hardware behavior. Reconcile the
+software/manual trace point before promotion or wider trace qualification.
+No production CPU import/publication occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. See the
+[executed reference disagreement](COPPER68K_REFERENCE_QUALIFICATION.md#executed-030-returned-trace-reference-disagreement--2026-10-07).
