@@ -3210,3 +3210,12 @@ without skips. The ordinary requirement becomes 86,240,034 scenarios in
 change. No production CPU import or publication occurs. Milestone 6 remains
 **in progress**, `roadmapComplete=false`. See the
 [address-register matrix and consolidation record](COPPER68K_REFERENCE_QUALIFICATION.md#address-register-arithmetic-matrix-and-adda-consolidation--2026-10-07).
+
+A fresh complete five-selection replay is now running on the latest scoped-FC
+and returned-bank corrected private CPU, with all 230 parent inputs unchanged.
+The required 11,109,248 programs / 5,744 reports / 1,436 executions remain
+pending. A provisional 721,984-scenario / 599-report comparison and
+four integrity controls pass; they do not replace the terminal full gate.
+No production import/publication or architectural trace qualification occurs.
+Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
+[latest combined replay progress record](COPPER68K_REFERENCE_QUALIFICATION.md#latest-refault-corrected-combined-replay-in-progress--2026-10-07).

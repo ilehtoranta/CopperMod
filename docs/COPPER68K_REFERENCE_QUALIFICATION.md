@@ -9682,3 +9682,31 @@ Current reduced TRX SHA-256:
 No production CPU change, package/consumer requalification or physical timing
 claim occurs. Protected normal DLLs are unchanged. Broader milestone-6 gates,
 including the 030 trace disagreement, remain open; `roadmapComplete=false`.
+
+## Latest refault-corrected combined replay in progress — 2026-10-07
+
+The preceding 11,109,248-program combined proof qualifies the relocation-only
+CPU, not the later returned-bank and scoped original-FC corrections. A fresh
+isolated replay now executes all five unchanged complete selections on the
+latest indexed returned-bank parent: indexed pipe, indexed/chained trace,
+A7/CCR aliases, moved frames and entry/internal-load faults. Required coverage
+remains **11,109,248 programs / 5,744 reports / 1,436 executions**. Its 230
+source/project inputs match that qualified parent exactly; no CPU or fixture
+edit, package or production import is made.
+
+A provisional independent comparison verifies **721,984 passing scenarios
+in 599 reports**, with no changed keys, weights or results relative to
+the five pinned original proofs. Four controls precisely reject omitted and
+changed fixtures, wrong selection-parent evidence and altered report weights.
+This is an observation of completed reports while execution continues, not
+proof of the complete TRX roster or a passing complete gate. The full replay,
+exact terminal execution/producer/source audit and full integrity controls
+remain required. Existing trace results are software-policy retention;
+the unresolved 030 manual/reference disagreement is not promoted by replay.
+
+Evidence: `audits/Operand020CombinedRefaultV1`,
+`combined-refault-progress.json` and
+`integrity/Operand020CombinedRefaultV1/Partial` in the restoration temporary
+root. Progress record SHA-256: `5697e88d14180dcb990ed43a668bc2baab0d3ce3899fc2d319c6056eee213747`.
+Milestone 6 remains **in progress**, `roadmapComplete=false`; broader recovery,
+foreign origins, full CPU/consumers and other reference requirements remain.
