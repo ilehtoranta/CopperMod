@@ -3084,3 +3084,16 @@ selected replay pass. Foreign frames, privilege/bank/trace edits, other origins,
 full CPU/consumer validation and remaining gates stay required. Milestone 6
 remains **in progress**, `roadmapComplete=false`.
 See the [indexed nested-trace record](COPPER68K_REFERENCE_QUALIFICATION.md#full-format-indexed-and-chained-nested-trace-provenance--2026-10-07).
+
+Returned privilege/stack-mode discovery now records 3,328 passing controls and
+3,328 precise unsupported S-change cases. A sole private validator correction
+separates saved cycle FC from returned SR and passes all 6,656 programs across
+64 reports and 16 executions, with the fixture unchanged and six corruption
+controls passed. All sixteen S/M bank transitions, copied/control frames,
+MOVE/MOVEA `(A0)`, CCR00/1F, operand lanes and scalar/batch are covered.
+Persistent refault FC, returned trace edits, wider aliases/indexed cases and
+foreign origins remain required. The combined run uses the preceding CPU
+snapshot and cannot qualify this additional correction. No production import,
+publication or full-replay claim is made. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. See the
+[returned privilege and stack-mode record](COPPER68K_REFERENCE_QUALIFICATION.md#private-recovery-with-returned-privilege-and-stack-modes--2026-10-07).

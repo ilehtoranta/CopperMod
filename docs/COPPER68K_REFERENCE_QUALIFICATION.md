@@ -9159,3 +9159,46 @@ Production CPU source/packages, protected normal assemblies and CMPM retirements
 are unchanged. No fresh full CPU/consumer replay or physical timing
 qualification is claimed. Milestone 6 remains **in progress**,
 `roadmapComplete=false`.
+
+#### Private recovery with returned privilege and stack modes — 2026-10-07
+
+A new isolated discovery executes all sixteen original/returned S/M bank
+pairs, with real handlers editing the saved SR. MOVE byte/word/long to D0 and
+MOVEA word/long to A0 use independently chosen `(A0)` operands. CCR `00/1F`,
+copied/control private frames, every operand fault lane, scalar/batch and
+EC020/A1200/020/030 are included: **6,656 programs / 64 reports / 16 executions**.
+It checks the literal frame-read prefix, one pending operand read, exact
+registers/flags/PC, all three stack pointers, untouched memory and a following
+MOVEQ sentinel. Changing only M already works; changing S is rejected by the
+original private validator: **3,328 passing / 3,328 unsupported / zero
+mismatches**. Every rejected opcode/PC/profile and case identifier is audited.
+
+The validator incorrectly derives the faulted data-cycle supervisor bit from
+the returned SR. The saved SSW describes the suspended cycle independently
+of that SR. An isolated one-file correction preserves direction, size and
+reference-kind checks, validates the SSW's own supervisor bit and requires
+supervisor data space for trace-vector reads. The discovery fixture is
+unchanged; all **6,656 programs pass**. This follows the distinction between
+RTE's restored context and the saved fault-cycle address space in
+[MC68030UM-P2 sections 8.1.13 and 8.2.1](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf).
+The serialized `C022` frame remains an interpreter-private policy; this gate
+does not qualify undocumented silicon internal-state behavior.
+
+Complete inventories of 228 source/project inputs, actual TRX selections and
+output, all weighted combinations and exact original rejection reasons are
+verified. Six corruption controls reject missing/changed fixtures, wrong
+producers, empty selections, altered weights and unrelated failure reasons.
+Evidence: `audits/Operand020ReturnBankDiscovery`,
+`audits/Operand020ReturnBankFix` and `integrity/Operand020ReturnBank`.
+Aggregate proof: `operand020-return-bank-proof.json`, SHA-256
+`5e39f0ca0429646b0b26dbea310b8cc40784b677ee1e33444a4c05616dc2b6e5`.
+
+The earlier combined recovery run continues on its unchanged relocation-only
+CPU. It cannot qualify this additional validator correction. Persistent
+refaults still need independent tests for preservation of the original saved
+cycle FC; returned trace edits, wider source/destination aliases and indexed
+chains, foreign frames and other origins remain required. A fresh affected
+replay and full CPU/consumer qualification are still needed before import.
+Production CPU/packages, normal assemblies and CMPM retirements remain
+unchanged. No publication is authorized or performed. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.
