@@ -2967,3 +2967,19 @@ transport and remaining continuation/reference/consolidation stay required.
 No production import, package change or regression retirement occurs;
 milestone 6 stays **in progress**, `roadmapComplete=false`.
 See the [three-word pipe qualification](COPPER68K_REFERENCE_QUALIFICATION.md#three-word-private-pipe-transport--2026-10-07).
+
+
+Nested operand/trace-vector provenance now passes 516,096 programs across seven
+MOVE source forms, operand sizes, stack states, all CCR/vector lanes and both
+execution routes. Real handlers overwrite consumed code, supply vector input,
+refault and change VBR. Original instruction PC/opcode, next PC, post-MOVE trace
+SR, typed pending state and completed effects pass. Sole PC/SR mutations detect
+exactly 258,048 / 241,920 intended failures, preserving unaffected cases.
+Complete source/key/weight/TRX audits and five integrity controls pass. Earlier
+vector-initialization failures remain invalid fixture evidence with a fixture-
+only repair. This qualifies serialized private provenance, not physical overlap.
+Wider indexed/chained pipes/provenance, transport and remaining continuation/
+reference/consolidation gates remain required. No production import, package
+change or regression retirement occurs; milestone 6 stays **in progress**,
+`roadmapComplete=false`.
+See the [nested trace qualification](COPPER68K_REFERENCE_QUALIFICATION.md#nested-operand-and-trace-vector-provenance--2026-10-07).

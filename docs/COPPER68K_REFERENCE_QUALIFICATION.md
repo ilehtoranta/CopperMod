@@ -8725,3 +8725,58 @@ isolated, unimported and unpromoted. Wider pipes, nested PC/SR provenance,
 transport, other read origins, trace/interrupt, changed return-SR/stack, memory
 destinations, other families and remaining reference/consolidation gates stay
 required. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+#### Nested operand and trace-vector provenance — 2026-10-07
+
+The unchanged isolated prototype passes **516,096 programs / 336 reports /
+84 executions** for direct traces and traces after operand-read recovery.
+Seven MOVE source forms cover indirect/postincrement/predecrement,
+displacement, absolute-word/long and PC displacement, byte/word/long sizes,
+four stack states, all 32 initial CCR states, all four vector fault lanes,
+scalar/batch execution and EC020/A1200/020/030 profiles. The operand fault uses
+a canonical lane; earlier lane matrices retain their separate evidence.
+
+Real operand handlers replace consumed opcode/extensions with NOPs and install
+the later vector handler. Trace-vector handlers supply different vector input,
+refault or change VBR. Both initial and repeated vector faults retain the
+original instruction PC/opcode, consumed next PC, long vector-read width and
+typed pending-vector state. Trace frames preserve the post-MOVE SR and next
+instruction PC, together with the serialized original-instruction address.
+Register/stack/memory checks at each handler instruction, exact exception
+counts, completed operand-read counts and the following sentinel pass.
+[MC68030UM section 8.1.7](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+defers tracing until a suspended instruction completes and saves its resulting
+SR and next PC. The private nested vector-fault fields qualify the interpreter's
+serialized policy; they do not establish physical pipeline-overlap provenance
+or silicon-private frame contents. T0/interrupt and wider origins remain open.
+
+The first fixture left relocated bus-error/trace handlers' initial vectors at
+the old addresses. Its **86,016 passes / 430,080 precisely identified invalid-
+fixture failures** remain separate evidence. A fresh repair changes only the
+fixture's two vector initializations; no CPU defect is inferred.
+
+A sole PC mutation loses the original instruction address after operand RTE:
+**258,048 intended failures / 258,048 unaffected passes**. A sole SR mutation
+discards completed MOVE flags: **241,920 intended failures / 274,176 unaffected
+passes**. The latter preserves cases whose initial flags already equal the
+MOVE result. Every failure identifier/reason is verified; both mutations leave
+fixtures unchanged. Complete 221-file source inventories, exact TRX rosters,
+independently enumerated keys/weights and five corruption controls pass.
+
+Evidence: `audits/Operand020TraceProvenance`,
+`audits/Operand020TraceProvenanceV2`,
+`mutations/Operand020TraceProvenance/PC` and
+`mutations/Operand020TraceProvenance/SR`; aggregate
+`operand020-trace-provenance-proof.json`, SHA-256
+`1bc7701a3525f6d181f011ada153a000e37c1fe87374e282852a4a7adb357d61`.
+The proof pins four executions, complete source/producer/verifier/binary
+identities, the fixture-only repair, sole mutations, integrity rejections and
+the preceding multiword-pipe proof. Existing source-specific retention is
+reused; no fresh replay is claimed. Protected normal assemblies, production
+CPU source, API/packages and regression retirement remain unchanged. The
+prototype stays isolated, unimported and unpromoted. Wider indexed/chained
+pipes and provenance, frame transport, other read origins, trace/interrupt,
+changed return-SR/stack, memory destinations, other families and remaining
+reference/consolidation gates stay required. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
