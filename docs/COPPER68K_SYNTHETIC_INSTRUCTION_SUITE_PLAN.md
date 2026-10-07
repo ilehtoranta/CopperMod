@@ -3097,3 +3097,17 @@ snapshot and cannot qualify this additional correction. No production import,
 publication or full-replay claim is made. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See the
 [returned privilege and stack-mode record](COPPER68K_REFERENCE_QUALIFICATION.md#private-recovery-with-returned-privilege-and-stack-modes--2026-10-07).
+
+Repeated-fault coverage after saved privilege edits now passes 13,312 programs
+(128 reports / 32 executions). It retains 6,656 exact original FC mismatches
+and detects 6,656 scope-leak mutation failures with the fixture unchanged.
+All sixteen S/M pairs, one/two refaults, copied/control frames, MOVE/MOVEA
+`(A0)`, CCR00/1F, operand lanes and scalar/batch are covered. A scoped private
+saved-cycle FC correction also passes fresh affected retention: 800,768
+programs / 752 reports / 188 executions against four pinned parent proofs.
+Both complete audits and twelve evidence corruption controls pass. The older
+large combined run does not qualify this newer CPU. Changed-return trace,
+wider aliases/indexed chains, foreign origins and full CPU/consumer gates
+remain required; production source/packages remain unchanged. Milestone 6
+remains **in progress**, `roadmapComplete=false`. See the
+[changed-privilege repeated-fault record](COPPER68K_REFERENCE_QUALIFICATION.md#private-recovery-with-changed-privilege-and-repeated-faults--2026-10-07).

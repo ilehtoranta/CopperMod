@@ -9202,3 +9202,58 @@ replay and full CPU/consumer qualification are still needed before import.
 Production CPU/packages, normal assemblies and CMPM retirements remain
 unchanged. No publication is authorized or performed. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
+
+#### Private recovery with changed privilege and repeated faults — 2026-10-07
+
+The returned-bank validator candidate now has a separate repeated-fault
+discovery: **13,312 programs / 128 reports / 32 executions**. All sixteen
+original/returned S/M pairs, copied/control frames, MOVE byte/word/long and
+MOVEA word/long `(A0)`, CCR `00/1F`, operand fault lanes and scalar/batch are
+covered. A real first handler edits the saved SR and changes the bus-error
+vector to a second real handler. One or two further failed pending reads
+precede successful recovery. Each retry checks an independently constructed
+92-byte private image, original opcode/PC/address/width/FC, all stacks and
+registers, exact frame-read/write order, exception sequence and eventual
+operand/flags/PC plus a following sentinel.
+
+The discovery retains **6,656 passing / 6,656 mismatching / zero unsupported**
+programs. Every S-changing case incorrectly stores the returned privilege's
+FC in the new frame. The expected original FC and actual value are checked
+for every failure. A sole CPU-file correction scopes the saved SSW FC around
+pending data/pointer reads and restores the previous context in `finally`,
+including exceptional exits; trace-vector accesses select supervisor data
+space independently. It preserves the completed read prefix and pending
+suffix without instruction replay. The unchanged fixture passes all
+**13,312 programs**. This distinguishes the restored SR from the faulted
+data cycle, and follows deallocation/new-frame refault behavior in
+[MC68030UM-P2 sections 8.1.13, 8.2.1 and 8.2.3](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf).
+
+A sole scope-leak mutation removes the context restoration. It detects
+exactly **6,656 failures**, retaining 6,656 passing cases; every original
+supervisor-source case fails the next independently checked initial cycle
+provenance. Fixtures remain unchanged. Complete source inventories (229
+inputs), actual TRX selections/output, weighted combinations and exact
+baseline/mutation identifiers/reasons pass their audits. Six refault
+corruption controls reject missing/changed fixtures, wrong producers, empty
+selections, changed weights and unrelated failure reasons.
+
+Fresh affected retention on this corrected CPU passes **800,768 programs /
+752 reports / 188 executions**: returned-bank edits, A7/CCR aliases, frame
+entry/internal-load faults and the preceding simple nested-trace matrix.
+All four source-specific parent proofs, unchanged fixtures, actual executions
+and complete report dictionaries are checked. Six additional integrity
+controls reject producer/source-identity changes, empty selections, omitted
+executed-source inventory, missing reports and altered weights.
+Evidence: `audits/Operand020ReturnRefault{Discovery,Fix}`,
+`mutations/Operand020ReturnRefault/ScopeLeak` and the fix's `retained` directory.
+Aggregate proof: `operand020-return-refault-proof.json`, SHA-256
+`ef429454056ae53132f6b49324a5544b3997ba6b9f4bc3d003255e73fba11046`.
+
+This gate qualifies serialized interpreter-private cycle provenance, not
+physical function-code signals or enabled-MMU behavior. The large combined
+replay uses the preceding CPU and cannot qualify these additional changes.
+Changed-return trace, wider indexed/chained/alias cases, foreign frames,
+other origins and remaining roadmap gates stay required, as does fresh full
+CPU/consumer validation before import. Production CPU/packages, normal
+assemblies and CMPM retirements remain unchanged. No package is published.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
