@@ -2871,3 +2871,21 @@ transport, other read origins, trace/interrupt, changed return-SR/stack and
 broader continuation/reference/consolidation work stay required. Milestone 6
 stays **in progress**, `roadmapComplete=false`. See the
 [indexed source/pointer qualification](COPPER68K_REFERENCE_QUALIFICATION.md#indexed-move-source-and-pointer-stages--2026-10-07).
+
+The unchanged indexed prototype now passes 365,184 chained pointer/operand
+programs (5,760 controls; 359,424 fault programs). Real handlers redirect the
+second fault, supply different pointer/operand input, refault and alter
+registers, consumed code and completed pointers. Stage advance, original
+resumed-instruction PC/SR, ordered accesses and retained timing policies pass.
+Three mutations detect exactly 359,424 stale-stage failures, 359,424 wrong-PC
+failures and 239,616 repeated-pointer failures, preserving unaffected cases.
+Complete source/producer inventories and five corruption controls pass. The
+first fixture's 26,624 overlap failures remain invalid evidence; only the
+fixture changes in its repair. Existing retained evidence is reused after
+verifying unchanged CPU sources, with no new retention replay claimed.
+Production source/packages remain unchanged and the prototype stays isolated
+and unpromoted. All-structural indexed/register and wider chained/pipe,
+provenance/transport, trace/interrupt, return-SR/stack, other-family and
+remaining reference/consolidation work stay required. Milestone 6 remains
+**in progress**, `roadmapComplete=false`. See the
+[chained indexed fault qualification](COPPER68K_REFERENCE_QUALIFICATION.md#chained-indexed-pointer-and-operand-faults--2026-10-07).

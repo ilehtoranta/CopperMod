@@ -8358,3 +8358,64 @@ captured pipes, nested-PC provenance, other read origins, trace/interrupt,
 changed return-SR/stack, wider transport, memory destinations and other-family
 continuation remain required with the earlier reference/consolidation gaps.
 Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+#### Chained indexed pointer and operand faults — 2026-10-07
+
+The unchanged isolated indexed prototype now passes **365,184 programs / 56
+reports / 14 executions**: **5,760 controls** and **359,424 chained-fault
+programs**. Nine literal full-format witnesses select pre/post indirection,
+null/word/long displacements and suppression, An/PC sources, MOVE B/W/L and
+MOVEA W/L, four stack states, CCR 00/1F, every pointer/operand fault byte lane,
+EC020/A1200/020/030 and scalar/batch dispatch. Both faults are armed before
+execution; guest state changes occur through real handler instructions.
+
+The first handler redirects the bus-error vector to a separate second handler.
+Its RTE completes the pointer stage and then faults on the operand. Each frame
+must retain the original resumed MOVE's PC/SR, consumed instruction context,
+correct access address/width/function code and stack bank. The second frame
+must identify the operand stage, without restoring a stale pointer stage.
+Checks cover different pointer DIB input (and therefore a different operand
+address), different operand DIB input, both inputs together, an additional
+persistent operand refault, and handlers changing base/index registers,
+consumed opcode/extensions and an already-read pointer. Architectural state,
+all stacks, surrounding memory, exact next PC, ordered rejected/completed
+access widths/counts, exception counts and a following sentinel are checked.
+Literal retained full-indexed timing policies and 030 head/tail shapes also pass.
+
+[MC68030UM-P2 sections 8.1.2 and 8.2.2–8.2.3](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+provide bus-error status capture and DF/DIB/RTE completion rules. The saved
+stage and resumed-instruction provenance checks qualify the interpreter's
+serialized continuation model. They do not qualify physical overlapped
+instruction/pipeline state or all exception-PC origins.
+
+Three isolated CPU mutations detect exactly **359,424 stale-stage failures**,
+**359,424 RTE-PC provenance failures**, and **239,616 repeated-pointer-read
+failures**, with **5,760**, **5,760**, and **125,568** unaffected passes respectively.
+Each changes only the private operand-continuation file; witness fixtures are
+byte-identical to their accepted parent. Strict verifiers independently
+enumerate the full selection and weights, verify every precise mutation
+identifier/reason, match actual TRX summaries and pin complete source,
+producer and base-input identities. Five deliberate corruption controls reject
+omitted/changed fixtures, wrong producers, empty executions and wrong weights.
+
+All CPU/project and preexisting fixture sources remain byte-identical to the
+previous indexed correction. Its accepted retention evidence (**793,344
+programs / 352 reports / 109 executions**, including 25 map/cache controls)
+is reused after verifying unchanged CPU identities; no fresh retention replay
+is claimed. The first fixture placed its longest alias handler over the second
+handler: **26,624 failures** remain distinct invalid-fixture evidence, with
+338,560 other cases passing. A fresh fixture moves the second handler to a
+disjoint region and checks their extents. The repair changes only that fixture;
+no CPU defect is inferred from the overlap.
+
+Evidence: `audits/Operand020IndexedChain`, `audits/Operand020IndexedChainV2`,
+`mutations/Operand020IndexedChain`; aggregate `operand020-indexed-chain-proof.json`,
+SHA-256 `7531f558fe7391aa96b0c69fd557105fb6e740d7b64841172ac4f51bacf3825a`. It links all four selected/input proofs,
+three mutations, five corruption controls, invalid-fixture repair and the
+previous unchanged-source retention proof. Production source, public API,
+packages and regression retirement remain unchanged. The prototype remains
+isolated and unpromoted. All-structural indexed/register aliases, broader
+chained faults, captured multiword pipes, other exception-PC origins,
+trace/interrupt, changed return-SR/stack, wider transport, memory destinations,
+other families and all existing reference/consolidation gaps remain required.
+Milestone 6 stays **in progress**, `roadmapComplete=false`.
