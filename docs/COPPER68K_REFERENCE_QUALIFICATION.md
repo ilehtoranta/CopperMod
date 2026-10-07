@@ -8831,3 +8831,70 @@ memory destinations, other families and remaining reference/consolidation stay
 required. Production source/packages and protected normal assemblies remain
 unchanged; no regression is retired and the prototype stays isolated/unpromoted.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+#### Private frame-entry and internal state-load HALT — 2026-10-07
+
+The unchanged isolated prototype passes **138,240 programs / 160 reports /
+40 executions** for private frame-entry and internal RTE state-load faults.
+The ten preceding high/wrapped/odd frame starts remain selected. MOVE.L
+`(A0),D0` provides a canonical source fault; four stack states, CCR 00/1F,
+scalar/batch routes and EC020/A1200/020/030 profiles are covered. Entry faults
+exercise both bytes of all 46 descending word writes: **58,880 programs**.
+State-load faults exercise every byte of all 54 read occurrences, including
+repeated reads: **78,080 programs**. The remaining **1,280 controls** complete
+RTE, the pending operand read and the following MOVEQ sentinel.
+
+[MC68020UM section 6.1.2](https://www.nxp.com/docs/en/data-sheet/MC68020UM.pdf)
+and [MC68030UM section 8.1.2](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+specify HALT for a bus error during bus/address/reset exception processing or
+internal RTE state loading, with no further attempt to alter memory. This gate
+checks selected bus-error entry and internal state-load paths; it does not
+claim reset/address-error entry coverage. Earlier recoverable RTE validation
+faults remain distinct from internal state-load faults.
+
+The complete 92-byte private image is independently constructed from literals,
+including the selected cold pipe state. Guards and disjoint poisoned low
+mirrors verify memory outside completed writes. Entry failures preserve exactly
+the completed descending prefix and the failed logical stack position, without
+fetching the handler or building another image. Load failures preserve the
+completed validation/load read prefix, uncommitted original frame and live
+handler state, without an operand retry or another exception. Exact PC/SR,
+registers/stacks, exception counts, access widths/order and physical map domain
+pass, including EC020 boundary splits. Subsequent HALT calls perform no memory
+access or architectural work. Scalar calls retain the existing two-native-cycle
+Idle policy with a bus-synchronization barrier; batch calls retire zero
+instructions without advancing those counters. This is approximate policy
+preservation, not physical timing qualification.
+
+The first fixture did not compile because two batch calls omitted required
+arguments. It remains compile-only evidence with no TRX or executed coverage.
+An API-only fixture repair executed the matrix but incorrectly required scalar
+HALT calls to freeze timing counters: **69,760 passes / 68,480 precisely
+identified invalid-fixture failures**. A second fixture-only repair checks the
+existing Idle policy while preserving architectural and bus invariants. No CPU
+defect is inferred from either fixture error.
+
+A sole entry mutation continues after a failed frame write: **58,880 intended
+failures / 79,360 unaffected passes**. A sole state-load mutation fails to set
+HALT: **78,080 intended failures / 60,160 unaffected passes**. Every failure
+identifier/reason is checked; both mutations retain the repaired fixture.
+Complete 223-file source inventories, exact TRX rosters, independently
+enumerated case keys/weights and five evidence-corruption controls pass.
+
+Evidence: `audits/Operand020FrameFaults`, `audits/Operand020FrameFaultsV2`,
+`audits/Operand020FrameFaultsV3`,
+`mutations/Operand020FrameFaults/ContinueEntry` and
+`mutations/Operand020FrameFaults/ContinueLoad`; aggregate
+`operand020-frame-faults-proof.json`, SHA-256
+`69b5baebce61d0284fc132a3840c2c18c05d1ca422d1fb760e1337fbc2d823b3`.
+The proof pins four executed snapshots plus the compile-only attempt, complete
+source/producer/verifier/binary identities, exact fixture-only repairs, sole
+mutations, integrity rejections and the preceding nominal transport proof.
+Existing source-specific retention is reused; no fresh full replay is claimed.
+Production CPU source/packages and protected normal assemblies stay unchanged;
+the prototype remains isolated, unimported and unpromoted. Wider indexed/chained
+pipes/provenance, foreign frames, other origins, reset/address-error entry,
+trace/interrupt, changed return-SR/stack, memory destinations, other families
+and remaining reference/consolidation gates stay required. No regression is
+retired. Milestone 6 remains **in progress**, `roadmapComplete=false`.

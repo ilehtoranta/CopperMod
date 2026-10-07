@@ -2996,3 +2996,20 @@ entry/state-load faults and remaining wider continuation/reference/consolidation
 gates remain required; no production import, package change or test retirement
 occurs. Milestone 6 stays **in progress**, `roadmapComplete=false`.
 See the [private frame transport qualification](COPPER68K_REFERENCE_QUALIFICATION.md#high-and-wrapped-private-operand-frames--2026-10-07).
+
+Private frame-entry and internal state-load faults now pass 138,240 programs
+on the unchanged isolated prototype: 58,880 entry faults, 78,080 load faults
+and 1,280 recovery controls. Ten high/wrapped/odd frame starts, all 92 entry
+byte positions and 122 load-byte occurrences, stack states, CCR 00/1F and both
+routes verify the complete literal image, completed access prefixes, exact
+HALT state and absence of subsequent architectural/bus work. Scalar Idle timing
+and zero-retirement batch policy remain intact. Sole entry/load mutations detect
+exactly 58,880 / 78,080 intended failures, preserving unaffected cases.
+Complete source/key/weight/TRX audits and five integrity controls pass. The
+compile-only attempt and 68,480 earlier scalar timing-expectation failures stay
+invalid fixture evidence; both repairs change only the fixture. No production
+import, package change or regression retirement occurs. Wider indexed/chained
+pipes/provenance, foreign frames, other origins, reset/address-error entry and
+remaining continuation/reference/consolidation gates stay required. Milestone
+6 remains **in progress**, `roadmapComplete=false`.
+See the [frame fault HALT qualification](COPPER68K_REFERENCE_QUALIFICATION.md#private-frame-entry-and-internal-state-load-halt--2026-10-07).
