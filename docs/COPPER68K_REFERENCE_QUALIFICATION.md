@@ -9710,3 +9710,45 @@ Evidence: `audits/Operand020CombinedRefaultV1`,
 root. Progress record SHA-256: `5697e88d14180dcb990ed43a668bc2baab0d3ce3899fc2d319c6056eee213747`.
 Milestone 6 remains **in progress**, `roadmapComplete=false`; broader recovery,
 foreign origins, full CPU/consumers and other reference requirements remain.
+
+## Maintained address-arithmetic consolidation audit — 2026-10-07
+
+The ADDA retirement above now has a repository-owned reproduction command,
+[test-copper68k-address-arithmetic-consolidation.py](../scripts/test-copper68k-address-arithmetic-consolidation.py).
+It requires Python 3, Git and dotnet, a fresh output directory, and access to
+the pinned historical commit `6bb7ef83d9808ce39456a7e166e81d2ed5244802`.
+It regenerates historical addressing reports from that commit's test source;
+no earlier temporary reports, ROMs, media or external test binaries are needed.
+All compilation and intentional CPU defects stay in isolated output copies.
+
+```text
+python scripts/test-copper68k-address-arithmetic-consolidation.py --output artifacts/address-arithmetic-audit
+python scripts/test-copper68k-address-arithmetic-consolidation.py --output artifacts/address-arithmetic-audit --validate-only
+```
+
+The fresh complete audit and report-only replay both pass. Historical coverage
+is **58,756 scenarios / 87 executions**, including all 79 original HDF-boot
+regressions. The expanded clean selection is **200,068 / 87**, and the current
+selection after the documented retirement is **200,068 / 83**, retaining all
+75 other HDF-boot executions. Each passing selection has zero skips.
+The sole two-path word-An ADDA zero-extension mutation produces exactly
+**6,080 shared mismatches / 193,988 passing controls**; all eight shared
+batches and all four original witnesses fail, with precise result reasons.
+Independent formulas expand the 768 added combinations and their value/CCR
+weights per profile, while preserving the regenerated historical keys.
+
+Seven corruption controls reject missing fixtures, wrong producer, empty
+selection, altered weights, unrelated failure reasons, changed CPU mutation
+even with its manifest refreshed, and omitted original witnesses. Exact
+source inventories, historical pin, selected TRX names/outcomes, report
+summaries, protected normal DLLs and aggregate proof are checked on replay.
+Only the original pure semantic method is absent from the current source;
+its exact removal is verified against Git. This adds no further retirement,
+production CPU change or architectural/hardware reference claim.
+
+Fresh evidence: `audits/AddressArithmeticMaintainedV1` in the restoration
+temporary root; `proof.json` SHA-256
+`22178eb139ff644d72fb76c1e131bf6113e09493a73c1aed8f1bc9fdfaa3b3ab`.
+The earlier evidence keeps its separate identity. The latest private combined
+recovery replay is still pending; no full CPU/consumer claim, package
+publication or roadmap completion occurs. Milestone 6 remains **in progress**.

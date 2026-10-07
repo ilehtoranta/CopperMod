@@ -3219,3 +3219,14 @@ four integrity controls pass; they do not replace the terminal full gate.
 No production import/publication or architectural trace qualification occurs.
 Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
 [latest combined replay progress record](COPPER68K_REFERENCE_QUALIFICATION.md#latest-refault-corrected-combined-replay-in-progress--2026-10-07).
+
+ADDA consolidation now also has a maintained, isolated reproduction command:
+`python scripts/test-copper68k-address-arithmetic-consolidation.py --output artifacts/address-arithmetic-audit`
+and the same command with `--validate-only` replays the complete proof.
+Fresh pinned historical, expanded clean, two-path mutation and current reduced
+selections pass their required gates, together with seven integrity controls.
+The historical reports are regenerated without temporary reference inputs;
+all eight profiles and four original witnesses detect the intended defect.
+No further test retirement, CPU change or publication occurs. The latest
+combined private replay and broader milestone-6 requirements stay pending.
+See the [maintained consolidation record](COPPER68K_REFERENCE_QUALIFICATION.md#maintained-address-arithmetic-consolidation-audit--2026-10-07).
