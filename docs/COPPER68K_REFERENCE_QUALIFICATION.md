@@ -10229,3 +10229,79 @@ consumer proofs retain their original source scope and do not include this
 new group/retirement. The hardware-dependent disagreements and broader frame/
 reference requirements remain open. No CPU import or package publication occurs.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## Native source-read recovery before a memory destination — 2026-10-07
+
+Source inspection of the latest private 020/030 operand-read candidate still
+restricts simple MOVE continuation to register destinations. A memory-to-memory
+source fault is therefore an open recovery requirement. The new maintained
+native observer establishes the next software-reference fixture before changing
+that private continuation path; no production CPU fix is claimed here.
+
+`scripts/test-copper68k-030-memory-destination-reference.py` and
+`scripts/reference/m68030-memory-destination-recovery.cpp` execute unchanged
+WinUAE 030 generated operations `op_2090_32_ff` / `op_2098_32_ff`, native fixup,
+format-B construction/restoration and MMU retry-loop fragments at pin
+`5d22d33632646efc3f747f03e82d28353e52722e`. Canonical opcodes select
+`MOVE.L (A0),(A1)`, `(A0)+,(A1)`, `(A0),(A0)` and `(A0)+,(A0)`.
+A source physical request at `4200` is rejected once before its successful read;
+the real format-B handler/RTE path resumes execution. Direct controls omit that
+fault. The handler preserves saved SR and every frame byte.
+
+**4,096 native programs pass**: 2,048 fault recoveries and 2,048 direct controls,
+with four stack states, both source forms, separate/aliased destinations, four
+source values and all 32 initial CCRs. Every fault has two source attempts and
+one successful read; every control has one attempt/read. All have exactly one
+destination write. The aliased postincrement destination is `4204`, evaluated
+after A0 advances once; the ordinary alias writes `4200`, separate A1 writes
+`4400`. MOVE's X preservation and N/Z/V/C result are captured before the
+following MOVEQ changes flags. The next PC/following sentinel, active A7,
+untouched registers, original source data and surrounding memory are checked.
+The reference's successful data refill is not physically replayed by its
+instruction retry. This does not authorize replay after partial side effects
+in Copper68k.
+
+```powershell
+python scripts/test-copper68k-030-memory-destination-reference.py --reference-directory <pristine-pinned-WinUAE> --output artifacts/memory-destination-native-fresh
+python scripts/test-copper68k-030-memory-destination-reference.py --reference-directory <same-pinned-WinUAE> --output artifacts/memory-destination-native-fresh --validate-only
+```
+
+The command requires Windows/MSVC (Visual Studio 18 Community), Python 3 and
+PowerShell 7. It reuses the maintained baseline's six canonical cases and exact
+function extraction. Inputs, all four producer identities, extracted native
+fragments, fixture, executable, logs and trace are bound. Strict replay
+reexecutes the frozen observer and requires byte-identical rows and trace.
+Missing/changed reference inputs, empty/incomplete selection, wrong read/write
+provenance, outcomes or saved evidence fail. The restored pristine source is
+`reference/WinUaeSourceV2` in the restoration temporary root, outside the deleted
+artifacts checkout.
+
+Three sole observer mutations compile and fail precisely without any native
+fragment change: an extra actual source read, a duplicate physical destination
+write and writing an aliased postincrement result to the original address.
+The first two fail case 0; the alias defect retains 768 earlier controls then
+fails case 768. Seven evidence controls reject missing fixture, wrong producer,
+missing output identity, altered fixture with updated manifest, altered native
+function with updated manifest, empty output with updated manifest and altered
+verification. These test observers/evidence handling, not processor timing.
+
+Evidence: `reference/MemoryDestination030V2`,
+`mutations/MemoryDestinationNativeV2` and `integrity/MemoryDestinationNativeV2`
+in the restoration temporary root. `verification.json` SHA-256:
+`6a5cd149439268a4fe1b3a2158cc0b35e64e41f470b89d4fc8b8c496b7f68b87`;
+`memory-destination-native-proof-v2.json` SHA-256:
+`f28256faa078c5b5fb204da366004750692dee9cfef32387bacb2a81ecf186b6`.
+V1 passed the same cases with adapter signedness warnings; V2 corrects those
+adapter types and passes fresh generation/replay. Warnings in untouched
+extracted native code remain separately recorded.
+
+Scope is **030 software observation**, with flat physical FC1/5 transport,
+aligned long accesses, unchanged S/M and no trace/IRQ/cache/translation. It is
+not a full exception/pipeline/hardware oracle or architectural promotion.
+Byte/word destinations, other destination EAs, destination-write faults,
+handler-edited registers/S/M, indexed sources and other processor models remain
+required and unqualified by this observer. The private candidate still needs a
+bounded failing test and suffix-only implementation for the newly observed
+memory destination, followed by retention/full integration and consumers before
+any import. No CPU source/package/regression retirement changes. Milestone 6
+remains **in progress**, `roadmapComplete=false`.

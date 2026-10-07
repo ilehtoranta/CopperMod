@@ -3334,3 +3334,17 @@ Fresh end-to-end reproduction and strict replay pass. No production CPU change
 or publication occurs. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See the
 [CMPA replacement proof](COPPER68K_REFERENCE_QUALIFICATION.md#cmpa-displacement-sign-extension-consolidation--2026-10-07).
+
+Independent native 030 source-fault recovery now covers a memory destination:
+4,096 programs pass (2,048 recoveries / 2,048 controls), indirect/postincrement
+A0 source, separate A1 or aliased A0 destination, four stack states, four values
+and all CCRs. Exact source attempts, one successful read/write, postincrement
+alias address, pre-sentinel MOVE flags, untouched state/memory and frame
+preservation are checked. Frozen native replay matches; three sole observer
+mutations and seven corrupted-evidence controls are rejected precisely.
+This is scoped software reference evidence, not hardware/trace/translation or
+architectural promotion. The private 020/030 candidate still excludes memory
+destinations; implementation and broader model/EA/fault coverage stay required.
+No production CPU/package change occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. See the
+[native memory-destination evidence and scope](COPPER68K_REFERENCE_QUALIFICATION.md#native-source-read-recovery-before-a-memory-destination--2026-10-07).
