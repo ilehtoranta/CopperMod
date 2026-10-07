@@ -53,4 +53,3 @@ for model in models:
   check(all(any(f['id']==a for f in d['failures']) for a in anchors),'Missing direct replacement witnesses')
 check(passing+misses==203520 and misses=={'Clean':0,'AliasOrder':288,'ByteStackStride':180}[mode],'Wrong complete consolidation counts')
 v=dict(schema=1,mode=mode,passing=passing,mismatching=misses,unsupported=0,untested=0,executions=48,retainedTimingExecutions=36,reports=rows,sources=len(actual),historicalPin=pin,historicalFixtureSha256=base['historicalSha256'],replacementAnchors=anchors,inputsSha256=sha(root/'inputs.json'),trxSha256=sha(root/'audit.trx'),helperSha256=sha(Path(__file__)),productionCpuChanged=False,retirementApplied=False,roadmapComplete=False);(root/'verification.json').write_text(json.dumps(v,indent=2));print(f'{mode}: {passing} passing / {misses} precisely identified synthetic failures; original witnesses and 36 timing cases verified')
-

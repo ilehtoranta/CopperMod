@@ -8948,8 +8948,8 @@ Reproduce with `scripts/test-copper68k-cmpm-consolidation.ps1 -PythonPath
 <python3-executable> -OutputDirectory <fresh-output>`; Python 3 requires only
 its standard library. `-ValidateReportsOnly` checks retained evidence without
 executing the CPU. Ordinary CI coverage and integer inventory counts are
-unchanged. Evidence: `audits/CmpmConsolidationStrict/proof.json`, SHA-256
-`625fb7cceb164f0b76fd8d4903a992627378e680de6aeff74b95ceadc0815c7d`,
+unchanged. Evidence: `audits/CmpmConsolidationFinal/proof.json`, SHA-256
+`e6360daec2c2de102da162e448c347bf63ecbc84f8378b28cd902f686ae27f9a`,
 and `audits/CmpmRetainedActual/verification.json`. Earlier probe/command
 snapshots remain distinct. Production CPU source/packages and protected normal
 assemblies are unchanged; no fresh full CPU/consumer replay is claimed.
