@@ -3320,3 +3320,17 @@ All specialized timing, factory, continuation and memory regressions remain.
 No production CPU change/import/publication occurs. Milestone 6 remains
 **in progress**, `roadmapComplete=false`. See the
 [completed SUBA word/long replacement proof](COPPER68K_REFERENCE_QUALIFICATION.md#suba-indirect-wordlong-retirement-completed--2026-10-07).
+
+CMPA's three-row pure displacement/sign-extension method is retired after
+10,240 shared scenarios across eight profiles pass with the original negative
+displacement, full 32-bit destinations, all CCRs and both stack modes. A scoped
+base/advanced source-sign mutation produces exactly 5,120 shared failures and
+detects both original negative-source witnesses, retaining 5,120 controls and
+the original positive-source case. Original/reduced class runs pass 45 / 42
+cases plus eight shared batches. Exact removal scope and all rosters/results
+are verified; timing and integration checks remain. A reusable internal audit
+runner checks producer/source/command identities and nine corruption controls.
+Fresh end-to-end reproduction and strict replay pass. No production CPU change
+or publication occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. See the
+[CMPA replacement proof](COPPER68K_REFERENCE_QUALIFICATION.md#cmpa-displacement-sign-extension-consolidation--2026-10-07).

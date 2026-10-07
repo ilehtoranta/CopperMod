@@ -47,18 +47,6 @@ public sealed class M68020AddressSourceTests
     }
 
     [Theory]
-    [InlineData(0xFFFFu, 0xFFFF, 0x11)] [InlineData(0xFFFFFFFFu, 0xFFFF, 0x14)]
-    [InlineData(0u, 1, 0x19)]
-    public void CmpaWordDisplacementComparesSignExtendedSourceAgainstFullAddress(uint destination, ushort source, int flags)
-    {
-        var bus = new ZeroWaitCodeBus(); WriteWords(bus, CodeBase, 0xB2E8, 0xFFFE); WriteWords(bus, 0x2000, source);
-        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
-        cpu.Reset(CodeBase, 0x3000); cpu.State.A[0] = 0x2002; cpu.State.A[1] = destination; cpu.State.StatusRegister = 0x201F;
-        cpu.ExecuteInstruction(); Assert.Equal(flags, cpu.State.StatusRegister & 31);
-        Assert.Equal(destination, cpu.State.A[1]); Assert.Equal(CodeBase + 4, cpu.State.ProgramCounter);
-    }
-
-    [Theory]
     [InlineData(0x5270, 0xFFFF, 0, 0x15)] [InlineData(0x5370, 0, 0xFFFF, 0x19)]
     [InlineData(0x5070, 0x7FF8, 0x8000, 10)]
     public void IndexedQuickWordUpdatesTheOriginalAddressAndArithmeticFlags(ushort opcode, ushort initial, ushort expected, int flags)

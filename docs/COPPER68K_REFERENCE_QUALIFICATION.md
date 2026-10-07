@@ -10153,3 +10153,79 @@ Earlier full CPU/private-consumer evidence retains its exact original source
 scope; it does not include this new group or retirement. No production CPU
 change, package import/publication or physical timing qualification occurs.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## CMPA displacement sign-extension consolidation — 2026-10-07
+
+`SyntheticCmpaDisplacementTests.WordSourceComparesAgainstFullAddressAndPreservesExtend`
+adds **10,240 ordinary-CI scenarios** across all eight profiles: five full
+32-bit destination boundaries, four word source values, every CCR and both
+user/supervisor stacks. It uses the common independent operand fixture and
+architectural/memory verifier. Source extension is explicitly `FFFE` (-2),
+preserving the negative displacement exercised by the historical regression.
+All data/address registers, selected/inactive stacks, PC, defined SR, execution
+state and surrounding memory are checked through the shared verifier.
+
+The pure semantic method
+`CmpaWordDisplacementComparesSignExtendedSourceAgainstFullAddress` is retired:
+three rows, one twelve-line attribute/method block. Its original source is
+restored from Git pin `4ee523df69688c2ded0b4d26567399dc96830ad7` only in isolated
+audit copies. The rest of the class must equal the original after exactly that
+removal. No production CPU source changes. The original 45 class cases and
+reduced 42 class cases all pass, including their timing, factory-profile,
+extension, memory and continuation checks.
+
+The maintained family driver shares `scripts/copper68k_consolidation.py` for
+source inventories, pinned original/removal scope, isolated execution, exact
+xUnit rosters/outcomes, TRX counters/stdout, producer/command/protection identities
+and corrupted-evidence controls. Family-specific expectations remain in
+`scripts/test-copper68k-cmpa-displacement-retirement.py`: independent integer
+comparison arithmetic and explicit scenario/failure enumeration, without
+production decoder, flag or effective-address helpers. Both Python producer
+identities are bound. Older qualified commands remain source-specific: the
+preceding complete SUBA command requires its qualified `4ee523d` checkout;
+the earlier sign-extension-only SUBA command requires `8b6418f`.
+
+```powershell
+python scripts/test-copper68k-cmpa-displacement-retirement.py --output artifacts/cmpa-retirement-fresh
+python scripts/test-copper68k-cmpa-displacement-retirement.py --output artifacts/cmpa-retirement-fresh --validate-only
+```
+
+| Isolated selection | Shared passing | Shared mismatching | xUnit executions |
+| --- | ---: | ---: | ---: |
+| Original class plus shared matrix | 10,240 | 0 | 53 |
+| Word source zero-extension defect | 5,120 | 5,120 | 11 |
+| Reduced class plus shared matrix | 10,240 | 0 | 50 |
+
+The sole semantic defect zero-extends word displacement sources in the base
+arithmetic decoder and advanced CMPA path. All eight shared batches and the two
+negative-source historical rows fail precisely; the original positive-source
+row passes as a control. Expected/actual flags in the historical failures are
+`17/20` and `20/24`. The complete failed scenario IDs and full-SR differences
+are independently enumerated. All 5,120 positive-source controls pass; no
+unsupported/untested case or skipped clean execution is credited as coverage.
+
+Replacement anchors, with all other CCRs/profiles and boundaries retained:
+
+- `A1200/CMPA/2/d16(A0)/r1/negative-d16-word-source-full-destination-all-CCR/brief/super=True/op=B2E8/s=0000FFFF/d=0000FFFF/ccr=1F`.
+- `A1200/CMPA/2/d16(A0)/r1/negative-d16-word-source-full-destination-all-CCR/brief/super=True/op=B2E8/s=0000FFFF/d=FFFFFFFF/ccr=1F`.
+- `A1200/CMPA/2/d16(A0)/r1/negative-d16-word-source-full-destination-all-CCR/brief/super=True/op=B2E8/s=00000001/d=00000000/ccr=1F`.
+
+Nine controls reject missing fixture, wrong producer, empty selection, missing
+historical witnesses, wrong weights, unrelated failure reasons, changed CPU
+mutation with updated manifest, wrong command and wrong TRX counters. Fresh
+end-to-end generation from retired source and strict replay both pass.
+Evidence: `audits/CmpaDisplacementRetirementV4/proof.json` in the restoration
+temporary root, SHA-256
+`44bf90ce38d0efcc21c98c0270484d2905566d188a5c435e1a5bba00948a2931`.
+V1 clean execution passed but its mutation target guard rejected a nonunique
+expression before mutation execution. The target was narrowed to the intended
+arithmetic function. V2 proved source semantics at a positive offset; before
+retirement V3/V4 explicitly preserved the old negative displacement. These
+older attempts are retained separately and do not substitute for V4 acceptance.
+
+This consolidates one method; it does not establish physical timing or replace
+specialized cache/prefetch/JIT/fault/native-media coverage. Earlier full CPU and
+consumer proofs retain their original source scope and do not include this
+new group/retirement. The hardware-dependent disagreements and broader frame/
+reference requirements remain open. No CPU import or package publication occurs.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
