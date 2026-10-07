@@ -8228,3 +8228,64 @@ other read origins, trace/interrupt and changed return-SR/stack combinations,
 wider fault transport, memory destinations and other-family continuation remain
 required alongside all existing reference/consolidation gaps. Milestone 6 stays
 **in progress**, `roadmapComplete=false`.
+
+#### PC-relative operand function codes — 2026-10-07
+
+The next literal fixture demonstrates a function-code defect in the isolated
+read prototype. [M68000PM section 2](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+and [MC68030UM-P1 section 2/Table 4-1](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P1.pdf)
+classify PC-relative operands as program references: FC 2 in user mode and
+FC 6 in supervisor mode. Part 1 section 6.1.2 nevertheless places their operand
+data in the data cache, and section 4.3 places non-reset exception vectors in
+supervisor data space. Program function codes therefore do not justify changing
+the existing operand bus access kind to instruction fetch.
+
+The frozen discovery passes **9,216 fault-free controls** and retains **64,512
+precise SSW mismatches**: source faults incorrectly carry FC 1/5 instead of 2/6.
+The fixtures use independently selected positive, negative and unaligned operand
+locations, literal displacements, byte/word/long MOVE, every CCR and fault byte
+lane, four stack states, EC020/A1200/020/030 and scalar/batch dispatch with a
+host code-reader adapter. These discovery failures remain failed evidence.
+
+The isolated correction captures the function code for the typed pending read
+and validates it on explicit RTE. A MOVE PC-relative source uses program space;
+a trace-vector read uses supervisor data space even when the retained opcode
+is PC-relative. Existing bus access kinds, operand evaluation, extension order,
+partial effects and timing policy are unchanged. All **73,728 selected programs /
+32 reports / eight executions** pass, including controls, different DIB input,
+persistent refault and handlers that modify the source opcode/displacement.
+Per-instruction architectural state, stacks, defined frame fields, surrounding
+memory, exception/read counts and a following sentinel are checked.
+
+A separate PC-relative trace fixture passes **73,728 programs / 48 reports /
+12 executions**, with and without an earlier source fault, including software
+vector input, refault and changed VBR. It independently requires vector FC 5;
+the operand's program-space classification cannot leak into this later read.
+Discarding program-space capture produces exactly **64,512 SSW mismatches /
+9,216 unchanged control passes**. Deriving the vector code from the stale opcode
+produces exactly **73,728 mismatches**, each FC 6 where FC 5 is required.
+
+Fresh corrected-source retention passes **645,888 previously qualified programs**,
+with **272 byte-identical reports** and matching actual TRX summaries, plus all
+**25 mapping/cache/optional-interface controls** (**89 executions total**).
+These include the previous handler, A7/MOVEA, captured-pipe, trace, RTE fault
+and RTE transport gates. Strict verifiers check exact executions, independently
+enumerated keys/CCR weights, precise mutation identifiers/reasons, all source
+and producer/base-input identities and actual TRX summaries. Ten separate
+corruption controls reject omitted fixtures, changed source, altered producers,
+empty execution selections and wrong weights.
+
+Evidence: `audits/Operand020PcRelativeDiscovery`, `audits/Operand020PcRelativeFix`,
+`audits/Operand020PcRelativeTrace`, `audits/Operand020PcRelativeRetained` and
+`mutations/Operand020PcRelative`. Aggregate proof `operand020-pcrel-proof.json`,
+SHA-256 `c19704ef4687311f61f14aa19e204e93509303453be7a26cf8f28edc8a40f527`, pins all six case/input-integrity proofs and corruption
+controls. It confirms that the correction changes only the private operand
+continuation CPU file, with unchanged witness fixtures; each mutation likewise
+changes only that file. The production CPU source and public API remain unchanged.
+
+This correction remains isolated and unpromoted. Indexed PC-relative/pointer
+stages, other integer-family address-space handling, wider fault transport,
+more pipe/alias combinations, nested-PC provenance, trace/interrupt and changed
+return-SR/stack behavior remain required with all earlier reference/consolidation
+gaps. No package is built or published. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.

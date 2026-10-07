@@ -2837,3 +2837,19 @@ changed return-SR/stack, transport and general continuation stay required.
 No CPU source/package change or regression retirement is included; milestone 6
 stays **in progress**, `roadmapComplete=false`. See the
 [A7 and private-pipe qualification](COPPER68K_REFERENCE_QUALIFICATION.md#a7movea-and-captured-private-pipe-qualification--2026-10-07).
+
+PC-relative function-code qualification reproduces 64,512 precise SSW failures
+with 9,216 fault-free controls in the isolated prototype. A typed-read correction
+now passes all 73,728 selected operand/control programs and another 73,728
+PC-relative trace-vector programs. Program-space operand codes remain separate
+from supervisor data-space vector codes, without changing bus access kinds or
+timing policy. Two mutations detect exactly 64,512 and 73,728 failures. Fresh
+corrected-source retention passes 645,888 programs with 272 byte-identical
+reports, plus 25 map/cache controls (89 executions total); ten integrity controls
+and complete source/producer/input inventories pass. The correction remains
+isolated and unpromoted. Indexed/pointer stages, other-family function codes,
+wider transport, pipeline/aliases, nested-PC provenance, trace/interrupt,
+changed return-SR/stack and all remaining reference/consolidation work stay
+required. No package is built or published; milestone 6 stays **in progress**,
+`roadmapComplete=false`. See the
+[PC-relative function-code correction](COPPER68K_REFERENCE_QUALIFICATION.md#pc-relative-operand-function-codes--2026-10-07).
