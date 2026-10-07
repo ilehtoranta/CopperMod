@@ -9416,3 +9416,65 @@ inputs, empty selections and changed outcomes fail. Evidence:
 The next gate must reconcile the trace point before widening the canonical
 case to other banks, operands and frame origins. No publication or production
 import occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+#### Compatible 030 pipeline reference and failing agreement gate — 2026-10-07
+
+The reference checkout is verified clean upstream `tonioni/WinUAE` at
+`5d22d33632646efc3f747f03e82d28353e52722e`. A second maintained observer,
+`scripts/reference/m68030-compatible-return-trace.cpp`, executes generated
+`_35` instructions, the compatible RTE helper, unchanged pipeline/prefetch
+functions and official `cpustbl.cpp` metadata. The reference's
+`MORE_ACCURATE_68020_PIPELINE=1` is retained. Physical transport supplies
+cacheholding data; IRQ, enabled translation and physical timing remain excluded.
+The same complete retry loop and exact trace-specialties fragment execute.
+
+Fresh previous and compatible selections each execute **four fault/frame/RTE
+recoveries and two direct controls**, with native replay: **eight recoveries
+and four controls** across the two profiles. Both retain the earlier six
+exact observed outcomes. Thus executing the compatible software pipeline
+does not remove the delay: returned T1=1 traces after following MOVEQ at
+PC `1004`, while the direct trace-on control traces after MOVE at PC `1002`.
+This is agreement between two paths sharing a retry loop, not independent
+hardware confirmation.
+
+The compatible exploratory adapter first failed compilation for a missing
+forward declaration, then crashed because prefetch words were wider than
+the reference's `uae_u16` fields. The restored stage-B concatenation relies
+on 16-bit truncation. Matching word/validity-array types and adding static
+width/capacity assertions correct the observer, without changing extracted
+reference functions or accepting the failed outputs. A width mutant now
+fails compilation at the assertion; a sole access-history predicate mutant
+compiles and fails the successful-read-count guard. All other native inputs
+remain byte-identical. An initial guard runner expected the wrong compiler
+diagnostic spelling; its actual rejection is retained and fresh V2 corrects
+only that runner expectation/output directory.
+
+Nine evidence corruption controls pass, including incorrect profile and
+false pipeline claims. The new `-RequireArchitecturalAgreement` option
+**fails for both profiles** on the documented unchanged-T1=1 case. The
+[MC68030 manual, section 8.1.7](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+places tracing of a completed suspended instruction before the next
+instruction. With T1 unchanged, the trace belongs at PC `1002` with D7
+unchanged; the software references instead observe PC `1004` and D7=`2A`.
+The observer records the discrepancy rather than making it a passing
+architectural expectation. Manual text was verified through the browser;
+the direct PDF capture was denied, so no local PDF identity is claimed.
+
+Run the additional profile and the explicitly failing agreement gate:
+
+```powershell
+./scripts/test-copper68k-030-return-trace-reference.ps1 -Compatible030 -OutputDirectory <fresh-directory>
+./scripts/test-copper68k-030-return-trace-reference.ps1 -Compatible030 -OutputDirectory <same-directory> -ValidateReportsOnly
+./scripts/test-copper68k-030-return-trace-reference.ps1 -Compatible030 -OutputDirectory <same-directory> -ValidateReportsOnly -RequireArchitecturalAgreement
+```
+
+Evidence: `reference/ReturnedTrace030CompatibleMaintainedV1`,
+`reference/ReturnedTrace030PreviousMaintainedV3`,
+`integrity/ReturnedTrace030Compatible`,
+`mutations/ReturnedTrace030CompatibleV2`. Proof:
+`compatible-return-trace-reference-proof.json`, SHA-256 `a38cbfff0602b46ca7701f4d70b14faf272e1ac4ce978237a7da391b3563ab61`.
+The earlier exploratory failures and prior source-specific proofs remain
+separate. Production assemblies retain protected hashes; no CPU fix, package
+publication or full CPU/consumer claim occurs. Handler-edited T1 remains
+unresolved; neither software delay is a replacement architecture rule.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

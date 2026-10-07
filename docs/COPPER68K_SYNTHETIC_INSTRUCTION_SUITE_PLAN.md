@@ -3150,3 +3150,16 @@ software/manual trace point before promotion or wider trace qualification.
 No production CPU import/publication occurs. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See the
 [executed reference disagreement](COPPER68K_REFERENCE_QUALIFICATION.md#executed-030-returned-trace-reference-disagreement--2026-10-07).
+
+Compatible 030 reference qualification now executes the intact software
+pipeline, generated `_35` instructions and compatible RTE helper. Fresh
+previous/compatible profiles reproduce eight recoveries and four direct
+controls, with nine evidence corruption checks and two native observer
+guards. Both fail the explicitly requested architectural-agreement gate
+for unchanged T1=1: their trace occurs after following MOVEQ rather than
+before it. The manual-defined unchanged-T1 requirement is retained;
+software reference agreement cannot override it. Handler-edited T1 remains
+unresolved, and no production CPU behavior is changed. Observer word-width
+repairs and failed exploratory runs are recorded separately. Milestone 6
+remains **in progress**, `roadmapComplete=false`. See the
+[compatible pipeline/reference gate record](COPPER68K_REFERENCE_QUALIFICATION.md#compatible-030-pipeline-reference-and-failing-agreement-gate--2026-10-07).
