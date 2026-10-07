@@ -8419,3 +8419,56 @@ chained faults, captured multiword pipes, other exception-PC origins,
 trace/interrupt, changed return-SR/stack, wider transport, memory destinations,
 other families and all existing reference/consolidation gaps remain required.
 Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+#### All legal full-indexed read structures — 2026-10-07
+
+The unchanged isolated CPU prototype passes **786,432 logical programs / 32
+reports / nine executions**, with zero mismatching, unsupported or untested
+cases in this selection. The ninth execution checks **20 fixed An/PC fixture
+examples**. Shared test-internal `IndexFixture.FullStructures()` and
+`AddressingFixture` prepare all **66 legal full-format structures**: both
+suppression bits, null/word/long base displacements, direct addressing and
+all legal pre/post-indirect outer-displacement forms. Reserved combinations
+remain excluded according to [M68000PM table 2-2](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf).
+
+The separate deterministic matrix crosses An/PC bases, MOVE byte/word/long,
+MOVEA word/long, four 020/030 models/profiles, scalar/batch routes, four stack
+states, CCR 00/1F, and every byte lane of pointer/operand reads. It includes
+**42,240 fault-free controls** and **744,192 recovery programs** with repair,
+data-input-buffer and persistent refault handlers. Index D7.W=-8 and
+register destinations D2/A0 are canonical; this does not qualify all register,
+index-width, scale or alias combinations. The generator never calls production
+EA helpers. Fixed literal encodings and addresses anchor the shared fixture.
+
+Legal operands/pointers overlapping instruction extensions, including
+suppressed PC bases and address zero, stay in the matrix. Bytewise setup
+preserves code, expectations capture its real operand/pointer bytes, and the
+evaluated outer/index offset is frozen before handlers execute. Checks cover
+architectural registers, defined SR, PC, stack selection, memory guards,
+exception delivery, ordered read widths/counts and a following sentinel.
+This matrix does not add physical timing qualification or an all-structure
+timing-policy gate; the preceding literal timing-policy evidence is retained.
+
+A sole CPU mutation duplicates resumed **word** operand reads. With all
+fixtures unchanged it causes exactly **67,584 identified mismatches**, each
+for pointer/operand access ordering or count, while **718,848 unaffected
+programs pass**. Five deliberate integrity controls reject omitted/changed
+fixtures, wrong producer identity, empty execution selection and incorrect
+combination weights. Independent verifiers enumerate the complete source
+inventory and architectural keys, check exact logical weights against actual
+TRX output, and match every intended mutation failure identifier and reason.
+
+Evidence: `audits/Operand020IndexedStructures`,
+`mutations/Operand020IndexedStructures/RepeatWordRead`; aggregate
+`operand020-indexed-structures-proof.json`, SHA-256
+`e62a7da9ca29637cc5ce46ad943784051a28cebdc113c5eab7fd81bcfe9f353f`.
+It pins selected inputs/TRX, verifier identities, the mutation, five integrity
+controls, and the preceding chained proof. All CPU/project and preexisting
+fixture sources remain byte-identical; accepted retention is reused, with no
+fresh retention replay claimed. Protected normal assemblies remain unchanged.
+No production import, API/package change, publication or regression retirement
+is included. Register/index/alias permutations, all-structure chained faults,
+wider captured pipes and provenance/transport, other read origins,
+trace/interrupt, return-SR/stack, memory destinations, other families and
+remaining reference/consolidation gates stay required. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.

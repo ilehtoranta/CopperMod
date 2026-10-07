@@ -2889,3 +2889,18 @@ provenance/transport, trace/interrupt, return-SR/stack, other-family and
 remaining reference/consolidation work stay required. Milestone 6 remains
 **in progress**, `roadmapComplete=false`. See the
 [chained indexed fault qualification](COPPER68K_REFERENCE_QUALIFICATION.md#chained-indexed-pointer-and-operand-faults--2026-10-07).
+
+All 66 legal full-indexed structures now pass a separate 786,432-program
+read-recovery matrix on the unchanged isolated CPU prototype. Twenty fixed
+An/PC examples anchor the shared addressing fixtures; self-code operands,
+suppression, displacement lengths, indirection, stack states, CCR 00/1F and
+all fault lanes remain represented. A repeated-word-read mutation detects
+exactly 67,584 intended failures while preserving 718,848 unaffected programs;
+complete source/key/weight checks and five integrity controls pass. Canonical
+register/index selections do not replace the remaining permutation/alias
+matrix. Existing retention/timing evidence is reused, without claiming a fresh
+replay or all-structure timing gate. The prototype remains unimported and
+unpromoted, with no package change or test retirement. Register/index aliases,
+all-structure chained faults and broader continuation/reference/consolidation
+gates stay required. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+See the [all-structure read qualification](COPPER68K_REFERENCE_QUALIFICATION.md#all-legal-full-indexed-read-structures--2026-10-07).
