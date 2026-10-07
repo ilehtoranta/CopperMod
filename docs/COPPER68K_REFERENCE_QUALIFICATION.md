@@ -9752,3 +9752,42 @@ temporary root; `proof.json` SHA-256
 The earlier evidence keeps its separate identity. The latest private combined
 recovery replay is still pending; no full CPU/consumer claim, package
 publication or roadmap completion occurs. Milestone 6 remains **in progress**.
+
+## Current tests on latest private CPU — full replay started, 2026-10-07
+
+The remaining full-suite integration gate now executes an isolated snapshot
+containing the latest qualified private CPU and current mainline tests.
+All **38 CPU source/project inputs** match the indexed returned-bank parent
+exactly. All **167 test/project inputs** match current mainline at
+`125f5a7a3218943be58ea28f9a68da73acbe02aa`, preserving the expanded arithmetic
+matrix and the CMPM, EXTB and ADDA retirements. Four existing CPU files differ
+from production and the private operand-continuation file is added only to
+the frozen copy. The 26 private recovery fixture additions are not imported
+or credited as full-suite executions; their complete combined replay remains
+separate and uses the identical CPU source.
+
+The preflight audit verifies all **205 source/project identities**, ten
+unchanged pinned native presets and both protected normal assemblies.
+Eight corruption checks reject wrong snapshot/producer, absent source or
+source identity, changed CPU with refreshed manifests, changed tests,
+incorrect native selection and missing protected-assembly records.
+Preflight proof: `latest-private-full-preflight-proof.json`, SHA-256
+`3ee757123db85d5d35d85d1a6578aeda3c816d98026489b63879d73cb004efad`. This verifies inputs only, not completed tests.
+
+The required complete roster is derived from the prior 5,324-case TRX minus
+the nine proven retirements: **5,315 executions**, expecting **5,282 passing
+and the same 33 explicitly unavailable optional/discovery cases**. The strict
+terminal audit must verify exact names/outcomes, **865 profile reports**,
+the updated **707 ordinary reports / 86,240,034 scenarios**, all ten native
+presets and their controls. Historical keys/results remain pinned; the eight
+arithmetic reports use the separately pinned maintained audit. Only native
+CPU/test assembly identity fields may differ, and those must bind to the
+actual frozen build. Skips cannot be counted as successful optional coverage.
+
+Both this run at `audits/LatestPrivateFullCpuV1` and the 11,109,248-program
+combined run remain pending. Start record: `latest-private-full-start.json`,
+SHA-256 `1c2c1fbdb335608a3500646e0d57b191a680e4e1b712b40200186058aaf9b6b6` in the restoration temporary root.
+Full execution/integrity, wider recovery/reference gates and consumers stay
+required. No production import, package publication, architectural trace or
+physical timing qualification occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.

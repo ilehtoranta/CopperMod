@@ -3230,3 +3230,14 @@ all eight profiles and four original witnesses detect the intended defect.
 No further test retirement, CPU change or publication occurs. The latest
 combined private replay and broader milestone-6 requirements stay pending.
 See the [maintained consolidation record](COPPER68K_REFERENCE_QUALIFICATION.md#maintained-address-arithmetic-consolidation-audit--2026-10-07).
+
+The full CPU integration replay now runs on an isolated 205-input snapshot:
+38 exact latest private CPU inputs and 167 current test/project inputs, with
+all three documented retirements and expanded arithmetic coverage preserved.
+Its positive preflight and eight corruption controls pass. Required terminal
+coverage remains 5,315 executions (5,282 passing / 33 unavailable), 865 profile
+reports, 707 ordinary reports / 86,240,034 scenarios and ten pinned native
+presets. Both full CPU and combined private recovery executions are pending;
+input qualification is not execution completion. No production import or
+publication occurs. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+See the [current-tests/private-CPU full replay record](COPPER68K_REFERENCE_QUALIFICATION.md#current-tests-on-latest-private-cpu--full-replay-started-2026-10-07).
