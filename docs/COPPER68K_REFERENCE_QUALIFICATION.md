@@ -9952,3 +9952,41 @@ Evidence: `reference/ReturnedA7Native030V8` and
 gate or a replacement for either retained A7 hypothesis. No production CPU
 change, import, package publication or regression retirement occurs.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## Native A7 fixup-ordering cause isolated — 2026-10-07
+
+Passive state snapshots and capture of existing native debug logs preserve
+all twenty V8 observer outcomes byte-for-byte. They expose the unchanged-bank
+user case: the fault path advances original A7 from `4200` to `4204` and saves
+USP=`4204`; RTE then applies the inverse adjustment to the currently active
+handler stack (`7FA4` to `7FA0`) before restoring SR. After stack deallocation
+and SR restoration, USP remains `4204`, ISP is left at `7FFC`, and the resumed
+MOVE advances user A7 again to `4208`. Thus the inverse fixup targets the
+handler bank in this reference path. No passive observer change alters native
+functions, memory, register state or expected results.
+
+A sole ordering experiment moves both format-B inverse-fixup calls from before
+SR restoration to immediately after it. Only `rte.inc` differs; the observer
+and all other native fragments are byte-identical. The trace now deallocates
+the complete handler frame back to ISP=`8000`, restores user mode, then undoes
+the increment on user A7 (`4204` to `4200`). The resumed MOVE completes at
+`4204`. The two original unchanged-bank user discrepancies disappear; all
+four unchanged-bank fault cases and all four direct controls have the ordinary
+four-byte final increment. All sixteen bank-pair recoveries still execute the
+exact two operand attempts / one successful read, original data result and
+following sentinel. Direct control output is byte-identical to the baseline.
+
+This isolates a software recovery/fixup ordering cause; the changed native
+helper is an experiment, not an independently validated reference correction
+or a Copper68k candidate. Changed-S/M architectural bank selection, other
+registers/instructions, nested refaults and full host/pipeline behavior remain
+unqualified. The reference checkout and the failed original observations are
+preserved. No CPU source, published package or acceptance expectation changes.
+
+Evidence: `reference/ReturnedA7Native030V9` and
+`mutations/ReturnedA7FixupOrderingV1` in the restoration temporary root.
+`native-a7-fixup-ordering-proof-v1.json` SHA-256:
+`b1c40ddf7b3c6d50add4287cf410526b2f36ced26d10bbc2aa739695b1efaef8`. The verifier checks the exact original/changed helper relationship,
+all untouched fragments, complete case roster/results, identical passive
+observations, direct controls and both causal state sequences. Milestone 6
+remains **in progress**, `roadmapComplete=false`.

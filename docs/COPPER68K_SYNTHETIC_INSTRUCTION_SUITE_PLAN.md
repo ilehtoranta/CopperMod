@@ -3278,3 +3278,11 @@ the architectural question remains open. Two observer provenance/replay guards
 pass, and failed exploratory adapters remain retained. No CPU change or
 architectural promotion occurs. See the
 [native A7 discovery record](COPPER68K_REFERENCE_QUALIFICATION.md#native-030-returned-a7-observer-discovery--2026-10-07).
+
+The native A7 discrepancy is isolated to inverse-fixup ordering: the unmodified
+reference undoes the original increment on the handler's stack before restoring
+SR. A sole native-helper ordering experiment removes both unchanged-bank user
+discrepancies and retains all direct controls. This is causal software evidence,
+not a qualified reference correction or changed-S/M architectural expectation.
+No CPU change or promotion occurs. See the
+[native fixup-ordering record](COPPER68K_REFERENCE_QUALIFICATION.md#native-a7-fixup-ordering-cause-isolated--2026-10-07).
