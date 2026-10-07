@@ -10026,14 +10026,14 @@ output identity, changed fixture with updated manifest, changed native function
 with updated manifest, empty executable selection with updated manifest, and
 changed verification. These prove evidence handling, not hardware semantics.
 
-Evidence is `reference/ReturnedA7MaintainedV1` and
-`integrity/ReturnedA7MaintainedV1` in the restoration temporary root.
+Evidence is `reference/ReturnedA7MaintainedV2` and
+`integrity/ReturnedA7MaintainedV2` in the restoration temporary root.
 `identities.json` SHA-256:
-`874cbf36b0df0cb2ffc6add944721635d7bb3dbd4423bf01d2cd4d97bdf261e5`;
+`aaf97a3c23ec679e174ca07a0119f52f440dafe3955fa6a47a45821491f340cf`;
 `verification.json` SHA-256:
-`71192189d4f688a903a8b4f05fa1b219208d15cc67e5ad47aabb30e49e3b5f95`;
-`maintained-a7-controls-v1.json` SHA-256:
-`c06f7ec04cdfa2ef641c097c21e7fb0ef5610b235887e6b019f781c2c79fd8d8`.
+`3571738cfecfcd018930c40533159464ef7b0f32937e20166980c7bf6ead539a`;
+`maintained-a7-controls-v2.json` SHA-256:
+`72d0a3abb4b0b3d6f2d0d4df22ea6aaced1aabad2db734c30ca9b95140eaebe5`.
 Hardware is unavailable. No production CPU change, import, publication,
 regression retirement or architectural promotion occurs. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
