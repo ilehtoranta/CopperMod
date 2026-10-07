@@ -3261,3 +3261,12 @@ Consumer qualification and broader reference/fault requirements stay open;
 architectural trace remains unresolved. No production import/publication occurs.
 Milestone 6 stays **in progress**, `roadmapComplete=false`. See the
 [full current-tests/private-CPU record](COPPER68K_REFERENCE_QUALIFICATION.md#current-tests-on-latest-private-cpu--full-replay-complete-2026-10-07).
+
+Changed-bank A7 discovery now distinguishes two postincrement hypotheses in
+60,928 scenarios each. Updating the original physical bank yields 35,840 A7
+disagreements; updating the selected returned bank passes all cases on identical
+CPU source. All predecrement and same-bank controls pass. Exact identities,
+weights, failure IDs and test outcomes are verified. This remains unqualified
+architectural behavior; changing an expectation is not a CPU fix or completion.
+Milestone 6 stays **in progress**. See the
+[returned A7 discovery record](COPPER68K_REFERENCE_QUALIFICATION.md#returned-a7-bank-selection-discovery--2026-10-07).

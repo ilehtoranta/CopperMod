@@ -9862,3 +9862,43 @@ foreign-frame and reference requirements. Consumers still need qualification
 before any production import. No CPU import, package publication or physical
 timing qualification occurs. Milestone 6 remains **in progress**,
 `roadmapComplete=false`.
+
+## Returned A7 bank-selection discovery — 2026-10-07
+
+A new isolated discovery compares two explicit postincrement hypotheses for
+MOVE B/W/L from A7 when a real fault handler edits saved S/M before RTE.
+Each hypothesis executes **60,928 scenarios / 128 reports / 32 tests**, covering
+all sixteen original/returned bank pairs, postincrement and predecrement,
+relocated/control frames, scalar/batch execution, every operand fault byte,
+all 32 postincrement CCRs and predecrement CCR 0/31. T1 is disabled. All 230
+qualified parent inputs remain byte-identical; only a new discovery fixture
+is added in each 231-input snapshot. Production CPU source is untouched.
+
+The original-bank update hypothesis has **25,088 passing / 35,840 mismatching**
+scenarios. Its 16 postincrement tests fail; all 16 predecrement tests pass.
+Every mismatch is an exact A7-value disagreement for a changed physical bank.
+Same-physical-bank postincrement controls account for 21,504 passing cases;
+all 3,584 predecrement cases pass. The second fixture differs only in expected
+postincrement bank (plus class/report names and explanatory comment): updating
+the currently selected bank passes all **60,928** cases. Scenario setup,
+instruction bytes, CPU code, other register/memory expectations and bus checks
+remain unchanged. This is a comparison of unqualified expectations, not a
+mutation proving a CPU defect or a promoted architectural gate. The original
+failed execution and diagnostics are retained.
+
+The independent comparison enumerates every report identity, all 28 combination
+keys per report, exact CCR weights, every failure ID/reason, actual TRX summaries,
+32 test names/outcomes and both complete source inventories. Unsupported and
+untested counts are zero in both selected discovery matrices. Evidence:
+`audits/Operand020ReturnedA7DiscoveryV1` and
+`audits/Operand020ReturnedA7SelectedDiscoveryV1` in the restoration temporary
+root. `returned-a7-discovery-comparison-v1.json` SHA-256:
+`ec904d3095b1ad025083093dc40e4e0100a925ff188a675bba2765cbd813c706`. These source-only evidence checks do not qualify physical function-code
+spaces, other instructions, interrupted writebacks or handler-edited trace.
+
+The result distinguishes register-bank update policy from pending operand
+address retention. An independent architectural expectation is still needed
+before promoting changed-bank A7 postincrement behavior. Neither successful
+software agreement nor changing the expected bank closes that requirement.
+No CPU fix/import, package publication or regression retirement occurs.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
