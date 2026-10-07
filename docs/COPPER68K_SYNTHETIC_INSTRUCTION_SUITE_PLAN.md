@@ -3286,3 +3286,14 @@ discrepancies and retains all direct controls. This is causal software evidence,
 not a qualified reference correction or changed-S/M architectural expectation.
 No CPU change or promotion occurs. See the
 [native fixup-ordering record](COPPER68K_REFERENCE_QUALIFICATION.md#native-a7-fixup-ordering-cause-isolated--2026-10-07).
+
+The passive native A7 observer now has a maintained repository command and
+fixture, regenerating pinned reference fragments without temporary producers.
+Fresh generation and deterministic replay reproduce sixteen fault cases and
+four direct controls. Eight corrupted-evidence controls fail precisely.
+Discovery-only mode records unqualified observations; ordinary validation fails
+the two unchanged-bank user recovery disagreements. Twelve changed-bank
+architectural outcomes remain explicitly untested. Hardware is unavailable;
+no CPU change, promotion or publication occurs. Milestone 6 remains
+**in progress**, `roadmapComplete=false`. See the
+[maintained A7 command and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#maintained-native-a7-discovery-command--2026-10-07).

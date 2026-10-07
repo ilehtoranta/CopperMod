@@ -9990,3 +9990,50 @@ Evidence: `reference/ReturnedA7Native030V9` and
 all untouched fragments, complete case roster/results, identical passive
 observations, direct controls and both causal state sequences. Milestone 6
 remains **in progress**, `roadmapComplete=false`.
+
+## Maintained native A7 discovery command — 2026-10-07
+
+The original passive observer is now repository-owned in
+`scripts/reference/m68030-a7-recovery.cpp`, driven by
+`scripts/test-copper68k-030-a7-recovery-reference.py`. It regenerates the exact
+native fragments from WinUAE commit `5d22d33632646efc3f747f03e82d28353e52722e`,
+using the maintained return/trace helper's six canonical baseline cases. It
+requires Windows, Python 3, PowerShell 7 and Visual Studio 18 Community MSVC;
+the default reference checkout is `artifacts/reference-winuae-rte-modern`.
+No temporary producer scripts or Copper68k build are required.
+
+```powershell
+python scripts/test-copper68k-030-a7-recovery-reference.py --output artifacts/a7-reference-fresh --discovery-only
+python scripts/test-copper68k-030-a7-recovery-reference.py --output artifacts/a7-reference-fresh --validate-only --discovery-only
+python scripts/test-copper68k-030-a7-recovery-reference.py --output artifacts/a7-reference-fresh --validate-only
+```
+
+Use a fresh output for generation. The first two commands verify discovery;
+the third deliberately fails the architectural gate on the two unchanged-bank
+user recoveries ending at A7=`4208`. Twelve changed-bank architectural outcomes
+remain explicitly untested. All sixteen fault cases and four direct controls
+are executed, with exact source-read counts, result/PC/sentinel checks, native
+fragment identities and causal snapshots. Validate-only rechecks the pinned
+inputs and reexecutes the frozen observer, comparing output and trace byte for
+byte. This command preserves original native fixup ordering; it does not import
+the earlier ordering experiment. Flat physical FC1/5 transport, disabled
+translation/cache/IRQ/trace and raw inactive stack storage remain caveats.
+
+Fresh generation and discovery replay passed; ordinary architectural validation
+returned exit 1 with the expected A7 disagreement. Eight corruption controls
+were precisely rejected: missing fixture, wrong producer, wrong scope, missing
+output identity, changed fixture with updated manifest, changed native function
+with updated manifest, empty executable selection with updated manifest, and
+changed verification. These prove evidence handling, not hardware semantics.
+
+Evidence is `reference/ReturnedA7MaintainedV1` and
+`integrity/ReturnedA7MaintainedV1` in the restoration temporary root.
+`identities.json` SHA-256:
+`874cbf36b0df0cb2ffc6add944721635d7bb3dbd4423bf01d2cd4d97bdf261e5`;
+`verification.json` SHA-256:
+`71192189d4f688a903a8b4f05fa1b219208d15cc67e5ad47aabb30e49e3b5f95`;
+`maintained-a7-controls-v1.json` SHA-256:
+`c06f7ec04cdfa2ef641c097c21e7fb0ef5610b235887e6b019f781c2c79fd8d8`.
+Hardware is unavailable. No production CPU change, import, publication,
+regression retirement or architectural promotion occurs. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.
