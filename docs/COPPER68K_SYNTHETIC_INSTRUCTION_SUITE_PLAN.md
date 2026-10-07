@@ -3251,3 +3251,13 @@ required. Hardware is unavailable and the trace boundary stays unresolved;
 no production import/publication or architectural trace promotion occurs.
 Milestone 6 stays **in progress**, `roadmapComplete=false`. See the
 [complete corrected combined record](COPPER68K_REFERENCE_QUALIFICATION.md#latest-refault-corrected-combined-replay-complete--2026-10-07).
+
+The current full CPU project on the latest private source completes its exact
+integration gate: 5,282 passes / 33 unavailable / 5,315 executions, zero failures;
+865 profile reports, 707 ordinary reports / 86,240,034 scenarios, and ten pinned
+native preset audits. Eight complete-evidence corruption controls pass. The
+separate combined recovery gate remains qualified on identical CPU source.
+Consumer qualification and broader reference/fault requirements stay open;
+architectural trace remains unresolved. No production import/publication occurs.
+Milestone 6 stays **in progress**, `roadmapComplete=false`. See the
+[full current-tests/private-CPU record](COPPER68K_REFERENCE_QUALIFICATION.md#current-tests-on-latest-private-cpu--full-replay-complete-2026-10-07).

@@ -9826,3 +9826,39 @@ and the 020 format-B RTE path in `MoiraExec_cpp.h` discards saved recovery words
 before restoring SR/PC and refilling prefetch. No reference cases were executed
 or credited. The source hashes and inspection scope are retained separately in
 `moira-capability-v1.json`; the architectural trace question stays unresolved.
+
+## Current tests on latest private CPU — full replay complete, 2026-10-07
+
+The current CPU suite on the latest private returned-bank/scoped-FC source
+now passes its complete integration gate: **5,282 passing / 33 unavailable /
+5,315 exact executions**, zero failures. The roster is exactly the historical
+full suite minus nine independently proven retired semantic rows. All 205
+source/project identities remain frozen: 38 qualified private CPU inputs and
+167 current test/project inputs. The 26 private recovery fixture additions
+remain separate; they are not credited as executions in this full project.
+
+The strict terminal audit verifies all **865 profile reports**, including
+**707 ordinary reports / 86,240,034 scenarios**, with exact keys, weights,
+outcomes and actual TRX summaries. All ten pinned native preset audits pass
+unchanged coverage and controls. Their CPU/test assembly identities bind to
+the actual isolated build. The 33 optional/discovery skips remain unavailable
+coverage; they are not successful optional executions. Protected normal
+assemblies and source inputs remain unchanged.
+
+Eight complete-evidence controls reject a missing report, altered arithmetic
+weight, empty test roster, an unexpected skip, missing protected identity,
+wrong native assembly, altered native control and an incorrect aggregate
+execution record. The original preflight verifier remains byte-identical;
+terminal V2 adds an explicit missing-report diagnostic without changing any
+coverage or expectation. Evidence: `audits/LatestPrivateFullCpuV1` and
+`integrity/LatestPrivateFullCpuCompleteV1` in the restoration temporary root.
+Aggregate `latest-private-full-complete-proof.json` SHA-256:
+`d9fa5faee85a7ab8ee075371a22d8af58697ad6f2cc4f01ba5dc2e4f1a2df23e`.
+
+The separate complete five-selection recovery gate uses identical CPU source
+and retains its own 11,109,248-scenario proof. These completed software gates
+do not resolve the architectural trace disagreement or the broader fault,
+foreign-frame and reference requirements. Consumers still need qualification
+before any production import. No CPU import, package publication or physical
+timing qualification occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
