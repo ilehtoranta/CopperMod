@@ -2936,3 +2936,18 @@ pass. No production import, package change or regression retirement occurs.
 All-structure chained faults and wider continuation/reference/consolidation
 remain required; milestone 6 stays **in progress**, `roadmapComplete=false`.
 See the [signed index boundary qualification](COPPER68K_REFERENCE_QUALIFICATION.md#signed-index-boundaries-and-user-stack-a7--2026-10-07).
+
+All-structure chained indexed faults now pass 2,198,784 programs on the unchanged
+isolated prototype. All 66 full-format structures retain 42,240 controls; 54
+pointer-bearing structures execute 2,156,544 chained programs, with 12 direct
+structures explicitly excluded from pointer chains. Real handlers cover repair,
+input, refault and aliases; original PC/SR, ordered effects, private stage
+advance, sentinel and existing timing policy pass. A mutation against the
+repaired fixture detects exactly 2,156,544 intended failures while preserving
+all controls. Complete source/key/weight/TRX audits and five integrity controls
+pass. A compile-only snapshot and 6,656 earlier sentinel fixture failures remain
+invalid evidence, with fixture-only repairs. No production import, package
+change or regression retirement occurs. Wider pipes, provenance/transport and
+remaining continuation/reference/consolidation gates remain required;
+milestone 6 stays **in progress**, `roadmapComplete=false`.
+See the [all-structure chained qualification](COPPER68K_REFERENCE_QUALIFICATION.md#all-structure-chained-indexed-faults--2026-10-07).

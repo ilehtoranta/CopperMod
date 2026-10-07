@@ -8606,3 +8606,65 @@ chained faults, broader captured pipes/provenance/transport, other read origins,
 trace/interrupt, changed return-SR/stack, memory destinations, other families
 and remaining reference/consolidation work stay required. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
+
+#### All-structure chained indexed faults — 2026-10-07
+
+The unchanged isolated prototype passes **2,198,784 programs / 336 reports /
+85 executions**, with zero mismatching, unsupported or untested cases in the
+selected matrix. All **66 legal full-format structures** retain **42,240
+controls**. The **54 pointer-bearing structures** execute **2,156,544 chained
+programs**; the **12 direct structures** have no pointer access and are
+explicitly excluded from chains with that architectural reason. Four fixed
+encoding/pointer examples anchor the shared fixture.
+
+The matrix crosses An/PC, MOVE byte/word/long and MOVEA word/long, four stack
+states, CCR 00/1F, every pointer and operand fault lane, scalar/batch execution
+and EC020/A1200/020/030 profiles. Canonical D2.W is -8; previous register,
+size/scale and signed-boundary groups retain their separate evidence. Groups
+partition displacement length and base suppression to preserve every failure
+identifier without report truncation.
+
+Real handlers repair accesses, supply pointer/operand/both input buffers,
+refault, redirect the second exception vector and alter registers, consumed
+code and completed pointers. Checks cover original logical instruction PC/SR,
+private stage advance, saved addresses/function codes, architectural registers
+and stacks, ordered access widths/counts, memory guards and the following
+sentinel. Full-index native cycles, head/tail and barrier expectations pass
+across selected structures. These are the existing approximate timing policy,
+not physical pipeline/bus qualification; private frame fields are not claims
+about silicon frame contents.
+
+The compile-only initial snapshot has a constant-to-ushort narrowing error
+and no executed coverage. Its fresh fixture-only repair masks the low vector
+address word. The next snapshot has **2,192,128 passes / 6,656 invalid-fixture
+failures**: a completed-pointer write overlapping PC extension storage replaces
+the following sentinel with BRA.W, which the CPU correctly executes. A fresh
+fixture-only repair changes the pointer while preserving that sentinel's low
+word. Neither invalid snapshot counts toward the passing gate; no CPU bug is
+inferred from either failure.
+
+A sole CPU mutation leaves recovery at the pointer stage instead of advancing
+to the operand stage. Against the repaired fixture it produces exactly
+**2,156,544 identified stage mismatches**, preserving **42,240 controls**.
+An earlier mutation against the invalid-sentinel fixture remains a separate
+prefix probe. Complete 219-file source inventories, actual TRX rosters,
+independently enumerated keys/weights and five corruption controls pass. The
+controls reject omitted/changed fixtures, wrong producer identity, empty
+execution selections and incorrect weights.
+
+Evidence: `audits/Operand020IndexedFullChain`,
+`audits/Operand020IndexedFullChainV2`, `audits/Operand020IndexedFullChainV3`,
+`mutations/Operand020IndexedFullChain/KeepPointerStage` and
+`mutations/Operand020IndexedFullChain/KeepPointerStageV3`; aggregate
+`operand020-indexed-full-chain-proof.json`, SHA-256
+`eb64a95e6b2ac90d073bb073f7446721b23d7d4662f9acd66001744b303cf52d`.
+It pins complete inventories, producer/verifier/binary identities, exact
+fixture-only repairs, the sole CPU mutation, integrity rejections and the
+preceding signed-boundary proof. Existing source-specific retention is reused;
+no fresh retention replay is claimed. Protected normal assemblies, production
+source/packages and regression retirement remain unchanged. The prototype
+stays isolated, unimported and unpromoted. Wider captured multiword/extension
+pipes, provenance/transport, other read origins, trace/interrupt, changed
+return-SR/stack, memory destinations, other families and remaining reference/
+consolidation gates stay required. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
