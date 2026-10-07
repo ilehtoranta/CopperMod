@@ -9585,3 +9585,100 @@ then perform full-gate integrity checks. No production CPU import, full CPU
 or consumer claim, inventory reduction or publication occurs. Remaining
 reference/foreign-frame/general fault gates remain required. Milestone 6
 stays **in progress**, `roadmapComplete=false`.
+
+## Complete indexed returned-bank recovery gate — 2026-10-07
+
+The separately required full selection above has now finished and passed:
+**1,876,992 programs / 768 reports / 192 executions**, with zero mismatching,
+unsupported or untested selected cases and no skips. This comprises 439,296
+source-fault and 1,437,696 pointer-to-source programs across EC020, A1200,
+020 and 030. All sixteen initial/returned S/M pairs, 66 full-index source
+structures and 54 indirect structures execute with An/PC sources, MOVE
+B/W/L and MOVEA W/L, CCR 00/1F, all fault bytes and scalar/batch boundaries.
+The three-word saved pipe and its third-word handler edit are preserved.
+The twelve direct structures have no pointer phase; their source-fault
+coverage remains included rather than disappearing from the catalog.
+
+The audit independently expands every key and weight, verifies the exact
+192-case TRX roster and its report summaries, and binds all 230 source/project
+inputs to the unchanged 229-input refault-corrected parent plus the single
+new fixture. Seven corruption checks reject a missing fixture, wrong producer,
+empty selection, incorrect count, wrong parent, foreign returned-bank key
+and changed fixture even when both manifests are refreshed. The frozen new
+fixture identity is required independently of those mutable manifests.
+Normal assemblies retain their protected identities.
+
+Complete proof: `indexed-return-bank-full-proof.json`, SHA-256
+`414d299db0e1bd6affcdeedfeff140a8880198134d3a59d588e03539d397c0a5`.
+Evidence: `audits/Operand020IndexedReturnBankV1` and
+`integrity/Operand020IndexedReturnBankFull` in the restoration temporary root.
+The separate focused 51,584-program control, 19,968-mismatch FC mutation
+and six focused corruption checks retain their own identities and scope;
+they were not substituted for this complete run.
+
+This closes the selected indexed returned-bank gate on the private snapshot.
+It does not qualify trace, other register/index/scaling choices, relocated or
+foreign frames, broader fault origins, enabled MMU/cache operation or physical
+pipeline/function-code behavior. Existing timing policy checks pass; silicon
+timing is not claimed. Production CPU import, combined validation on this
+snapshot, full CPU/consumers and other remaining reference gates stay required.
+No package publication occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
+
+## Address-register arithmetic matrix and ADDA consolidation — 2026-10-07
+
+The earlier exhaustive register-field loop used Dn sources; An sources sampled
+only destinations A0/A1/A7. `ArithmeticAddressingModesAndFullExtensions` now
+also covers every An source/destination field for ADDA, SUBA and CMPA W/L
+on all eight profiles. Four source boundaries per size, both user/supervisor
+stack selections, CCR 00/1F on distinct registers and all 32 CCR states on
+aliases add **17,664 scenarios per profile / 141,312 total**. Nonzero upper
+source words expose missing word sign extension, and all A7 aliases execute.
+These cases reuse the shared operand and independent mathematical expectations.
+
+The expanded addressing selection passes **200,068 scenarios in eight batches**,
+and its clean audit co-executes all 79 original HDF-boot regression cases:
+**87 executions pass, no skips**. Independent verification expands all 768
+new keys per profile and their value/CCR weights, while requiring the exact
+unchanged earlier keys from the pinned 707-report audit. No older evidence
+is relabeled. Ordinary required arithmetic-addressing counts rise from
+4,667/8,237 to **22,331/25,901** (early/later models); the ordinary inventory
+now requires **86,240,034 cases / 707 reports**. This is its updated requirement,
+not a claim of a fresh complete-suite execution.
+
+A targeted ADDA word-An zero-extension mutation covers both the advanced
+handler and base-core path, with fixtures unchanged. It produces exactly
+**6,080 mismatches across all eight profiles** (760 each), while 193,988
+selected scenarios pass. All four original
+`AddaWordAddressRegisterSignExtendsAndAllowsAliasing` witnesses also fail
+with the intended result difference. An earlier generic-arithmetic probe
+only affected SUBA on five profiles, producing 3,800 precise failures while
+the original ADDA witnesses passed. That probe is retained separately and
+was not accepted as ADDA replacement proof. The verifier's preliminary
+short roster omitted parameterized PC tests; its rejection led to an explicit
+complete 79-case catalog before acceptance, without changing test outcomes.
+
+Six corruption checks reject missing register coverage, incorrect alias CCR
+weight, empty execution, missing original witness, wrong mutation producer
+and a changed mutation even when its manifests are refreshed. Retire only
+the pure semantic ADDA method's four model executions after this proof.
+Its exact replacement anchor is
+`68020/ADDA/2/A2/r2/all-address-register-fields/brief/super=True/op=D4CA/s=12348000/d=7FFFFFFE/ccr=1F`.
+All 75 other HDF-boot executions, including their timing assertions, remain.
+The reduced repository selection passes **83 executions without skips**;
+its eight shared batches again report all 200,068 passing scenarios.
+
+Semantic proof: `arithmetic-address-register-proof.json`, SHA-256
+`a58eecd4412ae570b4619de32b70bdde84e90a0307b632dde2e233a4f17fa2b7`.
+Integrity proof: `arithmetic-address-register-integrity-proof.json`, SHA-256
+`9578db78c237a5865f90e74bb44cae8e05fd14fb0c7a573bf15ddca62940a266`.
+Final retirement proof: `address-arithmetic-retirement-proof.json`, SHA-256
+`960bbe6eaa07d9441e53a0642337954078d4252c9cc0ddcdcbcb42bfc46a21c0`.
+Evidence is under `audits/ArithmeticAddressRegisters`,
+`audits/ArithmeticAddressRegistersCurrent`, `mutations/AddaAddressRegisters`,
+`mutations/ArithmeticAddressRegisters` and `integrity/ArithmeticAddressRegisters`.
+Current reduced TRX SHA-256:
+`093db48e491a48ab0a0cf2a254aa957cb1b1543b9a27320cafcd327171b72c88`.
+No production CPU change, package/consumer requalification or physical timing
+claim occurs. Protected normal DLLs are unchanged. Broader milestone-6 gates,
+including the 030 trace disagreement, remain open; `roadmapComplete=false`.

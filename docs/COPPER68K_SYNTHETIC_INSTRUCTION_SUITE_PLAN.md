@@ -3188,3 +3188,25 @@ reference/foreign-frame/general fault gates stay open. No production import
 or publication occurs. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See the
 [indexed returned-bank progress record](COPPER68K_REFERENCE_QUALIFICATION.md#indexed-returned-bank-recovery-qualification-in-progress--2026-10-07).
+
+The complete indexed returned-bank run above now passes all 1,876,992 programs,
+768 reports and 192 executions, with seven complete-gate corruption controls.
+All sixteen bank pairs and all 66 source/54 indirect structures are audited
+on the unchanged private refault-corrected CPU snapshot. The focused mutation
+retains its separate scope. This closes that selected private gate only;
+trace, broader/foreign origins, combined/full CPU/consumer validation and
+remaining qualification requirements stay open. See the
+[complete indexed returned-bank record](COPPER68K_REFERENCE_QUALIFICATION.md#complete-indexed-returned-bank-recovery-gate--2026-10-07).
+
+The shared arithmetic matrix now covers every An source/destination field
+for ADDA/SUBA/CMPA W/L, both stack modes and all alias CCRs, adding 141,312
+scenarios. Its 200,068-scenario addressing selection and 79 original HDF-boot
+regressions pass. A two-path ADDA sign-extension mutation fails all eight
+profiles and all four original ADDA witnesses; six corruption checks pass.
+Only that pure semantic method is retired, leaving 75 other HDF-boot
+executions, including timing checks. The reduced 83-execution selection passes
+without skips. The ordinary requirement becomes 86,240,034 scenarios in
+707 reports; a fresh complete-suite run is not claimed by this test-only
+change. No production CPU import or publication occurs. Milestone 6 remains
+**in progress**, `roadmapComplete=false`. See the
+[address-register matrix and consolidation record](COPPER68K_REFERENCE_QUALIFICATION.md#address-register-arithmetic-matrix-and-adda-consolidation--2026-10-07).

@@ -69,7 +69,7 @@ try {
             'transfer-moveq-unassigned-words'=131072;
             'transfer-movep'=3708; 'transfer-movem'=$(if ($model -in @('68000','68010')) {3196} else {3592});
             'transfer-movem-invalid-operands'=6400;
-            'arithmetic-boundaries'=56448; 'arithmetic-addressing'=$(if ($model -in @('68000','68010')) {4667} else {8237});
+            'arithmetic-boundaries'=56448; 'arithmetic-addressing'=$(if ($model -in @('68000','68010')) {22331} else {25901});
             'arithmetic-scenarios'=21072; 'arithmetic-extend'=25440;
             'arithmetic-invalid-operands'=$(if ($model -in @('68000','68010')) {6336} else {5952});
             'arithmetic-quick-invalid-operands'=26624;
