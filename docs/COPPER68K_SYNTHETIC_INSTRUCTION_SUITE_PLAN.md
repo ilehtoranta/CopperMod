@@ -3043,3 +3043,15 @@ is unimported. Wider indexed/chained nested provenance, foreign frames, other
 origins and remaining roadmap gates stay required. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
 See the [indexed/chained pipe qualification](COPPER68K_REFERENCE_QUALIFICATION.md#full-format-indexed-and-chained-private-pipe-transport--2026-10-07).
+
+Selected private-frame relocation now has a retained failing witness: 224
+supervisor-stack cases are unsupported while 672 controls/user-stack cases
+pass. A separate isolated correction removes the original-SP restriction and
+passes all 896 programs, retaining every frame read and the saved operand
+address. Fresh affected retention passes 138,240 frame-entry/internal-load
+fault programs; complete TRX/key/weight/source audits and six integrity
+controls pass. The correction remains unimported. Indexed/chained nested trace
+continues separately; foreign/cross-profile frames, broader return-SR/stack
+and alias behavior, full CPU/consumer validation and remaining roadmap gates
+stay required. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+See the [private-frame relocation evidence](COPPER68K_REFERENCE_QUALIFICATION.md#copied-private-frame-and-selected-stack-relocation--2026-10-07).

@@ -9006,3 +9006,47 @@ already-delivered CMPM retirements instead of replacing tests from an older
 snapshot. Indexed/chained nested trace-vector provenance, foreign frames,
 other origins and the remaining reference/continuation/consolidation gates
 remain required. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+#### Copied private frame and selected-stack relocation — 2026-10-07
+
+A bounded discovery exposes an original-stack-address restriction in the
+isolated MOVE operand-read prototype. A real handler copies every byte of the
+92-byte private frame using 23 MOVE.L instructions, selects the relocated
+frame with LEA A7, and executes RTE. Across EC020/A1200/020/030, MOVE B/W/L,
+four stack states, CCR `00/1F`, all operand byte lanes and scalar/batch,
+**672 programs pass and 224 supervisor-stack programs are unsupported**.
+All unmoved controls and relocated user-stack cases pass. Every unsupported
+identifier/reason points to the original RTE stack-equality guard.
+
+[MC68030UM section 8.1.13](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+describes RTE validating and consuming the frame on the selected active
+supervisor stack. For this interpreter-private image, fault-time A7 provenance
+does not impose an original-address restriction: the completed source address
+is serialized independently. A separate isolated correction removes that
+restriction while retaining the provenance read, all other frame reads,
+validation, saved effective address and suffix execution. The unchanged
+fixture then passes **896 programs / 16 reports / four executions**, with zero
+mismatches or unsupported cases and exactly one completed operand read.
+The original guard remains a retained discriminating regression witness.
+
+Fresh affected retention passes **138,240 frame-entry/internal-load fault
+programs / 160 reports / 40 executions**. Complete keys and weights match the
+previous independently qualified frame-fault gate; actual per-test TRX output
+and complete source identities agree. Defined HALT behavior, completed effects
+and existing scalar/batch policy remain intact. Six integrity controls reject
+omitted/changed fixtures, a wrong producer, an empty selection, changed weights
+and unrelated failure reasons. Aggregate proof:
+`operand020-moved-frame-proof.json`, SHA-256
+`719240a5ab6fa273f1402062249ddeb613e40a7b7fc826f81964a111ca7be4b3`.
+Evidence roots are `audits/Operand020MovedFrameDiscovery` and
+`audits/Operand020MovedFrameFix`; the sole CPU-file change and unchanged fixture
+are independently verified against the frozen indexed-pipe parent.
+
+This qualifies selected private-image relocation within each interpreter
+profile. It does not qualify foreign silicon images, cross-profile migration,
+changed return SR/banks, all A7 aliases or general A/B continuations. The
+indexed/chained nested-trace matrix continues separately on unchanged parent
+CPU source. Broader qualification, fresh full CPU validation and affected
+consumers remain required before importing the correction. Production CPU
+source/packages, protected normal assemblies and CMPM retirements are
+unchanged. Milestone 6 remains **in progress**, `roadmapComplete=false`.
