@@ -9130,12 +9130,16 @@ namespace Copper68k
         }
 
         protected virtual bool UsesFormatWordExceptionFrames => _useM68020BriefIndexedAddressing;
+        protected virtual bool Has68010SystemInstructions => _useM68020BriefIndexedAddressing;
 
         protected virtual bool IsSupportedRteFrameFormat(ushort format)
         {
             _ = format;
             return true;
         }
+
+        protected virtual bool TryConsumeModelSpecificRteFrame(ushort format)
+            => IsSupportedRteFrameFormat(format);
 
         protected virtual bool TryHandleModelSpecificAddressError(
             uint faultAddress,
@@ -9862,6 +9866,8 @@ namespace Copper68k
 
         private bool DecodeLine0(ushort opcode, uint instructionPc)
         {
+            if (Has68010SystemInstructions && (opcode & 0xFF00) == 0x0E00 && (opcode & 0xC0) != 0xC0)
+                return DecodeMoves(opcode, instructionPc);
             if (DecodeImmediateToStatusRegister(opcode, instructionPc))
             {
                 return true;
@@ -10164,6 +10170,42 @@ namespace Copper68k
             AddInstructionCycles(isLong ? 24 : 16);
         }
 
+        private bool DecodeMoves(ushort opcode, uint instructionPc)
+        {
+            if (!State.GetFlag(M68kCpuState.Supervisor))
+            { RaiseException(8, instructionPc, 34); return true; }
+            var mode = (opcode >> 3) & 7; var eaRegister = opcode & 7;
+            if (!IsMemoryAlterableEffectiveAddress(mode, eaRegister))
+            { RaiseException(4, instructionPc, 34); return true; }
+            var extension = FetchWord();
+            if ((extension & 0x7FF) != 0)
+            { RaiseException(4, instructionPc, 34); return true; }
+            var size = DecodeImmediateSize(opcode);
+            var register = (extension >> 12) & 7;
+            var addressRegister = (extension & 0x8000) != 0;
+            var write = (extension & 0x800) != 0;
+            // Capture the register before predecrement/postincrement can alias it.
+            var source = addressRegister ? State.A[register] : State.D[register];
+            var ea = ResolveEa(mode, eaRegister, size, write: write);
+            var alternateBus = _bus as IM68kFunctionCodeBus;
+            var previous = alternateBus?.AlternateFunctionCode;
+            if (alternateBus is not null)
+                alternateBus.AlternateFunctionCode = (byte)((write ? State.DestinationFunctionCode : State.SourceFunctionCode) & 7);
+            try
+            {
+                if (write) ea.Write(source);
+                else
+                {
+                    var value = ea.Read();
+                    if (addressRegister) SetAddressRegister(register, M68kCpuState.SignExtend(value, size));
+                    else WriteDataRegister(register, value, size);
+                }
+            }
+            finally { if (alternateBus is not null) alternateBus.AlternateFunctionCode = previous; }
+            AddInstructionCycles(size == M68kOperandSize.Long ? 20 : 16);
+            return true;
+        }
+
         private bool DecodeImmediateToStatusRegister(ushort opcode, uint instructionPc)
         {
             if (opcode is not (0x003C or 0x007C or 0x023C or 0x027C or 0x0A3C or 0x0A7C))
@@ -10264,14 +10306,16 @@ namespace Copper68k
                         return true;
                     }
 
+                    var frameStackPointer = State.A[7];
                     var statusRegister = PullWord();
                     var programCounter = PullLong();
                     if (UsesFormatWordExceptionFrames)
                     {
                         var format = PullWord();
                         if (_useM68020BriefIndexedAddressing && (format & 0xf000) == 0x2000) _ = PullLong();
-                        if (!IsSupportedRteFrameFormat(format))
+                        if (!TryConsumeModelSpecificRteFrame(format))
                         {
+                            State.SetActiveStackPointer(frameStackPointer);
                             RaiseException(14, instructionPc, 34);
                             return true;
                         }
@@ -10287,6 +10331,15 @@ namespace Copper68k
                     var programCounter = PullLong();
                     AddInstructionCycles(16);
                     BranchTo(programCounter, State.ProgramCounter);
+                    return true;
+                }
+                case 0x4E74 when Has68010SystemInstructions:
+                {
+                    var displacement = (short)FetchWord();
+                    var target = PullLong();
+                    State.SetActiveStackPointer(unchecked(State.A[7] + (uint)(int)displacement));
+                    AddInstructionCycles(16);
+                    BranchTo(target, State.ProgramCounter);
                     return true;
                 }
                 case 0x4E76:
@@ -10347,6 +10400,11 @@ namespace Copper68k
 
             if ((opcode & 0xFFC0) == 0x40C0)
             {
+                if (Has68010SystemInstructions && !State.GetFlag(M68kCpuState.Supervisor))
+                {
+                    RaiseException(8, instructionPc, 34);
+                    return true;
+                }
                 var mode = (opcode >> 3) & 7;
                 var reg = opcode & 7;
                 if (!IsDataAlterableEffectiveAddress(mode, reg))
@@ -10369,6 +10427,21 @@ namespace Copper68k
 
                 ea.Write(State.StatusRegister);
                 AddInstructionCycles(GetMoveFromSrCycles(mode, reg));
+                return true;
+            }
+
+            if ((opcode & 0xFFC0) == 0x42C0 && Has68010SystemInstructions)
+            {
+                var mode = (opcode >> 3) & 7;
+                var register = opcode & 7;
+                if (!IsDataAlterableEffectiveAddress(mode, register))
+                {
+                    RaiseException(4, instructionPc, 34);
+                    return true;
+                }
+                var ea = ResolveEa(mode, register, M68kOperandSize.Word, write: true);
+                ea.Write((uint)(State.StatusRegister & 0xFF));
+                AddInstructionCycles(GetMoveFromSrCycles(mode, register));
                 return true;
             }
 
@@ -12698,7 +12771,7 @@ namespace Copper68k
             _skipRetirePrefetchTopUp = false;
         }
 
-        private void SetProgramCounterAndFlushPrefetch(uint target)
+        protected void SetProgramCounterAndFlushPrefetch(uint target)
         {
             CommitIssuedPendingPrefetch();
             State.ProgramCounter = target;
@@ -14068,7 +14141,7 @@ namespace Copper68k
             WriteLongDescending(State.A[7], value);
         }
 
-        private ushort PullWord()
+        protected ushort PullWord()
         {
             var value = ReadWord(State.A[7]);
             State.SetActiveStackPointer(State.A[7] + 2);

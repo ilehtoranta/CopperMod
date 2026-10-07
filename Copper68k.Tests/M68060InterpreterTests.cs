@@ -1,9 +1,62 @@
 using Copper68k;
+using CopperFloat;
 
 namespace Copper68k.Tests;
 
 public sealed class M68060InterpreterTests
 {
+    [Fact]
+    public void ArithmeticExceptionIsDeferredUntilNextFpuInstructionAndFsaveClearsIt()
+    {
+        var bus = new Copper68kTestBus(0x10000);
+        bus.WriteWords(0x1000, 0xF200, 0x0420, 0x7207, 0xF200, 0x0000); // FDIV FP1,FP0; MOVEQ; FMOVE
+        bus.WriteWords(0x4000, 0xF310, 0x4E73); bus.WriteLong(50 * 4, 0x4000);
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
+        cpu.Reset(0x1000, 0x7000); cpu.State.A[0] = 0x5000;
+        cpu.State.M68040Fpu.FP[0] = ExtF80Math.FromInt32(1);
+        cpu.State.M68040Fpu.FP[1] = ExtF80.PositiveZero;
+        cpu.State.M68040Fpu.Fpcr = 0x400;
+        cpu.ExecuteInstruction(); Assert.Equal(0x1004u, cpu.State.ProgramCounter); Assert.Equal(0x7000u, cpu.State.A[7]);
+        cpu.ExecuteInstruction(); Assert.Equal(7u, cpu.State.D[1]);
+        cpu.ExecuteInstruction(); Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+        Assert.Equal(0x6FF8u, cpu.State.A[7]); Assert.Equal(50 * 4, bus.ReadWord(0x6FFE));
+        Assert.Equal(0x1006u, bus.ReadLong(0x6FFA));
+        cpu.ExecuteInstruction(); Assert.Equal(0xE002u, bus.ReadLong(0x5000));
+        cpu.ExecuteInstruction(); cpu.ExecuteInstruction();
+        Assert.Equal(0x100Au, cpu.State.ProgramCounter); Assert.Equal(0x7000u, cpu.State.A[7]);
+        Assert.Equal(ExtF80Math.FromInt32(1), cpu.State.M68040Fpu.FP[0]);
+    }
+
+    [Fact]
+    public void ExceptionalFpuFrameRoundTripsTwelveBytesAndSaveReturnsToIdle()
+    {
+        var bus = new Copper68kTestBus(0x10000);
+        bus.WriteWords(0x1000, 0xF350, 0xF311, 0xF312); // restore (A0); save (A1); save (A2)
+        bus.WriteLong(0x5000, 0x3FFFE006); bus.WriteLong(0x5004, 0x81234567); bus.WriteLong(0x5008, 0x89ABCDEF);
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
+        cpu.Reset(0x1000, 0x7000); cpu.State.A[0] = 0x5000; cpu.State.A[1] = 0x5100; cpu.State.A[2] = 0x5200;
+        cpu.ExecuteInstruction(); cpu.ExecuteInstruction();
+        Assert.Equal(bus.Memory.AsSpan(0x5000, 12).ToArray(), bus.Memory.AsSpan(0x5100, 12).ToArray());
+        cpu.ExecuteInstruction(); Assert.Equal(0x6000u, bus.ReadLong(0x5200));
+        Assert.Equal(0x1006u, cpu.State.ProgramCounter); Assert.Equal(0x7000u, cpu.State.A[7]);
+    }
+
+    [Theory]
+    [InlineData(0xF241, 0, 0)] // FSF D1
+    [InlineData(0xF248, 0, 2)] // FDBF D0, displacement
+    [InlineData(0xF27A, 0, 2)] // FTRAPF.W
+    [InlineData(0xF27B, 0, 4)] // FTRAPF.L
+    public void RemovedFpuConditionalsUseSoftwarePackageTrap(int opcode, int extension, int extraBytes)
+    {
+        var bus = new Copper68kTestBus(0x10000); bus.WriteWords(0x1000, (ushort)opcode, (ushort)extension, 0, 0);
+        bus.WriteLong(44, 0x4000);
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
+        cpu.Reset(0x1000, 0x7000); cpu.State.D[0] = 9; cpu.State.D[1] = 7;
+        cpu.ExecuteInstruction(); Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+        Assert.Equal(0x202C, bus.ReadWord(0x6FFA)); Assert.Equal(0x1004u + (uint)extraBytes, bus.ReadLong(0x6FF6));
+        Assert.Equal(9u, cpu.State.D[0]); Assert.Equal(7u, cpu.State.D[1]);
+    }
+
     // Independent expectations: MC68060UM 3.2.2.2, 3.2.2.5, 11.1.2, C.2, D-22.
     [Theory]
     [InlineData(0x0108, 0x0010)] // MOVEP
@@ -126,8 +179,6 @@ public sealed class M68060InterpreterTests
     }
 
     [Theory]
-    [InlineData(0x003, 0x8000u)]
-    [InlineData(0x004, 0x8000u)]
     [InlineData(0x008, 0x20000000u)]
     public void UnimplementedSystemFeaturesStopExplicitly(int control, uint value)
     {
@@ -196,13 +247,21 @@ public sealed class M68060InterpreterTests
     }
 
     [Theory]
-    [InlineData(0xF200, 0x0022)] // FADD: explicitly unavailable, not a fabricated CPU trap.
-    [InlineData(0xF200, 0x0000)] // FMOVE of FP data.
-    public void FpuArithmeticDoesNotSilentlyUse040Semantics(int opcode, int extension)
+    [InlineData(0x0022, 6)] // FADD FP0,FP0
+    [InlineData(0x0000, 3)] // FMOVE FP0,FP0
+    [InlineData(0x0023, 9)] // FMUL FP0,FP0
+    [InlineData(0x0020, 1)] // FDIV FP0,FP0
+    [InlineData(0x0028, 0)] // FSUB FP0,FP0
+    public void FpuArithmeticProducesArchitecturalResults(int extension, int expected)
     {
-        var bus = new Copper68kTestBus(0x10000); bus.WriteWords(0x1000, (ushort)opcode, (ushort)extension);
+        var bus = new Copper68kTestBus(0x10000); bus.WriteWords(0x1000, 0xF200, (ushort)extension);
         using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
         cpu.Reset(0x1000, 0x7000);
-        Assert.Throws<M68kEmulationException>(() => cpu.ExecuteInstruction());
+        cpu.State.M68040Fpu.FP[0] = ExtF80Math.FromInt32(3);
+        cpu.ExecuteInstruction();
+        Assert.Equal(ExtF80Math.FromInt32(expected), cpu.State.M68040Fpu.FP[0]);
+        Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+        Assert.Equal(0x1000u, cpu.State.M68040Fpu.Fpiar);
+        Assert.Equal(0x7000u, cpu.State.A[7]);
     }
 }

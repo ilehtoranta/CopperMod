@@ -9,9 +9,9 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.5.2</Version>
-    <PackageVersion>1.5.2</PackageVersion>
-    <PackageReleaseNotes>Development candidate: completes synthetic MOVE/MOVEA, transfer/address and arithmetic/comparison milestones across seven CPU models and A1200 EC020 with 2945168 deterministic logical cases. Adds remaining arithmetic EAs, full indexed arithmetic, memory ADDX/SUBX and PACK/UNPK. Fixes active stack-bank updates, decimal operand alias ordering, signed word division overflow and model-specific divide-by-zero frames and returns. Earlier MOVE/MOVEM, address-width and partial-execution fixes are retained. Logical/bit/shift and control/system milestones and cross-model external qualification remain untested. Existing admitted brief timing policies remain approximate; physical timing is not qualified. This version is unpublished until explicitly released.</PackageReleaseNotes>
+    <Version>1.5.3</Version>
+    <PackageVersion>1.5.3</PackageVersion>
+    <PackageReleaseNotes>Mainline release 1.5.3 includes the preceding integer/addressing fixes and CPU integration changes: 68010 motherboard timing forwarding, 58-byte format-8 frames and system instructions; 68060 FPU arithmetic, 12-byte exceptional state restoration and deferred arithmetic exceptions; architectural 040/060 page tables, permissions, timed descriptor updates and translated fault stacks; MMU interpreter fallback in JIT and public JIT counters. Validated by 4,433 CPU tests and CopperScreen integration/native boot checks. Seven optional CPU conformance checks were unavailable. Advanced CPU profiles remain experimental: physical pipeline/accelerator timing, 68010 fault continuation, complete 040 access-error recovery and native 060-aware OS boot are not qualified. Publication authorized on 2026-10-07.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

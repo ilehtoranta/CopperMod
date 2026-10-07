@@ -12,13 +12,21 @@ namespace Copper68k
         IM68kBus,
         IM68kCodeReader,
         IM68kFastMemoryBus,
-        IM68kPhysicalAddressMap
+        IM68kPhysicalAddressMap,
+        IM68000BusCycleTiming,
+        IM68kFunctionCodeBus
     {
         private const uint AddressMask = 0x00FF_FFFFu;
         private readonly IM68kBus _bus;
         private readonly IM68kCodeReader? _codeReader;
         private readonly IM68kFastMemoryBus? _fastMemoryBus;
         private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
+        private readonly IM68000BusCycleTiming? _timing;
+        public byte? AlternateFunctionCode
+        {
+            get => (_bus as IM68kFunctionCodeBus)?.AlternateFunctionCode;
+            set { if (_bus is IM68kFunctionCodeBus bus) bus.AlternateFunctionCode = value; }
+        }
 
         public M68010AddressMaskedBus(IM68kBus bus)
         {
@@ -26,7 +34,15 @@ namespace Copper68k
             _codeReader = bus as IM68kCodeReader;
             _fastMemoryBus = bus as IM68kFastMemoryBus;
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
+            _timing = bus as IM68000BusCycleTiming;
         }
+
+        public int M68000BusCycleStartDelay => _timing?.M68000BusCycleStartDelay ?? 0;
+        public bool RequiresExactM68000PipelineFallback => _timing?.RequiresExactM68000PipelineFallback ?? false;
+        public M68000BusAccessTiming GetM68000BusAccessTiming(uint address, M68kOperandSize size,
+            M68kBusAccessKind kind, bool write, long requested, long completed)
+            => _timing?.GetM68000BusAccessTiming(Mask(address), size, kind, write, requested, completed)
+                ?? new M68000BusAccessTiming(completed, completed);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
@@ -207,9 +223,20 @@ namespace Copper68k
             => (ushort)((int)vectorAddress & 0x0FFF);
 
         protected override bool UsesFormatWordExceptionFrames => true;
+        protected override bool Has68010SystemInstructions => true;
 
         protected override bool IsSupportedRteFrameFormat(ushort format)
             => (format & 0xF000) is 0x0000 or 0x8000;
+
+        protected override bool TryConsumeModelSpecificRteFrame(ushort format)
+        {
+            if (!IsSupportedRteFrameFormat(format)) return false;
+            if ((format & 0xF000) == 0x8000)
+                for (var offset = 8; offset < 58; offset += 2)
+                    if (offset is 14 or 18 or 22) State.SetActiveStackPointer(State.A[7] + 2);
+                    else _ = PullWord();
+            return true;
+        }
 
         protected override bool TryHandleModelSpecificExceptionFrame(
             int vector,
@@ -228,18 +255,31 @@ namespace Copper68k
             M68kBusAccessKind accessKind,
             bool useDataAccessStackedProgramCounter)
         {
-            _ = faultAddress;
-            _ = isWrite;
-            _ = accessKind;
             _ = useDataAccessStackedProgramCounter;
             var stackedProgramCounter = State.LastInstructionProgramCounter;
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(3, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
+            // MC68000UM fig. 6-8: 29 words, three reserved slots unwritten.
+            // Internal pipeline information is represented by the interpreter's
+            // instruction PC/opcode; it is not a physical pipeline snapshot.
+            for (var word = 0; word < 16; word++) PushWord(0);
+            PushWord(State.LastOpcode);
+            State.SetActiveStackPointer(State.A[7] - 2);
+            PushWord(0);
+            State.SetActiveStackPointer(State.A[7] - 2);
+            PushWord(0);
+            State.SetActiveStackPointer(State.A[7] - 2);
+            PushLong(faultAddress);
+            var instruction = accessKind == M68kBusAccessKind.CpuInstructionFetch;
+            var supervisor = (savedStatusRegister & M68kCpuState.Supervisor) != 0;
+            var status = (instruction ? 0x2000 : 0x1000) | (!isWrite ? 0x0100 : 0) |
+                (supervisor ? 4 : 0) | (instruction ? 2 : 1);
+            PushWord((ushort)status);
             PushWord(0x800C);
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
-            State.ProgramCounter = ReadLong(GetExceptionVectorAddress(3));
+            SetProgramCounterAndFlushPrefetch(ReadLong(GetExceptionVectorAddress(3)));
             return true;
         }
 
@@ -255,6 +295,9 @@ namespace Copper68k
                     return true;
                 case 0x801:
                     value = State.VectorBaseRegister;
+                    return true;
+                case 0x800:
+                    value = State.UserStackPointer;
                     return true;
                 default:
                     RaiseException(4, instructionPc, 34);
@@ -275,6 +318,9 @@ namespace Copper68k
                     return true;
                 case 0x801:
                     State.VectorBaseRegister = value;
+                    return true;
+                case 0x800:
+                    State.SetUserStackPointer(value);
                     return true;
                 default:
                     RaiseException(4, instructionPc, 34);
