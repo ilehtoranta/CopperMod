@@ -3426,3 +3426,17 @@ architecturally. Broader source-read/chained, short-frame, trace, integration an
 consumer requirements remain open. No CPU/package change or test retirement
 occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
 [native handler agreement, disagreement and causal diagnostic](COPPER68K_REFERENCE_QUALIFICATION.md#native-pending-write-handler-comparison--2026-10-08).
+
+The private all-width source-read suffix and read-to-write/refault chain gate
+now passes 786,432 new cases, exactly retaining 647,168 earlier cases. Byte/word
+recovery gaps in the old private baseline are reproduced; four sole defects
+are detected with complete failure witnesses, and evidence integrity controls
+reject incomplete or altered results. Current production direct controls pass
+120,832 cases, with eight private recovery batches unavailable. The pinned
+33,792-case native transfer evidence replays exactly in its stated scope.
+A7 source-postincrement and repeated-fault saved-PC disagreements remain open;
+the new chains qualify the private software contract only. Broader short-frame,
+trace, frame/fault/origin and full integration/isolated-consumer gates remain
+required. Hardware is unavailable. No production CPU import, package publication
+or regression retirement occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. See [all-width source and chained-write scope](COPPER68K_REFERENCE_QUALIFICATION.md#private-all-width-source-read-and-chained-write-continuation--2026-10-08).

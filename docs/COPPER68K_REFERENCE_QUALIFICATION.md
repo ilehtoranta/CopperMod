@@ -10730,3 +10730,66 @@ continuation, read-to-write chains, saved-pipe/frame/fault variants and complete
 integration/isolated consumers remain required. No production or private CPU
 source correction, package publication or regression retirement occurs.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+### Private all-width source-read and chained-write continuation — 2026-10-08
+
+`scripts/test-copper68k-memory-read-write.py` extends the frozen private
+handler-qualified candidate to byte/word memory-destination source-read suffixes.
+Its only CPU changes are in the isolated `Operand020.cs`: admit all three MOVE
+size encodings for indirect/postincrement sources and indirect destinations,
+validate the same forms on restoration, and select the existing size-specific
+timing key. The long path, completed source effects and pending-write protocol
+are retained. Production CPU source is unchanged.
+
+The new fixture independently checks **786,432 cases** across EC020, 020, 030
+and A1200: byte/word/long, A0/A7, indirect/postincrement, separate/aliased
+addresses, four stack states and boundary values, every CCR, scalar/batch and
+each byte offset of a denied whole logical source request. Direct controls,
+source-read recovery, source-to-write denial and another write denial are
+separate deterministic lanes. Checks include initial B92 and subsequent A32
+frames, exact PC/SR, registers/stacks, surrounding memory, one source read and
+one final write, exception counts, the following sentinel and existing timing
+policy. Source rereads and repeated postincrement are forbidden.
+
+The unchanged private baseline passes 491,520 cases and reports 294,912
+byte/word recoveries unsupported. The corrected private candidate passes all
+786,432 new cases and exactly retains 647,168 previous cases: **1,433,600 logical
+cases / 18 xUnit executions / 360 reports**. Four isolated defects are detected:
+source replay (688,128 mismatches), repeated update (344,064), stale aliased
+postincrement destination (172,032), and changed source-suffix timing (229,376).
+Each keeps its unaffected direct and recovery cases passing. Reports contain
+4,096 cases each, below the shared failure-witness cap. Every failure identifier,
+status and cause is checked; timing failures must name the timing-policy cause.
+
+Seven independent corrupted-evidence controls reject missing fixture sources,
+empty combinations, false TRX counters, missing per-test summaries, changed
+retained reports, an unrelated mutation cause and missing output identities.
+The complete original proof is revalidated. The unchanged production CPU passes
+**120,832 direct cases / 6 batches**; its eight optional private recovery batches
+remain unavailable, separately reported.
+
+```powershell
+python scripts/test-copper68k-memory-read-write.py `
+  --qualified-parent-directory <frozen-MoveWriteHandlersV2> `
+  --output <fresh-memory-read-write-output>
+# --validate-only requires the full frozen parent, sources and every witness.
+```
+
+The pinned native all-width transfer evidence remains the external software
+comparison for its recorded non-chained scope. The native A7-postincrement
+source-read difference and repeated-write-fault saved-PC difference remain
+open; this new chain matrix checks the private software contract and does not
+settle those architectural questions. Trace, saved-pipe variations, foreign/
+moved/invalid frames, changed return S/M/banks, entry/load faults, broader
+addressing/origins and physical partial transfers remain outside this gate.
+Complete private CPU integration and isolated package consumers are still
+required before import. Hardware is unavailable. No production CPU import,
+package publication or regression retirement occurs. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.
+
+Evidence `audits/MemoryReadWriteV1/proof.json` SHA-256:
+`d6f501a8605e78626bffc7ce26c04379d6fd2401a2e4fbf4c80508e152db2ecb`.
+Unchanged production `audits/MoveTransferProductionControlsV5/verification.json`
+SHA-256: `32d2a464c7e7cb78e8d38154f1284074a4e1ea92dc3be26e2f02cbdde6f12ded`.
+Integrity `memory-read-write-controls-v1.json` SHA-256:
+`077926031cd65ecf74a7fcd695ec602c39e396986dcbeee4d4846ce6535052d4`.
