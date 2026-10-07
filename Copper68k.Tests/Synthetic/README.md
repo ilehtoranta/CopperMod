@@ -1222,3 +1222,24 @@ requires format 7. Actual recovery, broader addressing/MOVEM phases and all
 remaining fault protocols are required work. The discovery remains outside
 promoted ordinary-CI batch counts; no inventory gap is removed. See the
 [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#actual-040-operand-read-fault-discovery--2026-10-06).
+
+## CMPM semantic consolidation
+
+Run `./scripts/test-copper68k-cmpm-consolidation.ps1 -PythonPath <python3-executable>
+-OutputDirectory <fresh-output>` to reproduce the original CMPM alias/stack
+witnesses and their shared synthetic replacements. Python 3 uses only its
+standard library for this optional audit; ordinary xUnit coverage is unchanged.
+The command reinstates the exact class pinned at commit
+`1e1ab44489b68982a1bbc981c45cddf01fec09c5` in owned source copies, including
+after retirement. Production source and normal build outputs are preserved.
+
+All eight shared `arithmetic-extend` matrices require 203,520 clean scenarios.
+The alias-order and A7 byte-stride mutations must fail both original and
+replacement witnesses, with exactly 288 / 180 synthetic failures and the
+unaffected cases passing. All 36 specialized timing/width/flags/memory cases
+remain in `M68020CmpmTests` and pass under both mutations. Eight corruption
+controls check input/source linkage, pinned witnesses, actual execution and
+report integrity. `-ValidateReportsOnly` rechecks unchanged retained evidence;
+missing, empty, changed or unrelated evidence fails.
+
+See the [replacement mapping and proof](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#cmpm-alias-and-a7-semantic-consolidation--2026-10-07).

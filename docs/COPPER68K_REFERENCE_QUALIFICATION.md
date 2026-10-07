@@ -8898,3 +8898,61 @@ pipes/provenance, foreign frames, other origins, reset/address-error entry,
 trace/interrupt, changed return-SR/stack, memory destinations, other families
 and remaining reference/consolidation gates stay required. No regression is
 retired. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+#### CMPM alias and A7 semantic consolidation — 2026-10-07
+
+Two pure semantic methods in `M68020CmpmTests` are retired after proving their
+shared replacements: three aliased-A0 size cases and one aliased-A7 byte case.
+The existing 36 timing/width/flags/memory cases remain. The shared
+`SyntheticExtendDecimalTests.ExtendComparisonAndAliases` matrix checks CMPM
+source updates before destination reads, all register pairs, sizes, both stack
+privilege modes and complete architectural/memory state. Its A7 byte fixtures
+retain the two-byte stride specified by
+[M68000PM section 2.2.4](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf).
+
+| Retired original witness | Representative shared replacement |
+| --- | --- |
+| `AliasedAddressRegisterUsesTheNextOperandAfterSourceIncrement`, B/W/L | `A1200/CMPM/{1,2,4}/r0-r0/memory=True/super=True`, opcodes `B108/B148/B188`, source `1`, destination all-ones, CCR `14` |
+| `ByteStackRegisterUsesTwoByteStrideForBothAliasedOperands` | `A1200/CMPM/1/r7-r7/memory=True/super=True/op=BF0F/s=00000001/d=000000FF/ccr=14` |
+
+The representative replacement inputs differ from the originals' `0/1`, CCR
+`1F`; both inputs distinguish the same ordering/stride defect. The shared group
+also covers all other registers and user stacks. No equivalence is inferred
+from passing tests alone: the original class is pinned to commit
+`1e1ab44489b68982a1bbc981c45cddf01fec09c5` and reinstated unchanged in owned
+copies for co-execution under each targeted mutation.
+
+The clean command passes **203,520 shared programs / eight reports**, plus all
+40 pinned original cases. A sole CMPM-function mutation samples the destination
+base before source increment: **288 precisely identified synthetic failures**
+and all four original alias/stack witnesses fail, while 203,232 shared programs
+and all 36 timing cases pass. A second sole-function mutation gives byte A7 a
+one-byte stride: **180 precisely identified synthetic failures** and the original
+A7 witness fail, while 203,340 shared programs and all 36 timing cases pass.
+The untouched 000/010 implementations remain controls. Fixtures are unchanged
+across mutations; defined flags, register updates and failure reasons are
+independently enumerated.
+
+The maintained command audits complete source/helper identities, links owned
+baseline sources to the current repository and pinned original class, verifies
+the exact 48-test TRX roster, all 1,920 weighted keys per profile and every
+failure identifier/reason. Eight corruption controls reject missing fixtures,
+wrong producers, empty selections, wrong weights, changed pins/witnesses,
+unrelated failure reasons and a copied CPU alteration even when its metadata is
+re-signed. A fresh direct run against the reduced worktree passes **44 tests**:
+all 36 retained timing cases and eight shared batches / 203,520 programs, with
+zero failures or skips.
+
+Reproduce with `scripts/test-copper68k-cmpm-consolidation.ps1 -PythonPath
+<python3-executable> -OutputDirectory <fresh-output>`; Python 3 requires only
+its standard library. `-ValidateReportsOnly` checks retained evidence without
+executing the CPU. Ordinary CI coverage and integer inventory counts are
+unchanged. Evidence: `audits/CmpmConsolidationStrict/proof.json`, SHA-256
+`625fb7cceb164f0b76fd8d4903a992627378e680de6aeff74b95ceadc0815c7d`,
+and `audits/CmpmRetainedActual/verification.json`. Earlier probe/command
+snapshots remain distinct. Production CPU source/packages and protected normal
+assemblies are unchanged; no fresh full CPU/consumer replay is claimed.
+Indexed/chained private pipe execution remains a separate pending gate.
+All remaining reference/continuation/consolidation requirements stay open;
+milestone 6 remains **in progress**, `roadmapComplete=false`.

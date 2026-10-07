@@ -3013,3 +3013,18 @@ pipes/provenance, foreign frames, other origins, reset/address-error entry and
 remaining continuation/reference/consolidation gates stay required. Milestone
 6 remains **in progress**, `roadmapComplete=false`.
 See the [frame fault HALT qualification](COPPER68K_REFERENCE_QUALIFICATION.md#private-frame-entry-and-internal-state-load-halt--2026-10-07).
+
+Two pure CMPM alias/A7 methods (four original cases) are now retired with a
+pinned-original/shared-replacement proof. The maintained command passes 203,520
+shared programs; alias-order and byte-stack-stride mutations detect exactly
+288 / 180 intended failures and the corresponding original witnesses. All
+36 specialized timing/width/flags/memory cases remain and pass under both
+mutations. Complete source linkage, exact TRX/key/weight/reason audits and eight
+integrity controls pass. A direct reduced-worktree run passes all 44 selected
+tests, including the 36 retained cases and eight shared batches. Production CPU
+source, packages and protected normal assemblies are unchanged; no fresh full
+CPU/consumer replay is claimed. The indexed/chained pipe matrix remains a
+separate pending gate. All remaining reference/continuation/consolidation
+requirements stay open; milestone 6 remains **in progress**,
+`roadmapComplete=false`.
+See the [CMPM replacement mapping](COPPER68K_REFERENCE_QUALIFICATION.md#cmpm-alias-and-a7-semantic-consolidation--2026-10-07).
