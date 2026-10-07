@@ -8289,3 +8289,72 @@ more pipe/alias combinations, nested-PC provenance, trace/interrupt and changed
 return-SR/stack behavior remain required with all earlier reference/consolidation
 gaps. No package is built or published. Milestone 6 remains **in progress**,
 `roadmapComplete=false`.
+
+#### Indexed MOVE source and pointer stages — 2026-10-07
+
+The next frozen discovery passes **11,520 fault-free literal controls** and
+retains **105,984 PC-indexed SSW mismatches / 105,984 unsupported An-indexed
+RTE continuations**. Its 18 independent witnesses cover brief signed/scaled
+word and long indexes, an aliased address-register index, full null/word/long
+base displacements, base/index suppression, unaligned and high/negative
+addresses, and pre/post memory indirection with null/word/long outer
+displacements. An and PC sources, MOVE B/W/L to an aliased index register,
+MOVEA W/L to the source base, four stack states, CCR 00/1F, every rejected byte
+lane, EC020/A1200/020/030 and scalar/batch routes are selected. This is a bounded
+extension/stage matrix; it does not claim every full-format structural or
+register combination. The earlier all-CCR gates remain separately retained.
+
+An isolated correction explicitly distinguishes the indirect-pointer read
+from the final operand read. It serializes the consumed extension, selected
+timing policy and already-evaluated outer/post-index component in versioned
+interpreter-private context. RTE performs only the suspended read and its
+remaining suffix. A pointer DIB supplies a different pointer and therefore
+selects a different operand address; an operand DIB supplies a different value
+without rereading memory. Persistent faults remain observable. Real handlers
+alter base/index registers and consumed instruction words, and change already
+read pointers. Recovery preserves the saved calculation and never retries the
+instruction or repeats completed pointer reads.
+
+[M68000PM 2.2.7–2.2.15](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
+provides the addressing rules. [MC68030UM-P1 section 2/Table 4-1](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P1.pdf)
+provides program-space classification for PC-relative references, including
+suppressed-PC forms. [Part 2 section 8.2.2](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+defines DF/DIB software completion. Operand bus access kinds remain unchanged;
+the private context is not a claim about physical pipeline/cache contents.
+
+All **223,488 selected programs / 40 reports / ten executions** pass, with
+independent architectural register/SR/stack/memory/frame expectations, exact
+next PC, ordered pointer/operand read widths and counts, exception counts and
+a following sentinel. A separate **223,488-program** policy gate checks literal
+retained timing keys/cycle policies and full-indexed 030 head/tail shapes after
+both ordinary and recovered execution. These are existing approximate policies,
+not physical timing qualification. Fresh retention passes **793,344 previously
+qualified programs / 352 byte-identical reports / 109 executions**, including
+all **25 mapping/cache/optional-interface controls**.
+
+Discarding the saved pointer offset produces exactly **81,920 mismatches /
+141,568 unaffected passes**. Repeating the recovered operand read produces
+exactly **89,856 mismatches / 133,632 unaffected passes**. Replacing the captured
+indexed timing policy with the general MOVE policy produces exactly **211,968
+policy mismatches / 11,520 unchanged control passes**. Each mutation changes
+only the private continuation CPU file; its fixtures are unchanged. Strict
+verifiers independently enumerate all keys/weights and precise failure
+identifiers/reasons, match actual TRX execution summaries, and verify complete
+source and producer/base-input inventories. Ten deliberate corruption controls
+reject omitted/changed fixtures, wrong producers, empty executions and wrong
+weights for the read and policy gates.
+
+Evidence: `audits/Operand020IndexedDiscovery`, `audits/Operand020IndexedFixV2`,
+`audits/Operand020IndexedPolicy`, `audits/Operand020IndexedRetained`,
+`mutations/Operand020Indexed`; aggregate proof `operand020-indexed-proof.json`,
+SHA-256 `55c6d6caccb956d708a48d78f3c2f78cb4e4169329f0d904bbae4026db771d99`. The first correction snapshot's missing
+narrowing casts remain a distinct failed compile, not passing qualification.
+The accepted correction changes three isolated CPU files; production source,
+public API, packages and regression retirement remain unchanged.
+
+The prototype stays isolated and unpromoted. All-structural indexed/address
+alias coverage, chained pointer/operand faults, extension-bearing/multiword
+captured pipes, nested-PC provenance, other read origins, trace/interrupt,
+changed return-SR/stack, wider transport, memory destinations and other-family
+continuation remain required with the earlier reference/consolidation gaps.
+Milestone 6 stays **in progress**, `roadmapComplete=false`.

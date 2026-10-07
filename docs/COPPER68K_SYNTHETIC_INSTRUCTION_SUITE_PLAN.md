@@ -2853,3 +2853,21 @@ changed return-SR/stack and all remaining reference/consolidation work stay
 required. No package is built or published; milestone 6 stays **in progress**,
 `roadmapComplete=false`. See the
 [PC-relative function-code correction](COPPER68K_REFERENCE_QUALIFICATION.md#pc-relative-operand-function-codes--2026-10-07).
+
+Indexed source/pointer qualification now distinguishes the suspended read stage
+and preserves consumed extensions, evaluated index/outer components and the
+selected timing policy. Eighteen literal witnesses expose 105,984 PC-indexed
+SSW failures and 105,984 unsupported An-indexed RTE continuations, with 11,520
+controls. The isolated correction passes all 223,488 selected programs and a
+separate 223,488-program retained timing-policy gate. Fresh retention passes
+793,344 prior programs with 352 byte-identical reports, plus all 25 map/cache
+controls (109 executions total). Saved-offset, repeated-read and timing-policy
+mutations detect exactly 81,920, 89,856 and 211,968 intended failures, preserving
+unaffected cohorts. Complete source/producer inventories and ten deliberate
+integrity controls pass. Production CPU source, packages and regression
+retirement remain unchanged. The prototype remains isolated and unpromoted;
+all-structural indexed/alias and chained-fault coverage, wider pipe/provenance,
+transport, other read origins, trace/interrupt, changed return-SR/stack and
+broader continuation/reference/consolidation work stay required. Milestone 6
+stays **in progress**, `roadmapComplete=false`. See the
+[indexed source/pointer qualification](COPPER68K_REFERENCE_QUALIFICATION.md#indexed-move-source-and-pointer-stages--2026-10-07).
