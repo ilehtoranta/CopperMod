@@ -3363,3 +3363,18 @@ trace/hardware, full integration and consumer gates remain open before any CPU
 import. No production CPU/package change occurs. Milestone 6 remains **in
 progress**, `roadmapComplete=false`. See the
 [private memory-destination suffix and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-memory-destination-read-recovery-suffix--2026-10-07).
+
+The native MOVE fault reference now covers byte/word/long source-read and final
+destination-write recovery with A0/A7, aliases, four stack states/values and all
+CCRs: 33,792 programs pass, with 3,072 A7-postincrement source-read combinations
+explicitly untested by this command. Final writes use short format A with the
+following PC, completed flags and pending output; source reads use format B.
+Four sole observer/input defects and nine evidence corruptions are detected;
+frozen native replay matches. The current private CPU separately reproduces
+6,144 denied-write mapping bypasses while 6,144 direct controls pass. Its
+maintained default audit correctly fails the recovery gate; discovery-only
+records the failures without promotion. Write recovery and byte/word source
+continuation still require implementation, mutation/retention and integration
+proof. No production CPU/package change occurs. Milestone 6 remains **in
+progress**, `roadmapComplete=false`. See the
+[native widths/final-write evidence and failing private probe](COPPER68K_REFERENCE_QUALIFICATION.md#native-move-widths-and-final-write-fault-discovery--2026-10-08).

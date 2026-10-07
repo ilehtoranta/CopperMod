@@ -10390,3 +10390,113 @@ does not qualify this new candidate. Full integration and consumers are still
 required before import. Hardware is unavailable; the trace disagreements remain
 open. No regression retirement or public release occurs. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
+
+### Native MOVE widths and final-write fault discovery — 2026-10-08
+
+The maintained native successor now executes byte, word and long indirect/
+postincrement MOVE to an indirect separate or aliased memory destination, with
+A0 or A7 sources, four unchanged stack states, four width-specific values and
+all 32 CCR states. Pinned WinUAE generated functions, MMU access/retry, frame,
+RTE and fixup fragments are unchanged; the byte-stride table is copied exactly
+from pinned `newcpu.cpp`. Reference pin remains
+`5d22d33632646efc3f747f03e82d28353e52722e`.
+
+**33,792 programs pass:** 9,216 source-read recoveries, 12,288 final-write
+recoveries and 12,288 direct controls. The 3,072 A7-postincrement source-read
+fault combinations remain explicitly **untested by this command**, because the
+separate native A7 investigation retains its unresolved restoration disagreement.
+They are not silently counted as successful, invalid or excluded architectural
+instructions. Direct and final-write A7 cases do run, including its byte stride
+of two and supervisor-stack/operand overlap.
+
+Source faults produce format B / 92 bytes, saved PC `1000`, initial CCR and a
+read SSW. Final-write faults produce format A / 32 bytes, saved PC `1002`,
+completed MOVE flags, write SSW, pending destination address and data output.
+Native RTE completes the pending final write without another source read or
+source update. Every selected case checks exact source/write attempts and
+successful transfers, destination address/value/width, source/alias/A7 results,
+pre-sentinel flags, returned S/M, inactive banks, untouched registers, next PC
+and exact event order. Full memory is compared with only the intended operand
+write and observed opaque native frame allowed. A frame overlapping completed
+A7 source memory is accounted for explicitly. No frame/internal-word guess is
+used to infer architectural behavior. Data-output checks cover the defined
+operand-width bits; upper unused transport bits are not qualified.
+
+Four independent negative runs preserve all generated native functions:
+source replay and duplicate write fail at case 0, a wrong final-write retry
+address fails at case 256 after those controls pass, and a sole byte-stride
+table mutation fails at case 2304 after preceding controls pass. The last
+mutation deliberately changes the copied data table; it is not a pristine
+reference run. Nine corrupted-evidence controls reject missing fixture, wrong
+producer, missing output identity, changed fixture/function/stride fragment
+with updated manifest, empty output, wrong saved PC with updated manifest, and
+changed verification. The original executable then replays rows/trace exactly.
+
+```powershell
+python scripts/test-copper68k-030-move-transfer-faults.py `
+  --reference-directory <pristine-pinned-WinUAE-checkout> `
+  --output <fresh-native-output>
+python scripts/test-copper68k-030-move-transfer-faults.py `
+  --reference-directory <same-checkout> --output <same-native-output> --validate-only
+```
+
+Evidence `reference/MoveTransfer030V5/verification.json` SHA-256:
+`4e7ff2240652bed80ada5ffb716c7be745ad404a2b92b0c95888fb710cf76f08`.
+Combined `move-transfer-native-proof-v5.json` SHA-256:
+`5be3cce1e2f05d56413c85571c2279eb02f19f1f36cbe77d2b362b9b169315ad`.
+V1 rejected an incorrect native extraction signature; V2 rejected duplicate
+inherited definitions at compilation. V3 passed transfer results; V4 added
+frame fields/whole-memory/bank checks; V5 pins the actual byte-stride table.
+Only V5 is the final current proof. Compiler warnings in unchanged extracted
+native code remain recorded. Production CPU source is untouched.
+
+The current private CPU fails a new independent write-fault fixture:
+**6,144 denied destination writes bypass its physical-address map**, while all
+**6,144 direct controls pass**. `SyntheticM68020MoveWriteFaultTests` covers all
+three widths, A0/A7, indirect/postincrement, separate/aliased destinations,
+four stack states/values, CCR 0/31 and scalar/batch execution. The transport
+throws before a denied ordinary write can modify memory. Frame-A, completed
+prefix and pending-write expectations are encoded for the future correction,
+but those recovery checks are **not yet reached or qualified**. For an A7
+source overlapping a future short frame, its ordinary frame reads are excluded
+from the coarse source counter; detailed overlapping frame/read sequencing
+will need its own proof, not credit from this failing probe.
+
+The discovery command pins the complete previous private read-recovery proof,
+copies all 231 parent sources plus this fixture, and checks exact producers,
+commands, outputs, TRX names/outcomes/counters/stdout and every report key,
+weight and mapping-bypass cause. Default execution and validate-only return
+failure for the unqualified recovery gate. Explicit discovery-only mode
+records the same failures with `recoveryGatePassed=false`; it does not qualify
+or promote the CPU.
+
+```powershell
+python scripts/test-copper68k-move-write-discovery.py `
+  --qualified-parent-directory <restoration-root>/audits/MemoryDestinationPrivateV4 `
+  --output <fresh-write-discovery-output>
+# To retain the failing observations explicitly, add --discovery-only.
+# For an existing output, add --validate-only; the ordinary gate still fails.
+```
+
+Evidence `audits/MoveFinalWriteDiscoveryV1/verification.json` SHA-256:
+`79a07c829bb43d0deba60bebc9a0d69a475738b65677dadb4609fe0fa345766c`.
+All four requested batches ran: two pass / two fail, zero unavailable or
+unsupported selected cases. These are recorded mapping failures, not passing
+bus-error recovery. The next implementation must finish only the pending
+write and preserve the already-completed source/flags, saved pipe and existing
+timing policy. Byte/word memory-destination source-read continuation also
+remains absent from the previous private CPU candidate.
+
+Separate production-source runs retain both fixtures' direct coverage:
+22,528 scenarios / four passing batches, with four optional private recovery
+batches explicitly unavailable. No normal build output is used or replaced.
+`audits/MoveTransferProductionControlsV1/verification.json` SHA-256:
+`c11b4d5273fda6849c4b345c287a783b3401b4a745114e0d7d98e4256fcb1831`.
+
+Native agreement remains **030 software observation**, not hardware or an
+independent 020/EC020/040/060 exception oracle. Enabled translation, trace,
+interrupts, physical timing/cache behavior, changed handler registers/S/M,
+other EAs, unaligned/partial writes, nested/frame faults and broader origins
+remain open. Earlier complete-suite/combined/consumer gates retain their old
+source scope. No CPU import, package publication or regression retirement
+occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
