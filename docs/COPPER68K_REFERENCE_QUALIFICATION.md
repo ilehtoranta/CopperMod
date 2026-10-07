@@ -7763,3 +7763,81 @@ This slice adds tests, a strict command and documentation only. It fixes no
 production behavior, retires no regression and creates no package. The preceding
 full CPU/consumer evidence applies to the MOVEM correction, not a fresh full run
 of this new fixture. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## 020/030 instruction-prefetch recovery correction — 2026-10-07
+
+The subsequent correction delivers a 92-byte format-B frame for the synchronous
+interpreter's initial odd instruction prefetch on EC020/A1200/020/030. The
+defined header, SSW RC/RB bits and stage-B address follow MC68020UM 6.1.3/6.2/6.4
+and MC68030UM 8.1.3/8.2/8.4. FB/FC/DF remain clear because an odd prefetch does
+not issue a bus cycle. The opaque internal image identifies this interpreter's
+pending instruction context; it is not a silicon, MMU or physical-pipeline
+serialization format. No address-keyed side table or automatic instruction
+retry is introduced.
+
+RTE checks the long-frame version before loading state, preserves the original
+frame on version rejection, and restores software-repaired C/B instruction
+words after the existing RTE timing barrier. Both supplied words survive until
+consumed, including a supplied NOP followed by a supplied branch. Uncleared
+RC/RB bits cause explicit RTE to enter the address-error handler again without
+fetching an odd address. Foreign opaque images, format-A data continuation and
+format-9 context transport remain unsupported required work; they are not
+relabeled architectural format errors or promoted by this correction.
+
+The original discovery command now passes **6,144 entry cases and 512 controls**
+in six executions, zero skips. Evidence: `audits/AddressFrameEntryAcceptance`,
+manifest SHA-256
+`5ba39907279db53982dbd61162df2849b457bce9f8621cea5c40ef0b278942d2`.
+The retained failing discovery remains historical evidence of the original defect.
+
+`SyntheticM68020PrefetchRecoveryTests` executes real repair handlers and RTE,
+with shared register/PC/status/stack/memory checks at instruction boundaries,
+two pipeline-word sequences, low/high addresses, four stack states, all CCRs,
+T0/T1 trace returns, fifteen incompatible versions and uncleared rerun bits.
+The strict eight-execution gate passes **8,960 complete programs / 32 reports**,
+with zero mismatches, unsupported or untested cases in this selected matrix.
+
+```powershell
+./scripts/test-copper68k-020-prefetch-recovery.ps1 -OutputDirectory artifacts/020-prefetch-recovery
+```
+
+Fresh output is required. `-ValidateReportsOnly` checks frozen source/binary/
+report identities, exact execution roster, all actual TRX summaries and
+independently enumerated keys and weights. Evidence:
+`audits/PrefetchRecoveryAcceptanceFinal`, manifest SHA-256
+`491ad179157b10a3b6c9ccb1f7d6bd8aea5f1267d5804eaacdb974739e26925a`.
+Four copied-evidence integrity controls reject missing reports, changed weights,
+empty execution and changed source identity. Two isolated production mutations
+detect loss of the restored pipe (256 mismatches) and loss of its second word
+(64 mismatches, 192 unchanged passing witnesses). Evidence is retained under
+`PrefetchRecoveryIntegrity` and `mutations/PrefetchRecovery`. The 486 selected
+existing 020/030 interpreter and synthetic exception controls also pass.
+
+Fresh pinned SingleStepTests and Musashi audits pass: 312,500 cases / 125 files
+with documented TAS/TRAPV exclusions, and 536 model/program combinations / 88
+explicit exclusions respectively. A clean CopperScreen archive at
+`aa1dad5dcc0fb7c970e8e3443a160487add846af` builds with zero warnings/errors through
+isolated immutable private package `1.5.2-synthetic-dev.70`. Host 171, disk 74 and
+separate engine 1,080 tests pass, with six unavailable optional host replays.
+Two explicit native Workbench 3.1 floppy boots pass; runtime app and test CPU
+assemblies match the package DLL. No HD replay or public release is claimed.
+Evidence: `audits/PrefetchIndependent` and `consumer-70-final`.
+
+Fresh full CPU validation passes **5,265 tests, zero failures and 33 explicit
+optional/discovery skips (5,298 total)**, including all ten qualified WinUAE
+presets. The ordinary gate and separate actual-TRX audit verify all **707 required
+reports / 86,098,722 scenarios**, with complete combination weights. The opt-in
+entry/recovery matrices pass separately above; remaining skipped coverage stays
+unpromoted. Evidence: `audits/PrefetchFull`; source manifest SHA-256
+`3a03e18a3cd8b7210e078b26a56100cd13df6f5ac9b5ff18b407ebb3256db2ab`, TRX SHA-256
+`a131a12c38502a8347f9578df463d1c63ba45c7c03e71c41e2798d9f4b611e2f`.
+Normal CPU/test assemblies and unrelated CopperScreen changes are preserved.
+The immutable .70 package SHA-256 is
+`15d6af210c9487b66b1bfd1c25ff92c694fda296b7eb0d703fae35e6a38aec84`;
+validated app/test CPU DLL SHA-256 is
+`cddef7efa5803a2f2b32345cb7330e4b4d10192da92a55600da5f4e86bed18f4`.
+
+Broader A/B data recovery, foreign
+images, format-9 transport, nested fault/load-failure qualification and remaining
+reference/consolidation work stay required. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. No regression is retired or public package published.

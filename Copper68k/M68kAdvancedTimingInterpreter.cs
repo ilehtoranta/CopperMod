@@ -4572,12 +4572,13 @@ namespace Copper68k
                 return;
             }
 
-            if ((State.ProgramCounter & 1) != 0)
+            if ((State.ProgramCounter & 1) != 0 && !_instructionPipe.Contains(State.ProgramCounter))
             {
                 var instructionPc = State.ProgramCounter;
                 BeginInstruction(0);
                 if (_profile.Model == M68kAcceleratorModel.M68040)
                     RaiseM68040AddressError(instructionPc, instructionPc, State.StatusRegister);
+                else if (Has020AccessFrames) RaiseM68020InstructionAddressError(instructionPc);
                 else RaiseFormat0Exception(3, instructionPc, M68kInstructionTimingKey.IllegalInstruction);
                 return;
             }
@@ -8716,6 +8717,7 @@ namespace Copper68k
                 var format = ReadRteFrameWord(framePointer + 6) >> 12;
                 if (format == 7 && _profile.Model == M68kAcceleratorModel.M68040 &&
                     TryRestoreM68040AccessFrame(framePointer, restoredStatus, restoredPc)) return;
+                if (TryRestoreM68020AccessFrame(framePointer, (ushort)format, restoredStatus, restoredPc)) return;
                 var size = format switch { 0 or 1 => 8u, 2 => 12u, 3 when _profile.Model == M68kAcceleratorModel.M68040 => 12u, _ => 0u };
                 if (size == 0)
                 { RaiseFormat0Exception(14, instructionPc, M68kInstructionTimingKey.FormatError); return; }
@@ -18776,7 +18778,10 @@ namespace Copper68k
         {
             if ((State.ProgramCounter & 1) != 0)
             {
-                _instructionPipe.Reset(State.ProgramCounter);
+                // RTE can supply repaired instruction words without a bus
+                // prefetch. Keep the remaining restored head; never read ahead
+                // at an odd address after one of those words retires.
+                if (!_instructionPipe.Contains(State.ProgramCounter)) _instructionPipe.Reset(State.ProgramCounter);
                 return;
             }
 
@@ -19380,6 +19385,7 @@ namespace Copper68k
         private bool TryPeekOpcode(uint address, out ushort opcode)
         {
             opcode = 0;
+            if (_instructionPipe.TryPeek(address, out opcode)) return true;
             if ((address & 1) != 0)
             {
                 return false;

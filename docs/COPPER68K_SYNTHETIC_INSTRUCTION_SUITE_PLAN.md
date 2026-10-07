@@ -2735,3 +2735,23 @@ executed repair/RTE continuation and separate format-9 transport remain required
 No CPU fix, package or regression retirement is claimed. See the
 [address-frame discovery](COPPER68K_REFERENCE_QUALIFICATION.md#020030-address-frame-entry-discovery--2026-10-07).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+The subsequent scoped 020/030 correction passes all 6,144 selected frame-entry
+cases and 512 controls, plus 8,960 executed instruction-prefetch recovery/refusal
+programs. Real handlers repair C/B words and clear rerun bits before RTE;
+two-word retention, CCRs, stack states, trace, incompatible versions and explicit
+uncleared-bit reentry are checked without odd instruction bus accesses. The
+interpreter-specific opaque image is not claimed as a physical pipeline oracle.
+Two isolated mutations detect lost restored words and four integrity controls
+reject corrupted evidence. The 486 retained affected controls and fresh pinned
+SingleStepTests/Musashi audits pass. Clean CopperScreen private-package .70
+production build, host/disk/engine tests and two native floppy boots pass.
+Fresh full CPU validation passes 5,265 tests, zero failures and 33 explicit
+optional/discovery skips (5,298 total), including all ten qualified WinUAE
+presets. All 707 ordinary reports and actual passing TRX summaries verify
+86,098,722 deterministic scenarios and complete combination weights. Opt-in
+entry/recovery matrices pass separately; remaining skipped coverage is unpromoted.
+A/B data continuation, foreign images, format-9
+transport and wider restoration/consolidation remain required. See the
+[prefetch correction](COPPER68K_REFERENCE_QUALIFICATION.md#020030-instruction-prefetch-recovery-correction--2026-10-07).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
