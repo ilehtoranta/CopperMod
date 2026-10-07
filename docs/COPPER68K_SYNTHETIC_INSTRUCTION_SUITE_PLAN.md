@@ -3308,3 +3308,15 @@ method remains: its separate long-width witness and remaining class need
 replacement/retention proof before retirement. No production CPU change or
 publication occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
 See the [SUBA indirect proof and remaining gate](COPPER68K_REFERENCE_QUALIFICATION.md#suba-indirect-shared-replacement-proof-retirement-pending--2026-10-07).
+
+The pending SUBA indirect retirement gate is complete: independent word
+zero-extension and long-as-word mutations fail their respective original rows
+and produce exactly 3,072 / 4,608 shared failures, with the other width retained
+as a control. Original/reduced class runs pass 47 / 45 cases plus eight shared
+batches, each covering 12,288 scenarios. Only the one two-row pure semantic
+method is removed; exact source-removal scope is checked. Fresh end-to-end
+reproduction and validate-only replay pass, including ten evidence controls.
+All specialized timing, factory, continuation and memory regressions remain.
+No production CPU change/import/publication occurs. Milestone 6 remains
+**in progress**, `roadmapComplete=false`. See the
+[completed SUBA word/long replacement proof](COPPER68K_REFERENCE_QUALIFICATION.md#suba-indirect-wordlong-retirement-completed--2026-10-07).

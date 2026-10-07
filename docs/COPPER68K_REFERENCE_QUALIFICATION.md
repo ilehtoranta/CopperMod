@@ -10089,3 +10089,67 @@ retention are still required before removing that method. Earlier full CPU
 results do not include this new group. Timing, prefetch, native media and other
 specialized regressions remain retained. No CPU import/publication occurs;
 milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## SUBA indirect word/long retirement completed — 2026-10-07
+
+The preceding SUBA retirement-pending gate is now closed for the one pure
+semantic method `SubaIndirectSignExtendsWordsAndLeavesCcrUntouched` (two rows).
+Only its twelve-line attribute/method block is removed. The remaining class is
+byte-equivalent to the pinned original after that exact removal; its timing,
+factory-profile, memory, extension-order and continuation checks remain.
+Milestone 6 as a whole is still **in progress**.
+
+The maintained successor `scripts/test-copper68k-suba-indirect-retirement.py`
+restores original witness source from pin
+`073d1f4ea604f8f4db1b5b42a647c1fb942f3fd7` in isolated copies. It checks all
+source identities, exact original/reduced class rosters, the actual command,
+TRX outcomes/counters/stdout, all profile keys/weights and precise failure IDs
+and reasons. No normal build outputs are used. The old sign-extension-only
+command is historical and requires the pre-retirement `8b6418f` source checkout;
+the successor below is the current reproduction command.
+
+```powershell
+python scripts/test-copper68k-suba-indirect-retirement.py --output artifacts/suba-retirement-fresh
+python scripts/test-copper68k-suba-indirect-retirement.py --output artifacts/suba-retirement-fresh --validate-only
+```
+
+| Isolated selection | Shared passing | Shared mismatching | xUnit executions |
+| --- | ---: | ---: | ---: |
+| Original class and shared matrix | 12,288 | 0 | 55 |
+| Word zero-extension defect | 9,216 | 3,072 | 10 |
+| Long operand read as one word | 7,680 | 4,608 | 10 |
+| Reduced class and shared matrix | 12,288 | 0 | 53 |
+
+Original class coverage is **47 passing cases**, reduced coverage **45 passing
+cases**; eight shared batches run in each clean selection. Neither clean
+selection skips a case. Each isolated mutation changes only the same semantic
+operation in the base/advanced paths and fails all eight shared batches plus
+its corresponding historical witness. The other historical width passes.
+The long defect reads the operand's high word in place of its complete long;
+the original long witness fails with expected `4094` / actual `4096`. Thus
+both removed rows have separate discriminating proofs, rather than relying on
+word failures to justify retiring long coverage.
+
+Replacement anchors (all other CCRs, aliases, stack modes and profiles retained):
+
+- Word: `68EC020/SUBA/2/(A3)/r0/indirect-sign-alias-all-CCR/brief/super=True/op=90D3/s=0000FFFE/d=00001000/ccr=1F`.
+- Long: `68EC020/SUBA/4/(A3)/r0/indirect-sign-alias-all-CCR/brief/super=True/op=91D3/s=00000002/d=00001000/ccr=1F`.
+
+Ten evidence controls reject missing fixture, wrong producer, empty selection,
+missing historical witnesses, wrong coverage weights, unrelated failure reasons,
+changed CPU mutation with updated manifest, wrong protected-output identity,
+wrong command and wrong TRX counters. Fresh end-to-end generation from the
+retired checkout and strict validate-only replay both pass. Evidence:
+`audits/SubaIndirectRetirementV4/proof.json` in the restoration temporary root,
+SHA-256 `b0bb373794722f9f9f16ccefcb0b972a988c902e79aa90d9f57d8dfe74d60050`.
+
+A failed V2 preparation printed the wrong proof filename after writing its
+verified preparation record; that terminal exit-1 observation and frozen
+producer are retained. The reporter was corrected before fresh V3 preparation,
+retirement and complete V4 reproduction. No CPU/test expectation was weakened.
+The restored checkout has no prior normal assemblies: old protection evidence
+predates the external deletion and is not relabeled as a post-deletion result.
+Earlier full CPU/private-consumer evidence retains its exact original source
+scope; it does not include this new group or retirement. No production CPU
+change, package import/publication or physical timing qualification occurs.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

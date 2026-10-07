@@ -103,18 +103,6 @@ public sealed class M68020AddressSourceTests
     }
 
     [Theory]
-    [InlineData(0x90D3, 0xFFFE, 0, 0x1002u)]
-    [InlineData(0x91D3, 0, 2, 0xFFEu)]
-    public void SubaIndirectSignExtendsWordsAndLeavesCcrUntouched(ushort opcode, ushort hi, ushort lo, uint expected)
-    {
-        var bus = new ZeroWaitCodeBus(); WriteWords(bus, CodeBase, opcode); WriteWords(bus, 0x2000, hi, lo);
-        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68EC020, bus);
-        cpu.Reset(CodeBase, 0x3000); cpu.State.A[3] = 0x2000; cpu.State.A[0] = 0x1000; cpu.State.StatusRegister = 0x201F;
-        cpu.ExecuteInstruction(); Assert.Equal(expected, cpu.State.A[0]); Assert.Equal(0x2000u, cpu.State.A[3]);
-        Assert.Equal(0x201F, cpu.State.StatusRegister); Assert.Equal(CodeBase + 2, cpu.State.ProgramCounter);
-    }
-
-    [Theory]
     [InlineData(0x2060, 0)] [InlineData(0x2260, 1)]
     public void MoveaPredecrementLatchesSourceBeforeDestinationAndKeepsFlags(ushort opcode, int destination)
     {
