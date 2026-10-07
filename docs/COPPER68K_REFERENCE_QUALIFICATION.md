@@ -9320,3 +9320,33 @@ CPU/consumer replay, production import or publication is claimed. The earlier
 large combined run uses its preceding source snapshot. Indexed/alias/foreign
 origins and all remaining roadmap gates stay required. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
+
+#### Complete combined private recovery replay — 2026-10-07
+
+A fresh combined snapshot passes **11,109,248 programs / 5,744 reports /
+1,436 executions**, with zero mismatching, unsupported or untested selected
+cases. Its 227 source inputs combine the relocation-corrected private CPU
+and complete frozen selections for indexed software pipes (4,692,480),
+indexed/chained nested trace (6,137,856), stack aliases and returned CCR
+(139,776), moved frames (896), and entry/internal-load faults (138,240).
+Every parent proof, source identity, report key/weight/result and actual TRX
+execution roster is checked. Seven corruption controls reject omitted or
+changed fixtures, wrong parent identities, changed weights, wrong producers,
+empty executions and wrong selections. Protected normal assemblies remain
+unchanged. Prior mutation proofs remain separately identified; mutations
+were not repeated by this combined passing replay.
+
+Evidence: `audits/Operand020CombinedRecovery` and
+`integrity/Operand020CombinedRecovery/Full`. Aggregate proof:
+`operand020-combined-recovery-proof.json`, SHA-256 `002270baccebfff53ca623f20eadccdc70200254e3585e067cb86a129ffa56e5`.
+
+This replay qualifies only its frozen relocation-corrected private source.
+It does not qualify the later returned-bank validator or scoped refault-FC
+corrections, which have their own source-specific evidence. The private
+returned-trace policy still has 101,888 reference-unresolved changed-T1
+cases. Interpreter frames/software pipes are distinct from physical pipeline,
+cache or silicon timing qualification. Wider origins, foreign frames, full
+CPU/consumer validation and the remaining roadmap gates stay required.
+Production CPU source and packages are unchanged; preserve the production
+CMPM retirements on any future import. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.

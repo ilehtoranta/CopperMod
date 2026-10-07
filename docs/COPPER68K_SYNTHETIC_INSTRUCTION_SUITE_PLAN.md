@@ -3127,3 +3127,14 @@ cases, full CPU/consumers and remaining gates stay required. No production
 import or publication is claimed. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See the
 [returned-trace policy and reference-gap record](COPPER68K_REFERENCE_QUALIFICATION.md#private-returned-trace-policy-and-unresolved-architectural-outcomes--2026-10-07).
+
+The fresh combined private recovery replay passes 11,109,248 programs across
+5,744 reports and 1,436 executions, with exact complete parent selections,
+227 source identities and seven corruption controls verified. This closes
+the combined replay gate for the relocation-corrected snapshot only; later
+returned-bank/refault corrections and changed-T1 architectural uncertainty
+remain separately identified. Full CPU/consumer validation, wider origins,
+foreign frames and remaining roadmap gates are still required. No production
+CPU import or publication occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. See the
+[combined recovery record](COPPER68K_REFERENCE_QUALIFICATION.md#complete-combined-private-recovery-replay--2026-10-07).
