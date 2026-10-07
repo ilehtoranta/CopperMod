@@ -3069,3 +3069,18 @@ separate parent; privilege/bank/trace edits, foreign frames, other origins,
 full CPU/consumers and remaining roadmap gates stay required. Milestone 6
 remains **in progress**, `roadmapComplete=false`.
 See the [A7 alias and CCR record](COPPER68K_REFERENCE_QUALIFICATION.md#private-recovery-with-a7-aliases-and-edited-ccr--2026-10-07).
+
+Full-format indexed/chained nested-trace qualification now passes 6,137,856
+programs, 3,456 reports and 864 executions. All 66 direct/source structures
+and 54 pointer chains are covered; the 12 direct chain exclusions remain
+explicit. Real opcode-overwrite and buffer/refault/VBR handlers preserve
+original provenance, post-instruction SR, completed reads and trace frames.
+PC/width mutations detect exactly 5,630,976 / 6,137,856 intended failures;
+complete source/TRX/key/weight/reason audits and six corruption controls pass.
+Compile-only fixture repair and the corrected pre-acceptance planned total are
+retained. This unchanged-CPU parent remains separate from the qualified
+relocation/stack-alias candidate until a fresh combined snapshot and complete
+selected replay pass. Foreign frames, privilege/bank/trace edits, other origins,
+full CPU/consumer validation and remaining gates stay required. Milestone 6
+remains **in progress**, `roadmapComplete=false`.
+See the [indexed nested-trace record](COPPER68K_REFERENCE_QUALIFICATION.md#full-format-indexed-and-chained-nested-trace-provenance--2026-10-07).

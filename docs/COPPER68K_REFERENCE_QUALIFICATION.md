@@ -9105,3 +9105,57 @@ other origins and remaining roadmap gates still require qualification before
 production import and fresh full CPU/consumer validation. Production CPU
 source/packages, protected normal assemblies and CMPM retirements remain
 unchanged. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+#### Full-format indexed and chained nested trace provenance — 2026-10-07
+
+The isolated unchanged-CPU parent passes **6,137,856 programs / 3,456 reports /
+864 executions** with zero mismatches, unsupported cases or skips in the
+selected nested-trace matrix. Direct completion contributes 506,880 programs,
+source-fault recovery 1,317,888 and pointer-to-operand chains 4,313,088. All 66
+full-format structural forms have direct/source coverage; all 54
+pointer-bearing forms have chained coverage, with 12 direct chain exclusions.
+An/PC bases, MOVE byte/word/long and MOVEA word/long, four stack states, CCR
+`00/1F`, all selected pointer/operand/vector byte lanes and scalar/batch are
+included. Canonical indexes are signed `D2.W=-8`; retained register/boundary
+and simple-address trace gates provide their separately qualified breadth.
+
+Real source handlers overwrite the original opcode before return. The resumed
+instruction completes its saved operand and register/flag suffix once, then
+enters trace processing. Vector handlers exercise a software input buffer,
+persistent refault and changed VBR. The test independently verifies the
+original instruction PC/opcode and exact next PC, post-instruction SR, format-2
+trace frame, nested private bus-error context, stack selection, completed
+pointer/operand reads, the saved original vector address and following
+instruction. The architectural trace expectations follow
+[MC68030UM section 8.1.7](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf).
+Private serialized provenance is distinct from physical pipeline overlap.
+
+Two sole CPU-file mutations retain every fixture unchanged. Losing original
+PC provenance during resumed completion produces exactly **5,630,976
+failures**, retaining 506,880 direct controls. Corrupting the saved vector-read
+width produces exactly **6,137,856 failures**. Every identifier and precise
+frame-field reason is independently enumerated. Complete source inventories,
+all 864 actual TRX results and per-test output, weighted report keys and logical
+totals agree. Six corruption controls precisely reject missing/changed fixtures,
+wrong producers, empty selections, changed weights and unrelated failure
+reasons. Aggregate proof: `operand020-indexed-trace-proof.json`, SHA-256
+`3d67385d5fb57b1f0a702bf1ec9ed887262668ba3b1a70b86c3d16ba0fbc06ca`.
+
+Evidence: `audits/Operand020IndexedTraceV2` and
+`mutations/Operand020IndexedTrace/{PC,Width}`. The original CS0136 local-name
+collision is compile-only evidence; its repair changes only the fixture local
+name. An initial planned aggregate omitted MOVEA widths when adding the five
+sizes. Per-case catalogs/weights already included them; the aggregate was
+corrected to 6,137,856 before any complete gate was accepted, without changing
+fixtures, selections or acceptance scope. All 224 preexisting parent inputs
+remain unchanged; the new fixture is the 225th source/project input.
+
+This proof applies to the unchanged parent CPU, separately from the relocated
+frame correction and its stack-alias gate. They must be combined in a fresh
+source snapshot and checked against their complete qualified selections.
+Foreign/cross-profile frames, returned privilege/bank/trace changes, other
+origins and remaining reference/continuation/consolidation gates remain open.
+Production CPU source/packages, protected normal assemblies and CMPM retirements
+are unchanged. No fresh full CPU/consumer replay or physical timing
+qualification is claimed. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
