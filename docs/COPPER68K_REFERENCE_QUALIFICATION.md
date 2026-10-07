@@ -9530,3 +9530,58 @@ into a fresh directory; V1 is not qualified evidence. No new full CPU,
 consumer or physical timing qualification is claimed. The 030 trace
 disagreement remains open. Milestone 6 remains **in progress**,
 `roadmapComplete=false`; no package publication occurs.
+
+## Indexed returned-bank recovery qualification in progress — 2026-10-07
+
+The canonical returned-bank/refault proof did not qualify full indexed or
+pointer-to-source recovery after saved S/M changes. A new isolated fixture
+copies the 229 exact inputs from `Operand020ReturnRefaultFix` and adds one
+test file, leaving its CPU source unchanged. It extends the independently
+qualified indexed-pipe fixture with real writes to the saved SR. The pending
+source/pointer locations are selected before CPU execution; expectations
+account for deallocation of the old frame, the new exception stack, retained
+cycle FC, saved instruction provenance, registers, flags, memory, following
+instruction and successful-read ordering.
+
+The [MC68030 manual, sections 8.2.1–8.2.3](https://www.nxp.com/docs/en/reference-manual/MC68030UM-P2.pdf)
+defines the data cycle's address space through the SSW FC field, permits
+handler changes to the saved SR and describes creating a new frame after
+deallocating the previous frame when a restarted cycle faults. These defined
+rules guide the assertions. The prototype's serialized C022 internal state,
+saved three-word pipe and continuation suffix remain a selected private
+transport policy; this does not qualify silicon pipeline state, physical
+function-code spaces or arbitrary foreign frames. Incoming/returned trace
+is disabled, leaving the independent trace disagreement open.
+
+The **completed focused control** passes **51,584 programs / 16 reports /
+four executions**. It covers null base displacement, unsuppressed base/index,
+all seven legal IIS structures (six indirect), An/PC sources, MOVE B/W/L and
+MOVEA W/L, all four initial S/M images and user/ISP returns (eight bank pairs),
+CCR 00/1F and each pointer/operand fault byte. Actual handlers retain all
+three following-instruction words and edit the third. Source-only and
+pointer-to-source paths execute on EC020, A1200, 020 and 030.
+
+With this focused fixture unchanged, removing only the scoped restoration
+of the original data-cycle FC produces **19,968 precisely identified
+mismatches** in chained S-changing cases; **31,616 controls pass**, with
+zero unsupported/untested selected cases. The exact expected failure is
+`Indexed pipe fault provenance differs`. Six copied-evidence controls
+reject missing fixture, wrong producer, empty execution, wrong weights,
+wrong parent identity and a missing mutation failure. Normal DLL identities
+are unchanged. Focused proof: `indexed-return-bank-focus-proof.json`, SHA-256
+`f20baad77d5e7251dae1ddd4f7d5d0e4f8d18f35019eb195f83dfa403cc30d33`;
+evidence under `mutations/Operand020IndexedReturnBank` and
+`integrity/Operand020IndexedReturnBankFocus` in the restoration temporary root.
+
+The separate **full gate is still running**, not qualified: its required
+selection is all sixteen bank pairs, all 66 full-index source structures
+and 54 indirect structures, An/PC, all five MOVE/MOVEA forms, CCR 00/1F,
+every fault byte, scalar/batch and retained third-word editing. Its planned
+complete totals are **1,876,992 programs / 768 reports / 192 executions**
+at `audits/Operand020IndexedReturnBankV1`. The focused evidence cannot
+replace that full selection. Audit all source identities, reports, weights,
+failure identifiers and actual TRX selection after terminal execution,
+then perform full-gate integrity checks. No production CPU import, full CPU
+or consumer claim, inventory reduction or publication occurs. Remaining
+reference/foreign-frame/general fault gates remain required. Milestone 6
+stays **in progress**, `roadmapComplete=false`.

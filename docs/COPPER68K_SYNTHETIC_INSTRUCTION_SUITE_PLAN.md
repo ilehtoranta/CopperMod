@@ -3175,3 +3175,16 @@ regressions remain. This completes only the EXTB consolidation slice;
 remaining reference gaps, including the 030 trace disagreement, stay open.
 Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
 [EXTB consolidation record](COPPER68K_REFERENCE_QUALIFICATION.md#extb-availability-regression-consolidation--2026-10-07).
+
+Indexed returned-bank qualification now has a completed focused control of
+51,584 programs and an unchanged-fixture cycle-FC mutation detecting 19,968
+precise failures, plus six evidence corruption checks. The CPU source is
+unchanged from the refault-corrected private snapshot. Its separate full
+all-sixteen-bank / full-index source-and-chain selection is still running:
+1,876,992 programs, 768 reports and 192 executions are required before its
+gate can pass. Focused evidence cannot replace the complete selection.
+Trace remains disabled in this slice; its disagreement and other required
+reference/foreign-frame/general fault gates stay open. No production import
+or publication occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. See the
+[indexed returned-bank progress record](COPPER68K_REFERENCE_QUALIFICATION.md#indexed-returned-bank-recovery-qualification-in-progress--2026-10-07).
