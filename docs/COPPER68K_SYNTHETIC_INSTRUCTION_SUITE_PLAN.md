@@ -3393,3 +3393,18 @@ before importing this private candidate. Hardware is unavailable, so unresolved
 reference disagreements remain open. No production CPU/package change or test
 retirement occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
 See the [private final-write implementation and bounded evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-final-move-write-continuation--2026-10-08).
+
+Pending-write handler protocols now pass 491,520 all-CCR cases for unchanged/
+edited output, software DF-clear completion, another write denial and refault
+after CCR/FC edits, with 155,648 previous recovery cases exactly retained.
+Four sole defects are detected, including repeated postincrement, flag
+recomputation and lost refault FC. Reports are split below the shared failure
+witness cap; a capped V1 mutation audit was rejected rather than accepted with
+incomplete detail. Second-fault stack-bank/SR, register/memory, timing, exception
+count and sentinel checks pass. Production controls remain passing and optional
+private recovery tests remain unavailable there. These checks qualify the
+private software protocol; new handler edits/refaults still need independent
+reference evidence, alongside the remaining short-frame, source-read/chained,
+trace and integration/consumer gates. No production CPU/package change or test
+retirement occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+See [pending-write handler scope and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-handler-protocols--2026-10-08).

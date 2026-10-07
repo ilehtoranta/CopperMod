@@ -10568,3 +10568,77 @@ EAs/origins and full integration/isolated consumers remain required before impor
 Hardware is unavailable; the earlier trace and A7 software disagreements remain
 open. No production CPU import, package publication or regression retirement
 occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+### Private pending-write handler protocols — 2026-10-08
+
+`SyntheticM68020MoveWriteHandlerTests` adds five deterministic handler operations:
+unchanged frame, edited output value, software-completed write with DF clear,
+one further denied write, and a refault after editing CCR and the saved function
+code independently of returned S/M. The source prefix must execute exactly
+once, even with postincrement/A7/aliases. Output editing does not recompute MOVE
+flags. Software completion performs no CPU destination write. Both refault
+operations must retain following PC, returned SR, saved FC, output/address,
+source updates and stack banks at the second exception boundary, then finish
+only the pending write. Whole memory, untouched registers, timing policy,
+exception counts and the following MOVEQ sentinel are checked as well.
+
+All **491,520** new cases pass across byte/word/long, A0/A7,
+indirect/postincrement, separate/aliased destinations, four stack states/values,
+all 32 initial CCR states, scalar/batch and EC020/020/030/A1200 profiles. The
+previous **155,648** final-write/read-recovery cases retain exactly their full
+report contents: **647,168 logical cases / 14 xUnit executions / 168 reports**,
+zero selected mismatches, unsupported cases or unavailable batches. Four sole
+defects are detected with exact case identities and full failure details:
+
+| Defect | Mismatching | Unaffected passing |
+| --- | ---: | ---: |
+| Ignore DF clear | 98,304 | 393,216 |
+| Repeat completed postincrement | 245,760 | 245,760 |
+| Recompute returned flags from output | 190,464 | 301,056 |
+| Discard saved function code on refault | 98,304 | 393,216 |
+
+V1 passed its candidate execution, but its first mutation audit was correctly
+rejected because shared reports cap failure details at 10,000 witnesses.
+V2 splits reports by width and handler operation into 4,096-case groups,
+preserving every expected failure detail without changing that shared cap or
+weakening verification. V2 also adds explicit stack-bank/entry-SR checks at the
+second fault boundary. Only V2 is the current complete proof.
+
+```powershell
+python scripts/test-copper68k-final-write-handlers.py `
+  --qualified-parent-directory <restoration-root>/audits/MoveFinalWriteCandidateV2 `
+  --output <fresh-handler-output>
+# Recheck the same complete evidence with --validate-only.
+```
+
+The maintained audit pins and revalidates the complete qualified parent,
+copies all 233 parent sources plus the fixture, and verifies complete source
+and producer identities, exact commands/outputs, actual TRX rosters/counters/
+stdout, every case key/weight, every mutation witness and all 48 retained
+reports. Missing fixtures, empty reports, missing selections, skipped requested
+tests and any unexpected outcome fail its gate.
+Evidence `audits/MoveWriteHandlersV2/proof.json` SHA-256:
+`f63d2ecf21777c2bc8fc259039aa2361bb72165b63b51caefa085b751a9f0674`.
+Seven independent copied-variant evidence controls reject missing fixtures,
+empty combinations, wrong TRX counters, removed stdout summaries, altered
+retained results, unrelated FC failure causes and missing output identities.
+The complete original proof then revalidates. Their scoped control record is
+`write-handlers-controls-v2.json`.
+Separate production-source controls pass 22,528 scenarios / four batches;
+six optional private-recovery batches, including the two new methods, remain
+explicitly unavailable there. Existing private-fixture compiler warnings are
+retained in logs. The candidate CPU is byte-identical to the qualified parent;
+this slice adds qualification, not an interpreter correction.
+`audits/MoveTransferProductionControlsV4/verification.json` SHA-256:
+`ca4445e6735e32f8ab76d3f8343b1b8a40a7c0913fbbcbe9871fb13b300ca43f`.
+
+These are **private frame-software protocol checks**, not independent native
+observations of the new handler edits/refaults or hardware qualification. The
+earlier native 030 baseline frame/transfer evidence keeps its original scope.
+Saved-pipe lengths/edits, invalid/foreign/moved short frames, entry/load faults,
+changed S/M/stacks, trace, broader addressing modes and partial bus cycles
+remain unqualified. Independent handler-protocol reference checks,
+byte/word memory-destination source-read continuation, read-to-write fault
+chains, complete integration and isolated consumers remain required before
+import. No production CPU change, publication or regression retirement occurs.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
