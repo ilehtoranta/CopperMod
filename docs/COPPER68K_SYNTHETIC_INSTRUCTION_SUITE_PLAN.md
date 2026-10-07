@@ -3440,3 +3440,17 @@ trace, frame/fault/origin and full integration/isolated-consumer gates remain
 required. Hardware is unavailable. No production CPU import, package publication
 or regression retirement occurs. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See [all-width source and chained-write scope](COPPER68K_REFERENCE_QUALIFICATION.md#private-all-width-source-read-and-chained-write-continuation--2026-10-08).
+
+The private short-frame saved-pipe gate now passes 184,320 cases for every
+zero-to-three word length/edit, normal/DF-clear/refault completion, all transfer
+widths, A0/A7 and aliases/banks, while retaining all 1,433,600 previous cases.
+Four sole defects are detected, including data-word reordering without altered
+reads. Seven evidence corruptions are rejected; the initial fixture's omitted
+far-end validation request is independently traced and its failed evidence
+preserved. No CPU correction occurs. The complete frozen production/private CPU
+run remains active and its final result is unavailable; the new focused fixture
+is a later test-only addition with byte-identical private CPU inputs. Integration,
+isolated consumers, broader frame/provenance/fault and architectural A7/trace/
+native refault-PC gates remain required. Hardware is unavailable. No production
+import, publication or test retirement occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. See [saved-pipe scope and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-saved-pipes--2026-10-08).

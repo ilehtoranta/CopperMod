@@ -10793,3 +10793,80 @@ Unchanged production `audits/MoveTransferProductionControlsV5/verification.json`
 SHA-256: `32d2a464c7e7cb78e8d38154f1284074a4e1ea92dc3be26e2f02cbdde6f12ded`.
 Integrity `memory-read-write-controls-v1.json` SHA-256:
 `077926031cd65ecf74a7fcd695ec602c39e396986dcbeee4d4846ce6535052d4`.
+
+### Private pending-write saved pipes — 2026-10-08
+
+`scripts/test-copper68k-move-write-pipe.py` executes **184,320** new cases for
+zero through three serialized instruction words, every retained-word edit,
+normal pending-write completion, DF-clear software completion and another write
+fault. EC020, 020, 030 and A1200 cover byte/word/long, A0/A7, indirect/
+postincrement, separate/aliased destinations, four stack states/values and
+CCR 0/31 in scalar/batch mode. The earlier all-32-CCR handler and read/write
+matrices are retained rather than multiplying that full domain by every pipe
+edit. Each new report contains 256 cases, below the failure-witness cap.
+
+The following literal MOVE.L instruction distinguishes retained words from
+changed backing memory and exposes lost/reordered words. Checks include exact
+next PC, registers/stacks, defined flags, surrounding memory, original opcode,
+private metadata and active words across refault, exact exception counts,
+one source read/one pending write (zero CPU writes for DF-clear), selected
+existing last-instruction timing policy and instruction-fetch addresses/counts.
+The fixed RTE frame-request sequence also catches extra source reads when A7
+postincrement overlaps the frame. These are repository transport and serialized
+software-state checks, not physical bus/prefetch or silicon internal-state
+qualification.
+
+The candidate CPU is byte-identical to the all-width read/write parent. All
+184,320 new cases and **1,433,600 exactly retained cases** pass: **1,617,920
+logical cases / 20 xUnit executions / 1,080 reports**. Four sole defects fail
+precise affected cases while retaining unaffected cases: discard the restored
+pipe (165,888 mismatches), swap the second/third saved data words while preserving
+all frame reads (73,728), lose refault pipe count (55,296), and clear the pipe
+on DF-clear completion (55,296). Every failure identifier/status/cause is
+recorded and checked. The count mutation requires the specific frame-state
+failure reason.
+
+The first V1 fixture omitted the short frame's far-end validation read. Its
+184,320 failing cases and failed command remain preserved. A separate one-case
+trace, using byte-identical CPU sources, proves that the sole request-sequence
+difference is the offset-30 word read after the frame header and before context/
+SSW loading. The diagnostic's first build failed from a tuple-name mistake;
+its fresh V2 successor executes the one case and records the expected failed
+comparison. No diagnostic is relabelled successful qualification. V2 corrects
+the fixture; final V3 additionally verifies opcode provenance and exact final
+exception counts, and makes the word-order mutation change data without changing
+reads. These are test/verifier changes; no CPU correction occurs.
+
+Seven independent corrupted-evidence controls reject missing fixture sources,
+empty combinations, false counters, missing per-test summaries, altered retained
+reports, an unrelated mutation cause and missing output identities. The complete
+original proof revalidates. The audit binds all 236 source/project inputs,
+producer/parent identities, commands/exits, assemblies, logs, actual test rosters,
+complete report keys/weights and every failure witness. Missing fixtures or empty
+selections cannot become successful coverage.
+
+```powershell
+python scripts/test-copper68k-move-write-pipe.py `
+  --qualified-parent-directory <frozen-MemoryReadWriteV1> `
+  --output <fresh-pending-write-pipe-output>
+# --validate-only requires every frozen input and report.
+```
+
+Foreign/moved/invalid short frames, changed return S/M/banks, entry/load faults,
+trace/interrupts, wider addressing/origins and partial physical transfers remain
+open. The native A7 source-restoration and repeated-fault saved-PC disagreements
+are unchanged and remain architecturally unqualified. Hardware is unavailable.
+A fresh complete production/private CPU integration run is active on frozen
+`8aa9083` snapshots; it does not include this later test-only addition, and final
+integration results are not yet available. The private CPU sources are unchanged
+between that run and this focused proof. Package/consumer validation still waits
+for its completed gate. No production CPU import, package publication or
+regression retirement occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
+
+Evidence `audits/MoveWritePipeV3/proof.json` SHA-256:
+`dcb7ea91da3d88b0b35d84c01f159e16191c0eed4c78707d65e4e3239c8fdca7`.
+Integrity `move-write-pipe-controls-v3.json` SHA-256:
+`581babd34c31c5ba0abd2a6ed5a7e65329aa48f1ec13c556cec07908554820be`.
+Diagnostic `move-write-pipe-read-diagnostic-v2.json` SHA-256:
+`2c0fabc565c2b034f1a249cabe661006f00aecf44d1efcafdb3f0ffa36d4250e`.
