@@ -3610,3 +3610,41 @@ and does not qualify the separate current full run. Its independent proof binds
 passes 86,410,018 cases / 739 batches. Production CPU behavior,
 specialized regressions and the
 remaining reference requirements are unchanged. Milestone 6 stays **in progress**.
+
+### Milestone 6 MOVEM mask access-fault qualification — 2026-10-08
+
+Extend the previously qualified 040 physical MOVEM store/CM recovery fixture from
+its captured four-register mask to independent register-list masks. The new
+ordinary controls execute 55 masks, including empty/full masks, each singleton,
+each omitted register, adjacent pairs and alternating data/address selections.
+Every selected transfer is faulted for word/long indirect and predecrement stores
+using A2, both scalar/batch routes, ISP and CCR 31. Empty masks execute without a
+fault and must leave operands unchanged. All 2,728 new programs pass; nine bounded
+tests also preserve the six earlier witness reports exactly.
+
+Three private mutations qualify detection after CM return: lost initial-base
+decrement (524 mismatches per route), omitted A7 replay (1,048), and wrong data
+register replay (1,240). Independent enumeration checks every passing/failing
+combination and its diagnostic category. The initial diagnostic verifier omitted
+normal-mode missing-memory cases; its failure is retained and a successor verifies
+the distinct memory, final-base and transfer-order outcomes.
+
+The deep audit must execute all 65,536 mask words per route, both sizes and both
+addressing forms. Each nonempty mask faults its last selected transfer; empty
+masks are fault-free. This adds 524,288 whole programs. The unchanged earlier
+143,512-program recovery matrix and 136 fault-free programs remain separate
+required cohorts. The frozen complete audit passes **670,664 programs / thirteen
+tests / twelve reports** with exact independently verified inventories and retained
+report comparison. Eight altered-evidence controls reject; the ordinary report-only
+gate passes 86,412,746 cases / 741 batches and rejects missing/incomplete controls.
+The maintained command also passes the same complete gate from its separate
+frozen 216-input snapshot; all twelve reports match the first audit. Complete
+source/evidence linkage is recorded in the
+[qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-movem-register-mask-access-fault-qualification--2026-10-08).
+The prior wide full suite remains a separate 215-input execution; production
+CPU sources remain identical, and no new wide full-suite run is claimed.
+
+No production CPU source or package changes occur. This slice does not qualify
+all mask/fault-position Cartesian combinations, other CCR/stack/EA combinations,
+enabled MMU/cache, physical timing, or the unresolved hardware boundaries.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

@@ -75,11 +75,12 @@ public sealed class SyntheticM68040MovemWriteFaultDiscoveryTests(ITestOutputHelp
 
     internal static void Case(CoverageBatch report, bool batch, string cohort, OperandForm form,
         int width, int transfer, int faultByte, string bank, ushort trace, int ccr, bool reject = true,
-        bool recover = false, IndexFixture? index = null, bool overwritePointer = false)
+        bool recover = false, IndexFixture? index = null, bool overwritePointer = false, ushort? registerMask = null)
     {
         var opcode = Opcode(form, width);
         var indexedId = index is null ? "" : $"/index={index.Id}/ix={(index.AddressIndex ? "A" : "D")}{index.IndexRegister}/{(index.LongIndex ? "L" : "W")}/scale={1 << index.Scale}/pointer-alias={overwritePointer}";
-        var id = $"68040/MOVEM/write-fault/{cohort}/size={width}/mode={form.Mode}/reg={form.Register}{indexedId}/bank={bank}/T={trace:X4}/transfer={transfer}/byte={faultByte}/op={opcode:X4}/ccr={ccr:X2}";
+        var maskId = registerMask is { } selectedMask ? $"/mask={selectedMask:X4}" : "";
+        var id = $"68040/MOVEM/write-fault/{cohort}/size={width}/mode={form.Mode}/reg={form.Register}{indexedId}{maskId}/bank={bank}/T={trace:X4}/transfer={transfer}/byte={faultByte}/op={opcode:X4}/ccr={ccr:X2}";
         try
         {
             var bus = new SyntheticM68040AccessDoubleFaultTests.FaultBus();
@@ -90,7 +91,15 @@ public sealed class SyntheticM68040MovemWriteFaultDiscoveryTests(ITestOutputHelp
             var stacks = new Dictionary<string, uint> { ["user"] = 0x7800, ["ISP"] = 0x4700, ["MSP"] = 0x7400 };
             SetStacks();
             var registers = m.Core.State.D.Concat(m.Core.State.A).ToArray();
-            var words = new List<ushort> { opcode, (ushort)(form.Mode == 4 ? 0xc0c0 : 0x0303) };
+            var logicalMask = registerMask ?? 0x0303;
+            var encodedMask = logicalMask;
+            if (form.Mode == 4)
+            {
+                encodedMask = 0;
+                for (var bit = 0; bit < 16; bit++)
+                    if ((logicalMask & (1 << bit)) != 0) encodedMask |= (ushort)(1 << (15 - bit));
+            }
+            var words = new List<ushort> { opcode, encodedMask };
             var fixture = new AddressingFixture(m, width, words, (uint[])m.Core.State.D.Clone(),
                 (uint[])m.Core.State.A.Clone(), 0, new(DestinationIndex:
                     index ?? new(IndexRegister: 1, LongIndex: true, BriefDisplacement: 64),
@@ -104,8 +113,9 @@ public sealed class SyntheticM68040MovemWriteFaultDiscoveryTests(ITestOutputHelp
                 if (fixture.DestinationPointerAddress != first) throw new InvalidOperationException("Wrong independently intended pointer location");
             }
             var ea = form.Mode == 4 ? registers[8 + form.Register] : first;
-            var addresses = Enumerable.Range(0, 4).Select(n => unchecked(first + (uint)(form.Mode == 4 ? -n * width : n * width))).ToArray();
-            int[] order = form.Mode == 4 ? [9, 8, 1, 0] : [0, 1, 8, 9];
+            var selected = Enumerable.Range(0, 16).Where(r => (logicalMask & (1 << r)) != 0);
+            int[] order = (form.Mode == 4 ? selected.Reverse() : selected).ToArray();
+            var addresses = Enumerable.Range(0, order.Length).Select(n => unchecked(first + (uint)(form.Mode == 4 ? -n * width : n * width))).ToArray();
             var values = order.Select(r => registers[r] - (form.Mode == 4 && r == 8 + form.Register ? (uint)width : 0u))
                 .Select(v => width == 2 ? v & 0xffff : v).ToArray();
             foreach (var at in addresses) m.InitializePhysical(at, 0x5a5aa5a5, width);
@@ -126,10 +136,10 @@ public sealed class SyntheticM68040MovemWriteFaultDiscoveryTests(ITestOutputHelp
             e.ControlChecks["SFC"] = (s => s.SourceFunctionCode, 6);
             if (!reject)
             {
-                for (var n = 0; n < 4; n++) e.Write(addresses[n], values[n], width, m.Model);
+                for (var n = 0; n < order.Length; n++) e.Write(addresses[n], values[n], width, m.Model);
                 if (form.Mode == 4)
                 {
-                    e.A[form.Register] = unchecked(ea - (uint)(4 * width));
+                    e.A[form.Register] = unchecked(ea - (uint)(order.Length * width));
                     if (form.Register == 7) stacks[M68040StackFixture.PhysicalBank(bank)] = e.A[7];
                 }
                 M68040StackFixture.SetStacks(e, stacks, sr); e.Pc = fixture.NextPc;
@@ -205,10 +215,10 @@ public sealed class SyntheticM68040MovemWriteFaultDiscoveryTests(ITestOutputHelp
                 }
                 if (!handlerStores.SequenceEqual(new[] { (addresses[transfer], width, values[transfer]) }))
                     throw new InvalidOperationException("WB1 handler did not complete the independently intended store");
-                for (var n = 0; n < 4; n++) e.Write(addresses[n], values[n], width, m.Model);
+                for (var n = 0; n < order.Length; n++) e.Write(addresses[n], values[n], width, m.Model);
                 if (form.Mode == 4)
                 {
-                    e.A[form.Register] = unchecked(ea - (uint)(4 * width));
+                    e.A[form.Register] = unchecked(ea - (uint)(order.Length * width));
                     if (form.Register == 7) stacks[M68040StackFixture.PhysicalBank(bank)] = e.A[7];
                 }
                 M68040StackFixture.SetStacks(e, stacks, sr); e.Pc = fixture.NextPc;
@@ -216,10 +226,10 @@ public sealed class SyntheticM68040MovemWriteFaultDiscoveryTests(ITestOutputHelp
                 var resumedStart = bus.Accesses.Count;
                 Execute();
                 if (e.Verify(m) is { } resumedMismatch) throw new InvalidOperationException("resumed MOVEM: " + resumedMismatch);
-                var resumedWrites = bus.Accesses.Skip(resumedStart).Where(a => a.Write).Take(4)
+                var resumedWrites = bus.Accesses.Skip(resumedStart).Where(a => a.Write).Take(order.Length)
                     .Select(a => (a.Address, a.Width, a.Value));
                 if (!resumedWrites.SequenceEqual(addresses.Select((at, n) => (at, width, values[n]))))
-                    throw new InvalidOperationException("CM did not repeat the original four operand writes in order");
+                    throw new InvalidOperationException("CM did not repeat the selected operand writes in order");
                 if (fixture.DestinationPointerAddress is { } pointer &&
                     bus.Accesses.Count(a => !a.Write && a.Kind == M68kBusAccessKind.CpuDataRead && a.Address == pointer && a.Width == 4) != 1)
                     throw new InvalidOperationException("CM repeated indirect-pointer resolution");

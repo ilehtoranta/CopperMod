@@ -1335,3 +1335,26 @@ The accepted preconsolidation full suite has a separate source roster; the
 maintained consolidated full audit passes separately with 86,600,962 cases /
 937 complete reports / ten native presets; its ordinary gate passes 86,410,018
 cases / 739 batches.
+
+The new 040 MOVEM mask fault audit extends the existing physical writeback/CM
+fixture. Ordinary CI requires 1,364 `movem-mask-fault-controls-scalar` and 1,364
+`movem-mask-fault-controls-batch` whole programs. It checks all selected fault
+positions for 55 representative masks, both sizes and indirect/predecrement A2.
+The opt-in audit adds all 65,536 mask words with a last-selected-transfer fault;
+empty masks are fault-free controls. It retains the existing recovery matrix and
+fixed encoding witnesses. Both the frozen deep audit and maintained command pass
+670,664 programs in thirteen tests / twelve reports, with exact inventories,
+unchanged retained reports and eight evidence-corruption controls. See the
+[qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-movem-register-mask-access-fault-qualification--2026-10-08).
+
+```powershell
+./scripts/test-copper68k-040-movem-mask-faults.ps1 -OutputDirectory artifacts/movem-mask-audit
+```
+
+Use PowerShell 7 and Python 3 (`-PythonCommand` selects an installed interpreter).
+A fresh output is required; the command copies and hashes a frozen source graph,
+uses isolated build outputs, and requires all thirteen tests and twelve reports.
+`-ValidateReportsOnly` verifies existing frozen evidence without executing CPU
+instructions. `-BaselineDirectory` additionally requires unchanged retained
+recovery reports; a missing requested baseline fails. Neither mode promotes
+missing inputs, empty selections or mismatching/unsupported execution.

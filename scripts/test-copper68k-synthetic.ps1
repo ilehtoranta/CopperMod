@@ -240,6 +240,8 @@ try {
             $expected['rte-access-trace'] = 13824
             $expected['rte-access-movem-opcodes'] = 120960
             $expected['rte-access-movem-full-index'] = 114048
+            $expected['movem-mask-fault-controls-scalar'] = 1364
+            $expected['movem-mask-fault-controls-batch'] = 1364
             $expected['handler-prefetch-executing-scalar'] = 12288
             $expected['handler-prefetch-executing-batch'] = 12288
             $expected['handler-prefetch-entry-scalar'] = 196608

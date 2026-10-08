@@ -11530,3 +11530,91 @@ failed gate and does not rewrite earlier evidence that recorded the full run as
 pending.
 No private CPU candidate import, package publication, hardware qualification or
 roadmap completion is claimed. Milestone 6 remains **in progress**.
+
+## 040 MOVEM register-mask access-fault qualification — 2026-10-08
+
+The existing physical MOVEM store frame/handler/CM recovery gate uses a fixed
+logical `0303` list. The new test-internal optional mask fixture preserves that
+default, its predecrement `C0C0` encoding and all existing successful report keys.
+Register selection, reversed predecrement encoding, ordering and initial-base
+minus one operand size are computed independently of the production decoder.
+Their reference is [M68000PM MOVEM, 4-128–4-130](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf):
+control-mode lists run D0 through A7, predecrement reverses the list and its mask
+bits, and 040 stores the initial selected base minus one operand size.
+Source and destination registers, exact saved/restored PC/SR and stack state,
+defined frame fields, WB1 lanes, completed pre-fault writes, actual handler steps,
+resumed operand order and following MOVEQ are verified through the public factory.
+RTE explicitly repeats MOVEM operands as documented in MC68040UM 8.4.6.7; no
+automatic instruction retry is added.
+
+The bounded controls execute 55 logical masks: empty/full, all sixteen singletons,
+all sixteen one-register omissions, fifteen adjacent pairs, alternating/data-only/
+address-only lists and captured/boundary lists. Both sizes and indirect/predecrement
+A2 are tested on scalar and batch routes, ISP and CCR 31. Every selected transfer
+is faulted at its last byte; empty masks execute fault-free and check the following
+instruction. Each route passes **1,364 programs**, totaling **2,728 new programs**.
+A frozen 216-input snapshot passes nine bounded tests and **3,048 whole programs**;
+the six retained witness/fault-free reports are identical to the preceding
+215-input full-suite reports. Production CPU inputs are unchanged.
+
+Private continuation-only mutations qualify causality:
+
+| Defect | Mismatches per route | Unchanged passing per route |
+| --- | ---: | ---: |
+| Omit initial-base decrement when replaying its selected register | 524 | 840 |
+| Omit A7 replay | 1,048 | 316 |
+| Replay a different data register | 1,240 | 124 |
+
+The independent verifier predicts exact mask/mode membership and every
+passing/failing combination. Omitted A7 causes a final-base mismatch for
+predecrement; for indirect stores, it either leaves missing memory or reaches
+the replay-order check, depending on whether the original fault occurred at A7.
+The initial verifier's too-narrow diagnostic assertion fails and is preserved;
+the successor distinguishes these outcomes without changing any execution.
+All mutations affect only owned CPU copies. No old regression is retired.
+
+The complete audit additionally enumerates every one of **65,536 mask words**,
+both sizes and both A2 forms, on each route: **524,288 programs**. Nonempty masks
+fault their last selected transfer; zero masks are fault-free. It retains the
+separate **143,512-program** earlier recovery matrix and **136 fault-free**
+programs. Required total: **670,664 programs / thirteen tests / twelve reports**.
+The frozen discovery audit passes all **670,664 programs / thirteen tests / twelve
+reports**, with zero mismatching/unsupported/untested cases. Independent verification
+binds exact source/assembly/command/TRX/combination identities and all six retained
+recovery reports match the accepted baseline. Eight copied-evidence corruptions
+reject for the intended reasons; originals remain unchanged. The maintained command
+also passes the same thirteen tests / twelve reports / 670,664 programs in its own
+frozen snapshot, including the requested baseline comparison. Every report matches
+the first completed audit. The 37 production CPU inputs remain byte-identical to
+the preceding full CPU and `.74` consumer qualification; only test inputs change.
+No new wide full-suite execution is claimed for the 216-input test graph.
+
+```powershell
+./scripts/test-copper68k-040-movem-mask-faults.ps1 -OutputDirectory artifacts/movem-mask-audit
+```
+
+The command requires PowerShell 7 and Python 3, freezes source bytes in a fresh
+directory, isolates build/results, and invokes an independent architectural
+combination verifier. `-PythonCommand` selects the interpreter;
+`-BaselineDirectory` requires the retained recovery reports to match a supplied
+accepted baseline. Requested missing inputs already reject. `-ValidateReportsOnly`
+performs no CPU execution. The ordinary CI gate now requires each 1,364-program
+control report. Its composed report-only fixture passes **86,412,746 cases / 741
+batches**; missing/incomplete scalar controls reject. That fixture executes no
+instructions and does not substitute for the separate deep program audit.
+
+Local frozen evidence: `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/MovemMaskControlsV1`, `mutations/MovemMaskV1`, `audits/MovemMaskFullV1`,
+`audits/MovemMaskMaintainedCommandV1` and `movem-mask-ordinary-controls-v1`.
+Bounded proof SHA-256:
+`2b5b36b0286bb0b0118e607590c5d33b5c8494d1a272a9409fa6973f005e5786`;
+mutation proof:
+`cd533a4941106c9acb39391d121139485c356225be1e4c36a7d7ef534d1bca3e`.
+Frozen complete proof: `2562176b2999f2aea8bc2ba905bc327db0833017578d566fe63b8461554073eb`;
+eight integrity controls: `e8abc5ecbcc67edd3dbaa139f1c5624851de2e8c5dee7c1a4d91b661548c53be`;
+ordinary report-only controls: `4e23e681a0f1f39deb6988020e1dbe1f3587ca678ca6e94b5d44686d60d4d231`.
+Maintained-command proof: `8160c5a78a52a4a9aeccbb752e2973067d230ce9e7a99abd07bbd3bd536e1e13`;
+complete source/evidence linkage: `3f5d769639d7cc0678980fc24c0b5cf575c5f03c4d70b1280b31d34b1905e423`.
+This slice does not establish every mask/fault-position Cartesian combination,
+other stack/CCR/EA combinations, enabled cache/MMU, physical timing or hardware
+trace behavior. Milestone 6 remains **in progress**, `roadmapComplete=false`.
