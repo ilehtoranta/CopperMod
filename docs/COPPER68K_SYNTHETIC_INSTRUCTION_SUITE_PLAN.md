@@ -4156,3 +4156,13 @@ The full expected report catalog is frozen at 13,737 reports / 110,928,842 cases
 full execution remains running and its independent verification is pending.
 No publication or private production import occurs. Milestone 6 remains
 **in progress**, with broad reference, restoration and hardware gaps explicit.
+
+### Milestone 6 checkpoint — combined candidate API review, 2026-10-08
+
+Separate-process compiled API comparison and independent evidence verification
+find zero managed public/protected signature changes: 20 types / 211 records in
+both production and the combined candidate. A normalized six-file CPU source
+patch is prepared for review without production import. The qualification record
+states the exact scope and proof identities. Full-suite execution remains running;
+unavailable hardware leaves disputed 030/040 boundaries unqualified. Milestone 6
+stays **in progress**, `roadmapComplete=false`.

@@ -13287,3 +13287,35 @@ report/key/weight, ten reference presets and immutable sources/inputs/binaries.
 The broad Basic mismatches, private recovery limits and disputed hardware
 boundaries remain open. Full replay/verification is pending; milestone 6 stays
 **in progress**, `roadmapComplete=false`, and PR #22 stays draft.
+
+### Combined candidate API and source review — 2026-10-08
+
+Separate reflection processes compare the compiled production assembly from the
+completed 230-input full run with the frozen combined candidate assembly used by
+the pending full run. Both expose **20 types / 211 public or protected records**,
+with **zero added or removed records**. The comparison includes type bases and
+interfaces, generic constraints, member signatures and accessibilities, constant
+values, optional parameter defaults and accessor visibility. No constructors or
+CPU instructions execute. Independent verification binds both DLL identities,
+their dependency directories, helper sources/output, and the candidate's full-run
+input manifest. This qualifies managed signatures; it does not establish physical
+layout, serialization compatibility, runtime behavior or hardware correctness.
+
+A normalized source patch removes line-ending noise and identifies six semantic
+CPU files: `Access020`, `FinalWrite020`, `Move`, `Operand020`, `Rte020` and the
+main advanced interpreter. The new files and private C022/C023 dispatch, selected
+operand/final-write continuation and existing mapped execution paths are visible
+for review. The current MOVE16 correction remains unchanged. The patch is local
+review evidence, not an import into production or a package release.
+
+Evidence under the retained audit root:
+
+| Record | SHA-256 |
+| --- | --- |
+| `api-review-v1/proof.json` | `cd1acd76f9e0f49447def8214fd5cf6d72bb52e72e6e5797d3a0d24e474ae7fc` |
+| `api-review-v1/independent-proof.json` | `7b199ab22f626e240a0bad63028ec3222fa8950e06e2649ae4b145e3d3ca57f5` |
+| `api-review-v1/semantic-source.patch` | `f596f8b6d10d046b035e315cde444012af94189c9859980c70ec3969d4540c2b` |
+
+The full suite is still running. Hardware is unavailable for the disputed 030/040
+boundaries, which remain explicitly unqualified. No broad reference failure is
+reclassified. Milestone 6 remains **in progress**, `roadmapComplete=false`.
