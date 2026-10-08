@@ -13319,3 +13319,69 @@ Evidence under the retained audit root:
 The full suite is still running. Hardware is unavailable for the disputed 030/040
 boundaries, which remain explicitly unqualified. No broad reference failure is
 reclassified. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+### Predecrement-source final-write discovery and private correction — 2026-10-08
+
+The new `SyntheticM68020PredecrementWriteTests` exercises byte/word/long
+`MOVE -(An),(Am)` with all eight source registers, aliased and distinct
+destinations, four stack modes, four boundary values, all 32 CCR values and
+scalar/batch execution on EC020, 020, 030 and A1200. Registers, flags, next PC,
+memory canaries, explicit fault/RTE progression and source/write counts are
+checked through the existing public factory and recording bus. The canonical
+operand is independently placed at 4200; the initial source register is one
+stride beyond it. A7 byte stride is two. The following MOVEQ sentinel and the
+existing nine-cycle general-EA policy discriminate replay, extra register effects
+and timing changes. This selected matrix does not claim every destination
+register or a physical partial-transfer protocol.
+
+An unchanged copy of the qualified 258-input private candidate plus this fixture
+has **196,608 passing mapped controls and 196,608 mismatching denied-write cases**:
+four named tests, two passed and two failed, actual exit 1. Every fault combination
+fails, with the first 10,000 retained diagnostics per report stating
+`Denied destination write bypassed physical map`. The reporting cap is explicit;
+the remaining failing combination statuses are retained, without a claim to
+have stored their individual diagnostics. The general MOVE route dispatched the
+destination directly instead of creating the pending-write frame.
+
+The isolated correction changes only private `Move.cs` and `FinalWrite020.cs`.
+It checks this selected destination before dispatch, admits source mode 4 into
+the C023 software format and restores the same general-EA timing plan after an
+explicit RTE. The accepted source decrement/read and captured value are retained;
+the opcode/source is not retried. Normal mapped controls are byte-for-byte equal
+as JSON reports to the unchanged baseline. Twelve selected tests pass:
+**1,204,224 cases / 264 reports**, consisting of **393,216 new cases** and
+**811,008 retained cases**. All retained reports match the earlier qualified
+catalog exactly; zero selected mismatching, unsupported or untested cases remain.
+Independent verification checks 259 source/project inputs, three executed DLLs,
+exact TRX outcomes/definitions/methods/paths, counters, combination keys/weights,
+baseline diagnostics and immutable outputs. An initial verifier rejected Windows
+path separators; V2 normalizes them without changing evidence or criteria.
+
+The reviewable patch is
+`scripts/reference/m68020-predecrement-write-candidate.patch`. Apply it only to a
+fresh isolated copy of the private candidate source, with the new fixture copied
+into its test project; the production tree is unchanged. A two-file patch replay
+proves normalized source equality to the executed correction. Patch application
+preserves some original CRLF bytes, so this is normalized source equality, not a
+claim that replayed raw source or rebuilt DLL hashes equal the executed build.
+The selected audit enables `COPPER68K_RUN_020_PREDECREMENT_WRITE=1`; its precise
+filter is `FullyQualifiedName~SyntheticM68020PredecrementWriteTests`. The retained
+checks additionally select `SyntheticM68020MoveWriteFaultTests`,
+`SyntheticM68020MoveOriginEntryFaultTests` and `SyntheticM68020MoveWriteHandlerTests`
+with their corresponding three opt-in variables enabled. Output reports and a
+TRX must be requested; missing/empty selections cannot establish this result.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| `audits/PredecrementWriteProofV2.json` | `4775c37e7b3e166524f2abd632b76bec835ee3eba6a99c0dec470c08fa1faa64` |
+| Candidate patch | `65a874ecb01896059ce1ad00c8b3ff2ccf8267a2379d2ebe11d3b655a354e128` |
+| New fixture | `129c13cf4549091eacc6a6334534f0be3497003500a33373b9463c0b72b6b770` |
+| `audits/PredecrementPatchReplayV1/proof.json` | `26fe0756bf3017a09fcea9a232e99c6a595907c98024c052afdf89bf45b48844` |
+
+This closes the selected private whole-request destination-check gap, not
+initial predecrement read faults, other destinations, partial transfers, trace,
+enabled MMU/cache or foreign frames. The newer 259-input / 39-CPU correction
+requires full/deep/API and affected-consumer qualification. The earlier 258-input
+full run continues unchanged and cannot qualify these new CPU changes. Production
+has 232 inputs / 37 unchanged CPU inputs after adding the fixture. No private
+CPU is imported and no package is published. Milestone 6 remains **in progress**.

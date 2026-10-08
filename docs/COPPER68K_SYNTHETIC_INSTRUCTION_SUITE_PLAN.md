@@ -4166,3 +4166,16 @@ patch is prepared for review without production import. The qualification record
 states the exact scope and proof identities. Full-suite execution remains running;
 unavailable hardware leaves disputed 030/040 boundaries unqualified. Milestone 6
 stays **in progress**, `roadmapComplete=false`.
+
+### Milestone 6 checkpoint — predecrement final-write correction, 2026-10-08
+
+A new selected `MOVE -(An),(Am)` fixture passes 196,608 normal controls and
+exposes 196,608 denied writes bypassing the physical map in the isolated private
+candidate. A two-file private correction preserves the accepted source decrement,
+captured value and existing general-EA timing policy across explicit RTE. Exact
+independent verification qualifies 1,204,224 passing cases / 264 reports, including
+811,008 unchanged retained cases. The test and reviewable candidate patch are
+saved; production CPU code is unchanged. See the qualification record for scope,
+evidence identities and patch replay caveats. Newer full/deep/API and consumer
+qualification is pending; the earlier full run remains on its frozen inputs.
+Milestone 6 stays **in progress**, `roadmapComplete=false`.
