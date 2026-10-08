@@ -19,7 +19,7 @@ it does not replace or discard their remaining gaps.
 | Complete integer-family inventory; later families cannot disappear | `IntegerInventory.cs`, generated model/family inventory and named execution reports | Inventory and reporting are implemented. Inventory membership alone does not prove execution or internal restoration coverage. |
 | Coverage by architectural combination, with passing/mismatching/unsupported/untested distinct | Actual per-model report keys, weights and statuses; exact named TRX selection; no empty or substituted reports | The ordinary gate validates required groups and counts. The frozen c284b94 full run is qualified: 86,806,858 passing cases / 967 reports. The guard and later ANDI consolidation retain separate focused execution evidence. |
 | Deterministic coverage in ordinary CI | Current `test-copper68k-synthetic.ps1` and CI invocation; all required reports and positive case counts | Implemented, including 4,096 EOR postincrement and 3,072 ANDI / MOVEA displacement cases per profile. Frozen full execution and the separately qualified duplicate-selection guard are explicitly linked. |
-| Explicit deep-audit command, deterministic seeds and strict missing/empty/mismatch rejection | Deep command/settings, recorded seed and selected inputs; rejected negative controls | Fresh seed 68020 runs 10,000 samples per family/profile: 320,000 passing cases. Six actual invalid/missing/empty requests fail. Mismatch rejection has separate mutation evidence; retain final source/evidence linkage. |
+| Explicit deep-audit command, deterministic seeds and strict missing/empty/mismatch rejection | Deep command/settings, recorded seed and selected inputs; rejected negative controls | Frozen 86469f7 seed 68020 runs 10,000 samples per family/profile: 320,000 passing cases. Eight same-build invalid/missing/empty/duplicate requests fail. Mismatch rejection retains separate mutation evidence. The full same-build suite remains pending. |
 | Reuse SingleStepTests, Musashi and WinUAE with pinned identities and caveats | Adapter source, reference manifests, source/input hashes, actual execution and documented exclusions | Implemented. SingleStepTests supplies 000 semantic fixtures; Musashi runs independent self-checking programs, not its CPU as an oracle. WinUAE remains a software reference. |
 | Replacement detects absolute decoding, extension length, index sign, alias order, A7 stride and flags defects | Six distinct isolated mutation proofs with precise replacement IDs and current source linkage | The maintained mutation command defines all six. Fresh isolated 51444ea executions detect all six against a 75,214-case clean baseline. Exact source/roster/report linkage and every mismatch ID are verified. |
 | Retire an old regression only after a mapped replacement detects its defect | Exact pinned old method/rows, before-removal proof, mutation witness and after-removal sibling verification | NOT displacement, EOR postincrement, ANDI displacement and aliased MOVEA word retirements have exact proofs. EOR replaces one fact with 32,768 passing cases and retains four siblings. Schema-2 retirement replay now requires execution DLL hashes and exact loaded definition/method linkage; fresh MOVEA/EOR executions, 20 corruption controls each and strict replay are qualified. No blanket regression deletion is authorized. |
@@ -341,7 +341,11 @@ evidence: 320,000 seeded cases, 312,500 SingleStepTests cases and 536 Musashi
 programs pass. Its 88 Musashi exclusions remain explicit. Proof SHA-256:
 `293c7675e4f9e5f70b6b5fa602eab9ea0bc4b26724b553e6a477f5063883b64e`.
 All 230 source/project inputs and 37 CPU inputs are bound to the executed
-assemblies and named test methods. The same-build full-suite execution is
+assemblies and named test methods. Eight fresh same-build invalid requests
+reject with exact named failures and guard diagnostics, including duplicate
+model IDs. Independent command/source/assembly/method/corpus linkage proof:
+`f344233c7317e1957dc436d0be12a4bca093bb167130ff8fc70741a2510e0140`.
+These controls generate no coverage reports. The same-build full-suite execution is
 still pending; this checkpoint does not close the coherent final-evidence
 requirement. No hardware is available for disputed 030/040 boundaries. The
 failed broad gate and private-production restoration work remain required;

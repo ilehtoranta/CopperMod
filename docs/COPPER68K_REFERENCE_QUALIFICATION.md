@@ -13032,6 +13032,17 @@ eight profiles. Reference pins remain respectively
 
 The independently verified proof SHA-256 is
 `293c7675e4f9e5f70b6b5fa602eab9ea0bc4b26724b553e6a477f5063883b64e`.
+`CurrentDeepRejectionControlsV2` then executes eight actual requests against
+those same assemblies: zero seed, zero samples, empty models, missing
+SingleStepTests, empty SingleStepTests selection, missing Musashi, and adjacent
+and separated duplicate model IDs. Each exits 1 with exactly one named failing
+test and its expected guard diagnostic, without a generated coverage report.
+Independent verification checks command/settings, all source and assembly
+hashes, exact TRX result/definition/method paths and unchanged reference inputs.
+Execution proof: `ad35d75a3552113678d18ad1d3a83ed4fca06efcf93d1f863231a0761829565b`;
+independent proof: `f344233c7317e1957dc436d0be12a4bca093bb167130ff8fc70741a2510e0140`.
+These are adapter rejection controls, not extra instruction coverage.
+
 The separate `CurrentReferenceFullV2` execution uses the same assemblies and
 is still running at this checkpoint; no full-suite pass is claimed. Earlier
 full-suite, rejection-control, mutation and consumer evidence retains its own

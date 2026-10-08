@@ -4074,6 +4074,11 @@ cases / 125 files and 536 Musashi programs with 88 documented exclusions.
 Independent verification binds all 230 source/project inputs, 37 unchanged CPU
 inputs, loaded assemblies, exact named methods, corpus inputs and reports.
 Proof: `293c7675e4f9e5f70b6b5fa602eab9ea0bc4b26724b553e6a477f5063883b64e`.
+Eight fresh invalid requests against the same assemblies each fail exactly one
+named test with the intended diagnostic: six missing/empty/invalid input checks
+plus adjacent and separated duplicate models. Exact command, source, binary,
+method, report absence and unchanged corpus linkage is independently verified:
+`f344233c7317e1957dc436d0be12a4bca093bb167130ff8fc70741a2510e0140`.
 The separate full CPU run is still pending. With no hardware available, disputed
 030/040 boundaries remain unqualified; broad failed and private-restoration
 requirements also remain open. Milestone 6 stays **in progress**,
