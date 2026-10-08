@@ -12833,3 +12833,70 @@ scope; use this checkpoint for reproduction if later retirements change that
 class. The 010 RTE / 060 STOP broad gate and private-production restoration
 requirements remain open. Milestone 6 stays **in progress**,
 `roadmapComplete=false`.
+
+
+## Per-case failed-reference witnesses — 2026-10-08
+
+`BasicContinuationDiscoveryV4` extends the accepted isolated V3 observer with
+one retained NDJSON witness per validation, including passing cases. Its frozen
+mainline source is `3a5314f`; **229 mainline inputs plus one isolated test input**
+leave all **37 production CPU inputs unchanged**. Original input files, native
+bridge and V3 evidence remain immutable. No observer is imported into the CPU.
+
+Every witness records its model/group-relative ordinal, the exact callback's
+initial integer registers/PC/SR and supervisor/master stack pointers, initial
+instruction and supervisor-stack bytes, decoded reference register/PC/SR image,
+the returned CPU image, expected/actual vectors, defined SR mask, comparison-site
+deltas and supported expected/observed frame bytes. These are **adapter images**,
+not a new hardware oracle. `expectedSrRaw` retains the reference tag's high-half
+ignore bits; comparisons use the recorded mask. A no-exception sentinel is
+reported as vector zero by this adapter. Snapshot reads are bounded and use zero
+for unmapped bytes. Observed frame bytes are meaningful as exception-frame
+evidence only when the actual vector/frame is valid; notably, the STOP vector
+mismatch's raw memory snapshot is not an actual privilege-exception frame.
+
+All **202,856 disputed cases** and **eight control cases** have unique contiguous
+ordinals and precisely match the V3 callback, failure, site and frame counts.
+Per-case evidence now establishes co-occurrence, rather than inferring it from
+aggregate site totals:
+
+| Selection | Passing cases | Mismatching cases | Sites in every mismatch |
+| --- | ---: | ---: | --- |
+| 68010 RTE | 4,015 | 2,233 | SR result and saved-frame byte |
+| 68060 STOP | 131,072 | 65,536 | Exception vector and SR result |
+
+Every failing RTE witness expects and receives vector **14**; its input format
+is neither legal 010 format 0 nor 8. The supported eight-byte saved frame differs
+in SR, with the remaining bytes matching. The first failure is ordinal **12**:
+initial SR `201F`, expected `2011`, actual `201F`; expected/actual frame images
+are `20110087FFA00038` / `201F0087FFA00038`.
+Every failing STOP witness starts in supervisor mode and supplies a new S-clear
+SR. It expects vector **8** but receives **0**. The first is ordinal **3**, opcode
+`4E72 0000`: expected SR `2000`, actual `0000`.
+
+Clean NOP controls preserve registers, PC and defined SR with no error sites.
+Corrupted NOP controls change only returned D0 and each produce exactly the
+unchanged-register comparison failure. All six native verdicts retain the V3
+contract. The single named discovery test still **fails with exit 1** after
+recording all witnesses; this is deliberately failed reference evidence.
+
+Independent verification reverses every observer insertion and requires exact
+equality with the accepted V3 comparison code/header. It binds all 3,546 pinned
+input files, complete source graph, producer/native hashes, loaded assemblies,
+exact named TRX result, six outputs, every ordinal and every site's counts.
+The verifier's initial assumptions about counting only C# CPU files and an
+ILLEGAL sentinel vector were rejected; the accepted verifier includes the CPU
+project input and checks the existing adapter's vector-zero contract. Neither
+execution nor expectations were changed to satisfy those checks.
+
+| Retained evidence | SHA-256 |
+| --- | --- |
+| V3 parent discovery proof | `64b51aec11c3568ad0c941d50d667ec4ceb287813e640146f5abba1bd360acaa` |
+| V4 complete inputs | `0b829b0df2b6d99f979eba21ab53bac673c88894023b0a363e8efd2699e64d7d` |
+| V4 execution and witness output hashes | `07eff4b7c6e15ad9c2290bd8953ccb9262e516240e1fb4ae9e1aef630dbd3bb9` |
+| V4 independent per-case proof | `d808738036ce30bf89a929a729c3a754ff722d211e7db8c22d6b905e5d981386` |
+
+These witnesses confirm the location and extent of software disagreements;
+they do not settle the undocumented behavior. No CPU fix, reference exclusion,
+public release or new whole-suite/consumer run follows. The broad gate remains
+failed and milestone 6 remains **in progress**, `roadmapComplete=false`.

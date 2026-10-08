@@ -4021,3 +4021,17 @@ missing/wrong-weight controls rejecting. Its composed report-only gate passes
 The current graph has 229 source inputs and unchanged 37 CPU inputs. Original
 full/deep/consumer identities and broader failed/private gates remain retained;
 no publication follows. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 checkpoint — per-case reference witnesses, 2026-10-08
+
+An isolated observer now retains all 202,856 disputed RTE/STOP cases and eight
+clean/corrupted NOP control cases, with contiguous ordinals and initial,
+reference and returned adapter images. Every 010 RTE mismatch has SR and saved
+frame disagreement; every 060 STOP mismatch has vector and SR disagreement.
+The 2,233 / 65,536 failure counts are unchanged. Reversing the observer additions
+proves exact V3 comparison-code equality; complete input/source/native/assembly,
+named failing test and per-case linkage are verified. The request still exits 1.
+Source 3a5314f has 229 mainline inputs plus one isolated test, with all 37 CPU
+inputs unchanged. No hardware qualification, guessed fix, exclusion, import or
+publication follows. Milestone 6 stays **in progress**, `roadmapComplete=false`.

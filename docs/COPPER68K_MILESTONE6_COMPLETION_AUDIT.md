@@ -35,8 +35,11 @@ it does not replace or discard their remaining gaps.
    two mismatching directories, with actual test exit 1. The first failures are
    010 RTE invalid-format CCR and 060 ordinary STOP with a new S-clear SR. The original replay stops at those first
    failures. A separate isolated discovery now visits 6,248 RTE and 196,608 STOP
-   callbacks, retaining 2,233 / 65,536 mismatching cases; aggregate comparison
-   sites are observed, while individual architectural witnesses remain limited. Passing qualified presets
+   callbacks, retaining 2,233 / 65,536 mismatching cases. A later isolated
+   observer retains every passing/failing adapter image and proves per-case
+   SR/frame disagreement for RTE and vector/SR disagreement for STOP, with
+   unchanged comparison code and counts. Hardware expectations remain
+   unresolved; these images are diagnostic evidence. Passing qualified presets
    do not turn this broad audit green.
 2. **Private continuation work is not production qualification.** The 020/030
    read/write recovery candidates and their literal private formats have scoped
