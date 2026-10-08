@@ -201,36 +201,6 @@ public sealed class M68020HdfBootTests
     [InlineData(M68kCpuModel.M68EC020)]
     [InlineData(M68kCpuModel.M68030)]
     [InlineData(M68kCpuModel.M68040)]
-    public void AndiLongDisplacementConsumesLongImmediateAndPreservesExtend(M68kCpuModel model)
-    {
-        foreach (var mask in new uint[] { 0, 0x80123456, 0x7FFFFFFF })
-        foreach (var displacement in new[] { -8, 8 })
-        {
-            var bus = new Copper68kTestBus(0x10000);
-            bus.WriteWords(0x1000, 0x02A9, (ushort)(mask >> 16), (ushort)mask, (ushort)displacement);
-            var address = (uint)(0x3000 + displacement);
-            bus.WriteWord(address - 2, 0xAAAA);
-            bus.WriteLong(address, 0xFFFFFFFF);
-            bus.WriteWord(address + 4, 0xBBBB);
-            using var cpu = M68kCoreFactory.Default.Create(model, bus);
-            cpu.Reset(0x1000, 0x7000);
-            cpu.State.A[1] = 0x3000;
-            cpu.State.StatusRegister = 0x271F;
-            cpu.ExecuteInstruction();
-            Assert.Equal(mask, bus.ReadLong(address));
-            Assert.Equal(0xAAAA, bus.ReadWord(address - 2));
-            Assert.Equal(0xBBBB, bus.ReadWord(address + 4));
-            Assert.Equal(mask == 0 ? 0x2714 : mask == 0x80123456 ? 0x2718 : 0x2710, cpu.State.StatusRegister);
-            Assert.Equal(0x1008u, cpu.State.ProgramCounter);
-            Assert.Equal(0x3000u, cpu.State.A[1]);
-        }
-    }
-
-    [Theory]
-    [InlineData(M68kCpuModel.M68020)]
-    [InlineData(M68kCpuModel.M68EC020)]
-    [InlineData(M68kCpuModel.M68030)]
-    [InlineData(M68kCpuModel.M68040)]
     public void MoveByteDisplacementToIndexUsesBothExtensionsAndPreservesSurroundingBytes(M68kCpuModel model)
     {
         foreach (var value in new byte[] { 0, 0x80, 0x7F })

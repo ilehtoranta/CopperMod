@@ -4006,3 +4006,18 @@ rejected evidence; only V3 is qualified. Counts do not settle undocumented
 hardware behavior, and no CPU change or reference exclusion follows. See the
 completion audit for exact scope; milestone 6 stays **in progress**,
 `roadmapComplete=false`.
+
+
+### Milestone 6 checkpoint — ANDI displacement retirement, 2026-10-08
+
+The captured long-immediate/displacement ANDI witness is replaced by 24,576
+shared-fixture cases across eight profiles. A lost-X mutation fails all four
+pinned original rows and exactly 12,288 replacement cases; every diagnostic,
+key/weight and named selection is verified. Exact removal leaves all 67 HDF
+siblings and eight replacement batches passing. Nine evidence controls and
+strict replay pass. Ordinary CI requires 3,072 cases per profile, with actual
+missing/wrong-weight controls rejecting. Its composed report-only gate passes
+86,638,954 cases / 775 batches / 975 reports; this is not a new full-suite run.
+The current graph has 229 source inputs and unchanged 37 CPU inputs. Original
+full/deep/consumer identities and broader failed/private gates remain retained;
+no publication follows. Milestone 6 stays **in progress**, `roadmapComplete=false`.

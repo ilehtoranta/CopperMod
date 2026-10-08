@@ -1619,3 +1619,24 @@ python scripts/test-copper68k-eor-postincrement-retirement.py `
 checks the exact reduced source; `--validate-only` requires unchanged complete
 evidence. Both execution paths are mutated only in isolated builds. The
 address-error/trace siblings remain. See [the retirement record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#eor-byte-postincrement-consolidation--2026-10-08).
+
+
+## Captured ANDI displacement retirement
+
+`SyntheticAndiDisplacementTests` reuses operand setup and architectural/memory
+verification for 24,576 cases across all eight profiles. It includes the original
+three masks and signed displacements, every address register, both privilege
+states and all CCRs, with literal encoding and exact extension consumption.
+The maintained helper proves a lost-X defect fails both the four pinned old
+rows and 12,288 replacement cases before removing only those rows:
+
+```powershell
+python scripts/test-copper68k-andi-displacement-retirement.py --output artifacts/andi-displacement-retirement
+python scripts/test-copper68k-andi-displacement-retirement.py --validate-only --output artifacts/andi-displacement-retirement
+```
+
+The ordinary gate requires 3,072 cases per profile. The helper pins the witness
+and class inventory; reproduce against this checkpoint if later retirements
+change that class. Exact identities, retained sibling verification, negative
+controls and the separate full/report-only scopes are in the
+[qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#andi-long-displacement-consolidation--2026-10-08).

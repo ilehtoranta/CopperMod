@@ -17,12 +17,12 @@ it does not replace or discard their remaining gaps.
 | --- | --- | --- |
 | Independent audits across 000, 010, EC020, 020, 030, 040, 060 and A1200 | Pinned reference inputs and adapters; executed selections for every profile; explicit exclusions and comparator checks | Fresh SingleStepTests 000 and Musashi eight-profile audits pass on the frozen current assemblies. The broad WinUAE audit still has two unresolved mismatching directories. |
 | Complete integer-family inventory; later families cannot disappear | `IntegerInventory.cs`, generated model/family inventory and named execution reports | Inventory and reporting are implemented. Inventory membership alone does not prove execution or internal restoration coverage. |
-| Coverage by architectural combination, with passing/mismatching/unsupported/untested distinct | Actual per-model report keys, weights and statuses; exact named TRX selection; no empty or substituted reports | The ordinary gate validates required groups and counts. The frozen c284b94 full run is qualified: 86,806,858 passing cases / 967 reports. The sole subsequent fixture guard has separate focused execution evidence. |
-| Deterministic coverage in ordinary CI | Current `test-copper68k-synthetic.ps1` and CI invocation; all required reports and positive case counts | Implemented, including 4,096 EOR postincrement cases per profile. Frozen full execution and the separately qualified duplicate-selection guard are explicitly linked. |
+| Coverage by architectural combination, with passing/mismatching/unsupported/untested distinct | Actual per-model report keys, weights and statuses; exact named TRX selection; no empty or substituted reports | The ordinary gate validates required groups and counts. The frozen c284b94 full run is qualified: 86,806,858 passing cases / 967 reports. The guard and later ANDI consolidation retain separate focused execution evidence. |
+| Deterministic coverage in ordinary CI | Current `test-copper68k-synthetic.ps1` and CI invocation; all required reports and positive case counts | Implemented, including 4,096 EOR postincrement and 3,072 ANDI displacement cases per profile. Frozen full execution and the separately qualified duplicate-selection guard are explicitly linked. |
 | Explicit deep-audit command, deterministic seeds and strict missing/empty/mismatch rejection | Deep command/settings, recorded seed and selected inputs; rejected negative controls | Fresh seed 68020 runs 10,000 samples per family/profile: 320,000 passing cases. Six actual invalid/missing/empty requests fail. Mismatch rejection has separate mutation evidence; retain final source/evidence linkage. |
 | Reuse SingleStepTests, Musashi and WinUAE with pinned identities and caveats | Adapter source, reference manifests, source/input hashes, actual execution and documented exclusions | Implemented. SingleStepTests supplies 000 semantic fixtures; Musashi runs independent self-checking programs, not its CPU as an oracle. WinUAE remains a software reference. |
 | Replacement detects absolute decoding, extension length, index sign, alias order, A7 stride and flags defects | Six distinct isolated mutation proofs with precise replacement IDs and current source linkage | The maintained mutation command defines all six. Fresh isolated 51444ea executions detect all six against a 75,214-case clean baseline. Exact source/roster/report linkage and every mismatch ID are verified. |
-| Retire an old regression only after a mapped replacement detects its defect | Exact pinned old method/rows, before-removal proof, mutation witness and after-removal sibling verification | Recent NOT displacement and EOR postincrement retirements have exact proofs. EOR replaces one fact with 32,768 passing cases and retains four siblings. No blanket regression deletion is authorized. |
+| Retire an old regression only after a mapped replacement detects its defect | Exact pinned old method/rows, before-removal proof, mutation witness and after-removal sibling verification | NOT displacement, EOR postincrement and ANDI displacement retirements have exact proofs. EOR replaces one fact with 32,768 passing cases and retains four siblings. No blanket regression deletion is authorized. |
 | Retain cache, prefetch, bus ordering, fault sequencing, JIT and native regressions unless separately proven redundant | Exact test-source diff and full named roster, with every removal accounted for | Specialized tests remain. The exact 5,400-test frozen roster is compared with its predecessor, including all retirements, replacements and unavailable additions. |
 | Production CPU fixes pass full CPU and affected consumers | Same-source full CPU proof; isolated NuGet package; CopperScreen production, host/disk/engine and applicable native results | MOVE16 recovery has full-suite and local .77 consumer evidence. Subsequent consolidation leaves all 37 CPU source inputs unchanged. No new consumer execution is claimed. |
 | Preserve successful ordering and timing policy; no automatic retry after partial effects | Relevant sequence/fault tests and change review, separate from timing qualification | Existing checks and scoped explicit-RTE continuation proofs remain. Private candidate results are not production behavior or physical timing qualification. |
@@ -191,7 +191,7 @@ not supply coverage**, and the separately failed broad 010 RTE / 060 STOP audit
 is not part of this passing selection.
 
 The full and 320,000-case deep/reference runs use frozen `c284b94` sources.
-The only subsequent test-source change is the duplicate-selection guard,
+At that full-run checkpoint, the sole subsequent test-source change was the duplicate-selection guard,
 qualified by its separate 3,200-case build and four actual rejection requests.
 The full audit's original gate is preserved and executed explicitly; it is not
 relabeled as a run of the guarded fixture. All 37 production CPU source inputs
@@ -272,3 +272,61 @@ Software-reference disagreement still does not settle the undocumented flags
 or STOP behavior. No CPU fix, reference exclusion, production bridge change,
 consumer replay or package publication is selected from these counts.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## ANDI long-displacement consolidation — 2026-10-08
+
+The four rows of `M68020HdfBootTests.AndiLongDisplacementConsumesLongImmediateAndPreservesExtend`
+at source pin `ea18c2c0d2d5e2db69421091b7fc83d7b1fc7596` are replaced by
+`SyntheticAndiDisplacementTests.CapturedLongAndiDisplacementConsumesImmediateAndPreservesExtend`.
+The replacement executes **24,576 cases / eight profiles**, 3,072 per profile:
+three original masks, both signed displacements, every address register,
+user/supervisor stacks and all 32 initial CCR images. It uses the shared operand
+fixture, public CPU factory and full architectural/memory verification. Literal
+`02A9` encoding, independent operand address and exact next PC `1008` check the
+long immediate followed by displacement. Expectations preserve X, derive N/Z
+from the result and clear V/C without production arithmetic or decoding helpers.
+The original A1 / supervisor / CCR-31 operand combinations are included;
+surrounding-memory canaries use the shared fixture rather than the old AAAA/BBBB
+literal bytes. This retires semantic rows, not native HDF boot coverage.
+
+Before removal, all **71 original HDF rows plus eight new batches** pass.
+A deliberate lost-X defect in the base and advanced ANDI execution paths fails
+all four original rows and exactly **12,288 replacement cases**. Every mismatch
+ID and diagnostic, combination key/weight and full named TRX selection is
+checked against independently enumerated expectations. After exact removal,
+all **67 retained HDF rows plus eight replacement batches** pass. Nine copied
+evidence corruptions reject, and strict replay reproduces the complete proof.
+
+The ordinary command requires all eight new reports, each with 3,072 passing
+cases. Its composed **report-only** gate passes **86,638,954 semantic cases /
+775 batches / 975 profile reports**, using the previously qualified full run
+plus the focused new reports and unchanged integer inventory. Two actual
+requests with a missing 000 report or wrong 000 case count reject. This is not
+a newly executed whole CPU suite. All **37 production CPU inputs** remain
+unchanged; the current test/CPU graph has **229 inputs**. Earlier full-suite,
+deep/reference and local .77 consumer results retain their original identities.
+No package or new consumer execution is claimed.
+
+The first mutation attempt rejected CRLF-sensitive anchors before mutant
+execution. A first composed gate also rejected an omitted inventory. These
+attempts remain separate; the accepted V2 audit and complete V2 gate correct
+the tooling inputs without changing expectations or weakening acceptance.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Before-removal preparation | `86aafb2afc40d73d75b9fe95925cd15ca2d94885fb3ec04aeaee5df14aa0b4ec` |
+| Complete Clean / Mutation / Current proof | `f16ce319c088dd400da0bbebbc3a986a28994857544bd2382702e7da818f122a` |
+| Complete report-only ordinary gate | `a75ad1fec362627f69bf0040681f151b5e8163a3766392071707c0e970a29cb5` |
+| Two actual required-report controls | `1c7b586342ecbed43f302ce4e3cd782920bb43ac1efb3307ea2c5e558e7fb9f3` |
+| Independent source / retirement / binary / report linkage | `a412f3851eb369d0738b5f1e6fd191f0b19837984e21d30d6f60a4cdb91c1a08` |
+
+```powershell
+python scripts/test-copper68k-andi-displacement-retirement.py --output artifacts/andi-displacement-retirement
+python scripts/test-copper68k-andi-displacement-retirement.py --validate-only --output artifacts/andi-displacement-retirement
+```
+
+The helper pins the original witness/class inventory and checks exact source
+scope; use this checkpoint for reproduction if later retirements change that
+class. The 010 RTE / 060 STOP broad gate and private-production restoration
+requirements remain open. Milestone 6 stays **in progress**,
+`roadmapComplete=false`.
