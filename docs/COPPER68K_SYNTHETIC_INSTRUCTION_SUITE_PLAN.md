@@ -4413,3 +4413,20 @@ contains exact commands and proof identities. Broader reference disagreements,
 the 480-case restoration gate and original-frame/repair/trace/interrupt coverage
 remain open. Milestone 6 stays **in progress**, `roadmapComplete=false`; no
 private CPU import, new package or consumer execution is claimed.
+
+### Milestone 6 checkpoint — differing-FC repeated faults, 2026-10-09
+
+The repeated-fault fixture now combines nonuniform per-slot FC1/5 triples with
+depths two/three across user/user-M/ISP/MSP supplied outer frames. A selected
+eight-test execution passes 156,192 new cases and 720 byte-identical retained
+controls. All 27 widths run at CCR=31; canonical widths 1/2/4 run at all CCRs,
+with all lanes and rejected bytes/slots on scalar/batch routes. Independent
+verification binds every key/weight and source/assembly/method/report identity.
+A wrong nested FC mutation detects 144 exact FC1 cases, preserves 144 FC5 cases
+and all 720 controls, and verifies the precise frame-byte diagnostic for every
+witness. The new test class reuses the unchanged execution helper, changing
+only its visibility from private to test-internal. The 234-input test graph
+keeps all 37 CPU inputs raw-identical. Earlier whole-class and whole-CPU proofs
+retain their frozen inputs. The broader 480-case gate, original construction,
+repair/operand/trace/interrupt and reference disagreements remain open.
+Milestone 6 stays **in progress**, `roadmapComplete=false`; no import or release.

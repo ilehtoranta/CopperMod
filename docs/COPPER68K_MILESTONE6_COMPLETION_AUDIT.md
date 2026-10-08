@@ -202,6 +202,17 @@ it does not replace or discard their remaining gaps.
    loaded methods and isolated source/binary identities. Proof:
    `a5f7da133c9a875b6b56804318e2af22700e1da98a4965e8467d307daacf2fd4`.
    Production CPU source is unchanged; this is fixture sensitivity evidence.
+   A later 234-input snapshot qualifies differing FC1/5 triples through repeated
+   faults: 156,192 new cases plus 720 byte-identical controls / eight named tests.
+   Independent proof:
+   `7a3aed859b09de33ab33c039b11870243ff756471481bf180270262295e4c200`.
+   A wrong nested FC mutation detects 144 exact FC1 witnesses while 144 FC5
+   examples and 720 controls retain their expected outcomes. Exact identifier,
+   diagnostic and source/assembly/method linkage proof:
+   `bd70e343b17541f3162a4ce3f581b56e1095a12aa9d8b283ca6407eefa2a5e73`.
+   The execution helper changes only from private to test-internal visibility;
+   all 37 production CPU inputs remain raw-identical to the preceding snapshot.
+   Broader original-frame/repair/trace/interrupt requirements remain open.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

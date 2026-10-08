@@ -256,7 +256,7 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
         report.Complete(output);
     }
 
-    private static void RunFunctionCodes(bool batch, int[] widths, int ccr, uint lane, int[] functionCodes, string bank, int faultSlot, int faultByte, int faultDepth = 1)
+    internal static void RunFunctionCodes(bool batch, int[] widths, int ccr, uint lane, int[] functionCodes, string bank, int faultSlot, int faultByte, int faultDepth = 1)
     {
         var bus = new SyntheticM68040AccessDoubleFaultTests.FaultBus();
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);

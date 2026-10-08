@@ -14257,3 +14257,55 @@ repair/refault/operand/trace/interrupt gaps. The broader 480-case failing gate
 and failed broad software-reference gate remain. All launched audit workers
 are terminal. Milestone 6 remains **in progress**, `roadmapComplete=false`; no
 private CPU import, package publication or new consumer execution occurs.
+
+## Differing function codes through repeated nested faults — 2026-10-09
+
+`SyntheticM68040HeterogeneousRefaultTests` composes the previously separate
+differing-FC and repeated-fault dimensions through the shared handler/frame
+fixture. Only `RunFunctionCodes` visibility changes from private to test-internal;
+its execution body and expectations remain byte-identical after CRLF-to-LF
+conversion. One test file is added, producing a 234-input / 37-CPU snapshot.
+All production CPU inputs remain raw-identical to `MaintainedNestedCompleteV1`.
+
+Fresh isolated `HeterogeneousRefaultV1` execution exits 0 and passes **eight named
+tests / 156,912 cases / eight reports**: **156,192 new cases** and **720 retained
+controls** with byte-identical reports. The new cases comprise 155,904 generated
+cases and 288 bounded ordinary examples. Six nonuniform FC1/5 triples cover all
+four supplied outer banks and fault depths two/three. All 27 B/W/L triples run
+at CCR=31; canonical widths 1/2/4 run at all CCRs. Both routes cover all lanes
+and rejected bytes/slots. This is separated structural and CCR coverage.
+Each recursive service checks the faulted slot's FC, pending datum, saved frame,
+stack/DFC unwind and single accepted write, using explicit handler execution
+and RTE. No automatic instruction retry is introduced.
+
+Independent verification enumerates every literal case identifier and weight,
+checks the exact eight loaded methods/definitions, completed counters, all
+source/asset/binary/output identities and precise source scope. The four
+retained reports match the preceding qualified complete audit byte-for-byte.
+
+An isolated mutation in `HeterogeneousRefaultFcMutationV1` changes one completed-
+MOVES fault assignment: after a prior exception, its recorded function code is
+forced to 5. First-fault behavior and saved PC remain unchanged. Actual xUnit
+execution exits 1: the two new bounded reference rows fail; all four retained
+rows pass. Exactly **144 nested FC1 cases** mismatch and **144 FC5 cases** pass,
+alongside **720 byte-identical passing controls**. Independent verification
+derives each failure's frame address and expected/actual SSW byte from its bank,
+slot and size and requires that exact `nested fault entry: Memory` diagnostic.
+All six loaded methods, counts, identifiers, mutation literal, source scope,
+assets, three DLLs and outputs are bound to the clean qualification. The
+production checkout remains unchanged by mutation execution.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Independent clean execution, source scope and retained report linkage | `7a3aed859b09de33ab33c039b11870243ff756471481bf180270262295e4c200` |
+| Independent 144 precise wrong-FC witnesses and unchanged outcomes | `bd70e343b17541f3162a4ce3f581b56e1095a12aa9d8b283ca6407eefa2a5e73` |
+
+The [test README](../Copper68k.Tests/Synthetic/README.md#differing-function-codes-through-repeated-nested-faults)
+records focused execution. These results qualify the frozen 234-input selected
+graph; the preceding maintained 233-input complete-fixture and 230-input whole-
+CPU proofs retain their original checkpoints. Whole-request rejection and
+supplied outer frames do not qualify physical FC spaces, partially accepted
+transfers, original construction or wider repair/operand/trace/interrupt paths.
+The 480-case broader failing inventory is unchanged. Both launched workers are
+terminal; milestone 6 stays **in progress**, `roadmapComplete=false`; no private
+CPU import, publication or new package/API/consumer execution occurs.

@@ -1729,3 +1729,30 @@ copy. It requires exactly 48 repeated-fault cases to fail on saved PC and all
 failing xUnit execution, precise diagnostics, case inventories, loaded methods,
 source and binary identities are checked before writing `mutation-proof.json`.
 It rejects unrelated source changes and verifies production source is unchanged.
+
+### Differing function codes through repeated nested faults
+
+`SyntheticM68040HeterogeneousRefaultTests` reuses the existing handler/frame
+fixture. Its ordinary examples execute 288 cases across both routes, six
+nonuniform FC1/5 triples, four supplied stack banks and fault depths two/three.
+The optional generated matrix covers all 27 B/W/L triples at CCR=31 and
+canonical widths 1/2/4 at all CCRs, with all lanes and rejected bytes/slots.
+This is separated structural and CCR coverage, not the full Cartesian product.
+
+For focused xUnit execution, set a fresh report directory and explicitly enable
+the generated cases. The selection includes the 720 retained controls:
+
+```powershell
+$env:COPPER68K_RUN_040_HETEROGENEOUS_REFAULT = '1'
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = 'artifacts/040-heterogeneous-refault/reports'
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/040-heterogeneous-refault/build --filter 'FullyQualifiedName~SyntheticM68040HeterogeneousRefaultTests|FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.ActualHandlerStoresFaultCompleteAndResume|FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.RepeatedNestedReferenceExamples' --logger 'trx;LogFileName=refault.trx' --results-directory artifacts/040-heterogeneous-refault/results
+Remove-Item Env:COPPER68K_RUN_040_HETEROGENEOUS_REFAULT
+Remove-Item Env:COPPER68K_SYNTHETIC_REPORT_DIR
+```
+
+The required result is eight passing named rows, eight reports and 156,912
+passing cases: 156,192 new and 720 retained. This xUnit invocation generates
+results; independent source/binary/method/report qualification is recorded
+separately in the [qualification log](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#differing-function-codes-through-repeated-nested-faults--2026-10-09).
+Earlier maintained nested-audit proofs retain their frozen source checkpoints;
+adding this test file does not relabel those proofs as current-tree execution.
