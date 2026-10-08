@@ -12113,3 +12113,91 @@ Evidence is local in `%TEMP%/copper68k-reference-restoration-20261006/` under
 | ordinary controls | `229a62670d18a8cad98cc3cc7f336b70cb712f588b12616144acb4d760efe84a` |
 | retained full | `46bddaccc8921960717c6f62a3fae9eb57eaf3dade9cf100d5294b3c617d1298` |
 | retained consumer | `ef4e3017ebfdf7471378dff94a430bfc0998eb9bbe7bd93dee4a16336b1d75f2` |
+
+
+## Private pending-write validation input and refault — 2026-10-08
+
+`SyntheticM68020MoveWriteValidationTests` adds **122,880 passing programs / two
+executions / 192 reports** on EC020, A1200, 020 and 030. The fixture begins with
+the literal private C023 format-A pending-write image at low or high relocated
+addresses. It rejects each byte of the four selected RTE validation requests:
+saved SR, PC, format and private version. Actual integer handlers either write
+the original validation value into the right-justified C021 input buffer and
+clear DF, or execute RTE to refault that validation request once before allowing
+completion. The two modes each contain **61,440 programs**.
+
+Coverage spans B/W/L pending stores, current ISP/MSP, returned user/user-M/ISP/MSP,
+CCR 0/31, zero-to-three retained instruction words and pending/software-completed
+stores, in scalar and one-instruction batch execution. Each handler instruction
+checks registers, defined flags, PC, memory guards and stack banks. Successful
+return checks exact validation-read ordering, one additional exception for
+explicit refault, serialized pending-write completion, unchanged source/address
+effects and three following MOVEQ sentinels. Supplying a validation value skips
+only that rejected request; later legitimate frame reads still occur. Refault
+does not replay completed validation phases. This is explicit RTE continuation,
+not automatic retry of the original MOVE.
+
+All **476,928 parent cases / six executions / 1,152 reports** retain identical
+results. The combined candidate has **599,808 cases / eight executions / 1,344
+reports**. The complete **239-input** frozen source graph differs from the
+238-input parent only by this fixture; all **39 private CPU inputs remain
+byte-identical**. The maintained audit revalidates the complete parent chain,
+selection/settings, source and output hashes, loaded test-assembly path, exact
+TRX roster/counters, every case key/weight/status and all retained reports.
+A frozen `--validate-only` replay passes without changing the proof.
+
+Three isolated mutations fail at exactly predicted cases: ignoring supplied
+input **61,440**; replaying completed phases during refault **49,152**; wrong saved
+fault PC **122,880**. Unaffected cases pass. A separate independent verifier
+checks all **233,472 complete diagnostic messages**, including the exact wrong-PC
+byte address under each model's transport width. Eleven copied controls reject
+missing reports, empty combinations, untested/foreign cases, changed source,
+roster or settings, missing witnesses, changed/missing retention and wrong loaded
+test-assembly identity. Validator fixture paths are explicitly rebased, including
+TRX storage paths; no copied control executes instructions. Hardlinked targets
+are unlinked before alteration and original evidence hashes remain intact.
+
+An isolated **223-input / 37-CPU-input** current production build also compiles
+the fixture. With the private flag absent, the exact two new tests are unavailable
+and execute no cases. The first default-selection verifier wrongly expected
+xUnit skips in the TRX aggregate `notExecuted` counter; it stopped with its
+failure preserved. The successor binds the compiled source/assemblies, reruns
+the exact selection with validated build prerequisites, verifies both explicit
+`NotExecuted` rows and records the actual aggregate counters (total 2, executed
+0, passed/failed/notExecuted 0). This is unavailable coverage, not successful
+production replay.
+
+Reproduce with the complete immutable `MoveWriteFrameFaultV1` parent and its
+pinned parent chain, using a fresh output:
+
+```powershell
+python scripts/test-copper68k-move-write-validation.py `
+  --qualified-parent-directory <frozen-MoveWriteFrameFaultV1> `
+  --output <fresh-write-validation-output>
+# --validate-only requires unchanged complete sources, settings and reports.
+```
+
+This qualifies resupply of the original validation value and one explicit
+validation refault under the bounded private contract. Changed input values,
+validation/exception-entry failures, returned-bank pending-write refaults,
+trace/interrupt continuation, wider origins/physical partial transfers and
+foreign hardware frames remain required. The fixture does not qualify the
+silicon representation of C021/C023 or resolve hardware trace/A7/PC disputes.
+No production CPU is changed or imported, no package published or old regression
+retired. No new wide CPU suite, consumer replay or physical qualification is
+claimed. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/MoveWriteValidationDiscoveryV1`, `audits/MoveWriteValidationV1`,
+`move-write-validation-controls-v1`, `write-validation-production-default-v1`
+and `write-validation-production-default-v2`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| audit | `3a2d2b3c8f82f4205224819a3ba82ba2d6066958881b9649d6153f88366cbf64` |
+| controls | `04184f1c3d7418eb5ad675ae2f915f298f52ca43c9ce32b94850d77563875790` |
+| reasons | `c3a10e52b3ec0b8562db6d3ad93676e5aae51a4f661dd3f17e5b25360144f900` |
+| default | `96449a7c17e272b8797c7f1d3855d1ba8c4197a5c203acd9d711ff0fd9d664cd` |
+| discovery | `a03c2242d9c6010c4d87d8309edb9502f5881dac5f7c7c92a9f25f8a55334c0c` |
+| parent | `93ec2beed12410b94ce6cf448e1b5bc67e010474edf5ed7b20b2b7a765ae123e` |
+| complete source/evidence linkage | `f0a6174fcbfdfe595ea48efdb0578f40a36caaa1616a9c3ccce773e6709523ba` |

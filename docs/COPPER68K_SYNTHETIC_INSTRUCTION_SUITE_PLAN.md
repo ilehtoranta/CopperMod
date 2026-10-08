@@ -3837,3 +3837,21 @@ consumer replay, package release or specialized-regression retirement is claimed
 The [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#not-displacement-semantic-regression-consolidation--2026-10-08)
 maps the exact replacement, defect and pinned evidence. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 private pending-write validation continuation — 2026-10-08
+
+The selected C023/C021 software contract adds **122,880 passing programs** for
+original-value validation input and one explicit refault, with integer handlers,
+exact read ordering, pending-store completion and following sentinels. All
+**476,928 parent cases** retain their reports. Three isolated defects produce
+**61,440 / 49,152 / 122,880** exact mismatches; all 233,472 diagnostic reasons are
+independently checked. Eleven evidence controls reject and frozen strict replay
+passes. The private 239-input graph preserves all 39 CPU inputs; the current
+223-input production graph compiles the fixture with both new tests unavailable.
+
+No production candidate is imported, package published or regression retired.
+Changed validation values, entry failures, pending-write refaults, trace/interrupt
+continuation and general hardware frames remain open. Exact graph/evidence limits
+are in [the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-validation-input-and-refault--2026-10-08).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

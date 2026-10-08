@@ -1496,3 +1496,25 @@ Use a fresh directory for execution. Missing fixtures, empty/wrong selections,
 changed source or defect, producer, command, case weights, reasons and counters
 fail verification. This does not qualify timing or bus ordering. See
 [the NOT retirement record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#not-displacement-semantic-regression-consolidation--2026-10-08).
+
+
+Private pending-write validation continuation is opt-in with
+`COPPER68K_RUN_020_MOVE_WRITE_VALIDATION=1`. The maintained command requires the
+complete frozen `MoveWriteFrameFaultV1` parent, uses a fresh output and supports
+strict `--validate-only` replay:
+
+```powershell
+python scripts/test-copper68k-move-write-validation.py `
+  --qualified-parent-directory <frozen-MoveWriteFrameFaultV1> `
+  --output <fresh-write-validation-output>
+```
+
+The 122,880 new cases execute integer buffer-supply/refault handlers for the four
+selected validation requests before pending-write completion, retaining 476,928
+parent cases. Three mutations detect ignored input, replayed phases and wrong
+fault PC. The private 39-input CPU remains unchanged; the current 37-input CPU
+only compiles the fixture with both tests unavailable by default. These are
+distinct source graphs. Missing fixtures, empty selections or any mismatch fail
+the requested audit. Changed validation values, entry faults, pending-store
+refaults, trace/interrupts and hardware frames remain unqualified. See
+[the private validation record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-validation-input-and-refault--2026-10-08).
