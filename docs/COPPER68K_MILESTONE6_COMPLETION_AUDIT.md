@@ -164,6 +164,13 @@ it does not replace or discard their remaining gaps.
    execution of this updated fixture. Differing-FC user-M, wider FCs, repeated
    faults, original construction and trace/interrupts remain open. The broader
    480-case gate remains untested/failing.
+   Differing-FC user-M now has the same separated structural/CCR selection:
+   19,488 new cases, 672 identical controls, four named passes, independent proof
+   `2f48b1f58ee95fad7d86c582bf3f09171023420d865edcfdbb8bfc50fcbd0b79`.
+   All six differing FC1/5 patterns cover all 27 widths at CCR=31, with widths
+   1/2/4 covering all CCRs. Earlier user/ISP/MSP evidence remains separate.
+   Wider FCs, repeated faults, original construction and trace/interrupts remain
+   open; physical FC spaces and the full dimension cross-product are not claimed.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

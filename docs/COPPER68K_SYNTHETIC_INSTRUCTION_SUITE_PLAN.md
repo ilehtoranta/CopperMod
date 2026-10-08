@@ -2105,6 +2105,18 @@ gate is retained; differing-FC user-M, wider FCs, repeated faults, original
 construction and trace/interrupts remain required. Milestone 6 stays
 **in progress**, `roadmapComplete=false`; no private import or publication.
 
+### Milestone 6 checkpoint — differing FCs for supplied user-M, 2026-10-09
+
+The shared differing-FC generator now selects supplied user-M independently.
+Four named tests pass 19,488 new cases plus 672 byte-identical controls. Six
+differing FC1/5 patterns cover all 27 widths, lanes and rejected bytes/slots at
+CCR=31; canonical widths 1/2/4 cover all CCRs on scalar/batch routes. Independent
+verification binds all case and source/assembly/method/report identities. The
+execution fixture and production CPU remain unchanged. Earlier bank selections
+retain their own frozen evidence. Wider FCs, repeated faults, original construction
+and trace/interrupts remain open; the 480-case broader gate is retained. Milestone 6
+stays **in progress**, `roadmapComplete=false`; no private import or publication.
+
 ### Milestone 6 user-tail software trace service — 2026-10-06
 
 Four new `UserTailSoftwareTraceService` scalar/batch groups compose the existing

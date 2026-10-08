@@ -14008,3 +14008,56 @@ All launched audit workers are now terminal; the complete private read candidate
 retains the separate full/deep/API/consumer linkage recorded above. Broad 010
 RTE / 060 STOP disagreements remain failed/unqualified. Milestone 6 remains
 **in progress**, `roadmapComplete=false`; no private CPU import or publication.
+
+### Differing FC1/5 for supplied user-M nested returns — 2026-10-09
+
+The shared differing-function-code generator now selects user-M independently
+through two new environment facts. Its execution fixture is unchanged. All
+six nonuniform FC1/5 triples cover all 27 B/W/L width triples at CCR=31;
+canonical widths 1/2/4 additionally cover CCR=0..30. Both scalar/batch routes
+vary four lanes, every pending slot and every rejected byte. This separates
+structural and CCR dimensions; no full Cartesian product is claimed.
+
+Fresh execution completes with four named passes, zero failed or skipped:
+19,488 new cases plus 672 retained controls whose reports are byte-identical.
+Each route has 9,744 new cases: 4,536 structural and 5,208 other-CCR cases.
+Nested service, faulted-slot DFC, saved SR/PC, stack selection, final USP/M-bit
+restoration, pending-store order, canaries and following-instruction checks use
+the previously qualified shared expectations. Earlier user/ISP/MSP differing-FC
+evidence retains its own frozen inputs and is not rerun or relabeled here.
+
+Independent verification checks exact command/settings, all 233 raw snapshot
+inputs/assets, three executed assemblies, loaded definitions/methods, completed
+four-row TRX counters and every case key/status/weight. All 37 CPU files match
+the retained baseline after CRLF-to-LF only; the same two restored raw newline
+differences remain explicit. No CPU semantics or timing policy changes occur.
+
+Reproduce in fresh directories and require four completed named passes:
+
+```powershell
+$env:COPPER68K_RUN_040_USER_M_HETEROGENEOUS_WRITEBACK = '1'
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = [IO.Path]::GetFullPath('artifacts/user-M-heterogeneous-reports')
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/user-M-heterogeneous-build --filter 'FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.HeterogeneousUserMasterBit|FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.ActualHandlerStoresFaultCompleteAndResume' --logger 'trx;LogFileName=returns.trx' --results-directory artifacts/user-M-heterogeneous-results
+```
+
+| Selected evidence | SHA-256 |
+| --- | --- |
+| `UserMHeterogeneousV1/inputs.json` | `9edbfd6d54d0ab8770147851a530c67656d82cb8814ea1cae31c754ef7c71da4` |
+| `UserMHeterogeneousV1/execution.json` | `2382936e2a37e4efe934724be0cdae41e7a9b95f387102f189e6298ad173e423` |
+| `UserMHeterogeneousIndependentV1.json` | `2f48b1f58ee95fad7d86c582bf3f09171023420d865edcfdbb8bfc50fcbd0b79` |
+| New scalar report | `183fa6bdd19a7a00bf1093008836ebcfac80fdaa8ea3ee7c9539402e21fa21cd` |
+| New batch report | `bcee5a841bd6f484257933b87cfe73b641dd949b22c9aedce9a265d82d407ec3` |
+| Later diagnostic-only static proof | `910e7516df594f40362c21b861276c416075c78710338a867ac75cba6b589e7a` |
+
+The subsequent diagnostic literal retains all 480 required untested cases,
+enabling condition and failing gate. Wider FC values, deeper repeated faults,
+original frame construction and trace/interrupt interruption remain open.
+Source review confirms that the present nested fixture injects exactly one
+handler-store rejection; it cannot qualify another fault during its nested
+handler's store. Such coverage must verify each distinct nested frame and
+explicit RTE unwind while preserving one accepted final operand write.
+
+Physical FC spaces remain unqualified; no full-current-suite, hardware, API,
+package or consumer result is claimed. The broad 010 RTE / 060 STOP disagreements
+remain failed/unqualified. Milestone 6 stays **in progress**, `roadmapComplete=false`;
+no private CPU import or publication occurs.

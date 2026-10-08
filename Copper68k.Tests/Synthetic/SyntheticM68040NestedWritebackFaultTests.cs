@@ -165,15 +165,22 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
     [EnvironmentFact("COPPER68K_RUN_040_HETEROGENEOUS_NESTED_WRITEBACK", "require differing function codes in nested writeback slots"), Trait("Suite", "ReferenceDiscovery")]
     public void HeterogeneousFunctionCodesBatch() => HeterogeneousFunctionCodes(true);
 
-    private void HeterogeneousFunctionCodes(bool batch)
+    [EnvironmentFact("COPPER68K_RUN_040_USER_M_HETEROGENEOUS_WRITEBACK", "require differing function codes for supplied user-M nested returns"), Trait("Suite", "ReferenceDiscovery")]
+    public void HeterogeneousUserMasterBitScalar() => HeterogeneousFunctionCodes(false, true);
+
+    [EnvironmentFact("COPPER68K_RUN_040_USER_M_HETEROGENEOUS_WRITEBACK", "require differing function codes for supplied user-M nested returns"), Trait("Suite", "ReferenceDiscovery")]
+    public void HeterogeneousUserMasterBitBatch() => HeterogeneousFunctionCodes(true, true);
+
+    private void HeterogeneousFunctionCodes(bool batch, bool userMasterBit = false)
     {
-        var report = new CoverageBatch("68040", "heterogeneous-nested-writeback-fault-" + (batch ? "batch" : "scalar"));
+        var group = userMasterBit ? "user-M-heterogeneous-nested-writeback-fault-" : "heterogeneous-nested-writeback-fault-";
+        var report = new CoverageBatch("68040", group + (batch ? "batch" : "scalar"));
         foreach (var f1 in new[] { 1, 5 })
         foreach (var f2 in new[] { 1, 5 })
         foreach (var f3 in new[] { 1, 5 })
         {
             if (f1 == f2 && f2 == f3) continue; // Common FC groups retain separate coverage.
-            foreach (var bank in new[] { "user", "ISP", "MSP" })
+            foreach (var bank in userMasterBit ? new[] { "user-M" } : new[] { "user", "ISP", "MSP" })
             foreach (var w1 in new[] { 1, 2, 4 })
             foreach (var w2 in new[] { 1, 2, 4 })
             foreach (var w3 in new[] { 1, 2, 4 })
