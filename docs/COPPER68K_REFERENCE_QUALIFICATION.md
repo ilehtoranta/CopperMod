@@ -8,6 +8,14 @@ The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
 maps the accepted requirements to current evidence and outstanding gates.
 The dated records below remain scoped historical evidence.
 
+Current source checkpoint `c284b94` has fresh seeded and SingleStepTests/Musashi
+evidence bound to one frozen assembly pair: 320,000 seeded cases, 312,500
+SingleStepTests cases and 536 Musashi programs pass, with 88 explicit Musashi
+exclusions. Six actual invalid/missing/empty adapter requests reject. The full
+CPU run with ten qualified WinUAE presets is still pending; the broad 010 RTE /
+060 STOP audit remains failed. See the completion audit for exact identities
+and scope. No current full-suite success or roadmap completion is claimed.
+
 ## Sources and reproducibility
 
 The [Motorola programmer reference](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)

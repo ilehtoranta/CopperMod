@@ -121,6 +121,14 @@ The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
 maps the accepted requirements to evidence and remaining gates. Dated records
 below remain historical; focused proofs do not establish whole-roadmap completion.
 
+Fresh frozen `c284b94` seeded/reference validation (2026-10-08) passes 320,000
+seeded cases, 312,500 SingleStepTests cases and 536 Musashi programs across the
+selected profiles, with 88 explicit program exclusions. Six actual invalid/
+missing/empty adapter requests fail. Sources, input sets, loaded assemblies,
+commands, exact roster and every report outcome are independently linked.
+The current full CPU run is still active; its result is not yet claimed.
+Milestone 6 remains in progress, `roadmapComplete=false`.
+
 Record commands, logical case counts, failure discoveries, fixes, reference
 identities, replacement proofs and remaining required coverage here as work
 progresses. No milestone is complete merely because an inventory exists or a

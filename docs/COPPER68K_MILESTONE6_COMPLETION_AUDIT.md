@@ -15,11 +15,11 @@ it does not replace or discard their remaining gaps.
 
 | Requirement from the accepted plan | Authoritative evidence needed | Current assessment |
 | --- | --- | --- |
-| Independent audits across 000, 010, EC020, 020, 030, 040, 060 and A1200 | Pinned reference inputs and adapters; executed selections for every profile; explicit exclusions and comparator checks | Scoped SingleStepTests, Musashi and WinUAE audits exist. The broad WinUAE audit still has two unresolved mismatching directories. |
+| Independent audits across 000, 010, EC020, 020, 030, 040, 060 and A1200 | Pinned reference inputs and adapters; executed selections for every profile; explicit exclusions and comparator checks | Fresh SingleStepTests 000 and Musashi eight-profile audits pass on the frozen current assemblies. The broad WinUAE audit still has two unresolved mismatching directories. |
 | Complete integer-family inventory; later families cannot disappear | `IntegerInventory.cs`, generated model/family inventory and named execution reports | Inventory and reporting are implemented. Inventory membership alone does not prove execution or internal restoration coverage. |
 | Coverage by architectural combination, with passing/mismatching/unsupported/untested distinct | Actual per-model report keys, weights and statuses; exact named TRX selection; no empty or substituted reports | The ordinary gate validates required groups and counts. A fresh current-source full run is underway; its result is not yet qualified. |
 | Deterministic coverage in ordinary CI | Current `test-copper68k-synthetic.ps1` and CI invocation; all required reports and positive case counts | Implemented, including 4,096 EOR postincrement cases per profile. Final current-source execution linkage remains pending. |
-| Explicit deep-audit command, deterministic seeds and strict missing/empty/mismatch rejection | Deep command/settings, recorded seed and selected inputs; rejected negative controls | Commands and earlier scoped proofs exist. Collect the final linkage to their pinned sources and distinguish historical executions from current ones. |
+| Explicit deep-audit command, deterministic seeds and strict missing/empty/mismatch rejection | Deep command/settings, recorded seed and selected inputs; rejected negative controls | Fresh seed 68020 runs 10,000 samples per family/profile: 320,000 passing cases. Six actual invalid/missing/empty requests fail. Mismatch rejection has separate mutation evidence; retain final source/evidence linkage. |
 | Reuse SingleStepTests, Musashi and WinUAE with pinned identities and caveats | Adapter source, reference manifests, source/input hashes, actual execution and documented exclusions | Implemented. SingleStepTests supplies 000 semantic fixtures; Musashi runs independent self-checking programs, not its CPU as an oracle. WinUAE remains a software reference. |
 | Replacement detects absolute decoding, extension length, index sign, alias order, A7 stride and flags defects | Six distinct isolated mutation proofs with precise replacement IDs and current source linkage | The maintained mutation command defines all six. Historical proofs need final source/evidence linkage; a mutation definition is not execution evidence. |
 | Retire an old regression only after a mapped replacement detects its defect | Exact pinned old method/rows, before-removal proof, mutation witness and after-removal sibling verification | Recent NOT displacement and EOR postincrement retirements have exact proofs. EOR replaces one fact with 32,768 passing cases and retains four siblings. No blanket regression deletion is authorized. |
@@ -86,3 +86,24 @@ local under `%TEMP%/copper68k-reference-restoration-20261006/audits/`.
 The run is still in progress; neither success nor final logical counts are
 claimed here. It does not include the separately failing broad Basic audit or
 private CPU imports.
+
+`CurrentDeepReferencesV1` has completed against those **same frozen assemblies**:
+three named tests pass, with 320,000 seeded cases in 32 reports, 312,500
+SingleStepTests cases in 125 files and 536 passing Musashi programs across all
+eight profiles. Musashi retains 88 explicit exclusions. Complete pinned input
+sets (127 SingleStepTests files including exclusions and 78 Musashi binaries),
+source and binary hashes, command/settings, loaded test paths, exact TRX roster,
+report keys/weights/statuses and per-file/per-program outcomes were independently
+verified. This does not qualify physical timing or every instruction combination.
+
+`CurrentDeepRejectionControlsV1` executes six actual failing adapter requests:
+zero seed, zero samples, empty model selection, missing SingleStepTests corpus,
+empty SingleStepTests filter and missing Musashi root. Each executes exactly one
+named failing test with its expected diagnostic before emulated CPU execution;
+original input and assembly hashes remain unchanged. These are adapter guards,
+not a claim to have tested every CLI guard or every possible malformed input.
+
+| Current deep evidence | SHA-256 |
+| --- | --- |
+| Complete seeded/reference proof | `6bf1ae0d33a92445ea1387580c4d09bff3f944627e51569fd94f49a0cca55f6b` |
+| Six actual rejection controls | `4e80db7425c2b65ca3dcb9dba14ce45786d1a1a30d3527f784c8c3ab245a0c8a` |
