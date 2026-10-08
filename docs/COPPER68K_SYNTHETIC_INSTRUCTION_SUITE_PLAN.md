@@ -4083,3 +4083,21 @@ The separate full CPU run is still pending. With no hardware available, disputed
 030/040 boundaries remain unqualified; broad failed and private-restoration
 requirements also remain open. Milestone 6 stays **in progress**,
 `roadmapComplete=false`. See the reference qualification checkpoint for scope.
+
+### Milestone 6 checkpoint — complete current evidence, 2026-10-08
+
+The frozen `86469f7` full suite and independent verification finish successfully:
+5,345 passing / 63 unavailable / zero failed tests, 86,856,010 logical cases /
+983 reports and ten qualified WinUAE presets. The ordinary gate passes
+86,663,530 semantic cases / 783 batches. Exact source, loaded methods, all named
+results, report keys/weights/statuses and reference input sets are verified.
+Full proof: `ee6dcf069e3747ea536bd3650ce66f0e727e51bb184b662d4df25cb4ac006980`.
+
+Same-build deep/reference and eight rejection controls, unchanged-CPU .77
+consumer results, six-defect MOVE baseline reports and schema-2 EOR/MOVEA
+retirement graphs are linked without relabeling earlier execution identities.
+All 230 source/project inputs and 37 CPU inputs remain unchanged. Linkage proof:
+`fea989f4167448e1c35576e4269416a67d54b8b0a8f9f440a9f2b00d5f0368f4`.
+This closes current snapshot coherence. The failed broad reference gate and
+private-production restoration requirements remain open; milestone 6 stays
+**in progress**, `roadmapComplete=false`, and PR #22 remains draft.

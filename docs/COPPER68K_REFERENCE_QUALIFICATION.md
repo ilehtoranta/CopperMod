@@ -13049,3 +13049,43 @@ full-suite, rejection-control, mutation and consumer evidence retains its own
 identity. No hardware is available to settle disputed 030/040 boundaries;
 software agreement cannot close them. The broad failed and private-restoration
 gates remain open. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+### Complete current-build qualification and evidence linkage, 2026-10-08
+
+`CurrentReferenceFullV2` has finished with **5,345 passing tests, 63 unavailable,
+zero failures / 5,408 total**. Independent V4 verification qualifies
+**86,856,010 passing logical cases / 983 profile reports** and all ten retained
+qualified WinUAE presets. It checks every named result, exact loaded assembly
+and method identity, all report keys/weights/statuses, immutable reference input
+sets, source graph and execution outputs. The ordinary gate passes
+**86,663,530 semantic cases / 783 batches**. The 33 opcode-matrix rows that
+legitimately share one definition are checked individually; none is dropped.
+There are 5,376 definitions for the complete 5,408-result roster.
+
+The full proof SHA-256 is
+`ee6dcf069e3747ea536bd3650ce66f0e727e51bb184b662d4df25cb4ac006980`.
+The source snapshot is `86469f7eee4abd75916af7af761b9532f381dbd1`, with
+230 source/project inputs and 37 unchanged CPU inputs. Later documentation
+commits do not change that executed graph. The same assembly hashes bind the
+320,000-case seeded run, 312,500-case SingleStepTests run, 536 Musashi programs
+with 88 exclusions, and eight actual invalid deep-audit requests above.
+
+Independent cross-evidence linkage verifies that schema-2 EOR and MOVEA
+retirement Current inputs equal the complete 230-input graph and their reports
+equal full execution. The three retained six-defect MOVE baseline reports also
+equal the full reports: 75,214 clean cases and 8,712 precisely mapped mutant
+mismatches retain their earlier execution identity. All 37 CPU inputs match
+the immutable local .77 package sources; the retained consumer package,
+loaded CPU copies, NuGet boundary and test outputs remain intact. These are
+171 host passes / six unavailable, 74 disk passes, 1,080 engine passes and two
+native floppy replays. No new consumer execution is claimed.
+
+Complete cross-evidence linkage SHA-256:
+`fea989f4167448e1c35576e4269416a67d54b8b0a8f9f440a9f2b00d5f0368f4`.
+Current CPU/consumer linkage SHA-256:
+`286e15c68243304a2a4df1465e8a2e2899ff25dd841fe3352b036757eddf2c3e`.
+Earlier proof files retain their original identities. The independently
+qualified snapshot closes the current evidence-coherence requirement; the
+failed broad 010 RTE / 060 STOP gate and private-production restoration gaps
+remain open. Hardware is unavailable for disputed boundaries. Milestone 6
+remains **in progress**, `roadmapComplete=false`; PR #22 remains draft.
