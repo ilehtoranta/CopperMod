@@ -4247,3 +4247,19 @@ commands and source/evidence identities. Broader full runs retain their own
 frozen inputs and pending verification; the selected result cannot close
 milestone 6, the broad failed reference gate or hardware gaps. Milestone 6 stays
 **in progress**, `roadmapComplete=false`; no private import or publication.
+
+### Milestone 6 checkpoint — mixed nested 040 writebacks, 2026-10-09
+
+The shared supplied-frame handler fixture now varies each WB1/WB2/WB3 width
+independently and initial CCR. All 24 mixed B/W/L triples pass across all 32
+CCR values, four lanes, common FC1/5, ISP/MSP outer frames, each rejected byte
+and pending slot, and scalar/batch routes: 172,032 new cases. Its two existing
+same-width rows retain 672 cases and byte-identical reports. Four named tests
+pass; independent source/assembly/method/report checks are recorded in the
+qualification log. Production CPU code is unchanged. The 480-case broader
+040 protocol gate remains untested and failing when requested; only its
+coverage description is updated. Original construction, other CCRs for
+same-width slots, heterogeneous FCs, user outer returns, deeper refaults and
+trace/interrupt interruption remain required. This focused result does not
+qualify the running private full suites or close milestone 6. Status remains
+**in progress**, `roadmapComplete=false`; no import or publication.

@@ -100,6 +100,17 @@ it does not replace or discard their remaining gaps.
    The original evidence remains unchanged; no new CPU execution is claimed
    from those validator controls. Their proof is
    `8d9cfea6562c99b9b7662b443fa0a57f004318291d8f525837fb842800da92ae`.
+   A later production-CPU fixture extension qualifies supplied mixed-width
+   nested writebacks: all 24 B/W/L width triples with differing slot widths,
+   all 32 CCR values, four lanes, common FC1/5, ISP/MSP outer frames, every
+   rejected byte/slot, and scalar/batch execution. Four named tests pass with
+   172,032 new cases and 672 byte-identical retained cases. Independent proof:
+   `d41d476f7ef765c49c94fd7f6c180774ef84bbd32bd489cad6f3e9ffde56ac30`.
+   All 37 production CPU inputs are unchanged. The later inventory description
+   update changes no case generation or failing gate; all 480 required untested
+   protocol IDs remain. Original slot construction, other same-width CCRs,
+   heterogeneous FCs, user outer returns, deeper refaults and trace/interrupt
+   interruption remain open. This focused result is not a whole-suite result.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

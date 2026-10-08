@@ -13642,3 +13642,66 @@ portable selected result does not satisfy those full gates. Broad 010 RTE /
 060 STOP disagreements, wider restoration protocols and unavailable hardware
 remain explicit. Milestone 6 stays **in progress**, `roadmapComplete=false`;
 PR #22 stays draft. No package publication or private production import occurs.
+
+### Supplied mixed-width 040 nested writebacks — 2026-10-09
+
+`SyntheticM68040NestedWritebackFaultTests` now reuses one execution fixture for
+independent WB1/WB2/WB3 widths and the initial CCR. The original same-width
+theory still selects CCR=31 and retains its exact IDs. Two opt-in scalar/batch
+facts exercise all **24 mixed B/W/L triples**, all **32 CCR values**, four
+address lanes, common FC1/5, ISP/MSP outer frames, every pending slot and every
+rejected byte of that slot's transfer. Each route has **86,016 cases**.
+The outer supplied frame uses each slot's own size, masked value and status;
+WB1 data stays memory aligned and WB2/WB3 data stays register aligned.
+
+Fresh isolated `MixedNestedWritebackV1` execution passes **all four named
+tests**, with zero skipped/failed, **172,032 new cases** and **672 retained
+cases** in four reports. Independent verification enumerates every new case
+identifier and its unit weight, and binds exact source, loaded DLL,
+definition/method, command, TRX counters and report identities. Both retained
+336-case reports are byte-identical to `CurrentReferenceFullV2`. All **37
+production CPU inputs** match that earlier qualified CPU graph; no CPU fix,
+package or consumer rerun is introduced. SourceLink's isolated-build warnings
+remain recorded.
+
+The fixture executes a real normal-space handler-store fault, captures the
+defined nested format-7 fields and completes that pending store through its
+integer handler and explicit RTE. It checks saved PC/SR, register restoration,
+DFC/SFC, stack consumption, WB1/WB2/WB3 order, accepted store widths/values,
+canaries, no repeated/omitted store and a following MOVEQ sentinel. The outer
+slots are supplied test inputs; this does not qualify their original hardware
+construction, physical spaces, enabled MMU/cache/pipeline behavior or timing.
+
+```powershell
+$env:COPPER68K_RUN_040_MIXED_NESTED_WRITEBACK = '1'
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = [IO.Path]::GetFullPath('artifacts/mixed-nested-writeback-reports')
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/mixed-nested-writeback-build --filter FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests --logger 'trx;LogFileName=mixed.trx' --results-directory artifacts/mixed-nested-writeback-results
+```
+
+Use a fresh report/results directory and require all four named rows; skipped
+opt-in rows are unavailable coverage. These selected tests do not replace the
+ordinary suite or the explicit broader protocol gate.
+
+| Mixed nested evidence | SHA-256 |
+| --- | --- |
+| `MixedNestedWritebackV1/inputs.json` | `e97c6b22474f06da3d6f14808ef9304f0eedecb7cb5907d75be96e2d8906dc5b` |
+| `MixedNestedWritebackV1/execution.json` | `f521dc5b1701f76d31519470288af7562742167d3a059903028cdbe652293184` |
+| `MixedNestedWritebackIndependentV1.json` | `d41d476f7ef765c49c94fd7f6c180774ef84bbd32bd489cad6f3e9ffde56ac30` |
+| New scalar report | `088f94d8e28700561089a2b9133f7c884609f2385c3a1d717fe92d98534f645c` |
+| New batch report | `139739cbee60ec888ad6db9ba378a41e69ef9166001cd66371a306edc1bcf105` |
+| Later inventory-description check | `ea63100f66ea260cfc4f9b73fe517d360d7935458cf3b8d72af7bc3dc6c8c594` |
+
+The executed snapshot has **233 source/project inputs**. A subsequent single
+diagnostic literal in `SyntheticM68040AccessFrameAuditTests` acknowledges this
+coverage. Static inspection proves only that literal changed: all **480
+required untested protocol IDs**, statuses, enable flag and failure gate remain.
+That later note is separate from the frozen execution inputs; no full current
+suite is claimed. The earlier private 259/260-input full executions retain
+their original snapshots and pending verification.
+
+Original construction of all outer slots, other CCR values for same-width
+slots, heterogeneous FCs, user outer returns, deeper repeated faults and
+trace/interrupt interruption remain required. The failed broad 010 RTE / 060
+STOP reference gate and unavailable 030/040 hardware remain open. Milestone 6
+stays **in progress**, `roadmapComplete=false`; PR #22 stays draft. No package
+publication or private production import occurs.
