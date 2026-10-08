@@ -3454,3 +3454,13 @@ isolated consumers, broader frame/provenance/fault and architectural A7/trace/
 native refault-PC gates remain required. Hardware is unavailable. No production
 import, publication or test retirement occurs. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See [saved-pipe scope and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-saved-pipes--2026-10-08).
+
+The frozen current production baseline now passes 5,299 tests with 41 explicitly
+unavailable (5,340 total). Strict verification binds 86,453,506 logical cases,
+921 complete profile reports and ten native presets. An independent discovery
+requires the private half to execute its entire 8,022-case roster; discovery alone
+is not qualification. Two altered-selection controls are rejected. The private
+run remains active; complete private, isolated-consumer and broader architectural
+requirements remain open. No candidate import, publication or test retirement
+occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
+[current baseline evidence](COPPER68K_REFERENCE_QUALIFICATION.md#current-full-production-baseline--2026-10-08).

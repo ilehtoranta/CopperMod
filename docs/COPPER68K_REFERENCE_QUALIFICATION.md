@@ -10870,3 +10870,43 @@ Integrity `move-write-pipe-controls-v3.json` SHA-256:
 `581babd34c31c5ba0abd2a6ed5a7e65329aa48f1ec13c556cec07908554820be`.
 Diagnostic `move-write-pipe-read-diagnostic-v2.json` SHA-256:
 `2c0fabc565c2b034f1a249cabe661006f00aecf44d1efcafdb3f0ffa36d4250e`.
+
+## Current full production baseline — 2026-10-08
+
+The production half of the frozen `8aa9083` integration snapshot completed:
+**5,340 executions / 5,299 passing / 41 explicitly unavailable / zero failures**.
+The complete strict report audit verifies **86,453,506 logical cases / 921
+profile reports**, plus all ten selected native presets. This aggregate includes
+additional promoted/consolidation and direct-control reports beyond the ordinary
+milestone helper's 707-report aggregate; those distinct counts are not substituted
+for each other. The production CPU source is unchanged.
+
+The first strict verifier incorrectly expected xUnit's TRX `notExecuted` counter
+to equal the unavailable result rows. This adapter emits 41 `NotExecuted` rows
+but zero in that counter. The failed verifier evidence is preserved; its successor
+checks the actual row outcomes, complete counters and `Completed` summary.
+No CPU failure or missing coverage is relabelled as success.
+
+The latest verifier also requires the exact selected environment settings.
+Two controls disable a required RTE gate or add a foreign selection; both fail
+with the intended selection reason before acceptance. Independent test discovery
+from the pinned private assembly lists **8,022 test cases**. The completed private
+suite must contain exactly that roster, in addition to preserved source fixtures,
+current test outcomes, complete report keys/weights and native preset identities.
+Discovery is not execution evidence. The earlier verifier's weaker extra-test
+presence check cannot substitute for this roster gate.
+
+The private half is still running. The frozen full snapshots precede the later
+saved-pipe fixture, which has separate focused proof and byte-identical private
+CPU inputs. Full private verification and isolated NuGet consumer validation
+remain required before importing any candidate. Hardware is unavailable; the
+architectural A7, trace and native refault-PC disagreements remain open.
+No production CPU import, package publication or regression retirement occurs.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Production proof `audits/LatestPrivateFullCpuV2/production-verification-v5.json` SHA-256:
+`79556e7128f0e84e1790521966a7296b7c5ff5368c8585edba0e340321115125`.
+Candidate discovery `full-private-discovery-v1/discovery.json` SHA-256:
+`cb09bd39466df3a7355c9a9db40b4a4672e79f05fab38268f7bbec4bb2911471`.
+Selection controls `full-selection-controls-v1/verification.json` SHA-256:
+`a3a36a048b226077795391498351e5e36872f90bc6cd5994d91377db67b69603`.
