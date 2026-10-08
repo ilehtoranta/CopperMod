@@ -129,6 +129,48 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
     }
 
     private static void Run(bool batch, int[] widths, int ccr, uint lane, int fc, string bank, int faultSlot, int faultByte)
+        => RunFunctionCodes(batch, widths, ccr, lane, [fc, fc, fc], bank, faultSlot, faultByte);
+
+    [EnvironmentFact("COPPER68K_RUN_040_HETEROGENEOUS_NESTED_WRITEBACK", "require differing function codes in nested writeback slots"), Trait("Suite", "ReferenceDiscovery")]
+    public void HeterogeneousFunctionCodesScalar() => HeterogeneousFunctionCodes(false);
+
+    [EnvironmentFact("COPPER68K_RUN_040_HETEROGENEOUS_NESTED_WRITEBACK", "require differing function codes in nested writeback slots"), Trait("Suite", "ReferenceDiscovery")]
+    public void HeterogeneousFunctionCodesBatch() => HeterogeneousFunctionCodes(true);
+
+    private void HeterogeneousFunctionCodes(bool batch)
+    {
+        var report = new CoverageBatch("68040", "heterogeneous-nested-writeback-fault-" + (batch ? "batch" : "scalar"));
+        foreach (var f1 in new[] { 1, 5 })
+        foreach (var f2 in new[] { 1, 5 })
+        foreach (var f3 in new[] { 1, 5 })
+        {
+            if (f1 == f2 && f2 == f3) continue; // Common FC groups retain separate coverage.
+            foreach (var bank in new[] { "user", "ISP", "MSP" })
+            foreach (var w1 in new[] { 1, 2, 4 })
+            foreach (var w2 in new[] { 1, 2, 4 })
+            foreach (var w3 in new[] { 1, 2, 4 })
+            {
+                int[] widths = [w1, w2, w3];
+                // Structural widths use CCR=31; one canonical width triple
+                // independently exercises the other CCRs without duplicates.
+                for (var ccr = 0; ccr < 32; ccr++)
+                {
+                    if (ccr != 31 && (w1 != 1 || w2 != 2 || w3 != 4)) continue;
+                    for (uint lane = 0; lane < 4; lane++)
+                    for (var slot = 1; slot <= 3; slot++)
+                    for (var faultByte = 0; faultByte < widths[slot - 1]; faultByte++)
+                    {
+                        var id = $"68040/writeback/heterogeneous-nested-physical-fault/sizes={w1}-{w2}-{w3}/FCs={f1}-{f2}-{f3}/ccr={ccr:X2}/lane={lane}/bank={bank}/WB={slot}/byte={faultByte}";
+                        try { RunFunctionCodes(batch, widths, ccr, lane, [f1, f2, f3], bank, slot, faultByte); report.Record(id, "passing", null); }
+                        catch (Exception ex) { report.Record(id, "mismatching", ex.ToString()); }
+                    }
+                }
+            }
+        }
+        report.Complete(output);
+    }
+
+    private static void RunFunctionCodes(bool batch, int[] widths, int ccr, uint lane, int[] functionCodes, string bank, int faultSlot, int faultByte)
     {
         var bus = new SyntheticM68040AccessDoubleFaultTests.FaultBus();
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);
@@ -141,16 +183,17 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
         var stacks = new Dictionary<string, uint> { ["user"] = 0x7800, ["ISP"] = 0x4700, ["MSP"] = 0x7400 };
         var frame = stacks[handlerBank] - 60; stacks[handlerBank] = frame;
         var width = widths[faultSlot - 1];
+        var fc = functionCodes[faultSlot - 1];
         var size = width == 1 ? 0x20 : width == 2 ? 0x40 : 0;
         var wbStatus = (ushort)(0x80 | size | fc);
-        var statuses = widths.Select(w => (ushort)(0x80 | (w == 1 ? 0x20 : w == 2 ? 0x40 : 0) | fc)).ToArray();
+        var statuses = widths.Select((w, n) => (ushort)(0x80 | (w == 1 ? 0x20 : w == 2 ? 0x40 : 0) | functionCodes[n])).ToArray();
         uint[] addresses = [0x4200 + lane, 0x4300 + lane, 0x4400 + lane];
         uint[] values = [0x89abcdef, 0x10203040, 0xfedcba98];
         values = values.Select((x, n) => x & (widths[n] == 1 ? 0xffu : widths[n] == 2 ? 0xffffu : uint.MaxValue)).ToArray();
         for (uint at = frame; at < frame + 60; at++) m.InitializePhysical(at, 0, 1);
         m.InitializePhysical(frame, sr, 2); m.InitializePhysical(frame + 2, Next, 4);
         m.InitializePhysical(frame + 6, 0x7008, 2);
-        m.InitializePhysical(frame + 12, (uint)((statuses[0] & 0x60) | fc), 2);
+        m.InitializePhysical(frame + 12, (uint)((statuses[0] & 0x60) | functionCodes[0]), 2);
         m.InitializePhysical(frame + 20, addresses[0], 4);
         for (var n = 0; n < 3; n++)
         {

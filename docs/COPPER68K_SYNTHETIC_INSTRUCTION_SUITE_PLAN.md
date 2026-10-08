@@ -4292,6 +4292,20 @@ scope, commands, identities and wider user-width/user-M/FC/refault/trace gaps.
 All 480 broader protocol cases remain untested and fail their requested gate.
 Milestone 6 remains **in progress**, `roadmapComplete=false`; no import or release.
 
+### Milestone 6 checkpoint — differing nested writeback function codes, 2026-10-09
+
+The shared supplied-frame fixture accepts an independent FC1/5 for each slot;
+existing common-code callers preserve their inputs. Four selected tests pass
+58,464 new cases and 672 byte-identical controls. All six differing FC patterns
+cover all 27 width triples and user/ISP/MSP at CCR=31; canonical widths 1/2/4
+cover the remaining CCRs. Both routes check lanes, rejected bytes/slots, nested
+service, DFC restoration and final return. Independent verification binds all
+case keys and source/assembly/method/report identities. No CPU semantics change;
+the two restored raw newline differences remain explicitly recorded. The
+480-case broader gate remains untested/failing. Wider FCs, user-M, repeated
+faults, original construction and trace/interrupts remain open; physical FC
+spaces are not qualified. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
 ### Milestone 6 checkpoint — remaining supplied user widths, 2026-10-09
 
 Four selected tests pass 64,512 new cases for the eighteen remaining mixed-width

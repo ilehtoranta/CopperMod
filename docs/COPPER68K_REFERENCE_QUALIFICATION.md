@@ -13858,3 +13858,55 @@ Original frame construction, user-M returns, heterogeneous FCs, deeper repeated
 faults and trace/interrupt interruption remain required. The broad reference
 disagreements remain failed/unqualified. Milestone 6 remains **in progress**,
 `roadmapComplete=false`; PR #22 stays draft. No CPU import or release occurs.
+
+### Differing function codes in nested supplied writebacks — 2026-10-09
+
+The shared fixture now accepts an independent function code for each WB slot.
+Its existing common-code entry supplies the same FC three times. Slot status
+words use their respective codes, the supplied outer SSW describes WB1, and
+nested fault expectations and DFC restoration use the faulted slot's code.
+The production handler program, CPU implementation and execution timing policy
+are unchanged. This extends software-visible DFC checks; the recording bus does
+not provide distinct physical function-code address spaces.
+
+Fresh execution completes with four named passes, zero failed or skipped:
+58,464 new cases and 672 retained controls whose reports remain byte-identical.
+There are 29,232 new cases per route, 9,744 per user/ISP/MSP bank. All six
+differing FC1/5 patterns cover all 27 B/W/L triples, four lanes, every rejected
+byte and slot at CCR=31: 13,608 cases per route. Canonical widths 1/2/4 cover
+CCR=0..30 across those same patterns/banks/lanes/faults: 15,624 per route.
+This deliberately separates structural and CCR dimensions; it does not claim
+their full Cartesian product, user-M or other function-code values.
+
+Independent verification binds the exact command/settings, all 233 raw source
+inputs and assets, three executed assemblies, named loaded definitions/methods,
+completed TRX counters and every generated combination key/status/weight.
+All 37 CPU inputs equal the pinned production baseline after CRLF-to-LF only;
+the same two restored raw newline differences are retained explicitly. Prior
+broader common-FC user/width matrices remain separate frozen evidence and are
+not rerun or relabeled as results from this modified shared fixture.
+
+Reproduce with fresh directories; require four completed named passes:
+
+```powershell
+$env:COPPER68K_RUN_040_HETEROGENEOUS_NESTED_WRITEBACK = '1'
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = [IO.Path]::GetFullPath('artifacts/heterogeneous-nested-reports')
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/heterogeneous-nested-build --filter 'FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.HeterogeneousFunctionCodes|FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.ActualHandlerStoresFaultCompleteAndResume' --logger 'trx;LogFileName=returns.trx' --results-directory artifacts/heterogeneous-nested-results
+```
+
+| Selected evidence | SHA-256 |
+| --- | --- |
+| `HeterogeneousNestedV1/inputs.json` | `0e7f79ad0d7489e5386b924fabb29604c68351d5e49be5c478fd69d67f7f5cf7` |
+| `HeterogeneousNestedV1/execution.json` | `1e3472926eebbe900c53adae46a2d49b2bbc561f50ada7ad8a374c39e9d6db9b` |
+| `HeterogeneousNestedIndependentV1.json` | `36232f1eb49a65f505579a35d7094fd9ee2143d3c0e2c24dacc588b735526476` |
+| New scalar report | `52b50e8c7b71c6bb966d83966d5e805ac278c20087f55f098bf43cf1d2f1f2d1` |
+| New batch report | `8137655d3f8831c39fe8d20c0572e9508b7ae9edb04a5c674882b2550bc56afe` |
+| Later diagnostic-only static proof | `c4f619437afcc6ad6622ff48ef51ecb0ebc7b7a1080e83008180d2df705d5b02` |
+
+The subsequent inventory literal changes only its description and preserves all
+480 untested cases, enabling condition and failing gate. It is separate from
+the executed snapshot. No whole-current-suite, API, package, consumer or hardware
+qualification is claimed. Original frame construction, wider FC combinations,
+user-M, deeper repeated faults and trace/interrupt interruption remain open,
+alongside the broad failed reference gates. Milestone 6 remains **in progress**,
+`roadmapComplete=false`; no private CPU import or publication occurs.

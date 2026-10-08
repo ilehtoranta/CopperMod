@@ -140,6 +140,14 @@ it does not replace or discard their remaining gaps.
    execution-fixture or CPU semantic change occurs. User-M returns,
    heterogeneous FCs, deeper refaults, trace/interrupts and original construction
    remain open; the 480-case broader gate is retained.
+   Differing FC1/5 slot patterns now have separate selected evidence: 58,464
+   new cases and 672 identical controls, four named passes, proof
+   `36232f1eb49a65f505579a35d7094fd9ee2143d3c0e2c24dacc588b735526476`.
+   All six differing patterns cover all 27 widths, user/ISP/MSP, lanes and
+   rejected bytes/slots at CCR=31; canonical widths 1/2/4 cover all CCRs.
+   This is separated structural/CCR coverage, not their full cross-product or
+   physical function-code-space qualification. Wider FCs, user-M, repeated
+   faults, original construction and trace/interrupts remain open.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;
