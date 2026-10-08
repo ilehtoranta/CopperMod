@@ -47,14 +47,15 @@ it does not replace or discard their remaining gaps.
    record still lists wider restoration, operand, repair/refault, trace/interrupt
    and foreign-frame gaps. Preserve those distinctions when reviewing the
    promoted integer/system families.
-3. **Current snapshot coherence is verified.** The frozen `86469f7` graph has
+3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;
    their reports match the full run. The six MOVE mutation baseline reports
    match full execution, and all 37 CPU inputs match the retained .77 consumer
    package. Proof: `fea989f4167448e1c35576e4269416a67d54b8b0a8f9f440a9f2b00d5f0368f4`.
-   Future source changes require renewed linkage. This closes snapshot
-   coherence, while gates 1 and 2 still prevent milestone completion.
+   A later test-only C021 metadata fixture has separate focused evidence below;
+   the full run still qualifies the original 230-input snapshot. Future source
+   changes require renewed linkage. Gates 1 and 2 still prevent milestone completion.
 
 For ordinary STOP, [M68000PM 6-85](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
 describes the incoming supervisor check followed by SR transfer and stopping.
@@ -83,6 +84,15 @@ Diagnostic 010/060 qualification remains separate from desktop readiness.
 Publication is a separate release step. PR #22 remains a draft, and
 `roadmapComplete=false` until a requirement-by-requirement final audit proves
 completion.
+
+## Later focused validation — 2026-10-08 (private metadata)
+
+The later private C021 metadata checkpoint adds one opt-in fixture with 10,240
+passing controls and 6,144 exact isolated mutant failure witnesses. It closes
+the covered phase/SSW/returned-stack software guard gap; it does not qualify
+foreign frames, private C023 production recovery or disputed hardware trace
+boundaries. See the latest qualification record for scope and proof identities.
+No production CPU input changes. Milestone 6 remains in progress.
 
 ## Earlier frozen validation — 2026-10-08 (c284b94)
 

@@ -4101,3 +4101,20 @@ All 230 source/project inputs and 37 CPU inputs remain unchanged. Linkage proof:
 This closes current snapshot coherence. The failed broad reference gate and
 private-production restoration requirements remain open; milestone 6 stays
 **in progress**, `roadmapComplete=false`, and PR #22 remains draft.
+
+### Milestone 6 checkpoint — private metadata guards, 2026-10-08
+
+A test-only C021 fixture adds 10,240 passing private return-frame software
+controls across EC020, 020, 030 and A1200, with scalar/batch execution, both
+supervisor stack banks, low/high addresses and all CCR values. Valid returns
+execute a following-instruction sentinel. Three isolated guard removals produce
+6,144 independently checked case IDs and diagnostics. Baseline and mutation
+proofs are recorded in the reference qualification log, including the rejected
+V1 label-format attempt and fresh corrected V2 execution.
+
+The new 231-input focused graph is the earlier fully qualified 230-input graph
+plus one test fixture; all 37 production CPU inputs remain unchanged. Earlier
+full/deep/consumer results are retained under their original identities. This
+does not qualify foreign hardware frames or close the broad reference and
+restoration gaps. With no 030/040 hardware available, disputed trace boundaries
+remain unqualified. Milestone 6 stays **in progress**, `roadmapComplete=false`.

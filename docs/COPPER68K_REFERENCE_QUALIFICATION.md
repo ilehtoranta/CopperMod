@@ -13089,3 +13089,54 @@ qualified snapshot closes the current evidence-coherence requirement; the
 failed broad 010 RTE / 060 STOP gate and private-production restoration gaps
 remain open. Hardware is unavailable for disputed boundaries. Milestone 6
 remains **in progress**, `roadmapComplete=false`; PR #22 remains draft.
+
+### Private C021 metadata guard qualification — 2026-10-08
+
+`SyntheticM68020RteMetadataTests` checks the existing interpreter-private C021
+return-frame contract on EC020, 020, 030 and A1200. Scalar and batch routes cover
+ISP/MSP, low/high addresses and all 32 initial CCR values. The literal fixtures
+include valid return and following-instruction controls, malformed phase,
+phase/format combinations, fault addresses, SSW size/function-code/reserved bits,
+returned frame and stack-bank selection. Rejection must preserve registers,
+stack banks and memory, perform no writes, and avoid reading the inner frame.
+These are software-contract checks, not foreign hardware-frame expectations.
+
+The isolated `C021MetadataDiscoveryV2` baseline passes **10,240 cases** in two
+named tests and eight reports: **1,024 valid controls / 9,216 rejection controls**.
+Its 231 inputs are exactly the qualified frozen 230-input graph plus this
+fixture; all 37 production CPU inputs are unchanged. Independent verification
+checks source and loaded assembly identities, exact methods, report keys and
+weights. Baseline proof:
+`503bce056816d59dd2a9f29caa1b861e433a17f49a8b904f4d278626fa84a4c8`.
+
+`C021MetadataMutationsV2` removes phase-range, SSW and returned-stack guards in
+three separate isolated copies. Every case ID and diagnostic is independently
+checked: **1,024 / 3,072 / 2,048** mismatches respectively, **6,144** total.
+Unaffected combinations and valid controls remain passing. Returned-frame
+mutants are detected by forbidden inner-frame reads even when a later error
+would otherwise satisfy the expected rejection. Mutation proof:
+`57100cb8564b3845086f9015f576a33aa35a941c4ac9472ccd77c07a2a6f4045`.
+
+The original V1 evidence is retained. Its mutation verifier rejected malformed
+CCR case labels (`{ccr:02X}` in C#); V2 corrects the fixture to `{ccr:X2}` and
+reruns baseline and mutants in fresh directories. V1 is not a qualified mutation
+proof and has not been relabeled. Local outputs remain beneath
+`%TEMP%/copper68k-reference-restoration-20261006/audits/`.
+
+Run the focused fixture explicitly (an ordinary skipped opt-in is unavailable
+coverage):
+
+```powershell
+$env:COPPER68K_RUN_020_RTE_METADATA = '1'
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = 'artifacts/c021-metadata'
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/c021-metadata-build --filter 'FullyQualifiedName~SyntheticM68020RteMetadataTests' --logger 'trx;LogFileName=metadata.trx' --results-directory artifacts/c021-metadata
+Remove-Item Env:COPPER68K_RUN_020_RTE_METADATA
+Remove-Item Env:COPPER68K_SYNTHETIC_REPORT_DIR
+```
+
+This test-only addition has focused validation; the earlier full/deep and
+consumer executions retain their original identities. No production CPU fix,
+private C023 import, regression retirement or package publication is made.
+Hardware is unavailable for disputed 030/040 trace boundaries. The broad
+reference failures and other continuation gaps remain open; milestone 6 stays
+**in progress**, `roadmapComplete=false`.
