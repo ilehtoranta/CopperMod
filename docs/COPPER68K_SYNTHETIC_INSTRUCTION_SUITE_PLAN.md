@@ -3951,3 +3951,16 @@ assembly linkage pass. The ordinary gate requires 4,096 cases per profile.
 All 37 production CPU inputs remain unchanged; no private CPU import or release.
 See [the retirement mapping and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#eor-byte-postincrement-consolidation--2026-10-08).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 checkpoint — duplicate model-selection rejection, 2026-10-08
+
+The seeded adapter and command now reject duplicate profile IDs. The old
+`68020,68020` request passed while overwriting half its report paths. The guarded
+fixture passes 3,200 valid cases across all eight profiles; two actual adapter
+requests and both command modes reject duplicates before emulated execution or
+output creation. Independent linkage verifies all 228 source inputs and the
+unchanged 37 production CPU inputs. Full/deep reference runs retain their
+separately identified pre-guard snapshot; no current full-suite success is
+claimed. See the completion audit for exact evidence. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.

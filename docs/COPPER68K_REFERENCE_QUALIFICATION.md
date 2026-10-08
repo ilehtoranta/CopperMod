@@ -12611,3 +12611,33 @@ Local evidence under `%TEMP%/copper68k-reference-restoration-20261006/`:
 | pre-retirement preparation | `f5939ba511b6e18a1df987bc89bf38a785b8ec8ef9da7832b3664b222f39caad` |
 | complete consolidation | `460acbf420eb434df30ef49b5da0261df2cca64893dd1106c92a2990b85ba838` |
 | source/assembly/evidence linkage | `7e8728565e571f020529d5e63f29fa9eb48df45a00d4d702672de1aff43b8c5c` |
+
+## Duplicate model-selection guards — 2026-10-08
+
+The seeded MOVE adapter and command preflight now reject duplicate model IDs.
+The frozen baseline request `68020,68020` incorrectly passed: it executed eight
+groups but overwrote repeated report paths, leaving four reports. A request must
+not silently substitute repeated execution for distinct profile coverage.
+
+The isolated guarded build passes **3,200 cases in 32 reports**, using all eight
+profiles, seed 68020 and 100 samples per family/profile. Adjacent and separated
+duplicates each fail exactly one named adapter test before CPU execution, with
+no reports. Both `-Deep` and `-ValidateReportsOnly` reject duplicates before
+creating output directories. Exact source, loaded assembly, command, TRX roster,
+report keys/counts and rejection diagnostics are independently verified. Only
+one test source and the command preflight change; all **37 production CPU inputs**
+remain unchanged. No package or consumer rerun is needed for this test-only fix.
+
+The running full audit and the earlier 320,000-case deep/reference audit retain
+their frozen `c284b94` fixture and gate. They are not relabeled as execution of
+the guarded fixture. The focused guarded build supplies the separate evidence
+for this sole test-source difference; the full audit remains pending.
+
+| Guard evidence | SHA-256 |
+| --- | --- |
+| Reproduced unguarded baseline | `d3d3ba54eee5ae08a1259bd4ae5fd41e48ed703335f8f801dffd91ca24dd9c66` |
+| Guarded valid and rejection executions | `f01b927d108dc7191ef16212f3d6ad0f2e606a271e3be05b92ec72c92a573751` |
+| Independent complete source/evidence linkage | `788a9af242c2c0c07233d752bdb4d001b769deef8ee9b59b325d281f66936eaa` |
+
+This closes the observed duplicate-selection gap, not the remaining milestone-6
+reference disagreements or broader qualification requirements.

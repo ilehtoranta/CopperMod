@@ -17,6 +17,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $knownModels = @('68000', '68010', '68EC020', '68020', '68030', '68040', '68060', 'A1200')
 if ($Models.Count -eq 0 -or @($Models | Where-Object { $_ -cnotin $knownModels }).Count -gt 0) { throw 'Empty or unknown CPU model selection' }
+if (@($Models | Select-Object -Unique).Count -ne $Models.Count) { throw 'Duplicate CPU model selection' }
 if ($Seed -eq 0) { throw 'Seed must be nonzero' }
 if ([bool]$WinUaePath -ne [bool]$WinUaeLibrary) { throw 'WinUAE audit requires both generated fixtures and native library' }
 if ($WinUaePath -and $WinUaeSourceCommit -notmatch '^[0-9a-fA-F]{40}$') { throw 'WinUAE audit requires the pinned generator source commit' }

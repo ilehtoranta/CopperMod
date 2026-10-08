@@ -21,6 +21,7 @@ public sealed class SyntheticDeepAuditTests(ITestOutputHelper output)
         Assert.True(int.TryParse(Environment.GetEnvironmentVariable("COPPER68K_SYNTHETIC_SAMPLES"), out var samples) && samples > 0, "An audit must select positive samples");
         var selected = (Environment.GetEnvironmentVariable("COPPER68K_SYNTHETIC_MODELS") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries);
         Assert.NotEmpty(selected);
+        Assert.True(selected.Distinct(StringComparer.Ordinal).Count() == selected.Length, "Duplicate audit model IDs are not allowed");
         Assert.All(selected, id => Assert.Contains(ModelSpec.All, m => m.Id == id));
         var opcodes = MoveSpecification.Opcodes().ToArray();
         foreach (var id in selected)
