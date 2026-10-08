@@ -2079,6 +2079,19 @@ user-tail software trace-service programs, internal restoration and all other
 retained model/reference/consolidation requirements remain required.
 Milestone 6 stays **in progress**, `roadmapComplete=false`.
 
+### Milestone 6 checkpoint — complete private read-candidate evidence, 2026-10-09
+
+The frozen 260-input / 39-CPU read-recovery candidate completes its full run
+with 8,095 passed, 37 unavailable and zero failed. Independent verification
+binds all 8,132 rows, 8,100 loaded definitions, 13,945 reports / 112,894,922
+logical cases, ten qualified native presets and the ordinary 86,663,530-case
+/ 783-batch gate. Complete linkage connects that proof with the candidate's
+same-build deep references, request guards, compiled API and same-source local
+.80 consumers. Later fixture extensions and current mainline are not qualified
+by this frozen run. Broad reference disagreements and restoration gaps remain
+open; milestone 6 stays **in progress**, `roadmapComplete=false`. No private CPU
+import or publication occurs.
+
 ### Milestone 6 user-tail software trace service — 2026-10-06
 
 Four new `UserTailSoftwareTraceService` scalar/batch groups compose the existing

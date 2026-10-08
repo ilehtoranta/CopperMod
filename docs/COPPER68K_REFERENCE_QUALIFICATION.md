@@ -13910,3 +13910,45 @@ qualification is claimed. Original frame construction, wider FC combinations,
 user-M, deeper repeated faults and trace/interrupt interruption remain open,
 alongside the broad failed reference gates. Milestone 6 remains **in progress**,
 `roadmapComplete=false`; no private CPU import or publication occurs.
+
+### Complete frozen private read-candidate qualification — 2026-10-09
+
+The 260-input / 39-CPU read-recovery candidate's full execution terminates with
+actual exit 0. Independent verification then completes with exit 0: 8,095
+passing rows, 37 explicitly unavailable, zero failed, all 8,132 exact named rows
+and 8,100 loaded test definitions. It verifies all snapshot source hashes,
+three executed assembly identities, input/reference manifests, completed TRX
+counters, every report's cases/statuses/weights and its pinned reference report,
+and the exact complete report set. The actual result is 13,945 reports and
+112,894,922 logical cases; it is no longer only an expected catalog.
+
+Ten qualified native presets retain exact pinned fixture/native/adapter
+identities and matching outcomes. The ordinary report gate passes 86,663,530
+semantic cases / 783 batches on this same full evidence. The 37 unavailable
+rows retain their names and outcomes; broad Basic disagreements and unavailable
+hardware are not turned into passing coverage.
+
+The complete evidence linker rechecks the prior bounded proof identities,
+source/assembly equality, full input hash, selected/discovery/catalog links,
+compiled API result (20 types / 211 records, zero signature changes), and
+ordinary summary identity. It connects the full result to the already verified
+same-build deep/reference/request guards and same-source local .80 consumers.
+Package metadata retains a separate binary identity; source equality is
+explicit. No reference, API, package or consumer rerun is claimed here.
+
+| Complete read-candidate evidence | SHA-256 |
+| --- | --- |
+| `PredecrementReadFixV1/full/proof.json` | `dd26113d245a986970cb2c59dfe63d8031e0546f58136be77057009dda7a6ef5` |
+| Earlier bounded source/deep/API/consumer link | `2e092d99a6116d1ebd0b95605b71c61d71c095d1f76c7b4ec511c95eb1db0915` |
+| `predecrement-read-complete-link-v1.json` | `b23e23001bd04601b926c0c13044c979566731f64b112c395d7dbb0713980c9d` |
+
+This qualifies only its frozen 260-input / 39-CPU graph. The newer supplied
+mixed-width/user-return/function-code fixtures retain their own selected
+production-CPU evidence. The user-M extension is still running and cannot be
+qualified by this earlier full result. Current mainline, the dirty primary
+checkout, physical timing/FC spaces and HD boot are not qualified here.
+
+The broad 010 RTE / 060 STOP reference disagreements, wider repair/refault,
+original construction and trace/interrupt requirements remain open. Milestone 6
+remains **in progress**, `roadmapComplete=false`; PR #22 stays draft. No private
+CPU implementation is imported and no package publication occurs.
