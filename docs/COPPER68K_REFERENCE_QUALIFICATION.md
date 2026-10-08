@@ -13443,3 +13443,31 @@ assemblies and all 39 local-package CPU inputs. Both full runs remain pending.
 Broad reference disagreements, wider restoration and hardware boundaries remain
 open. Production CPU code is unchanged; no package is published. Milestone 6
 remains **in progress**, `roadmapComplete=false`, and PR #22 remains draft.
+
+### Completed predecessor full qualification — 2026-10-08
+
+The frozen 258-input / 39-CPU `CurrentPrivateRebaseV3` suite completes with
+**8,087 passed / 37 unavailable / zero failed**, across 8,124 named rows and
+8,092 definitions. Independent verification checks the exact discovery roster,
+loaded assemblies and methods, source inputs, **13,737 reports / 110,928,842
+logical cases**, and ten qualified native reference presets. The ordinary
+report-only gate passes **86,663,530 cases / 783 batches** on these outputs.
+Unavailable rows remain unavailable coverage; the broad Basic disagreements
+and opt-in restoration discovery gates are not reclassified by this result.
+
+Full proof SHA-256:
+`bfbe80fbdda42673441afe46158db41d56e068f394a5f87ce50db8dda282c2d4`.
+The fresh `current-private-complete-link-v1.json` binds this completed proof to
+the previously verified same-build deep/guard evidence, same-source local .78
+consumer evidence and compiled API review. Its SHA-256 is
+`d9c5948d380cf3acb9ebe277b349a2c1a56b74d8546dbb9fcee27356a1a1b898`.
+The first linkage request rejected an incorrectly selected V1 prior record;
+the documented qualified V2 record is used, with all original pins preserved.
+Historical records that said full execution was pending remain historical.
+
+This qualifies the predecessor only. The newer 259-input predecrement correction
+still has a separate running full suite; no result is transferred between the
+two CPU versions. No hardware is available for the disputed 030/040 boundaries,
+which remain unqualified. Production import, wider restoration and the failed
+broad reference gate remain open. No package is published. Milestone 6 remains
+**in progress**, `roadmapComplete=false`, and PR #22 remains draft.

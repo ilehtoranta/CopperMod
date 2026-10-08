@@ -4192,3 +4192,15 @@ six unavailable, 74 disk, 1,080 engine and two native floppy checks. Explicit
 source/assembly/package linkage and caveats are in the qualification record.
 Full execution and its independent verification remain pending; no private CPU
 import or publication occurs. Milestone 6 stays **in progress**.
+
+### Milestone 6 checkpoint — predecessor full qualification, 2026-10-08
+
+The 258-input combined predecessor now completes independent full verification:
+8,087 tests pass / 37 remain unavailable, with zero failures, 13,737 reports and
+110,928,842 logical cases. The ordinary gate and ten qualified native presets
+pass. Fresh linkage binds this result to its deep/guard, API and local .78
+consumer evidence. The qualification record supplies proof identities and scope.
+The newer 259-input predecrement full run is still pending and cannot inherit
+the predecessor's result. Hardware is unavailable; disputed trace boundaries
+remain unqualified. Broad reference and wider restoration gaps keep milestone 6
+**in progress**, `roadmapComplete=false`; no private CPU import or publication.

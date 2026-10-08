@@ -47,22 +47,24 @@ it does not replace or discard their remaining gaps.
    record still lists wider restoration, operand, repair/refault, trace/interrupt
    and foreign-frame gaps. Preserve those distinctions when reviewing the
    promoted integer/system families.
-   The latest isolated 258-input candidate preserves the current production
+   The isolated 258-input predecessor preserves the current production
    MOVE16 correction. Its 38-test / 1,641,472-case preflight is independently
    qualified, and exact discovery proves 8,124 complete-suite names. That full
-   execution has started; completed results and full verification remain pending.
+   execution completes with 8,087 passed / 37 unavailable / zero failed.
+   Independent full verification binds 13,737 reports / 110,928,842 cases,
+   ten qualified native presets and the ordinary 86,663,530-case gate.
    This is candidate evidence, not production import or hardware qualification.
    The same candidate's local .78 consumer checks and same-build seeded,
    SingleStepTests/Musashi and eight rejection controls are independently
    verified. Source/package linkage is complete for these scopes. The full
-   expected catalog has 13,737 reports / 110,928,842 cases; actual complete-suite
-   execution and verification remain pending.
+   completed evidence is linked by
+   `d9c5948d380cf3acb9ebe277b349a2c1a56b74d8546dbb9fcee27356a1a1b898`.
    A newer 259-input private predecrement final-write correction has selected
    1,204,224-case evidence and a reviewable two-file patch. Its same-build deep/API,
    eight invalid-request guards and local .79 consumers are independently verified.
    Exact source/assembly/package linkage is recorded in the qualification log.
-   Its newer full replay has started; both full results and verification remain
-   pending. The running 258-input replay cannot qualify the newer CPU changes.
+   Its newer full replay has started; its result and independent verification
+   remain pending. The completed predecessor cannot qualify the newer CPU changes.
    No private production import occurs.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
