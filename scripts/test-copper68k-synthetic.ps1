@@ -246,6 +246,8 @@ try {
             $expected['moves-read-fault-provenance-batch'] = 46976
             $expected['moves-write-recovery-scalar'] = 4032
             $expected['moves-write-recovery-batch'] = 4032
+            $expected['nested-writeback-fault-scalar'] = 336
+            $expected['nested-writeback-fault-batch'] = 336
             $expected['handler-prefetch-executing-scalar'] = 12288
             $expected['handler-prefetch-executing-batch'] = 12288
             $expected['handler-prefetch-entry-scalar'] = 196608

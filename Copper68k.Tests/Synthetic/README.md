@@ -1425,3 +1425,22 @@ the clean consumer build/tests and two native floppy replays; source, package,
 loaded DLL and input/result linkage is independently verified. Nothing is
 published. See [the write-recovery record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-moves-normal-space-write-recovery--2026-10-08).
 Milestone 6 remains in progress.
+
+Ordinary coverage now also requires 336 `nested-writeback-fault-scalar` and 336
+`nested-writeback-fault-batch` programs. These supply a three-slot normal outer
+format-7 frame and reject an actual integer handler store in WB1/WB2/WB3.
+Nested completion, register/DFC restoration, RTE, remaining writes and a following
+sentinel are checked instruction by instruction. The three writes occur in order
+exactly once. Coverage spans B/W/L, four lanes, TM 1/5, ISP/MSP and every rejected
+operand byte; the slots share one selected width and the initial CCR is 31.
+
+All 672 programs pass and fail against the preceding MOVES write CPU. Three
+mutations detect lost A1 restoration, wrong word data and wrong return PC. The
+ordinary composed report-only gate passes 86,515,434 cases / 747 batches and
+rejects missing/incomplete nested reports. This test-only promotion retains the
+same 37 production CPU inputs, earlier 219-input full CPU audit and local `.76`
+consumer evidence. It adds a bounded 220-input execution and does not claim a new
+wide full suite or consumer run. Outer-frame construction, mixed slot widths,
+trace/interrupt interruption, other transfer spaces, enabled MMU/cache and
+physical timing remain unqualified. See [the nested-handler record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-nested-integer-writeback-handler-faults--2026-10-08).
+Milestone 6 remains in progress; nothing is published.

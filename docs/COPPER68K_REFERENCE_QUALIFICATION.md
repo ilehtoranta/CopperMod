@@ -11892,3 +11892,66 @@ this ordinary gate's scope. The software/manual trace disagreements and 010/060
 broad-reference mismatches remain open; hardware is unavailable. No private C023
 production candidate is imported, no package is published and prior versions
 remain immutable. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## 040 nested integer writeback handler faults — 2026-10-08
+
+`SyntheticM68040NestedWritebackFaultTests` promotes the previously captured
+private fixture into ordinary synthetic coverage. Only the class, trait and
+report labels change; the fixture logic is identical. All **672 programs** pass
+(336 on each scalar/batch route), and all 672 fail against the preceding MOVES
+write implementation. The accompanying **103,552 retained MOVES programs** keep
+their case inventories and architectural results. The six passing reports are
+identical to the accepted full CPU checkpoint. Before-fix failure stack traces
+have different frozen source paths; their case IDs, statuses and diagnostic
+messages match the captured predecessor. The initial verifier's overstrict
+stack-trace comparison is retained alongside the corrected verifier.
+
+The independent fixture supplies a normal format-7 outer frame with three valid
+writeback slots. An actual integer completion handler suffers one physical MOVES
+store fault in WB1, WB2 or WB3; its nested handler completes the rejected store
+and returns to the outer handler. Byte/word/long stores, all four lanes, TM 1/5,
+ISP/MSP and every rejected operand byte are covered. The three supplied slots use
+the same selected operand width and CCR starts at 31. Each instruction checks
+registers, defined flags, memory canaries, stack banks and PC. The program checks
+DFC restoration, actual RTE, all three writes in order exactly once, and a
+following MOVEQ sentinel. This is explicit software completion of pending writes,
+not implicit operand retry. The reentrant handler shares code addresses with its
+caller: observing the resume address is insufficient to prove return, so the
+fixture observes execution of the actual RTE step.
+
+Three owned mutations fail at precisely enumerated combinations per route:
+lost A1 restoration **336**; wrong word writeback data **96** (the remaining 240
+pass); wrong following PC **336**. The mutants change only the actual handler
+encoding or the production return-PC assignment, leaving expectations intact.
+Original frozen sources are unchanged. No regression is retired.
+
+The ordinary semantic gate requires both 336-case reports. Missing and incomplete
+reports reject; a complete composed fixture passes **86,515,434 logical cases /
+747 batches / 947 model reports**. These report-only controls execute no CPU
+instructions. The new bounded execution uses **220 source inputs**, with all
+**37 production CPU inputs identical** to commit `6cddeab` and the accepted local
+`.76` package. The earlier **219-input** full execution remains **5,320 passing /
+53 unavailable / zero failures**, 86,707,242 cases, 945 reports and ten native
+presets. The same CPU's isolated consumer evidence is retained; neither a new
+wide full-suite run nor new consumer execution is claimed for this test-only
+promotion.
+
+Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/NestedWritebackPromotionBeforeV1`, `audits/NestedWritebackPromotionAfterV1`,
+`mutations/NestedWritebackV1` and `nested-writeback-ordinary-controls-v1`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| promotion | `bc28c2a25540af6f682f88bb4aabf93b20fa3adbebfb502e176f87f9da568303` |
+| mutations | `8cf0aa5d26a8dbae6ba7d8448cb290f9832505ef32b207faa32878cd91d8e788` |
+| ordinary controls | `6455a9fa164e960ddec37e4acb41441725b09ae42444a3e034cf605e4986b1ea` |
+| retained full CPU proof | `f32959471ba2ea93a8c2d9444a119016b347a2fa0e4f07bf7e394abee6f93027` |
+| retained consumer proof | `9fc1251d189a160fb8eb3553c277e6630ca7e332b8545bbcdcfa2e8d52c55367` |
+
+The outer frame is supplied; original physical construction of all three pending
+slots is not qualified. This gate does not cover mixed slot widths, every CCR,
+trace/interrupt interruption, other transfer spaces, deeper repeated handler
+faults, enabled MMU/cache or physical pipeline/timing. MOVE16 write-fault discovery
+remains failed and unpromoted. Hardware is unavailable for the trace/manual
+boundary disagreements. No private C023 production candidate is imported and no
+package is published. Milestone 6 remains **in progress**, `roadmapComplete=false`.

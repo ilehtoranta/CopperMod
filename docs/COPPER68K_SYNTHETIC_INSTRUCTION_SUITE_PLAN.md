@@ -3744,3 +3744,29 @@ bounded gate. Complete source/evidence linkage binds the focused, full, mutation
 fault-frame, ordinary-control and consumer results without rewriting records that
 were created while the full gate was pending. Milestone 6 remains **in progress**,
 `roadmapComplete=false`.
+
+### Milestone 6 nested integer writeback handler faults — 2026-10-08
+
+Promote the captured normal-space nested-handler fixture with unchanged logic.
+All **672 programs** pass and fail against the preceding MOVES write CPU; all
+**103,552 accompanying MOVES programs** retain their architectural results.
+The supplied three-slot outer format-7 frame drives actual integer WB1/WB2/WB3
+handler faults, nested completion, restoration, RTE, remaining outer writes and
+a following sentinel. B/W/L, four lanes, TM 1/5, ISP/MSP and each rejected byte
+are covered; every instruction is checked and the three writes occur in order
+exactly once. Three mutations detect missing register restoration, wrong word
+data and wrong following PC without changing expectations.
+
+Both new 336-case reports are mandatory in ordinary coverage. Missing/incomplete
+controls reject; the composed report-only gate passes **86,515,434 cases / 747
+batches**. The new bounded 220-input execution retains all 37 production CPU
+inputs. The accepted 219-input full suite and local `.76` NuGet consumer gates
+remain separate unchanged evidence; this slice claims no new wide full execution,
+consumer replay or package release. Evidence identities and exact limits are in
+[the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-nested-integer-writeback-handler-faults--2026-10-08).
+
+Outer frame creation, mixed slot widths, all CCR states, trace/interrupt
+interruption, other transfer spaces and physical pipeline behavior remain outside
+this gate. MOVE16 write faults remain a failed private discovery. No old test is
+retired. Hardware is unavailable at disputed boundaries. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.
