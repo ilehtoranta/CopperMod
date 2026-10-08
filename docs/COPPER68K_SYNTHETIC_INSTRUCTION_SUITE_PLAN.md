@@ -3874,3 +3874,20 @@ hardware frames remain open. Hardware is unavailable, so disputed native 030/040
 boundaries remain unqualified. Exact scope and evidence are in [the qualification
 record](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-validation-exception-entry--2026-10-08).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 private changed validation input — 2026-10-08
+
+The cold C021/C023 software contract adds **16,384 passing cases** for changed
+SR/PC/same-format/end input via actual handlers, exact remaining read order,
+pending-store completion and retained sentinels. All **651,008 parent cases**
+retain their reports. Ignored input, replayed phases and lost M state are detected;
+all **30,720** mismatch/unsupported diagnostics are independently verified.
+Eleven evidence controls reject and strict frozen replay passes. All 39 private
+CPU inputs remain unchanged; current production compiles both tests as
+unavailable. No production candidate is imported or package published.
+
+Malformed-protocol repair, wider pending/pipe forms, returned-bank write refaults,
+trace/interrupts, physical partial transfers and general hardware frames remain
+required. Exact scope and evidence are in [the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-changed-validation-input--2026-10-08).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

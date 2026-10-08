@@ -1540,3 +1540,23 @@ unavailable by default; it uses a distinct 37-input CPU graph. Missing fixtures,
 empty selection or mismatches fail the requested audit. Wider pending forms,
 changed validation values, pending-store refaults, trace/interrupts and hardware
 frames remain unqualified. See [the entry-fault qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-validation-exception-entry--2026-10-08).
+
+
+Cold private changed validation input is opt-in with
+`COPPER68K_RUN_020_MOVE_WRITE_CHANGED_INPUT=1`:
+
+```powershell
+python scripts/test-copper68k-move-write-changed-input.py `
+  --qualified-parent-directory <frozen-MoveWriteEntryV1> `
+  --output <fresh-write-changed-input-output>
+```
+
+The 16,384 new cases execute changed SR/PC/same-format/end input handlers from
+literal C021/C023 contexts, retaining 651,008 parent cases. Three mutations
+detect ignored input, replayed phases and lost M state; unsupported mutant cases
+fail the gate. Strict `--validate-only` requires complete unchanged evidence.
+Missing fixtures, empty selection or mismatch/unsupported legal execution fail
+the requested audit. All 39 private CPU inputs remain frozen; current production
+uses a distinct 37-input CPU graph and both tests are unavailable by default.
+Malformed protocols, wider forms, store refaults, trace/interrupts and hardware
+frames remain open. See [the changed-input qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-changed-validation-input--2026-10-08).

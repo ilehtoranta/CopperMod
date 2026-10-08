@@ -12284,3 +12284,83 @@ Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
 | discovery | `aaa09e983612da06d214498b73e163efc00774a6eda42e9a7a83a55b9b5e613d` |
 | parent | `3a2d2b3c8f82f4205224819a3ba82ba2d6066958881b9649d6153f88366cbf64` |
 | complete source/evidence linkage | `e99fa0e461c07f93451e42cb3f52251d6583654b17938462073e003b600c4853` |
+
+
+## Private pending-write changed validation input — 2026-10-08
+
+`SyntheticM68020MoveWriteChangedInputTests` adds **16,384 passing cases / two
+executions / 16 reports** on EC020, A1200, 020 and 030. It begins with literal
+cold C021/C023 contexts, a canonical word pending store and three retained
+instruction words. Actual MOVE.L/ANDI.W/RTE handlers supply changed validation
+input and clear DF. Across ISP/MSP, four returned banks, paired low/high frame
+locations and all 32 CCR states, the selected changes are: toggled CCR/M state
+with nonzero upper input bits; high PC `0x12342400`; format `0xA024` with nonzero
+upper bits; and end-word input `0xCAFE9876`. The inner frame retains its original
+values, so it cannot supply the expected changed SR or PC by a repeated read.
+
+Each handler instruction checks PC, registers, defined SR, stack and memory
+guards. Return checks the changed SR/PC and bank selection, exact remaining inner
+validation/state-load reads, one serialized pending word write and all three
+retained following MOVEQ instructions. Word-sized SR/format values use their
+low 16 bits. Format A remains format A, its changed low vector bits do not alter
+restoration, and this end-word input is semantically ignored by the selected
+private contract. No original MOVE or initial validation fault is executed here;
+the parent audit retains separately qualified original-value fault handlers.
+
+All **651,008 parent cases / ten executions / 1,376 reports** retain identical
+results. Combined: **667,392 cases / twelve executions / 1,392 reports**. The
+**241-input** private graph adds only this fixture and preserves all **39 CPU
+inputs**. The maintained audit revalidates its complete pinned parent chain,
+source/output hashes, loaded assembly, selection/settings, TRX roster/counters,
+every case key/status/weight and retained reports. Strict frozen replay passes.
+
+Ignoring supplied input causes **16,384 mismatches**. Replaying completed phases
+causes **4,096 mismatches and 8,192 unsupported cases**, with **4,096** unaffected
+cases passing. Clearing the supplied M bit causes **2,048 mismatches**, with
+**14,336** unaffected cases passing. All **30,720** failure diagnostics are
+independently checked, including exact SR, PC and unsupported-profile messages.
+Unsupported mutant execution fails its test gate; it is not relabeled as an
+architectural exception. The first maintained run rejected an incorrect
+prediction that all replay failures would be mismatches; its output is retained.
+The successful fresh run explicitly distinguishes these categories. Initial
+local tuple/import errors are also retained separately from successful evidence.
+
+Eleven copied evidence controls reject missing reports, empty/foreign/untested
+combinations, changed source/roster/settings, missing witnesses, changed/missing
+retention and wrong loaded assembly. Validator paths are rebased, hardlinked
+targets unlinked before modification and original hashes preserved; controls
+execute no CPU. An isolated **225-input / 37-CPU-input** current production build
+compiles the fixture with exactly two unavailable tests and no executed cases.
+Its explicit `NotExecuted` rows and actual TRX counters are recorded.
+
+```powershell
+python scripts/test-copper68k-move-write-changed-input.py `
+  --qualified-parent-directory <frozen-MoveWriteEntryV1> `
+  --output <fresh-write-changed-input-output>
+# --validate-only requires unchanged complete producers, sources and evidence.
+```
+
+This covers selected changed input under a cold private software contract. Other
+frame formats, malformed-protocol repair, byte/long pending stores, zero-to-two
+retained words, physical partial transfers, returned-bank pending-store refaults,
+trace/interrupt continuation and foreign hardware frames remain unqualified.
+Disputed native 030/040 boundaries lack hardware evidence. No private CPU is
+imported, package published or regression retired; no new full CPU suite or
+consumer replay is claimed. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
+
+Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/MoveWriteChangedInputDiscoveryV2`, `audits/MoveWriteChangedInputV1`
+(rejected prediction), `audits/MoveWriteChangedInputV2`,
+`move-write-changed-input-controls-v2`, and
+`write-changed-input-production-default-v1`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| audit | `4f6e928d90ad460567c23817ee3680e87579d65ed6b725b17904cc7a41c62ceb` |
+| controls | `6b290d8dd9dd1c67525dd80474feb386775e5ec24dc024af330ecba9eea1d238` |
+| reasons | `1d884bcd85a29bd06c45e4184dd17074cb11158811b293a7c35cfd821c88d5c4` |
+| default | `3863c04f28eb8d0f45d8a302af5f019eb5bbc2f4eb502d13d46aa4cb5b385cbe` |
+| discovery | `6cec3aa5a90aea1041d012cc45c4e297ba051c9a339cffa067119b2259def539` |
+| parent | `540bc6b5f896666eb404cf9ccb6c2da1cbf7ad0e6e62dfef2dde29791c3c6478` |
+| complete source/evidence linkage | `57b50a215274295f4e63dd7245d4645fe961fa868266c9699cf76f7aa59bb4cf` |
