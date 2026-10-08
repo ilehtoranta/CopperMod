@@ -1358,3 +1358,24 @@ uses isolated build outputs, and requires all thirteen tests and twelve reports.
 instructions. `-BaselineDirectory` additionally requires unchanged retained
 recovery reports; a missing requested baseline fails. Neither mode promotes
 missing inputs, empty selections or mismatching/unsupported execution.
+
+The separate 040 MOVES physical-fault discovery is currently **failing**. Its
+literal byte/word/long encodings use (A0), all eight SFC/DFC choices, four address
+lanes, ISP/MSP and CCR 0/31. Each operand byte can trigger a physical-map rejection
+on scalar/batch public-factory routes. All 1,536 fault-free controls pass; of 3,584
+fault cases, 3,136 mismatch. Writes incorrectly stack format 0; reads record
+supervisor-data attributes except where those happen to match the selected FC.
+The controls run by default; the two fault tests are unavailable unless requested.
+They remain a discovery gate, separate from the qualified MOVES instruction matrix.
+
+```powershell
+./scripts/test-copper68k-040-moves-faults.ps1 -OutputDirectory artifacts/moves-fault-discovery
+```
+
+This command intentionally returns failure while the defects remain. It freezes
+the source graph, requires all four tests and exact inventories, and records a
+failed verification proof. Missing inputs, empty selections and altered evidence
+also fail. `-ValidateReportsOnly` executes no instructions; `-PythonCommand`
+selects Python 3. Saved-PC policy, recovery/retry, special-space writebacks,
+nested handler faults, enabled MMU/cache and hardware timing remain unqualified.
+See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-moves-physical-fault-discovery--2026-10-08).

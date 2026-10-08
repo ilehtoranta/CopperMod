@@ -11618,3 +11618,84 @@ complete source/evidence linkage: `3f5d769639d7cc0678980fc24c0b5cf575c5f03c4d70b
 This slice does not establish every mask/fault-position Cartesian combination,
 other stack/CCR/EA combinations, enabled cache/MMU, physical timing or hardware
 trace behavior. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## 040 MOVES physical-fault discovery — 2026-10-08
+
+The user confirms that no real 68030/68040 hardware is available. The existing
+manual/software disagreement at a trace boundary remains explicitly unqualified;
+absence of hardware evidence does not establish either software reference as an
+architectural oracle. Software work continues on separately documented behavior.
+
+[MC68040UM 3.2.5/Table 3-2 and 8.4.6](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+defines format 7 for physical operand access errors and the MOVES SFC/DFC to
+TT/TM conversion. Function codes 2/6 become data references 1/5; 0/3/4/7 use
+transfer type 2 and retain their modifier. These literal table rows are independent
+test expectations. The new discovery does not infer saved-PC or instruction
+completion policy from the software reference's approximate writeback slot.
+Normal data-space physical writes require WB1 valid, FA=WB1A and memory-aligned
+WB1 data (8.4.6.5/7); special-space writeback fields are left unqualified.
+
+Fixed MOVES.B/W/L D0,(A0) and (A0),D0 encodings execute through the public 040
+factory on scalar and one-instruction batch routes. The bounded inventory crosses
+three widths, four address lanes, all eight SFC/DFC choices, both directions,
+ISP/MSP and initial CCR 0/31. Each byte in the original operand can be rejected
+by the physical address map. Expected fault fields include original SR, format,
+SSW transfer attributes, logical FA and normal-write WB1; registers, inactive
+stacks, surrounding memory and absence of implicit operand retry are checked.
+Saved PC, unknown frame fields, trace and actual handler execution are excluded.
+
+| Cohort | Cases per route | Passing per route | Mismatching per route |
+| --- | ---: | ---: | ---: |
+| Fault-free encodings | 768 | 768 | 0 |
+| Physical operand faults | 1,792 | 224 | 1,568 |
+
+Each write faults into an eight-byte format-zero frame, rather than the required
+60-byte format-seven frame: **896 mismatches per route**. Reads do create format
+7, but use supervisor-data TT/TM regardless of SFC: **672 mismatches per route**.
+Only FC 5/6 reads match the converted attributes (**224 passing per route**).
+These exact memberships and diagnostic categories are independently enumerated.
+There are zero unsupported/untested cases in the requested bounded inventory;
+the **3,136 mismatches among 5,120 total cases keep qualification failed**.
+Later checks behind each first mismatch do not thereby become verified.
+
+A first frozen discovery and two maintained-command snapshots produce identical
+four reports. Each actual CPU invocation returns exit 1, with two passing fixture
+tests and two failing fault tests; the verifier also returns 1 and records status
+`failed`. All 216 preceding compiler inputs are byte-identical; the sole added
+input is this discovery test, yielding 217. Production CPU inputs remain unchanged.
+The same frozen assembly separately passes 18 MOVES fixture/semantic/invalid-EA
+tests, with the two unrequested fault discoveries unavailable. No current wide
+full-suite or consumer rerun is claimed for this test-only slice.
+
+The maintained command requires PowerShell 7/Python 3 and a fresh output:
+
+```powershell
+./scripts/test-copper68k-040-moves-faults.ps1 -OutputDirectory artifacts/moves-fault-discovery
+```
+
+Its verifier binds source, producer, command/settings, assemblies, TRX execution
+identities, complete architectural keys, counts and per-case failures. Requested
+missing/empty selections fail. Seven copied-evidence controls reject missing
+reports, empty test selection, changed combination weight, wrong FC key, changed
+source, wrong producer and changed assembly. A complete relocated fixture remains
+**failed**, retaining all 3,136 mismatches. The original evidence is hash-checked
+unchanged after every control. An initial relocation helper failed because TRX
+storage paths were lowercased; that attempt is retained, and its successor fixes
+only owned fixture relocation. No CPU result or expectation is altered.
+
+Local evidence under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/MovesFaultDiscoveryV1`, `audits/MovesFaultMaintainedV1`,
+`audits/MovesFaultMaintainedV2` and `moves-gap-controls-v2`.
+Maintained failed-gate proof SHA-256:
+`198a8a8666ff402f87a8ff2964e4d9d5c5119084be826d2d498a5ef653b0c9ad`;
+exact-gap/integrity-control proof:
+`87bd4b9707267142e8b82fbac1fd95216d6bd9a337da3761ce63abcf9a0aa672`.
+
+Next: carry the selected alternate-space attributes on the actual MOVES operand
+fault, distinguish EA pointer faults from the MOVES transfer, and qualify store
+completion/saved-PC/writeback return before introducing a recovery policy.
+Never rerun an instruction automatically after partial operand side effects.
+Auto addressing/aliases, nested WB2/WB3 handler faults, trace, enabled MMU/cache,
+physical partial transfers and timing remain outside this bounded discovery.
+No CPU fix, regression retirement, package publication or private candidate import
+occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.

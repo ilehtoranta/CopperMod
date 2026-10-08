@@ -1922,6 +1922,30 @@ provenance, internal restoration, data/writeback/context transfer, other models'
 restoration and broader independent qualification/consolidation remain required.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
 
+### Milestone 6 MOVES physical-fault discovery — 2026-10-08
+
+No 030/040 hardware is available; the manual/software trace disagreement remains
+unqualified. Continue independent software qualification of defined behavior.
+The bounded 040 MOVES discovery uses fixed B/W/L D0/(A0) encodings, all eight
+SFC/DFC choices and independently literal MC68040UM Table 3-2 attributes.
+Scalar/batch routes, four address lanes, ISP/MSP, CCR 0/31 and rejection at each
+operand byte execute **5,120 cases** including **1,536 passing fault-free controls**.
+Of the **3,584 fault cases**, **3,136 mismatch**: writes produce format 0 and most
+reads use supervisor-data attributes. Each route passes only FC 5/6 reads.
+The discovery gate remains **failed**, not a completed fault/recovery promotion.
+
+Two maintained snapshots reproduce the first frozen discovery reports exactly;
+an independent verifier binds the full input/execution/architectural inventories.
+Seven evidence corruptions reject, while a complete copied fixture retains all
+3,136 mismatches. Existing MOVES semantics and invalid-operand tests pass separately.
+Production CPU sources are unchanged; no wide full-suite/consumer rerun is claimed.
+See [the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-moves-physical-fault-discovery--2026-10-08).
+Next work must qualify alternate-space operand provenance and store completion,
+saved PC and actual writeback recovery; it must not retry a partially executed
+instruction. EA pointer faults, alias/auto modes, trace, nested handlers, enabled
+MMU/cache and physical timing remain unqualified. No package or retirement changes
+occur. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
 
 
 On 2026-10-07 the executed 040 MOVEM read-recovery gate passes 229,968 complete
