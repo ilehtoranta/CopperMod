@@ -3482,3 +3482,23 @@ See the [mandatory consolidation gate](COPPER68K_REFERENCE_QUALIFICATION.md#mand
 Hardware is unavailable. Broader frame provenance, fault origins, trace and
 reference requirements remain open. Milestone 6 remains **in progress**,
 `roadmapComplete=false`.
+
+### Milestone 6 private cold pending-write images — 2026-10-08
+
+Four optional reference-discovery batches now pass 163,584 private-contract
+cases / 768 reports across EC020/A1200/020/030. Literal C023 frames after reset
+exercise three locations, B/W/L, pending/DF-clear cycles, current ISP/MSP,
+all four return banks, all CCRs and every zero-to-three saved instruction length.
+Fourteen malformed/foreign/unsupported private image classes must reject before
+stack/status/data commitment. Registers, all stack banks, guarded memory, exact
+write/exception counts and three following instruction words are checked.
+
+Wrong reserved-state acceptance, stack pop and flag recomputation are independently
+detected; eight missing/changed evidence controls fail precisely. Frozen
+revalidation passes. All 39 private CPU inputs are unchanged from the full suite
+and `.73` consumer checkpoint; this adds only a fixture and maintained audit helper.
+No CPU import, publication or old-test retirement occurs. These are bounded
+software-protocol results, not hardware frame or trace qualification. General
+foreign images, validation/load/entry faults, changed-bank refaults and broader
+continuations remain required. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. See the [scope, command and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-cold-and-relocated-pending-write-frames--2026-10-08).

@@ -1256,3 +1256,18 @@ Keep the required `integer-inventory.json` alongside frozen reports.
 The complete ordinary semantic gate totals 86,262,562 cases in 723 batches;
 full-suite and optional private audit counts have separate scopes. See the
 [gate evidence and negative controls](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#mandatory-arithmetic-consolidation-reports--2026-10-08).
+
+## Private cold pending-write frame audit
+
+`scripts/test-copper68k-move-write-frame.py --qualified-parent-directory
+<frozen-MoveWritePipeV3> --output <fresh-output>` runs the four optional
+`SyntheticM68020MoveWriteFrameTests` batches on an isolated, unchanged private
+CPU snapshot, plus three targeted mutations. The parent and its pinned upstream
+directories must remain available. `--validate-only` rejects missing, empty,
+changed or unrelated inputs/results.
+
+The 163,584 cases qualify literal cold/relocated C023 images, returned stack banks,
+preserved completed state and rejection atomicity under the private software
+contract. They do not qualify silicon internal images or promote architectural
+unsupported forms. Existing ordinary CI counts and full-suite checkpoint scopes
+remain unchanged. See the [scope and evidence](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-cold-and-relocated-pending-write-frames--2026-10-08).
