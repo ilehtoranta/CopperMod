@@ -3964,3 +3964,15 @@ unchanged 37 production CPU inputs. Full/deep reference runs retain their
 separately identified pre-guard snapshot; no current full-suite success is
 claimed. See the completion audit for exact evidence. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 checkpoint — fresh six-defect MOVE proof, 2026-10-08
+
+Fresh isolated 51444ea executions detect absolute decoding, extension length,
+index sign, alias order, A7 stride and flags defects against a clean 75,214-case
+68020 baseline. Each mutant changes one isolated CPU input; pushed CPU sources
+stay unchanged. Independent source, loaded-assembly, exact-roster and report
+verification is supplemented by six literal witnesses and all 8,712 diagnostic
+ID-to-combination mappings. The current full run retains its pre-guard frozen
+fixture and remains pending. See the completion audit for identities and scope;
+milestone 6 stays **in progress**, `roadmapComplete=false`.

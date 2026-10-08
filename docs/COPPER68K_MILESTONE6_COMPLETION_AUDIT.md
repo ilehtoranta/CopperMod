@@ -21,7 +21,7 @@ it does not replace or discard their remaining gaps.
 | Deterministic coverage in ordinary CI | Current `test-copper68k-synthetic.ps1` and CI invocation; all required reports and positive case counts | Implemented, including 4,096 EOR postincrement cases per profile. Final current-source execution linkage remains pending. |
 | Explicit deep-audit command, deterministic seeds and strict missing/empty/mismatch rejection | Deep command/settings, recorded seed and selected inputs; rejected negative controls | Fresh seed 68020 runs 10,000 samples per family/profile: 320,000 passing cases. Six actual invalid/missing/empty requests fail. Mismatch rejection has separate mutation evidence; retain final source/evidence linkage. |
 | Reuse SingleStepTests, Musashi and WinUAE with pinned identities and caveats | Adapter source, reference manifests, source/input hashes, actual execution and documented exclusions | Implemented. SingleStepTests supplies 000 semantic fixtures; Musashi runs independent self-checking programs, not its CPU as an oracle. WinUAE remains a software reference. |
-| Replacement detects absolute decoding, extension length, index sign, alias order, A7 stride and flags defects | Six distinct isolated mutation proofs with precise replacement IDs and current source linkage | The maintained mutation command defines all six. Historical proofs need final source/evidence linkage; a mutation definition is not execution evidence. |
+| Replacement detects absolute decoding, extension length, index sign, alias order, A7 stride and flags defects | Six distinct isolated mutation proofs with precise replacement IDs and current source linkage | The maintained mutation command defines all six. Fresh isolated 51444ea executions detect all six against a 75,214-case clean baseline. Exact source/roster/report linkage and every mismatch ID are verified. |
 | Retire an old regression only after a mapped replacement detects its defect | Exact pinned old method/rows, before-removal proof, mutation witness and after-removal sibling verification | Recent NOT displacement and EOR postincrement retirements have exact proofs. EOR replaces one fact with 32,768 passing cases and retains four siblings. No blanket regression deletion is authorized. |
 | Retain cache, prefetch, bus ordering, fault sequencing, JIT and native regressions unless separately proven redundant | Exact test-source diff and full named roster, with every removal accounted for | Specialized tests remain. Refresh the complete current roster and compare it with the previous frozen full run. |
 | Production CPU fixes pass full CPU and affected consumers | Same-source full CPU proof; isolated NuGet package; CopperScreen production, host/disk/engine and applicable native results | MOVE16 recovery has full-suite and local .77 consumer evidence. Subsequent consolidation leaves all 37 CPU source inputs unchanged. No new consumer execution is claimed. |
@@ -137,3 +137,35 @@ for this sole test-source difference; the full audit remains pending.
 
 This closes the observed duplicate-selection gap, not the remaining milestone-6
 reference disagreements or broader qualification requirements.
+
+## Six current MOVE mutation witnesses — 2026-10-08
+
+`CurrentMoveMutationsV1` refreshes the six required MOVE mutation checks using
+isolated `51444ea` sources. Three clean 68020 batches pass **75,214 cases**.
+Each deliberate defect changes exactly one CPU source in a separate copy;
+the pushed production sources remain unchanged. Every intended named test runs
+and fails with a concrete replacement witness. Independent verification checks
+all 228 source inputs, exact mutation text, loaded assemblies, commands, rosters,
+report statuses and complete combination weights. A separate literal-witness
+check validates all six intended cases and maps **all 8,712 mismatch IDs** to
+their report combinations, preserving the clean baseline's keys and weights.
+
+| Mutation | Executed cases | Mismatches | Diagnostic at the pinned witness |
+| --- | ---: | ---: | --- |
+| absolute-decode | 9,726 | 8 | `PC expected 00001004, actual 00001006` |
+| extension-length | 9,726 | 160 | `PC expected 00001004, actual 00001006` |
+| index-sign | 7,120 | 288 | `SR expected 2708, actual 2704, mask=FFFF` |
+| alias-order | 9,726 | 24 | `Memory 00004001: expected EE, actual 5A` |
+| a7-stride | 9,726 | 8 | `A7 expected 00004702, actual 00004701` |
+| move-flags | 58,368 | 8,224 | `SR expected 2704, actual 2700, mask=FFFF` |
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Complete source/execution/report linkage | `129af1d38941789f70c1cb845ea64d8e7a2de95364cf9dd5cc584400414a5995` |
+| Six literal witnesses and complete diagnostic mapping | `6730dac567a7cae1cfb606337ccca0ec0805150416627af1c77a6a2665e1ebe9` |
+
+This refresh proves detection of the six named defects on 68020. It does not
+claim a new all-model mutation audit or physical qualification. The full CPU
+run remains active on its separate frozen `c284b94` fixture. No production CPU
+source, consumer package or retired regression changes in this checkpoint;
+milestone 6 stays **in progress**, `roadmapComplete=false`.
