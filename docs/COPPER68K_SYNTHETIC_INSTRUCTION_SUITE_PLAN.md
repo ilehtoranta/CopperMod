@@ -3976,3 +3976,33 @@ verification is supplemented by six literal witnesses and all 8,712 diagnostic
 ID-to-combination mappings. The current full run retains its pre-guard frozen
 fixture and remains pending. See the completion audit for identities and scope;
 milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 checkpoint — full run and six current MOVE mutants, 2026-10-08
+
+The frozen c284b94 full run passes 5,337 tests, with 63 unavailable and zero
+failures; 967 profile reports contain 86,806,858 passing logical cases. All ten
+requested qualified WinUAE presets and the frozen ordinary report gate pass.
+The exact roster and retained/new reports are independently linked. The newer
+duplicate-selection guard retains separate focused evidence; no snapshot is
+relabeled. Fresh isolated 51444ea mutation runs detect all six required MOVE
+defects against a clean 75,214-case baseline, with exact source, assembly,
+roster and report/witness linkage. All 37 CPU inputs remain unchanged; no new
+consumer execution or package publication is claimed. See the completion audit
+for identities and remaining gates. Milestone 6 stays **in progress**,
+`roadmapComplete=false`.
+
+
+### Milestone 6 checkpoint — later failed-reference cases, 2026-10-08
+
+An isolated continuation bridge visits 6,248 010 RTE and 196,608 060 STOP cases
+without changing the original fixture inputs or 37 CPU inputs. It retains
+2,233 / 65,536 failing cases, with saved-frame/SR and exception/SR comparison
+events respectively. Four clean/corrupted NOP controls validate the observer;
+the discovery request still exits 1 and the original broad gate remains failed.
+The complete native diff, pinned inputs, source graph, loaded assemblies,
+named test and aggregate report are independently verified. V1/V2 failures are
+rejected evidence; only V3 is qualified. Counts do not settle undocumented
+hardware behavior, and no CPU change or reference exclusion follows. See the
+completion audit for exact scope; milestone 6 stays **in progress**,
+`roadmapComplete=false`.

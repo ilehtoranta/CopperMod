@@ -11,10 +11,11 @@ The dated records below remain scoped historical evidence.
 Current source checkpoint `c284b94` has fresh seeded and SingleStepTests/Musashi
 evidence bound to one frozen assembly pair: 320,000 seeded cases, 312,500
 SingleStepTests cases and 536 Musashi programs pass, with 88 explicit Musashi
-exclusions. Six actual invalid/missing/empty adapter requests reject. The full
-CPU run with ten qualified WinUAE presets is still pending; the broad 010 RTE /
-060 STOP audit remains failed. See the completion audit for exact identities
-and scope. No current full-suite success or roadmap completion is claimed.
+exclusions. Six actual invalid/missing/empty adapter requests reject. The frozen full
+CPU run passes 5,337 tests and 86,806,858 logical cases, with 63 unavailable tests
+and ten qualified WinUAE presets. The broad 010 RTE / 060 STOP audit remains failed. See the completion audit for exact identities
+and scope. The subsequent duplicate-selection guard and six MOVE mutations have separate
+current-source evidence; no roadmap completion is claimed.
 
 ## Sources and reproducibility
 
@@ -12631,7 +12632,8 @@ remain unchanged. No package or consumer rerun is needed for this test-only fix.
 The running full audit and the earlier 320,000-case deep/reference audit retain
 their frozen `c284b94` fixture and gate. They are not relabeled as execution of
 the guarded fixture. The focused guarded build supplies the separate evidence
-for this sole test-source difference; the full audit remains pending.
+for this sole test-source difference. At that guard checkpoint, the full audit
+was pending; its completed result is recorded below.
 
 | Guard evidence | SHA-256 |
 | --- | --- |
@@ -12673,3 +12675,103 @@ claim a new all-model mutation audit or physical qualification. The full CPU
 run remains active on its separate frozen `c284b94` fixture. No production CPU
 source, consumer package or retired regression changes in this checkpoint;
 milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+## Frozen full-suite and refreshed MOVE mutation qualification — 2026-10-08
+
+The complete `CurrentReferenceFullV1` run has finished: **5,337 passing tests,
+63 unavailable tests, zero failures**, 5,400 total. Its 967 profile reports contain
+**86,806,858 passing logical cases**, with zero mismatching, unsupported or
+untested cases in those executed reports. All ten requested qualified WinUAE
+presets pass. The exact roster accounts for the five retired NOT/EOR rows,
+16 replacement batches and ten unavailable private-candidate tests added since
+the preceding full snapshot. All 951 retained profile reports match that
+snapshot; the 16 added reports match their focused consolidation evidence.
+
+Independent verification binds every frozen source, command/settings, loaded
+assembly, TRX outcome, report key/weight/status, native input and result to this
+execution. The frozen ordinary report gate also passes. **Unavailable tests do
+not supply coverage**, and the separately failed broad 010 RTE / 060 STOP audit
+is not part of this passing selection.
+
+The full and 320,000-case deep/reference runs use frozen `c284b94` sources.
+The only subsequent test-source change is the duplicate-selection guard,
+qualified by its separate 3,200-case build and four actual rejection requests.
+The full audit's original gate is preserved and executed explicitly; it is not
+relabeled as a run of the guarded fixture. All 37 production CPU source inputs
+are identical across these snapshots and the retained local .77 consumer proof.
+
+`CurrentMoveMutationsV1` independently refreshes the six required MOVE witnesses
+on isolated `51444ea` sources. Its three clean 68020 batches pass **75,214 cases**.
+Each deliberately changed production source is confined to one isolated copy;
+the exact intended test runs and detects that defect. Source hashes, mutation
+text, loaded assemblies, commands, named rosters, complete report weights and
+recorded diagnostic witnesses are verified. A separate literal-witness check
+also binds every one of the 8,712 mismatch IDs to its report combination and
+proves unchanged baseline combination keys and weights. This demonstrates causal detection
+for the six defects, not hardware qualification or a new all-model mutation run.
+
+| Mutation | Logical cases | Mismatches | Replacement witness |
+| --- | ---: | ---: | --- |
+| absolute-decode | 9,726 | 8 | `68020/MOVE/1/(A0)->abs.w/canonical/op=11D0/v=89ABCDEE/ccr=00` |
+| extension-length | 9,726 | 160 | `68020/MOVE/1/abs.w->(A0)/canonical/op=10B8/v=89ABCDEE/ccr=00` |
+| index-sign | 7,120 | 288 | `68020/MOVE/1/index(A0)->D1/brief/D0/W/scale=1/d=-32/ignored-format=False/op=1230/v=89ABCDEE/ccr=00` |
+| alias-order | 9,726 | 24 | `68020/MOVE/1/(A0)+->(A0)/canonical/op=1098/v=89ABCDEE/ccr=00` |
+| a7-stride | 9,726 | 8 | `68020/MOVE/1/(A7)+->D0/canonical/op=101F/v=89ABCDEE/ccr=00` |
+| move-flags | 58,368 | 8,224 | `68020/MOVE/1/D0->D1/boundary-ccr/op=1200/v=00000000/ccr=00` |
+
+| Complete evidence | SHA-256 |
+| --- | --- |
+| Frozen full-suite, references and ordinary gate | `03b60c8348a83e75f7581cf663a4c6629ec5687a02e15c746c134472960885a8` |
+| Fresh six-mutation source/execution/witness linkage | `129af1d38941789f70c1cb845ea64d8e7a2de95364cf9dd5cc584400414a5995` |
+| Six literal witnesses and all 8,712 diagnostic mappings | `6730dac567a7cae1cfb606337ccca0ec0805150416627af1c77a6a2665e1ebe9` |
+
+No CPU source changes, public package publication or additional consumer replays
+are included. The unresolved broad-reference disagreements, private production
+qualification and remaining consolidation requirements keep milestone 6
+**in progress**, `roadmapComplete=false`.
+
+## Later-case observation of the failed Basic groups — 2026-10-08
+
+The original broad audit still fails at its first 010 RTE and 060 STOP
+disagreements. Its native `continue_on_error` option only continues across
+instruction directories; a separate compile-time switch stops each directory
+at its first failure. Changing that option alone would not observe later cases.
+
+The isolated `BasicContinuationDiscoveryV3` bridge visits the remaining cases
+without altering input fixtures, CPU execution or reference comparisons. It
+removes the two early exits, preserves aggregate failure across input files,
+counts comparison events at 21 existing error sites and resets only diagnostic
+buffer bookkeeping before each comparison. Observer calls retain the original
+error statement's scope. An independent reconstruction verifies the complete
+native/header diff; all 3,546 pinned input files, original DLL and 37 production
+CPU source inputs remain unchanged. Its test-only graph has 229 source inputs,
+including one local discovery fixture that is not imported into production.
+
+| Profile / selection | Callbacks and validations | Failed cases | Comparison error events |
+| --- | ---: | ---: | ---: |
+| 010 RTE | 6,248 | 2,233 | 4,466 |
+| 060 STOP | 196,608 | 65,536 | 131,072 |
+| Each profile's clean NOP control | 2 | 0 | 0 |
+| Each profile's corrupted NOP control | 2 | 2 | 2 |
+
+The RTE aggregate records 2,233 SR and 2,233 saved-frame byte comparisons.
+The STOP aggregate records 65,536 exception-vector and 65,536 SR comparisons. No other comparator sites fire in these two selections, and
+there is no emulator-level unsupported execution. These are aggregate site
+distributions, not retained independent architectural expectations or a complete
+per-case register/frame witness archive. The controls establish that clean
+execution remains successful and deliberately wrong results remain failures.
+
+The actual discovery request exits 1 and its exact named xUnit test fails after
+writing the report. It does not turn either disputed family or the original
+broad gate green. The first compiler-environment failure and a subsequent native
+crash with no usable result remain rejected attempts; only the repaired V3
+execution is qualified. The crash motivated resetting diagnostic output per
+comparison, and observer statements were also made explicitly scoped.
+
+Complete source/native/input/assembly/TRX/report linkage is recorded in the
+local `BasicContinuationDiscoveryV3/proof.json`, SHA-256
+`64b51aec11c3568ad0c941d50d667ec4ceb287813e640146f5abba1bd360acaa`.
+Software-reference disagreement still does not settle the undocumented flags
+or STOP behavior. No CPU fix, reference exclusion, production bridge change,
+consumer replay or package publication is selected from these counts.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
