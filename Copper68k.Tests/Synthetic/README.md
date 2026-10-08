@@ -1679,3 +1679,39 @@ checkpoint and independent verification record. Fresh MOVEA and EOR audits and
 strict replay qualify the new runner, without changing their semantic coverage
 or retiring additional tests. See the
 [execution-identity record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#retirement-execution-identity--2026-10-08).
+
+### Maintained supplied-frame nested-writeback audit
+
+From the CopperMod root, run the complete 040 nested-writeback selection in a
+fresh directory. Python uses only its standard library; the command invokes
+the existing xUnit project and public CPU factory in an isolated source copy.
+
+```powershell
+python scripts/test-copper68k-040-nested-writebacks.py --output artifacts/040-nested-complete
+python scripts/test-copper68k-040-nested-writebacks.py --validate-only --output artifacts/040-nested-complete
+```
+
+The complete gate requires all 18 named tests and 517,040 cases in 18 reports.
+It independently enumerates all case keys/weights, requires completed passing
+rows with exact loaded methods and DLL paths, and binds command/settings,
+snapshot sources/assets and execution binaries. Missing/extra reports, empty
+or substituted selections, mismatches, skipped tests and changed artifacts fail.
+Replay requires the same producer and current source contents (CRLF-to-LF only
+for source comparison). Relocated evidence retains its original executed paths
+and binary identities; validation never executes its recorded command.
+
+For a small execution/validator check use `--selection controls`, which requires
+four named tests, 720 cases and four reports. It does not qualify the complete
+selection. Copied-evidence integrity checks execute no CPU:
+
+```powershell
+python scripts/test-copper68k-040-nested-writebacks.py --selection controls --output artifacts/040-nested-controls
+python scripts/prove-copper68k-040-nested-writeback-integrity.py --source artifacts/040-nested-controls --output artifacts/040-nested-integrity
+```
+
+The integrity command preserves original evidence, requires a relocated valid
+copy to pass, and requires eight copied corruptions to reject. The fixture
+covers supplied outer frames and whole-request physical-map rejections; original
+construction, broader repair/refault/trace/interrupt paths, partially accepted
+transfers, physical FC spaces and hardware timing remain separate. It does not
+import private CPU code, publish a package or qualify the whole CPU suite.

@@ -14126,3 +14126,60 @@ combinations, other repair/operand/frame fault paths, original construction and
 trace/interrupt interruption remain open. Broad 010 RTE / 060 STOP disagreements
 remain failed/unqualified. Milestone 6 stays **in progress**, `roadmapComplete=false`;
 no private CPU import, package or consumer rerun, or publication occurs.
+
+### Maintained complete nested-writeback audit and integrity controls — 2026-10-09
+
+`scripts/test-copper68k-040-nested-writebacks.py` supplies a maintained isolated
+execution and strict replay command for the complete current fixture. The
+default selection requires all 18 exact named rows and 517,040 cases across
+18 reports. Its Python expectations enumerate literal widths, CCRs, lanes,
+FCs, banks, depths, slots and rejection bytes independently of production
+decoder/EA/timing helpers. The smaller explicit `controls` selection requires
+four exact named rows / 720 cases / four reports; it cannot qualify the default.
+
+The command records raw snapshot source/asset identities, source hashes after
+CRLF-to-LF only for checkout comparison, exact command/settings and three
+executed DLLs. Validation requires completed passing counters, exact loaded
+test definitions/methods and recorded DLL paths, every combination key/weight,
+positive case counts and the complete report set. Missing/extra JSON evidence,
+extra/missing CPU/test DLLs, changed source/binaries/output, empty/substituted
+selections, mismatches and skipped rows fail. Replay never executes the recorded
+command; copied evidence can relocate while preserving its original executed
+root and identities. Producer changes or source changes require new execution
+or use of the corresponding source checkpoint.
+
+A first control run passes before the final extra-evidence/DLL checks are added;
+it retains its separate producer identity and is not current-tool qualification.
+Fresh V2 execution with the final command and strict replay both pass four
+named rows / 720 cases / four reports. The maintained integrity command creates
+separate copies, validates a relocated positive copy and rejects eight corruptions:
+missing report, wrong weight, extra report, empty named selection, wrong loaded
+method, wrong loaded assembly, changed DLL and changed source. Method/selection
+and source controls rehash their altered metadata to reach structural/current-
+source checks. Original evidence is verified unchanged. No CPU is executed by
+those integrity controls. Two actual unknown-selection/missing-evidence requests
+also reject before CPU execution and create no output directory.
+
+| Maintained bounded evidence | SHA-256 |
+| --- | --- |
+| Fresh `MaintainedNestedControlsV2/proof.json` | `40ccd9ec76894a82d9355bab19632ed578414be30f63e8247b8496351c40b401` |
+| Eight corruptions / relocated valid / original unchanged | `e892970c10fbe3b654c99db8848f72e9c309406ca3f8c8fcc5b04d867e7e009f` |
+| Two actual request rejections and expected complete inventory | `3f01fa541632edefccb594bf40841c12aabe77250c6c6726dd530a63ad0624da` |
+
+```powershell
+python scripts/test-copper68k-040-nested-writebacks.py --selection controls --output artifacts/040-nested-controls
+python scripts/test-copper68k-040-nested-writebacks.py --selection controls --validate-only --output artifacts/040-nested-controls
+python scripts/prove-copper68k-040-nested-writeback-integrity.py --source artifacts/040-nested-controls --output artifacts/040-nested-integrity
+python scripts/test-copper68k-040-nested-writebacks.py --output artifacts/040-nested-complete
+python scripts/test-copper68k-040-nested-writebacks.py --validate-only --output artifacts/040-nested-complete
+```
+
+The complete selection is now executing on its own 233-input / 37-CPU source
+snapshot. Its 18-row / 18-report / 517,040-case inventory is independently checked
+but remains expected coverage until execution and validation complete. Earlier
+bounded results are not relabeled as execution of this complete selection.
+This is a fixture-class audit, not the whole CPU suite, hardware, API, package
+or consumer qualification. Whole-request rejection, supplied outer frames and
+other fixture boundaries remain explicit. The broader 480-case failing gate,
+broad reference disagreements and remaining restoration requirements stay open.
+Milestone 6 remains **in progress**, `roadmapComplete=false`; no import or release.

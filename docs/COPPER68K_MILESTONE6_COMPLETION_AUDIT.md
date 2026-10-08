@@ -181,6 +181,16 @@ it does not replace or discard their remaining gaps.
    write per slot. Earlier larger single-fault matrices retain separate source
    identities. Wider FC/refault combinations, original construction and
    trace/interrupt interruption remain open; the 480-case broader gate remains.
+   A maintained nested-writeback command now binds exact named selections,
+   independent case inventories, source/assembly/method identities and strict
+   replay. Its fresh four-test / 720-case control selection passes, proof
+   `40ccd9ec76894a82d9355bab19632ed578414be30f63e8247b8496351c40b401`.
+   Relocated evidence passes and eight copied corruptions reject, with original
+   evidence unchanged, proof
+   `e892970c10fbe3b654c99db8848f72e9c309406ca3f8c8fcc5b04d867e7e009f`.
+   The complete selection is running and still requires its own result: 18
+   named tests / 517,040 expected cases / 18 reports. Expected inventory is not
+   execution. This supplies maintained reproduction without closing other gates.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

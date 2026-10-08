@@ -2132,6 +2132,18 @@ timing-policy change occurs. Wider FC/refault combinations, original constructio
 and trace/interrupts remain open; the 480-case broader failing gate is retained.
 Milestone 6 stays **in progress**, `roadmapComplete=false`; no import or release.
 
+### Milestone 6 checkpoint — maintained nested-writeback audit, 2026-10-09
+
+A maintained command executes isolated sources and independently validates
+exact selections, loaded methods, sources/DLLs and architectural case keys.
+Fresh execution and strict replay pass its four-test / 720-case control selection.
+A relocated valid copy passes, eight copied corruptions reject, and two actual
+unknown/missing-evidence requests fail before CPU execution. The complete
+18-test / 517,040-case selection has started; its inventory is expected coverage,
+not completed execution. Commands, caveats and evidence identities are recorded
+in the qualification log and test README. No source API/CPU change or import
+occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
 ### Milestone 6 user-tail software trace service — 2026-10-06
 
 Four new `UserTailSoftwareTraceService` scalar/batch groups compose the existing
