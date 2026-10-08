@@ -12364,3 +12364,89 @@ Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
 | discovery | `6cec3aa5a90aea1041d012cc45c4e297ba051c9a339cffa067119b2259def539` |
 | parent | `540bc6b5f896666eb404cf9ccb6c2da1cbf7ad0e6e62dfef2dde29791c3c6478` |
 | complete source/evidence linkage | `57b50a215274295f4e63dd7245d4645fe961fa868266c9699cf76f7aa59bb4cf` |
+
+
+## Private returned-bank pending-write refaults — 2026-10-08
+
+`SyntheticM68020MoveWriteRefaultTests` adds **458,752 passing programs / two
+executions / 96 reports** on EC020, A1200, 020 and 030. It starts from literal
+cold C023 format-A frames and rejects two successive pending stores during
+explicit RTE continuation. The matrix covers B/W/L, every byte of each rejected
+request, current ISP/MSP, returned user/user-M/ISP/MSP, saved function codes 1/5
+independent of returned privilege, paired low/high original frame locations,
+all 32 CCR states, zero-to-three retained instruction words, scalar/batch
+execution and mapped/software completion. The operand is the canonical negative
+value `0x80A1B2C3` truncated to size; other value patterns/origins are not newly
+enumerated. No original MOVE or original source read is executed.
+
+Each fault commits a fresh literal 16-word C023 image on the returned M-selected
+supervisor bank. The test independently checks every frame word and descending
+accepted stack write, saved PC/SR and exception count, all registers, memory
+guards, active/inactive stack banks, preserved function code and retained pipe
+words. The second actual handler RTE refaults once. The final handler either
+allows the pending write or executes MOVE immediate to the saved destination,
+clears DF with ANDI.W, and RTEs without another operand write. Subsequent MOVEQ
+sentinels distinguish all retained/fetched words. Data reads are confined to
+the supplied frames and vector; the unrelated live source/destination registers
+remain unchanged. The pending operand is written **exactly once**. This is
+explicit serialized continuation, not implicit retry after partial effects.
+
+All **667,392 parent cases / twelve executions / 1,392 reports** retain identical
+results. Combined: **1,126,144 cases / fourteen executions / 1,488 reports**.
+The **242-input** private graph adds only this fixture and preserves all **39 CPU
+inputs**. Its maintained command revalidates the complete pinned parent chain,
+source/output identities, loaded assembly, command/settings, TRX roster/counters,
+all case IDs/statuses/weights and retained reports. Strict frozen replay passes.
+
+Four isolated defects cause exactly predicted mismatches: recomputed flags
+**430,080**; lost saved function code **229,376**; live destination reuse
+**458,752**; discarded pipe words **344,064**. Unaffected cases pass. A separate
+verifier independently checks all **1,462,272** complete diagnostic messages,
+including exact SR and model-width physical addresses of corrupted frame bytes.
+Eleven copied evidence controls reject missing reports, empty/foreign/untested
+combinations, changed source/roster/settings, missing witnesses, changed/missing
+retention and wrong loaded assembly. Validator paths are rebased, hardlinked
+targets unlinked before modification and original hashes preserved. Controls
+execute no CPU.
+
+The adjacent CPU assemblies in all five test output directories are separately
+hash-bound to their corresponding compiled candidate/mutant CPU assemblies. A
+copied changed CPU assembly is rejected by that identity verifier, with the
+original unchanged. This supplements the maintained loaded-test-assembly gate;
+it is an assembly-copy identity check, not new instruction execution.
+
+The isolated current **226-input / 37-CPU-input** production graph compiles the
+fixture with exactly two unavailable tests and zero executed cases. Explicit
+`NotExecuted` result rows and actual TRX counters are recorded. This is compile
+coverage, not production continuation replay.
+
+```powershell
+python scripts/test-copper68k-move-write-refault.py `
+  --qualified-parent-directory <frozen-MoveWriteChangedInputV2> `
+  --output <fresh-write-refault-output>
+# --validate-only requires unchanged complete producers, sources and evidence.
+```
+
+This qualifies the selected cold private returned-bank refault contract. It
+does not qualify actual initial MOVE origins, physical partial transfers,
+refault exception-entry failures, trace/interrupt continuation, malformed
+protocol repair or foreign hardware frames. Disputed native 030/040 boundaries
+remain without hardware evidence. No private CPU is imported, package published
+or regression retired; no new full CPU suite, consumer replay or physical timing
+qualification is claimed. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
+
+Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/MoveWriteRefaultDiscoveryV1`, `audits/MoveWriteRefaultV1`,
+`move-write-refault-controls-v1`, and `write-refault-production-default-v1`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| audit | `96abb10dcbe6c0c51f5922a28f2484018b2bbcdaaac9059eaf0416028eb87bd3` |
+| controls | `2f02ce4d895fd3741f6c1b8b487ac7117ec948f756441f482756a7e81e113a0e` |
+| reasons | `bf6229fa91391e7ea371b84427312dbe25155878ec046af98853b6a19861f0bf` |
+| default | `e54dc9a7cd6e04a2debb8160dffc0e1e178d533a43efe63d1fc92feb77e1d551` |
+| discovery | `85b19726b2d483c1912c93d36362482dfb24ee5eafd15cb0582d6ca65cc589a6` |
+| parent | `4f6e928d90ad460567c23817ee3680e87579d65ed6b725b17904cc7a41c62ceb` |
+| adjacent CPU binding | `ec66795f7044ecd74d8db89f7030e0add303663819de732e05dcf6024780157c` |
+| complete source/evidence linkage | `49210ade00f3abf6de0445284556fcf900fe90b2b7ba8de71c2cecd458159ee5` |

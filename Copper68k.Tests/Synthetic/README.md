@@ -1560,3 +1560,24 @@ the requested audit. All 39 private CPU inputs remain frozen; current production
 uses a distinct 37-input CPU graph and both tests are unavailable by default.
 Malformed protocols, wider forms, store refaults, trace/interrupts and hardware
 frames remain open. See [the changed-input qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-changed-validation-input--2026-10-08).
+
+
+Cold private pending-store refaults are opt-in with
+`COPPER68K_RUN_020_MOVE_WRITE_REFAULT=1`:
+
+```powershell
+python scripts/test-copper68k-move-write-refault.py `
+  --qualified-parent-directory <frozen-MoveWriteChangedInputV2> `
+  --output <fresh-write-refault-output>
+```
+
+The 458,752 new cases execute two returned-bank store faults and explicit
+mapped/software completion, retaining 667,392 parent cases. Saved SR/FC, exact
+frame writes, inactive banks and all retained words must survive; the destination
+is written once and the source never reread. Four mutations detect flags, FC,
+destination and pipe defects. Strict `--validate-only` requires complete unchanged
+evidence; missing fixtures, empty selection or mismatch/unsupported legal
+execution fail. All 39 private CPU inputs remain frozen. Current production
+uses a distinct 37-input CPU graph and both tests are unavailable by default.
+Physical partial transfers, entry faults, trace/interrupts, malformed protocols
+and hardware frames remain open. See [the returned-bank refault record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-returned-bank-pending-write-refaults--2026-10-08).

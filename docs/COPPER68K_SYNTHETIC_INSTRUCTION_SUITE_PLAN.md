@@ -3891,3 +3891,21 @@ Malformed-protocol repair, wider pending/pipe forms, returned-bank write refault
 trace/interrupts, physical partial transfers and general hardware frames remain
 required. Exact scope and evidence are in [the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-changed-validation-input--2026-10-08).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 private returned-bank write refaults — 2026-10-08
+
+The cold C023 software contract adds **458,752 passing programs** for two
+successive pending-store faults and explicit mapped/software completion, covering
+B/W/L, all returned banks, saved FC 1/5, all CCR states, zero-to-three pipe words
+and every rejected request byte. All **667,392 parent cases** retain their
+reports. Four isolated defects produce exactly predicted mismatches; all
+**1,462,272** failure messages are independently checked. Eleven evidence
+controls reject and strict frozen replay passes. All 39 private CPU inputs stay
+unchanged; production compiles two unavailable tests. No private candidate is
+imported, package published or regression retired.
+
+Actual original MOVE origins, physical partial transfers, refault entry faults,
+trace/interrupts, malformed protocol repair and general hardware frames remain
+required. Exact scope and evidence are in [the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#private-returned-bank-pending-write-refaults--2026-10-08).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
