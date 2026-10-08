@@ -188,9 +188,14 @@ it does not replace or discard their remaining gaps.
    Relocated evidence passes and eight copied corruptions reject, with original
    evidence unchanged, proof
    `e892970c10fbe3b654c99db8848f72e9c309406ca3f8c8fcc5b04d867e7e009f`.
-   The complete selection is running and still requires its own result: 18
-   named tests / 517,040 expected cases / 18 reports. Expected inventory is not
-   execution. This supplies maintained reproduction without closing other gates.
+   The complete selection now finishes with 18 passing named tests / 517,040
+   passing cases / 18 reports, followed by successful strict replay. Maintained
+   proof: `7367fe2e3452934531cc35d3eef26e842a95db8095e2592ec54340933e064f36`.
+   Independent source/assembly/method/case/report linkage and comparison with
+   all pinned historical reports pass:
+   `e97c134ce8a2a59c3b70cfefed2bac672c7f97c1546925bf1f619a8bea0f5bfd`.
+   This qualifies the complete fixture class on its frozen 233-input / 37-CPU
+   snapshot, not the whole CPU suite or other restoration/reference gates.
    A separate maintained saved-PC mutation audit detects exactly 48 repeated-
    fault mismatches while all 672 initial-fault controls remain byte-identical.
    It binds actual failing xUnit execution, exact diagnostics, case inventories,

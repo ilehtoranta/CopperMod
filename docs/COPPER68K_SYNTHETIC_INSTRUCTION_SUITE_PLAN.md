@@ -4397,3 +4397,19 @@ all CCRs, lanes, common FC1/5 and rejected bytes/slots on scalar/batch routes.
 Original frame construction, user-M, heterogeneous FCs, deeper refaults and
 trace/interrupt qualification remain open. The 480-case broader gate is retained.
 Milestone 6 remains **in progress**, `roadmapComplete=false`; no import or release.
+
+### Milestone 6 checkpoint — complete maintained nested audit, 2026-10-09
+
+The complete supplied-frame 040 nested-writeback selection finishes with all
+18 named tests / 517,040 cases / 18 reports passing. Strict replay passes.
+Independent verification binds all 233 source/project inputs, 37 production CPU
+inputs, three executed DLLs, exact loaded methods and every report, and confirms
+all reports are byte-identical to pinned earlier qualified slices. The frozen
+production CPU baseline matches after CRLF-to-LF conversion only; the two raw
+restoration differences remain explicit. This completes maintained execution
+qualification for the fixture class, including all its single/repeated-fault
+groups; it is not a newly executed whole CPU suite. The qualification record
+contains exact commands and proof identities. Broader reference disagreements,
+the 480-case restoration gate and original-frame/repair/trace/interrupt coverage
+remain open. Milestone 6 stays **in progress**, `roadmapComplete=false`; no
+private CPU import, new package or consumer execution is claimed.

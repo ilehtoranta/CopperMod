@@ -14217,3 +14217,43 @@ The complete nested selection is still running with its unchanged producer and
 233 source identities. This mutation proves fixture sensitivity, not hardware
 qualification or completion of wider restoration/reference gates. Milestone 6
 stays **in progress**, `roadmapComplete=false`; no import or publication.
+
+## Complete maintained nested-writeback audit — 2026-10-09
+
+The unchanged maintained producer completes its `complete` selection in
+`MaintainedNestedCompleteV1`: **18 passing named tests / 517,040 passing cases /
+18 reports**, zero mismatches, unsupported cases, untested cases or skipped
+rows in this selected fixture class. Actual execution exits 0; strict
+`--validate-only` replay independently recomputes the same maintained proof.
+
+The separate full-selection verifier checks the exact 18 loaded methods and
+definitions, completed counters, command/settings, all 233 current raw source/
+project inputs and assets, executed CPU/test assembly identities, every case
+count/status/weight and the exact report roster. All 18 reports are byte-identical
+to their pinned previously qualified slices, including retained initial-fault
+controls and repeated-fault examples. All 37 production CPU inputs match the
+retained frozen production baseline after CRLF-to-LF conversion only. The raw
+newline differences in `M68040Support.cs` and
+`M68kAdvancedTimingInterpreter.System.cs` remain recorded; no semantic CPU
+change is inferred from the restored checkout. The complete fixture uses the
+unchanged producer SHA-256
+`cc2a3f3ff2ba7d4938abf8d0c11f7355f9d058fda79006f920c8e0b255aacd96`.
+
+| Complete fixture evidence | SHA-256 |
+| --- | --- |
+| Maintained execution and strict replay proof | `7367fe2e3452934531cc35d3eef26e842a95db8095e2592ec54340933e064f36` |
+| Independent full selection and pinned-report linkage | `e97c134ce8a2a59c3b70cfefed2bac672c7f97c1546925bf1f619a8bea0f5bfd` |
+
+```powershell
+python scripts/test-copper68k-040-nested-writebacks.py --output artifacts/040-nested-complete
+python scripts/test-copper68k-040-nested-writebacks.py --validate-only --output artifacts/040-nested-complete
+```
+
+This qualifies the complete supplied-frame nested fixture on its frozen current
+test/production-CPU graph. It does not relabel the older whole-CPU result as an
+execution of the newer test graph, qualify physical FC spaces/partially accepted
+transfers or hardware timing, or close original-frame construction and broader
+repair/refault/operand/trace/interrupt gaps. The broader 480-case failing gate
+and failed broad software-reference gate remain. All launched audit workers
+are terminal. Milestone 6 remains **in progress**, `roadmapComplete=false`; no
+private CPU import, package publication or new consumer execution occurs.
