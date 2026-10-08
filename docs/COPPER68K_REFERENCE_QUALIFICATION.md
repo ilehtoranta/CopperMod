@@ -13206,8 +13206,8 @@ untested cases in this selection. It includes actual private MOVE entry/refault
 checks, current MOVE16 faults/reserved encodings, MOVES faults/completion and
 C021 metadata guards. Every previously qualified selected report is identical;
 new literal MOVES fault fixtures also pass. Independent verification checks the
-sources, loaded test methods and assembly paths, exact named outcomes, memory
-coverage report keys/weights and prior-report equality. Preflight proof:
+sources, loaded test methods and assembly paths, exact named outcomes, coverage
+report keys/weights and prior-report equality. Preflight proof:
 `c017d73a13bd91ee62b2e5fda1bdc65de7b03f1bb31e081a2c9a7ec24d6215af`.
 
 The first preflight's expected-roster recorder omitted eight MOVES names selected
@@ -13232,3 +13232,58 @@ live; completion and independent full verification remain pending. No candidate
 full-suite, consumer, hardware or production-import qualification is claimed by
 this start. Public CPU sources and package dependencies are unchanged. Milestone
 6 remains **in progress**, `roadmapComplete=false`.
+
+### Combined candidate consumers and deep references — 2026-10-08
+
+The isolated 258-input / 39-CPU-input candidate now has affected-consumer and
+same-build deep/reference evidence. This checkpoint does not finish the complete
+CPU replay, which is still running, or import private CPU code into production.
+
+A fresh local-only `1.5.2-synthetic-dev.78` package snapshots the 39 CPU/project
+inputs plus README/icon assets, 41 inputs total. CopperScreen uses the same clean
+`aa1dad5` archive as the retained .77 checks, with a new private package cache and
+an explicit NuGet version override. The production build passes with zero
+warnings/errors; **171 host passes / six unavailable**, **74 disk passes**,
+**1,080 engine passes** and **two Workbench 3.1 floppy replays** pass. Independent
+verification checks the exact retained test rosters, archive/source identities,
+NuGet-only dependency boundary, private cache, package and all three consumer CPU
+copies, commands/results and native input hashes. The live checkout is untouched.
+Consumer proof: `b4cf981621487404e583d20b79cdab6532b3307455ffa7f021c8284ae20dcb10`.
+This is local package validation, without publication, HD boot or throughput claims.
+
+The same frozen test/CPU assemblies pass three named deep/reference executions:
+**320,000 seeded cases / 32 reports**, **312,500 SingleStepTests cases / 125 files**
+and **536 Musashi programs / 88 explicit exclusions** across all eight profiles.
+Seed 68020 and 10,000 samples per family/profile, pinned complete input sets,
+loaded methods/assembly paths, exact commands/settings, report weights/statuses,
+per-file/program outcomes and source/binary identities are independently checked.
+Deep proof: `faf0f671a72e153dd3f2fce9a1bca8fe5addb7e41a4fce2a2acb64fd057a4699`.
+SingleStepTests qualifies the 000 corpus; Musashi programs remain self-checking
+software fixtures. Neither result is physical timing or complete hardware coverage.
+
+Eight actual invalid audit requests reject on these same assemblies: zero seed,
+zero samples, empty model selection, missing/empty SingleStepTests input, missing
+Musashi root and adjacent/separated duplicate model IDs. Each executes exactly
+one named failing test with the intended diagnostic, no coverage report and no
+CPU execution. Original inputs and binaries remain unchanged. Independent proof:
+`1d3c23788c0cbfae1f7ec4224216c660ed007d0343365e600a46a1d99220560a`.
+
+Cross-evidence linkage binds the complete 258-input graph and three loaded
+assemblies for preflight, discovery, deep references and controls to the exact
+39 CPU inputs in the local consumer package. Linkage proof:
+`b3bb40f371313364fc60747d97756f00f40647ba6959d548017c5e3e8d7d4d39`.
+The earlier V1 linkage remains separate; V2 explicitly binds the controls'
+producer input record rather than using an optional-key fallback.
+
+Before full completion, the expected coverage catalog is independently assembled
+from retained qualified runs: **13,737 reports / 110,928,842 logical cases**.
+Overlapping reference reports are identical; no conflicting report is silently
+replaced. Catalog proof:
+`c795fab6ee2591db10d04c69f245e48ed320be9159f91ff7b1fe3f09aaa640ca`.
+These are expected full results, not completed execution. The full verifier is
+prepared to check all 8,124 named outcomes, loaded definitions/methods, every
+report/key/weight, ten reference presets and immutable sources/inputs/binaries.
+
+The broad Basic mismatches, private recovery limits and disputed hardware
+boundaries remain open. Full replay/verification is pending; milestone 6 stays
+**in progress**, `roadmapComplete=false`, and PR #22 stays draft.

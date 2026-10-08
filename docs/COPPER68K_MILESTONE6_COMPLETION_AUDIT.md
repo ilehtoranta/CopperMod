@@ -52,6 +52,11 @@ it does not replace or discard their remaining gaps.
    qualified, and exact discovery proves 8,124 complete-suite names. That full
    execution has started; completed results and full verification remain pending.
    This is candidate evidence, not production import or hardware qualification.
+   The same candidate's local .78 consumer checks and same-build seeded,
+   SingleStepTests/Musashi and eight rejection controls are independently
+   verified. Source/package linkage is complete for these scopes. The full
+   expected catalog has 13,737 reports / 110,928,842 cases; actual complete-suite
+   execution and verification remain pending.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

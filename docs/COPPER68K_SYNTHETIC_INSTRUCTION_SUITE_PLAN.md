@@ -4141,3 +4141,18 @@ on the same frozen assemblies with ten qualified reference presets. Completion,
 independent full verification and affected-consumer qualification remain pending;
 no private CPU code is imported. See the qualification record for identities,
 preliminary attempts and scope. Milestone 6 stays **in progress**.
+
+### Milestone 6 checkpoint — combined candidate consumers and references, 2026-10-08
+
+The local-only .78 package preserves the NuGet consumer boundary and passes the
+clean CopperScreen build, 171 host tests / six unavailable, 74 disk tests,
+1,080 engine tests and two native floppy replays. Same-build deep audits pass
+320,000 seeded cases, 312,500 SingleStepTests cases and 536 Musashi programs /
+88 exclusions. Eight actual invalid requests reject before CPU execution.
+Independent linkage binds the 258-input graph, loaded assemblies and 39 packaged
+CPU inputs. Proofs and reference caveats are in the qualification record.
+
+The full expected report catalog is frozen at 13,737 reports / 110,928,842 cases;
+full execution remains running and its independent verification is pending.
+No publication or private production import occurs. Milestone 6 remains
+**in progress**, with broad reference, restoration and hardware gaps explicit.
