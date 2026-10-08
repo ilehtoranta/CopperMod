@@ -270,12 +270,14 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
 - SingleStepTests has the pinned 312,500-case 68000 instruction-body audit.
   The later checkpoints below add a pinned multi-model WinUAE bridge, the
   unchanged failing Basic discovery audit, and separately qualified trace,
-  trap/bounds, breakpoint, legal long-arithmetic and word-division presets. Remaining Basic disagreements and
-  unsupported integer execution still require per-case qualification; passing
-  focused presets do not replace the failing broad audit.
-- Generated 010 word-MOVE/MOVEA format-8 images now have the scoped continuation
-  gate below. Long transfers, other instruction families, foreign silicon images,
-  external bus faults, 020/030 formats 9/A/B and the remaining 040 format-7
+  trap/bounds, breakpoint, legal long-arithmetic and word-division presets. The
+  [first-failure ledger](#basic-first-failure-qualification-ledger--2026-10-08)
+  maps all 54 current non-passing rows to their qualified counterparts or explicit
+  unresolved questions. It does not qualify later unseen failures or replace the
+  failing broad audit; Basic 010 RTE flags and 060 STOP remain unresolved.
+- Selected generated 010 word/long MOVE/MOVEA format-8 images now have scoped
+  continuation gates below. Other instruction families, foreign silicon images,
+  external bus faults, general 020/030 formats 9/A/B and the remaining 040 format-7
   CP context transfer and detailed fault protocols remain unqualified. The advanced decoder does not implement all these
   legal restoration protocols; this is an implementation gap, not invalid encoding.
   The [040 access-frame discovery gate](#040-access-frame-restoration-discovery-2026-10-05)
@@ -11130,3 +11132,72 @@ Production default-selection `move-write-frame-fault-production-default-v1/verif
 `a721401813cfa32616267476dabacd2105a495971574a9a4a6421f2ad88819ff`.
 Complete linkage `move-write-frame-fault-complete-link-v1.json` SHA-256:
 `214e91c17a1cc6911f697939c6bb8a935be54ca32df52374b9406b910f7cbece`.
+
+## Basic first-failure qualification ledger — 2026-10-08
+
+A fresh isolated production-source replay of the unchanged restored Basic
+corpus confirms **1,327 passing directories / 46 mismatching / eight unsupported /
+zero untested**, across all eight profiles and 1,381 directories. It executes
+11,478,371 callbacks and 1,668,069 frame checks, including partial failing
+directories; these are not all-passing architectural cases. The single xUnit
+audit correctly fails. Native/input/source/assembly identities and all results
+are preserved in `audits/BasicCurrentLedgerV1`.
+
+[The machine-readable ledger](COPPER68K_BASIC_REFERENCE_QUALIFICATION_LEDGER.json)
+accounts for every observed first failure, with exact model/family, raw status,
+callback count, instruction words and diagnostic hash. It identifies **40
+reference-correction observations**, **12 reserved/undefined-input observations**,
+and **two unresolved architectural observations**. The 52 observations with
+counterparts bind the appropriate model/family row in one of ten already
+qualified presets, plus its report hash, callback count and documented source
+qualification. The two unresolved observations are 010 invalid-format/version
+RTE N/Z/V behavior and 060 ordinary STOP with S clear in the immediate word.
+Hardware is unavailable; neither is assigned a passing counterpart.
+
+This is an observed-first-failure review, not resolution of 52 Basic directories.
+Every ledger row retains `rawDirectoryResolved=false` and
+`laterRawFailuresUnobserved=true`. A passing canonical family sample cannot prove
+that the remainder of a raw failing directory is correct. The original corpus
+is neither patched nor filtered, and its eight reserved-extension unsupported
+rows are not disguised as successful legal integer execution. No overall Basic
+gate or architectural qualification status is promoted.
+
+The maintained validator binds the exact failed execution/command/model roster,
+source/input inventories, assemblies and report hashes, and matches every raw
+first failure to exactly one ledger row. Reserved-field observations use fixed
+encoding masks, without a production decoder. Counterparts require the same
+CPU/adapter source snapshot, a pinned full-integration proof, passing model/family
+rows and their comparator controls. Diagnostic 010/060 status remains separate
+from desktop readiness. Missing, duplicate, foreign or reclassified rows,
+unrelated counterparts and claims about unseen coverage fail acceptance.
+
+```powershell
+python scripts/test-copper68k-basic-qualification-ledger.py `
+  --basic-audit-directory <frozen-BasicCurrentLedgerV1> `
+  --qualified-report-directory <frozen-LatestPrivateFullCpuV2-production> `
+  --output <fresh-ledger-validation-output>
+```
+
+The ledger describes this pinned checkpoint; future replays require a fresh
+review of changed identities and first failures. Ten copied-ledger controls reject
+missing/foreign rows, wrong classification, absent/unrelated counterparts,
+changed words or report pin, a claimed raw pass, a claimed unseen result and
+missing fixtures. A final positive recheck leaves raw and qualified evidence
+unchanged. No CPU source change, package publication or regression retirement
+occurs. Broader combined-reference execution, later raw failure discovery,
+advanced exception protocols and outstanding architectural qualifications remain
+required. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Raw report SHA-256:
+`4a08c9eac033fcf8320f9da5b8ff8c430ebb6695bcf60e86cb3705a73f507fa7`.
+Original restored manifest/native hashes remain
+`b5741ca90fa75d3510ef25bac33d2d36d6a92ab2283f0666e762a5f1853a38ed` /
+`135d8c7d01137bbef2467e34207444984fd47a9076041a0c251848d2518b32ce`.
+
+Ledger SHA-256:
+`b21d8dd1ff4234a4d33bdce6d0bfb250125c8ced68df406fa1c17d9ecf9d9f15`.
+Successful validator / ten-control records:
+`a052e793addd064da6da5c51386b1f9c560e8b699070d63f2cf7b4f17f65a19e` /
+`3f330ac0e6fe4201916757defa4b5cdd7f5c075458f6860bff8f1ac1bde631e7`.
+Complete evidence linkage:
+`a8223397d35c31d589b91817e8f81b136a9c2b05661097b68c45078f1a998fd9`.

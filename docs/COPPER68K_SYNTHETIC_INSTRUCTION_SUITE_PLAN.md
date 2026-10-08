@@ -3523,3 +3523,22 @@ test retirement occurs. Supplied input, validation refaults/entry failures,
 returned-bank pending-write refaults and broader architectural requirements remain
 open. Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
 [frame-fault scope and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-frame-validation-and-load-faults--2026-10-08).
+
+### Milestone 6 broad-reference first-failure review — 2026-10-08
+
+Fresh unfiltered Basic execution confirms 1,327 passing, 46 mismatching and eight
+unsupported directories, zero untested, across 1,381 model/family rows. The audit
+fails as required. A maintained [qualification ledger](COPPER68K_BASIC_REFERENCE_QUALIFICATION_LEDGER.json)
+maps all 54 observed first failures: 40 reference-correction observations,
+12 reserved/undefined input observations and two unresolved architectural questions
+(010 RTE N/Z/V and 060 STOP S-clear). Qualified counterpart rows have exact
+model/family, report identity, source and comparator-control bindings.
+
+No raw directory is relabelled passing, and all later failures remain explicitly
+unobserved. The validator rejects missing/unrelated mappings and fabricated
+resolution; ten copied-ledger controls fail precisely. This completes the mapping
+of the currently observed failures, not the entire independent-reference goal.
+Combined reference execution, later-failure discovery, outstanding fault protocols
+and architectural questions remain required. No CPU change, publication or
+regression retirement occurs. Milestone 6 remains **in progress**,
+`roadmapComplete=false`. See the [review scope and command](COPPER68K_REFERENCE_QUALIFICATION.md#basic-first-failure-qualification-ledger--2026-10-08).

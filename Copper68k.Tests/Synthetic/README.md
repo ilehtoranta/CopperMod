@@ -1286,3 +1286,16 @@ The candidate totals 476,928 cases: 313,344 new validation/load-fault cases plus
 halt remain distinct; these qualify selected private images and existing software
 ordering. Physical BERR/partial transfers and general silicon images remain
 unqualified. See the [scope and evidence](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-frame-validation-and-load-faults--2026-10-08).
+
+## Broad reference first-failure review
+
+`scripts/test-copper68k-basic-qualification-ledger.py --basic-audit-directory
+<frozen-BasicCurrentLedgerV1> --qualified-report-directory
+<frozen-LatestPrivateFullCpuV2-production> --output <fresh-output>` verifies the
+54 observed non-passing model/family rows against the committed qualification
+ledger and pinned reference evidence. It validates a failed-audit checkpoint;
+it does not run CPU instructions or make the raw Basic audit passing.
+
+Every row retains its original status and marks later raw failures unobserved.
+Missing fixtures, mappings, counterparts and unsupported promotion claims fail.
+See the [scope, identities and remaining questions](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#basic-first-failure-qualification-ledger--2026-10-08).
