@@ -248,6 +248,10 @@ try {
             $expected['moves-write-recovery-batch'] = 4032
             $expected['nested-writeback-fault-scalar'] = 336
             $expected['nested-writeback-fault-batch'] = 336
+            $expected['move16-physical-fault-scalar'] = 20480
+            $expected['move16-physical-fault-batch'] = 20480
+            $expected['move16-physical-fixture-scalar'] = 320
+            $expected['move16-physical-fixture-batch'] = 320
             $expected['handler-prefetch-executing-scalar'] = 12288
             $expected['handler-prefetch-executing-batch'] = 12288
             $expected['handler-prefetch-entry-scalar'] = 196608

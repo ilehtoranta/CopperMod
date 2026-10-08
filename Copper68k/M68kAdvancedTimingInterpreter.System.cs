@@ -51,7 +51,21 @@ internal partial class M68kAdvancedTimingInterpreter
         source &= 0xfffffff0; destination &= 0xfffffff0;
         Span<uint> line = stackalloc uint[4];
         for (var i = 0; i < 4; i++) line[i] = ReadLong(source + (uint)i * 4);
-        for (var i = 0; i < 4; i++) WriteLong(destination + (uint)i * 4, line[i]);
+        try
+        {
+            for (var i = 0; i < 4; i++) WriteLong(destination + (uint)i * 4, line[i]);
+        }
+        catch (M68040MmuFaultException ex) when (_profile.Model == M68kAcceleratorModel.M68040 &&
+            !State.M68040Mmu.Enabled && ex.Fault.Write && ex.Fault.ByteCount == 4 &&
+            ex.Fault.AccessKind == M68kBusAccessKind.CpuDataWrite)
+        {
+            // All source reads completed before the first store. Keep their
+            // actual data; exception delivery must not reread or retry the line.
+            if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 16));
+            if (other >= 0 && other != register) WriteGeneralRegister(true, other, unchecked(State.A[other] + 16));
+            throw new M68040MmuFaultException(ex.Fault with
+            { CompletedMove16Line = new(line[0], line[1], line[2], line[3]) });
+        }
         if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 16));
         if (other >= 0 && other != register) WriteGeneralRegister(true, other, unchecked(State.A[other] + 16));
         CompleteTiming(M68kInstructionTimingKey.Movec);

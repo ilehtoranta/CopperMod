@@ -1854,6 +1854,8 @@ namespace Copper68k
                 (supervisor ? 1u : 0u);
     }
 
+    internal readonly record struct M68040Move16Line(uint Long0, uint Long1, uint Long2, uint Long3);
+
     internal readonly record struct M68040MmuFault(
         uint LogicalAddress,
         M68kBusAccessKind AccessKind,
@@ -1867,7 +1869,8 @@ namespace Copper68k
         bool UnbufferedOperandRead = false,
         uint? MovemEffectiveAddress = null,
         byte? MovesFunctionCode = null,
-        bool CompletedMovesWrite = false);
+        bool CompletedMovesWrite = false,
+        M68040Move16Line? CompletedMove16Line = null);
 
     internal sealed class UnsupportedM68040InstructionException : M68kEmulationException
     {
@@ -2564,6 +2567,11 @@ namespace Copper68k
             // half of an aligned long. Restart the executing instruction.
             if (!State.M68040Mmu.Enabled && fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
                 fault = fault with { StackedProgramCounter = ExecutionBoundaryProgramCounter };
+            else if (!State.M68040Mmu.Enabled && fault.CompletedMove16Line.HasValue &&
+                fault.Write && fault.AccessKind == M68kBusAccessKind.CpuDataWrite &&
+                State.ExceptionSequence == ExecutionBoundaryExceptionSequence &&
+                State.LastInstructionProgramCounter == ExecutionBoundaryProgramCounter)
+                fault = fault with { StackedProgramCounter = State.ProgramCounter };
             else if (TryCompleteFaultedMoveWrite(fault))
                 fault = fault with { StackedProgramCounter = State.ProgramCounter, CompletedMoveWrite = true };
             else if (!State.M68040Mmu.Enabled && fault.CompletedMovesWrite &&
@@ -4344,6 +4352,8 @@ namespace Copper68k
                     RaiseRteValidationAccessFault(fault, stackedProgramCounter);
                 else if (!State.M68040Mmu.Enabled && fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
                     RaiseUnbufferedReadAccessFault(fault, stackedProgramCounter, instruction: true);
+                else if (!State.M68040Mmu.Enabled && fault.CompletedMove16Line.HasValue && fault.Write)
+                    RaiseMove16WriteAccessFault(fault, stackedProgramCounter);
                 else if (fault.CompletedMoveWrite || fault.CompletedMovesWrite || (!State.M68040Mmu.Enabled && fault.Write &&
                     fault.MovemEffectiveAddress.HasValue && fault.AccessKind == M68kBusAccessKind.CpuDataWrite))
                     RaiseNormalWriteAccessFault(fault, stackedProgramCounter);
@@ -4365,6 +4375,30 @@ namespace Copper68k
 
         private void RaiseRteValidationAccessFault(M68040MmuFault fault, uint instructionPc)
             => RaiseUnbufferedReadAccessFault(fault, instructionPc, instruction: false);
+
+        private void RaiseMove16WriteAccessFault(M68040MmuFault fault, uint stackedPc)
+        {
+            // MC68040UM 8.4.6.7 example 4: MOVE16 TT=1; all four memory-aligned
+            // PD words survive for software completion. 8.4.6.3 contradicts
+            // example 4 on WB1 validity; zero follows 8.4.6.3 as an unqualified
+            // convention. This synchronous policy resumes after the instruction,
+            // with its address updates retained. It is not pipeline qualification.
+            var line = fault.CompletedMove16Line!.Value;
+            var savedSr = State.StatusRegister;
+            var modifier = (savedSr & M68kCpuState.Supervisor) != 0 ? 5 : 1;
+            var trace = (savedSr & 0x8000) != 0; // MOVE16 does not change flow.
+            State.RecordException(VectorBusError, stackedPc, savedSr);
+            State.StatusRegister = (ushort)((savedSr | M68kCpuState.Supervisor) & ~0xc000);
+            PushLong(line.Long3); PushLong(line.Long2); PushLong(line.Long1); PushLong(line.Long0);
+            PushLong(fault.LogicalAddress & 0xfffffff0);
+            for (var n = 0; n < 4; n++) PushLong(0); // No synchronous WB2/WB3.
+            PushLong(fault.LogicalAddress);
+            PushWord(0); PushWord(0); PushWord(0);
+            PushWord((ushort)((trace ? 0x2000 : 0) | 0x60 | 8 | modifier));
+            PushLong(trace ? State.LastInstructionProgramCounter : 0);
+            PushWord(0x7008); PushLong(stackedPc); PushWord(savedSr);
+            EnterAccessErrorHandler();
+        }
 
         private void RaiseNormalWriteAccessFault(M68040MmuFault fault, uint stackedPc)
         {

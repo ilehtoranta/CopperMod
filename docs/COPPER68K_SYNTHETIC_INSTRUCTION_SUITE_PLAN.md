@@ -3770,3 +3770,52 @@ interruption, other transfer spaces and physical pipeline behavior remain outsid
 this gate. MOVE16 write faults remain a failed private discovery. No old test is
 retired. Hardware is unavailable at disputed boundaries. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
+
+### Milestone 6 MOVE16 physical line-write recovery — 2026-10-08
+
+The physical MOVE16 write path now
+captures the four values already read, constructs format 7 with MOVE16 transfer
+attributes and pending line data, and retains synchronous following-PC/address
+updates. Actual integer software completion writes all four saved long words,
+restores registers and executes RTE without rereading the source or implicitly
+retrying the instruction. Already completed operand stores remain intact; the
+handler's explicit full-line writes are separately checked.
+
+The final bounded 221-input fixture passes **41,600 MOVE16 programs** and retains
+**104,224 MOVES/nested-handler programs**. The preceding CPU fails all **30,720
+write-fault combinations**. Captured diagnostic messages are limited to 10,000
+per route; all case IDs and statuses are independently verified. Four mutations
+detect wrong line data, transfer type, return PC and lost address updates.
+Review also exposed a test expectation sampled from live post-fault USP. The
+corrected fixture uses the captured pre-fault expectation; a fifth corruption
+control reproduces the former loophole and detects every affected write case.
+
+The composed ordinary report-only gate passes **86,557,034 cases / 751 batches**
+and rejects missing/incomplete MOVE16 reports. A fresh local-only `.77` NuGet
+package passes the clean consumer Release build, 171 host tests (six unavailable),
+74 disk tests, 1,080 engine diagnostics and two native floppy replays. Exact
+source/package/loaded-DLL and archive/input/result linkage is independently
+verified. No public package is released.
+
+The complete frozen 221-input CPU audit passes **5,326 tests / 53 unavailable /
+zero failures** (5,379 total), with **86,749,514 logical cases / 951 profile
+reports / ten native presets**. All 945 retained reports match the accepted
+predecessor; six added reports match focused evidence. The full audit uses V3;
+the final V4 focused audit strengthens one test-only USP expectation and all
+twelve focused reports remain byte-identical. Exact linkage proves the single
+test-line difference and identical 37 CPU inputs across both revisions and `.77`.
+This is not relabeled as a full execution of V4.
+
+A fresh broad Basic replay with the final V4 fixture and current CPU reproduces
+**1,379 passing / two mismatching directories**, 12,660,659 callbacks and
+2,327,142 exception frames. The unresolved 010 invalid-format RTE flags and 060
+S-clearing STOP behavior keep that separate gate failed. No family is excluded;
+later failures within the two failing groups remain unobserved. See
+[the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040-move16-physical-line-write-recovery--2026-10-08).
+
+MC68040UM 8.4.6.3 contradicts example 4 in 8.4.6.7 on WB1 validity; the bit remains
+unqualified. Read transfer type also remains unqualified. Saved following PC and
+address updates qualify the synchronous policy, not physical pipelines. Broader
+register/alias/user-mode combinations, enabled MMU/cache and physical timing
+remain outside this gate. No old regression is retired. Hardware is unavailable
+at disputed boundaries. Milestone 6 remains **in progress**, `roadmapComplete=false`.

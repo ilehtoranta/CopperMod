@@ -11955,3 +11955,99 @@ faults, enabled MMU/cache or physical pipeline/timing. MOVE16 write-fault discov
 remains failed and unpromoted. Hardware is unavailable for the trace/manual
 boundary disagreements. No private C023 production candidate is imported and no
 package is published. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+## 040 MOVE16 physical line-write recovery — 2026-10-08
+
+Actual normal-space MOVE16 destination faults previously escaped through the
+format-zero path. The correction retains the four already-read long words,
+builds format 7 with the MOVE16 write attributes and PD0..PD3, and preserves
+completed synchronous address updates and the following PC. Successful execution
+ordering and timing policy are unchanged. The handler explicitly writes the
+saved line, restores registers and executes RTE; the original instruction is
+never automatically retried and its source is never reread. Previously accepted
+destination stores remain intact. Explicit software full-line completion may
+write those destination long words again.
+
+`SyntheticM68040Move16FaultTests` uses five fixed legal opcode forms, independently
+chosen operands, all 16 source alignment lanes paired with complementary
+destination lanes, ISP/MSP, CCR 0/31 and every rejected byte. The paired lanes
+are not a full source/destination Cartesian product. Fault-free fixtures provide
+640 cases; 10,240 read-fault cases check format 7 and preserved state; 30,720
+write-fault programs additionally cover 0/T1/T0, defined transfer attributes,
+latched line data, retained address effects, every integer handler instruction,
+register/stack restoration, RTE, pending trace and a following MOVEQ sentinel.
+All **41,600 cases pass**; all **30,720 write cases fail** against the preceding
+CPU. All **104,224 accompanying MOVES/nested-handler programs** retain their
+results and eight reports. Missing or incomplete MOVE16 reports reject. The
+ordinary semantic gate passes **86,557,034 logical cases / 751 batches**.
+
+Four owned mutations detect wrong PD3 data, wrong TT, opcode return PC and lost
+address updates at precisely predicted combinations. Review exposed an inactive
+USP expectation read from live post-fault state. Final V4 uses the captured
+pre-fault value. A fifth control demonstrates that V3 incorrectly passes the
+damaged-USP implementation while V4 detects all 30,720 affected write cases.
+No production change is needed for this test correction. All twelve V4 focused
+reports are byte-identical to V3. Failure diagnostics have the existing 10,000
+message cap per route; every case ID/status is independently checked, and the
+captured messages are checked in canonical generation order. Initial verifier
+failures caused by the cap and lexical ordering are preserved; corrected
+verifiers enforce the complete inventories without weakening expectations.
+
+The complete frozen **221-input / 37-CPU-input** full audit passes **5,326 tests /
+53 unavailable / zero failures** (5,379 total): **86,749,514 logical cases / 951
+profile reports / ten native presets**. All 945 retained reports match the prior
+full checkpoint and six added reports match focused evidence. This full run uses
+V3. Final focused V4 differs by one captured-USP expectation line. Independent
+linkage verifies both exact source snapshots, that one-line transformation,
+report equality and the same 37 production inputs; it does not relabel V3 as a
+full V4 execution.
+
+The immutable local-only `1.5.2-synthetic-dev.77` package uses these same CPU
+inputs. Clean committed CopperScreen `aa1dad5` consumers pass the Release build,
+171 host tests (six unavailable), 74 disk tests, 1,080 engine tests and two
+Workbench 3.1 floppy replays. Exact archive/project/test/input rosters and all
+three loaded CPU DLLs are independently bound to the package. Earlier records
+retain their full-pending status; the separate complete-link proof records the
+finished gate. No HD boot or host-throughput claim is made.
+
+A fresh pinned broad Basic replay with the current CPU and final V4 fixture
+reproduces **1,379 passing / two mismatching / zero unsupported / zero untested
+directories**, 12,660,659 callbacks, 2,327,142 exception frames and 32 comparator
+probes. Every row/status/diagnostic/counter/probe matches the older broad result,
+apart from verified loaded CPU/test assembly identities. The 010 invalid-format
+RTE CCR mismatch and 060 ordinary S-clearing STOP mismatch remain unresolved.
+The requested broad test exits 1; its gate remains failed. Later failures inside
+those two failing directories remain unobserved. No Basic family is excluded.
+
+The pinned [MC68040 user manual](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+8.4.6.3 specifies invalid WB1 for MOVE16 writes, while example 4 in 8.4.6.7
+specifies valid WB1. WB1 validity remains unqualified. The example and transfer
+table also disagree about read TT; it remains outside the read gate. Saved
+following PC and address effects qualify the synchronous execution policy,
+not physical pipeline behavior. No real hardware is available. Broader general
+register/alias/user-mode combinations, enabled MMU/cache and physical timing
+remain outside this bounded gate. No regression is retired, private C023 CPU
+candidate imported or public package released. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
+
+Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/Move16RecoveryBeforeV4`, `audits/Move16RecoveryAfterV4`,
+`mutations/Move16RecoveryV1`, `mutations/Move16UserStackV1`,
+`move16-recovery-ordinary-controls-v1`, `audits/Move16RecoveryFullV1`,
+`consumer-77-final`, `audits/QualifiedBasicMove16RecoveryV1` and
+`reference/Move16ManualV1`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| initialFocused | `f010b76fded5dcfb87e574d92e5c98a9066b0919b84dc024e97c59c87deabb2a` |
+| finalFocused | `534c2482052f3251c52ed275ba619d5fc81f2bb4020a814789f782f73262d8d2` |
+| mutations | `239925be9b75e271e60884e46fd1d181ad5110ac621aabc8e5febc3582c4d7ab` |
+| userStackControl | `5c94ef61f4d4c0f03384f8c8d804bc628746cf91d64981d8e6842790bb403ddf` |
+| ordinaryControls | `9bfb854c7e3569963084d0218ff55de9b96868dcc846acd1cb8ca279a3da114d` |
+| consumer | `ef4e3017ebfdf7471378dff94a430bfc0998eb9bbe7bd93dee4a16336b1d75f2` |
+| package | `6d8206c1e2d8d41fb584477ced38a3d30708d47a2594f12eb24becff48723fbd` |
+| full | `46bddaccc8921960717c6f62a3fae9eb57eaf3dade9cf100d5294b3c617d1298` |
+| manual | `c426a8429ca15f342b31c8eb5f407b442e383d1e48f3c7be4aa649ad30c8ef82` |
+| complete source/evidence link | `093cec2ced250c78676790816de51aebde285f111367784da86206912dd8bf8f` |
+| current broad Basic replay | `d8c4e6f6e7a94e07c6f76cb9b66f1d1ddcb1672dd2195c328171428ee1642d90` |

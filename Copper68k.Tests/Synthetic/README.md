@@ -1444,3 +1444,30 @@ wide full suite or consumer run. Outer-frame construction, mixed slot widths,
 trace/interrupt interruption, other transfer spaces, enabled MMU/cache and
 physical timing remain unqualified. See [the nested-handler record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-nested-integer-writeback-handler-faults--2026-10-08).
 Milestone 6 remains in progress; nothing is published.
+
+
+Ordinary coverage additionally requires 320 `move16-physical-fixture-scalar` and
+320 `move16-physical-fixture-batch` cases, plus 20,480 `move16-physical-fault-scalar`
+and 20,480 `move16-physical-fault-batch` programs. Five literal legal MOVE16 forms,
+all 16 source alignment lanes paired with complementary destination lanes,
+ISP/MSP, CCR 0/31 and every rejected line byte are checked. Write programs cover
+0/T1/T0 and execute an actual integer full-line completion handler, RTE and a
+following sentinel. Latched PD0..PD3, defined transfer fields, registers, canaries
+and stacks are checked instruction by instruction; the source is not reread and
+the instruction is not implicitly retried. Explicit software completion can
+retouch destination long words accepted before the fault.
+
+All 41,600 programs pass; the preceding CPU fails all 30,720 write cases. Four
+mutations detect lost line data, wrong transfer type, wrong following PC and lost
+address updates. A fifth control proves that the final fixture detects damaged
+inactive USP using its captured pre-fault expectation. The complete full CPU
+audit passes 5,326 tests / 53 unavailable / zero failures: 86,749,514 cases / 951
+reports / ten native presets. The full frozen V3 fixture and final focused V4
+fixture differ by that one expectation line, with identical CPU inputs and
+byte-identical focused reports. The ordinary gate passes 86,557,034 cases / 751
+batches and rejects missing/incomplete MOVE16 reports. Local-only `.77` NuGet
+consumers pass the clean Release build, host/disk/engine tests and two floppy
+replays. WB1 validity, read transfer type, broader aliases/user-mode entry and
+physical pipelines remain unqualified. The refreshed broad Basic replay still
+has two mismatching directories. See [the MOVE16 record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-move16-physical-line-write-recovery--2026-10-08).
+Milestone 6 remains in progress; nothing is published.
