@@ -129,6 +129,17 @@ it does not replace or discard their remaining gaps.
    retains all 480 cases and the failing gate. Other user-width combinations,
    user-M returns, heterogeneous FCs, deeper refaults, trace/interrupts and
    original slot construction remain open.
+   The eighteen remaining mixed-width user triples subsequently pass 64,512
+   new cases plus 672 unchanged controls in four named tests. Independent proof
+   `7aefba59b42a4371e59dec1f656a9b1e1aef2016bfecd6a01eadd0722ffd440f`
+   verifies their exact identifiers, sources, assemblies and reports. Together
+   with the separate earlier slices, supplied user/ISP/MSP returns now cover
+   all 27 B/W/L triples, all CCRs, common FC1/5, lanes and rejected bytes/slots.
+   Two restored CPU files differ from the retained baseline only in line endings;
+   exact CRLF-to-LF comparison is recorded, not raw-source equality. No shared
+   execution-fixture or CPU semantic change occurs. User-M returns,
+   heterogeneous FCs, deeper refaults, trace/interrupts and original construction
+   remain open; the 480-case broader gate is retained.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

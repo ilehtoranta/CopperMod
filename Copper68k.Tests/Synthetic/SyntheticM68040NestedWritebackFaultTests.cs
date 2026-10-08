@@ -97,6 +97,37 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
         report.Complete(output);
     }
 
+    [EnvironmentFact("COPPER68K_RUN_040_USER_MIXED_NESTED_WRITEBACK", "require remaining mixed-width supplied user-frame returns"), Trait("Suite", "ReferenceDiscovery")]
+    public void RemainingUserMixedWidthsScalar() => RemainingUserMixedWidths(false);
+
+    [EnvironmentFact("COPPER68K_RUN_040_USER_MIXED_NESTED_WRITEBACK", "require remaining mixed-width supplied user-frame returns"), Trait("Suite", "ReferenceDiscovery")]
+    public void RemainingUserMixedWidthsBatch() => RemainingUserMixedWidths(true);
+
+    private void RemainingUserMixedWidths(bool batch)
+    {
+        var report = new CoverageBatch("68040", "user-mixed-nested-writeback-fault-" + (batch ? "batch" : "scalar"));
+        foreach (var w1 in new[] { 1, 2, 4 })
+        foreach (var w2 in new[] { 1, 2, 4 })
+        foreach (var w3 in new[] { 1, 2, 4 })
+        {
+            // Exactly two distinct widths: the preceding user-return slice
+            // separately qualifies same-width and three-distinct-width triples.
+            if ((w1 == w2 && w2 == w3) || (w1 != w2 && w2 != w3 && w1 != w3)) continue;
+            int[] widths = [w1, w2, w3];
+            for (var ccr = 0; ccr < 32; ccr++)
+            for (uint lane = 0; lane < 4; lane++)
+            foreach (var fc in new[] { 1, 5 })
+            for (var slot = 1; slot <= 3; slot++)
+            for (var faultByte = 0; faultByte < widths[slot - 1]; faultByte++)
+            {
+                var id = $"68040/writeback/user-mixed-nested-physical-fault/sizes={w1}-{w2}-{w3}/ccr={ccr:X2}/lane={lane}/FC={fc}/bank=user/WB={slot}/byte={faultByte}";
+                try { Run(batch, widths, ccr, lane, fc, "user", slot, faultByte); report.Record(id, "passing", null); }
+                catch (Exception ex) { report.Record(id, "mismatching", ex.ToString()); }
+            }
+        }
+        report.Complete(output);
+    }
+
     private static void Run(bool batch, int[] widths, int ccr, uint lane, int fc, string bank, int faultSlot, int faultByte)
     {
         var bus = new SyntheticM68040AccessDoubleFaultTests.FaultBus();

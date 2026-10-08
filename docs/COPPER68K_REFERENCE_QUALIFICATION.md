@@ -13803,3 +13803,58 @@ Broad failed reference gates and unavailable hardware remain unqualified. The
 read-candidate full run requires its own terminal result and independent proof.
 Milestone 6 remains **in progress**, `roadmapComplete=false`; no CPU import or
 package publication occurs.
+
+### Remaining supplied user-frame width triples — 2026-10-09
+
+The eighteen B/W/L triples with exactly two distinct widths complete the
+remaining supplied user-return width dimension. The shared `Run` fixture is
+unchanged byte-for-byte in text compared with `2c3b1d2`; only two environment
+facts and their deterministic scenario generator are added. They run scalar
+and batch paths across all 32 CCRs, four lanes, common FC1/5, every pending
+slot and every rejected byte. Each route has 32,256 new cases. The previous
+same-width and three-distinct-width user triples retain their separate evidence.
+
+Fresh execution completes with four named passes, zero failed or skipped:
+64,512 new cases plus 672 retained controls. Independent verification binds all
+233 raw snapshot inputs and assets, all three executed assembly identities,
+the exact command/settings, loaded test definitions/methods, completed TRX
+counters and every report key/status/weight. Both retained reports are identical
+to the earlier production full-run controls. Original handler execution,
+saved-SR/PC, stack selection, pending stores, canaries, DFC/SFC, store ordering
+and following-instruction checks are reused without changing their expectations.
+
+The restored checkout differs from the pinned production CPU baseline only by
+line endings in `M68040Support.cs` and `M68kAdvancedTimingInterpreter.System.cs`.
+The verifier checks the baseline raw hashes and compares all 37 CPU files after
+CRLF-to-LF conversion only. It does not claim raw equality for those two inputs,
+reuse a previous assembly identity or qualify current mainline/consumer binaries.
+
+Reproduce with fresh output directories; require four completed named passes:
+
+```powershell
+$env:COPPER68K_RUN_040_USER_MIXED_NESTED_WRITEBACK = '1'
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = [IO.Path]::GetFullPath('artifacts/user-mixed-nested-reports')
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/user-mixed-nested-build --filter 'FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.RemainingUserMixedWidths|FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.ActualHandlerStoresFaultCompleteAndResume' --logger 'trx;LogFileName=returns.trx' --results-directory artifacts/user-mixed-nested-results
+```
+
+| Selected evidence | SHA-256 |
+| --- | --- |
+| `UserMixedNestedV1/inputs.json` | `522b906f3a39a66bd596a46f67943a7cbc7d6a2e48746bb5abc921c7e4304022` |
+| `UserMixedNestedV1/execution.json` | `9a3a252eb364d84a56fc6cb0e44537c2ad63c718790c661e6e9aedf013d29bb0` |
+| `UserMixedNestedIndependentV1.json` | `7aefba59b42a4371e59dec1f656a9b1e1aef2016bfecd6a01eadd0722ffd440f` |
+| New scalar report | `481dd6480ac02ef9205781081284331b46d30fbe521827133fd00b6917c409fb` |
+| New batch report | `0cab2d95c97c3139025d94d7aa0bb4cdfcd4770ca32b25cf85946927cdc99693` |
+| Later diagnostic-only static proof | `efee44dfa6d966e6084c9a57edc917446babff745c535b79e7c162956a85c29a` |
+
+The subsequent inventory description acknowledges the combined supplied-frame
+width coverage; its separate static check retains all 480 untested protocol
+cases, enabling condition and failing gate. It is not part of the executed
+snapshot. No earlier mixed-width/user-return evidence is relabeled as execution
+of this later test source. No full-current-suite, API, package, consumer or
+hardware result is claimed. The live private read-candidate full run retains
+its own source/assembly identities and still requires independent verification.
+
+Original frame construction, user-M returns, heterogeneous FCs, deeper repeated
+faults and trace/interrupt interruption remain required. The broad reference
+disagreements remain failed/unqualified. Milestone 6 remains **in progress**,
+`roadmapComplete=false`; PR #22 stays draft. No CPU import or release occurs.

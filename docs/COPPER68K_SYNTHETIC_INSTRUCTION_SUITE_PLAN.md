@@ -4291,3 +4291,17 @@ not relabeled as this later source execution. The qualification log records
 scope, commands, identities and wider user-width/user-M/FC/refault/trace gaps.
 All 480 broader protocol cases remain untested and fail their requested gate.
 Milestone 6 remains **in progress**, `roadmapComplete=false`; no import or release.
+
+### Milestone 6 checkpoint — remaining supplied user widths, 2026-10-09
+
+Four selected tests pass 64,512 new cases for the eighteen remaining mixed-width
+user triples and 672 retained controls with identical reports. Independent
+verification checks exact case identifiers, source/assembly/method identities
+and the unchanged shared execution fixture. All 37 CPU inputs match the retained
+baseline after CRLF-to-LF conversion only; two raw identities changed during
+checkout restoration. Earlier user and supervisor slices retain separate frozen
+evidence. Their combined supplied-frame coverage includes all 27 B/W/L triples,
+all CCRs, lanes, common FC1/5 and rejected bytes/slots on scalar/batch routes.
+Original frame construction, user-M, heterogeneous FCs, deeper refaults and
+trace/interrupt qualification remain open. The 480-case broader gate is retained.
+Milestone 6 remains **in progress**, `roadmapComplete=false`; no import or release.
