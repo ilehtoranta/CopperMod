@@ -10987,7 +10987,7 @@ zero-to-three retained instruction words in scalar and one-instruction batch
 execution. Literal MOVE `(A7)+,(A1)` encodings deliberately have live registers
 unrelated to the saved destination: returning must consume the serialized pending
 cycle without reading/recalculating the source, incrementing A7 or recomputing
-completed flags. The verifier checks every architectural register, all three
+completed flags. The verifier checks PC/SR, D/A registers, all three
 stack banks, complete memory including frame/destination guards, exception
 sequence, exact write count/address/width, and three following literal MOVEQ
 sentinels. Saved words must avoid refetch while remaining words use backing code.
@@ -11053,3 +11053,80 @@ Control provenance `move-write-frame-controls-v2/provenance.json` SHA-256:
 `07b8a5b4c7ae93ce1da3d43e0407645ec298778c365775186aa6053cb76efb8b`.
 Production default-selection `move-write-frame-production-default-v1/verification.json` SHA-256:
 `819c957c16dabff105af53d4149062beb3253a2a016f4790d1fcfe17de12f248`.
+
+## Private pending-write frame validation and load faults — 2026-10-08
+
+`SyntheticM68020MoveWriteFrameFaultTests` adds **313,344 passing cases** and
+reexecutes all **163,584 cold-frame cases** without changing their complete
+reports: **476,928 cases / six executions / 1,152 reports** in the candidate
+selection. All EC020/A1200/020/030 profiles use the public factory and isolated
+sources/builds. The sole source addition to the cold-frame parent is this fixture;
+all **39 private CPU inputs** remain byte-identical to the full integration and
+`.73` consumer checkpoint. No CPU correction or new package is needed.
+
+The fixture denies every byte of every request in the literal private C023
+read protocol, including the far-end validation read, explicit context/output
+loads, each active pipe word and every opaque tail word. Repeated reads have
+separate occurrence selectors. It covers B/W/L writes, pending/DF-clear cycles,
+ISP/MSP entry, all four returned banks, low/high frame locations, pipe lengths
+zero-to-three, CCR 0/31, and scalar/one-instruction batch routes. These are mapped
+access rejections, not physical partial-cycle or external BERR-pin qualification.
+
+The **61,440 validation cases** check an intact original image and a new private
+format-B validation image containing the original RTE PC, fault address, phase,
+previously read SR/PC/format and empty software input. The existing private word
+write sequence, PC/SR, D/A registers, stack/memory state and exact exception count are
+checked. Executing the handler's RTE then resumes the rejected read, skips all
+completed header reads, consumes both frames, selects the supplied return bank,
+and completes only the pending write. Three literal following MOVEQ sentinels
+verify retained instruction words and backing-code fetches. Source/EA/flags are
+not recalculated and software-completed cycles perform no pending write.
+
+The **251,904 internal-load cases** must halt without another exception image,
+stack/status commitment or destination write; a subsequent scalar or batch call
+must perform no memory access. This preserves the already qualified distinction
+between validation fault recovery and internal-load halt described by MC68020UM
+6.1.12 / MC68030UM 8.1.13, while extending it to the selected private pending-write
+images. The opaque image and exact software request/write order are not silicon
+internal-state claims.
+
+Four sole mutations produce **251,904** missing-halt failures, **251,904** premature
+stack-commit failures, **49,152** completed-validation replay failures and
+**61,440** wrong saved-PC failures. An independent audit checks every failure's
+specific state/read/memory cause and all unaffected passing cases. The maintained
+command verifies complete source/assembly/selection identities, exact xUnit
+rosters/counters, report keys/weights/witnesses, TRX summaries, and byte-for-byte
+retained report content. Frozen `--validate-only` revalidation passes unchanged.
+
+Ten copied evidence controls reject missing/empty/untested/foreign new cases,
+changed source, roster or settings, missing mutation witnesses, and changed or
+missing cold-frame retention. Their rebased manifests are validator fixtures,
+with no CPU execution claim. Original evidence remains unchanged. A separate
+isolated production-source build compiles the new fixture and discovers its two
+optional cases as unavailable without the private flag; this is not instruction
+execution coverage.
+
+```powershell
+python scripts/test-copper68k-move-write-frame-fault.py `
+  --qualified-parent-directory <frozen-MoveWriteFrameV1> `
+  --output <fresh-frame-fault-output>
+# --validate-only requires the complete unchanged parent/input/report chain.
+```
+
+The selected C023 validation/load-fault contract is now covered. Software-supplied
+validation input, validation refaults/entry failures, returned-bank pending-write
+refaults, trace/interrupts and broader origins/images remain required. General
+hardware images and native A7/trace/repeated-fault-PC disagreements remain
+architecturally unqualified. No production CPU import, publication or regression
+retirement occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Proof `audits/MoveWriteFrameFaultV1/proof.json` SHA-256:
+`93ec2beed12410b94ce6cf448e1b5bc67e010474edf5ed7b20b2b7a765ae123e`.
+Controls `move-write-frame-fault-controls-v1/verification.json` SHA-256:
+`2ec5318c296b31b06c1d71c3a175d3709fd0dde0ce5abebcad682c9159b47bbd`.
+Causal/source linkage `move-write-frame-fault-causal-link-v1.json` SHA-256:
+`cb915cbb58d33cf25195b8b3d96ebde8522b1a48ed59e6bb95695e1de402f34d`.
+Production default-selection `move-write-frame-fault-production-default-v1/verification.json` SHA-256:
+`a721401813cfa32616267476dabacd2105a495971574a9a4a6421f2ad88819ff`.
+Complete linkage `move-write-frame-fault-complete-link-v1.json` SHA-256:
+`214e91c17a1cc6911f697939c6bb8a935be54ca32df52374b9406b910f7cbece`.

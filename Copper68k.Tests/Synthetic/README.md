@@ -1271,3 +1271,18 @@ preserved completed state and rejection atomicity under the private software
 contract. They do not qualify silicon internal images or promote architectural
 unsupported forms. Existing ordinary CI counts and full-suite checkpoint scopes
 remain unchanged. See the [scope and evidence](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-cold-and-relocated-pending-write-frames--2026-10-08).
+
+## Private pending-write frame faults
+
+`scripts/test-copper68k-move-write-frame-fault.py --qualified-parent-directory
+<frozen-MoveWriteFrameV1> --output <fresh-output>` executes the two optional
+`SyntheticM68020MoveWriteFrameFaultTests` batches, retains the four cold-frame
+batches, and runs four targeted mutations on isolated sources. The parent and
+its complete pinned upstream chain must remain available. `--validate-only`
+rejects missing or changed inputs, selections, reports and retained evidence.
+
+The candidate totals 476,928 cases: 313,344 new validation/load-fault cases plus
+163,584 exactly retained cold-frame cases. Validation recovery and internal-load
+halt remain distinct; these qualify selected private images and existing software
+ordering. Physical BERR/partial transfers and general silicon images remain
+unqualified. See the [scope and evidence](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-frame-validation-and-load-faults--2026-10-08).

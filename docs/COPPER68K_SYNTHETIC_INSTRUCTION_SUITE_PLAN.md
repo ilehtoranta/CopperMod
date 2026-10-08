@@ -3502,3 +3502,24 @@ software-protocol results, not hardware frame or trace qualification. General
 foreign images, validation/load/entry faults, changed-bank refaults and broader
 continuations remain required. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See the [scope, command and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-cold-and-relocated-pending-write-frames--2026-10-08).
+
+### Milestone 6 private pending-write frame faults — 2026-10-08
+
+Two optional batches add 313,344 passing cases covering every byte and occurrence
+of the selected C023 validation/load requests across all four 020/030 profiles.
+They retain 163,584 cold-frame cases exactly: 476,928 cases / six executions /
+1,152 reports. Validation faults preserve the original frame, serialize the
+completed phase and recover through explicit RTE without repeating prior reads;
+internal-load faults halt without committed stack/data effects or a second image.
+Both outcomes check PC/SR, D/A registers, memory, banks, exception counts,
+request order and resumed sentinels. CCR scope is 0/31 for this structural group.
+
+Four mutations detect missing halt, early stack commitment, completed-read replay
+and wrong saved PC with precise causes; ten corrupted evidence fixtures fail.
+Frozen revalidation passes. An isolated production build confirms compilation
+and two optional unavailable cases, not passing instruction coverage. All 39
+private CPU inputs remain unchanged; no CPU correction, import, publication or
+test retirement occurs. Supplied input, validation refaults/entry failures,
+returned-bank pending-write refaults and broader architectural requirements remain
+open. Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
+[frame-fault scope and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-frame-validation-and-load-faults--2026-10-08).
