@@ -3925,3 +3925,17 @@ Wider operand forms, physical partial transfers, refault entry failures,
 trace/interrupts, malformed protocols and hardware frames remain open. See
 [scope and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-actual-move-secondary-entry-faults--2026-10-08).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 EOR postincrement consolidation — 2026-10-08
+
+The captured pure EOR byte postincrement fact is replaced by **32,768 passing
+cases** across all eight profiles, every Dn/An, user/supervisor and all CCR states.
+Before retirement, an extra-increment mutation failed both the original fact
+and all replacement cases with exactly checked diagnostics. Nine evidence
+controls passed. After exact one-fact removal, eight replacement batches and
+all four retained address-error/trace siblings pass; strict replay and source/
+assembly linkage pass. The ordinary gate requires 4,096 cases per profile.
+All 37 production CPU inputs remain unchanged; no private CPU import or release.
+See [the retirement mapping and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#eor-byte-postincrement-consolidation--2026-10-08).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

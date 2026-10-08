@@ -96,6 +96,7 @@ try {
             'logical-boundaries'=31808;
             'logical-and-indirect-captured'=12288;
             'logical-not-displacement-captured'=3072;
+            'logical-eor-postincrement-captured'=4096;
             'logical-invalid-operands'=13248;
             'logical-unary-invalid-operands'=$(if ($model -in @('68000','68010')) {12544} elseif ($model -eq '68060') {10304} else {10432});
             'logical-bitfield-invalid-operands'=13312;

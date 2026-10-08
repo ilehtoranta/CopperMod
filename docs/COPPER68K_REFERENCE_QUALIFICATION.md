@@ -12529,3 +12529,73 @@ Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
 | parent | `96abb10dcbe6c0c51f5922a28f2484018b2bbcdaaac9059eaf0416028eb87bd3` |
 | resharding equivalence | `602b547cf166d1243cff0a3435f7a0917f2d47168b6c679b1f51c493de563940` |
 | complete source/evidence linkage | `7682e265b8bd10afe8986375185aad399aed4da06143a058f44d4158f5869a88` |
+
+
+## EOR byte postincrement consolidation — 2026-10-08
+
+The pure semantic fact `M68kLogicalTests.EorBytePostincrementDestinationAdvancesOnce`
+is replaced by `SyntheticEorPostincrementTests` with **32,768 passing cases /
+eight batches** across all eight selected profiles. The captured `BF1B` operands
+remain literal: D7=`6A34196D`, destination byte=`BB`, result=`D6`; the canonical
+supervisor/CCR=31/A3 case retains destination `2000` and final A3=`2001`.
+Its fixture SR is `2718`, preserving the fixture's IPL=7; the original fact used
+IPL=0 (`2018`) and asserted the same five CCR flags, not the full SR.
+The matrix extends this case to every Dn/An selection, both user/supervisor stacks
+and all 32 initial CCR states. A7 uses stride 2; other address registers use 1.
+The shared operand fixture and common verification check exact PC, all registers,
+preserved full source Dn and X, N/Z/V/C, stack selection and guarded memory.
+Expectations use literal XOR/flag results and independent addresses; they do not
+call production arithmetic, decoding, EA or timing helpers.
+
+Before retirement, the isolated clean run passed **13 tests**: eight new batches
+plus all five original logical regressions. A targeted extra-postincrement defect
+in the two actual execution paths fails all **32,768 replacement cases** and the
+original fact. Every exact failure ID and `A<n> expected ..., actual ...` message,
+including the A7 stride difference, is independently generated and checked. The
+original fact specifically fails expected `8193`, actual `8194`. This proves a
+targeted defect, not a claim that historical source contained that defect.
+
+The preparation proof passed nine copied evidence controls before removal.
+Only that one fact was then removed from source pinned at
+`9430fc416714c5f68a9757cd44ebe6ee72ee7ed6`; its three address-error siblings and
+EORI-to-SR trace regression remain unchanged. The current run passes **12 tests**:
+all eight replacement batches plus those four retained siblings. Strict
+`--validate-only` replay passes with complete source inventories, exact roster,
+counts, case keys/weights/statuses/reasons, commands and producer identities.
+Controls reject missing fixture, changed producer, empty selection, missing old
+witness, wrong weight/reason, changed mutation plus manifest, wrong command and
+wrong counters. No controls execute CPU instructions.
+
+The **228-input / 37-CPU-input** graphs are separately bound: mutation differs
+from clean in exactly two CPU files; current differs from clean only in the
+single legacy-test file. Production CPU inputs remain unchanged. An additional
+linkage verifier binds compiled CPU/test assemblies, adjacent CPU copies, actual
+TRX loaded-test paths, logs, full current sources and the ordinary gate script.
+The gate now requires **4,096 cases per profile** for the new group, and its
+PowerShell syntax check passes. This turn runs the affected tests; it does not
+claim a new full CPU suite, consumer replay, external reference audit or physical
+timing qualification.
+
+```powershell
+python scripts/test-copper68k-eor-postincrement-retirement.py `
+  --output <fresh-eor-consolidation-output>
+# --prepare proves the old witness before source retirement.
+# --finish-retirement adds current-source verification to prepared evidence.
+# --validate-only rejects incomplete or changed frozen evidence.
+```
+
+Failed preparation directories v1-v3 remain separate. V1 rejected a nonunique
+mutation target caused by unnormalized line endings. V2/v3 correctly rejected
+wrong predicted cross-model outcomes: the first mutation missed the advanced
+general-logical path. V4 targets both executed paths; no failure was excluded or
+gate weakened. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+Other reference/implementation gaps remain as recorded above.
+
+Local evidence under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`eor-postincrement-consolidation-v4`, `eor-consolidation-complete-link-v1.json`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| pre-retirement preparation | `f5939ba511b6e18a1df987bc89bf38a785b8ec8ef9da7832b3664b222f39caad` |
+| complete consolidation | `460acbf420eb434df30ef49b5da0261df2cca64893dd1106c92a2990b85ba838` |
+| source/assembly/evidence linkage | `7e8728565e571f020529d5e63f29fa9eb48df45a00d4d702672de1aff43b8c5c` |

@@ -1600,3 +1600,19 @@ shards preserve every diagnostic without changing logical cases. All 39 private
 CPU inputs remain frozen; the distinct production graph compiles two unavailable
 tests. Wider operands, partial transfers, refault entry, trace/interrupts and
 hardware qualification remain open. See [the actual MOVE entry record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-actual-move-secondary-entry-faults--2026-10-08).
+
+
+Captured EOR byte postincrement consolidation runs in ordinary CI as
+`logical-eor-postincrement-captured` (4,096 cases per profile). All register
+selections, CCR states and user/supervisor stacks preserve the captured BF1B
+operand semantics and A7 byte stride. Reproduce the exact one-fact retirement:
+
+```powershell
+python scripts/test-copper68k-eor-postincrement-retirement.py `
+  --output <fresh-eor-consolidation-output>
+```
+
+`--prepare` verifies the original witness before removal; `--finish-retirement`
+checks the exact reduced source; `--validate-only` requires unchanged complete
+evidence. Both execution paths are mutated only in isolated builds. The
+address-error/trace siblings remain. See [the retirement record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#eor-byte-postincrement-consolidation--2026-10-08).
