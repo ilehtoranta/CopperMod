@@ -83,7 +83,19 @@ internal partial class M68kAdvancedTimingInterpreter
             var size = (M68kOperandSize)(1 << field);
             var address = ResolveMoveAddress(m, r, size, opcode);
             if (m == 3) WriteGeneralRegister(true, r, unchecked(address + M68kIntegerSemantics.AddressIncrement(r, size)));
-            if (store) WriteSized(address, ReadGeneralRegister(ar, general), size);
+            if (store)
+            {
+                try { WriteSized(address, ReadGeneralRegister(ar, general), size); }
+                catch (M68040MmuFaultException ex) when (!State.M68040Mmu.Enabled &&
+                    ex.Fault.Write && ex.Fault.WriteValue.HasValue &&
+                    ex.Fault.AccessKind == M68kBusAccessKind.CpuDataWrite)
+                {
+                    // The actual store is already latched by the logical bus;
+                    // extensions and EA effects must not be performed again.
+                    throw new M68040MmuFaultException(ex.Fault with
+                    { MovesFunctionCode = (byte)(State.DestinationFunctionCode & 7), CompletedMovesWrite = true });
+                }
+            }
             else
             {
                 uint value;

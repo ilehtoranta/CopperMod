@@ -1866,7 +1866,8 @@ namespace Copper68k
         bool CompletedMoveWrite = false,
         bool UnbufferedOperandRead = false,
         uint? MovemEffectiveAddress = null,
-        byte? MovesFunctionCode = null);
+        byte? MovesFunctionCode = null,
+        bool CompletedMovesWrite = false);
 
     internal sealed class UnsupportedM68040InstructionException : M68kEmulationException
     {
@@ -2565,6 +2566,11 @@ namespace Copper68k
                 fault = fault with { StackedProgramCounter = ExecutionBoundaryProgramCounter };
             else if (TryCompleteFaultedMoveWrite(fault))
                 fault = fault with { StackedProgramCounter = State.ProgramCounter, CompletedMoveWrite = true };
+            else if (!State.M68040Mmu.Enabled && fault.CompletedMovesWrite &&
+                fault.Write && fault.WriteValue.HasValue && fault.AccessKind == M68kBusAccessKind.CpuDataWrite &&
+                State.ExceptionSequence == ExecutionBoundaryExceptionSequence &&
+                State.LastInstructionProgramCounter == ExecutionBoundaryProgramCounter)
+                fault = fault with { StackedProgramCounter = State.ProgramCounter };
             else if (!State.M68040Mmu.Enabled && fault.Write && fault.MovemEffectiveAddress.HasValue &&
                 fault.AccessKind == M68kBusAccessKind.CpuDataWrite &&
                 State.ExceptionSequence == ExecutionBoundaryExceptionSequence &&
@@ -4338,7 +4344,7 @@ namespace Copper68k
                     RaiseRteValidationAccessFault(fault, stackedProgramCounter);
                 else if (!State.M68040Mmu.Enabled && fault.AccessKind == M68kBusAccessKind.CpuInstructionFetch)
                     RaiseUnbufferedReadAccessFault(fault, stackedProgramCounter, instruction: true);
-                else if (fault.CompletedMoveWrite || (!State.M68040Mmu.Enabled && fault.Write &&
+                else if (fault.CompletedMoveWrite || fault.CompletedMovesWrite || (!State.M68040Mmu.Enabled && fault.Write &&
                     fault.MovemEffectiveAddress.HasValue && fault.AccessKind == M68kBusAccessKind.CpuDataWrite))
                     RaiseNormalWriteAccessFault(fault, stackedProgramCounter);
                 else if (fault.UnbufferedOperandRead)
@@ -4363,13 +4369,17 @@ namespace Copper68k
         private void RaiseNormalWriteAccessFault(M68040MmuFault fault, uint stackedPc)
         {
             // MC68040UM 8.4.6.5/7: physical normal write -> valid WB1, FA=WB1A,
-            // memory-aligned data. A completed MOVE resumes at its following
-            // instruction. MOVEM remains suspended with CM and its original EA;
+            // memory-aligned data. Synchronous completed MOVE/MOVES stores
+            // resume at the following instruction; physical pipeline PCs remain
+            // unqualified. MOVEM remains suspended with CM and its original EA;
             // software completes WB1 before RTE repeats operand transfers.
             var savedSr = State.StatusRegister;
             var size = fault.ByteCount == 1 ? 0x20 : fault.ByteCount == 2 ? 0x40 : 0;
             var modifier = (savedSr & M68kCpuState.Supervisor) != 0 ? 5 : 1;
-            var trace = fault.CompletedMoveWrite && (savedSr & 0x8000) != 0; // MOVE does not trigger T0.
+            if (fault.MovesFunctionCode is byte fc) modifier = MovesTransferAttributes(fc);
+            // MOVE does not trigger T0; MOVES does (MC68040UM 8.2.6).
+            var trace = fault.CompletedMoveWrite && (savedSr & 0x8000) != 0 ||
+                fault.CompletedMovesWrite && (savedSr & 0xc000) != 0;
             uint data = fault.WriteValue!.Value;
             if (fault.ByteCount == 1) data = (data & 0xff) << 24;
             else if (fault.ByteCount == 2) data = (data & 0xffff) << 16;
@@ -4410,7 +4420,7 @@ namespace Copper68k
             {
                 // MC68040UM Table 3-2: instruction spaces are merged into data;
                 // the other alternate spaces retain TM and use special TT=2.
-                modifier = (fc & 3) is 0 or 3 ? 0x10 | fc : (fc & 4) | 1;
+                modifier = MovesTransferAttributes(fc);
             }
             var size = fault.ByteCount == 1 ? 0x20 : fault.ByteCount == 2 ? 0x40 : 0;
             PushWord((ushort)(0x0100 | size | modifier | (fault.MovemEffectiveAddress.HasValue ? 0x1000 : 0)));
@@ -4420,6 +4430,9 @@ namespace Copper68k
             PushWord(savedSr);
             EnterAccessErrorHandler();
         }
+
+        private static int MovesTransferAttributes(byte fc)
+            => (fc & 3) is 0 or 3 ? 0x10 | fc : (fc & 4) | 1;
 
         private void EnterAccessErrorHandler()
         {

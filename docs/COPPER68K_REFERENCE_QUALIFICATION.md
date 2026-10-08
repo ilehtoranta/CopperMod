@@ -11809,3 +11809,86 @@ enabled MMU/cache, partial physical transfers, handler return, trace or physical
 timing. Store faults remain unfinished and the hardware disagreement remains
 open. Package `.75` is local-only; no publication or private C023 candidate
 import occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+## 040 MOVES normal-space write recovery — 2026-10-08
+
+Actual physical MOVES stores formerly fell through to format 0. The correction
+attaches the selected DFC and completion provenance only when the operand
+`WriteSized` rejects a physical store with latched data. EA resolution and
+extension fetching precede this scope. The frame builder converts TT/TM using
+[MC68040UM Table 3-2 and 8.4.6](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf),
+retains the actual data/address in memory-aligned WB1, and preserves the existing
+synchronous completed-store policy: software completes WB1 before RTE returns
+after MOVES. Pre/postincrement effects are retained exactly once. T0/T1 pending
+trace uses CT; MOVE retains its existing T1-only rule. No whole-instruction retry,
+production public API or timing-policy change is introduced. Physical pipeline
+PC/address timing remains unqualified.
+
+The independent normal-space matrix uses literal B/W/L D0 stores through (A0),
+(A0)+ and -(A0), all four byte lanes, DFC 1/2/5/6, ISP/MSP, CCR 0/31, every
+rejected operand byte and trace 0/T1/T0. Each of **8,064 programs** verifies
+registers/flags/canaries and defined frame fields, executes the actual integer
+WB1 handler with checks after every instruction, checks DFC/register restoration,
+RTE and pending trace, and executes a following MOVEQ sentinel. No original store
+or address update repeats. All 8,064 fail against the preceding CPU's format-zero
+path and pass with the correction. All 93,952 read-fault programs and 1,536
+fault-free fixtures retain identical reports. The first fixture run incorrectly
+omitted IPL from expected SR; its failure is retained, and the corrected fixture
+is run identically against both CPUs.
+
+Three owned mutations verify exact failing inventories per route: raw DFC
+conversion 2,016; lost T0 1,344; opcode return PC 4,032. Original sources remain
+unchanged. No existing regression is retired. The maintained physical MOVES gate
+separately passes **5,120 cases**: 3,584 actual faults and 1,536 controls, closing
+its 1,792 remaining write-frame mismatches. Its required WB1 data fields still
+apply only to ordinary data spaces. Seven altered-evidence controls reject
+missing reports, empty selection, wrong weight/key, changed source, producer and
+assembly; complete independently relocated evidence passes.
+
+The complete frozen **219-input / 37-CPU-input** full suite passes **5,320 tests /
+53 unavailable / zero failures** (5,373 total). Independent verification binds
+**86,707,242 logical cases / 945 complete reports / ten native presets**; all 943
+retained reports match the accepted read checkpoint and both new reports match
+focused evidence. The ordinary semantic gate passes **86,514,762 cases / 745
+batches**. Missing/incomplete write reports reject in separate copied-evidence
+controls. Those controls execute no CPU instructions and do not replace the full
+audit.
+
+A fresh immutable local `1.5.2-synthetic-dev.76` package uses these exact 37 CPU
+inputs plus README/icon. The clean committed CopperScreen `aa1dad5` archive
+passes the Release build, 171 host tests (six unavailable), 74 disk tests, 1,080
+engine diagnostics and two Workbench 3.1 floppy replays. Source files and test
+rosters match the accepted consumer archive; NuGet/private-cache resolution and
+all three loaded CPU DLLs match the package. The package/consumer records retain
+the full-pending status recorded when created. A separate complete linkage proof
+binds the now-finished full suite without rewriting those records. No HD boot or
+host-throughput qualification is claimed.
+
+Local evidence remains under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/MovesWriteProvenanceBeforeV4`, `audits/MovesWriteProvenanceAfterV5`,
+`mutations/MovesWriteV1`, `audits/MovesFaultStoreFixV1`,
+`moves-write-integrity-v1`, `moves-write-ordinary-controls-v1`,
+`audits/MovesWriteFullV1` and `consumer-76-final`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| focused | `6f21041e00c2aa09fde49d11cb6e8c73960b1346c6e4352004c3bd97cef0eb77` |
+| mutations | `bfb94303bde01542adf509debf0d442136c99ecf45eff6cf5f520bf46ee5b6b2` |
+| faultGate | `f0f55bcabb0406ef2ac59b920a0c4c1f44046e9ab6fd08c34f94ad143a1c62a1` |
+| integrity | `0da6c3ce401a8bc5b947f9b292dabee874aa38712949e45b1f76538870759407` |
+| ordinaryControls | `33a0fef2a7e7a0a0e5f41f76a82ebf49226a2110a81ba5deb90f9702abba4ab3` |
+| consumer | `9fc1251d189a160fb8eb3553c277e6630ca7e332b8545bbcdcfa2e8d52c55367` |
+| full | `f32959471ba2ea93a8c2d9444a119016b347a2fa0e4f07bf7e394abee6f93027` |
+| package | `d3936d1812ea5d978970c99d8c50a894497597e65d8eda4869e1ef71b0b062e3` |
+| complete source/evidence link | `8105e5c86f6bf8974b16067131972c1720f2c42ff869676b2662dd6a4ed2470c` |
+
+
+This bounded gate does not qualify every general register, EA/full-format,
+alias/A7/overlap combination, special-space recovery, nested handler fault,
+enabled MMU/cache, partial physical transport or physical timing. Separately
+captured private nested-handler discovery remains unpromoted and cannot expand
+this ordinary gate's scope. The software/manual trace disagreements and 010/060
+broad-reference mismatches remain open; hardware is unavailable. No private C023
+production candidate is imported, no package is published and prior versions
+remain immutable. Milestone 6 remains **in progress**, `roadmapComplete=false`.

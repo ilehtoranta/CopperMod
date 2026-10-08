@@ -1359,13 +1359,13 @@ instructions. `-BaselineDirectory` additionally requires unchanged retained
 recovery reports; a missing requested baseline fails. Neither mode promotes
 missing inputs, empty selections or mismatching/unsupported execution.
 
-The separate 040 MOVES physical-fault discovery is currently **failing**. Its
+The separate 040 MOVES physical-fault gate now **passes all 5,120 cases**. Its
 literal byte/word/long encodings use (A0), all eight SFC/DFC choices, four address
 lanes, ISP/MSP and CCR 0/31. Each operand byte can trigger a physical-map rejection
 on scalar/batch public-factory routes. All 1,536 fault-free controls pass; of 3,584
-fault cases, the original captured CPU had 3,136 mismatches. After the read
-attribute fix, all read cases pass; 1,792 write cases still incorrectly stack
-format 0. The original failed reports remain historical evidence.
+fault cases, the original captured CPU had 3,136 mismatches. After the read attribute fix, 1,792 writes still stacked format 0. The write
+correction closes those remaining frame mismatches; all 3,584 physical faults
+and 1,536 controls now pass. The original failed reports remain historical evidence.
 The controls run by default; the two fault tests are unavailable unless requested.
 They remain a discovery gate, separate from the qualified MOVES instruction matrix.
 
@@ -1373,12 +1373,13 @@ They remain a discovery gate, separate from the qualified MOVES instruction matr
 ./scripts/test-copper68k-040-moves-faults.ps1 -OutputDirectory artifacts/moves-fault-discovery
 ```
 
-This command intentionally returns failure while the defects remain. It freezes
-the source graph, requires all four tests and exact inventories, and records a
-failed verification proof. Missing inputs, empty selections and altered evidence
+This command freezes the source graph, requires all four tests and exact
+inventories, and records a passing verification proof only for complete evidence. Missing inputs, empty selections and altered evidence
 also fail. `-ValidateReportsOnly` executes no instructions; `-PythonCommand`
-selects Python 3. Saved-PC policy, recovery/retry, special-space writebacks,
-nested handler faults, enabled MMU/cache and hardware timing remain unqualified.
+selects Python 3. This frame-discovery command alone does not qualify saved-PC
+policy or handler recovery; the ordinary normal-space recovery matrix is
+described below. Special-space recovery, nested handler faults, enabled MMU/cache
+and hardware timing remain unqualified by these ordinary gates.
 See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-moves-physical-fault-discovery--2026-10-08).
 
 The ordinary gate now requires 46,976 `moves-read-fault-provenance-scalar` and
@@ -1397,5 +1398,30 @@ The complete 218-input CPU audit passes 5,318 tests with 53 unavailable and no
 failures; independent verification binds 86,699,178 cases, 943 profile reports
 and ten native presets. The current ordinary gate passes 86,506,698 cases / 743
 batches. The same CPU source inputs pass isolated local `.75` NuGet consumer
-build/tests and two native floppy replays. The remaining write discovery stays
-failed and Milestone 6 remains in progress.
+build/tests and two native floppy replays. This is the retained read checkpoint;
+the following write correction has its own complete frozen audit.
+
+
+Ordinary coverage additionally requires 4,032 `moves-write-recovery-scalar` and
+4,032 `moves-write-recovery-batch` programs. These use literal B/W/L D0 stores
+through (A0), (A0)+ and -(A0), four lanes, DFC 1/2/5/6, ISP/MSP, CCR 0/31, all
+rejected operand bytes and 0/T1/T0. Actual integer handlers complete WB1, clear
+its valid bit, restore DFC/registers and execute RTE. Defined frame fields,
+every handler instruction, pending trace and following MOVEQ are checked. The
+original operand is never retried and auto-address effects occur once.
+
+All 8,064 new programs pass; the preceding CPU fails every one. Three isolated
+mutations detect raw DFC, lost T0 and opcode return PC. The synchronous following
+PC and retained address effects qualify the existing execution policy, not
+physical pipeline behavior. Special-space write recovery, other operand forms,
+nested handler faults, enabled MMU/cache and hardware timing remain outside this
+ordinary matrix. No old regression is retired.
+
+The complete 219-input CPU audit passes 5,320 tests with 53 unavailable and no
+failures: 86,707,242 cases / 945 profile reports / ten native presets. All 943
+retained reports match the predecessor. The current ordinary semantic gate
+passes 86,514,762 cases / 745 batches. A local-only `.76` NuGet package passes
+the clean consumer build/tests and two native floppy replays; source, package,
+loaded DLL and input/result linkage is independently verified. Nothing is
+published. See [the write-recovery record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-moves-normal-space-write-recovery--2026-10-08).
+Milestone 6 remains in progress.

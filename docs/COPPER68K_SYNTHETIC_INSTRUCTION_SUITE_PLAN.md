@@ -3702,3 +3702,45 @@ No production CPU source or package changes occur. This slice does not qualify
 all mask/fault-position Cartesian combinations, other CCR/stack/EA combinations,
 enabled MMU/cache, physical timing, or the unresolved hardware boundaries.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+### Milestone 6 MOVES normal-space write recovery — 2026-10-08
+
+Hardware is unavailable for the disputed 030/040 trace boundary; that
+qualification gap remains open. The current software slice extends the existing
+synchronous completed-MOVE write policy to actual MOVES operand writes. It
+retains the bus-latched data/address and selected DFC, reports format 7/WB1,
+and resumes after the store once an actual integer handler completes WB1.
+No implicit instruction retry is permitted. Following-PC and pre/postincrement
+effects qualify that execution policy, not physical pipeline behavior.
+
+The bounded independent matrix executes byte/word/long D0 stores through (A0),
+(A0)+ and -(A0), all four byte lanes, DFC 1/2/5/6, ISP/MSP, CCR 0/31, every
+rejected operand byte and trace states 0/T1/T0. Each of **8,064 programs** checks
+defined frame fields, every handler instruction, DFC/register restoration, RTE,
+pending trace and a following MOVEQ sentinel. Every program fails against the
+preceding CPU's format-zero path and passes with the correction.
+All **93,952 read-fault programs** and **1,536 fault-free fixtures** retain their
+previous complete reports. The maintained MOVES fault command separately passes
+**5,120 cases**, closing its 1,792 remaining write-frame mismatches.
+
+Three isolated mutations fail at their independently enumerated combinations:
+raw DFC conversion (2,016 per route), lost T0 (1,344), and opcode return PC
+(4,032). Original sources remain unchanged. These are new qualification cases;
+no existing regression has been retired.
+
+The complete frozen 219-input CPU audit passes **5,320 tests / 53 unavailable /
+zero failures** (5,373 total), with 86,707,242 logical cases, 945 profile reports
+and ten native presets. All 943 retained reports match the accepted predecessor.
+The ordinary semantic gate passes 86,514,762 cases / 745 batches. Missing and
+incomplete write reports reject; seven altered-source/input/assembly controls
+reject, and the complete relocated fault evidence passes. A fresh local-only
+`1.5.2-synthetic-dev.76` package preserves the NuGet consumer boundary. The clean
+consumer archive passes the Release build, 171 host tests (six optional tests
+unavailable), 74 disk tests, 1,080 engine tests and two native floppy replays;
+loaded CPU DLLs match the package. It is not published. Special-space write
+recovery, nested handler write faults, broader operand forms, enabled MMU/cache
+and physical timing remain outside this
+bounded gate. Complete source/evidence linkage binds the focused, full, mutation,
+fault-frame, ordinary-control and consumer results without rewriting records that
+were created while the full gate was pending. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.

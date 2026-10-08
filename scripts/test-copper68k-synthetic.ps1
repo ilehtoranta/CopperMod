@@ -244,6 +244,8 @@ try {
             $expected['movem-mask-fault-controls-batch'] = 1364
             $expected['moves-read-fault-provenance-scalar'] = 46976
             $expected['moves-read-fault-provenance-batch'] = 46976
+            $expected['moves-write-recovery-scalar'] = 4032
+            $expected['moves-write-recovery-batch'] = 4032
             $expected['handler-prefetch-executing-scalar'] = 12288
             $expected['handler-prefetch-executing-batch'] = 12288
             $expected['handler-prefetch-entry-scalar'] = 196608
