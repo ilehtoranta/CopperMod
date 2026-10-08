@@ -12450,3 +12450,82 @@ Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
 | parent | `4f6e928d90ad460567c23817ee3680e87579d65ed6b725b17904cc7a41c62ceb` |
 | adjacent CPU binding | `ec66795f7044ecd74d8db89f7030e0add303663819de732e05dcf6024780157c` |
 | complete source/evidence linkage | `49210ade00f3abf6de0445284556fcf900fe90b2b7ba8de71c2cecd458159ee5` |
+
+
+## Private actual MOVE secondary entry faults — 2026-10-08
+
+`SyntheticM68020MoveOriginEntryFaultTests` adds **307,200 passing cases / two
+executions / 112 reports** on EC020, A1200, 020 and 030. Actual B/W/L MOVE
+instructions read `(An)` or `(An)+` and attempt `(Am)` writes. Separate groups
+enumerate all **384 opcode words** in this private supported subset, canonical
+values with all 32 CCR states, and every byte of the operand request followed
+by every byte of the 16 descending stack-word requests or vector long read.
+All groups cover user/user-M/ISP/MSP, paired low/high operand/stack/VBR locations
+and scalar/batch execution. Entry cases include A0/A7 sources, aliases and
+postincrement; opcode enumeration covers all source/destination registers.
+These are rejected physical requests, not physical partial-transfer tests.
+
+Independent expectations verify the completed source read, source postincrement
+and MOVE flags before the operand fault, every accepted literal C023 frame word,
+saved PC/SR, exception sequence, all registers, surrounding memory, active and
+inactive stack banks, VBR/SFC/DFC and the exact rejected request widths. The
+secondary fault halts with no source reread or operand write. A subsequent
+scalar/batch call makes no accesses; a halted batch emits no boundary callback.
+No instruction is implicitly retried after partial effects.
+
+All **1,126,144 parent cases / fourteen executions / 1,488 reports** retain
+identical results. Combined: **1,433,344 cases / sixteen executions / 1,600
+reports**. The private **243-input** graph adds one fixture and preserves all
+**39 CPU inputs**. The maintained command checks the complete pinned parent
+chain, sources/outputs, loaded test assembly, command/settings, TRX roster and
+counters, complete case IDs/statuses/weights and every failure witness.
+Strict frozen replay passes.
+
+Four isolated defects produce exact mismatch counts: omitted stack-entry halt
+**278,528**; extra stack advance **278,528**; wrong saved PC **57,344**; replayed
+source read **307,200**. All unaffected cases pass. A separate verifier checks
+all **921,600** exact diagnostic reasons. Eleven copied evidence controls reject
+missing reports, empty/foreign/untested combinations, changed source/roster/
+settings, missing witnesses, changed/missing retention and wrong loaded assembly.
+Rebased control paths and unlinked hardlink targets preserve original evidence;
+these controls execute no CPU.
+
+The first maintained audit was rejected because the reporter's 10,000-failure
+cap truncated mutation witnesses. Entry reports were split by size and bank,
+with at most **4,608** cases each. An independent old/new inventory comparison
+proves all **307,200** logical cases were preserved. The failed output remains
+separate; neither the evidence gate nor the cap was weakened.
+
+The distinct current **227-input / 37-CPU-input** production graph compiles the
+fixture, with exactly two unavailable tests and zero executed cases. Explicit
+`NotExecuted` rows and actual counters are recorded; this is compile coverage.
+
+```powershell
+python scripts/test-copper68k-move-origin-entry-fault.py `
+  --qualified-parent-directory <frozen-MoveWriteRefaultV1> `
+  --output <fresh-origin-entry-output>
+# --validate-only requires unchanged complete producers, sources and evidence.
+```
+
+This qualifies the selected private software contract. Wider initial operand
+forms, physical partial transfers, refault entry failures, trace/interrupt
+continuation, malformed protocol repairs and foreign hardware frames remain
+open. Disputed native 030/040 trace boundaries remain unqualified without
+hardware. No private CPU import, publication, regression retirement, new full
+CPU suite, consumer replay or physical timing qualification is claimed.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/MoveOriginEntryV2`, `audits/MoveOriginEntryDiscoveryV2`,
+`move-origin-entry-controls-v2` and `origin-entry-production-default-v2`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| audit | `438b991651b717ce10f32c4d5d4f3c09d3eb60c86251f897185a107d94efb2b5` |
+| controls | `79b27d79a14b5ac422d54f7e649f59a09ad6df9e3fe13bac088628192e05a403` |
+| reasons | `699c97519acba65d7cdf040ccb08c1fe0c06e2e4570a597c1f2dd10ed57367bf` |
+| default | `01228abe06fe150d96c0646806d85e4722daa0ec9a7a50f6e753cb22707d9932` |
+| discovery | `a422d22d70ad3fc30a0c4a3a74097318ae50db4ff16c632ca12ebbe8587c95d0` |
+| parent | `96abb10dcbe6c0c51f5922a28f2484018b2bbcdaaac9059eaf0416028eb87bd3` |
+| resharding equivalence | `602b547cf166d1243cff0a3435f7a0917f2d47168b6c679b1f51c493de563940` |
+| complete source/evidence linkage | `7682e265b8bd10afe8986375185aad399aed4da06143a058f44d4158f5869a88` |

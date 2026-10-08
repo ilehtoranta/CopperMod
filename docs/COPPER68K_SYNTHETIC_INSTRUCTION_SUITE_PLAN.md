@@ -3909,3 +3909,19 @@ Actual original MOVE origins, physical partial transfers, refault entry faults,
 trace/interrupts, malformed protocol repair and general hardware frames remain
 required. Exact scope and evidence are in [the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#private-returned-bank-pending-write-refaults--2026-10-08).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 private actual MOVE entry faults — 2026-10-08
+
+Actual simple MOVE origins add **307,200 passing cases**, retaining **1,126,144
+parent cases**. Separate opcode, value/CCR and entry groups cover all 384
+supported words and rejected operand/stack/vector bytes. All four deliberate
+defects are detected; **921,600** exact failure reasons, eleven evidence controls
+and strict replay are verified. Sharding preserves every logical case and
+failure witness. All 39 private CPU inputs remain unchanged; production compiles
+two unavailable tests. No private CPU import, publication or regression retirement.
+
+Wider operand forms, physical partial transfers, refault entry failures,
+trace/interrupts, malformed protocols and hardware frames remain open. See
+[scope and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-actual-move-secondary-entry-faults--2026-10-08).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

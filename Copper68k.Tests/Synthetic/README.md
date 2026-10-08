@@ -1581,3 +1581,22 @@ execution fail. All 39 private CPU inputs remain frozen. Current production
 uses a distinct 37-input CPU graph and both tests are unavailable by default.
 Physical partial transfers, entry faults, trace/interrupts, malformed protocols
 and hardware frames remain open. See [the returned-bank refault record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-returned-bank-pending-write-refaults--2026-10-08).
+
+
+Actual simple MOVE secondary entry faults are opt-in with
+`COPPER68K_RUN_020_MOVE_ORIGIN_ENTRY=1`:
+
+```powershell
+python scripts/test-copper68k-move-origin-entry-fault.py `
+  --qualified-parent-directory <frozen-MoveWriteRefaultV1> `
+  --output <fresh-origin-entry-output>
+```
+
+The 307,200 new cases enumerate 384 supported opcode words, value/CCR boundaries
+and rejected operand plus stack/vector entry bytes. All 1,126,144 parent cases
+are retained. Four mutations and eleven evidence controls verify the gate;
+strict `--validate-only` fails on incomplete or changed evidence. Size/bank
+shards preserve every diagnostic without changing logical cases. All 39 private
+CPU inputs remain frozen; the distinct production graph compiles two unavailable
+tests. Wider operands, partial transfers, refault entry, trace/interrupts and
+hardware qualification remain open. See [the actual MOVE entry record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-actual-move-secondary-entry-faults--2026-10-08).
