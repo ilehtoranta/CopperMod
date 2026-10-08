@@ -267,9 +267,9 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
 
 ## Remaining qualification and implementation gaps
 
-The [revision-2 broad replay](#040060-coprocessor-id-priority-qualification--2026-10-08)
-gets past `F520` and exposes reserved MOVE16 word `F628` on 040/060. The broad
-gate remains failed, alongside the retained 010 RTE and 060 STOP disagreements.
+The [reserved MOVE16 correction](#reserved-move16-first-word-qualification--2026-10-08)
+gets the revision-2 broad replay past `F628` on 040/060: 1,379 directories pass,
+and two remain mismatching (010 RTE and 060 STOP). The broad gate remains failed.
 
 
 - SingleStepTests has the pinned 312,500-case 68000 instruction-body audit.
@@ -11372,3 +11372,161 @@ Evidence SHA-256: normalized new patch `e646382b98fb38533f6411fe13b52eecb92e78df
 `26e1bd6a201fc6d46df6ce2b38c86bce806e8aaa112ab6a06c0a833a0c808dc0`; input-delta record
 `c7500fae50a111c0ec60d141e295d89025083b2934876d77e051ec6154fab889`; complete linkage
 `cbd5c1d9f365dfd6aeec7941431c02cd3e55ee52ea2dc0c737ace153ec6bf2fd`.
+
+## Reserved MOVE16 first-word qualification — 2026-10-08
+
+The newly exposed `F628` failure is a Copper68k exception-classification defect.
+Five assigned MOVE16 first-word forms occupy `F600..F627`. Unassigned `F628..F63F`
+are unrecognized F-line words, requiring vector 11 and a format-zero frame on
+040/060 ([MC68040UM 9.6.1](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf),
+[MC68060UM 8.2.4](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)). They are
+separate from an assigned `F620..F627` first word with a malformed extension, whose
+existing illegal-instruction handling is retained.
+
+The bounded regression enumerates all 24 unassigned words, four following words
+(`0000/8000/FFFF/4E71`), both incoming privilege states and all 32 CCRs on all eight
+profiles. Shared independent fixtures verify saved PC/SR, stack selection,
+register and memory preservation, and forbidden operand reads. The unchanged
+CPU fails all 6,144 cases on each of 040 and 060 with the vector-4 handler PC
+instead of vector 11; the other six profiles pass. With the single `System.cs`
+classification correction, all 49,152 cases pass in eight xUnit batches. The
+ordinary CI gate now requires the exact 6,144 cases per profile under
+`system-move16-reserved-first-words`. No legal MOVE16 transfer, extension decode,
+operand ordering or retry path changes.
+
+The native adapter already reports actual exception vector 4 correctly. Its
+comparator rejects expected 11 / actual 4. The wording "got no exception" refers
+to its vector-4 harness sentinel convention; it does not conceal a passing case.
+Neither adapter nor comparator is changed. On the public 040/060 profiles,
+`M68kTimingEngine` selects the one-native-cycle fixed plan for both exception keys;
+changing the exception classification retains that approximate execution policy.
+This is not physical exception timing qualification.
+
+A fresh broad replay uses the same revision-2 manifest and all 1,381 directories.
+It passes 1,379, with two mismatches, zero unsupported and zero untested rows;
+12,660,659 callbacks and 2,327,142 exception frames are checked. Both 040/060
+ILLEGAL directories now pass completely. Every other directory result is
+identical to the earlier broad result, including 010 RTE callback 12 and 060 STOP
+callback 3. Later cases inside those two failing directories remain unobserved.
+All 32 comparator controls remain detected. Eight copied-evidence corruptions
+are rejected, including removed failures/probes, changed source/assembly/input
+identity, and rehashed report/counter/exit changes. Originals remain unchanged.
+The frozen preconsolidation full CPU suite passes 5,307 tests, with zero failures
+and 49 explicitly unavailable rows (5,356 total). Independent verification binds
+86,502,658 logical cases, 929 complete reports and all ten native presets. The
+ordinary gate passes 86,311,714 cases / 731 batches. A fresh immutable local-only
+`1.5.2-synthetic-dev.74` package is built from those 37 CPU inputs plus the package
+README/icon. A clean committed CopperScreen `aa1dad5` archive passes Release
+build, 171 host tests / six unavailable, 74 disk tests, 1,080 engine tests and
+two supplied Workbench 3.1 floppy replays. Independent verification checks the
+archive's unchanged source files, exact package/source/DLL identities, restored
+NuGet assets and private cache, all result rosters and pinned ROM/ADF inputs.
+The 37 CPU source inputs also match the independently verified consolidated full
+snapshot below; the package and consumer evidence remain separate frozen records.
+The later AND consolidation has
+a separate current-source full audit; these rosters must not be conflated.
+Full proof SHA-256: `bff08761a1d952109c9156dda85977f965dc1c6afd2690958fb7eaf412a77e64`;
+local package SHA-256: `468689e5a430cdd5bb624f0af6479b355a859a3a0adaedae1c073fb71b834803`.
+Independent consumer proof:
+`d751ebee088625bfff148109f6cee0a6c15fcbf92e1f903c80370f8c66e71c08`.
+These results alone do not authorize roadmap completion or package publication.
+
+Local evidence is frozen under
+`%TEMP%/copper68k-reference-restoration-20261006/`: the before/after snapshots are
+`audits/ReservedMove16BeforeV1` and `audits/ReservedMove16AfterV1`; the broad replay
+is `audits/QualifiedBasicMove16FixV1`. Independent proofs hash the actual commands,
+source inputs, outputs and assemblies. Producer metadata in this slice contains
+a literal trailing backslash-n; verification strips only that two-byte suffix
+for parsing while retaining the original byte hashes. It does not rewrite any
+execution evidence or normalize source, fixture or report content.
+
+Focused proof SHA-256: `af6d55e63ab797dff33135bd549ac119965a2277cb4cf215db5704e7f759fb1f`.
+Failed broad proof: `0726e6a76e127561e0ca5fca29f837b88e396b61dbeb28808d85ccb069cdd9fa`.
+Eight rejection controls: `18976a3005d31271205ce220f9b8a47ccf318c74e75588fe0004ef01edb54d9e`.
+Broad report: `49de5c92b738b4bde099f54ecb90450e83c8390bf3dd9213c41418e28e329c5e`.
+
+Hardware is unavailable for the separate 030/040 trace boundary disagreement.
+That gap and the other architectural/protocol requirements remain open. No
+private pending-write CPU candidate is imported, no regression is retired and
+no package is published. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## AND indirect semantic regression consolidation — 2026-10-08
+
+The three EC020 rows of
+`M68020AddressSourceTests.AndAddressIndirectUsesSelectedWidthAndPreservesExtend`
+are replaced by `SyntheticAndIndirectTests.AndIndirectRetainsSelectedWidthRegistersAndFlags`.
+The replacement uses the shared public-factory machine, operand fixture, recording
+bus and complete architectural verifier. It preserves the captured literal
+opcodes `C012/C052/C092`, operands `F0/F0A5/F0A55A0F`, initial data values
+`FFFF00FF/FFFFFFFF/FFFFFFFF` and incoming CCR `17`, and expands to all eight
+profiles, every D/A register selection, all 32 CCRs and both stack modes.
+There are **12,288 cases per profile / 98,304 total**, in eight xUnit batches.
+Expectations are literal sized AND results and independent N/Z/V/C/X rules;
+no production arithmetic, decoder, EA or timing helper calculates them.
+
+The initial snapshot's byte/word setup incorrectly selected the low bytes of the
+long capture. Its failures are preserved in `audits/AndIndirectConsolidationV1`.
+Corrected captured-width fixtures pass all 98,304 cases and the three original
+rows. A first general-logical-path mutation did not execute for these words;
+the ineffective passing experiment remains in `audits/AndIndirectConsolidationV2`
+and provides no replacement qualification.
+
+The corrected causal mutations target the actual byte/word handler and the
+separate long effective-address handler. The independent verifier enumerates
+every combination and predicts its exact status, rather than accepting aggregate
+failure counts:
+
+| Targeted defect | Replacement mismatches | Original rows failing |
+| --- | ---: | --- |
+| Byte/word AND changed to OR | 49,152 | Byte and word |
+| Byte/word Extend cleared | 24,576 | Byte and word |
+| Byte/word upper register bits discarded | 49,152 | Byte and word |
+| Long indirect AND changed to OR | 24,576 | Long |
+| Long indirect Extend cleared | 12,288 | Long |
+
+The unchanged 000/010 execution paths pass in each mutation. Unaffected sizes and
+CCR-X-clear combinations pass exactly where predicted. Test identifiers, source
+preimages, actual executed assemblies, commands, reports, the eleven-row old/new
+roster and precise register/SR failure categories are checked independently.
+Both handler mutations remain private experiments; production CPU code is unchanged
+by consolidation. Specialized timing, JIT, cache, bus and native media regressions
+are retained.
+
+Removing only the documented method's three rows in a fresh isolated snapshot
+passes **47 executions**: all 39 retained sibling rows and the eight replacement
+batches. Replacement reports are identical to the earlier passing snapshot.
+The maintained test source now matches that qualified replacement/removal exactly.
+The ordinary CI gate now requires exactly 12,288 cases per profile under
+`logical-and-indirect-captured`. This requirement was added after the frozen MOVE16
+gate completed. Its source snapshot intentionally retains the original three rows
+and does not contain this replacement. The separate maintained full audit passes with the qualified 215-input source
+roster: **5,312 passing / 49 unavailable / zero failures (5,361 total)**. Exact
+old/new roster reconstruction binds **86,600,962 logical cases / 937 complete
+reports / ten native presets**. All 929 retained reports are identical to their
+parent records; all eight replacement reports match the isolated retirement.
+The current ordinary gate passes **86,410,018 cases / 739 batches**. These two
+source rosters remain separate full-suite executions.
+
+A composed **report-only** fixture combines the accepted frozen full reports
+with the eight independently qualified AND reports and original integer inventory.
+It passes the updated ordinary gate: 86,410,018 cases / 739 batches. Missing and
+one-case-short 000 AND reports are rejected for the intended group, and original
+reports remain unchanged after each control. This validates the CI requirement;
+it executes no instructions and does not substitute for the separate completed
+current full audit. Control proof SHA-256:
+`2d2bc6b92a75f617cd83875094e7c0c596e3a5f1508126fd38e51a2be3e37a45`.
+
+Evidence lives under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/AndIndirectConsolidationV3`, `audits/AndIndirectConsolidationV4` and
+`audits/AndIndirectRetirementV5`. Causal proof SHA-256:
+`22f30360da31b4767599210dd24286c53b14692d655ae91dfde2915a7bcfa775`;
+isolated retirement proof:
+`35364ec980b39a4bd04a7fe7f9f6a096c5706ab2434739e05c9871eadf39e5fb`.
+Current consolidated full proof SHA-256: `2f52f036cae9b0dd7b01720a451e2b3d74eb2f1a9c50750d9b2dd2dd86a90920`.
+Complete linkage: `33ae2c4a4ff4870229e16327e533c876614b1664da5662948532b714a08eb05f`. The linkage checks that current maintained
+CPU/test sources equal the executed frozen inputs and that the production CPU
+sources equal the local package and corrected broad replay. It retains the broad
+failed gate and does not rewrite earlier evidence that recorded the full run as
+pending.
+No private CPU candidate import, package publication, hardware qualification or
+roadmap completion is claimed. Milestone 6 remains **in progress**.

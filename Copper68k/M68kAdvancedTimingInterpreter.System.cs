@@ -44,7 +44,10 @@ internal partial class M68kAdvancedTimingInterpreter
             source = (form & 1) == 0 ? State.A[register] : absolute;
             destination = (form & 1) == 0 ? absolute : State.A[register];
         }
-        else { RaiseFormat0Exception(4, pc, M68kInstructionTimingKey.IllegalInstruction); return true; }
+        // F628..F63F do not assign a MOVE16 first-word form. They are
+        // unrecognized F-line words (MC68040UM 9.6.1 / MC68060UM 8.2.4),
+        // unlike a recognized F620..F627 word with an invalid extension.
+        else { RaiseFormat0Exception(11, pc, M68kInstructionTimingKey.LineFException); return true; }
         source &= 0xfffffff0; destination &= 0xfffffff0;
         Span<uint> line = stackalloc uint[4];
         for (var i = 0; i < 4; i++) line[i] = ReadLong(source + (uint)i * 4);

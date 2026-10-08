@@ -1316,3 +1316,22 @@ retained. The [revision-2 record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.m
 binds the 445,248-case first-word matrix and twelve corruption controls. The
 broad audit remains failed and now exposes `F628`; input validation is not a
 passing CPU gate. No Copper68k source change or package release is included.
+
+The subsequent [reserved MOVE16 correction](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#reserved-move16-first-word-qualification--2026-10-08)
+requires 6,144 `system-move16-reserved-first-words` cases per profile in ordinary
+CI. It independently checks all `F628..F63F` words, four following words, both
+privilege states and every CCR. The fixed CPU passes all 49,152 cases; the before
+snapshot detects every 040/060 case. The unchanged broad corpus now passes 1,379
+directories, while 010 RTE and 060 STOP remain mismatching. The frozen full CPU
+suite, ordinary gate and clean `.74` consumers pass; the separate consolidated
+full audit passes: 5,312 tests / 49 unavailable / zero failures. Milestone 6 and the hardware trace gap remain open.
+
+`SyntheticAndIndirectTests` replaces only the three captured EC020 AND-indirect
+semantic rows after [five causal mutations and a sibling-retention run](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#and-indirect-semantic-regression-consolidation--2026-10-08).
+It executes 12,288 `logical-and-indirect-captured` cases per profile, using all
+D/A registers, CCRs and privilege states. The original captured opcode/value
+combinations are preserved. Ordinary CI requires that exact per-profile count.
+The accepted preconsolidation full suite has a separate source roster; the
+maintained consolidated full audit passes separately with 86,600,962 cases /
+937 complete reports / ten native presets; its ordinary gate passes 86,410,018
+cases / 739 batches.

@@ -94,6 +94,7 @@ try {
             'logical-bitfield-values'=155136;
             'logical-bits'=$(if ($model -in @('68000','68010')) {104192} elseif ($model -in @('68020','68030','68040','68060','68EC020','A1200')) {104852});
             'logical-boundaries'=31808;
+            'logical-and-indirect-captured'=12288;
             'logical-invalid-operands'=13248;
             'logical-unary-invalid-operands'=$(if ($model -in @('68000','68010')) {12544} elseif ($model -eq '68060') {10304} else {10432});
             'logical-bitfield-invalid-operands'=13312;
@@ -114,6 +115,7 @@ try {
             'system-callm'=$(if ($model -in @('68000','68010')) {10832} elseif ($model -in @('68020','68EC020','A1200')) {11000} elseif ($model -in @('68030','68040','68060')) {10964});
             'system-interrupt'=$(if ($model -in @('68000')) {224} elseif ($model -in @('68010','68060')) {226} elseif ($model -in @('68020','68030','68040','68EC020','A1200')) {418});
             'system-model'=3584;
+            'system-move16-reserved-first-words'=6144;
             'system-cache-encodings'=16384;
             'system-lpstop-values'=17024;
             'system-movec'=2432;

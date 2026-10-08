@@ -3571,3 +3571,42 @@ See [the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040060-copro
 Milestone 6 remains **in progress**, `roadmapComplete=false`. The new encoding and
 adapter discrepancy, later failures and prior architectural/protocol gaps must
 be addressed; no source candidate import or package publication occurs.
+
+### Milestone 6 reserved MOVE16 first words — 2026-10-08
+
+Unassigned `F628..F63F` words incorrectly raised vector 4 on 040/060. Their
+documented Line-F classification is fixed without changing assigned transfers,
+extension decoding or the fixed-cycle policy. The new ordinary gate executes
+49,152 cases across eight profiles; it detects 12,288 failures before the fix
+and passes completely afterward. The unchanged revision-2 broad corpus now
+passes 1,379 directories, retaining the 010 RTE and 060 STOP mismatches. Eight
+evidence-corruption controls reject invalid acceptance records. See
+[the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#reserved-move16-first-word-qualification--2026-10-08).
+The frozen preconsolidation full CPU suite passes 5,307 / 49 unavailable / zero
+failures; independent verification binds 86,502,658 cases / 929 reports / ten native
+presets, and the ordinary gate passes 86,311,714 cases / 731 batches. Fresh local
+`.74` consumers pass Release build, 171 host / six unavailable, 74 disk, 1,080
+engine and two supplied Workbench floppy replays, with independent source/package
+bindings. The later consolidated full audit passes separately: 5,312 / 49
+unavailable / zero failures, 86,600,962 cases / 937 reports / ten native presets.
+Milestone 6 stays
+**in progress**, `roadmapComplete=false`; hardware is unavailable for the separate
+030/040 trace disagreement. No private CPU candidate import or publication occurs.
+
+### Milestone 6 AND indirect consolidation — 2026-10-08
+
+The three captured EC020 AND-indirect semantic rows are replaced by 98,304 shared
+fixture cases across all eight profiles. Five causal mutations cover both executed
+handlers, logical results, Extend preservation and partial-register preservation;
+each fails the corresponding original row and exact predicted replacement cases.
+An isolated retirement run passes all 39 sibling rows and eight replacement batches.
+See [the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#and-indirect-semantic-regression-consolidation--2026-10-08).
+The ordinary CI gate now requires 12,288 `logical-and-indirect-captured` cases per
+profile; the current full audit passes separately from the accepted
+preconsolidation snapshot (5,312 passing / 49 unavailable / zero failures). A complete composed report-only fixture passes 86,410,018 cases / 739
+batches; missing/incomplete AND controls reject. That check executes no instructions
+and does not qualify the separate current full run. Its independent proof binds
+86,600,962 cases / 937 reports / ten native presets; its current ordinary gate
+passes 86,410,018 cases / 739 batches. Production CPU behavior,
+specialized regressions and the
+remaining reference requirements are unchanged. Milestone 6 stays **in progress**.
