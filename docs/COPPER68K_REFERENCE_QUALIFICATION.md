@@ -14183,3 +14183,37 @@ or consumer qualification. Whole-request rejection, supplied outer frames and
 other fixture boundaries remain explicit. The broader 480-case failing gate,
 broad reference disagreements and remaining restoration requirements stay open.
 Milestone 6 remains **in progress**, `roadmapComplete=false`; no import or release.
+
+## Nested completed-MOVES saved-PC mutation — 2026-10-09
+
+The maintained `test-copper68k-040-nested-writeback-pc-mutation.py` command uses
+the qualified `MaintainedNestedControlsV2` baseline and creates a fresh isolated
+233-input source snapshot. It changes only the completed-MOVES saved-PC
+assignment in `Copper68k/M68040Support.cs`: a prior recorded exception vector
+selects the instruction-start PC instead of the correct following PC for nested
+faults. The initial fault still uses the correct following PC. No production
+source, fixture expectation or timing policy is edited.
+
+Actual xUnit execution fails exactly the two repeated-reference rows; both
+initial-fault rows pass. The independent verifier requires all 48 repeated-fault
+identifiers to mismatch on `nested fault entry: saved PC expected`, every case
+weight and diagnostic, and 672 byte-identical initial-fault passing cases.
+Source, asset, execution-output, three DLL and loaded-method identities are
+bound; all current production source inputs must match the clean baseline.
+The first mutation attempt used an incorrect zero-exception-counter assumption:
+reset itself records vector -1 and advances that counter. Its four failed rows
+are retained under `NestedSavedPcMutationV1`; the failure-roster verifier rejects
+that attempt and no proof is written. The accepted V2 mutation changes its
+scope without weakening expected outcomes.
+
+Accepted `NestedSavedPcMutationV2/mutation-proof.json` SHA-256:
+`a5f7da133c9a875b6b56804318e2af22700e1da98a4965e8467d307daacf2fd4`.
+
+```powershell
+python scripts/test-copper68k-040-nested-writeback-pc-mutation.py --baseline artifacts/040-nested-controls --output artifacts/040-nested-pc-mutation
+```
+
+The complete nested selection is still running with its unchanged producer and
+233 source identities. This mutation proves fixture sensitivity, not hardware
+qualification or completion of wider restoration/reference gates. Milestone 6
+stays **in progress**, `roadmapComplete=false`; no import or publication.

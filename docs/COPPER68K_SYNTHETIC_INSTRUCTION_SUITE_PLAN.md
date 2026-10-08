@@ -4357,6 +4357,19 @@ scope, commands, identities and wider user-width/user-M/FC/refault/trace gaps.
 All 480 broader protocol cases remain untested and fail their requested gate.
 Milestone 6 remains **in progress**, `roadmapComplete=false`; no import or release.
 
+### Milestone 6 checkpoint — nested saved-PC mutation, 2026-10-09
+
+A maintained isolated mutation command proves the repeated-fault fixture detects
+an incorrect completed-MOVES saved PC: exactly 48 repeated-fault examples fail
+on saved PC, while 672 initial-fault controls retain byte-identical passing
+reports. All 233 production test/project/CPU inputs are unchanged. The first
+attempt incorrectly assumed reset left the exception counter at zero and is
+retained as rejected evidence; the accepted mutation uses the prior exception
+vector to affect only nested faults. No expectations are weakened. The complete
+nested audit remains a separate running selection. Broader reference and
+restoration requirements remain open; milestone 6 stays **in progress**,
+`roadmapComplete=false`; no private CPU import or release.
+
 ### Milestone 6 checkpoint — differing nested writeback function codes, 2026-10-09
 
 The shared supplied-frame fixture accepts an independent FC1/5 for each slot;

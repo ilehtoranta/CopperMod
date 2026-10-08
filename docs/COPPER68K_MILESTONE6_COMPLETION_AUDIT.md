@@ -191,6 +191,12 @@ it does not replace or discard their remaining gaps.
    The complete selection is running and still requires its own result: 18
    named tests / 517,040 expected cases / 18 reports. Expected inventory is not
    execution. This supplies maintained reproduction without closing other gates.
+   A separate maintained saved-PC mutation audit detects exactly 48 repeated-
+   fault mismatches while all 672 initial-fault controls remain byte-identical.
+   It binds actual failing xUnit execution, exact diagnostics, case inventories,
+   loaded methods and isolated source/binary identities. Proof:
+   `a5f7da133c9a875b6b56804318e2af22700e1da98a4965e8467d307daacf2fd4`.
+   Production CPU source is unchanged; this is fixture sensitivity evidence.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

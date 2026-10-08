@@ -1715,3 +1715,17 @@ covers supplied outer frames and whole-request physical-map rejections; original
 construction, broader repair/refault/trace/interrupt paths, partially accepted
 transfers, physical FC spaces and hardware timing remain separate. It does not
 import private CPU code, publish a package or qualify the whole CPU suite.
+
+To prove the repeated-fault fixture detects a wrong saved PC, use a qualified
+control audit as the baseline and a fresh output directory:
+
+```powershell
+python scripts/test-copper68k-040-nested-writeback-pc-mutation.py --baseline artifacts/040-nested-controls --output artifacts/040-nested-pc-mutation
+```
+
+The command changes one completed-MOVES saved-PC assignment in its isolated CPU
+copy. It requires exactly 48 repeated-fault cases to fail on saved PC and all
+672 initial-fault controls to retain byte-identical passing reports. Actual
+failing xUnit execution, precise diagnostics, case inventories, loaded methods,
+source and binary identities are checked before writing `mutation-proof.json`.
+It rejects unrelated source changes and verifies production source is unchanged.
