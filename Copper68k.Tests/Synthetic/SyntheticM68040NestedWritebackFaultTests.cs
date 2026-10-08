@@ -131,6 +131,34 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
     private static void Run(bool batch, int[] widths, int ccr, uint lane, int fc, string bank, int faultSlot, int faultByte)
         => RunFunctionCodes(batch, widths, ccr, lane, [fc, fc, fc], bank, faultSlot, faultByte);
 
+    [EnvironmentFact("COPPER68K_RUN_040_USER_M_NESTED_WRITEBACK", "require supplied user-M nested writeback returns"), Trait("Suite", "ReferenceDiscovery")]
+    public void UserMasterBitReturnsScalar() => UserMasterBitReturns(false);
+
+    [EnvironmentFact("COPPER68K_RUN_040_USER_M_NESTED_WRITEBACK", "require supplied user-M nested writeback returns"), Trait("Suite", "ReferenceDiscovery")]
+    public void UserMasterBitReturnsBatch() => UserMasterBitReturns(true);
+
+    private void UserMasterBitReturns(bool batch)
+    {
+        var report = new CoverageBatch("68040", "user-M-nested-writeback-fault-" + (batch ? "batch" : "scalar"));
+        foreach (var w1 in new[] { 1, 2, 4 })
+        foreach (var w2 in new[] { 1, 2, 4 })
+        foreach (var w3 in new[] { 1, 2, 4 })
+        {
+            int[] widths = [w1, w2, w3];
+            for (var ccr = 0; ccr < 32; ccr++)
+            for (uint lane = 0; lane < 4; lane++)
+            foreach (var fc in new[] { 1, 5 })
+            for (var slot = 1; slot <= 3; slot++)
+            for (var faultByte = 0; faultByte < widths[slot - 1]; faultByte++)
+            {
+                var id = $"68040/writeback/user-M-nested-physical-fault/sizes={w1}-{w2}-{w3}/ccr={ccr:X2}/lane={lane}/FC={fc}/bank=user-M/WB={slot}/byte={faultByte}";
+                try { Run(batch, widths, ccr, lane, fc, "user-M", slot, faultByte); report.Record(id, "passing", null); }
+                catch (Exception ex) { report.Record(id, "mismatching", ex.ToString()); }
+            }
+        }
+        report.Complete(output);
+    }
+
     [EnvironmentFact("COPPER68K_RUN_040_HETEROGENEOUS_NESTED_WRITEBACK", "require differing function codes in nested writeback slots"), Trait("Suite", "ReferenceDiscovery")]
     public void HeterogeneousFunctionCodesScalar() => HeterogeneousFunctionCodes(false);
 
@@ -175,10 +203,11 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
         var bus = new SyntheticM68040AccessDoubleFaultTests.FaultBus();
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);
         m.Reset(ccr);
-        var sr = (ushort)((bank == "user" ? 0x0700 : bank == "MSP" ? 0x3700 : 0x2700) | ccr);
+        var userReturn = bank is "user" or "user-M";
+        var sr = (ushort)((bank == "user-M" ? 0x1700 : bank == "user" ? 0x0700 : bank == "MSP" ? 0x3700 : 0x2700) | ccr);
         // User-frame writebacks are serviced by supervisor code on ISP. The
         // supplied outer SR changes mode only when the outer RTE completes.
-        var handlerBank = bank == "user" ? "ISP" : bank;
+        var handlerBank = userReturn ? "ISP" : bank;
         var handlerSr = (ushort)((handlerBank == "MSP" ? 0x3700 : 0x2700) | ccr);
         var stacks = new Dictionary<string, uint> { ["user"] = 0x7800, ["ISP"] = 0x4700, ["MSP"] = 0x7400 };
         var frame = stacks[handlerBank] - 60; stacks[handlerBank] = frame;

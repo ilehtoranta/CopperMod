@@ -155,6 +155,15 @@ it does not replace or discard their remaining gaps.
    This is separated structural/CCR coverage, not their full cross-product or
    physical function-code-space qualification. Wider FCs, user-M, repeated
    faults, original construction and trace/interrupts remain open.
+   A supplied user-M extension subsequently passes all 27 width triples, all
+   CCRs, common FC1/5, lanes and rejected bytes/slots: 96,768 new cases plus
+   672 identical controls, four named passes. Independent proof:
+   `ac3d97610b813b7e31ed2364ef675f3df6988c0d2818c958e23a3c52409aaf4d`.
+   Nested service uses ISP and the final return selects USP while preserving
+   the supplied M bit. Earlier slices remain separate frozen evidence, not
+   execution of this updated fixture. Differing-FC user-M, wider FCs, repeated
+   faults, original construction and trace/interrupts remain open. The broader
+   480-case gate remains untested/failing.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

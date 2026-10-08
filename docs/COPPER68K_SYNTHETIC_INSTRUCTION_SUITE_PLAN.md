@@ -2092,6 +2092,19 @@ by this frozen run. Broad reference disagreements and restoration gaps remain
 open; milestone 6 stays **in progress**, `roadmapComplete=false`. No private CPU
 import or publication occurs.
 
+### Milestone 6 checkpoint — supplied user-M nested returns, 2026-10-09
+
+Four selected tests pass 96,768 new user-M cases plus 672 identical controls.
+All 27 B/W/L triples, all CCRs, common FC1/5, lanes, rejected bytes/slots and
+scalar/batch routes are covered. The supplied SR has S clear/M set; nested
+service runs on ISP and final RTE selects USP while preserving M. Independent
+verification binds every case, source, assembly, loaded method and report.
+No CPU semantics change; restored raw newline differences remain explicit.
+Earlier slices retain their separate source identities. The broader 480-case
+gate is retained; differing-FC user-M, wider FCs, repeated faults, original
+construction and trace/interrupts remain required. Milestone 6 stays
+**in progress**, `roadmapComplete=false`; no private import or publication.
+
 ### Milestone 6 user-tail software trace service — 2026-10-06
 
 Four new `UserTailSoftwareTraceService` scalar/batch groups compose the existing

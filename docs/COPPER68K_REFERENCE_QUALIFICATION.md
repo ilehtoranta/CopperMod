@@ -13952,3 +13952,59 @@ The broad 010 RTE / 060 STOP reference disagreements, wider repair/refault,
 original construction and trace/interrupt requirements remain open. Milestone 6
 remains **in progress**, `roadmapComplete=false`; PR #22 stays draft. No private
 CPU implementation is imported and no package publication occurs.
+
+### Supplied user-M nested-writeback returns — 2026-10-09
+
+The nested fixture now distinguishes supplied user-M (`S=0,M=1`) from user
+(`S=0,M=0`) when forming the outer SR. Both run the completion handler and
+nested fault service on ISP; the final outer RTE selects USP. The user-M
+expectation preserves the supplied M bit in the restored SR. Existing fixed
+SR and stack-selection examples in `SyntheticM68040ThrowawayTests` and the
+normal supplied writeback matrix already cover that state; this slice adds
+actual nested MOVES-store faults. Common-code callers and the handler program
+are unchanged. No production CPU or timing-policy change is made.
+
+Fresh execution completes with four named passes, zero failed or skipped:
+96,768 new cases, 48,384 per scalar/batch route, plus 672 unchanged controls
+with byte-identical reports. All 27 B/W/L slot-width triples, all 32 CCRs, four
+lanes, common FC1/5 and every pending slot/rejected byte are exercised. The
+shared expectations check defined nested saved SR/PC, stack positions, pending
+data, completion order, DFC/SFC restoration, final USP/ISP/MSP and following
+instruction, with canaries and untouched architectural registers.
+
+Independent verification binds exact command/settings, all 233 raw snapshot
+inputs/assets, all three executed assemblies, four loaded definitions/methods,
+completed TRX counters and every case key/status/weight in all four reports.
+All 37 production CPU files match the retained baseline after CRLF-to-LF only;
+the two restored raw newline differences remain explicit. Previous user,
+supervisor and differing-FC slices retain their own frozen source identities
+and are not rerun or relabeled as results of this updated fixture.
+
+Reproduce with fresh directories and require four completed named passes:
+
+```powershell
+$env:COPPER68K_RUN_040_USER_M_NESTED_WRITEBACK = '1'
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = [IO.Path]::GetFullPath('artifacts/user-M-nested-reports')
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/user-M-nested-build --filter 'FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.UserMasterBitReturns|FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.ActualHandlerStoresFaultCompleteAndResume' --logger 'trx;LogFileName=returns.trx' --results-directory artifacts/user-M-nested-results
+```
+
+| Selected evidence | SHA-256 |
+| --- | --- |
+| `UserMNestedV1/inputs.json` | `eb822b51cc0b8deaeb6d5fbf071e6fbae50dd843f50b4c828ac121f8f3d7cad5` |
+| `UserMNestedV1/execution.json` | `2c15dda3ddedf00503037b1b99f12244a7a849ba8b017b1e480f559fd48aaeb5` |
+| `UserMNestedIndependentV1.json` | `ac3d97610b813b7e31ed2364ef675f3df6988c0d2818c958e23a3c52409aaf4d` |
+| New scalar report | `fb550fe2702f8c25717de75982134386a840300310e40d211225c9d4b69f92c6` |
+| New batch report | `83a580f9e2f668ecf3ccd20539ef2cdb1c4a20ba2e68ad668f7cd8d48f5e3548` |
+| Later diagnostic-only static proof | `594db36251b094efb43e15773378d458e33a5c3b3b0ee48bc0bc3bcb64ec245d` |
+
+The later single diagnostic literal acknowledges supplied user-M coverage but
+retains all 480 required untested protocol cases, enabling condition and failing
+gate. It is separate from the executed snapshot. Differing-FC user-M, wider FC
+values, deeper repeated faults, original frame construction and trace/interrupt
+interruption remain required. Physical FC spaces are unqualified. No whole
+current-suite, hardware, API, package or consumer qualification is claimed.
+
+All launched audit workers are now terminal; the complete private read candidate
+retains the separate full/deep/API/consumer linkage recorded above. Broad 010
+RTE / 060 STOP disagreements remain failed/unqualified. Milestone 6 remains
+**in progress**, `roadmapComplete=false`; no private CPU import or publication.
