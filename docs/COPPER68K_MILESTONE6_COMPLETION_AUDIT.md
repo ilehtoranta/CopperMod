@@ -86,6 +86,20 @@ it does not replace or discard their remaining gaps.
    Two later 040 diagnostic strings are explicitly separated from the frozen
    inputs, with the same 480-case failing inventory retained. Production import
    and wider protocols remain open.
+   A portable selected audit now reconstructs that private candidate from the
+   current 233-input checkout in an isolated 235-input snapshot. The combined
+   six-file review patch reproduces all 39 qualified CPU inputs; all 196 test
+   inputs match the current checkout. Its fresh execution passes all 14 named
+   tests and 3,244,032 cases in 520 byte-identical pinned reports, and strict
+   replay passes. Independent linkage proof:
+   `836e17c0f43e3565076aa8381320b704a5e21c106e6687544dbf1624d3dff263`.
+   This supplies maintained reproduction without the temporary predecessor.
+   It does not qualify the whole current suite or import the private CPU.
+   A relocated valid evidence copy passes and all eight copied corruption
+   controls reject the intended report/selection/method/assembly/source defects.
+   The original evidence remains unchanged; no new CPU execution is claimed
+   from those validator controls. Their proof is
+   `8d9cfea6562c99b9b7662b443fa0a57f004318291d8f525837fb842800da92ae`.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

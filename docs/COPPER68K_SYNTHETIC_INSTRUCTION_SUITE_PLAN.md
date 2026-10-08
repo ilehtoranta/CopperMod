@@ -4233,3 +4233,17 @@ qualification record. Both running full candidates retain separate identities
 and still require independent full verification. Broad reference, restoration
 and hardware gaps keep milestone 6 **in progress**, `roadmapComplete=false`;
 no private CPU import or package publication occurs.
+
+### Milestone 6 checkpoint — portable private recovery audit, 2026-10-08
+
+The selected private recovery audit can now be reproduced from the current
+233-input checkout using a pinned combined patch, without a temporary
+predecessor checkout. It runs an isolated 235-input snapshot with 39 private
+CPU inputs and all 196 current test inputs. Fresh execution passes 14 named
+tests / 3,244,032 cases / 520 reports; strict replay passes and independent
+checks establish source equality and byte-identical pinned reports. Production
+CPU inputs remain unchanged. The qualification record contains the maintained
+commands and source/evidence identities. Broader full runs retain their own
+frozen inputs and pending verification; the selected result cannot close
+milestone 6, the broad failed reference gate or hardware gaps. Milestone 6 stays
+**in progress**, `roadmapComplete=false`; no private import or publication.

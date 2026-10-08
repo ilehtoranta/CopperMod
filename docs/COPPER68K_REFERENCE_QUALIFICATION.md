@@ -13585,3 +13585,57 @@ execution and its independent verification remain pending. Failed broad
 references, wider restoration and unavailable hardware remain open. No private
 CPU is imported and no package is published. Milestone 6 stays **in progress**,
 `roadmapComplete=false`; PR #22 remains draft.
+
+### Portable selected private recovery — 2026-10-08
+
+The maintained command below reconstructs the complete private candidate from
+the current checkout rather than requiring the temporary 259-input predecessor.
+The pinned combined six-file patch is review material: it is applied only in
+the command's isolated output directory. No production CPU implementation is
+imported. The manifest pins the current 233 source/project inputs, all 39
+normalized candidate CPU inputs, the exact 14 named tests, and all 520 report
+hashes and logical counts. Its LF checkout rule preserves the pinned manifest
+bytes on Windows. Later source changes require an explicit new qualification;
+the helper rejects a changed baseline rather than silently accepting it.
+
+```powershell
+python scripts/test-copper68k-private-predecrement.py --output artifacts/private-predecrement
+python scripts/test-copper68k-private-predecrement.py --validate-only --output artifacts/private-predecrement
+python scripts/prove-copper68k-private-predecrement-integrity.py --audit artifacts/private-predecrement --output artifacts/private-predecrement-controls
+```
+
+Fresh `PortablePredecrementV1` execution passes **14 named tests**, with zero
+skips/failures, and **3,244,032 cases / 520 reports**. The isolated snapshot has
+235 source/project inputs: 39 private CPU and 196 current test inputs. All
+normalized CPU inputs match the separately qualified 260-input candidate;
+the temporary candidate's additional test files are absent from this snapshot.
+All current test inputs match, including the later 040 diagnostic descriptions.
+Every selected report is byte-identical to its pinned predecessor. Strict
+replay passes and independent source/report/assembly/execution checks bind
+this new snapshot. Its DLLs have their own identities; source equality does
+not relabel it as the previous build or a full current-suite execution. The
+isolated build logs retain SourceLink's missing-repository warnings.
+
+The integrity command uses copied validator inputs, without executing a CPU.
+A relocated valid copy passes. Eight independently altered copies each exit 1
+for the required reason: missing report, zero-count changed report, empty test
+selection, wrong loaded method, wrong assembly path, changed DLL, changed source
+and extra report. TRX mutations update the outer output hash so method/selection
+checks must reject the internal defect. Hard-linked immutable files are
+detached by atomic replacement before alteration; every original evidence
+file hash remains unchanged and its final strict replay passes.
+
+| Portable selected evidence | SHA-256 |
+| --- | --- |
+| Combined six-file candidate patch | `624a9134a9f88dacda50d15508f5418106a77da766c7051a53322fa079e13490` |
+| Pinned manifest | `d7ade9a6020cd711f05a8e7b0ef6fd427b223a48c50239ac6949e3d83f85b06c` |
+| `PortablePredecrementV1/proof.json` | `98cb43ae342c42e7e757df8c3ec302ac56f74a3a88a1a750017dcbd2d4aff381` |
+| `PortablePredecrementIndependentV1.json` | `836e17c0f43e3565076aa8381320b704a5e21c106e6687544dbf1624d3dff263` |
+| `PortablePredecrementControlsV1/proof.json` | `8d9cfea6562c99b9b7662b443fa0a57f004318291d8f525837fb842800da92ae` |
+
+Both broader 259/260-input full executions remain live on their original
+assemblies and require terminal results and independent verification. This
+portable selected result does not satisfy those full gates. Broad 010 RTE /
+060 STOP disagreements, wider restoration protocols and unavailable hardware
+remain explicit. Milestone 6 stays **in progress**, `roadmapComplete=false`;
+PR #22 stays draft. No package publication or private production import occurs.
