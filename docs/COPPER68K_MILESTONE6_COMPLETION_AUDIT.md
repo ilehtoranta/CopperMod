@@ -58,9 +58,12 @@ it does not replace or discard their remaining gaps.
    expected catalog has 13,737 reports / 110,928,842 cases; actual complete-suite
    execution and verification remain pending.
    A newer 259-input private predecrement final-write correction has selected
-   1,204,224-case evidence and a reviewable two-file patch. Its broader full/deep/API
-   and consumer qualification is pending; the running 258-input full replay cannot
-   qualify the newer CPU changes. No private production import occurs.
+   1,204,224-case evidence and a reviewable two-file patch. Its same-build deep/API,
+   eight invalid-request guards and local .79 consumers are independently verified.
+   Exact source/assembly/package linkage is recorded in the qualification log.
+   Its newer full replay has started; both full results and verification remain
+   pending. The running 258-input replay cannot qualify the newer CPU changes.
+   No private production import occurs.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

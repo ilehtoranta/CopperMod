@@ -13385,3 +13385,61 @@ requires full/deep/API and affected-consumer qualification. The earlier 258-inpu
 full run continues unchanged and cannot qualify these new CPU changes. Production
 has 232 inputs / 37 unchanged CPU inputs after adding the fixture. No private
 CPU is imported and no package is published. Milestone 6 remains **in progress**.
+
+### Predecrement candidate integration checkpoint — 2026-10-08
+
+The newer 259-input / 39-CPU graph is independently frozen at source proof
+`cb425ab482a49f783ab722ca0e8cf504d17424f33ebf050ae22d58bd7ca4f4fa`.
+Compiled discovery gives exactly **8,128 named rows**. Before execution, its full
+catalog binds **13,753 reports / 111,322,058 expected cases** to retained qualified
+reports plus the sixteen new predecrement reports. The full suite starts from
+the already qualified selected-run assemblies, without rebuilding, and enables
+the same ten qualified native reference presets plus the predecrement fixture.
+Expected outcomes are 8,091 passed / 37 unavailable; these are expectations,
+not completed full execution. The earlier 258-input full replay continues on
+its original sources and assemblies. Neither running audit is restarted.
+
+The newer assemblies independently pass **320,000 seeded cases / 32 reports**,
+**312,500 SingleStepTests cases / 125 files** and **536 Musashi programs / 88
+exclusions**. Pinned inputs, exclusions, exact loaded methods/paths, commands,
+settings, case weights/statuses and binary/source identities are verified.
+The same assemblies execute eight actual invalid audit requests, each with one
+intended failed test and no CPU execution/report: zero seed/samples, empty model
+selection, missing/empty SingleStepTests input, missing Musashi input and
+adjacent/separated duplicate models. Guard verifier V1 stops while constructing
+its output because the newer source record has different lineage metadata;
+V2 records lineage from the deep input and preserves all eight checks and their
+original execution evidence. No rejected proof is relabeled as successful.
+
+Separate reflection processes compare this newer compiled CPU with the retained
+production CPU: **20 exported types / 211 public or protected records**, zero
+added or removed managed signatures. Independent verification binds the helper,
+two distinct assembly inputs and candidate full-run manifest. This retains the
+managed-signature scope and earlier physical-layout/runtime caveats.
+
+A fresh local-only `1.5.2-synthetic-dev.79` package contains these exact 39 CPU
+inputs plus README/icon assets. The clean `aa1dad5` CopperScreen archive, separate
+package cache and explicit version override preserve the NuGet-only boundary.
+Independent consumer verification proves a clean production build, **171 host
+passes / six unavailable**, **74 disk passes**, **1,080 engine passes** and **two
+native Workbench 3.1 floppy replays**, with exact retained rosters, archive/source
+identities, all three loaded CPU copies and unchanged ROM/media hashes. Package
+version/build metadata gives the package its own binary identity; source equality
+is explicit rather than silently equating the package DLL with the full-run DLL.
+No HD boot, throughput or hardware qualification is added by these checks.
+
+| Newer candidate evidence | SHA-256 |
+| --- | --- |
+| `discovery/proof.json` | `382381db2d8ee78241e8c2ce81e442db13972e85c17c18659f49d422a92d49a2` |
+| `expected-reports.json` | `ed62506e84c964961c6eb4b2c238078924c4c461a76a74f7b2046767ab0e6c93` |
+| `audits/PredecrementDeepV1/proof.json` | `dfab8a22affec7c935b7a4daacc750947de871a419be8b50b9e6d1c878eede3e` |
+| `audits/PredecrementDeepControlsV1/independent-proof.json` | `4c5e4b14d1990e141aa7f0975380a7363598b43348efeea271ac8df6623cb28d` |
+| `api-review-v2/independent-proof.json` | `88e05e1302689d664253342d5df1df893134e1bd75961ec8464acf745589879c` |
+| `consumer-79-complete-proof-v1.json` | `d19650946c07337af5a9a406a2a3549fb8ca1a75794450bb693c55ea39ec9ce8` |
+| `predecrement-evidence-link-v1.json` | `b744c7979487b28aa7b134011b22a90e2d755f4808e95a9d23e36a93afb06a0a` |
+
+The final linkage checks all 259 source inputs, exact shared full/deep/guard/API
+assemblies and all 39 local-package CPU inputs. Both full runs remain pending.
+Broad reference disagreements, wider restoration and hardware boundaries remain
+open. Production CPU code is unchanged; no package is published. Milestone 6
+remains **in progress**, `roadmapComplete=false`, and PR #22 remains draft.

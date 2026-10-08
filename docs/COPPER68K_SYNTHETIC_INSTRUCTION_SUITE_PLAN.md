@@ -4179,3 +4179,16 @@ saved; production CPU code is unchanged. See the qualification record for scope,
 evidence identities and patch replay caveats. Newer full/deep/API and consumer
 qualification is pending; the earlier full run remains on its frozen inputs.
 Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+### Milestone 6 checkpoint — newer candidate integration, 2026-10-08
+
+The 259-input predecrement candidate has exact 8,128-row compiled discovery and
+a frozen 13,753-report / 111,322,058-case expected catalog. Its full run has
+started on the selected-run assemblies; the earlier 258-input run continues
+separately. Same-build deep references and eight actual invalid-request guards
+are independently verified, as are zero managed public/protected API changes.
+The fresh local-only .79 package passes clean CopperScreen build, 171 host /
+six unavailable, 74 disk, 1,080 engine and two native floppy checks. Explicit
+source/assembly/package linkage and caveats are in the qualification record.
+Full execution and its independent verification remain pending; no private CPU
+import or publication occurs. Milestone 6 stays **in progress**.
