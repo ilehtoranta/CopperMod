@@ -13140,3 +13140,44 @@ private C023 import, regression retirement or package publication is made.
 Hardware is unavailable for disputed 030/040 trace boundaries. The broad
 reference failures and other continuation gaps remain open; milestone 6 stays
 **in progress**, `roadmapComplete=false`.
+
+### Maintained private C021 audit command — 2026-10-08
+
+The repository now includes an isolated baseline/mutation command and strict
+replay. It snapshots tracked CPU/test sources, clears inherited audit settings,
+builds into fresh outputs and executes exactly the two named metadata tests.
+Each of three isolated mutants changes only its specific guard. Verification
+checks the current source graph and producer identity, exact command/settings,
+execution outputs, both CPU assembly copies, all result counters, loaded test
+methods/assembly paths, every combination weight and ordered failure diagnostic.
+Missing fixtures, missing/empty selections, unexecuted rows and mismatches cannot
+be accepted as baseline success. Existing output directories are rejected.
+
+```powershell
+python scripts/test-copper68k-rte-metadata.py --output artifacts/c021-audit
+python scripts/test-copper68k-rte-metadata.py --output artifacts/c021-audit --replay
+python scripts/prove-copper68k-rte-metadata-integrity.py --audit artifacts/c021-audit --output artifacts/c021-integrity
+```
+
+The completed `C021MaintainedCommandV2` execution passes **10,240 baseline cases**
+and detects **6,144** exact mutant witnesses. Strict replay passes. Independent
+linkage verifies all 231 inputs and every report against the earlier separately
+qualified baseline/mutants, plus the named methods and binary identities.
+Command proof: `9efd2808a8eb5759b3b8738c7d2635fa0c216043e212519ee08421ba9b76d7a3`.
+Independent linkage: `9d4701f7f15d9a4caaa53a6a00a51f6c76acd6efcdf0fb237aaa5803b56ca1ab`.
+The earlier maintained-driver V1 run is retained under its original producer
+identity; V2 adds explicit TRX counter and missing-method checks in a fresh run.
+
+`C021MaintainedIntegrityV1` checks 17 single-corruption controls. Each relocated
+validator fixture passes a positive structural check before its deliberate
+corruption; these copied inputs are not claimed as new CPU executions. All
+controls reject at their exact intended guard, including coherent source/output
+manifest tampering, empty selection/coverage, missing fixtures/assemblies,
+loaded-method identity, counters/outcomes, failure IDs and diagnostics. The
+original execution files remain unchanged. Integrity proof:
+`e954c840409307783e3258b9a3d487a98b88cdcd13f0c6b21c1508e1c92e3979`.
+
+This adds maintained audit tooling, without changing the 231-input focused
+CPU/test graph or the 37 production CPU inputs. Full-suite, deep-reference,
+consumer and hardware qualification keep their earlier scope and identities.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

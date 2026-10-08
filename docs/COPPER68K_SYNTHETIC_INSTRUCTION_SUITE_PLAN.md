@@ -4118,3 +4118,15 @@ full/deep/consumer results are retained under their original identities. This
 does not qualify foreign hardware frames or close the broad reference and
 restoration gaps. With no 030/040 hardware available, disputed trace boundaries
 remain unqualified. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+### Milestone 6 checkpoint — maintained private audit, 2026-10-08
+
+The maintained private C021 command snapshots and builds isolated sources,
+reproduces 10,240 passing baseline cases and 6,144 exact mutation witnesses,
+and supports strict replay. Seventeen corruption controls reject missing/empty
+or coherently altered validator inputs at their intended guards, with positive
+relocation controls and unchanged original evidence. Independent comparison
+matches all focused source graphs and reports to the earlier qualified runs.
+No CPU/test input changes accompany the tooling. The qualification record gives
+commands, scope and proof identities. Milestone 6 remains **in progress**;
+failed broad references, private recovery and hardware questions remain open.

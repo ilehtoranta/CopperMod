@@ -94,6 +94,14 @@ foreign frames, private C023 production recovery or disputed hardware trace
 boundaries. See the latest qualification record for scope and proof identities.
 No production CPU input changes. Milestone 6 remains in progress.
 
+The maintained `test-copper68k-rte-metadata.py` command reproduces the baseline
+and all three isolated mutants, then strictly verifies sources, loaded methods,
+assemblies, result counters and exact reports. Replay passes. The companion
+integrity command rejects 17 corrupted copied validator inputs at their intended
+guards and preserves original evidence. Commands and proof identities are in
+the latest qualification record. This closes reproducibility for this focused
+private software audit, without qualifying the broader unresolved behavior.
+
 ## Earlier frozen validation — 2026-10-08 (c284b94)
 
 Current source checkpoint: `c284b948263501183136656307cab2ecce6e0479`.
