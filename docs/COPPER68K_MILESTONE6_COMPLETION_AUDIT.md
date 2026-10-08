@@ -66,6 +66,12 @@ it does not replace or discard their remaining gaps.
    Its newer full replay has started; its result and independent verification
    remain pending. The completed predecessor cannot qualify the newer CPU changes.
    No private production import occurs.
+   The 040 access-frame discovery inventory retains all 480 required untested
+   combinations (three banks, 32 CCR images, five protocol labels). Its diagnostic
+   notes now acknowledge the separately qualified MOVES, nested supplied-slot
+   writeback and MOVE16 fixtures without treating their bounded coverage as
+   completion of those broader protocols. Only descriptions change; no case,
+   status, enable flag or failure condition is removed.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;
