@@ -12051,3 +12051,65 @@ Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
 | manual | `c426a8429ca15f342b31c8eb5f407b442e383d1e48f3c7be4aa649ad30c8ef82` |
 | complete source/evidence link | `093cec2ced250c78676790816de51aebde285f111367784da86206912dd8bf8f` |
 | current broad Basic replay | `d8c4e6f6e7a94e07c6f76cb9b66f1d1ddcb1672dd2195c328171428ee1642d90` |
+
+
+## NOT displacement semantic regression consolidation — 2026-10-08
+
+Retire exactly four model rows of
+`M68020HdfBootTests.NotLongDisplacementUpdatesOnlyTheLongAndPreservesExtend`,
+pinned at `3dd2640cd5f112a42efbb51a42847d830eb000e4`. They cover NOT.L d16(A5)
+with values 0, FFFFFFFF and 92345678, displacements -8/+8 and CCR 31. The shared
+`SyntheticNotDisplacementTests.LongNotDisplacementPreservesExtendAndSurroundingMemory`
+contains those architectural combinations and expands to all eight profiles,
+A0..A7, user/supervisor stacks and all 32 CCRs: **24,576 cases / eight batches**.
+The shared operand fixture chooses the address independently, validates the fixed
+46AD example and exact four-byte instruction length, surrounds the operand with
+canaries and checks all registers, defined flags, memory and a following NOP.
+No production arithmetic, EA or timing helper computes expected results.
+
+Expectations follow [M68000PM NOT, printed 4-148/149](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf):
+complement the long operand, preserve X, derive N/Z, clear V/C. The isolated
+intentional lost-X mutation changes only the base displacement-long unary path
+and advanced long-displacement NOT path. All four pinned legacy rows fail at the
+same flag defect; exactly **12,288 shared cases fail**, the X-set half. The other
+12,288 pass. Clean pre-retirement execution passes **83 tests** (75 old HDF rows
+and eight replacement batches); exact retirement passes **79 tests** (71 retained
+sibling rows and eight batches). No source CPU is changed and no other old method
+is removed. Nine controls reject missing fixtures, changed producers, empty or
+missing-witness selections, wrong case weights/reasons, an altered mutation and
+manifest, wrong execution command and wrong TRX counters.
+
+The maintained ordinary gate requires all eight 3,072-case reports.
+Missing/incomplete reports reject and complete composed evidence passes
+**86,581,610 logical cases / 759 batches / 959 profile reports**. These copied
+report controls execute no instructions. Original report hashes remain intact;
+hardlinked control targets are unlinked before alteration. The first control
+producer stopped on an incorrect assertion of the PowerShell declaration syntax;
+that failed output is retained and the corrected producer uses a fresh directory.
+
+The focused retirement snapshot has **222 source inputs**, including the added
+fixture and reduced legacy file. Its **37 production CPU inputs are identical**
+to the accepted MOVE16 full audit and `.77` package. The retained full audit uses
+the separately recorded 221-input V3 fixture (5,326 passing / 53 unavailable,
+86,749,514 cases / 951 reports / ten native presets), with its final focused V4
+expectation strengthening recorded separately. It is not claimed as a new full
+execution of this 222-input retirement. The accepted `.77` consumer build/tests
+and two floppy replays remain unchanged evidence. No new consumer execution,
+package release, timing/cache/prefetch/bus/JIT/native retirement or physical
+qualification is claimed. The two broad Basic reference mismatches and other
+restoration gaps remain open. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
+
+Reproduce with `scripts/test-copper68k-not-displacement-retirement.py` and a fresh
+`--output`; `--validate-only` independently reconstructs all expected case IDs,
+weights, failure reasons, source/producer inventories, pinned row outcomes and
+TRX counters. `--prepare` / `--finish-retirement` support proof before exact removal.
+Evidence is local in `%TEMP%/copper68k-reference-restoration-20261006/` under
+`not-displacement-consolidation-v1` and `not-displacement-ordinary-controls-v2`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| retirement | `33bdf414a53cd0f5eb9244e0432ad06ecc669a235ccdb0a4aa5b8d0bbc63b431` |
+| ordinary controls | `229a62670d18a8cad98cc3cc7f336b70cb712f588b12616144acb4d760efe84a` |
+| retained full | `46bddaccc8921960717c6f62a3fae9eb57eaf3dade9cf100d5294b3c617d1298` |
+| retained consumer | `ef4e3017ebfdf7471378dff94a430bfc0998eb9bbe7bd93dee4a16336b1d75f2` |

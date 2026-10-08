@@ -3819,3 +3819,21 @@ address updates qualify the synchronous policy, not physical pipelines. Broader
 register/alias/user-mode combinations, enabled MMU/cache and physical timing
 remain outside this gate. No old regression is retired. Hardware is unavailable
 at disputed boundaries. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 NOT displacement consolidation — 2026-10-08
+
+The shared captured NOT.L displacement fixture passes **24,576 cases** across
+eight profiles, every address register, user/supervisor stacks and all CCRs.
+The isolated lost-X mutation fails exactly **12,288 cases** and all four pinned
+legacy rows. Exact removal preserves 71 sibling HDF rows and eight replacement
+batches; nine altered-evidence controls reject. All eight 3,072-case reports are
+mandatory. Missing/incomplete report controls reject; the complete composed
+report-only gate passes **86,581,610 cases / 759 batches / 959 reports**.
+
+This test-only 222-input snapshot retains all 37 production CPU inputs and the
+separately recorded full/.77 consumer evidence. No new wide full-suite execution,
+consumer replay, package release or specialized-regression retirement is claimed.
+The [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#not-displacement-semantic-regression-consolidation--2026-10-08)
+maps the exact replacement, defect and pinned evidence. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.

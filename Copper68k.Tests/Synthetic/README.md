@@ -1471,3 +1471,28 @@ replays. WB1 validity, read transfer type, broader aliases/user-mode entry and
 physical pipelines remain unqualified. The refreshed broad Basic replay still
 has two mismatching directories. See [the MOVE16 record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-move16-physical-line-write-recovery--2026-10-08).
 Milestone 6 remains in progress; nothing is published.
+
+
+The ordinary gate requires 3,072 `logical-not-displacement-captured` cases for
+each of the eight profiles. Captured long-NOT values 0 / FFFFFFFF / 92345678 and
+signed displacements -8/+8 are extended across A0..A7, user/supervisor stacks and
+all 32 CCRs. Shared operand fixtures and architectural verification check the
+result, flags, untouched registers/memory, extension length and following NOP.
+An isolated lost-X mutation fails all four old HDF rows and exactly 12,288 shared
+cases. Their exact retirement leaves 71 sibling HDF rows passing alongside eight
+replacement batches. Nine altered-evidence controls reject. This test-only
+slice retains the same 37 CPU inputs and accepted full/.77 consumer evidence;
+the composed report-only ordinary gate passes 86,581,610 cases / 759 batches.
+
+Reproduce before retirement with `--prepare`, apply the exact scoped removal,
+then use `--finish-retirement`; an existing complete result supports strict replay:
+
+```powershell
+python ./scripts/test-copper68k-not-displacement-retirement.py --output artifacts/not-consolidation
+python ./scripts/test-copper68k-not-displacement-retirement.py --output artifacts/not-consolidation --validate-only
+```
+
+Use a fresh directory for execution. Missing fixtures, empty/wrong selections,
+changed source or defect, producer, command, case weights, reasons and counters
+fail verification. This does not qualify timing or bus ordering. See
+[the NOT retirement record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#not-displacement-semantic-regression-consolidation--2026-10-08).
