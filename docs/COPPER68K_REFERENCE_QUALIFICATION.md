@@ -267,6 +267,11 @@ bus ordering, detailed fault sequencing, JIT and native ROM/media tests remain.
 
 ## Remaining qualification and implementation gaps
 
+The [revision-2 broad replay](#040060-coprocessor-id-priority-qualification--2026-10-08)
+gets past `F520` and exposes reserved MOVE16 word `F628` on 040/060. The broad
+gate remains failed, alongside the retained 010 RTE and 060 STOP disagreements.
+
+
 - SingleStepTests has the pinned 312,500-case 68000 instruction-body audit.
   The later checkpoints below add a pinned multi-model WinUAE bridge, the
   unchanged failing Basic discovery audit, and separately qualified trace,
@@ -11288,3 +11293,82 @@ Evidence SHA-256: manifest `34f41176251d1816586e70cdb384b08cacb69bb316785a34f9f2
 `c3037b7cd25288e82ce2a53b8f7205f75d92b81fa0dcf438a41699d09f4f850f` /
 `5cd24163a0acac4cc41d6026cc8c0248f88697e617b9cc6c30d38ec414f1fd2a`; complete linkage
 `b9a8133b4ed373f91339fdc7a72f5d8b86bb2153ce30a98a518bad9f8f3d86a6`.
+
+## 040/060 coprocessor ID priority qualification — 2026-10-08
+
+The native fallback applied external cpSAVE/cpRESTORE privilege rules to every
+nonzero coprocessor ID on 040/060. `F520` encodes ID 2 and predecrement A0;
+recognizing it as privileged external state transfer gave vector 8 in user mode.
+[MC68040UM E-2 and 8.2.4](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+requires ID 001 for floating-point instructions and distinguishes unrecognized
+F-line words. [MC68060UM 8.2.4](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+specifies vector 11, format 0 and causing-instruction PC for unrecognized F-line
+words. The recognized ID-1 FPU and integer MMU instruction paths remain separate.
+
+`coprocessor-id-priority.patch` confines the native fallback privilege check to
+ID 1 on 040/060; the 020/030 rule is unchanged. The correction runs before
+reference execution, without changing Copper68k, an observed CPU result, a
+comparator mask or an input family selection. `QualifiedBasicRevision=2` adds
+this fourteenth composed patch. Revision 1 keeps its thirteen-patch definition;
+the maintained verifier successfully rechecks its frozen failed execution.
+Both original corpora and their evidence remain unchanged.
+
+The existing public-factory first-word matrix was freshly executed against the
+same frozen production source/assemblies. All **445,248 cases in eight batches**
+pass. Exact per-model encoding/vector inventories and case multiplicities are
+independently re-enumerated: both privilege states, every CCR, all IDs and EA
+fields, with integer MMU overlaps explicitly owned by their existing matrices
+and legal supervisor FPU protocols outside this first-word exception selection.
+ID-2 coverage is **5,120 cases on 040** and **6,144 on 060**; `F520` alone has
+64 cases on each. Verification includes registers, saved PC/SR/frame, canaries
+and forbidden operand reads. This is documented semantic software qualification,
+not hardware evidence or FPU/MMU operational qualification.
+
+The fresh revision-2 broad run executes every retained family/profile. It reports
+**1,377 passing / four mismatching / zero unsupported / zero untested**,
+**12,650,585 callbacks** and **2,317,066 exception frames**, with all 32 named
+comparison controls intact. On both 040 and 060 the ILLEGAL first failure moves
+from callback 29,459 (`F520`) to callback 29,843 (`F628`): 384 additional callbacks
+are reached per profile. The passing-directory count does not increase; neither
+failing ILLEGAL directory is resolved. The 010 RTE and 060 STOP observations are
+unchanged, and later failures in all four directories remain unobserved.
+
+`F628` is a new reserved MOVE16 first-word discrepancy. The native diagnostic
+expects vector 11 and reports no actual exception, while the CPU execution
+trace records vector 4. Its architectural classification and adapter termination
+handling need a bounded reproduction; this checkpoint makes no correction or
+qualification claim for it. Other A7/trace/repeated-fault/advanced-frame gaps
+remain open. The broad test and strict execution verifier both return failure.
+
+A separate data-delta comparison ignores **only** the generator's documented
+start-time field (bytes 4..7 of opcode header/data records); memory images are
+compared in full. It finds changed payloads only in the 040 and 060 ILLEGAL data
+files. All other payloads are unchanged. This diagnostic comparison does not
+weaken acceptance: both complete exact input inventories and hashes are still
+bound by the strict verifier.
+
+Twelve copied-input controls reject the original ten corruptions plus an unknown
+revision and a widened CpID mask despite an updated composed-source hash. They
+unlink copies before modification and confirm originals after every experiment.
+The new patch's original Windows CRLF identity and emitted LF-copy identity are
+recorded separately; the initial preflight rejected their mistaken conflation
+before any CPU execution. The verifier now permits only the pinned original or
+exact LF/CRLF textual representations, while retaining exact emitted-source and
+fixture bindings. No production CPU change, private candidate import, package
+publication or regression retirement occurs. Milestone 6 remains **in progress**.
+
+Use `prepare-copper68k-winuae.ps1 -Preset QualifiedBasic -QualifiedBasicRevision 2`
+for new inputs; `-QualifiedBasicRevision 1` preserves the earlier composition.
+The unchanged frozen verification command above accepts both explicit revisions
+(and the original revision-1 manifest) and fails unknown revisions or any failed
+broad gate. Requested execution audits must not interpret input-only validation
+as instruction execution.
+
+Evidence SHA-256: normalized new patch `e646382b98fb38533f6411fe13b52eecb92e78dfa169b88137b9a54da86e6461`; matrix
+`898d4f7c996fe5cc90922918e3d751a4c394a5e2bac7a299934348fb2deb7dfa`; failed broad report
+`44e23cf3fda3c7a3ddceb523dae87ed1f653ded9604011c3e026c58998d470f0`; strict proof / twelve controls
+`95757f467a366ba775e9fdf18737c9c099c96872f35427d6d096b6f9e26a7a17` /
+`5d509b365df6e0703b1b04e52ca7faed059bf8de8c0650a2714eabe0517d8ec6`; retained revision-1 proof
+`26e1bd6a201fc6d46df6ce2b38c86bce806e8aaa112ab6a06c0a833a0c808dc0`; input-delta record
+`c7500fae50a111c0ec60d141e295d89025083b2934876d77e051ec6154fab889`; complete linkage
+`cbd5c1d9f365dfd6aeec7941431c02cd3e55ee52ea2dc0c737ace153ec6bf2fd`.

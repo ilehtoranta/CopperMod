@@ -1,0 +1,13 @@
+--- cputest.cpp
++++ cputest-qualified-basic.cpp
+@@
+ 		test_exception = 11;
+-		if (privileged_copro_instruction(opcode)) {
++		// MC68040UM E-2 / 8.2.4 and MC68060UM 8.2.4:
++		// only CpID 1 identifies FPU state instructions on 040/060.
++		// Other IDs are unrecognized F-line words, not privileged
++		// external cpSAVE/cpRESTORE. Preserve the 020/030 CIR rules.
++		if ((cpu_lvl < 4 || (opcode & 0x0e00) == 0x0200) &&
++			privileged_copro_instruction(opcode)) {
+ 			test_exception = 8;
+ 		}

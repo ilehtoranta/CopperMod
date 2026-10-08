@@ -1309,3 +1309,10 @@ execution bindings; it returns failure for the current four mismatching rows.
 Input-only verification executes no CPU instructions. The original raw Basic
 ledger and failed audit retain their separate scope. This broad checkpoint does
 not qualify hardware timing, resolve unseen failures or complete milestone 6.
+
+`QualifiedBasicRevision=2` adds the reviewed 040/060 coprocessor-ID fallback
+priority correction; revision 1 remains supported and its frozen evidence is
+retained. The [revision-2 record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040060-coprocessor-id-priority-qualification--2026-10-08)
+binds the 445,248-case first-word matrix and twelve corruption controls. The
+broad audit remains failed and now exposes `F628`; input validation is not a
+passing CPU gate. No Copper68k source change or package release is included.

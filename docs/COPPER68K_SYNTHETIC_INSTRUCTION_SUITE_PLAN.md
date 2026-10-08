@@ -3557,3 +3557,17 @@ No CPU source changes, candidate import, publication or retirement occur.
 Milestone 6 remains **in progress**, `roadmapComplete=false`; neighboring
 encoding/priority qualification, later-failure discovery and the existing
 architectural/protocol requirements remain outstanding.
+
+### Milestone 6 coprocessor-ID reference priority — 2026-10-08
+
+The 040/060 `F520` discrepancy is qualified as a native-reference priority error:
+only ID 1 identifies FPU state instructions on these models. Revision 2 limits
+that reference check without changing Copper68k or excluding families; revision 1
+remains reproducible. The fresh independent first-word matrix passes 445,248
+cases in eight batches. The broad run still fails four directories, now exposing
+`F628` reserved MOVE16 words behind `F520`; 010 RTE and 060 STOP remain. Twelve
+corruption controls pass, and exact retained revision-1 evidence revalidates.
+See [the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#040060-coprocessor-id-priority-qualification--2026-10-08).
+Milestone 6 remains **in progress**, `roadmapComplete=false`. The new encoding and
+adapter discrepancy, later failures and prior architectural/protocol gaps must
+be addressed; no source candidate import or package publication occurs.

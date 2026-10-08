@@ -60,6 +60,8 @@ PATCHES = {'trap-bounds-pc.patch': {'sha256': '2ab0b6724978492623faa188cb23b1e9d
                            'available': 2,
                            'applied': 1,
                            'copySha256': 'ef393d99b50198f1c0139de12d890f1f2c3cc0675bee19d22259de698c68e32e'}}
+ID_PRIORITY_PATCH = {'sha256': '5400a56d5fc4f73492a26f261208b5b25f6d909add545c07b85902a9685a58a4', 'copySha256': 'e646382b98fb38533f6411fe13b52eecb92e78dfa169b88137b9a54da86e6461', 'available': 1, 'applied': 1}
+
 GENERATOR_PIN = '025b999239800357e95065fe5b9a15ea5b300fa7'
 RUNNER_PIN = '7a83745d6c6159bc74ab0471578ffc8bc244e66e'
 MODELS = ['68000', '68010', '68EC020', '68020', '68030', '68040', '68060']
@@ -97,15 +99,21 @@ def validate(root, basic, generator):
     require(m['Preset'] == 'QualifiedBasic' and b['Preset'] == 'Basic', 'Wrong broad preset')
     require(m['GeneratorCommit'] == b['GeneratorCommit'] == GENERATOR_PIN and
             m['RunnerCommit'] == b['RunnerCommit'] == RUNNER_PIN, 'Changed reference pins')
+    revision = m.get('QualifiedBasicRevision', 1)
+    require(revision in [1, 2], 'Unknown broad reference revision')
+    patches = dict(PATCHES)
+    if revision == 2:
+        patches['coprocessor-id-priority.patch'] = ID_PRIORITY_PATCH
     actual = m['QualifiedBasicPatches']
-    require(len(actual) == len(PATCHES) and [p['Name'] for p in actual] == list(PATCHES), 'Missing or reordered patches')
+    require(len(actual) == len(patches) and [p['Name'] for p in actual] == list(patches), 'Missing or reordered patches')
     sources = {}
     for file in ['gencpu.cpp', 'cputest.cpp']:
         sources[file] = subprocess.check_output(['git', '-C', str(generator), 'show',
                                                GENERATOR_PIN + ':gencpu/' + file]).decode('utf-8').replace('\r\n', '\n')
-    for item, (name, spec) in zip(actual, PATCHES.items()):
+    for item, (name, spec) in zip(actual, patches.items()):
         path = root / name
-        require(sha(path) == spec['copySha256'] and item['Sha256'] == spec['sha256'] and item['AppliedHunks'] == spec['applied']
+        require(sha(path) == spec['copySha256'] and item['Sha256'] in
+                {spec['sha256'], spec['copySha256'], hashlib.sha256(path.read_text(encoding='utf-8').replace('\n', '\r\n').encode('utf-8')).hexdigest()} and item['AppliedHunks'] == spec['applied']
                 and item['AvailableHunks'] == spec['available'], 'Changed patch identity or selected hunks')
         file = 'gencpu.cpp' if name in list(PATCHES)[:7] else 'cputest.cpp'
         sources[file] = apply(sources[file], path.read_text(encoding='utf-8').replace('\r\n', '\n'), spec)
@@ -134,7 +142,7 @@ def validate(root, basic, generator):
         original_config = (basic / p['Id'] / 'cputestgen.ini').read_text(encoding='utf-8')
         normalize = lambda x: re.sub(r'(?m)^path=.*$', 'path=<fresh-output>/', x)
         require(normalize(config) == normalize(original_config), 'Changed broad generator selection')
-    return {'compositionVerified': True, 'profiles': MODELS, 'patches': len(PATCHES),
+    return {'compositionVerified': True, 'profiles': MODELS, 'patches': len(patches), 'revision': revision,
             'manifestSha256': sha(root / 'manifest.json'), 'rawBasicManifestSha256': sha(basic / 'manifest.json'),
             'directoryCount': sum(len(p['Opcodes']) for p in m['Profiles']),
             'architecturalPromotion': False, 'roadmapComplete': False}

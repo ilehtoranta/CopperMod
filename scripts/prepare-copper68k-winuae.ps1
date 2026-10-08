@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)] [string] $RunnerSource,
     [Parameter(Mandatory)] [string] $VcVars64,
     [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Moves','Cas','Cas2','CacheEncodings','Move16','QualifiedBasic')] [string] $Preset = 'Basic',
+    [ValidateSet(1,2)] [int] $QualifiedBasicRevision = 2,
     [string] $OutputDirectory = 'artifacts/winuae-model-inputs'
 )
 $ErrorActionPreference = 'Stop'
@@ -116,6 +117,9 @@ try {
             # Correct scope-00 exception classification only. The second hunk
             # is the narrow preset's family filter and MUST NOT enter this run.
             $source = Apply-QualifiedPatch $source 'cache-encodings.patch' 2 1
+            if ($QualifiedBasicRevision -eq 2) {
+                $source = Apply-QualifiedPatch $source 'coprocessor-id-priority.patch' 1
+            }
             $testerSource = Join-Path $output 'cputest-qualified-basic.cpp'
             [IO.File]::WriteAllText($testerSource, $source)
         }
@@ -297,6 +301,7 @@ void M68KTester_destroy(M68KTesterContext* context) {
     @{
         Schema=1; GeneratorCommit=$generatorPin; RunnerCommit=$runnerPin; Profiles=$profiles
         Preset=$Preset
+        QualifiedBasicRevision=$(if ($Preset -eq 'QualifiedBasic') {$QualifiedBasicRevision} else {$null})
         QualifiedBasicPatches=$combinedPatches
         QualifiedBasicCpuSourceSha256=$(if ($Preset -eq 'QualifiedBasic') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-qualified-basic.cpp')).Hash.ToLowerInvariant()} else {$null})
         QualifiedBasicInputSourceSha256=$(if ($Preset -eq 'QualifiedBasic') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-qualified-basic.cpp')).Hash.ToLowerInvariant()} else {$null})
