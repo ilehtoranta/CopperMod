@@ -2117,6 +2117,21 @@ retain their own frozen evidence. Wider FCs, repeated faults, original construct
 and trace/interrupts remain open; the 480-case broader gate is retained. Milestone 6
 stays **in progress**, `roadmapComplete=false`; no private import or publication.
 
+### Milestone 6 checkpoint — repeated nested writeback faults, 2026-10-09
+
+The shared supplied-frame fixture explicitly services repeated pending-store
+faults at depths two and three. Six selected tests pass 51,968 generated cases,
+48 bounded ordinary-CI examples and 672 byte-identical single-fault controls.
+Each saved SR/PC, frame, stack consumption, pending datum, DFC and explicit
+return is checked; the accepted operand-write trace remains one write per slot.
+All four banks, common FC1/5 and lanes/rejected bytes/slots cover all 27 widths
+at CCR=31, with canonical widths 1/2/4 at all CCRs. Independent verification
+binds exact case/source/assembly/method/report identities. Earlier larger
+single-fault selections retain separate frozen evidence. No CPU semantics or
+timing-policy change occurs. Wider FC/refault combinations, original construction
+and trace/interrupts remain open; the 480-case broader failing gate is retained.
+Milestone 6 stays **in progress**, `roadmapComplete=false`; no import or release.
+
 ### Milestone 6 user-tail software trace service — 2026-10-06
 
 Four new `UserTailSoftwareTraceService` scalar/batch groups compose the existing

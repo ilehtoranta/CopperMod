@@ -14061,3 +14061,68 @@ Physical FC spaces remain unqualified; no full-current-suite, hardware, API,
 package or consumer result is claimed. The broad 010 RTE / 060 STOP disagreements
 remain failed/unqualified. Milestone 6 stays **in progress**, `roadmapComplete=false`;
 no private CPU import or publication occurs.
+
+### Repeated nested pending-store faults and explicit unwind — 2026-10-09
+
+The supplied-frame fixture factors its existing nested handler service into a
+recursive test helper. At each level it injects an actual physical-map rejection
+of the same pending MOVES store, checks the defined new format-7 frame, executes
+the integer completion handler, and explicitly returns after the faulted MOVES.
+Depths two and three exercise another rejection while servicing a prior fault.
+The helper never retries the original opcode. It checks exception sequence,
+saved SR/PC, frame header/SSW/WB1 pending data, rejection address/width/count,
+stack selection and consumption, restored registers/DFC/SFC and following
+instruction. Each frame's return restores its caller; the final operand trace
+must contain exactly one accepted write per WB slot in order.
+
+Physical rejection is whole-request rejection when the chosen byte falls in
+the requested access. It does not qualify partially accepted bus transfers,
+enabled MMU/cache behavior, physical FC spaces or hardware timing. The outer
+frame is supplied; its original construction remains unqualified. New ordinary
+bounded cases use fixed widths 1/2/4, CCR=5, lane=3, FC5, the last byte of each
+slot and all four banks at depths two/three: 24 per scalar/batch route.
+
+An initial smoke build rejected a test-code uint/int sequence-count expression;
+the corrected build passes both original control rows, and the repeated bounded
+rows pass separately. These smoke results do not qualify the generated matrix.
+After formatting, a fresh isolated 233-input snapshot runs six named tests with
+zero failed or skipped: 51,968 generated cases, 48 bounded cases and 672 retained
+single-fault controls. Their two reports are byte-identical to the retained
+production baseline. All 37 CPU files match after CRLF-to-LF only, with the
+same two restored raw newline differences recorded. No CPU or timing change occurs.
+
+Per route, 25,984 generated cases cover all four banks (6,496 each), common
+FC1/5, both depths, four lanes and all slots/rejected bytes. All 27 widths at
+CCR=31 supply 12,096 cases; canonical widths 1/2/4 at CCR=0..30 supply 13,888.
+Independent verification binds every key/status/weight, exact command/settings,
+all raw snapshot inputs/assets, three executed DLLs, six loaded definitions/
+methods, completed TRX counters and all six coverage reports. Earlier larger
+single-fault matrices retain their own sources and are not relabeled as runs
+of the newly factored fixture. No full-current-suite claim is made.
+
+Reproduce in fresh directories and require six completed named passes:
+
+```powershell
+$env:COPPER68K_RUN_040_REPEATED_NESTED_WRITEBACK = '1'
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = [IO.Path]::GetFullPath('artifacts/repeated-nested-reports')
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/repeated-nested-build --filter 'FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.RepeatedNested|FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.ActualHandlerStoresFaultCompleteAndResume' --logger 'trx;LogFileName=returns.trx' --results-directory artifacts/repeated-nested-results
+```
+
+| Selected evidence | SHA-256 |
+| --- | --- |
+| `RepeatedNestedV1/inputs.json` | `206536c0b91ac5e2ab0bfa90e3103ab72beab4c74aaa18acbe4c1143f35ca30e` |
+| `RepeatedNestedV1/execution.json` | `264807dea8180cf7e04336d0da9a3e4ef6666ec76a47ee24cb26a69495718225` |
+| `RepeatedNestedIndependentV1.json` | `23a093183fe481a644ada6ee0bad839316ca0ca40edd1132c6d74cbe436ff18f` |
+| Generated scalar report | `2f1cd974f33d6556281e11adaacc9146923562ea4d866e8e1724cb51b70f6b7f` |
+| Generated batch report | `fd61dcfddc89ffe429ba55e01613457ffc14599d6da63157288b2740b9077272` |
+| Bounded scalar report | `094a26babdef2219c5800753a467458ff83fae2a0d4c72bbbaa082ceee204716` |
+| Bounded batch report | `364634717511501b08567dd52e36e4b1a94dbd6db5a44b1942f3114480596c33` |
+| Later diagnostic-only static proof | `d5d9ef50a3a65753d61adcbf74d4d6c3a8287f0c4f19528b92e676e70ad9f4ed` |
+
+The subsequent inventory literal acknowledges this scoped repeated-fault
+coverage without changing any of the 480 untested cases, enabling condition or
+failing gate. It is separate from the executed snapshot. Wider FC/refault
+combinations, other repair/operand/frame fault paths, original construction and
+trace/interrupt interruption remain open. Broad 010 RTE / 060 STOP disagreements
+remain failed/unqualified. Milestone 6 stays **in progress**, `roadmapComplete=false`;
+no private CPU import, package or consumer rerun, or publication occurs.

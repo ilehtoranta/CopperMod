@@ -171,6 +171,16 @@ it does not replace or discard their remaining gaps.
    1/2/4 covering all CCRs. Earlier user/ISP/MSP evidence remains separate.
    Wider FCs, repeated faults, original construction and trace/interrupts remain
    open; physical FC spaces and the full dimension cross-product are not claimed.
+   Repeated same-store faults at depths two and three now pass 51,968 generated
+   cases, 48 bounded examples and 672 identical single-fault controls in six
+   named tests. Independent proof:
+   `23a093183fe481a644ada6ee0bad839316ca0ca40edd1132c6d74cbe436ff18f`.
+   All four banks, common FC1/5, lanes and rejected bytes/slots cover all 27
+   widths at CCR=31 and canonical widths 1/2/4 at all CCRs. Each saved frame and
+   explicit RTE unwind is checked; the final operand trace has one accepted
+   write per slot. Earlier larger single-fault matrices retain separate source
+   identities. Wider FC/refault combinations, original construction and
+   trace/interrupt interruption remain open; the 480-case broader gate remains.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

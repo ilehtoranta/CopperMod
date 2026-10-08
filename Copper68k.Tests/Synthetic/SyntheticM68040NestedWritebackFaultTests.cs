@@ -205,7 +205,58 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
         report.Complete(output);
     }
 
-    private static void RunFunctionCodes(bool batch, int[] widths, int ccr, uint lane, int[] functionCodes, string bank, int faultSlot, int faultByte)
+    [EnvironmentFact("COPPER68K_RUN_040_REPEATED_NESTED_WRITEBACK", "require repeated nested handler-store faults and explicit returns"), Trait("Suite", "ReferenceDiscovery")]
+    public void RepeatedNestedFaultsScalar() => RepeatedNestedFaults(false);
+
+    [EnvironmentFact("COPPER68K_RUN_040_REPEATED_NESTED_WRITEBACK", "require repeated nested handler-store faults and explicit returns"), Trait("Suite", "ReferenceDiscovery")]
+    public void RepeatedNestedFaultsBatch() => RepeatedNestedFaults(true);
+
+    [Theory, Trait("Suite", "Synthetic")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RepeatedNestedReferenceExamples(bool batch)
+    {
+        var report = new CoverageBatch("68040", "repeated-nested-writeback-reference-" + (batch ? "batch" : "scalar"));
+        foreach (var bank in new[] { "user", "user-M", "ISP", "MSP" })
+        foreach (var depth in new[] { 2, 3 })
+        for (var slot = 1; slot <= 3; slot++)
+        {
+            int[] widths = [1, 2, 4];
+            var id = $"68040/writeback/repeated-nested-reference/depth={depth}/sizes=1-2-4/ccr=05/lane=3/FC=5/bank={bank}/WB={slot}/byte={widths[slot - 1] - 1}";
+            try { RunFunctionCodes(batch, widths, 5, 3, [5, 5, 5], bank, slot, widths[slot - 1] - 1, depth); report.Record(id, "passing", null); }
+            catch (Exception ex) { report.Record(id, "mismatching", ex.ToString()); }
+        }
+        report.Complete(output);
+    }
+
+    private void RepeatedNestedFaults(bool batch)
+    {
+        var report = new CoverageBatch("68040", "repeated-nested-writeback-fault-" + (batch ? "batch" : "scalar"));
+        foreach (var depth in new[] { 2, 3 })
+        foreach (var bank in new[] { "user", "user-M", "ISP", "MSP" })
+        foreach (var w1 in new[] { 1, 2, 4 })
+        foreach (var w2 in new[] { 1, 2, 4 })
+        foreach (var w3 in new[] { 1, 2, 4 })
+        {
+            int[] widths = [w1, w2, w3];
+            for (var ccr = 0; ccr < 32; ccr++)
+            {
+                if (ccr != 31 && (w1 != 1 || w2 != 2 || w3 != 4)) continue;
+                for (uint lane = 0; lane < 4; lane++)
+                foreach (var fc in new[] { 1, 5 })
+                for (var slot = 1; slot <= 3; slot++)
+                for (var faultByte = 0; faultByte < widths[slot - 1]; faultByte++)
+                {
+                    var id = $"68040/writeback/repeated-nested-physical-fault/depth={depth}/sizes={w1}-{w2}-{w3}/ccr={ccr:X2}/lane={lane}/FC={fc}/bank={bank}/WB={slot}/byte={faultByte}";
+                    try { RunFunctionCodes(batch, widths, ccr, lane, [fc, fc, fc], bank, slot, faultByte, depth); report.Record(id, "passing", null); }
+                    catch (Exception ex) { report.Record(id, "mismatching", ex.ToString()); }
+                }
+            }
+        }
+        report.Complete(output);
+    }
+
+    private static void RunFunctionCodes(bool batch, int[] widths, int ccr, uint lane, int[] functionCodes, string bank, int faultSlot, int faultByte, int faultDepth = 1)
     {
         var bus = new SyntheticM68040AccessDoubleFaultTests.FaultBus();
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);
@@ -254,7 +305,7 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
         e.ControlChecks["SFC"] = (s => s.SourceFunctionCode, 6);
         e.ControlChecks["exception sequence"] = (s => s.ExceptionSequence, sequence);
         var originalD = (uint[])e.D.Clone(); var originalA = (uint[])e.A.Clone();
-        var stores = new List<(uint Address, int Width, uint Value)>(); var faulted = false; var steps = 0;
+        var stores = new List<(uint Address, int Width, uint Value)>(); var faulted = false; var steps = 0; var faults = 0;
         bus.Accesses.Clear();
         while (e.Pc != Next)
         {
@@ -263,50 +314,63 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
             if (!faulted && i.Slot == faultSlot && i.Operation.StartsWith("store-"))
             {
                 faulted = true;
-                var savedSr = e.Sr; var resume = i.Pc + 4;
-                var nested = stacks[handlerBank] - 60; stacks[handlerBank] = nested;
-                M68040StackFixture.SetStacks(e, stacks, (ushort)(savedSr & 0x3fff));
-                e.Pc = Handler; e.ExceptionVector = 2;
-                e.ControlChecks["exception sequence"] = (s => s.ExceptionSequence, sequence + 1);
-                e.ControlChecks["saved PC"] = (s => s.LastExceptionStackedProgramCounter, resume);
-                e.ControlChecks["saved SR"] = (s => s.LastExceptionStatusRegister, savedSr);
-                for (uint b = 8; b < 60; b++) e.MemoryMasks[nested + b] = 0;
-                Define(0, savedSr, 2); Define(2, resume, 4); Define(6, 0x7008, 2);
-                Define(12, (uint)(size | fc), 2); e.MemoryMasks[nested + 13] = 0x7f;
-                foreach (uint at in new uint[] { 14, 16 }) { Define(at, 0, 2); e.MemoryMasks[nested + at + 1] = 0x80; }
-                Define(18, wbStatus, 2); Define(20, addresses[faultSlot - 1], 4); Define(40, addresses[faultSlot - 1], 4);
-                for (var b = 0; b < width; b++)
-                {
-                    var at = nested + 44 + ((addresses[faultSlot - 1] + (uint)b) & 3);
-                    e.Memory[at] = (byte)(values[faultSlot - 1] >> (8 * (width - 1 - b))); e.MemoryMasks[at] = 255;
-                }
-                bus.Arm(addresses[faultSlot - 1] + (uint)faultByte, M68kBusAccessKind.CpuDataWrite);
-                Execute("nested fault entry");
-                if (bus.Rejected.Count != 1) throw new InvalidOperationException("Missing unique handler-store rejection");
-                for (uint b = 8; b < 60; b++) e.Memory[nested + b] = bus.Peek(nested + b);
-                e.MemoryMasks.Clear();
-                ushort[] ns = [wbStatus, 0, 0]; uint[] na = [addresses[faultSlot - 1], 0, 0];
-                uint[] nd = [m.PeekPhysical(nested + 44, 4), 0, 0];
-                var nestedD = (uint[])e.D.Clone(); var nestedA = (uint[])e.A.Clone();
-                var nestedStores = new List<(uint Address, int Width, uint Value)>(); var nsteps = 0;
-                // The reentrant handler shares code addresses with its caller.
-                // Seeing the resume PC inside the nested handler is not a return.
-                var returned = false;
-                while (!returned)
-                {
-                    if (++nsteps > 120) throw new InvalidOperationException("Nested handler did not terminate");
-                    var ni = program.Instructions.Single(x => x.Pc == e.Pc);
-                    program.Expect(ni, m, e, nested, ns, na, nd, nestedD, nestedA, (uint)fc, stacks, nestedStores);
-                    if (ni.Operation == "return")
-                    { stacks[handlerBank] = nested + 60; M68040StackFixture.SetStacks(e, stacks, savedSr); e.Pc = resume; returned = true; }
-                    Execute("nested " + ni.Operation);
-                }
-                if (!nestedStores.SequenceEqual(new[] { (addresses[faultSlot - 1], width, values[faultSlot - 1]) }))
-                    throw new InvalidOperationException("Nested handler completed wrong pending store");
-                stores.Add((addresses[faultSlot - 1], width, values[faultSlot - 1]));
+                CompleteFaultedStore(i, 1, stores);
 
-                void Define(uint at, uint value, int count)
-                { e.Write(nested + at, value, count, m.Model); for (uint b = 0; b < count; b++) e.MemoryMasks[nested + at + b] = 255; }
+                void CompleteFaultedStore(SyntheticM68040WritebackProgram.Instruction faulting, int depth,
+                    List<(uint Address, int Width, uint Value)> callerStores)
+                {
+                    faults++;
+                    var savedSr = e.Sr; var resume = faulting.Pc + 4;
+                    var nested = stacks[handlerBank] - 60; stacks[handlerBank] = nested;
+                    M68040StackFixture.SetStacks(e, stacks, (ushort)(savedSr & 0x3fff));
+                    e.Pc = Handler; e.ExceptionVector = 2;
+                    e.ControlChecks["exception sequence"] = (s => s.ExceptionSequence, sequence + (uint)faults);
+                    e.ControlChecks["saved PC"] = (s => s.LastExceptionStackedProgramCounter, resume);
+                    e.ControlChecks["saved SR"] = (s => s.LastExceptionStatusRegister, savedSr);
+                    for (uint b = 8; b < 60; b++) e.MemoryMasks[nested + b] = 0;
+                    Define(0, savedSr, 2); Define(2, resume, 4); Define(6, 0x7008, 2);
+                    Define(12, (uint)(size | fc), 2); e.MemoryMasks[nested + 13] = 0x7f;
+                    foreach (uint at in new uint[] { 14, 16 }) { Define(at, 0, 2); e.MemoryMasks[nested + at + 1] = 0x80; }
+                    Define(18, wbStatus, 2); Define(20, addresses[faultSlot - 1], 4); Define(40, addresses[faultSlot - 1], 4);
+                    for (var b = 0; b < width; b++)
+                    {
+                        var at = nested + 44 + ((addresses[faultSlot - 1] + (uint)b) & 3);
+                        e.Memory[at] = (byte)(values[faultSlot - 1] >> (8 * (width - 1 - b))); e.MemoryMasks[at] = 255;
+                    }
+                    bus.Arm(addresses[faultSlot - 1] + (uint)faultByte, M68kBusAccessKind.CpuDataWrite);
+                    Execute("nested fault entry");
+                    if (bus.Rejected.Count != faults || bus.Rejected[^1].Address != addresses[faultSlot - 1] ||
+                        bus.Rejected[^1].Width != width) throw new InvalidOperationException("Wrong handler-store rejection count/address/width");
+                    for (uint b = 8; b < 60; b++) e.Memory[nested + b] = bus.Peek(nested + b);
+                    e.MemoryMasks.Clear();
+                    ushort[] ns = [wbStatus, 0, 0]; uint[] na = [addresses[faultSlot - 1], 0, 0];
+                    uint[] nd = [m.PeekPhysical(nested + 44, 4), 0, 0];
+                    var nestedD = (uint[])e.D.Clone(); var nestedA = (uint[])e.A.Clone();
+                    var nestedStores = new List<(uint Address, int Width, uint Value)>(); var nsteps = 0;
+                    // The reentrant handler shares code addresses with its caller.
+                    // Seeing the resume PC inside the nested handler is not a return.
+                    var returned = false;
+                    while (!returned)
+                    {
+                        if (++nsteps > 120) throw new InvalidOperationException("Nested handler did not terminate");
+                        var ni = program.Instructions.Single(x => x.Pc == e.Pc);
+                        if (depth < faultDepth && ni.Slot == 1 && ni.Operation.StartsWith("store-"))
+                        {
+                            CompleteFaultedStore(ni, depth + 1, nestedStores);
+                            continue; // Explicit nested service returns after the faulted MOVES.
+                        }
+                        program.Expect(ni, m, e, nested, ns, na, nd, nestedD, nestedA, (uint)fc, stacks, nestedStores);
+                        if (ni.Operation == "return")
+                        { stacks[handlerBank] = nested + 60; M68040StackFixture.SetStacks(e, stacks, savedSr); e.Pc = resume; returned = true; }
+                        Execute("nested " + ni.Operation);
+                    }
+                    if (!nestedStores.SequenceEqual(new[] { (addresses[faultSlot - 1], width, values[faultSlot - 1]) }))
+                        throw new InvalidOperationException("Nested handler completed wrong pending store");
+                    callerStores.Add((addresses[faultSlot - 1], width, values[faultSlot - 1]));
+
+                    void Define(uint at, uint value, int count)
+                    { e.Write(nested + at, value, count, m.Model); for (uint b = 0; b < count; b++) e.MemoryMasks[nested + at + b] = 255; }
+                }
             }
             else
             {
@@ -316,7 +380,7 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
                 Execute("outer " + i.Operation);
             }
         }
-        if (!faulted || !stores.SequenceEqual(addresses.Select((a, n) => (a, widths[n], values[n]))))
+        if (!faulted || faults != faultDepth || !stores.SequenceEqual(addresses.Select((a, n) => (a, widths[n], values[n]))))
             throw new InvalidOperationException("WB1/WB2/WB3 completion order differs");
         var operandWrites = bus.Accesses.Where(a => a.Write && addresses.Contains(a.Address))
             .Select(a => (a.Address, a.Width, a.Value));
