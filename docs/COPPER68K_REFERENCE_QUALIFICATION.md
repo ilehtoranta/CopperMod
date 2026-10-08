@@ -13742,3 +13742,64 @@ The source remains a private review candidate. The broad 010 RTE / 060 STOP
 disagreements, broader restoration protocols and unavailable 030/040 hardware
 remain open. Milestone 6 stays **in progress**, `roadmapComplete=false`;
 PR #22 remains draft. No CPU import or package publication occurs.
+
+### Supplied 040 user returns and remaining same-width CCRs — 2026-10-09
+
+The shared supplied-frame fixture separates the outer saved SR from the running
+supervisor handler SR. For a supplied user return the outer frame and nested
+fault service use ISP; the final outer RTE selects USP. ISP/MSP returns retain
+their existing supervisor handler behavior. No production CPU input changes.
+
+A fresh selected run passes four named tests, zero failed or skipped, with
+53,088 new cases and 672 unchanged controls. Each new scalar/batch route has
+26,544 cases: 16,128 user, 5,208 ISP and 5,208 MSP. User coverage includes three
+same-width B/W/L triples and six distinct-width permutations, all 32 CCRs.
+Supervisor coverage adds CCR=0..30 for same-width triples; the retained controls
+already cover CCR=31. Both routes vary four lanes, common FC1/5, each pending
+slot and every rejected byte. This does not cover the other eighteen mixed-width
+user combinations or user-M returns.
+
+The fixture checks saved SR/PC, nested stack allocation, pending data, handler
+completion, RTE, final USP/ISP/MSP, DFC/SFC, memory canaries, store width/value
+and order, and the following MOVEQ sentinel. Independent verification checks
+every literal case identifier and weight, all 233 snapshot inputs, all 37 CPU
+inputs against the retained production baseline, three assembly identities,
+loaded method identities, the completed four-row TRX and four reports. The
+earlier 172,032 mixed-width cases retain separate frozen evidence and are not
+rerun or relabeled here. This selected run is not a whole-class/full-CPU run;
+no new API, package, consumer or hardware qualification is claimed.
+
+Reproduce in fresh output directories; four completed passing named rows are
+required and skipped rows are unavailable coverage:
+
+```powershell
+$env:COPPER68K_RUN_040_NESTED_RETURN_BANKS = '1'
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = [IO.Path]::GetFullPath('artifacts/nested-return-bank-reports')
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/nested-return-bank-build --filter 'FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.OtherCcrAndUserReturns|FullyQualifiedName~SyntheticM68040NestedWritebackFaultTests.ActualHandlerStoresFaultCompleteAndResume' --logger 'trx;LogFileName=returns.trx' --results-directory artifacts/nested-return-bank-results
+```
+
+| Selected evidence | SHA-256 |
+| --- | --- |
+| `NestedReturnBanksV1/inputs.json` | `fa5784d7c0b4d5ccc51c4da90a9f896f407961cfbbb21337fd5658a3e8769b8e` |
+| `NestedReturnBanksV1/execution.json` | `16047dbf0bcacf05852ea7c6490f70c856c3b849bd4a7672ae52cb5ff1a6ec1c` |
+| `NestedReturnBanksIndependentV1.json` | `7decf4a860ff66b4f3911b2126b0760d7f042018090cbda8d1afac64242d0136` |
+| New scalar report | `2f13ab3151e013f7ab460d9e98f7fbc8b629ef6b5b17e4b6d7c7532ab0cea1b7` |
+| New batch report | `8644263f6470b55a7d8570a6fbb4aafb2d9e76f6e5e8e152b8ea60258677b24f` |
+| Tested/recovered fixture | `ec2e32af86eca7b8887303ff828269ca4cc560762909c22dbc7d31d175f1531a` |
+
+An external cleanup removed the checkout after verification. The pushed base
+was restored and the fixture recovered byte-for-byte from its executed source
+snapshot. The diagnostic-only coverage description was reconstructed separately:
+its bytes differ from the lost description, so its earlier hash is not reused.
+A fresh static check verifies that only one diagnostic literal changes, with
+all 480 required untested cases, enabling condition and failing gate unchanged.
+Its recovered source identity is
+`b5b0310ea6e8621e9d2a982d157368b9f4841b1942b322404766f923548f8afd`.
+The dirty primary checkout and original evidence remain untouched.
+
+Original slot construction, other user-width combinations, user-M returns,
+heterogeneous FCs, deeper refaults and trace/interrupt interruption remain open.
+Broad failed reference gates and unavailable hardware remain unqualified. The
+read-candidate full run requires its own terminal result and independent proof.
+Milestone 6 remains **in progress**, `roadmapComplete=false`; no CPU import or
+package publication occurs.

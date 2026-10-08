@@ -117,6 +117,18 @@ it does not replace or discard their remaining gaps.
    protocol IDs remain. Original slot construction, other same-width CCRs,
    heterogeneous FCs, user outer returns, deeper refaults and trace/interrupt
    interruption remain open. This focused result is not a whole-suite result.
+   A further selected slice adds 20,832 same-width CCR=0..30 cases and 32,256
+   supplied user-return cases (three same-width triples and six distinct-width
+   permutations, all CCRs). Four named tests pass with those 53,088 new cases
+   and 672 unchanged controls. Independent proof:
+   `7decf4a860ff66b4f3911b2126b0760d7f042018090cbda8d1afac64242d0136`.
+   It separates the supplied user SR from the supervisor handler SR, checks
+   nested ISP service and the final USP switch. The earlier mixed-width matrix
+   retains its own frozen evidence; it is not reexecuted by this slice. All
+   37 production CPU inputs remain unchanged. A later diagnostic-only update
+   retains all 480 cases and the failing gate. Other user-width combinations,
+   user-M returns, heterogeneous FCs, deeper refaults, trace/interrupts and
+   original slot construction remain open.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

@@ -60,14 +60,55 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
         report.Complete(output);
     }
 
+    [EnvironmentFact("COPPER68K_RUN_040_NESTED_RETURN_BANKS", "require other same-width CCRs and supplied user-frame returns"), Trait("Suite", "ReferenceDiscovery")]
+    public void OtherCcrAndUserReturnsScalar() => OtherCcrAndUserReturns(false);
+
+    [EnvironmentFact("COPPER68K_RUN_040_NESTED_RETURN_BANKS", "require other same-width CCRs and supplied user-frame returns"), Trait("Suite", "ReferenceDiscovery")]
+    public void OtherCcrAndUserReturnsBatch() => OtherCcrAndUserReturns(true);
+
+    private void OtherCcrAndUserReturns(bool batch)
+    {
+        var report = new CoverageBatch("68040", "nested-writeback-return-banks-" + (batch ? "batch" : "scalar"));
+        foreach (var bank in new[] { "user", "ISP", "MSP" })
+        foreach (var w1 in new[] { 1, 2, 4 })
+        foreach (var w2 in new[] { 1, 2, 4 })
+        foreach (var w3 in new[] { 1, 2, 4 })
+        {
+            var same = w1 == w2 && w2 == w3;
+            var allDifferent = w1 != w2 && w2 != w3 && w1 != w3;
+            // Separate dimensions: complete the same-width CCR matrix and use
+            // fixed width permutations for user returns, not a larger product.
+            if (!same && (bank != "user" || !allDifferent)) continue;
+            int[] widths = [w1, w2, w3];
+            for (var ccr = 0; ccr < 32; ccr++)
+            {
+                if (bank != "user" && ccr == 31) continue; // Retained original group.
+                for (uint lane = 0; lane < 4; lane++)
+                foreach (var fc in new[] { 1, 5 })
+                for (var slot = 1; slot <= 3; slot++)
+                for (var faultByte = 0; faultByte < widths[slot - 1]; faultByte++)
+                {
+                    var id = $"68040/writeback/nested-return-bank/sizes={w1}-{w2}-{w3}/ccr={ccr:X2}/lane={lane}/FC={fc}/bank={bank}/WB={slot}/byte={faultByte}";
+                    try { Run(batch, widths, ccr, lane, fc, bank, slot, faultByte); report.Record(id, "passing", null); }
+                    catch (Exception ex) { report.Record(id, "mismatching", ex.ToString()); }
+                }
+            }
+        }
+        report.Complete(output);
+    }
+
     private static void Run(bool batch, int[] widths, int ccr, uint lane, int fc, string bank, int faultSlot, int faultByte)
     {
         var bus = new SyntheticM68040AccessDoubleFaultTests.FaultBus();
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);
         m.Reset(ccr);
-        var sr = (ushort)((bank == "MSP" ? 0x3700 : 0x2700) | ccr);
+        var sr = (ushort)((bank == "user" ? 0x0700 : bank == "MSP" ? 0x3700 : 0x2700) | ccr);
+        // User-frame writebacks are serviced by supervisor code on ISP. The
+        // supplied outer SR changes mode only when the outer RTE completes.
+        var handlerBank = bank == "user" ? "ISP" : bank;
+        var handlerSr = (ushort)((handlerBank == "MSP" ? 0x3700 : 0x2700) | ccr);
         var stacks = new Dictionary<string, uint> { ["user"] = 0x7800, ["ISP"] = 0x4700, ["MSP"] = 0x7400 };
-        var frame = stacks[bank] - 60; stacks[bank] = frame;
+        var frame = stacks[handlerBank] - 60; stacks[handlerBank] = frame;
         var width = widths[faultSlot - 1];
         var size = width == 1 ? 0x20 : width == 2 ? 0x40 : 0;
         var wbStatus = (ushort)(0x80 | size | fc);
@@ -96,7 +137,7 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
         m.InitializePhysical(Next + 2, 0x4e71, 2);
         m.Start(); m.Core.State.SetUserStackPointer(stacks["user"]);
         m.Core.State.SetInterruptStackPointer(stacks["ISP"]); m.Core.State.SetMasterStackPointer(stacks["MSP"]);
-        m.Core.State.StatusRegister = sr; m.Core.State.ProgramCounter = Handler;
+        m.Core.State.StatusRegister = handlerSr; m.Core.State.ProgramCounter = Handler;
         m.Core.State.DestinationFunctionCode = 7; m.Core.State.SourceFunctionCode = 6;
         var e = ArchitecturalExpectation.Capture(m); var sequence = m.Core.State.ExceptionSequence;
         e.ControlChecks["DFC"] = (s => s.DestinationFunctionCode, 7);
@@ -113,7 +154,7 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
             {
                 faulted = true;
                 var savedSr = e.Sr; var resume = i.Pc + 4;
-                var nested = stacks[bank] - 60; stacks[bank] = nested;
+                var nested = stacks[handlerBank] - 60; stacks[handlerBank] = nested;
                 M68040StackFixture.SetStacks(e, stacks, (ushort)(savedSr & 0x3fff));
                 e.Pc = Handler; e.ExceptionVector = 2;
                 e.ControlChecks["exception sequence"] = (s => s.ExceptionSequence, sequence + 1);
@@ -147,7 +188,7 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
                     var ni = program.Instructions.Single(x => x.Pc == e.Pc);
                     program.Expect(ni, m, e, nested, ns, na, nd, nestedD, nestedA, (uint)fc, stacks, nestedStores);
                     if (ni.Operation == "return")
-                    { stacks[bank] = nested + 60; M68040StackFixture.SetStacks(e, stacks, savedSr); e.Pc = resume; returned = true; }
+                    { stacks[handlerBank] = nested + 60; M68040StackFixture.SetStacks(e, stacks, savedSr); e.Pc = resume; returned = true; }
                     Execute("nested " + ni.Operation);
                 }
                 if (!nestedStores.SequenceEqual(new[] { (addresses[faultSlot - 1], width, values[faultSlot - 1]) }))
@@ -161,7 +202,7 @@ public sealed class SyntheticM68040NestedWritebackFaultTests(ITestOutputHelper o
             {
                 program.Expect(i, m, e, frame, statuses, addresses, data, originalD, originalA, 7, stacks, stores);
                 if (i.Operation == "return")
-                { stacks[bank] = frame + 60; M68040StackFixture.SetStacks(e, stacks, sr); e.Pc = Next; }
+                { stacks[handlerBank] = frame + 60; M68040StackFixture.SetStacks(e, stacks, sr); e.Pc = Next; }
                 Execute("outer " + i.Operation);
             }
         }

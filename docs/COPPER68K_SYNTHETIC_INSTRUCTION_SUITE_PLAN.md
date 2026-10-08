@@ -4276,3 +4276,18 @@ consumers. These results qualify that frozen graph, not the newer read candidate
 or later production-test extensions. Broad reference and restoration gaps keep
 milestone 6 **in progress**, `roadmapComplete=false`; no private import or
 package publication occurs.
+
+### Milestone 6 checkpoint — supplied user returns and same-width CCRs, 2026-10-09
+
+The shared nested-writeback fixture now distinguishes the supplied outer SR
+from the running supervisor handler SR. A selected four-test slice passes
+53,088 new cases: 20,832 remaining same-width CCR cases and 32,256 canonical
+supplied user returns. Both scalar/batch routes cover all CCRs, lanes, common
+FC1/5, each rejected byte/slot, nested supervisor service and final USP return.
+Its 672 original controls remain byte-identical. Independent verification binds
+all identifiers, exact named methods and source/assembly/report identities.
+All 37 production CPU inputs are unchanged; earlier mixed-width evidence is
+not relabeled as this later source execution. The qualification log records
+scope, commands, identities and wider user-width/user-M/FC/refault/trace gaps.
+All 480 broader protocol cases remain untested and fail their requested gate.
+Milestone 6 remains **in progress**, `roadmapComplete=false`; no import or release.
