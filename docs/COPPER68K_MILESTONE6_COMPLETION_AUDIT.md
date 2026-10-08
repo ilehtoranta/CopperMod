@@ -72,6 +72,14 @@ it does not replace or discard their remaining gaps.
    writeback and MOVE16 fixtures without treating their bounded coverage as
    completion of those broader protocols. Only descriptions change; no case,
    status, enable flag or failure condition is removed.
+   A subsequent 260-input private candidate also closes selected whole-request
+   predecrement source-read recovery in focused execution: 3,244,032 passing
+   cases / 520 reports, including 1,671,168 byte-identical retained cases.
+   The new fixture and one-file review patch preserve the accepted decrement
+   across explicit RTE, including read/write/refault lanes. It requires separate
+   full/deep/API and consumer qualification; the running 259-input full audit
+   cannot qualify that newer change. Production import and wider protocols remain
+   open.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

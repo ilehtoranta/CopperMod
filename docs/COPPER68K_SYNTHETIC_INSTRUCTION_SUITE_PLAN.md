@@ -4204,3 +4204,18 @@ The newer 259-input predecrement full run is still pending and cannot inherit
 the predecessor's result. Hardware is unavailable; disputed trace boundaries
 remain unqualified. Broad reference and wider restoration gaps keep milestone 6
 **in progress**, `roadmapComplete=false`; no private CPU import or publication.
+
+### Milestone 6 checkpoint — predecrement read recovery, 2026-10-08
+
+The next isolated private gap is reproduced and corrected: selected
+`MOVE -(An),(Am)` read faults previously recorded an unknown continuation and
+failed at RTE. The one-file candidate admits the accepted decrement and completes
+only the pending suffix, preserving the mapped general-EA timing policy.
+Independent verification qualifies 3,244,032 passing cases / 520 reports,
+including 1,671,168 byte-identical retained cases. The new fixture covers all
+source address registers, aliases, A7 stride, stack modes, CCRs, scalar/batch
+routes and read/write/refault lanes. Its patch and replay are reviewable;
+production CPU code is unchanged. Full/deep/API and consumer qualification of
+this newer 260-input graph remain required. The earlier full audit continues on
+its own frozen inputs. Broad reference, wider restoration and hardware gaps keep
+milestone 6 **in progress**, `roadmapComplete=false`.

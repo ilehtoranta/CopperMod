@@ -13471,3 +13471,61 @@ two CPU versions. No hardware is available for the disputed 030/040 boundaries,
 which remain unqualified. Production import, wider restoration and the failed
 broad reference gate remain open. No package is published. Milestone 6 remains
 **in progress**, `roadmapComplete=false`, and PR #22 remains draft.
+
+### Predecrement source-read continuation — 2026-10-08
+
+`SyntheticM68020PredecrementReadTests` independently chooses source address
+`4200`, encodes B/W/L `MOVE -(An),(Am)` and starts An one stride above it.
+It covers every source address register, distinct/aliased destinations, four
+stack modes, four boundary values, all 32 CCR images and scalar/batch execution
+on EC020, 020, 030 and A1200. A7 byte stride is two. Whole-request read denial
+selects every operand byte; separate lanes exercise read recovery alone,
+read-to-write faults and one repeated final-write fault. Register/memory guards,
+frame provenance, exact following PC and a following MOVEQ sentinel are checked.
+The accepted source decrement remains complete before the read fault; only the
+pending suffix may execute after explicit RTE.
+
+The frozen 260-input predecessor passes **196,608 normal controls** and reports
+**1,376,256 unsupported continuations**, failing both selected fault tests.
+All unsupported diagnostics identify RTE at `9020`. Its read classifier excludes
+source mode 4 for memory destinations, so it records an unknown continuation;
+restoration also excludes that form. The isolated one-file correction in
+`Operand020.cs` admits this already-decremented source and uses the existing
+general-EA completion policy for it. It does not rerun address calculation or
+the opcode. The mapped policy remains nine native policy cycles, with the
+existing 030 head/tail split; this is not physical timing qualification.
+
+All **14 selected tests / 3,244,032 cases / 520 reports pass**, with zero
+mismatching, unsupported or untested selected cases. This includes **1,572,864
+new cases** and **1,671,168 retained read/write, predecrement final-write and
+handler cases**. Normal controls and all retained reports are byte-identical
+to their pinned predecessors. Independent verification checks every case ID,
+status/weight and baseline diagnostic, exact source changes, named TRX roster,
+loaded definitions/methods/assemblies and immutable evidence.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| `audits/PredecrementReadProofV1.json` | `28cd5d79924c841bb10ad47134a955412b6f552195b4c940c95300f729af4de2` |
+| New fixture | `5427d03ab43d753a2307ea2a41e83ed5f3325f20f9c83d27d3e0574768843bed` |
+| `scripts/reference/m68020-predecrement-read-candidate.patch` | `576ea9749c637d5873ea56f6c22c081551e52239eda966a0ff45ce5985c2d494` |
+| `audits/PredecrementReadPatchReplayV1/proof.json` | `1b5489d5ccbee6f4e73b6cb184d38204ac68538f4c2d02be0b3e4722a93f5c82` |
+
+Apply the review patch only to a fresh isolated copy of the earlier private
+predecrement-write candidate, and copy the new fixture into that test project.
+Enable `COPPER68K_RUN_020_PREDECREMENT_READ=1`, select
+`FullyQualifiedName~SyntheticM68020PredecrementReadTests`, and request reports
+through `COPPER68K_SYNTHETIC_REPORT_DIR` plus a TRX. The retained selection adds
+`SyntheticM68020MemoryReadWriteTests`, `SyntheticM68020PredecrementWriteTests`
+and `SyntheticM68020MoveWriteHandlerTests`, with their corresponding opt-ins.
+Fresh patch replay proves normalized source equality; preserved CRLF bytes mean
+raw replayed source and rebuilt binary identity are not claimed equal.
+
+The 260-input read correction requires its own full/deep/API and isolated
+consumer qualification. The running 259-input full audit remains unchanged and
+cannot qualify this newer CPU change. The later mainline 040 inventory edit
+changes only two diagnostic descriptions, preserving all 480 untested cases;
+it is not relabeled as part of these frozen executions. This closes selected
+private whole-request source-read recovery, not other destination forms, foreign
+frames, partial transfers, trace/interrupt or enabled MMU/cache behavior.
+Production CPU inputs remain unchanged; no private CPU is imported and no
+package is published. Milestone 6 remains **in progress**, `roadmapComplete=false`.
