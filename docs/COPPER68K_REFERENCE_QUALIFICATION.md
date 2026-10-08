@@ -12201,3 +12201,86 @@ and `write-validation-production-default-v2`.
 | discovery | `a03c2242d9c6010c4d87d8309edb9502f5881dac5f7c7c92a9f25f8a55334c0c` |
 | parent | `93ec2beed12410b94ce6cf448e1b5bc67e010474edf5ed7b20b2b7a765ae123e` |
 | complete source/evidence linkage | `f0a6174fcbfdfe595ea48efdb0578f40a36caaa1616a9c3ccce773e6709523ba` |
+
+
+## Private pending-write validation exception entry — 2026-10-08
+
+`SyntheticM68020MoveWriteEntryFaultTests` adds **51,200 passing cases / two
+executions / 32 reports** on EC020, A1200, 020 and 030. Starting from a literal
+private C023 word pending-write image, it rejects each byte of the four selected
+validation reads, then each byte of the 46 format-B stack-word writes or the
+vector long read. The canonical enumeration group covers all 96 secondary byte
+positions (**30,720 cases**); the separate all-32-CCR group covers both bytes of
+the first stack write (**20,480 cases**). Current ISP/MSP, paired low/high frame
+and VBR locations, and scalar/one-instruction batch execution are covered. The
+saved return is user mode and the retained pipe has three words. Other pending
+widths, return banks and pipe counts are not newly enumerated by this slice.
+
+An independently serialized fixed C021 layout checks every completed frame word
+and surrounding memory, logical SP advancement before the rejected write, live
+and saved PC/SR, exception count, all registers and inactive stack banks. Exact
+accepted validation reads and completed descending stack writes must match their
+prefixes. The pending operand remains untouched. A second halted scalar/batch
+call must perform no access or additional fault request. Faults are rejected
+mapped requests, not physical partial transfers or hardware BERR observations.
+
+All **599,808 parent cases / eight executions / 1,344 reports** retain identical
+results. The combined candidate has **651,008 cases / ten executions / 1,376
+reports**. Its **240-input** frozen source graph adds only this fixture to the
+239-input parent; all **39 private CPU inputs remain byte-identical**. The
+maintained audit revalidates the complete pinned parent chain, exact source and
+output inventories, command/settings, loaded test assembly, TRX roster/counters,
+every case ID/weight/status and retained report. Strict frozen `--validate-only`
+replay passes without changing the proof.
+
+Three isolated defects produce exactly predicted failures: missing halt
+**51,200**, incorrect stack advancement **51,200**, and corrupted saved SR
+**1,280**. The other **49,920** saved-SR mutation cases pass because they fault
+before that word is committed. A separate verifier independently checks all
+**103,680 complete diagnostic messages**, including logical SP and model-width
+physical memory addresses. Eleven copied evidence controls reject missing
+reports, empty/foreign/untested combinations, changed source/roster/settings,
+missing witnesses, changed/missing retention and wrong loaded assembly. Copied
+validator paths are explicitly rebased, hardlinked targets unlinked before
+alteration, and original evidence hashes preserved. Controls execute no CPU.
+
+The isolated current **224-input / 37-CPU-input** production graph compiles the
+fixture with both tests explicitly `NotExecuted` and zero executed cases when
+private flags are absent. Actual TRX aggregate counters are total 2, executed
+0, passed/failed/notExecuted 0; the exact result rows establish unavailability.
+The first local producer had a syntax error before execution or output creation;
+its successor uses a fresh output and passes. This is compile/unavailable
+coverage, not a production instruction replay.
+
+Reproduce with the complete immutable `MoveWriteValidationV1` parent and its
+pinned chain, using a fresh output:
+
+```powershell
+python scripts/test-copper68k-move-write-entry-fault.py `
+  --qualified-parent-directory <frozen-MoveWriteValidationV1> `
+  --output <fresh-write-entry-output>
+# --validate-only requires unchanged complete sources, settings and reports.
+```
+
+This qualifies secondary stack-write/vector-read faults for the selected private
+validation exception-entry contract. Changed validation values/protocol repairs,
+returned-bank pending-write refaults, trace/interrupt continuation, wider origins,
+physical partial transfers and general hardware frames remain required. The user
+has no hardware available; native 030/040 trace/A7/PC disagreements remain
+unqualified. No private CPU is imported, package published or regression retired.
+No new full CPU suite, consumer replay or physical qualification is claimed.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+Evidence is local under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/MoveWriteEntryDiscoveryV1`, `audits/MoveWriteEntryV1`,
+`move-write-entry-controls-v1` and `write-entry-production-default-v2`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| audit | `540bc6b5f896666eb404cf9ccb6c2da1cbf7ad0e6e62dfef2dde29791c3c6478` |
+| controls | `0aae5ae6a50314ad2728d62e6ab98447900d411be567e48719e2a73b875f5cec` |
+| reasons | `dfd2d48bed532a49969c6b6b11c517f35f6221a5af4c55db0e9089e004e27c81` |
+| default | `90cdba9f772e2338ba1878d991aafa9d7b3a8ddcab5fec6d9982b871364da45b` |
+| discovery | `aaa09e983612da06d214498b73e163efc00774a6eda42e9a7a83a55b9b5e613d` |
+| parent | `3a2d2b3c8f82f4205224819a3ba82ba2d6066958881b9649d6153f88366cbf64` |
+| complete source/evidence linkage | `e99fa0e461c07f93451e42cb3f52251d6583654b17938462073e003b600c4853` |

@@ -3855,3 +3855,22 @@ Changed validation values, entry failures, pending-write refaults, trace/interru
 continuation and general hardware frames remain open. Exact graph/evidence limits
 are in [the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-validation-input-and-refault--2026-10-08).
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 private validation exception entry — 2026-10-08
+
+The selected C023/C021 software contract adds **51,200 passing cases** for
+secondary stack/vector faults after validation failure. All **599,808 parent
+cases** retain identical reports. Three isolated defects produce exactly
+**51,200 / 51,200 / 1,280** mismatches; all **103,680** diagnostic messages are
+independently checked. Eleven evidence controls reject and strict frozen replay
+passes. The private 240-input graph preserves all 39 CPU inputs; current
+production's 224-input graph compiles the fixture with two tests unavailable.
+
+No production candidate is imported, package published or regression retired.
+Changed validation values/protocol repairs, returned-bank pending-write refaults,
+trace/interrupt continuation, wider origins/physical partial transfers and general
+hardware frames remain open. Hardware is unavailable, so disputed native 030/040
+boundaries remain unqualified. Exact scope and evidence are in [the qualification
+record](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-validation-exception-entry--2026-10-08).
+Milestone 6 remains **in progress**, `roadmapComplete=false`.

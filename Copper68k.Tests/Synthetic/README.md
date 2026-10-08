@@ -1518,3 +1518,25 @@ distinct source graphs. Missing fixtures, empty selections or any mismatch fail
 the requested audit. Changed validation values, entry faults, pending-store
 refaults, trace/interrupts and hardware frames remain unqualified. See
 [the private validation record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-validation-input-and-refault--2026-10-08).
+
+
+Private validation exception-entry faults are opt-in with
+`COPPER68K_RUN_020_MOVE_WRITE_ENTRY_FAULT=1`. Require the complete frozen
+`MoveWriteValidationV1` parent, a fresh output, and use strict `--validate-only`
+for unchanged frozen evidence:
+
+```powershell
+python scripts/test-copper68k-move-write-entry-fault.py `
+  --qualified-parent-directory <frozen-MoveWriteValidationV1> `
+  --output <fresh-write-entry-output>
+```
+
+The 51,200 new cases check secondary stack/vector faults after selected private
+validation failures, exact completed accesses, saved state and halted behavior;
+599,808 parent cases retain their reports. Three mutations and eleven corrupted
+evidence controls fail as expected. This bounded software contract preserves all
+39 private CPU inputs. Current production compiles the fixture with two tests
+unavailable by default; it uses a distinct 37-input CPU graph. Missing fixtures,
+empty selection or mismatches fail the requested audit. Wider pending forms,
+changed validation values, pending-store refaults, trace/interrupts and hardware
+frames remain unqualified. See [the entry-fault qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-validation-exception-entry--2026-10-08).
