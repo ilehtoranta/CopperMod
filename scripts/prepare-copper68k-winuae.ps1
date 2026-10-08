@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $GeneratorSource,
     [Parameter(Mandatory)] [string] $RunnerSource,
     [Parameter(Mandatory)] [string] $VcVars64,
-    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Moves','Cas','Cas2','CacheEncodings','Move16')] [string] $Preset = 'Basic',
+    [ValidateSet('Basic','TraceTraps','TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Moves','Cas','Cas2','CacheEncodings','Move16','QualifiedBasic')] [string] $Preset = 'Basic',
     [string] $OutputDirectory = 'artifacts/winuae-model-inputs'
 )
 $ErrorActionPreference = 'Stop'
@@ -31,6 +31,25 @@ function Patch-Once([string] $Text, [string] $Before, [string] $After) {
     if (($Text.Split([string[]]@($Before), [StringSplitOptions]::None).Count - 1) -ne 1) { throw "Native patch anchor changed: $Before" }
     return $Text.Replace($Before, $After)
 }
+# Compose only already reviewed corrections. Each original patch and resulting
+# source is recorded; Basic and the individual family presets stay unchanged.
+$combinedPatches = @()
+function Apply-QualifiedPatch([string] $Text, [string] $Name, [int] $RequiredHunks, [int] $SelectedHunks = 0) {
+    $path = Join-Path $PSScriptRoot ('winuae/' + $Name)
+    $patch = [IO.File]::ReadAllText($path).Replace("`r`n", "`n")
+    $hunks = @($patch -split "(?m)^@@`n" | Select-Object -Skip 1)
+    if ($hunks.Count -ne $RequiredHunks) { throw "Incorrect combined patch hunk count: $Name" }
+    $count = if ($SelectedHunks -eq 0) { $RequiredHunks } else { $SelectedHunks }
+    for ($i = 0; $i -lt $count; $i++) {
+        $lines = $hunks[$i].TrimEnd("`n").Split("`n")
+        $before = (($lines | Where-Object { $_.StartsWith('-') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
+        $after = (($lines | Where-Object { $_.StartsWith('+') -or $_.StartsWith(' ') }) | ForEach-Object { $_.Substring(1) }) -join "`n"
+        $Text = Patch-Once $Text $before $after
+    }
+    [IO.File]::WriteAllText((Join-Path $output $Name), $patch)
+    $script:combinedPatches += @{Name=$Name; Sha256=(Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant(); AppliedHunks=$count; AvailableHunks=$RequiredHunks}
+    return $Text
+}
 try {
     $settings = & $env:COMSPEC /c "`"$vcvars`" >nul && set"
     if ($LASTEXITCODE -ne 0) { throw 'MSVC environment initialization failed' }
@@ -48,6 +67,18 @@ try {
         & ./build68k.exe table68k | Set-Content -Encoding utf8 cpudefs.cpp
         if ($LASTEXITCODE -ne 0) { throw 'Opcode table generation failed' }
         $cpuGeneratorSource = 'gencpu.cpp'
+        if ($Preset -eq 'QualifiedBasic') {
+            $source = [IO.File]::ReadAllText((Join-Path $generator 'gencpu.cpp')).Replace("`r`n", "`n")
+            foreach ($item in @(
+                @('trap-bounds-pc.patch',2), @('breakpoint-pc.patch',1),
+                @('long-arithmetic-unimplemented.patch',3), @('word-division-carry.patch',1),
+                @('lpstop-fetch-pc.patch',2), @('cas-unimplemented-pc.patch',1),
+                @('cas2-compare-alias.patch',2))) {
+                $source = Apply-QualifiedPatch $source $item[0] $item[1]
+            }
+            $cpuGeneratorSource = Join-Path $output 'gencpu-qualified-basic.cpp'
+            [IO.File]::WriteAllText($cpuGeneratorSource, $source)
+        }
         if ($Preset -in @('TrapBounds','Breakpoints','LongArithmetic','WordDivision','LowPowerStop','Cas','Cas2')) {
             # TrapBounds: following PC (MC68020UM 6.1.4 / MC68040UM 8.2.3).
             # Breakpoints: opcode PC (illegal exception, UM 6.1.5 / 8.2.4).
@@ -74,6 +105,20 @@ try {
         & ./gencpu_prog.exe . *> (Join-Path $output 'gencpu-run.log')
         if ($LASTEXITCODE -ne 0) { throw 'CPU source generation failed' }
         $testerSource = 'cputest.cpp'
+        if ($Preset -eq 'QualifiedBasic') {
+            $source = [IO.File]::ReadAllText((Join-Path $generator 'cputest.cpp')).Replace("`r`n", "`n")
+            # CAS's insertion anchors the original MOVES block: apply it first.
+            foreach ($item in @(@('cas-encodings.patch',1), @('moves-encodings.patch',1),
+                @('long-arithmetic-encodings.patch',1), @('cas2-overlap-inputs.patch',1),
+                @('move16-encodings.patch',5))) {
+                $source = Apply-QualifiedPatch $source $item[0] $item[1]
+            }
+            # Correct scope-00 exception classification only. The second hunk
+            # is the narrow preset's family filter and MUST NOT enter this run.
+            $source = Apply-QualifiedPatch $source 'cache-encodings.patch' 2 1
+            $testerSource = Join-Path $output 'cputest-qualified-basic.cpp'
+            [IO.File]::WriteAllText($testerSource, $source)
+        }
         if ($Preset -eq 'CacheEncodings') {
             # Correct only the scope-00 architectural exception; select its
             # ILLEGAL inputs before execution. Upstream excludes actual cache
@@ -172,6 +217,7 @@ void M68KTester_destroy(M68KTesterContext* context) {
 
     $profiles = @()
     $baseIni = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'winuae/cputestgen.ini')).Replace("`r`n", "`n")
+    if ($Preset -eq 'QualifiedBasic') { $baseIni = $baseIni.Replace('[test=Basic]', '[test=QualifiedBasic]') }
     if ($Preset -eq 'TraceTraps') {
         $baseIni = $baseIni.Replace('[test=Basic]', '[test=TraceTraps]').Replace('mode=all', 'mode=TRAP').Replace('feature_sr_mask=0x0000', 'feature_sr_mask=0xa000')
     }
@@ -251,6 +297,10 @@ void M68KTester_destroy(M68KTesterContext* context) {
     @{
         Schema=1; GeneratorCommit=$generatorPin; RunnerCommit=$runnerPin; Profiles=$profiles
         Preset=$Preset
+        QualifiedBasicPatches=$combinedPatches
+        QualifiedBasicCpuSourceSha256=$(if ($Preset -eq 'QualifiedBasic') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-qualified-basic.cpp')).Hash.ToLowerInvariant()} else {$null})
+        QualifiedBasicInputSourceSha256=$(if ($Preset -eq 'QualifiedBasic') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-qualified-basic.cpp')).Hash.ToLowerInvariant()} else {$null})
+        QualifiedBasicScope=$(if ($Preset -eq 'QualifiedBasic') {'All Basic families and profiles; reviewed corrections and legal-input rules composed before execution. Ordinary STOP and RTE disagreements retained; no trace correction or narrow cache family filter. MOVE16 retains the broad one-round selection, not the separate sixteen-round qualification.'} else {$null})
         TracePrioritySourceSha256=$(if ($Preset -eq 'TraceTraps') {(Get-FileHash -LiteralPath (Join-Path $output 'cputest-trace.cpp')).Hash.ToLowerInvariant()} else {$null})
         TracePriorityPatchSha256=$(if ($Preset -eq 'TraceTraps') {(Get-FileHash -LiteralPath (Join-Path $output 'trace-priority.patch')).Hash.ToLowerInvariant()} else {$null})
         TrapBoundsSourceSha256=$(if ($Preset -eq 'TrapBounds') {(Get-FileHash -LiteralPath (Join-Path $output 'gencpu-trap-bounds.cpp')).Hash.ToLowerInvariant()} else {$null})

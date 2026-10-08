@@ -1299,3 +1299,13 @@ it does not run CPU instructions or make the raw Basic audit passing.
 Every row retains its original status and marks later raw failures unobserved.
 Missing fixtures, mappings, counterparts and unsupported promotion claims fail.
 See the [scope, identities and remaining questions](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#basic-first-failure-qualification-ledger--2026-10-08).
+
+Broad composition: `prepare-copper68k-winuae.ps1 -Preset QualifiedBasic` preserves
+all Basic families and composes the reviewed generator corrections in separate
+inputs. The [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#composed-broad-reference-execution--2026-10-08)
+contains the preparation and frozen-result verification commands. The maintained
+`test-copper68k-qualified-basic-inputs.py` checks exact composition and optional
+execution bindings; it returns failure for the current four mismatching rows.
+Input-only verification executes no CPU instructions. The original raw Basic
+ledger and failed audit retain their separate scope. This broad checkpoint does
+not qualify hardware timing, resolve unseen failures or complete milestone 6.

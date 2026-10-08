@@ -11201,3 +11201,90 @@ Successful validator / ten-control records:
 `3f330ac0e6fe4201916757defa4b5cdd7f5c075458f6860bff8f1ac1bde631e7`.
 Complete evidence linkage:
 `a8223397d35c31d589b91817e8f81b136a9c2b05661097b68c45078f1a998fd9`.
+
+## Composed broad reference execution — 2026-10-08
+
+The first-failure ledger does not establish what lies behind the original 54
+failed Basic directories. A fresh `QualifiedBasic` generator preset now composes
+thirteen already reviewed source corrections and legal-input patches in one
+broad run. It retains all **1,202 generator directories** across seven hardware
+models and all **1,381 execution rows** across the eight profiles (including
+A1200). `mode=all`, address widths, rounds, privilege selection and Basic's other
+settings remain intact. The cache patch applies its exception-classification
+hunk only; its narrow family filter is deliberately absent. MOVE16 uses the
+broad one-round inputs here; the separate sixteen-round qualifier retains its
+own scope. No trace correction is introduced into a non-trace selection.
+
+The frozen production CPU and adapter sources are unchanged: the same 210
+source/project inputs as the current raw Basic audit and completed production
+integration. The new corpus is generated from copies of pinned sources, rather
+than patching the original `.dat` files or observed CPU results. Both original
+Basic evidence and the individual family presets remain unchanged. This is a
+new corrected corpus, not a claim that 50 original raw directories are resolved.
+
+Execution in `QualifiedBasicCurrentV1` reports **1,377 passing directories / four
+mismatching / zero unsupported / zero untested**, with **12,649,817 callbacks** and
+**2,316,298 compared exception frames**. All 32 register/SR/frame/undefined-SR
+comparison controls remain present. Callbacks include partial failing directories
+and are not a count of independently qualified passing architectural cases.
+The audit and its strict verifier both return failure; milestone 6 stays in
+progress and `roadmapComplete=false`.
+
+The four observed first failures are:
+
+| Profile / family | Observed failure |
+| --- | --- |
+| 010 RTE | Callback 12: invalid-format/version N/Z/V discrepancy, unchanged |
+| 040 ILLEGAL | Callback 29,459: `F520`, reference privilege vector 8 versus CPU line-F vector 11 |
+| 060 ILLEGAL | Callback 29,459: `F520`, reference privilege vector 8 versus CPU line-F vector 11 |
+| 060 STOP | Callback 3: ordinary immediate S-clear behavior, unchanged |
+
+The `F520` observations were behind the earlier scope-zero `F400` discrepancy.
+Their native `privileged_copro_instruction` helper accepts every ID above zero
+for 040/060 cpSAVE/cpRESTORE privilege checks. `F520` has ID 2.
+[MC68040UM E.1/E-2](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf)
+requires floating-point coprocessor ID 001; its 8.2.4 and
+[MC68060UM 8.2.4](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf)
+distinguish unrecognized F-line words from floating-point operations. This
+identifies a reference-priority question to qualify across neighboring encodings
+and both privilege states, not grounds to alter the CPU from this trace alone.
+Later failures in all four stopped directories remain unobserved. Existing
+A7/trace/repeated-fault and advanced-frame gaps also remain open.
+
+`scripts/test-copper68k-qualified-basic-inputs.py` reconstructs both composed
+sources from pinned original Git content and exact patch/hunk inventories. It
+binds all fixture hashes, complete model/family selections, configuration and
+native comparison authority. Exact source hashes are retained; only LF/CRLF
+transport differences are allowed when comparing the restored comparator text.
+Its optional execution verification binds the exact command/settings, unchanged
+210 inputs, full-integration identity, assemblies, log/TRX/report, complete
+1,381-row roster and all 32 named controls. It writes the actual failed result
+and exits nonzero for mismatches, unsupported or untested rows. Input-only
+verification executes no CPU instructions and is not an architectural gate.
+The execution verifier is bound to this checkpoint; future CPU changes require
+fresh source qualification, not replacement of these frozen records.
+
+```powershell
+./scripts/prepare-copper68k-winuae.ps1 -GeneratorSource <clean-pinned-copy> `
+  -RunnerSource <pinned-runner> -VcVars64 <vcvars64.bat> `
+  -Preset QualifiedBasic -OutputDirectory <fresh-broad-inputs>
+python scripts/test-copper68k-qualified-basic-inputs.py `
+  --input-directory <frozen-QualifiedBasicV1> --raw-basic-directory <frozen-Basic> `
+  --generator-source <pinned-generator> --audit-directory <frozen-QualifiedBasicCurrentV1> `
+  --raw-audit-directory <frozen-BasicCurrentLedgerV1> --output <fresh-proof>
+```
+
+Ten separate copied-input controls reject missing/reordered patches, the cache
+family-filter hunk, a removed family/profile, unreviewed composed source,
+modified comparator/configuration, empty fixtures and corrupt fixture bytes.
+Controls unlink a copy before alteration and verify original evidence after
+every experiment. The initial verifier exposed LF/CRLF representation differences;
+source comparison was corrected without relaxing semantic or exact inventory
+bindings. Failed initial checks and successive proofs remain separate.
+No CPU fix, package release, candidate import or regression retirement occurs.
+
+Evidence SHA-256: manifest `34f41176251d1816586e70cdb384b08cacb69bb316785a34f9f24fb2b8138d34`; failed broad report
+`57ce11cb65901ac34d8e6e15e7fdac2ae2f0ffd61e36397d89c6011eb07141e1`; strict verification / ten-control records
+`c3037b7cd25288e82ce2a53b8f7205f75d92b81fa0dcf438a41699d09f4f850f` /
+`5cd24163a0acac4cc41d6026cc8c0248f88697e617b9cc6c30d38ec414f1fd2a`; complete linkage
+`b9a8133b4ed373f91339fdc7a72f5d8b86bb2153ce30a98a518bad9f8f3d86a6`.

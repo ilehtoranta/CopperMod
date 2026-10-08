@@ -3542,3 +3542,18 @@ Combined reference execution, later-failure discovery, outstanding fault protoco
 and architectural questions remain required. No CPU change, publication or
 regression retirement occurs. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See the [review scope and command](COPPER68K_REFERENCE_QUALIFICATION.md#basic-first-failure-qualification-ledger--2026-10-08).
+
+### Milestone 6 composed broad reference execution — 2026-10-08
+
+A separate `QualifiedBasic` corpus composes reviewed reference/input corrections
+while preserving all Basic families and all eight execution profiles. Its fresh
+run has 1,377 passing / four mismatching / zero unsupported / zero untested
+directories. New 040/060 `F520` first failures are exposed behind the earlier
+`F400` discrepancy; 010 RTE and 060 STOP remain unresolved. This is a new corpus,
+not resolution of the old raw directories, and the broad gate still fails.
+Exact composition, source/input/result bindings and ten corruption controls are
+maintained alongside [the qualification record](COPPER68K_REFERENCE_QUALIFICATION.md#composed-broad-reference-execution--2026-10-08).
+No CPU source changes, candidate import, publication or retirement occur.
+Milestone 6 remains **in progress**, `roadmapComplete=false`; neighboring
+encoding/priority qualification, later-failure discovery and the existing
+architectural/protocol requirements remain outstanding.
