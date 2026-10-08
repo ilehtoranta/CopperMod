@@ -13012,3 +13012,29 @@ binding and its discriminating controls rather than weakening expectations.
 The broad 010 RTE / 060 STOP gate remains failed, and private production and
 restoration gaps remain open. No package is published. Milestone 6 stays
 **in progress**, `roadmapComplete=false`.
+
+### Current-build seeded and software-reference checkpoint, 2026-10-08
+
+`CurrentDeepReferencesV2` executes the three named seeded, SingleStepTests and
+Musashi selections against the already built, frozen `86469f7` assemblies:
+230 source/project inputs and 37 unchanged CPU inputs. All three pass. Independent
+verification binds the source graph, all three assembly hashes, exact TRX
+definitions and method assembly paths, reference inputs and every report.
+
+Seed 68020 with 10,000 samples per model produces **320,000 passing cases /
+32 reports** across all eight profiles. The pinned SingleStepTests corpus
+produces **312,500 passing cases / 125 files**; its 127 recorded inputs retain
+the documented TAS/TRAPV exclusions. The pinned Musashi corpus produces
+**536 passing programs / 88 documented exclusions** from 78 inputs across
+eight profiles. Reference pins remain respectively
+`64b253116a3de04aaac4346c43680960dc9b67e5` and
+`72c1d74800f3087b45a0c1a7342601bbed898881`.
+
+The independently verified proof SHA-256 is
+`293c7675e4f9e5f70b6b5fa602eab9ea0bc4b26724b553e6a477f5063883b64e`.
+The separate `CurrentReferenceFullV2` execution uses the same assemblies and
+is still running at this checkpoint; no full-suite pass is claimed. Earlier
+full-suite, rejection-control, mutation and consumer evidence retains its own
+identity. No hardware is available to settle disputed 030/040 boundaries;
+software agreement cannot close them. The broad failed and private-restoration
+gates remain open. Milestone 6 stays **in progress**, `roadmapComplete=false`.

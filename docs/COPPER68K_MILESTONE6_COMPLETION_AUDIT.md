@@ -333,3 +333,16 @@ scope; use this checkpoint for reproduction if later retirements change that
 class. The 010 RTE / 060 STOP broad gate and private-production restoration
 requirements remain open. Milestone 6 stays **in progress**,
 `roadmapComplete=false`.
+
+### Current-build reference evidence, 2026-10-08
+
+The frozen `86469f7` build now has independently verified fresh deep/reference
+evidence: 320,000 seeded cases, 312,500 SingleStepTests cases and 536 Musashi
+programs pass. Its 88 Musashi exclusions remain explicit. Proof SHA-256:
+`293c7675e4f9e5f70b6b5fa602eab9ea0bc4b26724b553e6a477f5063883b64e`.
+All 230 source/project inputs and 37 CPU inputs are bound to the executed
+assemblies and named test methods. The same-build full-suite execution is
+still pending; this checkpoint does not close the coherent final-evidence
+requirement. No hardware is available for disputed 030/040 boundaries. The
+failed broad gate and private-production restoration work remain required;
+milestone 6 remains **in progress**, `roadmapComplete=false`.

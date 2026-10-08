@@ -4065,3 +4065,16 @@ evidence. All 230 source inputs and 37 CPU inputs remain unchanged; no new
 retirement, semantic scope, full-suite or consumer run is claimed. Broader
 failed/private gates remain open. Milestone 6 stays **in progress**,
 `roadmapComplete=false`.
+
+### Milestone 6 checkpoint — current-build deep references, 2026-10-08
+
+Fresh seeded and pinned software-reference execution against frozen `86469f7`
+assemblies passes: 320,000 seeded cases / 32 reports, 312,500 SingleStepTests
+cases / 125 files and 536 Musashi programs with 88 documented exclusions.
+Independent verification binds all 230 source/project inputs, 37 unchanged CPU
+inputs, loaded assemblies, exact named methods, corpus inputs and reports.
+Proof: `293c7675e4f9e5f70b6b5fa602eab9ea0bc4b26724b553e6a477f5063883b64e`.
+The separate full CPU run is still pending. With no hardware available, disputed
+030/040 boundaries remain unqualified; broad failed and private-restoration
+requirements also remain open. Milestone 6 stays **in progress**,
+`roadmapComplete=false`. See the reference qualification checkpoint for scope.
