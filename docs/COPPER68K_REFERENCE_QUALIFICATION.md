@@ -10887,26 +10887,86 @@ but zero in that counter. The failed verifier evidence is preserved; its success
 checks the actual row outcomes, complete counters and `Completed` summary.
 No CPU failure or missing coverage is relabelled as success.
 
-The latest verifier also requires the exact selected environment settings.
-Two controls disable a required RTE gate or add a foreign selection; both fail
-with the intended selection reason before acceptance. Independent test discovery
-from the pinned private assembly lists **8,022 test cases**. The completed private
-suite must contain exactly that roster, in addition to preserved source fixtures,
-current test outcomes, complete report keys/weights and native preset identities.
-Discovery is not execution evidence. The earlier verifier's weaker extra-test
-presence check cannot substitute for this roster gate.
+The verifier requires exact selected environment settings. Two controls disable
+a required RTE gate or add a foreign selection; both fail for the intended reason.
+The initial discovery roster had 8,022 names, including one deferred theory
+placeholder. Execution expands that placeholder into 33 declared matrix rows,
+giving **8,054 cases**. The initial discovery also decoded UTF-8 output as Windows
+1252, corrupting thirteen display names. The V5 verifier correctly rejected that
+roster; its failed evidence is preserved in
+`full-private-verifier-v5-discovery-failure.json`. This was a discovery/verifier
+defect, not a CPU failure.
 
-The private half is still running. The frozen full snapshots precede the later
-saved-pipe fixture, which has separate focused proof and byte-identical private
-CPU inputs. Full private verification and isolated NuGet consumer validation
-remain required before importing any candidate. Hardware is unavailable; the
-architectural A7, trace and native refault-PC disagreements remain open.
+Fresh explicit UTF-8 discovery and independent enumeration of the frozen test
+fixture's declared data reconstruct exactly all 8,054 execution names. The data
+reader does not execute CPU instructions or call decoder/EA/arithmetic helpers.
+V6 binds its sources, assembly, command and output to the frozen inputs, checks
+the complete roster and outcomes, and rejects missing names or changed data in
+two separate controls. No foreign or missing case is ignored.
+
+The private half completed **8,054 executions / 8,021 passing / 33 explicitly
+unavailable / zero failures**. Strict verification binds **109,079,170 logical
+cases / 12,065 profile reports** and ten native presets, exact source and assembly
+identities, selection settings, retained reports, complete keys and weights.
+The frozen full snapshots precede the later saved-pipe fixture, which has its
+separate 1,617,920-case proof and byte-identical private CPU inputs.
+
+The immutable local package **1.5.2-synthetic-dev.73** passed an isolated Release
+app build and clean CopperScreen `aa1dad5` consumer checks: **171 host tests /
+6 unavailable**, **74 disk tests**, **1,080 engine diagnostic tests**, and **two
+Workbench 3.1 floppy replays**. The clean archive excludes unrelated working
+changes. Package CPU bytes match the frozen candidate and consumer assemblies;
+archive, source, commands, results and native inputs are bound by independent
+verification. Three preflight controls reject changed archive, wrong commit or
+publication status before extraction. This is local package validation, with no
+publication or HD-boot claim.
+
+Full integration and consumers qualify these private software contracts only.
+Hardware is unavailable; architectural A7, trace and native refault-PC
+disagreements, broader frame provenance, fault origins and other milestone-6
+requirements remain open.
 No production CPU import, package publication or regression retirement occurs.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
 
 Production proof `audits/LatestPrivateFullCpuV2/production-verification-v5.json` SHA-256:
 `79556e7128f0e84e1790521966a7296b7c5ff5368c8585edba0e340321115125`.
-Candidate discovery `full-private-discovery-v1/discovery.json` SHA-256:
+Initial rejected discovery `full-private-discovery-v1/discovery.json` SHA-256:
 `cb09bd39466df3a7355c9a9db40b4a4672e79f05fab38268f7bbec4bb2911471`.
 Selection controls `full-selection-controls-v1/verification.json` SHA-256:
 `a3a36a048b226077795391498351e5e36872f90bc6cd5994d91377db67b69603`.
+
+Complete V6 proof `audits/LatestPrivateFullCpuV2/proof.json` SHA-256:
+`a17fb76bcca015c9cebfc86072bc7c6ff977a69070295f79bc765589bdd43c4b`.
+Corrected discovery `full-private-discovery-v2/expanded-discovery.json` SHA-256:
+`78c47e1e6701876792f0999dc77c2d6addac7de91597d613999978f9c20f2525`.
+Discovery controls `full-discovery-controls-v6/verification.json` SHA-256:
+`280d235cb7e6bc8ce748c3e9dd258614ec3b79a5c2784924a8e7ea30f83d4b17`.
+Consumer proof `consumer-73-complete-proof.json` SHA-256:
+`c7f97a733ab89a556ded142649c829ed3fb5214484c8e1575b6f3655d4351099`.
+Package SHA-256:
+`4d9dc8c6d6298b533f100513b9e339cd57ea04c4210afad16a96d0c52955258a`.
+
+## Mandatory arithmetic consolidation reports — 2026-10-08
+
+The ordinary synthetic selection already executes the shared SUBA indirect and
+CMPA displacement fixtures, but its report validator omitted their mandatory
+membership. Both groups are now required on every model/profile: 1,536 SUBA and
+1,280 CMPA cases each, **22,528 cases / 16 reports** in total. This closes the
+acceptance omission after their proven semantic-regression retirements; it adds
+no CPU behavior or new retirement.
+
+The ordinary gate now verifies **86,262,562 logical cases / 723 batches**, distinct
+from the broader full-production aggregate above. Report-only validation uses
+the unchanged frozen production reports and required integer inventory. All
+921 input reports and the inventory retain their hashes. Removing a SUBA report
+or marking a CMPA case untested makes the maintained validator fail with the
+specific group reason. The first copied positive fixture omitted the integer
+inventory and correctly failed; that evidence remains preserved, and a fresh
+complete fixture passes. Earlier 707-report results retain their original scope.
+
+Gate proof `ordinary-consolidation-gate-proof-v2.json` SHA-256:
+`bb37e23e2d229c7961aa67a66ad704318f551c770a3787a45f1b3dc9f281ebfc`.
+Controls `ordinary-consolidation-controls-v1/verification.json` SHA-256:
+`540a76d28d66bb81ccdd79c6b45172850254bbf0c0dfcd4a26434adbcdf07508`.
+Milestone 6 remains **in progress**, `roadmapComplete=false`; no production
+candidate import or package publication is authorized by these results.

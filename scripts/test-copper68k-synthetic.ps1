@@ -71,6 +71,7 @@ try {
             'transfer-movem-invalid-operands'=6400;
             'arithmetic-boundaries'=56448; 'arithmetic-addressing'=$(if ($model -in @('68000','68010')) {22331} else {25901});
             'arithmetic-scenarios'=21072; 'arithmetic-extend'=25440;
+            'suba-indirect-consolidation'=1536; 'cmpa-displacement-consolidation'=1280;
             'arithmetic-invalid-operands'=$(if ($model -in @('68000','68010')) {6336} else {5952});
             'arithmetic-quick-invalid-operands'=26624;
             'integer-binary-invalid-operands'=121344;

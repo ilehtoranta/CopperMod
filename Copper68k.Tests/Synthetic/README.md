@@ -1243,3 +1243,16 @@ report integrity. `-ValidateReportsOnly` rechecks unchanged retained evidence;
 missing, empty, changed or unrelated evidence fails.
 
 See the [replacement mapping and proof](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#cmpm-alias-and-a7-semantic-consolidation--2026-10-07).
+
+## Mandatory SUBA and CMPA replacement reports
+
+The ordinary `scripts/test-copper68k-synthetic.ps1` gate requires
+`suba-indirect-consolidation` (1,536 cases) and
+`cmpa-displacement-consolidation` (1,280 cases) for each of the eight profiles.
+These already execute in the default synthetic selection. Missing or incomplete
+replacement reports fail acceptance, including `-ValidateReportsOnly` runs.
+Keep the required `integer-inventory.json` alongside frozen reports.
+
+The complete ordinary semantic gate totals 86,262,562 cases in 723 batches;
+full-suite and optional private audit counts have separate scopes. See the
+[gate evidence and negative controls](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#mandatory-arithmetic-consolidation-reports--2026-10-08).

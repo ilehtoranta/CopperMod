@@ -3455,12 +3455,30 @@ native refault-PC gates remain required. Hardware is unavailable. No production
 import, publication or test retirement occurs. Milestone 6 remains **in progress**,
 `roadmapComplete=false`. See [saved-pipe scope and evidence](COPPER68K_REFERENCE_QUALIFICATION.md#private-pending-write-saved-pipes--2026-10-08).
 
-The frozen current production baseline now passes 5,299 tests with 41 explicitly
-unavailable (5,340 total). Strict verification binds 86,453,506 logical cases,
-921 complete profile reports and ten native presets. An independent discovery
-requires the private half to execute its entire 8,022-case roster; discovery alone
-is not qualification. Two altered-selection controls are rejected. The private
-run remains active; complete private, isolated-consumer and broader architectural
-requirements remain open. No candidate import, publication or test retirement
-occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`. See the
-[current baseline evidence](COPPER68K_REFERENCE_QUALIFICATION.md#current-full-production-baseline--2026-10-08).
+The frozen complete production suite passes 5,299 tests with 41 explicitly
+unavailable (5,340 total), and the private suite passes 8,021 with 33 unavailable
+(8,054 total), both with zero failures. Strict verification binds respectively
+86,453,506 / 109,079,170 logical cases, 921 / 12,065 complete profile reports,
+ten native presets each, exact selections and source/assembly identities.
+The initial 8,022-name discovery used the wrong text encoding and included a
+deferred theory placeholder; its verifier rejection is preserved. Explicit UTF-8
+discovery plus independent enumeration of 33 declared fixture rows reconstructs
+exactly all 8,054 execution names. Missing names and changed data are rejected.
+The later focused pipe fixture remains separate, with identical private CPU bytes.
+
+Immutable local `.73` passes a clean committed CopperScreen archive build,
+171 host tests (six unavailable), 74 disk tests, 1,080 engine tests and two
+Workbench 3.1 floppy replays. These validate the private software contract,
+not the outstanding architectural disagreements. No CPU candidate import or
+package publication occurs. See the [full integration and consumer evidence](COPPER68K_REFERENCE_QUALIFICATION.md#current-full-production-baseline--2026-10-08).
+
+The ordinary validator now requires the already executed SUBA/CMPA replacement
+groups on every profile: 22,528 cases / 16 reports. Its total is 86,262,562 cases
+in 723 batches. Missing SUBA and incomplete CMPA controls fail for their precise
+reasons; unchanged frozen reports and the integer inventory pass. A first copied
+fixture missing that inventory correctly failed and remains preserved. This
+changes acceptance membership only, with no CPU fix or further test retirement.
+See the [mandatory consolidation gate](COPPER68K_REFERENCE_QUALIFICATION.md#mandatory-arithmetic-consolidation-reports--2026-10-08).
+Hardware is unavailable. Broader frame provenance, fault origins, trace and
+reference requirements remain open. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
