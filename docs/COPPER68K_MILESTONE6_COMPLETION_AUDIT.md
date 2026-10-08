@@ -47,6 +47,11 @@ it does not replace or discard their remaining gaps.
    record still lists wider restoration, operand, repair/refault, trace/interrupt
    and foreign-frame gaps. Preserve those distinctions when reviewing the
    promoted integer/system families.
+   The latest isolated 258-input candidate preserves the current production
+   MOVE16 correction. Its 38-test / 1,641,472-case preflight is independently
+   qualified, and exact discovery proves 8,124 complete-suite names. That full
+   execution has started; completed results and full verification remain pending.
+   This is candidate evidence, not production import or hardware qualification.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

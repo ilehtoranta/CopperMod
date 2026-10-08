@@ -4130,3 +4130,14 @@ matches all focused source graphs and reports to the earlier qualified runs.
 No CPU/test input changes accompany the tooling. The qualification record gives
 commands, scope and proof identities. Milestone 6 remains **in progress**;
 failed broad references, private recovery and hardware questions remain open.
+
+### Milestone 6 checkpoint — combined candidate validation started, 2026-10-08
+
+The isolated private candidate now preserves the current production MOVE16
+correction and all current test inputs. Independent source reconstruction and a
+38-test preflight pass: 1,641,472 cases / 1,628 reports. Compiled discovery proves
+8,124 named cases, including deferred theory rows. The complete suite has started
+on the same frozen assemblies with ten qualified reference presets. Completion,
+independent full verification and affected-consumer qualification remain pending;
+no private CPU code is imported. See the qualification record for identities,
+preliminary attempts and scope. Milestone 6 stays **in progress**.

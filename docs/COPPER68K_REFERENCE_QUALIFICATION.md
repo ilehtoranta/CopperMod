@@ -13181,3 +13181,54 @@ This adds maintained audit tooling, without changing the 231-input focused
 CPU/test graph or the 37 production CPU inputs. Full-suite, deep-reference,
 consumer and hardware qualification keep their earlier scope and identities.
 Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+### Current tests and MOVE16 correction on the private candidate — 2026-10-08
+
+Source inspection finds that the latest qualified private 39-input CPU graph
+predates two current production MOVE16 files. A wholesale copy would lose the
+production correction. The new isolated `CurrentPrivateRebaseV3` graph contains
+all **194 current test/project inputs**, the **25 retained private-only fixtures**
+and **39 CPU inputs**, **258 inputs** total. The two current production files,
+`M68040Support.cs` and `M68kAdvancedTimingInterpreter.System.cs`, are preserved
+byte-for-byte. Other private CPU inputs retain their original candidate identity.
+No private code is imported into the public source tree.
+
+Independent source verification reconstructs both normalized three-way merges
+and proves their results equal the current production files. The first raw-byte
+merge attempt produced line-ending conflicts; V2 normalized the merge inputs,
+and V3 retains the exact current bytes after confirming semantic equivalence.
+Those preliminary graphs are retained separately. Source-only proof:
+`2c5326714600deece6bcda04be958a403237627b07677a26b15c05b20f5feded`.
+
+The corrected `preflight-v2` runs **38 named tests**, all passing, with
+**1,641,472 logical cases / 1,628 reports**, zero mismatching, unsupported or
+untested cases in this selection. It includes actual private MOVE entry/refault
+checks, current MOVE16 faults/reserved encodings, MOVES faults/completion and
+C021 metadata guards. Every previously qualified selected report is identical;
+new literal MOVES fault fixtures also pass. Independent verification checks the
+sources, loaded test methods and assembly paths, exact named outcomes, memory
+coverage report keys/weights and prior-report equality. Preflight proof:
+`c017d73a13bd91ee62b2e5fda1bdc65de7b03f1bb31e081a2c9a7ec24d6215af`.
+
+The first preflight's expected-roster recorder omitted eight MOVES names selected
+by its prefix filter; it is preliminary evidence. The fresh corrected run
+explicitly enables both optional MOVES discovery tests. A verifier attempt also
+incorrectly equated a parameterized display name with the unparameterized method
+name; corrected verification retains exact display names and separately checks
+actual method identity. Neither acceptance criteria nor reports were weakened.
+
+Independent compiled discovery finds exactly **8,124 named test rows**. The
+33 deferred opcode-matrix rows are obtained from the compiled fixture without
+executing instructions; expansion matches the retained 2,714 private-only cases
+plus the 5,410 current cases. Discovery proof:
+`c6ffecec912aa6d3907c14040054f4a6fb4ebc02c1bc2e84a6758d8a1da02b12`.
+
+The complete suite has **started** on these same frozen assemblies, with all
+8,124 expected names, ten qualified WinUAE presets and scoped private settings.
+Expected outcomes are 8,087 passes and 37 explicitly unavailable rows, derived
+before execution from retained rosters and the qualified preflight. These are
+expectations, not completed results. The producer and test process were confirmed
+live; completion and independent full verification remain pending. No candidate
+full-suite, consumer, hardware or production-import qualification is claimed by
+this start. Public CPU sources and package dependencies are unchanged. Milestone
+6 remains **in progress**, `roadmapComplete=false`.
