@@ -13705,3 +13705,40 @@ trace/interrupt interruption remain required. The failed broad 010 RTE / 060
 STOP reference gate and unavailable 030/040 hardware remain open. Milestone 6
 stays **in progress**, `roadmapComplete=false`; PR #22 stays draft. No package
 publication or private production import occurs.
+
+### Complete private predecrement write-candidate evidence — 2026-10-09
+
+The frozen `PredecrementWriteFixV1` **259-input / 39-CPU** snapshot finishes
+with **8,091 passed / 37 unavailable / zero failed**. Independent full
+verification checks the exact **8,128-row roster**, **8,096 definitions**,
+all loaded methods/assemblies, commands, sources, pinned native inputs and
+every **13,753 report / 111,322,058 logical cases** against its frozen catalog.
+All ten qualified WinUAE preset reports match their retained architectural
+results with the new CPU/adapter identities. The report-only ordinary gate
+passes **86,663,530 cases / 783 batches**. All unavailable rows remain explicit;
+the broad Basic audit is still failed and is not substituted by these presets.
+
+The complete link independently verifies the same source/assembly identities
+across full, selected, seeded, SingleStepTests/Musashi and eight request-guard
+evidence. It checks the compiled API's zero changes (20 types / 211 records)
+and the already qualified same-source local-only `.79` consumer evidence.
+Package metadata retains its separate binary identity; source equality is
+explicit. No new reference, API, package or consumer execution is claimed.
+
+| Complete write-candidate evidence | SHA-256 |
+| --- | --- |
+| `PredecrementWriteFixV1/full/proof.json` | `850ee974c38565c99ae90cd943fda3f0a68196581c89729a7459aec00fc9e154` |
+| Earlier bounded source/deep/API/consumer link | `b744c7979487b28aa7b134011b22a90e2d755f4808e95a9d23e36a93afb06a0a` |
+| `predecrement-complete-link-v1.json` | `3097ce893cfc9581dcb597b3f4c15232f7f42edc85e7c3f6d4a8c9584806924b` |
+
+This full proof qualifies only its original snapshot. The **260-input read
+candidate's full execution remains live** and requires its own independent
+verification. The subsequent 040 mixed-width fixture has its own production
+CPU selected evidence; newer same-width-CCR/user-return work is separate and
+not yet qualified. Earlier expected catalogs and completed predecessors are
+not relabeled as runs of those later sources.
+
+The source remains a private review candidate. The broad 010 RTE / 060 STOP
+disagreements, broader restoration protocols and unavailable 030/040 hardware
+remain open. Milestone 6 stays **in progress**, `roadmapComplete=false`;
+PR #22 remains draft. No CPU import or package publication occurs.

@@ -4263,3 +4263,16 @@ same-width slots, heterogeneous FCs, user outer returns, deeper refaults and
 trace/interrupt interruption remain required. This focused result does not
 qualify the running private full suites or close milestone 6. Status remains
 **in progress**, `roadmapComplete=false`; no import or publication.
+
+### Milestone 6 checkpoint — complete private write-candidate evidence, 2026-10-09
+
+The frozen 259-input / 39-CPU write-recovery candidate completes its full run:
+8,091 passed / 37 unavailable / zero failed. Independent verification binds
+all 8,128 rows, 13,753 reports / 111,322,058 logical cases, ten qualified native
+presets and the ordinary 86,663,530-case / 783-batch semantic gate. Complete
+linkage connects that full proof to the candidate's already qualified deep
+references, eight request guards, compiled API and same-source local .79
+consumers. These results qualify that frozen graph, not the newer read candidate
+or later production-test extensions. Broad reference and restoration gaps keep
+milestone 6 **in progress**, `roadmapComplete=false`; no private import or
+package publication occurs.

@@ -63,9 +63,15 @@ it does not replace or discard their remaining gaps.
    1,204,224-case evidence and a reviewable two-file patch. Its same-build deep/API,
    eight invalid-request guards and local .79 consumers are independently verified.
    Exact source/assembly/package linkage is recorded in the qualification log.
-   Its newer full replay has started; its result and independent verification
-   remain pending. The completed predecessor cannot qualify the newer CPU changes.
-   No private production import occurs.
+   Its full replay now completes with 8,091 passed / 37 unavailable / zero
+   failed. Independent verification binds all 8,128 rows, 13,753 reports /
+   111,322,058 cases, ten qualified native presets and the ordinary gate.
+   Complete linkage to its same-build deep/API/guards and same-source .79
+   consumers is
+   `3097ce893cfc9581dcb597b3f4c15232f7f42edc85e7c3f6d4a8c9584806924b`.
+   This qualifies the frozen 259-input graph; it cannot qualify the later
+   260-input read change or the current test extensions. No private production
+   import occurs.
    The 040 access-frame discovery inventory retains all 480 required untested
    combinations (three banks, 32 CCR images, five protocol labels). Its diagnostic
    notes now acknowledge the separately qualified MOVES, nested supplied-slot
