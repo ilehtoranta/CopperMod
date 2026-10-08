@@ -11699,3 +11699,113 @@ Auto addressing/aliases, nested WB2/WB3 handler faults, trace, enabled MMU/cache
 physical partial transfers and timing remain outside this bounded discovery.
 No CPU fix, regression retirement, package publication or private candidate import
 occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+## 040 MOVES read-fault provenance — 2026-10-08
+
+The captured MOVES discovery above records the unchanged CPU at `37dbb3a`; it
+remains failed historical evidence. Its read defect is now reproduced independently
+and fixed at the actual operand-read boundary. A physical-map read rejection
+carries the selected SFC in an internal fault record. Extension consumption and
+effective-address pointer reads happen before that scope and cannot acquire SFC.
+No access is retried, no public API changes, and enabled MMU behavior is unchanged.
+The format-seven read builder converts that latched SFC using
+[MC68040UM Table 3-2](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf):
+1/2 map to normal user-data TM 1, 5/6 to supervisor-data TM 5, and 0/3/4/7
+retain TM with special transfer type 2. Ordinary read/fetch frame attributes and
+existing saved-PC/auto-address effects are preserved.
+
+The new test encodes nine legal forms independently: indirect, postincrement,
+predecrement, displacement, brief index, absolute word/long and full-format
+pre/post memory indirection with word base displacement. Literal examples use
+extensions `1921/1925`, independent pointer locations and values. Both public
+040 scalar/batch routes cover the following separately ordered cohorts:
+
+| Cohort | Cases per route | Scope |
+| --- | ---: | --- |
+| Operand | 8,064 | Nine forms, B/W/L, four lanes, eight SFC values, ISP/MSP, CCR 0/31, every rejected operand byte |
+| CCR | 14,336 | All 32 CCR values for indirect operands, remaining dimensions retained |
+| Pointer | 6,144 | Full pre/post indirect pointers, load/store, every rejected long-read byte; ordinary TM 5 |
+| Extension | 18,432 | Six forms with EA extensions, load/store, every rejected prefetch byte; ordinary TM 6 |
+
+Registers, active/inactive stacks, defined SR/SSW/frame words, memory canaries,
+single fault provenance and no operand/pointer retry are checked. Saved opcode
+PC and retained pre/post address effects assert the existing synchronous
+execution policy, **not hardware pipeline or handler-return qualification**.
+No following RTE or writeback recovery is claimed. The expected attributes are
+literal manual table rows, not calls into production decoding or conversion.
+
+The unchanged 37-input CPU with the new test executes the identical 218-input
+graph except for the two production fixes: **33,600 mismatches**, exactly operand
+SFC values other than 5/6. Every pointer and extension case already passes.
+The fixed CPU passes **93,952 read/provenance cases**, plus **1,536 unchanged
+fault-free MOVES controls**. All 46,976 combination keys per route are independently
+enumerated. The existing report limits failure diagnostics to 10,000 per batch;
+the before-run has 16,800 mismatches per route, so diagnostic samples are capped
+while every passing/mismatching combination remains recorded and verified.
+
+| Owned CPU mutation | Mismatches per route | Preserved passing per route |
+| --- | ---: | ---: |
+| Store raw FC without Table 3-2 conversion | 16,800 | 30,176 |
+| Select DFC instead of SFC | 22,400 | 24,576 |
+| Infer MOVES attributes from the opcode at frame construction | 4,608 | 42,368 |
+
+Each mutation changes exactly one CPU input in its owned copy. Independent
+enumeration predicts all affected FC/stage memberships, counts, diagnostics
+(subject to the existing cap) and unchanged combinations. The third mutation
+demonstrates why a MOVES opcode alone must not relabel indirect pointer faults.
+Original focused source bytes remain unchanged. No old regression is retired.
+
+The maintained discovery command separately executes all 5,120 original cases
+with the fixed CPU. All **1,792 read faults and 1,536 fixtures pass**. Its remaining
+**1,792 write-frame mismatches** keep the discovery gate **failed**. Special-space
+writeback fields, saved-PC/store completion, nested handler faults and recovery
+remain unqualified; those first write-frame failures do not validate later checks.
+
+Ordinary CI requires each new 46,976-case read report. The full 218-input CPU
+audit passes **5,318 tests / 53 unavailable / zero failures** (5,371 total).
+Its independently verified inventory contains **86,699,178 logical cases / 943
+reports / ten native presets**. All 937 retained reports match the preceding
+215-input full audit; the six added mask/fixture/read reports match their
+independently qualified snapshots. The ten native results retain identical
+outcomes and pinned inputs, with current CPU/adapter assembly identities bound.
+The current ordinary semantic gate passes **86,506,698 cases / 743 batches**.
+The composed **report-only** fixture separately passes **86,506,698 cases / 743
+batches** across 941 reports. Missing/incomplete scalar read reports reject for
+the intended reasons; each hardlinked control is unlinked before alteration and
+original report hashes remain unchanged. That check executes no CPU instructions
+and does not substitute for the running full audit.
+A fresh isolated local `1.5.2-synthetic-dev.75` package uses these exact 37 CPU
+inputs plus README/icon (39 total). Its immutable package record explicitly
+retains the `fullIntegrationPending=true` recorded at creation. A separate
+completed linkage proof now binds those exact 37 packaged CPU inputs to the full
+execution and clears the pending qualification without rewriting that record.
+The clean committed CopperScreen `aa1dad5` archive passes the Release production
+build, 171 host tests (six unavailable), 74 disk tests, 1,080 engine diagnostics
+and two Workbench 3.1 **floppy** replays. Independent verification binds identical
+consumer source files and test rosters, NuGet-only/private-cache resolution,
+packaged/loaded DLL hashes, producer exits and exact ROM/ADF identities.
+No HD boot or physical throughput result is claimed.
+
+Local evidence under `%TEMP%/copper68k-reference-restoration-20261006/`:
+`audits/MovesReadProvenanceBeforeV1`, `audits/MovesReadProvenanceAfterV1`,
+`mutations/MovesReadV1`, `audits/MovesFaultReadFixV1`, `audits/MovesReadFullV1`
+and `consumer-75-final`. Focused proof:
+`2a5b3126d471119a2f64499372c0f7794cf4a8bc08d501470ccc01711c362e8e`;
+mutation proof:
+`9a762acd3048144a968d792bf3be8c27f99c57f1d152db9835ac1436df41b4dc`;
+remaining failed discovery:
+`2a0e0af89c0b42d51fe420957d08ed59bf170d2d3b3fb79c42548cfd3797a3ed`;
+consumer proof:
+`a70d4cf6802c6ec6d16deac74d6965b3d862e7469b3e64c615f40e6905c20721`.
+Ordinary report-only control proof:
+`a271213de74a35e51c95e1819061d3cc53b27546d65e2550bb176495b71e9818`.
+Completed full audit proof:
+`47ea0f96f3fb28ff5fba16ce8fe53a7bdd5bd035d7694e9c1ed480430f229fef`;
+complete source/evidence linkage:
+`22eb639ac1071a62f5d8338a05ccabd86c4e7b715453fe82ee3b459a7846742d`.
+
+This slice does not qualify every EA/full-format/alias/stack-register combination,
+enabled MMU/cache, partial physical transfers, handler return, trace or physical
+timing. Store faults remain unfinished and the hardware disagreement remains
+open. Package `.75` is local-only; no publication or private C023 candidate
+import occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.

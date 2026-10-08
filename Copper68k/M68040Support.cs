@@ -1865,7 +1865,8 @@ namespace Copper68k
         uint? WriteValue = null,
         bool CompletedMoveWrite = false,
         bool UnbufferedOperandRead = false,
-        uint? MovemEffectiveAddress = null);
+        uint? MovemEffectiveAddress = null,
+        byte? MovesFunctionCode = null);
 
     internal sealed class UnsupportedM68040InstructionException : M68kEmulationException
     {
@@ -4398,12 +4399,19 @@ namespace Copper68k
             State.StatusRegister = (ushort)((savedSr | M68kCpuState.Supervisor) & ~0xc000);
             // No pending pipeline writebacks in this synchronous read path.
             // Undefined EA/writeback/push data use zero as an implementation
-            // convention, not a hardware-defined result. ATC/MA/LK/TT are clear;
-            // SSW SIZE describes the original read, TM its data function code.
+            // convention, not a hardware-defined result. ATC/MA/LK are clear;
+            // SSW SIZE describes the original read. MOVES carries the selected
+            // alternate-space FC only for its operand, not EA pointer reads.
             for (var n = 0; n < 9; n++) PushLong(0);
             PushLong(fault.LogicalAddress);
             PushWord(0); PushWord(0); PushWord(0);
             var modifier = ((savedSr & M68kCpuState.Supervisor) != 0 ? 4 : 0) | (instruction ? 2 : 1);
+            if (!instruction && fault.MovesFunctionCode is byte fc)
+            {
+                // MC68040UM Table 3-2: instruction spaces are merged into data;
+                // the other alternate spaces retain TM and use special TT=2.
+                modifier = (fc & 3) is 0 or 3 ? 0x10 | fc : (fc & 4) | 1;
+            }
             var size = fault.ByteCount == 1 ? 0x20 : fault.ByteCount == 2 ? 0x40 : 0;
             PushWord((ushort)(0x0100 | size | modifier | (fault.MovemEffectiveAddress.HasValue ? 0x1000 : 0)));
             PushLong(fault.MovemEffectiveAddress ?? 0);

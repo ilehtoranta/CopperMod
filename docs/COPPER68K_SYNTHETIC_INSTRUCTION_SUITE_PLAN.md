@@ -1946,6 +1946,36 @@ instruction. EA pointer faults, alias/auto modes, trace, nested handlers, enable
 MMU/cache and physical timing remain unqualified. No package or retirement changes
 occur. Milestone 6 remains **in progress**, `roadmapComplete=false`.
 
+### Milestone 6 MOVES read-fault provenance — 2026-10-08
+
+Fix the documented read attribute defect at the actual MOVES operand boundary.
+Physical reads latch SFC in an internal fault record, converted by the frame
+builder according to MC68040UM Table 3-2. Extension and EA pointer reads retain
+ordinary attributes. No access is retried, no public API or enabled MMU behavior
+changes, and saved-PC/auto-address effects preserve the existing execution policy.
+The separate nine-form operand, all-CCR indirect, pointer and extension cohorts
+execute **93,952 cases**, all passing. The unchanged CPU fails **33,600** exact
+operand combinations; the 1,536 fault-free discovery controls remain identical.
+Three private mutations qualify conversion, SFC selection and operand provenance
+against exact affected memberships. Ordinary CI requires 46,976 cases per route.
+The composed report-only CI fixture passes 86,506,698 cases / 743 batches;
+missing/incomplete scalar read reports reject, with original evidence unchanged.
+This report validation executes no instructions and is separate from CPU testing.
+
+The original maintained discovery now has only **1,792 write-frame mismatches**,
+so its gate stays **failed**. Store completion/saved PC, actual handler recovery,
+trace, additional EA/alias/register combinations and physical pipeline/timing
+remain unqualified. The full 218-input CPU audit passes **5,318 tests / 53
+unavailable / zero failures**, with an independently verified **86,699,178-case /
+943-report / ten-native-preset** inventory. All retained reports match the earlier
+accepted full audit; the current ordinary gate passes 86,506,698 cases / 743 batches.
+Local `.75` package consumers pass the clean production build, host, disk, engine
+and two native Workbench 3.1 floppy replays. Completed linkage binds all 37 CPU
+inputs across focused/full execution and the package; immutable earlier pending
+records are preserved. The local package is not published and the private C023 CPU is
+not imported. See [the read-fault record](COPPER68K_REFERENCE_QUALIFICATION.md#040-moves-read-fault-provenance--2026-10-08).
+No regression is retired. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
 
 
 On 2026-10-07 the executed 040 MOVEM read-recovery gate passes 229,968 complete

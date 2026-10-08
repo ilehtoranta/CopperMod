@@ -86,7 +86,17 @@ internal partial class M68kAdvancedTimingInterpreter
             if (store) WriteSized(address, ReadGeneralRegister(ar, general), size);
             else
             {
-                var value = ReadSized(address, size);
+                uint value;
+                try { value = ReadSized(address, size); }
+                catch (M68040MmuFaultException ex) when (!State.M68040Mmu.Enabled &&
+                    !ex.Fault.Write && ex.Fault.AccessKind == M68kBusAccessKind.CpuDataRead)
+                {
+                    // Only the actual MOVES operand uses SFC. Address calculation
+                    // (including indirect pointers) and extension fetches precede
+                    // this scope. Carry provenance without retrying any access.
+                    throw new M68040MmuFaultException(ex.Fault with
+                    { MovesFunctionCode = (byte)(State.SourceFunctionCode & 7) });
+                }
                 if (ar) WriteGeneralRegister(true, general, M68kCpuState.SignExtend(value, size));
                 else WriteDataRegisterSized(general, value, size);
             }

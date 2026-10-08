@@ -1363,8 +1363,9 @@ The separate 040 MOVES physical-fault discovery is currently **failing**. Its
 literal byte/word/long encodings use (A0), all eight SFC/DFC choices, four address
 lanes, ISP/MSP and CCR 0/31. Each operand byte can trigger a physical-map rejection
 on scalar/batch public-factory routes. All 1,536 fault-free controls pass; of 3,584
-fault cases, 3,136 mismatch. Writes incorrectly stack format 0; reads record
-supervisor-data attributes except where those happen to match the selected FC.
+fault cases, the original captured CPU had 3,136 mismatches. After the read
+attribute fix, all read cases pass; 1,792 write cases still incorrectly stack
+format 0. The original failed reports remain historical evidence.
 The controls run by default; the two fault tests are unavailable unless requested.
 They remain a discovery gate, separate from the qualified MOVES instruction matrix.
 
@@ -1379,3 +1380,22 @@ also fail. `-ValidateReportsOnly` executes no instructions; `-PythonCommand`
 selects Python 3. Saved-PC policy, recovery/retry, special-space writebacks,
 nested handler faults, enabled MMU/cache and hardware timing remain unqualified.
 See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-moves-physical-fault-discovery--2026-10-08).
+
+The ordinary gate now requires 46,976 `moves-read-fault-provenance-scalar` and
+46,976 `moves-read-fault-provenance-batch` cases. The new matrix checks all SFC
+table rows across nine captured legal EA forms, widths/lanes, ISP/MSP, selected
+CCR states and each rejected operand byte. Separate all-CCR indirect cases,
+pre/post indexed pointer faults and extension-fetch faults verify that only
+the MOVES operand acquires alternate-space attributes. Store-side EA pointer
+and extension faults retain ordinary read/instruction attributes. The unchanged
+CPU fails 33,600 of these cases; the fix passes all 93,952. Three owned mutations
+detect raw FC encoding, selecting DFC and inferring MOVES provenance from the
+opcode at the frame builder. Saved opcode PC/auto-address effects preserve the
+existing execution policy; handler return and physical pipeline behavior remain
+unqualified. See [the read-fault record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#040-moves-read-fault-provenance--2026-10-08).
+The complete 218-input CPU audit passes 5,318 tests with 53 unavailable and no
+failures; independent verification binds 86,699,178 cases, 943 profile reports
+and ten native presets. The current ordinary gate passes 86,506,698 cases / 743
+batches. The same CPU source inputs pass isolated local `.75` NuGet consumer
+build/tests and two native floppy replays. The remaining write discovery stays
+failed and Milestone 6 remains in progress.
