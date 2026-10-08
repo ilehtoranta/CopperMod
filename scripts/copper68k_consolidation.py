@@ -11,6 +11,11 @@ import xml.etree.ElementTree as ET
 
 MODELS = ["68000", "68010", "68EC020", "68020", "68030", "68040", "68060", "A1200"]
 NS = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+EXECUTED_ASSEMBLIES = (
+    "build/bin/Copper68k/release/Copper68k.dll",
+    "build/bin/Copper68k.Tests/release/Copper68k.Tests.dll",
+    "build/bin/Copper68k.Tests/release/Copper68k.dll",
+)
 
 
 def check(ok, reason):
@@ -74,18 +79,26 @@ class Audit:
                 "--artifacts-path", str(root / "build"), "--filter", f"FullyQualifiedName~{self.s['method']}|FullyQualifiedName~{selection}",
                 "--logger", "trx;LogFileName=audit.trx", "--results-directory", str(root)]
 
+    @staticmethod
+    def assemblies(root):
+        check(all((root / path).is_file() for path in EXECUTED_ASSEMBLIES), "Missing executed assembly")
+        hashes = {path: sha(root / path) for path in EXECUTED_ASSEMBLIES}
+        check(hashes[EXECUTED_ASSEMBLIES[0]] == hashes[EXECUTED_ASSEMBLIES[2]], "Executed CPU copies disagree")
+        return hashes
+
     def execute(self, root, mode):
         for p, contents in self.sources(mode).items():
             target = root / "source" / p
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(contents)
         args = self.command(root, mode)
-        data = dict(schema=1, mode=mode, pin=self.s["pin"], producers=self.producers(), sources=self.inventory(root / "source"), protected=self.protected(), command=args)
+        data = dict(schema=2, mode=mode, pin=self.s["pin"], producers=self.producers(), sources=self.inventory(root / "source"), protected=self.protected(), command=args)
         env = dict(os.environ, COPPER68K_SYNTHETIC_MODELS=",".join(MODELS), COPPER68K_SYNTHETIC_REPORT_DIR=str(root))
         print(mode + ": executing shared coverage and pinned legacy selection", flush=True)
         with (root / "execution.log").open("w", encoding="utf-8") as log:
             data["testExit"] = subprocess.run(args, cwd=self.repo, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
         data["logSha256"] = sha(root / "execution.log")
+        data["executedAssemblies"] = self.assemblies(root)
         save(root / "inputs.json", data)
 
     def legacy_names(self):
@@ -111,13 +124,15 @@ class Audit:
 
     def verify(self, root, mode):
         data = load(root / "inputs.json")
-        check(data["schema"] == 1 and data["mode"] == mode and data["pin"] == self.s["pin"] and data["producers"] == self.producers(), "Wrong producer or scope")
+        check(data["schema"] == 2 and data["mode"] == mode and data["pin"] == self.s["pin"] and data["producers"] == self.producers(), "Wrong producer or scope")
         ids = {p: hashlib.sha256(v).hexdigest() for p, v in self.sources(mode).items()}
         check(data["sources"] == ids, "Wrong baseline or mutation identity")
         check(self.inventory(root / "source") == ids, "Incomplete or changed source inventory")
         check(data["protected"] == self.protected(), "Wrong protected identities")
         check(data["command"] == self.command(root, mode), "Wrong execution command")
         check(data["testExit"] == (1 if mode == "Mutation" else 0) and data["logSha256"] == sha(root / "execution.log"), "Wrong execution or log")
+        check(set(data.get("executedAssemblies", {})) == set(EXECUTED_ASSEMBLIES), "Wrong executed assembly manifest")
+        check(data["executedAssemblies"] == self.assemblies(root), "Changed executed assembly")
         names = self.legacy_names()
         witnesses = {n for n in names if self.s["witness"] in n}
         check(len(witnesses) == self.s["witness_cases"], "Wrong witness roster")
@@ -129,6 +144,20 @@ class Audit:
         tree = ET.parse(root / "audit.trx")
         tests = tree.findall(".//t:UnitTestResult", NS)
         check(len(tests) == len(names) and {t.get("testName") for t in tests} == set(names), "Wrong or empty execution selection")
+        definitions = tree.findall(".//t:UnitTest", NS)
+        expected_storage = (root / EXECUTED_ASSEMBLIES[1]).resolve()
+        check(len(definitions) == len(names) and
+              {d.get("id"): d.get("name") for d in definitions} ==
+              {t.get("testId"): t.get("testName") for t in tests} and
+              len({d.get("id") for d in definitions}) == len(names) and
+              all(d.get("storage") and Path(d.get("storage")).resolve() == expected_storage for d in definitions),
+              "Wrong loaded test assembly or definitions")
+        for definition in definitions:
+            method = definition.find("t:TestMethod", NS)
+            check(method is not None and method.get("codeBase") and
+                  Path(method.get("codeBase")).resolve() == expected_storage and
+                  method.get("className", "") + "." + method.get("name", "") == definition.get("name").split("(", 1)[0],
+                  "Wrong loaded test method identity")
         check(all(t.get("outcome") == names[t.get("testName")] for t in tests), "Wrong execution outcomes")
         for t in tests:
             name = t.get("testName")
@@ -150,14 +179,25 @@ class Audit:
             passed += expected["counts"]["passing"]
             missed += expected["counts"]["mismatching"]
         check({p.name for p in root.glob(f"*-{self.s['group']}.json")} == {r["path"] for r in reports}, "Foreign report selection")
-        return dict(mode=mode, passing=passed, mismatching=missed, executions=len(names), reports=reports, inputsSha256=sha(root / "inputs.json"), trxSha256=sha(root / "audit.trx"))
+        return dict(mode=mode, passing=passed, mismatching=missed, executions=len(names), reports=reports, executedAssemblies=data["executedAssemblies"], inputsSha256=sha(root / "inputs.json"), trxSha256=sha(root / "audit.trx"))
 
     def integrity(self, output, validate_only):
         definitions = [("MissingFixture", "Incomplete or changed source inventory"), ("WrongProducer", "Wrong producer or scope"),
                        ("EmptySelection", "Wrong or empty execution selection"), ("MissingWitness", "Wrong or empty execution selection"),
                        ("WrongWeight", "Wrong report keys weights or failures"), ("WrongFailure", "Wrong report keys weights or failures"),
                        ("ChangedMutationAndManifest", "Wrong baseline or mutation identity"), ("WrongCommand", "Wrong execution command"),
-                       ("WrongCounters", "Wrong TRX counters")]
+                       ("WrongCounters", "Wrong TRX counters"),
+                       ("MissingAssemblyManifest", "Wrong executed assembly manifest"),
+                       ("MissingTestAssembly", "Missing executed assembly"),
+                       ("MissingCpuAssembly", "Missing executed assembly"),
+                       ("ChangedTestAssembly", "Changed executed assembly"),
+                       ("ChangedCpuAssembly", "Executed CPU copies disagree"),
+                       ("WrongLoadedAssembly", "Wrong loaded test assembly or definitions"),
+                       ("MissingTestDefinition", "Wrong loaded test assembly or definitions"),
+                       ("WrongTestDefinitionId", "Wrong loaded test assembly or definitions"),
+                       ("MissingTestMethod", "Wrong loaded test method identity"),
+                       ("WrongMethodAssembly", "Wrong loaded test method identity"),
+                       ("WrongMethodName", "Wrong loaded test method identity")]
         records = []
         for name, reason in definitions:
             target = output / "integrity" / name
@@ -166,6 +206,17 @@ class Audit:
                 shutil.copytree(parent / "source", target / "source", ignore=shutil.ignore_patterns("bin", "obj"))
                 for path in [parent / "inputs.json", parent / "execution.log", parent / "audit.trx", *parent.glob(f"*-{self.s['group']}.json")]:
                     shutil.copyfile(path, target / path.name)
+                for relative in EXECUTED_ASSEMBLIES:
+                    path = target / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(parent / relative, path)
+                # A relocated control has its own copied assembly. Rebase only
+                # the recorded path before applying its single corruption.
+                tree = ET.parse(target / "audit.trx")
+                for definition in tree.findall(".//t:UnitTest", NS):
+                    definition.set("storage", str((target / EXECUTED_ASSEMBLIES[1]).resolve()))
+                    definition.find("t:TestMethod", NS).set("codeBase", str((target / EXECUTED_ASSEMBLIES[1]).resolve()))
+                tree.write(target / "audit.trx")
                 data = load(target / "inputs.json")
                 data["command"] = self.command(target, "Mutation")
                 if name == "MissingFixture":
@@ -181,6 +232,37 @@ class Audit:
                     data["sources"][key] = sha(path)
                 elif name == "WrongCommand":
                     data["command"][data["command"].index("--filter") + 1] = "FullyQualifiedName~Nothing"
+                elif name == "MissingAssemblyManifest":
+                    data.pop("executedAssemblies")
+                elif name in ["MissingTestAssembly", "MissingCpuAssembly"]:
+                    path = target / EXECUTED_ASSEMBLIES[1 if name == "MissingTestAssembly" else 0]
+                    check(path.resolve().is_relative_to(target.resolve()), "Unsafe integrity path")
+                    path.unlink()
+                elif name in ["ChangedTestAssembly", "ChangedCpuAssembly"]:
+                    path = target / EXECUTED_ASSEMBLIES[1 if name == "ChangedTestAssembly" else 2]
+                    with path.open("ab") as stream:
+                        stream.write(b"intentional integrity corruption")
+                elif name in ["WrongLoadedAssembly", "MissingTestDefinition", "WrongTestDefinitionId"]:
+                    tree = ET.parse(target / "audit.trx")
+                    definitions = tree.find("t:TestDefinitions", NS)
+                    if name == "WrongLoadedAssembly":
+                        definitions[0].set("storage", str((parent / EXECUTED_ASSEMBLIES[1]).resolve()))
+                    elif name == "MissingTestDefinition":
+                        definitions.remove(definitions[0])
+                    else:
+                        definitions[0].set("id", "00000000-0000-0000-0000-000000000000")
+                    tree.write(target / "audit.trx")
+                elif name in ["MissingTestMethod", "WrongMethodAssembly", "WrongMethodName"]:
+                    tree = ET.parse(target / "audit.trx")
+                    definition = tree.find("t:TestDefinitions/t:UnitTest", NS)
+                    method = definition.find("t:TestMethod", NS)
+                    if name == "MissingTestMethod":
+                        definition.remove(method)
+                    elif name == "WrongMethodAssembly":
+                        method.set("codeBase", str((parent / EXECUTED_ASSEMBLIES[1]).resolve()))
+                    else:
+                        method.set("name", "CompletelyDifferentInstruction")
+                    tree.write(target / "audit.trx")
                 elif name in ["EmptySelection", "MissingWitness", "WrongCounters"]:
                     tree = ET.parse(target / "audit.trx")
                     if name == "WrongCounters":
@@ -231,7 +313,7 @@ class Audit:
                 self.execute(root, mode)
             entries.append(self.verify(root, mode))
             print(f"{mode}: {entries[-1]['passing']} passing / {entries[-1]['mismatching']} precise mismatches", flush=True)
-        proof = dict(schema=1, producers=self.producers(), pin=self.s["pin"], entries=entries,
+        proof = dict(schema=2, producers=self.producers(), pin=self.s["pin"], entries=entries,
                      integrity=self.integrity(output, args.validate_only or args.finish_retirement), retiredRows=self.s["witness_cases"] if not args.prepare else 0,
                      productionCpuChanged=False, publication=False, roadmapComplete=False)
         path = output / ("preparation-proof.json" if args.prepare else "proof.json")

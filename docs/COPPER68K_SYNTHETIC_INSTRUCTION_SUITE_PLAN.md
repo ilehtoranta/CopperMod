@@ -4050,3 +4050,18 @@ with actual missing/wrong-count rejection. The composed report-only gate passes
 All 37 CPU inputs remain unchanged in the 230-input graph; earlier full,
 reference and consumer identities remain retained. Broader failed/private gates
 remain open. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 checkpoint — retirement execution identity, 2026-10-08
+
+The maintained retirement runner now requires schema-2 manifests with both CPU
+DLLs and the test DLL, matching hashes and exact definition/method/path linkage.
+Missing binaries and foreign paths were reproduced as accepted by the old
+runner; a storage-only candidate's method gap was also reproduced. Fresh V2
+MOVEA and EOR Clean/Mutation/Current executions preserve every prior case
+report and named outcome, with twenty actual corruption controls per adapter
+and strict replay passing. Old-schema replay rejects without altering retained
+evidence. All 230 source inputs and 37 CPU inputs remain unchanged; no new
+retirement, semantic scope, full-suite or consumer run is claimed. Broader
+failed/private gates remain open. Milestone 6 stays **in progress**,
+`roadmapComplete=false`.

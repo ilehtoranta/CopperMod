@@ -1662,3 +1662,20 @@ corruption controls reject incomplete or changed evidence. The ordinary gate
 requires the replacement group. Reproduce at this checkpoint if later HDF
 retirements change its pinned class inventory. See the
 [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#movea-word-aliased-displacement-consolidation--2026-10-08).
+
+## Retirement execution identity
+
+The shared retirement runner writes schema-2 evidence with hashes for both CPU
+DLL copies and the test DLL. Replay requires those binaries to remain present
+and unchanged, the CPU copies to agree, and each named result to match its test
+definition and method. Both recorded assembly paths must identify the isolated
+test DLL. Missing or inconsistent artifacts fail before a result is accepted.
+
+Each audit executes twenty corruption controls, including missing/changed
+binaries and inconsistent test paths, IDs or methods. Relocated control copies
+receive explicitly rebased paths before applying their individual corruption.
+Historical schema-1 evidence is not upgraded in place; use its original source
+checkpoint and independent verification record. Fresh MOVEA and EOR audits and
+strict replay qualify the new runner, without changing their semantic coverage
+or retiring additional tests. See the
+[execution-identity record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#retirement-execution-identity--2026-10-08).

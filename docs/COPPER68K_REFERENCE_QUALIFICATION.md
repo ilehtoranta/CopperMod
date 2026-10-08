@@ -12953,3 +12953,62 @@ reproduction if later HDF retirements change that class. The unresolved broad
 RTE/STOP disagreements and private production/restoration requirements remain
 open. No publication follows. Milestone 6 stays **in progress**,
 `roadmapComplete=false`.
+
+
+## Retirement execution identity — 2026-10-08
+
+Review of the maintained `copper68k_consolidation.py` runner found that replay
+checked source, reports and result names but did not require execution binaries
+or bind loaded assembly paths. An actual copied-MOVEA verification at `55fe8b7`
+accepted **no build binaries** and definitions pointing to another directory.
+This is a runner gap, not evidence that the independently linked delivered CPU
+runs used incorrect assemblies. Their original proofs and outputs are retained.
+
+Schema-2 execution evidence now records the test DLL and both CPU DLL copies,
+requires exact presence/hashes and matching CPU copies, and binds every named
+result to its unique definition ID/name, assembly storage path and test-method
+assembly/class/name. Both assembly paths must resolve to the isolated test DLL.
+Aggregate proof entries retain those hashes as well as manifest/TRX identities.
+The runner does not manufacture missing binaries or replay instructions.
+
+Fresh isolated **Clean / Mutation / Current** executions qualify two adapters:
+
+| Selection | Clean tests | Mutation tests | Current tests | Cases per eight-profile batch | Mutation mismatches |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| MOVEA displacement / HDF witnesses | 75 passing | 12 failing as expected | 71 passing | 24,576 | 8,192 |
+| EOR postincrement / logical witnesses | 13 passing | 9 failing as expected | 12 passing | 32,768 | 32,768 |
+
+Every case report is byte-identical to its preceding scoped identity audit, and
+the complete named outcome rosters match. The 230-input graph and all 37 CPU
+inputs are unchanged. Independent verification binds all sources, three
+assemblies per mode, manifests/logs/TRX definitions/methods and all report files.
+No new semantic coverage, retirement, whole-suite, consumer or hardware result
+is claimed. Earlier full/reference and .77 consumer identities remain intact.
+
+Each adapter passes **20 actual copied-evidence rejection controls**, including
+the retained nine source/report/roster controls and eleven new manifest,
+binary, definition and method guards. Relocated controls copy binaries and
+explicitly rebase both assembly paths before applying their corruption.
+Independent inspection identifies every new corruption, and strict replay
+reproduces both complete schema-2 proofs. An actual request to replay old
+schema-1 MOVEA evidence rejects with `Wrong producer or scope`; the original
+proof, manifests and TRX hashes remain unchanged. Use the historical source
+checkpoint for old-format reproduction; no evidence is migrated or relabeled.
+
+The first storage-only candidate passed its narrower checks but accepted a
+contradictory method assembly/name. That acceptance was reproduced and retained;
+V1 is not the final complete identity gate. Fresh V2 execution adds method
+binding and its discriminating controls rather than weakening expectations.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Original missing-binary / foreign-path acceptance | `77e67879ef2db665bf31480ad39ff2d405da8c8eea9d467716935894481b652a` |
+| Storage-only candidate's method-identity gap | `2837c9e18540d0bdea40a708b2b27a1a80dc8f1f4238fff7c8cfcc701ba9b7fd` |
+| Complete V2 MOVEA execution / 20 controls / replay | `6f920b7dfc7741e32baf2def44b3d67b3a6ac62e3a767aac03f4c8464bff0071` |
+| Complete V2 EOR execution / 20 controls / replay | `0aee8a754493825789936f6702da1034c4175de628434bf64b34e77fbe9198a1` |
+| Actual old-schema rejection / immutable original evidence | `c8742bdf5fec6d5901c763f5bfb8ac61e7d8615f19c5c0d1d6e20409c10dc115` |
+| Independent complete source / binary / method / control linkage | `95415494e995a0338aa42a8663d95bce6b6741c93cbbc377c947eb713383a544` |
+
+The broad 010 RTE / 060 STOP gate remains failed, and private production and
+restoration gaps remain open. No package is published. Milestone 6 stays
+**in progress**, `roadmapComplete=false`.
