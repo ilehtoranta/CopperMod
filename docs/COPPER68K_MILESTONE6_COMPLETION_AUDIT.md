@@ -76,10 +76,16 @@ it does not replace or discard their remaining gaps.
    predecrement source-read recovery in focused execution: 3,244,032 passing
    cases / 520 reports, including 1,671,168 byte-identical retained cases.
    The new fixture and one-file review patch preserve the accepted decrement
-   across explicit RTE, including read/write/refault lanes. It requires separate
-   full/deep/API and consumer qualification; the running 259-input full audit
-   cannot qualify that newer change. Production import and wider protocols remain
-   open.
+   across explicit RTE, including read/write/refault lanes. Same-build deep,
+   eight actual rejection guards, compiled API and clean local .80 consumers are
+   independently qualified. Its own full suite has started with 8,132 names and
+   a frozen 13,945-report / 112,894,922-case expected catalog. Full execution and
+   independent verification remain pending; the running 259-input audit cannot
+   qualify this newer change. Explicit linkage:
+   `2e092d99a6116d1ebd0b95605b71c61d71c095d1f76c7b4ec511c95eb1db0915`.
+   Two later 040 diagnostic strings are explicitly separated from the frozen
+   inputs, with the same 480-case failing inventory retained. Production import
+   and wider protocols remain open.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

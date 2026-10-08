@@ -11970,6 +11970,7 @@ boundary disagreements. No private C023 production candidate is imported and no
 package is published. Milestone 6 remains **in progress**, `roadmapComplete=false`.
 
 
+
 ## 040 MOVE16 physical line-write recovery — 2026-10-08
 
 Actual normal-space MOVE16 destination faults previously escaped through the
@@ -13529,3 +13530,58 @@ private whole-request source-read recovery, not other destination forms, foreign
 frames, partial transfers, trace/interrupt or enabled MMU/cache behavior.
 Production CPU inputs remain unchanged; no private CPU is imported and no
 package is published. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+### Predecrement read candidate integration checkpoint — 2026-10-08
+
+The 260-input / 39-CPU read candidate has frozen source and assembly identities,
+exact compiled discovery of **8,132 named rows**, and an expected catalog of
+**13,945 reports / 112,894,922 cases**. Its complete suite has started on the
+focused-run assemblies with ten qualified native presets. Expected outcomes
+are 8,095 passed / 37 unavailable; these are not completed full execution.
+The earlier 259-input full run continues separately. Neither is restarted.
+
+The source proof compares all **196 current test/project inputs** with the
+frozen candidate: only the two 040 inventory diagnostic strings differ.
+Case generation, statuses, flags and failure conditions are unchanged. The
+frozen executions retain their own exact source identities rather than being
+relabeled as execution of the later wording. Catalog preparation first fails
+with a memory-allocation error before writing output; retrying the unchanged
+command succeeds. A producer-adaptation guard also rejects a verifier-only
+anchor absent from the producer; the corrected adaptation preserves all
+execution/verifier checks and explicitly accounts for those distinct schemas.
+
+Independent same-build deep verification qualifies **320,000 seeded cases**,
+**312,500 SingleStepTests cases / 125 files** and **536 Musashi programs / 88
+exclusions**. The input pins and reference caveats remain unchanged. Eight
+actual invalid requests each fail at the intended guard before CPU execution
+or coverage output. Separate-process compiled API comparison and independent
+verification find zero managed public/protected signature changes:
+**20 types / 211 records**. Physical layout and runtime compatibility are not
+claimed from that comparison.
+
+The fresh local-only `1.5.2-synthetic-dev.80` package preserves all 39 candidate
+CPU inputs. A clean `aa1dad5` CopperScreen archive passes the production build
+with zero warnings/errors, **171 host tests / six unavailable**, **74 disk**,
+**1,080 engine** and **two native Workbench 3.1 floppy replays**. Independent
+verification binds the archive, NuGet-only dependency/cache boundary, exact
+rosters, all three loaded CPU copies and unchanged ROM/media hashes. Package
+version/build metadata gives its DLL a separate identity; CPU source equality
+is explicit. No HD boot, throughput, live dirty-tree or hardware claim is added.
+
+| Newer read candidate evidence | SHA-256 |
+| --- | --- |
+| `source-proof.json` | `34a52560f78161238f20bfd567766d2dc236aa42e8fa72ac3fa11f2da1a3d958` |
+| `discovery/proof.json` | `3d7f2f68db776e79838cdf04452795b3492b8e4f76caa24badce4e3162166d35` |
+| `expected-reports.json` | `ade892d48f0ff53e7a91e1fd79c9bc952f1a23125b2af9466b19edb06f7ccf24` |
+| `audits/PredecrementReadDeepV1/proof.json` | `6b990d51c3ce9b23e149280621641d50b2fd009aa54f8279b45a7e4c9f505186` |
+| `audits/PredecrementReadDeepControlsV1/independent-proof.json` | `26cbb4c5fb24f4331d56f8448ecd6e71249c1b0574b62972ed49cd00c50a51eb` |
+| `api-review-v3/independent-proof.json` | `f50d5c54a381de88143f15948aa25bcd5ca591c42284d2cf97456a7b9ac11744` |
+| `consumer-80-complete-proof-v1.json` | `ca939d946871daac39b3bd6c0bf1791f0ef78081f9f6636be9d1821d6d6ffd95` |
+| `predecrement-read-evidence-link-v1.json` | `2e092d99a6116d1ebd0b95605b71c61d71c095d1f76c7b4ec511c95eb1db0915` |
+
+Explicit linkage checks all 260 sources, shared full/deep/guard/API assemblies,
+qualified reports and all 39 packaged CPU sources and consumer copies. Full
+execution and its independent verification remain pending. Failed broad
+references, wider restoration and unavailable hardware remain open. No private
+CPU is imported and no package is published. Milestone 6 stays **in progress**,
+`roadmapComplete=false`; PR #22 remains draft.

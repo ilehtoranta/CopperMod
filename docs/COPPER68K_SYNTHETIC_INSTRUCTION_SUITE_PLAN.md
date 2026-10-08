@@ -4219,3 +4219,17 @@ production CPU code is unchanged. Full/deep/API and consumer qualification of
 this newer 260-input graph remain required. The earlier full audit continues on
 its own frozen inputs. Broad reference, wider restoration and hardware gaps keep
 milestone 6 **in progress**, `roadmapComplete=false`.
+
+### Milestone 6 checkpoint — read candidate integration, 2026-10-08
+
+The 260-input read candidate has exact 8,132-row discovery and a frozen
+13,945-report / 112,894,922-case expected catalog. Full execution has started on
+the focused-run assemblies. Independent deep/reference and eight rejection
+controls pass, with zero compiled managed API changes. The local-only .80
+package passes the clean CopperScreen build, 171 host / six unavailable,
+74 disk, 1,080 engine and two native floppy checks. Source/assembly/package
+linkage and the two later diagnostic-string differences are explicit in the
+qualification record. Both running full candidates retain separate identities
+and still require independent full verification. Broad reference, restoration
+and hardware gaps keep milestone 6 **in progress**, `roadmapComplete=false`;
+no private CPU import or package publication occurs.
