@@ -1756,3 +1756,35 @@ results; independent source/binary/method/report qualification is recorded
 separately in the [qualification log](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#differing-function-codes-through-repeated-nested-faults--2026-10-09).
 Earlier maintained nested-audit proofs retain their frozen source checkpoints;
 adding this test file does not relabel those proofs as current-tree execution.
+
+### First indirect operand-read fault recovery
+
+`SyntheticM68040OperandReadRecoveryTests` extends the shared read-entry fixture
+through executed handler RTE, completed instruction and following MOVEQ. It
+covers MOVE, MOVEA, ADD, CMP, TST and one-register MOVEM on four supplied stack
+banks. Ordinary examples cover 128 programs / 512 phase checks; the opt-in
+matrix adds 40,960 programs / 163,840 phase checks across all CCRs, lanes and
+rejected bytes. Expected arithmetic and flags use test-only mathematical
+specifications; literal encoding controls remain in the existing fixture.
+
+Focused execution, including unchanged fault-entry and indexed-MOVEM controls:
+
+```powershell
+$env:COPPER68K_RUN_040_OPERAND_READ_RECOVERY = '1'
+$env:COPPER68K_RUN_040_OPERAND_READ_DISCOVERY = '1'
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = 'artifacts/040-read-recovery/reports'
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/040-read-recovery/build --filter 'FullyQualifiedName~SyntheticM68040OperandReadRecoveryTests|FullyQualifiedName~SyntheticM68040OperandReadFaultDiscoveryTests' --logger 'trx;LogFileName=read.trx' --results-directory artifacts/040-read-recovery/results
+Remove-Item Env:COPPER68K_RUN_040_OPERAND_READ_RECOVERY
+Remove-Item Env:COPPER68K_RUN_040_OPERAND_READ_DISCOVERY
+Remove-Item Env:COPPER68K_SYNTHETIC_REPORT_DIR
+```
+
+Require nine passing named rows / six reports: 164,352 new phase checks and
+122,880 retained entry cases. CCR and phase precede the report's opcode marker,
+so every new phase has its own combination key. The physical map rejects one
+whole first read, then allows it; no accepted operand effects precede the fault
+and the completed instruction has exactly one accepted operand read. Other EAs,
+later MOVEM transfers, incoming trace, actual mapping repair, enabled MMU and
+physical cache/pipeline behavior remain separate. This execution command emits
+results; [independent qualification](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#first-indirect-operand-read-recovery--2026-10-09)
+binds source, binary, methods, inventories and retained evidence separately.

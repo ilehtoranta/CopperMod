@@ -9,7 +9,7 @@ public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHel
 {
     internal const string Enable = "COPPER68K_RUN_040_OPERAND_READ_DISCOVERY";
     private const uint Operand = 0x4200, Handler = 0xa000;
-    private static readonly (string Family, int Width, ushort Opcode, bool Movem)[] Instructions =
+    internal static readonly (string Family, int Width, ushort Opcode, bool Movem)[] Instructions =
     [
         ("MOVE", 1, 0x1010, false), ("MOVE", 2, 0x3010, false), ("MOVE", 4, 0x2010, false),
         ("MOVEA", 2, 0x3050, false), ("MOVEA", 4, 0x2050, false),
@@ -115,11 +115,17 @@ public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHel
         report.Complete(output);
     }
 
-    private static void Case(CoverageBatch report, bool batch,
+    internal static void Case(CoverageBatch report, bool batch,
         (string Family, int Width, ushort Opcode, bool Movem) instruction,
-        string bank, ushort trace, int ccr, int lane, int faultByte)
+        string bank, ushort trace, int ccr, int lane, int faultByte, bool recover = false, string cohort = "")
     {
         var id = $"68040/{instruction.Family}/operand-read-fault/size={instruction.Width}/bank={bank}/T={trace:X4}/lane={lane}/byte={faultByte}/op={instruction.Opcode:X4}/ccr={ccr:X2}";
+        if (recover)
+        {
+            if (trace != 0) throw new ArgumentException("Recovery trace epochs require separate qualification");
+            id = id.Replace("operand-read-fault", "operand-read-recovery/" + cohort);
+            id = id.Replace($"/op={instruction.Opcode:X4}/ccr={ccr:X2}", $"/ccr={ccr:X2}/op={instruction.Opcode:X4}");
+        }
         try
         {
             var bus = new SyntheticM68040AccessDoubleFaultTests.FaultBus();
@@ -131,6 +137,12 @@ public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHel
             m.InitializePhysical(SyntheticMachine.Code, instruction.Opcode, 2);
             m.InitializePhysical(SyntheticMachine.Code + 2, instruction.Movem ? 0x0001u : 0x4e71u, 2);
             m.InitializePhysical(SyntheticMachine.Code + 4, 0x4e71, 2);
+            var next = SyntheticMachine.Code + (instruction.Movem ? 4u : 2u);
+            if (recover)
+            {
+                m.InitializePhysical(next, 0x7e55, 2);
+                m.InitializePhysical(next + 2, 0x4e71, 2);
+            }
             m.InitializePhysical(8, Handler, 4);
             m.InitializePhysical(Handler, 0x4e73, 2);
             m.InitializePhysical(Handler + 2, 0x4e71, 2);
@@ -179,7 +191,51 @@ public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHel
             for (uint n = 20; n < 24; n++) e.MemoryMasks[frame + n] = 255;
             bus.Arm(Operand + (uint)(lane + faultByte), M68kBusAccessKind.CpuDataRead);
             // Exactly one faulting attempt. Do not retry partially executed instructions.
-            M68040StackFixture.Step(m, e, report, id, batch);
+            if (!recover) { M68040StackFixture.Step(m, e, report, id, batch); return; }
+            string[] phases = ["fault-entry", "handler-RTE", "completed-read", "following-MOVEQ"];
+            string PhaseId(string name) => id.Replace("/op=", "/phase=" + name + "/op=");
+            var phase = 0;
+            bool Step()
+            {
+                if (M68040StackFixture.Step(m, e, report, PhaseId(phases[phase++]), batch)) return true;
+                while (phase < phases.Length) report.Record(PhaseId(phases[phase++]), "untested", "Recovery prerequisite failed");
+                return false;
+            }
+            e.ControlChecks["accepted operand reads"] = (_ => (uint)bus.Accesses.Count(a =>
+                !a.Write && a.Kind == M68kBusAccessKind.CpuDataRead && a.Address == Operand + (uint)lane), 0);
+            if (!Step()) return;
+            // The handler executes RTE. Only the first read was rejected, with
+            // no committed operand effects; no automatic opcode retry is used.
+            pointers[exceptionBank] += 60;
+            M68040StackFixture.SetStacks(e, pointers, sr);
+            e.Pc = SyntheticMachine.Code; e.ExceptionVector = null;
+            if (!Step()) return;
+            uint value = 0;
+            for (var b = 0; b < instruction.Width; b++) value = (value << 8) | (uint)(0x80 + lane + b);
+            var mask = MoveSpecification.Mask(instruction.Width);
+            if (instruction.Family is "ADD" or "CMP")
+            {
+                var result = ArithmeticSpecification.Binary(e.D[0], value, instruction.Width, sr,
+                    subtract: instruction.Family == "CMP", compare: instruction.Family == "CMP");
+                if (instruction.Family == "ADD") e.D[0] = (e.D[0] & ~mask) | result.Value;
+                e.Sr = result.Sr;
+            }
+            else if (instruction.Family is "MOVE" or "TST")
+            {
+                if (instruction.Family == "MOVE") e.D[0] = (e.D[0] & ~mask) | value;
+                e.Sr = (ushort)((sr & 0xfff0) | (value == 0 ? 4 : 0) | ((value & (1u << (instruction.Width * 8 - 1))) != 0 ? 8 : 0));
+            }
+            else if (instruction.Family == "MOVEA")
+                e.A[0] = unchecked((uint)ArithmeticSpecification.Signed(value, instruction.Width));
+            else if (instruction.Movem)
+                e.D[0] = unchecked((uint)ArithmeticSpecification.Signed(value, instruction.Width));
+            else throw new ArgumentException("Missing independent read semantics");
+            e.Pc = next;
+            e.ControlChecks["accepted operand reads"] = (_ => (uint)bus.Accesses.Count(a =>
+                !a.Write && a.Kind == M68kBusAccessKind.CpuDataRead && a.Address == Operand + (uint)lane), 1);
+            if (!Step()) return;
+            e.D[7] = 0x55; e.Pc = next + 2; e.Sr &= 0xfff0;
+            Step();
         }
         catch (NotSupportedException ex) { report.Record(id, "unsupported", ex.Message); }
         catch (Exception ex) { report.Record(id, "mismatching", ex.Message); }

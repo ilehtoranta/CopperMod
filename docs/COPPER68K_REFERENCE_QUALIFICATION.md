@@ -14309,3 +14309,51 @@ transfers, original construction or wider repair/operand/trace/interrupt paths.
 The 480-case broader failing inventory is unchanged. Both launched workers are
 terminal; milestone 6 stays **in progress**, `roadmapComplete=false`; no private
 CPU import, publication or new package/API/consumer execution occurs.
+
+## First indirect operand-read recovery — 2026-10-09
+
+`SyntheticM68040OperandReadRecoveryTests` extends the shared read-entry fixture
+for the sixteen literal MOVE/MOVEA/ADD/CMP/TST/single-register-MOVEM forms. Its
+expected results use independent mathematical `ArithmeticSpecification` and
+test-only masks/sign extension; production decoder, EA, arithmetic and timing
+helpers are not consulted. Four supplied stack banks, all 32 CCRs, four lanes
+and every rejected byte cover a first indirect read. The bus denies one whole
+request and then allows it. No operand transfer or register effect commits
+before that rejection. Software executes the handler's RTE; completed execution
+has exactly one accepted operand read and the next MOVEQ sentinel is checked.
+Each program verifies fault entry, handler RTE, completed read and following
+MOVEQ with the shared full architectural/memory checks.
+
+The bounded smoke passes three rows, including both ordinary routes and the
+existing sixteen literal encoding witnesses. A preliminary full V1 run passes
+nine rows, but the generic report splits at `/op=` and aggregated its trailing
+CCR and phase fields. That run remains separate evidence. The corrected V2
+puts CCR and phase before the opcode marker and runs a fresh isolated snapshot.
+No production CPU or expected semantic result is changed by this correction.
+
+`OperandReadRecoveryV2` exits 0: **nine passing named rows / six reports**, with
+**41,088 recovery programs / 164,352 new phase checks** and **122,880 retained
+entry cases**. The ordinary examples account for 128 programs / 512 phase checks;
+the generated matrix accounts for 40,960 programs / 163,840 checks. The existing
+encoding fact and both indexed MOVEM recovery controls also pass. Both retained
+entry reports are byte-identical to pinned `OperandReadAcceptance` evidence.
+
+Independent verification enumerates all 164,352 new phase keys with weight one
+and all 1,920 retained keys per route with weight 32. It checks exact nine loaded
+methods/definitions, complete counters, command/settings, all source/asset/output
+and three DLL identities, precise source scope and historical retained hashes.
+One test file is added and only the shared read fixture changes; all 37 CPU
+inputs remain raw-identical to the preceding qualified 234-input graph. The new
+snapshot has 235 source/project inputs. Independent proof SHA-256:
+`ae72aea3c23a2290c24cfdf34b74f4c4933bbbedfb01f81a110072b9777e9778`.
+
+The [test README](../Copper68k.Tests/Synthetic/README.md#first-indirect-operand-read-fault-recovery)
+records focused execution. The handler performs RTE after a one-shot rejection,
+not actual software mapping repair. This does not qualify other EAs, reads after
+partial effects/later MOVEM transfers, incoming trace epochs, enabled MMU,
+partially accepted physical requests or physical cache/pipeline behavior.
+Earlier whole-class and whole-CPU graphs retain their original identities. The
+480-case broader failing gate, trace and broad reference disagreements remain.
+All launched workers are terminal. Milestone 6 stays **in progress**,
+`roadmapComplete=false`; no CPU semantics/timing change, private import,
+publication or new package/API/consumer execution occurs.

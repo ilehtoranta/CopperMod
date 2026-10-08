@@ -213,6 +213,15 @@ it does not replace or discard their remaining gaps.
    The execution helper changes only from private to test-internal visibility;
    all 37 production CPU inputs remain raw-identical to the preceding snapshot.
    Broader original-frame/repair/trace/interrupt requirements remain open.
+   Normal first indirect reads now have separate completed-recovery evidence
+   for MOVE/MOVEA/ADD/CMP/TST and one-register MOVEM. Nine selected rows pass
+   41,088 recovery programs / 164,352 phase checks, plus 122,880 byte-identical
+   retained entry cases and existing encoding/indexed-MOVEM controls. Independent
+   proof: `ae72aea3c23a2290c24cfdf34b74f4c4933bbbedfb01f81a110072b9777e9778`.
+   The 235-input snapshot preserves all 37 production CPU inputs. The physical
+   rejection is one-shot and whole-request, with no earlier operand effects;
+   other EAs/later transfers, incoming trace and actual mapping repair remain
+   open. This does not qualify the wider 480-case restoration inventory.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

@@ -2132,6 +2132,23 @@ timing-policy change occurs. Wider FC/refault combinations, original constructio
 and trace/interrupts remain open; the 480-case broader failing gate is retained.
 Milestone 6 stays **in progress**, `roadmapComplete=false`; no import or release.
 
+### Milestone 6 checkpoint — first indirect read recovery, 2026-10-09
+
+The existing read-entry fixture now has an opt-in recovery path checking actual
+handler RTE, completed instruction and following sentinel. Nine selected rows
+pass 41,088 new recovery programs / 164,352 phase checks and 122,880 byte-identical
+retained entry cases. MOVE/MOVEA/ADD/CMP/TST and one-register MOVEM cover four
+banks, all CCRs, lanes and rejected bytes, with zero incoming trace and no earlier
+accepted operand effects. Independent expectations reuse mathematical test-only
+specifications; fixed encoding and indexed-MOVEM controls pass. CCR and phase
+are explicit report keys; a preliminary passing run that aggregated those fields
+retains separate evidence, followed by fresh corrected execution. All 235 inputs,
+37 unchanged CPU inputs, loaded methods and report identifiers/weights are bound.
+The whole-request rejection is one-shot; other EAs/later transfers, actual mapping
+repair and trace/interrupt protocols remain open. The broader 480-case gate and
+reference disagreements remain. Milestone 6 stays **in progress**,
+`roadmapComplete=false`; no production CPU change, private import or release.
+
 ### Milestone 6 checkpoint — maintained nested-writeback audit, 2026-10-09
 
 A maintained command executes isolated sources and independently validates
