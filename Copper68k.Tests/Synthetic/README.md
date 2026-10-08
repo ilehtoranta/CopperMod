@@ -1640,3 +1640,25 @@ and class inventory; reproduce against this checkpoint if later retirements
 change that class. Exact identities, retained sibling verification, negative
 controls and the separate full/report-only scopes are in the
 [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#andi-long-displacement-consolidation--2026-10-08).
+
+## Captured aliased MOVEA displacement retirement
+
+`SyntheticMoveaDisplacementTests` reuses `MoveFixture` for the captured word
+values and signed displacements, every aliased address register, both privilege
+states and all CCRs: 3,072 cases per profile. Full register/SR/memory verification,
+exact PC and the following NOP check sign extension and source-before-destination
+ordering. The original A1 / supervisor / CCR-31 cases are included.
+
+```powershell
+python scripts/test-copper68k-movea-displacement-retirement.py --output artifacts/movea-displacement-retirement
+python scripts/test-copper68k-movea-displacement-retirement.py --validate-only --output artifacts/movea-displacement-retirement
+```
+
+The helper requires four pinned originals and all 8,192 replacement mismatches
+under deliberate zero extension before retiring the rows. It checks every
+failure identifier and verifies all retained HDF siblings. `--prepare` and
+`--finish-retirement` support the before-removal workflow; strict replay and nine
+corruption controls reject incomplete or changed evidence. The ordinary gate
+requires the replacement group. Reproduce at this checkpoint if later HDF
+retirements change its pinned class inventory. See the
+[qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#movea-word-aliased-displacement-consolidation--2026-10-08).

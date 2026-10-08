@@ -12900,3 +12900,56 @@ These witnesses confirm the location and extent of software disagreements;
 they do not settle the undocumented behavior. No CPU fix, reference exclusion,
 public release or new whole-suite/consumer run follows. The broad gate remains
 failed and milestone 6 remains **in progress**, `roadmapComplete=false`.
+
+
+## MOVEA word aliased-displacement consolidation — 2026-10-08
+
+`SyntheticMoveaDisplacementTests` replaces the four model rows of
+`M68020HdfBootTests.MoveaWordDisplacementSignExtendsBeforeOverwritingAliasedBase`,
+pinned at `56c0a69202d0b77a76ae7436a77f5a546a14adc2`. It reuses `MoveFixture`,
+independent addressing setup and full architectural/memory checks through the
+public CPU factory. The exact captured `8001`, `7FFF`, zero and signed -8/+8
+displacements are extended to every aliased address register, both privilege
+states and all 32 CCRs: **3,072 cases per profile / 24,576 across eight profiles**.
+Literal `3269` is checked, exact next PC is `1004`, and the following NOP exposes
+overconsumed extensions. Word sign extension replaces the complete address
+register, source memory remains unchanged and MOVEA preserves full SR/CCR.
+The original A1/supervisor/CCR-31 combinations are included; surrounding-memory
+guards use the shared fixture. This retires semantic rows, not native HDF boot.
+
+Before removal, **67 original HDF rows plus eight replacement batches** pass.
+Deliberate zero extension in the isolated base/advanced execution paths fails
+all four old rows and exactly **8,192 replacement cases**. Every mismatch ID
+and register diagnostic is checked against an independently enumerated bit
+pattern, as are all combination keys/weights, source graphs, loaded assemblies
+and named TRX selections. After exact removal, **63 retained HDF rows plus eight
+replacement batches** pass. Nine copied evidence corruptions reject; strict
+replay reproduces the proof. All **37 CPU inputs remain unchanged** in the
+current **230-input** test/CPU graph.
+
+The ordinary gate requires the new group for every profile. Its composed
+**report-only** request passes **86,663,530 semantic cases / 783 batches / 983
+profile reports**, retaining all 975 previous reports and the integer inventory
+plus eight freshly executed replacement reports. Actual missing-report and
+wrong-case-count requests reject for the 000 replacement report. This is not a
+new full CPU run; earlier full, deep/reference and local .77 consumer evidence
+retain their original identities. No new package or consumer run is claimed.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Before-removal preparation | `1423e58b8914b02aa9b96c68371b46bd990e8130bd4cdd1a207f1801a954236c` |
+| Complete Clean / Mutation / Current proof | `d316e73ed45bf8b7aa1ca07a6f7933718ae7a582b36168f58d6b4ded0d57eda2` |
+| Independent source / binary / per-case linkage | `60c0f2dc46011aca711e3082983358b724318aa1f151a89ed2ee5ff1cc2be1a1` |
+| Composed ordinary report-only gate | `39ab3117b0d8efed9afff595980a035ca7111542b2d6e7d51cf54ad69206ac39` |
+| Two actual required-report controls | `18c17fcc46f00d1bc57bbdd4054ac293762cb26f8f06100d09639366bc12fb49` |
+
+```powershell
+python scripts/test-copper68k-movea-displacement-retirement.py --output artifacts/movea-displacement-retirement
+python scripts/test-copper68k-movea-displacement-retirement.py --validate-only --output artifacts/movea-displacement-retirement
+```
+
+The helper pins the original class inventory; use this checkpoint for future
+reproduction if later HDF retirements change that class. The unresolved broad
+RTE/STOP disagreements and private production/restoration requirements remain
+open. No publication follows. Milestone 6 stays **in progress**,
+`roadmapComplete=false`.

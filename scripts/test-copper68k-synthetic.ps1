@@ -61,7 +61,7 @@ try {
     $logicalCases = 0
     $logicalBatches = 0
     foreach ($model in $knownModels) {
-        $expected = @{'move-opcodes'=9726; 'move-values-ccr'=58368; 'move-invalid-operands'=2562; 'move-alignment'=12;
+        $expected = @{'move-opcodes'=9726; 'movea-displacement-captured'=3072; 'move-values-ccr'=58368; 'move-invalid-operands'=2562; 'move-alignment'=12;
             'move-extensions-aliases'=$(if ($model -in @('68000','68010')) {1756} else {7120});
             'move-register-overlap'=$(if ($model -in @('68000','68010')) {1801} else {2593});
             'move-address-boundary'=$(if ($model -in @('68000','68010')) {44} else {60});

@@ -4035,3 +4035,18 @@ named failing test and per-case linkage are verified. The request still exits 1.
 Source 3a5314f has 229 mainline inputs plus one isolated test, with all 37 CPU
 inputs unchanged. No hardware qualification, guessed fix, exclusion, import or
 publication follows. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
+
+### Milestone 6 checkpoint — captured MOVEA displacement retirement, 2026-10-08
+
+Shared MOVE fixtures now cover all captured aliased word MOVEA values with
+every address register, user/supervisor state and CCR: 24,576 passing cases.
+Zero extension fails all four pinned old rows and exactly 8,192 replacements;
+every diagnostic, key/weight and named selection is verified. Exact removal
+leaves all 63 HDF siblings and eight replacement batches passing. Nine evidence
+controls and strict replay pass. Ordinary CI requires 3,072 cases per profile,
+with actual missing/wrong-count rejection. The composed report-only gate passes
+86,663,530 cases / 783 batches / 983 reports, without claiming a new full run.
+All 37 CPU inputs remain unchanged in the 230-input graph; earlier full,
+reference and consumer identities remain retained. Broader failed/private gates
+remain open. Milestone 6 stays **in progress**, `roadmapComplete=false`.

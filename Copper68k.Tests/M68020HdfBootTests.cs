@@ -175,32 +175,6 @@ public sealed class M68020HdfBootTests
     [InlineData(M68kCpuModel.M68EC020)]
     [InlineData(M68kCpuModel.M68030)]
     [InlineData(M68kCpuModel.M68040)]
-    public void MoveaWordDisplacementSignExtendsBeforeOverwritingAliasedBase(M68kCpuModel model)
-    {
-        foreach (var value in new ushort[] { 0x8001, 0x7FFF, 0 })
-        foreach (var displacement in new[] { -8, 8 })
-        {
-            var bus = new Copper68kTestBus(0x10000);
-            bus.WriteWords(0x1000, 0x3269, (ushort)displacement); // MOVEA.W (d16,A1),A1
-            var address = (uint)(0x3000 + displacement);
-            bus.WriteWord(address, value);
-            using var cpu = M68kCoreFactory.Default.Create(model, bus);
-            cpu.Reset(0x1000, 0x7000);
-            cpu.State.A[1] = 0x3000;
-            cpu.State.StatusRegister = 0x271F;
-            cpu.ExecuteInstruction();
-            Assert.Equal(value == 0x8001 ? 0xFFFF8001u : (uint)value, cpu.State.A[1]);
-            Assert.Equal(value, bus.ReadWord(address));
-            Assert.Equal(0x271F, cpu.State.StatusRegister);
-            Assert.Equal(0x1004u, cpu.State.ProgramCounter);
-        }
-    }
-
-    [Theory]
-    [InlineData(M68kCpuModel.M68020)]
-    [InlineData(M68kCpuModel.M68EC020)]
-    [InlineData(M68kCpuModel.M68030)]
-    [InlineData(M68kCpuModel.M68040)]
     public void MoveByteDisplacementToIndexUsesBothExtensionsAndPreservesSurroundingBytes(M68kCpuModel model)
     {
         foreach (var value in new byte[] { 0, 0x80, 0x7F })
