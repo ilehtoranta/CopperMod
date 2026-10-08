@@ -13597,6 +13597,9 @@ normalized candidate CPU inputs, the exact 14 named tests, and all 520 report
 hashes and logical counts. Its LF checkout rule preserves the pinned manifest
 bytes on Windows. Later source changes require an explicit new qualification;
 the helper rejects a changed baseline rather than silently accepting it.
+Use checkout `df9de9bb727f473b8ee31b376efa1c8e83c803ec` for this pinned
+reproduction. Later test-only extensions also change that baseline; their
+evidence does not authorize rewriting the manifest or relabeling this run.
 
 ```powershell
 python scripts/test-copper68k-private-predecrement.py --output artifacts/private-predecrement
