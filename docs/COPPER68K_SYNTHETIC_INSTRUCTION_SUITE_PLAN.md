@@ -117,6 +117,10 @@ pipeline/cache qualification and OS compatibility are outside this roadmap.
 
 ## Implementation evidence
 
+The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
+maps the accepted requirements to evidence and remaining gates. Dated records
+below remain historical; focused proofs do not establish whole-roadmap completion.
+
 Record commands, logical case counts, failure discoveries, fixes, reference
 identities, replacement proofs and remaining required coverage here as work
 progresses. No milestone is complete merely because an inventory exists or a

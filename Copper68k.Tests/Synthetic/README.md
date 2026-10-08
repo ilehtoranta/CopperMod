@@ -15,8 +15,11 @@ From the CopperMod root, run:
 ```
 
 Milestones 1–5 execute MOVE/MOVEA, transfer/address, arithmetic/comparison,
-logical/bit/shift/atomic and control/system operations in
-**8,761,672 logical cases** across **386 reporting xUnit batches**, across seven models and the A1200 profile.
+logical/bit/shift/atomic and control/system operations across seven models and
+the A1200 profile. Each run emits its actual logical case and reporting batch
+counts; dated qualification records retain earlier totals. The
+[milestone 6 completion audit](../../docs/COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
+records the current completion requirements and unresolved gates.
 Ordinary `dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release` includes
 these batches. CI additionally validates every required report and exact count;
 missing reports, mismatches, unsupported execution and empty groups fail the gate.

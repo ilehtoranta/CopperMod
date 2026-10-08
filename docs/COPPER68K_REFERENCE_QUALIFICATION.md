@@ -4,6 +4,10 @@ Milestone 6 is in progress. This is scoped software-reference evidence, not
 exhaustive external coverage, physical CPU qualification or desktop readiness.
 68010 and 68060 remain diagnostic profiles.
 
+The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
+maps the accepted requirements to current evidence and outstanding gates.
+The dated records below remain scoped historical evidence.
+
 ## Sources and reproducibility
 
 The [Motorola programmer reference](https://www.nxp.com/docs/en/reference-manual/M68000PM.pdf)
