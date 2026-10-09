@@ -8,6 +8,59 @@ The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
 maps the accepted requirements to current evidence and outstanding gates.
 The dated records below remain scoped historical evidence.
 
+### All-CCR context transfer and live-Z mutation, 2026-10-09
+
+The later frozen **239-input / 37-CPU** graph extends the shared context-transfer
+fixture with all 32 initial CCR patterns. Supplied saved CCR is `initial ^ 31`,
+so retaining the incoming CCR cannot satisfy restoration. Seven supplied pending
+vectors 49–55, three outer banks (user/ISP/MSP), local controls and fresh/unrelated
+destination contexts run through scalar/batch execution. The new four reports
+contain **4,032 cases**; the existing four canonical reports retain **126 cases**
+byte-identically for each corresponding baseline/candidate. Snapshot ownership
+and all sixteen retained delivery tests also run in the clean selection.
+
+| Variant | Actual exit / named outcomes | Reported case outcomes |
+| --- | --- | --- |
+| Production baseline V2 | Exit 1; 18 passes / five failures | 1,386 passing local cases, 1,386 unsupported fresh transfers and 1,386 exact wrong-vector unrelated-pending transfers. |
+| Private context snapshot candidate V2 | Exit 0; all 23 rows pass | All 4,158 cases pass in eight reports, zero mismatching/unsupported/untested. |
+| Isolated live-Z-clearing mutation V2 | Exit 1; four canonical rows pass / two new rows fail | 2,142 passes / exactly 2,016 SR mismatches in eight reports; all 126 canonical cases still pass. |
+
+The mutation changes exactly one expression in an isolated
+`M68kAdvancedTimingInterpreter.Rte.cs`: the converted live-SR mask changes from
+`~0xc000` to `~0xc004`. Saved frame SR, selected vector and every other CPU source
+remain unchanged. The independent expected mismatch set consists exactly of
+the new cases with initial Z clear, whose complementary saved Z must be set.
+Every retained diagnostic identifies the same expected/observed vector and
+expected live SR versus that SR with bit 2 cleared. All other new combinations
+pass. This demonstrates added flag-discriminating coverage that the canonical
+CCR-31 / saved-CCR-0 cases alone lacked.
+
+V1 clean execution passed all 4,032 new cases, but its mutation failed the local
+group before the transfer group ran. That incomplete mutation attempt remains
+separate. The V2 harness aggregates failures from independent groups, executing
+both on fresh per-case machines. It never retries a partially executed opcode.
+All eight requested V2 reports exist even for negative variants; unknown or
+missing reports fail independent verification. No acceptance mask is weakened.
+
+Independent proof SHA-256:
+`6c530977128b59dca1569edeb3b6551a5982aa479f2b3ed32fc182fb0d1d2397`.
+The verifier binds exact commands/settings, source graphs, loaded DLLs and
+definitions, every named outcome/counter, precise independent vector/bank/
+destination/CCR report keys and unit weights, all expected status totals, the
+single mutation source delta, exact SR diagnostics and canonical report hashes.
+The clean variants preserve the corresponding production/private candidate's
+37 CPU source/project hashes. Only one shared test fixture changes and one
+test class is added. The preceding full proof remains the frozen 238-input
+qualification, not execution of this later graph. No full-current-suite or new
+consumer qualification is claimed from this selected slice.
+
+These tests exercise supplied suspended integer-delivery state and public
+emulator context APIs with zero incoming trace. They do not establish a silicon
+FSAVE/context-migration ABI, FPU arithmetic, foreign-frame restoration or
+physical timing. The 480-case broader protocol gate and disputed references
+remain unchanged. No production CPU fix/import or package publication occurs.
+Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
 ### Full private context candidate qualification, 2026-10-09
 
 The same frozen private candidate now completes full CPU execution with actual

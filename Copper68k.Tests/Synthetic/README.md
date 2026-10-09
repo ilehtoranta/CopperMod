@@ -1890,3 +1890,32 @@ is missing. These are private snapshot qualifications; broader restoration and
 reference disagreements remain, and no CPU import or publication occurs.
 See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#full-private-context-candidate-qualification-2026-10-09)
 for exact identities and separation of execution rows from discovery display.
+
+### All-CCR pending-delivery context transfer
+
+Enable `COPPER68K_RUN_040_CONTEXT_TRANSFER_CCR=1` to request
+`SyntheticM68040ContextTransferCcrTests`. It reuses the context-transfer fixture
+with all 32 initial CCR images and their complementary saved CCRs. This
+distinguishes restored flags from stale live flags. Both local and transfer
+groups run on fresh per-case machines and aggregate their failures; continuing
+the independent group does not retry a partially executed instruction.
+
+```powershell
+$env:COPPER68K_RUN_040_CONTEXT_TRANSFER_CCR = '1'
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/context-ccr-tests --filter 'FullyQualifiedName~SyntheticM68040ContextTransferCcrTests'
+```
+
+Requested production execution fails at the retained context-copy defect;
+disabled optional execution is unavailable coverage. The private two-file
+snapshot candidate passes 4,032 new cases / four new reports and retains all
+126 canonical cases unchanged. Vectors 49–55, user/ISP/MSP frames and local,
+fresh or unrelated-pending destinations run through scalar/batch routes.
+The supplied saved SR and converted frame/live SR are checked independently.
+An isolated mutation that clears live Z produces 2,016 exact new mismatches,
+while all 126 original cases pass. V2 executes every requested group; the V1
+mutation stopped after a local-group failure and is not complete evidence.
+The selected 239-input graph shares all 37 CPU inputs with the corresponding
+qualified baseline/private candidate, but it is not a new full-suite result.
+Incoming trace, foreign hardware frames, FPU arithmetic, physical timing and
+the broader 480-case requirement remain separate. No CPU import occurs.
+See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#all-ccr-context-transfer-and-live-z-mutation-2026-10-09).

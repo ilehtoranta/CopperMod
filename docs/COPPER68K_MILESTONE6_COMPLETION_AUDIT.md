@@ -30,6 +30,19 @@ it does not replace or discard their remaining gaps.
 
 ## Completion gates and evidence status
 
+A later selected 239-input graph extends context transfer across all 32 initial
+CCRs with complementary saved CCRs. The candidate passes all 23 named rows /
+4,158 cases; baseline has 18 passes / five failures. All 4,032 new cases cover
+vectors 49–55, three supplied banks, three destination states and both routes.
+The retained 126 canonical cases remain byte-identical. A single isolated
+live-Z-clearing mutation preserves those canonical passes but produces exactly
+2,016 new SR mismatches. All independent groups execute and aggregate failures;
+no transfer report disappears after a local failure. Independent proof:
+`6c530977128b59dca1569edeb3b6551a5982aa479f2b3ed32fc182fb0d1d2397`.
+This is selected zero-trace host-context coverage. The earlier full proof remains
+bound to its frozen 238-input graph, and the broader 480-case gate is unchanged.
+No production CPU source changes, candidate import or publication occurs.
+
 Full private context-candidate qualification is complete on its frozen
 238-input / 37-CPU graph: 5,363 passes, 89 unavailable rows, zero failures,
 87,250,840 passing cases / 1,027 reports and ten pinned native reference presets.

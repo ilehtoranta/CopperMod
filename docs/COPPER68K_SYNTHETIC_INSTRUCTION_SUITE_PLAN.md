@@ -1,5 +1,23 @@
 # Copper68k synthetic instruction suite
 
+### Milestone 6 checkpoint — all-CCR context transfer, 2026-10-09
+
+The selected context-transfer fixture now covers all 32 initial CCR images,
+complementary saved CCRs, vectors 49–55, user/ISP/MSP frames and local/fresh/
+unrelated-pending destinations through scalar and batch execution. The frozen
+239-input graph preserves the prior production and private candidate's 37 CPU
+inputs. Its private candidate passes 23 named rows / 4,158 cases, including
+4,032 new cases and 126 byte-identical retained canonical cases. Production
+baseline execution retains 18 passes / five failures. An isolated live-Z-clearing
+mutation leaves all 126 canonical cases passing but produces exactly 2,016 new
+flag mismatches. Independent checks verify every requested report key, weight,
+status and saved/live SR diagnostic. Independent groups aggregate failures so
+neither disappears after the other fails. The earlier V1 mutation stopped after
+the local group and remains incomplete evidence; V2 executes both groups.
+This is selected host-context/zero-trace evidence, not qualification of the
+whole 239-input suite or the wider 480-case gate. No CPU import or publication
+occurs; milestone 6 stays **in progress**, `roadmapComplete=false`.
+
 ### Milestone 6 checkpoint — full private context candidate, 2026-10-09
 
 The frozen 238-input / 37-CPU private context candidate completes full execution

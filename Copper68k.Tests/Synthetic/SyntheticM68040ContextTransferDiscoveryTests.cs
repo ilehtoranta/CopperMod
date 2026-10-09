@@ -23,16 +23,17 @@ public sealed class SyntheticM68040ContextTransferDiscoveryTests(ITestOutputHelp
     [EnvironmentFact(Enable, "diagnose lost or unrelated CP vectors after public task-context transfer"), Trait("Suite", "ReferenceDiscovery")]
     public void TransferredVectorRequirementBatch() => Audit(true, true);
 
-    private void Audit(bool batch, bool transfer)
+    internal void Audit(bool batch, bool transfer, bool allCcr = false)
     {
         var route = batch ? "batch" : "scalar";
-        var report = new CoverageBatch("68040", $"cp-context-{(transfer ? "transfer-discovery" : "local-controls")}-{route}");
+        var report = new CoverageBatch("68040", $"cp-context-{(transfer ? "transfer-discovery" : "local-controls")}{(allCcr ? "-all-ccr" : "")}-{route}");
         foreach (var vector in Enumerable.Range(49, 7))
         foreach (var bank in new[] { "user", "ISP", "MSP" })
         foreach (var destination in transfer ? new[] { "fresh", "unrelated-pending" } : ["local"])
+        foreach (var ccr in allCcr ? Enumerable.Range(0, 32) : [31])
         {
             var source = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"));
-            var (_, frame, sr) = SyntheticM68040AccessFrameAuditTests.Prepare(source, 7, bank, 31, 0, Vbr, Ea, 0x8005);
+            var (_, frame, sr) = SyntheticM68040AccessFrameAuditTests.Prepare(source, 7, bank, ccr, 0, Vbr, Ea, 0x8005);
             // This vector was selected before delivery was suspended. It must
             // not be inferred from mutable FPCR/FPSR or an unrelated event.
             source.Core.State.M68040PendingFpuExceptions.Begin(3, vector, Target);
@@ -62,7 +63,7 @@ public sealed class SyntheticM68040ContextTransferDiscoveryTests(ITestOutputHelp
             e.Write(frame + 54, (uint)(0x3000 | vector * 4), 2, machine.Model);
             e.Write(frame + 56, Ea, 4, machine.Model);
             e.Pc = 0xb000u + (uint)vector * 32; e.ExceptionVector = vector;
-            var id = $"68040/RTE/CP-context/vector={vector}/bank={bank}/destination={destination}/ccr=1F/phase=converted-delivery/op=4E73";
+            var id = $"68040/RTE/CP-context/vector={vector}/bank={bank}/destination={destination}/ccr={ccr:X2}/phase=converted-delivery/op=4E73";
             try
             {
                 if (batch)
