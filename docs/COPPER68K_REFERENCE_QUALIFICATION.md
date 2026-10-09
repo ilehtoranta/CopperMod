@@ -8,6 +8,37 @@ The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
 maps the accepted requirements to current evidence and outstanding gates.
 The dated records below remain scoped historical evidence.
 
+### Full all-CCR candidate qualification, 2026-10-09
+
+The frozen **239-input / 37-CPU** graph finishes full execution with actual exit
+0. Independent verification checks **5,454 named rows: 5,365 passing, 89 explicitly
+unavailable, zero failing**, including exact loaded test definitions. All 5,408
+prior rows remain; 46 additions have 20 passes / 26 unavailable. Discovery display
+entries are not substituted for this executed roster.
+
+All **1,031 reports / 87,254,872 passing logical cases** are verified by exact
+combination keys, statuses and weights. The 983 prior coverage reports remain
+unchanged; 48 additions contribute 398,862 cases matching independent focused
+fixture inventories. Ten pinned native reference presets retain their exact
+expected results apart from checked execution DLL identities. Native manifests,
+input files and the integer inventory are verified. The report-only ordinary gate
+passes **86,663,530 cases / 783 batches**; it is not another CPU execution.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Full execution inputs | `35bbe6ddbdf53a5468a2b3f4a0bc4c6f3e2b978dc4c6208e4a41d02bd88db137` |
+| Independent full roster/report qualification | `7ec3339429e005d4e5d21946c66444723e77928bfa8b9bbaa064fc4601ae72b9` |
+| Same-build full/deep/guards/API and retained standard-consumer CPU-source linkage | `ba5125866548de59170b367d3e23ce94f4a0fd6fc16b9dcf92f302c320d1ec43` |
+
+The final link checks exact current full/deep/guard DLL identities and the API
+review's full-input identity. All 37 CPU source inputs match the retained local
+`.81` package and its separately verified clean-commit standard consumer tests.
+This is source linkage, not a new consumer execution. Native boot remains
+unavailable because the original ROM folder is missing. Full consumer integration,
+production readiness, candidate import and publication are not claimed. The
+earlier 238-input evidence remains immutable. Broader reference/restoration gates
+remain open; milestone 6 stays **in progress**, `roadmapComplete=false`.
+
 ### Current all-CCR candidate reference linkage, 2026-10-09
 
 The frozen 239-input / 37-CPU all-CCR candidate has independently verified

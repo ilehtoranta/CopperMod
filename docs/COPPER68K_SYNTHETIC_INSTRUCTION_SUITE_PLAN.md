@@ -1,5 +1,22 @@
 # Copper68k synthetic instruction suite
 
+### Milestone 6 checkpoint — full all-CCR candidate, 2026-10-09
+
+The frozen 239-input / 37-CPU candidate completes full execution with 5,365
+passes, 89 explicitly unavailable rows and zero failures. Independent verification
+checks all 5,454 named rows and loaded definitions, 1,031 reports / 87,254,872
+passing cases, and ten pinned native reference presets. All 5,408 prior rows
+remain; 46 additions have 20 passes / 26 unavailable. The 983 prior coverage
+reports remain unchanged; 48 additions match independently qualified fixtures.
+The ordinary gate passes 86,663,530 cases / 783 batches. Full proof:
+`7ec3339429e005d4e5d21946c66444723e77928bfa8b9bbaa064fc4601ae72b9`.
+Same-build full/deep/guards/API and retained `.81` standard-consumer CPU-source
+linkage proof:
+`ba5125866548de59170b367d3e23ce94f4a0fd6fc16b9dcf92f302c320d1ec43`.
+No new consumer execution is claimed. Native boot remains unavailable; broader
+reference/restoration gates remain open. No candidate import or publication
+occurs. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
 ### Milestone 6 checkpoint — current all-CCR reference linkage, 2026-10-09
 
 The frozen 239-input candidate now has same-build independently verified deep

@@ -23,7 +23,7 @@ it does not replace or discard their remaining gaps.
 | Reuse SingleStepTests, Musashi and WinUAE with pinned identities and caveats | Adapter source, reference manifests, source/input hashes, actual execution and documented exclusions | Implemented. SingleStepTests supplies 000 semantic fixtures; Musashi runs independent self-checking programs, not its CPU as an oracle. WinUAE remains a software reference. |
 | Replacement detects absolute decoding, extension length, index sign, alias order, A7 stride and flags defects | Six distinct isolated mutation proofs with precise replacement IDs and current source linkage | The maintained mutation command defines all six. Fresh isolated 51444ea executions detect all six against a 75,214-case clean baseline. Exact source/roster/report linkage and every mismatch ID are verified. |
 | Retire an old regression only after a mapped replacement detects its defect | Exact pinned old method/rows, before-removal proof, mutation witness and after-removal sibling verification | NOT displacement, EOR postincrement, ANDI displacement and aliased MOVEA word retirements have exact proofs. EOR replaces one fact with 32,768 passing cases and retains four siblings. Schema-2 retirement replay now requires execution DLL hashes and exact loaded definition/method linkage; fresh MOVEA/EOR executions, 20 corruption controls each and strict replay are qualified. No blanket regression deletion is authorized. |
-| Retain cache, prefetch, bus ordering, fault sequencing, JIT and native regressions unless separately proven redundant | Exact test-source diff and full named roster, with every removal accounted for | Specialized tests remain. The private context candidate retains all 5,408 prior rows and adds 44: 18 pass / 26 unavailable. Its exact 5,452-row roster has 89 explicitly unavailable rows. Prior retirement mappings and evidence remain separate. |
+| Retain cache, prefetch, bus ordering, fault sequencing, JIT and native regressions unless separately proven redundant | Exact test-source diff and full named roster, with every removal accounted for | Specialized tests remain. The current all-CCR private context candidate retains all 5,408 prior rows and adds 46: 20 pass / 26 unavailable. Its exact 5,454-row roster has 89 explicitly unavailable rows. Prior retirement mappings and evidence remain separate. |
 | Production CPU fixes pass full CPU and affected consumers | Same-source full CPU proof; isolated NuGet package; CopperScreen production, host/disk/engine and applicable native results | MOVE16 recovery has full-suite and local .77 consumer evidence. Subsequent consolidation leaves all 37 CPU source inputs unchanged. No new consumer execution is claimed. |
 | Preserve successful ordering and timing policy; no automatic retry after partial effects | Relevant sequence/fault tests and change review, separate from timing qualification | Existing checks and scoped explicit-RTE continuation proofs remain. Private candidate results are not production behavior or physical timing qualification. |
 | Test-internal framework; public factory; NuGet consumer boundary; immutable published versions | Source/project/package diffs and consumer dependency inspection | Preserved. Private 39-input CPU candidates remain separate from the production 37-input CPU graph. No publication is authorized by this audit. |
@@ -37,8 +37,17 @@ with 88 explicit exclusions. Full/deep/guards share exact DLL identities; API
 comparison finds no changes across 20 types / 211 records. All 37 CPU inputs
 match the retained `.81` standard-consumer package. Linkage proof:
 `c0e002d8c8c24b159e81dfef72087042c66243aa7a11bc67c9bb54d722db97ec`.
-Full execution of this graph is active with all-CCR discovery enabled; the
-238-input full proof is not relabeled. No new consumer execution is claimed.
+Full execution of this graph is independently qualified with all-CCR discovery
+enabled: 5,365 passes, 89 unavailable rows, zero failures, 87,254,872 passing
+cases / 1,031 reports and ten pinned native reference presets. Every named row,
+loaded definition and report key/status/weight is checked. The 983 prior reports
+remain unchanged; 48 additions match qualified fixtures. The ordinary gate passes
+86,663,530 cases / 783 batches. Full proof:
+`7ec3339429e005d4e5d21946c66444723e77928bfa8b9bbaa064fc4601ae72b9`.
+Final same-build full/reference/API and retained standard-consumer CPU-source
+linkage proof:
+`ba5125866548de59170b367d3e23ce94f4a0fd6fc16b9dcf92f302c320d1ec43`.
+The 238-input full proof is not relabeled. No new consumer execution is claimed.
 Missing native ROM input and unresolved broader gates still prevent completion.
 
 A later selected 239-input graph extends context transfer across all 32 initial
