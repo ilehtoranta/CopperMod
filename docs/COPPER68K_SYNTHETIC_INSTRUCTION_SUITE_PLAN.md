@@ -1,5 +1,25 @@
 # Copper68k synthetic instruction suite
 
+### Approved acceptance scope — known coverage, 2026-10-09
+
+The user approved the test suite for already known behavior and explicitly opted
+unclear behavior out for now. Milestone 6's **known-coverage acceptance is
+complete**; unresolved qualification is **deferred**, not passing. The machine-
+readable [scope registry](COPPER68K_QUALIFICATION_SCOPE.json) retains five deferred
+areas with reasons and explicit opt-in routes: 010 rejected-RTE CCR, 060 ordinary
+STOP privilege, disputed 030/040 trace boundaries, broader architectural
+restoration, and unpromoted private continuation candidates.
+
+The required milestone 1-5 semantic matrices, defined exceptions, mutation
+witnesses, reference identities and consumer checks retain their existing gates.
+Explicitly requested discovery/reference audits still fail on mismatches,
+unsupported execution, missing fixtures or empty selections. Their historical
+failures and the 480-case untested inventory are retained. The approved scope
+does not authorize another production import or package publication. Ordinary
+and reference summaries include the scope and its hash; `roadmapComplete=false`
+continues to distinguish accepted known coverage from exhaustive qualification.
+Earlier in-progress/blocked checkpoints remain historical.
+
 ### Milestone 6 checkpoint — approved context-copy production fix, 2026-10-09
 
 The user approved promotion of only the reviewed two-file context-copy fix.
@@ -172,7 +192,7 @@ model. A gap report alone does not complete it.**
 | 3. Arithmetic and comparison | Complete | ADD/SUB variants, quick/immediate/address/extend forms, comparisons, multiply/divide, decimal/packing operations; overflow, borrow, carry, sticky zero, exceptional operands. |
 | 4. Logical, bit and shift operations | Complete: semantic gate, 2026-10-04 | Logical/immediate/unary operations, bit manipulation, shifts/rotates, bitfields, atomic integer operations; preservation and memory effects. |
 | 5. Control and system operations | Complete: scoped semantic gate, 2026-10-04 | Branches, conditions, calls/returns, stack frames, traps, privilege-sensitive transfers, STOP/RESET, model-specific integer/system instructions; exception frames, saved PC/SR, stack selection, interrupt/trace. |
-| 6. Reference qualification and consolidation | In progress | Independent reference audits across selected models, gap review, retire proven redundant tests; publish architectural combination coverage, not just xUnit counts. |
+| 6. Reference qualification and consolidation | Complete for approved known coverage; unclear qualification deferred, 2026-10-09 | Independent reference audits, exact mutation/retirement evidence and architectural coverage retained. The explicit scope registry keeps deferred areas visible and opt-in; no exhaustive qualification claim. |
 
 For every promoted family, mismatches and emulator-level unsupported execution
 fail its gate. Documented processor exceptions (for example unimplemented integer

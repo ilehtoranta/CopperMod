@@ -1,12 +1,42 @@
 # Synthetic suite reference qualification
 
-Milestone 6 is in progress. This is scoped software-reference evidence, not
+Milestone 6's known-coverage scope is accepted; unclear qualification is explicitly
+deferred by the user on 2026-10-09. This is scoped software-reference evidence, not
 exhaustive external coverage, physical CPU qualification or desktop readiness.
 68010 and 68060 remain diagnostic profiles.
 
 The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
 maps the accepted requirements to current evidence and outstanding gates.
 The dated records below remain scoped historical evidence.
+
+### Accepted known coverage and deferred discovery, 2026-10-09
+
+The user approved the already known suite and opted unclear parts out for now.
+`docs/COPPER68K_QUALIFICATION_SCOPE.json` records the approved profiles/coverage
+and five deferred areas with reasons and explicit opt-in routes. Ordinary and
+reference summaries embed that registry and its hash. The required semantic
+reports and counts are unchanged; no mismatching/unsupported/untested case is
+reclassified as passing. Earlier scoped full, deep, mutation, retirement and
+consumer proofs remain authoritative for their frozen source identities.
+
+The 010 invalid-format RTE CCR and 060 ordinary STOP disagreements, disputed
+030/040 trace boundaries, broader restoration inventory and other private
+continuation candidates are nonblocking for this approved acceptance. They remain
+unqualified and visible. Their discovery tests, failing gates and original
+reference data are retained; an explicit opt-in request still requires honest
+execution and fails on mismatch or missing/empty input. No new candidate import
+or publication is authorized. `roadmapComplete=false` remains deliberate.
+
+Fresh report-only verification of the revised command passes the unchanged
+**86,663,530 cases / 783 batches** gate. The summary differs from the prior
+qualified summary only by the accepted-scope fields; retained source reports are
+unchanged. Four actual negative requests reject: a missing required MOVE opcode
+report, a dropped deferred area, a deferred entry labeled passing and a duplicate
+deferred ID. This is policy/report verification, not a new CPU execution.
+Scope registry SHA-256:
+`31b86efa03f367eb7871c7e172b956fe9cd80f0420bd5b24b08094491db4b5ae`.
+Verification proof:
+`8740d0938cb8b1ad5ba04de44f8e472bb144f57623a1287da05156c2ca4e7a45`.
 
 ### Approved context-copy production promotion, 2026-10-09
 

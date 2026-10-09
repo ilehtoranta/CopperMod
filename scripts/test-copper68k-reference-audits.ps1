@@ -11,6 +11,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'copper68k-qualification-scope.ps1')
+$qualificationScope = Get-Copper68kQualificationScope $repo
 if (-not $SingleStepPath -and -not $MusashiPath -and -not $WinUaePath) { throw 'Select at least one reference audit' }
 if (-not $WinUaePath -and ($WinUaeGeneratorSource -or $WinUaeRunnerSource)) { throw 'WinUAE source arguments require a Basic input directory' }
 $output = [IO.Path]::GetFullPath($OutputDirectory, $repo)
@@ -133,5 +135,5 @@ foreach ($job in $jobs) {
         $records += [ordered]@{ reference=$job.name; reportSha256=(Hash $reportPath); trxSha256=(Hash (Join-Path $reportDir 'audit.trx')); cpuSha256=(Hash (Join-Path $build 'bin/Copper68k/release/Copper68k.dll')); testSha256=(Hash (Join-Path $build 'bin/Copper68k.Tests/release/Copper68k.Tests.dll')) }
     } finally { foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key,$saved[$key]) } }
 }
-[ordered]@{ schema=1; inputsSha256=(Hash (Join-Path $output 'reference-inputs.json')); audits=$records; roadmapComplete=$false } |
+[ordered]@{ schema=1; inputsSha256=(Hash (Join-Path $output 'reference-inputs.json')); audits=$records; qualificationScope=$qualificationScope; roadmapComplete=$false } |
     ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $output 'reference-verification.json') -Encoding utf8

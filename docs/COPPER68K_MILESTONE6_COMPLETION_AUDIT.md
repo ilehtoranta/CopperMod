@@ -3,8 +3,26 @@
 This is the current completion checklist for **Reference qualification and
 consolidation**, derived from the accepted
 [synthetic-suite plan](COPPER68K_SYNTHETIC_INSTRUCTION_SUITE_PLAN.md).
-Milestone 6 is **in progress**. A passing focused audit, inventory entry or
-software-reference correction does not complete the milestone.
+The user approved acceptance of **known coverage** on 2026-10-09 and opted
+unclear qualification out for now. That approved scope is **accepted**;
+exhaustive qualification remains incomplete. The
+[scope registry](COPPER68K_QUALIFICATION_SCOPE.json) retains deferred areas,
+reasons and explicit opt-in routes. They do not block known-coverage acceptance,
+are not counted as passing, and still fail their audits when explicitly requested.
+
+Required milestone 1-5 matrices, documented exception checks, mutation witnesses,
+mapped retirements and qualified consumers are unchanged. No blanket regression
+deletion, other private candidate import or publication is authorized. The broad
+480-case inventory and historical failed reference evidence remain retained.
+The older completion gates below describe the original exhaustive scope; under
+this approval their unclear portions are deferred rather than release blockers
+for the accepted suite. `roadmapComplete=false` retains that distinction.
+
+The revised report-only gate passes the unchanged 86,663,530 cases / 783 batches.
+Its summary adds only scope metadata. Missing required coverage and dropped,
+passing-labeled or duplicate deferrals all reject in actual negative requests.
+Policy/report verification proof:
+`8740d0938cb8b1ad5ba04de44f8e472bb144f57623a1287da05156c2ca4e7a45`.
 
 The detailed [qualification record](COPPER68K_REFERENCE_QUALIFICATION.md)
 retains historical checkpoints and rejected attempts. This checklist separates

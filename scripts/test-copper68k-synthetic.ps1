@@ -15,6 +15,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'copper68k-qualification-scope.ps1')
+$qualificationScope = Get-Copper68kQualificationScope $repo
 $knownModels = @('68000', '68010', '68EC020', '68020', '68030', '68040', '68060', 'A1200')
 if ($Models.Count -eq 0 -or @($Models | Where-Object { $_ -cnotin $knownModels }).Count -gt 0) { throw 'Empty or unknown CPU model selection' }
 if (@($Models | Select-Object -Unique).Count -ne $Models.Count) { throw 'Duplicate CPU model selection' }
@@ -369,6 +371,7 @@ try {
     $inventory | Add-Member -NotePropertyName qualificationBoundaries -NotePropertyValue @('RTE fault restart/internal formats remain untested: 010 non-MOVE/foreign frame8 restart, 020/030 frames9/A/B, 040 frame7 CP context transfer and detailed access-fault restoration', 'BKPT external replacement responder is unavailable', 'MOVES physical function-code spaces and LPSTOP CPU-space broadcast are unqualified', 'CALLM/RTM type1 protocol uses an internal synthetic responder; normal public buses have none', '060 HALT debug-port restart, PULSE PST pins and debug pipeline commands are unavailable')
     $inventory | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $output 'qualified-inventory.json')
     @{schema=1; deterministicLogicalCases=$logicalCases; deterministicXunitBatches=$logicalBatches; moveGate='passing'; transferGate='passing'; arithmeticGate='passing'; logicalGate='passing'; controlGate='passing'; m68040DisabledMmuInstructionGate='passing'; m68000AddressErrorDoubleFaultGate='passing'; m68010Format8StructureGate='passing'; m68010WordMoveRestartGate='passing'; roadmapComplete=$false;
+        approvedCoverageGate='passing'; qualificationScope=$qualificationScope;
         seeded=$(if ($Deep) {@{seed=$Seed; samplesPerModel=$Samples; models=$Models}} else {$null});
         externalReferences=$references; unavailableReferenceCoverage=$(if ($references.Count -eq 0) {'External audits not requested/executed'} else {'Software-reference coverage is scoped by the per-program exclusions; hardware and exhaustive external instruction-combination qualification remain unavailable'});
         m68040MmuInstructionScope=@{translationEnabled=$false; dfc=@(1,2,5,6); globalRegisterField='canonical zero'; undefined='Disabled PTEST MMUSR; DFC 0/3/4/7'; enabledMmu='Unqualified flat-table approximation; PFLUSH conservatively flushes all ATC entries'};

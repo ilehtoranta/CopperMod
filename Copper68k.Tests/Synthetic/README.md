@@ -280,6 +280,14 @@ address base, reserved module fields and simultaneous T1/T0 are excluded.
 
 ## Milestone 6 reference work
 
+The known suite is accepted under the user's 2026-10-09 approval. Unclear
+qualification is deferred and opt-in, with IDs/reasons/routes retained in
+`docs/COPPER68K_QUALIFICATION_SCOPE.json` and embedded in command summaries.
+This does not weaken any required milestone 1-5 report or count. Explicitly
+requested discovery/reference audits still fail on mismatch, unsupported
+execution, missing fixtures or empty selections; deferred entries are not passes.
+Historical evidence below retains its original source and acceptance scope.
+
 The pinned Musashi command now audits all selected profiles across both integer
 program directories. It records passing/excluded programs and input identities;
 missing/incomplete fixtures and mismatches fail. See

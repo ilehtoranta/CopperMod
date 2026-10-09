@@ -65,7 +65,7 @@ jobs:
           COPPER68K_SYNTHETIC_REPORT_DIR: ${{ github.workspace }}/artifacts/synthetic-suite
         run: dotnet test Copper68k.Tests\Copper68k.Tests.csproj --configuration Release
 
-      - name: Require complete synthetic milestone coverage
+      - name: Require accepted synthetic coverage and report deferred qualification
         shell: pwsh
         run: ./scripts/test-copper68k-synthetic.ps1 -ValidateReportsOnly -OutputDirectory artifacts/synthetic-suite
 
