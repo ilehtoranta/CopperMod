@@ -33,5 +33,20 @@ internal sealed class M68040PendingFpuExceptions
             if (ReferenceEquals(_entries[n], entry)) { _entries.RemoveAt(n); return; }
     }
 
+    internal void CopyFrom(M68040PendingFpuExceptions source)
+    {
+        if (ReferenceEquals(this, source)) return;
+        // A saved task owns its delivery identities. Completion/reset in one
+        // context must not consume an equal-valued event in another context.
+        List<Entry>? copied = null;
+        if (source._entries != null)
+        {
+            copied = new List<Entry>(source._entries.Count);
+            foreach (var entry in source._entries)
+                copied.Add(new Entry(entry.Format, entry.Vector, entry.ProgramCounter));
+        }
+        _entries = copied;
+    }
+
     internal void Reset() => _entries?.Clear();
 }

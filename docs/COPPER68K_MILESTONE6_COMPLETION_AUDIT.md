@@ -24,11 +24,23 @@ it does not replace or discard their remaining gaps.
 | Replacement detects absolute decoding, extension length, index sign, alias order, A7 stride and flags defects | Six distinct isolated mutation proofs with precise replacement IDs and current source linkage | The maintained mutation command defines all six. Fresh isolated 51444ea executions detect all six against a 75,214-case clean baseline. Exact source/roster/report linkage and every mismatch ID are verified. |
 | Retire an old regression only after a mapped replacement detects its defect | Exact pinned old method/rows, before-removal proof, mutation witness and after-removal sibling verification | NOT displacement, EOR postincrement, ANDI displacement and aliased MOVEA word retirements have exact proofs. EOR replaces one fact with 32,768 passing cases and retains four siblings. Schema-2 retirement replay now requires execution DLL hashes and exact loaded definition/method linkage; fresh MOVEA/EOR executions, 20 corruption controls each and strict replay are qualified. No blanket regression deletion is authorized. |
 | Retain cache, prefetch, bus ordering, fault sequencing, JIT and native regressions unless separately proven redundant | Exact test-source diff and full named roster, with every removal accounted for | Specialized tests remain. The current all-CCR private context candidate retains all 5,408 prior rows and adds 46: 20 pass / 26 unavailable. Its exact 5,454-row roster has 89 explicitly unavailable rows. Prior retirement mappings and evidence remain separate. |
-| Production CPU fixes pass full CPU and affected consumers | Same-source full CPU proof; isolated NuGet package; CopperScreen production, host/disk/engine and applicable native results | MOVE16 recovery has full-suite and local .77 consumer evidence. Subsequent consolidation leaves all 37 CPU source inputs unchanged. No new consumer execution is claimed. |
+| Production CPU fixes pass full CPU and affected consumers | Same-source full CPU proof; isolated NuGet package; CopperScreen production, host/disk/engine and applicable native results | MOVE16 recovery retains its .77 evidence. The approved context-copy fix has exact 37-input CPU identity with the qualified full/reference/API candidate and its .81 standard/native consumers; fresh production-source focused tests pass. Other private candidates remain unimported. |
 | Preserve successful ordering and timing policy; no automatic retry after partial effects | Relevant sequence/fault tests and change review, separate from timing qualification | Existing checks and scoped explicit-RTE continuation proofs remain. Private candidate results are not production behavior or physical timing qualification. |
 | Test-internal framework; public factory; NuGet consumer boundary; immutable published versions | Source/project/package diffs and consumer dependency inspection | Preserved. Private 39-input CPU candidates remain separate from the production 37-input CPU graph. No publication is authorized by this audit. |
 
 ## Completion gates and evidence status
+
+The user approved production promotion of only the context-copy patch. Both
+state-copy APIs now preserve independently owned pending delivery snapshots.
+The ownership regression runs as an ordinary Synthetic Fact. Fresh production
+execution passes 23 selected rows / 4,158 cases, with all eight reports identical
+to the qualified candidate. All 37 CPU inputs match its same-source full CPU,
+reference/API and .81 standard/native consumer evidence exactly. Independent
+promotion linkage proof:
+`c1e006019ea3c3db0a331aa58f66e2a8b412d0f9943d7cb4ccc864bc66ebae33`.
+No whole-suite claim is added for the changed diagnostic/test-attribute graph.
+Other private candidates, disputed architectural rules and broader gates remain
+unchanged. No publication occurs; earlier no-import statements are historical.
 
 The native consumer input is recovered with its exact pinned hash. Two Workbench
 floppy boot rows pass on the retained local `.81` package and clean consumer

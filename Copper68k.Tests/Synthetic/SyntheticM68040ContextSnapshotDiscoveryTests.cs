@@ -5,7 +5,7 @@ namespace Copper68k.Tests.Synthetic;
 // Emulator snapshot ownership contract; not a silicon context/FSAVE ABI.
 public sealed class SyntheticM68040ContextSnapshotDiscoveryTests
 {
-    [EnvironmentFact("COPPER68K_RUN_040_CONTEXT_SNAPSHOT_DISCOVERY", "qualify independent suspended-delivery snapshots"), Trait("Suite", "ReferenceDiscovery")]
+    [Fact, Trait("Suite", "Synthetic")]
     public void SnapshotsOwnIndependentNestedPendingDeliveries()
     {
         foreach (var taskOnly in new[] { false, true })

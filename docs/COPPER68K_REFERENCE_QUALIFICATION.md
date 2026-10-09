@@ -8,6 +8,41 @@ The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
 maps the accepted requirements to current evidence and outstanding gates.
 The dated records below remain scoped historical evidence.
 
+### Approved context-copy production promotion, 2026-10-09
+
+The user explicitly authorized **only** the two-file context-copy fix after
+the full/reference/API and recovered native consumer checks. The CPU state
+copy APIs now copy pending delivery entries as independently owned nested
+snapshots, replacing stale entries and preserving self-copy. No public API,
+instruction ordering, timing policy or retry mechanism changes. The other
+private continuation candidates remain separate.
+
+`SnapshotsOwnIndependentNestedPendingDeliveries` is now an ordinary Synthetic
+Fact. It checks both copy APIs, replacement rather than append, equal-valued
+nested identities, self-copy, completion/reset independence, empty-context
+clearing and existing task/full-copy cycle rules. Its execution no longer needs
+an environment flag. The all-CCR transfer discovery remains separately enabled.
+
+Fresh isolated production-source execution passes **23 named tests / 4,158
+cases / eight reports**, with zero failures or unavailable rows. Independent
+verification checks exact loaded methods and that every report is byte-identical
+to the previously qualified candidate. All **37 CPU source/project inputs** are
+byte-identical to that candidate and its retained `.81` consumer package; its
+full CPU, deep/reference, API, standard consumer and two native boot results
+therefore retain same-CPU-source linkage. This is not a new whole-suite execution
+of the changed test graph. The only test-source differences from the frozen
+candidate are the independently checked broad-gate diagnostic and this Fact
+attribute; no expectation or execution fixture changes.
+
+The initial source preflight rejected mixed line endings before execution.
+An exact newline-only comparison permitted restoring the already qualified
+source bytes; the repaired execution then passed without weakened checks.
+Independent production promotion proof:
+`c1e006019ea3c3db0a331aa58f66e2a8b412d0f9943d7cb4ccc864bc66ebae33`.
+Earlier no-import records remain historical. Broad architectural/restoration
+gates are unchanged; no package publication occurs. Milestone 6 remains
+**in progress**, `roadmapComplete=false`.
+
 ### Recovered native consumer boot qualification, 2026-10-09
 
 The ROM relocated under `C:\Data\ROM` has the exact required SHA-256

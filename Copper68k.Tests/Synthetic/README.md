@@ -1854,21 +1854,29 @@ Remove-Item Env:COPPER68K_RUN_040_CONTEXT_TRANSFER_DISCOVERY
 Remove-Item Env:COPPER68K_SYNTHETIC_REPORT_DIR
 ```
 
-The requested selection must retain all four named rows and four reports, with
-two passing local rows and two failing discovery rows until the gap is resolved.
+The historical production baseline retained all four named rows and reports,
+with two passing local rows and two failing discovery rows. The approved
+context-copy fix now makes all four pass; the original failed evidence remains.
 The source pending vector is an explicit fixture input; no FPU arithmetic,
 hardware frame migration/FSAVE ABI, original access entry or trace is qualified.
 
-### Private pending-delivery snapshot candidate
+### Pending-delivery snapshot ownership
 
 `SyntheticM68040ContextSnapshotDiscoveryTests` checks nested LIFO order,
 distinct identity for equal-valued deliveries, replacement rather than append,
 self-copy, independent completion/reset, empty-context clearing, and the existing
-machine-time policy of `CopyFrom` versus `CopyTaskContextFrom`. Enable
-`COPPER68K_RUN_040_CONTEXT_SNAPSHOT_DISCOVERY=1` when explicitly requesting it.
-Production currently fails this test; unavailable execution supplies no coverage.
+machine-time policy of `CopyFrom` versus `CopyTaskContextFrom`. The approved
+two-file context-copy fix is now in production, and this regression runs as an
+ordinary Synthetic Fact without an opt-in flag. Fresh selected production
+execution passes 23 named rows / 4,158 cases with eight byte-identical candidate
+reports. All 37 CPU inputs match the qualified full/reference/API and `.81`
+standard/native consumer sources. Other private candidates remain unimported.
+Independent promotion proof:
+`c1e006019ea3c3db0a331aa58f66e2a8b412d0f9943d7cb4ccc864bc66ebae33`.
 
-The reviewed `scripts/reference/m68040-context-pending-candidate.patch` changes
+The following records describe the earlier private checkpoint; do not reapply
+the patch to current production. The reviewed
+`scripts/reference/m68040-context-pending-candidate.patch` changes
 only an isolated CPU copy. It clones delivery entries when saving/restoring CPU
 state and clears unrelated destination entries. It adds no public API. Apply it
 only to a separate source copy matching this checkpoint, after normalizing its

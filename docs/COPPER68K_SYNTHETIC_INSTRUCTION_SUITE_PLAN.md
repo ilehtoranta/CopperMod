@@ -1,5 +1,21 @@
 # Copper68k synthetic instruction suite
 
+### Milestone 6 checkpoint — approved context-copy production fix, 2026-10-09
+
+The user approved promotion of only the reviewed two-file context-copy fix.
+`CopyFrom` and `CopyTaskContextFrom` now copy pending delivery state with
+independent nested identities, replace stale destination state and preserve
+self-copy behavior. The snapshot-ownership regression runs in ordinary CI.
+Fresh production-source execution passes 23 selected tests / 4,158 cases;
+all eight reports match the qualified candidate byte-for-byte. All 37 CPU
+source inputs exactly match the candidate with retained full-suite, reference,
+API and standard/native consumer qualification. Independent linkage proof:
+`c1e006019ea3c3db0a331aa58f66e2a8b412d0f9943d7cb4ccc864bc66ebae33`.
+The current diagnostic/attribute edits have focused verification; the older full
+run retains its frozen test-source identity. Other private candidates are not
+imported, disputed architectural behavior is unchanged, and no package is
+published. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
 ### Milestone 6 checkpoint — recovered native consumer input, 2026-10-09
 
 The relocated Kickstart 3.1 A500 ROM matches the original pinned hash. Two

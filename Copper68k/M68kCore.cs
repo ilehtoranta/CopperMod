@@ -1404,6 +1404,7 @@ namespace Copper68k
             Stopped = source.Stopped;
             LastOpcode = source.LastOpcode;
             LastInstructionProgramCounter = source.LastInstructionProgramCounter;
+            M68040PendingFpuExceptions.CopyFrom(source.M68040PendingFpuExceptions);
         }
 
         /// <summary>
@@ -1430,6 +1431,7 @@ namespace Copper68k
             CacheAddressRegister = source.CacheAddressRegister;
             LastOpcode = source.LastOpcode;
             LastInstructionProgramCounter = source.LastInstructionProgramCounter;
+            M68040PendingFpuExceptions.CopyFrom(source.M68040PendingFpuExceptions);
         }
 
         /// <summary>
