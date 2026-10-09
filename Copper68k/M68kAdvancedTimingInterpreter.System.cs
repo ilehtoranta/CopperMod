@@ -13,10 +13,13 @@ internal partial class M68kAdvancedTimingInterpreter
         {
             if (_profile.Model != M68kAcceleratorModel.M68060)
             { RaiseFormat0Exception(11, pc, M68kInstructionTimingKey.LineFException); return true; }
+            // MC68060UM D-19/20 fixes the second opcode word at 01C0.
+            // Unrecognized F-line encodings take vector 11 (8.2.4), before
+            // the privilege check for a recognized instruction (8.2.5).
+            if (FetchWord() != 0x01c0)
+            { RaiseFormat0Exception(11, pc, M68kInstructionTimingKey.LineFException); return true; }
             if (!State.GetFlag(M68kCpuState.Supervisor))
             { RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation); return true; }
-            if (FetchWord() != 0x01c0)
-            { RaiseFormat0Exception(4, pc, M68kInstructionTimingKey.IllegalInstruction); return true; }
             var immediate = FetchWord();
             if ((immediate & M68kCpuState.Supervisor) == 0)
             { RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation); return true; }
@@ -41,11 +44,28 @@ internal partial class M68kAdvancedTimingInterpreter
             source = (form & 1) == 0 ? State.A[register] : absolute;
             destination = (form & 1) == 0 ? absolute : State.A[register];
         }
-        else { RaiseFormat0Exception(4, pc, M68kInstructionTimingKey.IllegalInstruction); return true; }
+        // F628..F63F do not assign a MOVE16 first-word form. They are
+        // unrecognized F-line words (MC68040UM 9.6.1 / MC68060UM 8.2.4),
+        // unlike a recognized F620..F627 word with an invalid extension.
+        else { RaiseFormat0Exception(11, pc, M68kInstructionTimingKey.LineFException); return true; }
         source &= 0xfffffff0; destination &= 0xfffffff0;
         Span<uint> line = stackalloc uint[4];
         for (var i = 0; i < 4; i++) line[i] = ReadLong(source + (uint)i * 4);
-        for (var i = 0; i < 4; i++) WriteLong(destination + (uint)i * 4, line[i]);
+        try
+        {
+            for (var i = 0; i < 4; i++) WriteLong(destination + (uint)i * 4, line[i]);
+        }
+        catch (M68040MmuFaultException ex) when (_profile.Model == M68kAcceleratorModel.M68040 &&
+            !State.M68040Mmu.Enabled && ex.Fault.Write && ex.Fault.ByteCount == 4 &&
+            ex.Fault.AccessKind == M68kBusAccessKind.CpuDataWrite)
+        {
+            // All source reads completed before the first store. Keep their
+            // actual data; exception delivery must not reread or retry the line.
+            if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 16));
+            if (other >= 0 && other != register) WriteGeneralRegister(true, other, unchecked(State.A[other] + 16));
+            throw new M68040MmuFaultException(ex.Fault with
+            { CompletedMove16Line = new(line[0], line[1], line[2], line[3]) });
+        }
         if (form == 4 || form < 2) WriteGeneralRegister(true, register, unchecked(State.A[register] + 16));
         if (other >= 0 && other != register) WriteGeneralRegister(true, other, unchecked(State.A[other] + 16));
         CompleteTiming(M68kInstructionTimingKey.Movec);
@@ -77,10 +97,32 @@ internal partial class M68kAdvancedTimingInterpreter
             var size = (M68kOperandSize)(1 << field);
             var address = ResolveMoveAddress(m, r, size, opcode);
             if (m == 3) WriteGeneralRegister(true, r, unchecked(address + M68kIntegerSemantics.AddressIncrement(r, size)));
-            if (store) WriteSized(address, ReadGeneralRegister(ar, general), size);
+            if (store)
+            {
+                try { WriteSized(address, ReadGeneralRegister(ar, general), size); }
+                catch (M68040MmuFaultException ex) when (!State.M68040Mmu.Enabled &&
+                    ex.Fault.Write && ex.Fault.WriteValue.HasValue &&
+                    ex.Fault.AccessKind == M68kBusAccessKind.CpuDataWrite)
+                {
+                    // The actual store is already latched by the logical bus;
+                    // extensions and EA effects must not be performed again.
+                    throw new M68040MmuFaultException(ex.Fault with
+                    { MovesFunctionCode = (byte)(State.DestinationFunctionCode & 7), CompletedMovesWrite = true });
+                }
+            }
             else
             {
-                var value = ReadSized(address, size);
+                uint value;
+                try { value = ReadSized(address, size); }
+                catch (M68040MmuFaultException ex) when (!State.M68040Mmu.Enabled &&
+                    !ex.Fault.Write && ex.Fault.AccessKind == M68kBusAccessKind.CpuDataRead)
+                {
+                    // Only the actual MOVES operand uses SFC. Address calculation
+                    // (including indirect pointers) and extension fetches precede
+                    // this scope. Carry provenance without retrying any access.
+                    throw new M68040MmuFaultException(ex.Fault with
+                    { MovesFunctionCode = (byte)(State.SourceFunctionCode & 7) });
+                }
                 if (ar) WriteGeneralRegister(true, general, M68kCpuState.SignExtend(value, size));
                 else WriteDataRegisterSized(general, value, size);
             }

@@ -1,0 +1,7 @@
+--- a/gencpu/gencpu.cpp
++++ b/gencpu/gencpu.cpp
+@@
+ 	case i_BKPT:		/* only needed for hardware emulators */
+-		sync_m68k_pc();
++		m68k_pc_offset = 0;
+ 		addcycles000(4);

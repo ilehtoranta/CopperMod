@@ -885,10 +885,11 @@ namespace Copper68k
             };
             var mode = (opcode >> 3) & 7;
             var register = opcode & 7;
-            var compareOnly = high == 0x0C00;
+            // This is the 000/010 plan inventory. CMPI does not write its EA,
+            // but still excludes immediate and PC-relative destinations here.
             if (mode == 1 ||
                 !IsSupportedReadableEa(mode, register, size) ||
-                (!compareOnly && !IsSupportedWritableEa(mode, register, size)))
+                !IsSupportedWritableEa(mode, register, size))
             {
                 return false;
             }

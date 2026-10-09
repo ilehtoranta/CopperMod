@@ -27,7 +27,7 @@ internal sealed record ModelSpec(string Id, M68kCpuModel Model, int AddressBits,
 
 internal readonly record struct BusAccess(uint Address, int Width, bool Write, uint Value, M68kBusAccessKind Kind);
 
-internal sealed class SparseRecordingBus : IM68kBus, IM68kModuleAccessBus
+internal class SparseRecordingBus : IM68kBus, IM68kModuleAccessBus
 {
     public Dictionary<uint, byte> Memory { get; } = [];
     public List<BusAccess> Accesses { get; } = [];
@@ -69,10 +69,10 @@ internal sealed class SparseRecordingBus : IM68kBus, IM68kModuleAccessBus
     public void ResetExternalDevices(long cycle) { DeviceResets++; }
 }
 
-internal sealed class SyntheticMachine(ModelSpec model)
+internal sealed class SyntheticMachine(ModelSpec model, SparseRecordingBus? bus = null)
 {
     public const uint Code = 0x1000;
-    public SparseRecordingBus Bus { get; } = new();
+    public SparseRecordingBus Bus { get; } = bus ?? new();
     private IM68kCore? core;
     public IM68kCore Core => core ??= Model.Create(Bus);
     public ModelSpec Model { get; } = model;

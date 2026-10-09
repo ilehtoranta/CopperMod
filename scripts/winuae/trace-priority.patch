@@ -1,0 +1,5 @@
+--- a/gencpu/cputest.cpp
++++ b/gencpu/cputest.cpp
+@@
+-								if ((regs.t1 || regs.t0) && (test_exception == 5 || test_exception == 6 || test_exception == 7 || (test_exception >= 32 && test_exception <= 47) || (cpu_lvl == 1 && test_exception == 14))) {
++								if (cpu_lvl < 4 && (regs.t1 || regs.t0) && (test_exception == 5 || test_exception == 6 || test_exception == 7 || (test_exception >= 32 && test_exception <= 47) || (cpu_lvl == 1 && test_exception == 14))) {

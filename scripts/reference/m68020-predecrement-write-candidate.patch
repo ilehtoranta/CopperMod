@@ -1,0 +1,52 @@
+--- a/Copper68k/M68kAdvancedTimingInterpreter.FinalWrite020.cs
++++ b/Copper68k/M68kAdvancedTimingInterpreter.FinalWrite020.cs
+@@ -18,7 +18,7 @@
+     }
+ 
+     private static bool IsSimpleFinalMove020(ushort opcode) => opcode >> 12 is >= 1 and <= 3 &&
+-        ((opcode >> 6) & 7) == 2 && ((opcode >> 3) & 7) is 2 or 3;
++        ((opcode >> 6) & 7) == 2 && ((opcode >> 3) & 7) is 2 or 3 or 4;
+ 
+     private static M68kOperandSize FinalMoveSize020(ushort opcode) => (opcode >> 12) switch
+     { 1 => M68kOperandSize.Byte, 3 => M68kOperandSize.Word, _ => M68kOperandSize.Long };
+@@ -33,6 +33,18 @@
+             (true, 3) => M68kInstructionTimingKey.MoveWordPostIncrementToAddressIndirect,
+             _ => M68kInstructionTimingKey.MoveLongPostIncrementToAddressIndirect
+         };
++
++    private void CompleteFinalMoveWriteTiming020(ushort opcode)
++    {
++        if (((opcode >> 3) & 7) != 4) { CompleteTiming(FinalMoveTiming020(opcode)); return; }
++        // This shape already uses the general-EA route on mapped execution.
++        // Only its pending destination write remains; preserve that same plan.
++        var cycles = _profile.FixedInstructionNativeCycles ?? 9;
++        var plan = _profile.Model == M68kAcceleratorModel.M68030
++            ? M68kInstructionPlan.CreateHeadTail(M68kInstructionTimingKey.GeneralMove, "MOVE/MOVEA general EA", cycles, 2, 0)
++            : M68kInstructionPlan.CreateFlat(M68kInstructionTimingKey.GeneralMove, "MOVE/MOVEA general EA", cycles);
++        CompleteTimingPlan(plan);
++    }
+ 
+     private void WriteFinalMoveDestination020(uint address, uint value, M68kOperandSize size)
+     {
+@@ -128,7 +140,7 @@
+             if ((ssw & 0x100) != 0) WriteFinalMoveDestination020(address, value, size);
+         }
+         finally { _resumingFinalMoveWrite020 = previous; _restoredWriteFunctionCode020 = previousFc; }
+-        CompleteTiming(FinalMoveTiming020(opcode));
++        CompleteFinalMoveWriteTiming020(opcode);
+         return true;
+     }
+ }
+--- a/Copper68k/M68kAdvancedTimingInterpreter.Move.cs
++++ b/Copper68k/M68kAdvancedTimingInterpreter.Move.cs
+@@ -55,7 +55,9 @@
+         else
+         {
+             var destination = ResolveMoveAddress(destinationMode, destinationRegister, size, opcode);
+-            WriteSized(destination, value, size);
++            if (destinationMode == 2 && sourceMode == 4)
++                WriteFinalMoveDestination020(destination, value, size);
++            else WriteSized(destination, value, size);
+             if (destinationMode == 3) WriteGeneralRegister(true, destinationRegister,
+                 unchecked(destination + M68kIntegerSemantics.AddressIncrement(destinationRegister, size)));
+         }

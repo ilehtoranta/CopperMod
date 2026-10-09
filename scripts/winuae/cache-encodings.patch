@@ -1,0 +1,21 @@
+--- cputest.cpp
++++ cputest-cache-encodings.cpp
+@@
+ uae_u32 REGPARAM2 op_illg_1(uae_u32 opcode)
+ {
+-	if ((opcode & 0xf000) == 0xf000) {
++	// M68000PM 6-4/9 and MC68060UM D-12: scope 00 is illegal.
++	if (cpu_lvl >= 4 && (opcode & 0xff18) == 0xf400) {
++		test_exception = 4;
++	} else if ((opcode & 0xf000) == 0xf000) {
+ 		if (currprefs.cpu_model == 68030) {
+@@
+ 			// match requested mnemonic
+ 			if (dp->mnemo != lookup->mnemo)
+ 				continue;
++			// Keep only cache scope-00 encodings in this preset's ILLEGAL
++			// family. Actual cache handlers stay excluded by upstream policy.
++			if (lookup->mnemo == i_ILLG && (opcode & 0xff18) != 0xf400)
++				continue;
+ 
+ 			if (lookup->mnemo != i_ILLG) {

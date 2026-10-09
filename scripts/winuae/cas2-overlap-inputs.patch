@@ -1,0 +1,27 @@
+--- a/gencpu/cputest.cpp
++++ b/gencpu/cputest.cpp
+@@
+ 							// execute test instruction(s)
++							// M68000PM 4-68: overlapping memory updates are undefined.
++							// Select before reference execution, including physical wrap
++							// and A7's actual initial user/supervisor stack. On 060 no
++							// operand is updated: every CAS2 takes vector 61.
++							if (dp->mnemo == i_CAS2 && cpu_lvl < 5) {
++								int width = dp->size == sz_word ? 2 : 4;
++								int r1 = get_word_test(opcode_memory_start + 2) >> 12;
++								int r2 = get_word_test(opcode_memory_start + 4) >> 12;
++								uae_u32 a1 = r1 == 15 && (regs.sr & 0x2000) ? regs.isp : regs.regs[r1];
++								uae_u32 a2 = r2 == 15 && (regs.sr & 0x2000) ? regs.isp : regs.regs[r2];
++								bool overlap = false;
++								for (int i = 0; i < width; i++)
++									for (int j = 0; j < width; j++)
++										overlap |= ((a1 + i) & addressing_mask) == ((a2 + j) & addressing_mask);
++								if (overlap) {
++									wprintf(_T(" CAS2 overlapping operands excluded before reference execution\n"));
++									*dst++ = CT_END_SKIP;
++									last_exception_len = -1;
++									undo_memory(ahist, ahcnt_start);
++									continue;
++								}
++							}
+ 							execute_ins(pc - endopcodesize, branch_target_pc, dp);

@@ -1,0 +1,37 @@
+--- a/gencpu/gencpu.cpp
++++ b/gencpu/gencpu.cpp
+@@
+ 		case i_MULL:
+ 		case i_DIVL:
++			// The 060 unimplemented form now traps before any EA effects.
++			// A real divide-by-zero is a completed group-3 instruction trap
++			// (MC68060UM 8.3); do not undo its postincrement/predecrement.
++			if (cpu_level == 5)
++				return false;
++			return true;
+ 		case i_CAS:
+ 			return true;
+@@
+ 	case i_DIVL:
+ 		genamode(curi, curi->smode, "srcreg", curi->size, "extra", 1, 0, 0);
++		// MC68060UM C.2.2: vector 61 saves the causing instruction PC.
++		// Detect the unavailable form before EA reads or register effects.
++		if (cpu_level == 5) {
++			out("if (extra & 0x0400) {\n");
++			out("op_unimpl(opcode);\n");
++			write_return_cycles(0);
++			out("}\n");
++		}
+ 		genamode(curi, curi->dmode, "dstreg", curi->size, "dst", 1, 0, 0);
+@@
+ 	case i_MULL:
+ 		genamode(curi, curi->smode, "srcreg", curi->size, "extra", 1, 0, 0);
++		// MC68060UM C.2.2: vector 61 saves the causing instruction PC.
++		// Detect the unavailable form before EA reads or register effects.
++		if (cpu_level == 5) {
++			out("if (extra & 0x0400) {\n");
++			out("op_unimpl(opcode);\n");
++			write_return_cycles(0);
++			out("}\n");
++		}
+ 		genamode(curi, curi->dmode, "dstreg", curi->size, "dst", 1, 0, 0);

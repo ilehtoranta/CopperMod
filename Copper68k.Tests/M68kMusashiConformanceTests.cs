@@ -5,7 +5,7 @@ using Xunit.Sdk;
 
 namespace Copper68k.Tests;
 
-public sealed class M68kMusashiConformanceTests
+public sealed partial class M68kMusashiConformanceTests
 {
 	private const string RunVariable = "COPPER68K_RUN_MUSASHI_M68000";
 	private const string PathVariable = "COPPER68K_MUSASHI_M68000_PATH";
@@ -42,6 +42,7 @@ public sealed class M68kMusashiConformanceTests
 	private static readonly IReadOnlyDictionary<string, string> KnownFailingM68040Programs =
 		new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 		{
+			["chk2.bin"] = "at offset 0xEC encodes CHK2.W (02D7 8800) against long bounds 10000000/70000000; asserts a long-sized trap, contrary to full-width An comparison against sign-extended word bounds",
 			["cmp2.bin"] = "CMP2 byte carry expectation conflicts with the test source author's documented expectation"
 		};
 	private static readonly IReadOnlyDictionary<string, string> KnownFailingM68kRsExtraPrograms =
@@ -64,7 +65,7 @@ public sealed class M68kMusashiConformanceTests
 			["m68030/bin/move16_030.bin"] = "MOVE16 is not currently implemented",
 			["m68040/bin/32bit_disp.bin"] = "full-extension indexed addressing is not fully implemented",
 			["m68040/bin/arch_unaligned.bin"] = "unaligned access and address-error completion semantics still diverge from this fixture",
-			["m68040/bin/bkpt.bin"] = "BKPT handler setup or related addressing forms are not currently implemented",
+			["m68040/bin/bkpt.bin"] = "Optional fixture's breakpoint handler and expected frame have not been requalified; standalone BKPT illegal-exception fallback is covered by synthetic and qualified WinUAE audits",
 			["m68040/bin/callm_rtm.bin"] = "CALLM/RTM behavior is not currently implemented",
 			["m68040/bin/ec040_positive.bin"] = "EC040 control/MMU behavior is not currently modeled",
 			["m68040/bin/fpu_arith.bin"] = "MC68040 FPU arithmetic behavior is not currently modeled",
@@ -488,21 +489,25 @@ public sealed class M68kMusashiConformanceTests
 		return null;
 	}
 
-	private void RunProgram(string file, int maxInstructions, M68kCpuModel cpuModel, MusashiBackend backend)
+	private int RunProgram(string file, int maxInstructions, M68kCpuModel cpuModel, MusashiBackend backend, bool a1200 = false)
 	{
 		var bus = new MusashiBus();
 		bus.LoadRom(File.ReadAllBytes(file));
 		bus.WriteLong(0, 0x0000_03F0);
 		bus.WriteLong(4, MusashiBus.RomBase);
 
-		using var cpu = CreateCore(cpuModel, backend, bus);
+		using var cpu = a1200 ? M68kCoreFactory.Default.CreateA1200Ec020(bus) : CreateCore(cpuModel, backend, bus);
 		cpu.Reset(MusashiBus.RomBase, 0x0000_03F0);
+		var recent = new Queue<string>();
 
 		for (var instruction = 0; instruction < maxInstructions; instruction++)
 		{
+			var previousPc = cpu.State.ProgramCounter;
 			try
 			{
 				cpu.ExecuteInstruction();
+				if (recent.Count == 16) recent.Dequeue();
+				recent.Enqueue($"{previousPc:X8}:{cpu.State.LastOpcode:X4}->{cpu.State.ProgramCounter:X8} SR={cpu.State.StatusRegister:X4} D6={cpu.State.D[6]:X8}");
 			}
 			catch (Exception ex)
 			{
@@ -527,12 +532,12 @@ public sealed class M68kMusashiConformanceTests
 					$"last PC=0x{cpu.State.LastInstructionProgramCounter:X8}, opcode=0x{cpu.State.LastOpcode:X4}, " +
 					FormatDataRegisters(cpu.State) +
 					$", {FormatAddressRegisters(cpu.State)}, {FormatLastException(cpu.State)}" +
-					$".{FormatStdout(bus)}");
+					$".{FormatStdout(bus)}{Environment.NewLine}Recent retirement: {string.Join("; ", recent)}");
 			}
 
 			if (bus.PassCount > 0)
 			{
-				return;
+				return instruction + 1;
 			}
 
 			if (cpu.State.Stopped || cpu.State.Halted)

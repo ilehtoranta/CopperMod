@@ -64,14 +64,14 @@ public sealed class SyntheticModelSystemTests(ITestOutputHelper output)
             if (store) { if (general < 8) m.Core.State.D[general] = value; else if (general == 15) m.Core.State.SetActiveStackPointer(0x7100); else m.Core.State.A[general - 8] = value; }
             var op = (ushort)(store ? 0x4e7b : 0x4e7a); var e = SyntheticExecution.Prepare(m, [op, (ushort)(general << 12 | control)]);
             var valid = modelId != "68000" && (control is 0 or 1 or 0x800 or 0x801 || m.Model.FullIndex && (control == 2 || control == 0x802 && modelId is not ("68040" or "68060") || control is 0x803 or 0x804 && modelId != "68060") || modelId is "68040" or "68060" && (control is >= 3 and <= 7 or 0x806 or 0x807 || control == 0x805 && modelId == "68040" || control is 8 or 0x808 && modelId == "68060"));
-            if (modelId == "68000" || !supervisor || !valid) SyntheticExecution.ExpectException(m, e, modelId == "68000" || supervisor ? 4 : 8);
+            if (modelId == "68000" || !supervisor || !valid) SyntheticExecution.ExpectException(m, e, modelId == "68000" || supervisor || modelId == "68060" && !valid ? 4 : 8);
             else
             {
                 var read = ControlReader(control); var actualValue = read(m.Core.State);
                 if (store)
                 {
                     var source = general < 8 ? e.D[general] : e.A[general - 8];
-                    var masked = control switch { 0 or 1 => source & 7, 2 when modelId == "68060" => source & 0xf880e000, 2 when modelId == "68040" => source & 0x80008000, 2 => source & (modelId == "68030" ? 0x3313u : 3u), 8 => source & 0xf0000000, 0x808 => 0x04300000 | source & 0x83, 0x806 or 0x807 when modelId == "68060" => source & 0xfffffe00, _ => source };
+                    var masked = control switch { 0 or 1 => source & 7, 2 when modelId == "68060" => source & 0xf880e000, 2 when modelId == "68040" => source & 0x80008000, 2 => source & (modelId == "68030" ? 0x3313u : 3u), 3 when modelId == "68040" => source & 0xc000, 3 when modelId == "68060" => source & 0xfffe, >= 4 and <= 7 when modelId is "68040" or "68060" => source & 0xffffe364, 8 => source & 0xa0000000, 0x808 => 0x04300000 | source & 0x83, 0x806 or 0x807 when modelId == "68060" => source & 0xfffffe00, _ => source };
                     e.ControlChecks[$"control {control:X3}"] = (read, masked);
                     if (control == 0x800) e.InactiveStackPointer = masked;
                     if (control == 0x803) e.MasterStackPointer = masked;
@@ -97,7 +97,7 @@ public sealed class SyntheticModelSystemTests(ITestOutputHelper output)
     };
 
     [Theory, MemberData(nameof(Models)), Trait("Suite", "Synthetic")]
-    public void Move16CacheInstructionsBreakpointsAndLowPowerStop(string modelId)
+    public void Move16TransfersAndBreakpoints(string modelId)
     {
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == modelId)); var report = new CoverageBatch(modelId, "system-model");
         for (var ccr = 0; ccr < 32; ccr++)
@@ -108,24 +108,9 @@ public sealed class SyntheticModelSystemTests(ITestOutputHelper output)
                 m.Reset(ccr, supervisor); var op = (ushort)(0x4848 | breakpoint); var e = SyntheticExecution.Prepare(m, [op]);
                 SyntheticExecution.ExpectException(m, e, 4); SyntheticExecution.Run(m, e, report, $"{modelId}/BKPT/none/{breakpoint}/super={supervisor}/op={op:X4}/ccr={ccr:X2}");
             }
-            foreach (var push in new[] { false, true })
-            for (var cache = 1; cache < 4; cache++)
-            for (var scope = 1; scope < 4; scope++)
-            for (var reg = 0; reg < 8; reg++)
-            {
-                m.Reset(ccr, supervisor); var op = (ushort)(0xf400 | (push ? 0x20 : 0) | cache << 6 | scope << 3 | reg); var e = SyntheticExecution.Prepare(m, [op]);
-                if (modelId is not ("68040" or "68060")) SyntheticExecution.ExpectException(m, e, 11);
-                else if (!supervisor) SyntheticExecution.ExpectException(m, e, 8);
-                SyntheticExecution.Run(m, e, report, $"{modelId}/{(push ? "CPUSH" : "CINV")}/{scope}/cache={cache}/A{reg}/super={supervisor}/op={op:X4}/ccr={ccr:X2}");
-            }
-            foreach (var sr in new ushort[] { 0, 0x0700, 0x2000, 0x2700, 0x271f })
-            {
-                m.Reset(ccr, supervisor); var e = SyntheticExecution.Prepare(m, [0xf800, 0x01c0, sr]);
-                if (modelId != "68060") SyntheticExecution.ExpectException(m, e, 11);
-                else if (!supervisor || (sr & 0x2000) == 0) SyntheticExecution.ExpectException(m, e, 8);
-                else { SyntheticSystemTests.ApplyStatus(m, e, sr); e.Stopped = true; }
-                SyntheticExecution.Run(m, e, report, $"{modelId}/LPSTOP/W/imm={sr:X4}/super={supervisor}/op=F800/ccr={ccr:X2}", !e.Stopped);
-            }
+            // Cache semantics moved to the exhaustive F4xx matrix after
+            // shared X-flag and extension-length mutation proof. Specialized
+            // physical cache/prefetch regressions are retained separately.
         }
         for (var form = 0; form < 5; form++)
         for (var r = 0; r < 8; r++)

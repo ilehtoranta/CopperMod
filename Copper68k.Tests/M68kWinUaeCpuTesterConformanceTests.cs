@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Copper68k;
+using Copper68k.Tests.Synthetic;
 using CopperFloat;
 using Xunit.Abstractions;
 using Xunit.Sdk;
@@ -11,7 +12,7 @@ namespace Copper68k.Tests;
 public sealed class WinUaeCpuTesterCollection;
 
 [Collection("WinUAE CPU tester")]
-public sealed class M68kWinUaeCpuTesterConformanceTests
+public sealed partial class M68kWinUaeCpuTesterConformanceTests
 {
 	private const string RunVariable = "COPPER68K_RUN_WINUAE_CPUTEST_M68000";
 	private const string RunM68040FpuVariable = "COPPER68K_RUN_WINUAE_CPUTEST_M68040_FPU";
@@ -291,13 +292,34 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 		private readonly NativeRunTests _runTests;
 		private readonly NativeLastOutput? _lastOutput;
 		private readonly NativeAddressingMask? _addressingMask;
+		private readonly NativeDestroy? _destroy;
+		private readonly NativeDefinedSr? _definedSr;
+		private readonly NativeCount? _frameChecks;
+		private readonly NativeCount? _maskedCases;
 		private readonly NativeCallback _callback;
 		private Exception? _callbackException;
 		private int _executedCases;
 		private int _unmappedReads;
 		private int _unmappedWrites;
+		private int _terminalCases;
+		private int _traceInputCases;
 		private string _lastCaseSummary = "";
 		private byte _cpuLevel;
+		private ModelSpec? _integerProfile;
+		private bool _corruptResult;
+		private bool _corruptFrame;
+		private bool _corruptSavedPc;
+		private bool _corruptCas2CompareAlias;
+		private bool _corruptMove16Memory;
+		private ushort _corruptSr;
+		private bool _corruptIgnoredSr;
+		private string _integerFamily = "";
+		private bool _qualifyLongArithmetic;
+		private readonly Dictionary<string, int> _longArithmeticForms = new(StringComparer.Ordinal);
+		private Func<ushort, ushort, string>? _fixtureClassifier;
+		private Func<ushort, ushort, ushort, ushort, string>? _fixtureWordsClassifier;
+		private Func<ushort, ushort, ushort, ushort, IReadOnlyList<uint>, string>? _fixtureRegisterClassifier;
+		private readonly Dictionary<string, int> _fixtureForms = new(StringComparer.Ordinal);
 
 		private NativeTester(IntPtr library)
 		{
@@ -306,6 +328,10 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 			_runTests = GetDelegate<NativeRunTests>(library, "M68KTester_run_tests");
 			_lastOutput = TryGetDelegate<NativeLastOutput>(library, "M68KTester_last_output");
 			_addressingMask = TryGetDelegate<NativeAddressingMask>(library, "m68k_tester_addressing_mask");
+			_destroy = TryGetDelegate<NativeDestroy>(library, "M68KTester_destroy");
+			_definedSr = TryGetDelegate<NativeDefinedSr>(library, "M68KTester_set_defined_sr");
+			_frameChecks = TryGetDelegate<NativeCount>(library, "M68KTester_frame_checks");
+			_maskedCases = TryGetDelegate<NativeCount>(library, "M68KTester_masked_cases");
 			_callback = RunCopper68k;
 		}
 
@@ -332,17 +358,51 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 			string opcode,
 			byte cpuLevel,
 			bool checkUndefinedSr,
-			bool continueOnError)
+			bool continueOnError,
+			ModelSpec? integerProfile = null,
+			bool corruptResult = false,
+			bool corruptFrame = false,
+			ushort corruptSr = 0,
+			bool corruptIgnoredSr = false,
+			bool qualifyLongArithmetic = false,
+			Func<ushort, ushort, string>? fixtureClassifier = null,
+			Func<ushort, ushort, ushort, ushort, string>? fixtureWordsClassifier = null,
+			bool corruptSavedPc = false,
+			Func<ushort, ushort, ushort, ushort, IReadOnlyList<uint>, string>? fixtureRegisterClassifier = null,
+			bool corruptCas2CompareAlias = false,
+			bool corruptMove16Memory = false)
 		{
 			_callbackException = null;
 			_executedCases = 0;
 			_unmappedReads = 0;
 			_unmappedWrites = 0;
+			_terminalCases = 0;
+			_traceInputCases = 0;
 			_lastCaseSummary = "";
 			_cpuLevel = cpuLevel;
+			_integerProfile = integerProfile;
+			_corruptResult = corruptResult;
+			_corruptFrame = corruptFrame;
+			_corruptSavedPc = corruptSavedPc;
+			_corruptCas2CompareAlias = corruptCas2CompareAlias;
+			_corruptMove16Memory = corruptMove16Memory;
+			_corruptSr = corruptSr;
+			_corruptIgnoredSr = corruptIgnoredSr;
+			_integerFamily = opcode;
+			_qualifyLongArithmetic = qualifyLongArithmetic;
+			_longArithmeticForms.Clear();
+			_fixtureClassifier = fixtureClassifier;
+			_fixtureWordsClassifier = fixtureWordsClassifier;
+			_fixtureRegisterClassifier = fixtureRegisterClassifier;
+			_fixtureForms.Clear();
+			if (integerProfile is not null && (_destroy is null || _addressingMask is null || _lastOutput is null))
+				throw new XunitException("Multi-model integer audit requires the qualified native bridge exports (destroy, addressing mask and diagnostics).");
+			if (integerProfile is not null && (_definedSr is null || _frameChecks is null || _maskedCases is null))
+				throw new XunitException("Multi-model integer audit requires architectural SR masks and exception-frame validation exports.");
 
 			var corpusPathPtr = Marshal.StringToHGlobalAnsi(corpusPath);
 			var opcodePtr = Marshal.StringToHGlobalAnsi(opcode);
+			var nativeContext = IntPtr.Zero;
 			try
 			{
 				var settings = new NativeRunSettings
@@ -354,6 +414,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 				};
 
 				var result = _init(corpusPathPtr, ref settings);
+				nativeContext = result.Context;
 				if (result.Error != IntPtr.Zero)
 				{
 					throw new XunitException(Marshal.PtrToStringAnsi(result.Error) ?? "WinUAE cputest initialization failed.");
@@ -390,6 +451,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 			}
 			finally
 			{
+				if (nativeContext != IntPtr.Zero) _destroy?.Invoke(nativeContext);
 				Marshal.FreeHGlobal(opcodePtr);
 				Marshal.FreeHGlobal(corpusPathPtr);
 			}
@@ -412,6 +474,14 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 			int UnmappedWrites,
 			string Detail);
 
+		public uint FrameChecks => _frameChecks?.Invoke() ?? 0;
+		public uint MaskedCases => _maskedCases?.Invoke() ?? 0;
+		public int TerminalCases => _terminalCases;
+		public int TraceInputCases => _traceInputCases;
+		public bool UnsupportedExecution => _callbackException?.InnerException is UnsupportedM68kTimingException;
+		public IReadOnlyDictionary<string, int> LongArithmeticForms => _longArithmeticForms;
+		public IReadOnlyDictionary<string, int> FixtureForms => _fixtureForms;
+
 		public void Dispose()
 		{
 			if (_library != IntPtr.Zero)
@@ -432,18 +502,94 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 				_ = userData;
 				var context = Marshal.PtrToStructure<NativeContext>(contextPtr);
 				var registers = Marshal.PtrToStructure<NativeRegisters>(registersPtr);
+				if ((registers.Sr & 0x8000) != 0) _traceInputCases++;
 				var bus = new NativeRangeBus(context, _addressingMask?.Invoke() ?? 0x00FF_FFFFu);
-				IM68kCore cpu = _cpuLevel == 4
+				IM68kCore cpu = _integerProfile is not null
+					? (_integerProfile.A1200 ? M68kCoreFactory.Default.CreateA1200Ec020(bus) : M68kCoreFactory.Default.Create(_integerProfile.Model, bus))
+					: _cpuLevel == 4
 					? new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz)
 					: new M68kInterpreter(bus);
-				_lastCaseSummary = FormatCaseSummary(context, registers, bus);
+				_lastCaseSummary = (_integerProfile is null ? "" : $"family={_integerFamily}, ") + FormatCaseSummary(context, registers, bus);
+				if (_qualifyLongArithmetic)
+				{
+					// Inspect immutable fixture bytes; never normalize input in the bridge.
+					var form = QualifyLongArithmeticEncoding(bus.ReadHostWord(registers.Pc),
+						bus.ReadHostWord(registers.Pc + 2), _integerFamily);
+					_longArithmeticForms[form] = _longArithmeticForms.GetValueOrDefault(form) + 1;
+				}
+				if (_fixtureClassifier is not null)
+				{
+					var form = _fixtureClassifier(bus.ReadHostWord(registers.Pc), (ushort)registers.Sr);
+					_fixtureForms[form] = _fixtureForms.GetValueOrDefault(form) + 1;
+				}
+				if (_fixtureWordsClassifier is not null)
+				{
+					// Read immutable input before any CPU execution or stack copying.
+					var form = _fixtureWordsClassifier(bus.ReadHostWord(registers.Pc),
+						bus.ReadHostWord(registers.Pc + 2), bus.ReadHostWord(registers.Pc + 4), (ushort)registers.Sr);
+					_fixtureForms[form] = _fixtureForms.GetValueOrDefault(form) + 1;
+				}
 				bus.CopyStackImage(registers.Regs[15], registers.Ssp, 0x20);
+				uint? corruptDestination = null;
+				if (_corruptMove16Memory)
+				{
+					var inputRegisters = (uint[])registers.Regs.Clone();
+					if ((registers.Sr & 0x2000) != 0) inputRegisters[15] = registers.Ssp;
+					corruptDestination = Move16Operands(_integerProfile!, bus.ReadHostWord(registers.Pc),
+						bus.ReadHostWord(registers.Pc + 2), bus.ReadHostWord(registers.Pc + 4),
+						(ushort)registers.Sr, inputRegisters, _integerFamily).Destination & ~15u;
+				}
+				if (_fixtureRegisterClassifier is not null)
+				{
+					// The native input stores USP in slot A7 even when S is set.
+					// Select its actual initial stack without executing production EA.
+					var inputRegisters = (uint[])registers.Regs.Clone();
+					if ((registers.Sr & 0x2000) != 0) inputRegisters[15] = registers.Ssp;
+					var form = _fixtureRegisterClassifier(bus.ReadHostWord(registers.Pc),
+						bus.ReadHostWord(registers.Pc + 2), bus.ReadHostWord(registers.Pc + 4),
+						(ushort)registers.Sr, inputRegisters);
+					_fixtureForms[form] = _fixtureForms.GetValueOrDefault(form) + 1;
+				}
 
 				ApplyRegisters(cpu, registers, _cpuLevel);
+				// Native corpus serialization restores USP into slot A7 and
+				// cannot independently compare the completed active SSP value.
+				// Keep an architectural assertion before copying output registers.
+				uint[]? move16ExpectedAddresses = null;
+				if (_integerFamily == "MOVE16" && _fixtureRegisterClassifier is not null)
+				{
+					var input = (uint[])registers.Regs.Clone();
+					input[15] = cpu.State.A[7];
+					move16ExpectedAddresses = Move16ExpectedAddressRegisters(bus.ReadHostWord(registers.Pc),
+						bus.ReadHostWord(registers.Pc + 2), input);
+				}
+				uint? corruptAliasValue = null;
+				var corruptAliasRegister = 0;
+				var corruptAliasWidth = 0;
+				if (_corruptCas2CompareAlias)
+				{
+					var opcode = bus.ReadHostWord(registers.Pc);
+					var first = bus.ReadHostWord(registers.Pc + 2);
+					var second = bus.ReadHostWord(registers.Pc + 4);
+					if (opcode is 0x0cfc or 0x0efc && (first & 7) == (second & 7))
+					{
+						// Capture operand 2 independently before execution. On a
+						// failed aliased comparison, substituting it recreates the
+						// old reference defect (manual requires operand 1).
+						var selector = second >> 12;
+						var address = selector == 15 && (registers.Sr & 0x2000) != 0
+							? registers.Ssp : registers.Regs[selector];
+						corruptAliasRegister = first & 7;
+						corruptAliasWidth = opcode == 0x0cfc ? 2 : 4;
+						corruptAliasValue = corruptAliasWidth == 2 ? bus.ReadHostWord(address) :
+							((uint)bus.ReadHostWord(address) << 16) | bus.ReadHostWord(unchecked(address + 2));
+					}
+				}
 				registers.Cycles = 0;
 				DeferredFpuException? deferredFpuException = null;
 				var deferredFpuExceptionObserved = false;
 				var executionTrace = "";
+				var completed = false;
 				for (var step = 0; step < MaxStepsPerCase; step++)
 				{
 					var instructionPc = cpu.State.ProgramCounter;
@@ -458,7 +604,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 						$"next=0x{cpu.State.ProgramCounter:X8},exc={cpu.State.LastExceptionVector},d4=0x{cpu.State.D[4]:X8}]";
 					if (cpu.State.LastExceptionVector >= 0)
 					{
-						if (deferredFpuException is null &&
+						if (_integerProfile is null && deferredFpuException is null &&
 							IsDeferredM68040FpuArithmeticException(cpu.State, bus, _cpuLevel))
 						{
 							deferredFpuException = DeferredFpuException.Capture(cpu.State);
@@ -473,14 +619,24 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 						}
 
 						deferredFpuException = null;
+						completed = true;
 						break;
 					}
 
 					registers.Cycles += (uint)cycles;
+					if (_integerProfile is not null && (cpu.State.Stopped || cpu.State.Halted))
+					{
+						// Compare the actual terminal instruction boundary. Do not
+						// wake the CPU or advance PC to a following harness sentinel.
+						_terminalCases++;
+						completed = true;
+						break;
+					}
 					var traceSetAfterInstruction = (cpu.State.StatusRegister & M68kCpuState.Trace) != 0;
-					if (tracePending && !cpu.State.Stopped && !cpu.State.Halted)
+					if (_integerProfile is null && tracePending && !cpu.State.Stopped && !cpu.State.Halted)
 					{
 						RaiseHarnessTraceException(cpu.State, bus);
+						completed = true;
 						break;
 					}
 
@@ -488,19 +644,50 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 						(cpu.State.ProgramCounter == registers.EndPc ||
 						 (registers.BranchTarget != 0xFFFF_FFFFu && cpu.State.ProgramCounter == registers.BranchTarget)))
 					{
+						completed = true;
 						break;
 					}
 				}
+				if (_integerProfile is not null && !completed)
+					throw new XunitException($"Reference case did not reach its boundary within {MaxStepsPerCase} instructions: {executionTrace}");
 
 				deferredFpuException?.Restore(cpu.State);
 				_lastCaseSummary += $", trace={executionTrace}";
 
-				if (_cpuLevel == 4 && bus.UnmappedReads != 0 && !deferredFpuExceptionObserved)
+				if (_integerProfile is null && _cpuLevel == 4 && bus.UnmappedReads != 0 && !deferredFpuExceptionObserved)
 				{
 					RestoreUnobservableFpuRead(cpu.State, bus, registers);
 				}
 
+				if (move16ExpectedAddresses is not null)
+					Assert.Equal(move16ExpectedAddresses, cpu.State.A);
 				CopyRegisters(cpu.State, bus, _cpuLevel, ref registers);
+				if (corruptAliasValue.HasValue && cpu.State.LastExceptionVector < 0 && (registers.Sr & 4) == 0)
+					registers.Regs[corruptAliasRegister] = corruptAliasWidth == 2
+						? (registers.Regs[corruptAliasRegister] & 0xffff0000) | corruptAliasValue.Value
+						: corruptAliasValue.Value;
+				if (_integerProfile is not null)
+				{
+					var mask = WinUaeArchitecturalFlags.DefinedMask(_integerFamily, cpu.State.LastExceptionVector, (ushort)registers.Sr);
+					_definedSr!(mask);
+					if (_corruptIgnoredSr) registers.Sr ^= (uint)(~mask & 31);
+				}
+				if (_corruptResult) registers.Regs[0] ^= 1;
+				if (corruptDestination.HasValue && cpu.State.LastExceptionVector < 0)
+					bus.WriteHostWord(corruptDestination.Value, (ushort)(bus.ReadHostWord(corruptDestination.Value) ^ 1));
+				registers.Sr ^= _corruptSr;
+				if (_corruptFrame && cpu.State.LastExceptionVector >= 0)
+				{
+					var address = registers.ExcFrame + (_cpuLevel == 0 ? 4u : 6u);
+					bus.WriteHostWord(address, (ushort)(bus.ReadHostWord(address) ^ 1));
+				}
+				if (_corruptSavedPc && cpu.State.LastExceptionVector >= 0)
+				{
+					// Recreate the advanced-PC reference defect without modifying
+					// the expected fixture or production instruction execution.
+					var address = registers.ExcFrame + 4;
+					bus.WriteHostWord(address, unchecked((ushort)(bus.ReadHostWord(address) + 4)));
+				}
 				Marshal.StructureToPtr(registers, registersPtr, fDeleteOld: false);
 				_unmappedReads += bus.UnmappedReads;
 				_unmappedWrites += bus.UnmappedWrites;
@@ -548,7 +735,7 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 			var state = cpu.State;
 			var supervisorMode = (registers.Sr & M68kCpuState.Supervisor) != 0;
 			var activeStackPointer = supervisorMode
-				? registers.Ssp
+				? cpuLevel >= 2 && cpuLevel != 5 && (registers.Sr & 0x1000) != 0 ? registers.Msp : registers.Ssp
 				: registers.Regs[15];
 
 			cpu.Reset(registers.Pc, registers.Ssp);
@@ -780,6 +967,15 @@ public sealed class M68kWinUaeCpuTesterConformanceTests
 
 		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 		private delegate uint NativeAddressingMask();
+
+		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+		private delegate void NativeDestroy(IntPtr context);
+
+		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+		private delegate void NativeDefinedSr(ushort mask);
+
+		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+		private delegate uint NativeCount();
 
 		[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 		private delegate void NativeCallback(IntPtr userData, IntPtr context, IntPtr registers);

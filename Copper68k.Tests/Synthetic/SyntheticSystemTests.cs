@@ -15,7 +15,10 @@ public sealed class SyntheticSystemTests(ITestOutputHelper output)
         foreach (var supervisor in new[] { false, true })
         {
             for (var trap = 0; trap < 16; trap++) Basic(machine, report, "TRAP", (ushort)(0x4e40 | trap), ccr, supervisor);
-            foreach (var (family, opcode) in new[] { ("NOP", 0x4e71), ("RESET", 0x4e70), ("ILLEGAL", 0x4afc), ("LineA", 0xa123), ("LineF", 0xf123), ("TRAPV", 0x4e76) })
+            // Type 110 is unassigned, but MC68030UM 8.1.5/6 still gives
+            // user-mode integrated-MMU CpID 0 privilege exception priority.
+            // F123 is instead a legal privileged cpSAVE on EC020/020.
+            foreach (var (family, opcode) in new[] { ("NOP", 0x4e71), ("RESET", 0x4e70), ("ILLEGAL", 0x4afc), ("LineA", 0xa123), ("LineF", 0xf1c0), ("TRAPV", 0x4e76) })
                 Basic(machine, report, family, (ushort)opcode, ccr, supervisor);
             foreach (var sr in new ushort[] { 0, 0x0700, 0x2000, 0x2700, 0x271f }) Basic(machine, report, "STOP", 0x4e72, ccr, supervisor, sr);
         }
@@ -84,8 +87,10 @@ public sealed class SyntheticSystemTests(ITestOutputHelper output)
             {
                 var saved = expected.A[reg];
                 expected.A[7] -= 4;
-                // LINK A7 stores the decremented SP (M68000PM 4-111 operation ordering).
-                expected.Write(expected.A[7], reg == 7 ? expected.A[7] : saved, 4, machine.Model);
+                // The prose describes pushing the original An; the shorthand SP/An
+                // assignments do not specify alias sampling across processors.
+                // Pinned MAME fixtures and WinUAE distinguish 040's early decrement.
+                expected.Write(expected.A[7], reg == 7 && modelId == "68040" ? expected.A[7] : saved, 4, machine.Model);
                 expected.A[reg] = expected.A[7]; expected.A[7] = unchecked(expected.A[7] + (uint)displacement);
             }
             SyntheticExecution.Run(machine, expected, report, $"{modelId}/LINK/{width}/A{reg}/super={supervisor}/op={opcode:X4}/disp={displacement}/ccr={ccr:X2}");
@@ -133,7 +138,12 @@ public sealed class SyntheticSystemTests(ITestOutputHelper output)
         else if (family == "RESET") expected.ExpectedDeviceResets = 1;
         else if (family == "TRAP") SyntheticExecution.ExpectException(machine, expected, 32 + (opcode & 15), expected.Pc);
         else if (family == "TRAPV" && (ccr & 2) != 0) SyntheticExecution.ExpectException(machine, expected, 7, expected.Pc);
-        else if (family is "ILLEGAL" or "LineA" or "LineF") SyntheticExecution.ExpectException(machine, expected, family == "ILLEGAL" ? 4 : family == "LineA" ? 10 : 11);
+        else if (family is "ILLEGAL" or "LineA" or "LineF")
+        {
+            var vector = family == "ILLEGAL" ? 4 : family == "LineA" ? 10
+                : machine.Model.Id == "68030" && !supervisor && (opcode & 0x0e00) == 0 ? 8 : 11;
+            SyntheticExecution.ExpectException(machine, expected, vector);
+        }
         SyntheticExecution.Run(machine, expected, report, $"{machine.Model.Id}/{family}/none/super={supervisor}/op={opcode:X4}/imm={immediate:X4}/ccr={ccr:X2}", !expected.Stopped);
     }
 
