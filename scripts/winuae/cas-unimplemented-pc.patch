@@ -1,0 +1,10 @@
+--- a/gencpu/gencpu.cpp
++++ b/gencpu/gencpu.cpp
+@@
+ 				if (mmufixupcnt)
+ 					out("cpu_restore_fixup();\n");
+-				sync_m68k_pc_noreset();
++				// MC68060UM C.2.2 / figure 8-3: vector 61 saves the
++				// unimplemented CAS instruction, not an advanced EA PC.
++				out("m68k_setpc(regs.instruction_pc);\n");
+ 				out("op_unimpl (opcode);\n");

@@ -109,8 +109,12 @@ internal partial class M68kAdvancedTimingInterpreter
         if (!memory) value = State.D[source];
         else
         {
-            var low = ReadPredecrementByte(source);
-            value = unpack ? low : (uint)(ReadPredecrementByte(source) << 8 | low);
+            // The unpacked operand is one contiguous word, including at A7.
+            // Only the packed byte uses A7's two-byte stride. Preserve the
+            // existing low-byte-first transfer ordering and timing policy.
+            var sourceStride = unpack && source == 7 ? 2u : 1u;
+            var low = ReadPredecrementByte(source, sourceStride);
+            value = unpack ? low : (uint)(ReadPredecrementByte(source, sourceStride) << 8 | low);
         }
         var result = unpack ? (ushort)(((value & 0xf0) << 4 | (value & 15)) + adjustment) :
             (ushort)((ushort)(value + adjustment) & 0x0f0f);
@@ -118,20 +122,21 @@ internal partial class M68kAdvancedTimingInterpreter
         if (!memory) WriteDataRegisterSized(destination, result, unpack ? M68kOperandSize.Word : M68kOperandSize.Byte);
         else
         {
-            WritePredecrementByte(destination, (byte)result);
-            if (unpack) WritePredecrementByte(destination, (byte)(result >> 8));
+            var destinationStride = !unpack && destination == 7 ? 2u : 1u;
+            WritePredecrementByte(destination, (byte)result, destinationStride);
+            if (unpack) WritePredecrementByte(destination, (byte)(result >> 8), destinationStride);
         }
         CompleteGeneralArithmeticTiming(memory ? 4 : 0, destination, memory);
         return true;
     }
-    private byte ReadPredecrementByte(int register)
+    private byte ReadPredecrementByte(int register, uint stride)
     {
-        var address = unchecked(State.A[register] - (register == 7 ? 2u : 1u));
+        var address = unchecked(State.A[register] - stride);
         WriteGeneralRegister(true, register, address); return ReadByte(address);
     }
-    private void WritePredecrementByte(int register, byte value)
+    private void WritePredecrementByte(int register, byte value, uint stride)
     {
-        var address = unchecked(State.A[register] - (register == 7 ? 2u : 1u));
+        var address = unchecked(State.A[register] - stride);
         WriteGeneralRegister(true, register, address); WriteByte(address, value);
     }
 }

@@ -11,6 +11,8 @@ namespace Copper68k
     // owns its PCR, stack, exception and three-long FPU state-frame contracts.
     internal sealed class M68060Interpreter : M68040Interpreter
     {
+        private bool _debugInstructionHalted;
+
         private int _pendingFloatingPointException;
         private ExtF80 _exceptionOperand;
         public M68060Interpreter(IM68kBus bus)
@@ -23,6 +25,7 @@ namespace Copper68k
         public override void Reset(uint programCounter, uint stackPointer)
         {
             base.Reset(programCounter, stackPointer);
+            _debugInstructionHalted = false;
             State.EnableM68060StackMode();
             State.M68060ProcessorConfiguration = 0x0430_0000; // First revision, ESS/DFP clear.
             State.M68060BusControl = 0;
@@ -31,6 +34,27 @@ namespace Copper68k
 
         protected override bool TryExecuteModelSpecificInstruction(ushort opcode)
         {
+            if (opcode is 0x4AC8 or 0x4ACC)
+            {
+                // MC68060UM 9.2.2: these reuse TAS mode-1 words on earlier
+                // processors. PULSE changes no integer state; physical PST and
+                // debug-port pipeline commands are outside this bus boundary.
+                BeginInstruction(opcode);
+                var pc = State.ProgramCounter;
+                _ = FetchWord();
+                if (opcode == 0x4AC8)
+                {
+                    if (!State.GetFlag(M68kCpuState.Supervisor))
+                    {
+                        RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation);
+                        return true;
+                    }
+                    _debugInstructionHalted = true;
+                    State.Halted = true;
+                }
+                CompleteTiming(M68kInstructionTimingKey.Nop);
+                return true;
+            }
             if (TryExecuteCacheMaintenance(opcode)) return true;
             if (opcode == 0x4E73) { Execute060Rte(); return true; }
             if ((opcode & 0xFFC0) is 0xF300 or 0xF340)
@@ -43,6 +67,14 @@ namespace Copper68k
                 var pc = State.ProgramCounter;
                 _ = FetchWord();
                 RaiseFormat0Exception(61, pc, M68kInstructionTimingKey.IllegalInstruction);
+                return true;
+            }
+            // Keep unassigned operand fields ahead of the inherited FPU decoder.
+            if ((opcode & 0xFF80) == 0xF200 && (opcode & 0x3F) >= 0x3D)
+            {
+                BeginInstruction(opcode);
+                _ = FetchWord();
+                RaiseFormat0Exception(11, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
                 return true;
             }
             if ((opcode & 0xFE00) == 0xF200 && (State.M68060ProcessorConfiguration & 2) != 0)
@@ -148,6 +180,11 @@ namespace Copper68k
             BeginInstruction(opcode);
             var pc = State.ProgramCounter;
             _ = FetchWord();
+            if (!IsValidCoprocessorStateFrameEa(opcode))
+            {
+                RaiseFormat0Exception(11, pc, M68kInstructionTimingKey.LineFException);
+                return true;
+            }
             if ((State.StatusRegister & M68kCpuState.Supervisor) == 0)
             {
                 RaiseFormat0Exception(8, pc, M68kInstructionTimingKey.PrivilegeViolation);
@@ -228,6 +265,10 @@ namespace Copper68k
             CompleteTiming(M68kInstructionTimingKey.Rte);
         }
 
+        // MC68060UM 8.2.4: an undefined MOVEC control field is illegal.
+        protected override bool IsMovecControlEncodingValid(int register) =>
+            register is >= 0 and <= 8 or 0x800 or 0x801 or 0x806 or 0x807 or 0x808;
+
         protected override bool TryReadControlRegister(int register, uint pc, out uint value)
         {
             switch (register)
@@ -235,11 +276,13 @@ namespace Copper68k
                 case 0x008: value = State.M68060BusControl; return true;
                 case 0x800: value = State.UserStackPointer; return true;
                 case 0x808: value = State.M68060ProcessorConfiguration; return true;
-                case 0x003: value = State.M68040Mmu.TranslationControl; return true;
-                case 0x004: value = State.M68040Mmu.InstructionTransparentTranslation0; return true;
-                case 0x005: value = State.M68040Mmu.InstructionTransparentTranslation1; return true;
-                case 0x006: value = State.M68040Mmu.DataTransparentTranslation0; return true;
-                case 0x007: value = State.M68040Mmu.DataTransparentTranslation1; return true;
+                // MC68060UM 4.1.2: bits 31-16 and bit 0 always read zero.
+                case 0x003: value = State.M68040Mmu.TranslationControl & 0xFFFE; return true;
+                // MC68060UM 4.1.3 has the same TTR zero-read mask as 040.
+                case 0x004: value = State.M68040Mmu.InstructionTransparentTranslation0 & 0xFFFF_E364; return true;
+                case 0x005: value = State.M68040Mmu.InstructionTransparentTranslation1 & 0xFFFF_E364; return true;
+                case 0x006: value = State.M68040Mmu.DataTransparentTranslation0 & 0xFFFF_E364; return true;
+                case 0x007: value = State.M68040Mmu.DataTransparentTranslation1 & 0xFFFF_E364; return true;
                 case 0x806: value = State.M68040Mmu.UserRootPointer; return true;
                 case 0x807: value = State.M68040Mmu.SupervisorRootPointer; return true;
                 case 0x802: case 0x803: case 0x804: case 0x805:
@@ -257,14 +300,16 @@ namespace Copper68k
                     // cache capacity are outside the current execution policy.
                     return base.TryWriteControlRegister(register, value & 0xF880_E000u, pc);
                 case 0x008:
-                    if (value != 0) throw Unavailable("BUSCR bus control", State.LastOpcode);
-                    State.M68060BusControl = 0; return true;
+                    // L/LE are software commands; SL/SLE retain exception state.
+                    State.M68060BusControl = (State.M68060BusControl & 0x5000_0000) | (value & 0xA000_0000);
+                    return true;
                 case 0x800: State.SetUserStackPointer(value); return true;
                 case 0x808:
                     State.M68060ProcessorConfiguration = 0x0430_0000 | (value & 0x83); return true;
                 case 0x003:
-                    State.M68040Mmu.TranslationControl = value & 0xFFFF; return true;
+                    State.M68040Mmu.TranslationControl = value & 0xFFFE; return true;
                 case 0x004: case 0x005: case 0x006: case 0x007:
+                    value &= 0xFFFF_E364;
                     if (register == 4) State.M68040Mmu.InstructionTransparentTranslation0 = value;
                     if (register == 5) State.M68040Mmu.InstructionTransparentTranslation1 = value;
                     if (register == 6) State.M68040Mmu.DataTransparentTranslation0 = value;
@@ -287,8 +332,8 @@ namespace Copper68k
             var sr = State.StatusRegister;
             State.RecordException(vector, pc, sr);
             State.StatusRegister = (ushort)((sr | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
-            if (vector == 5) PushLong(State.LastInstructionProgramCounter);
-            PushWord((ushort)((vector == 5 ? 0x2000 : 0) | (vector * 4)));
+            if (vector is 5 or 6 or 7 or 9) PushLong(State.LastInstructionProgramCounter);
+            PushWord((ushort)((vector is 5 or 6 or 7 or 9 ? 0x2000 : 0) | (vector * 4)));
             PushLong(pc);
             PushWord(sr);
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + (uint)vector * 4);
@@ -298,7 +343,8 @@ namespace Copper68k
 
         public override void RequestInterrupt(int level, uint vectorAddress)
         {
-            if (level <= 0 || (level != 7 && level <= ((State.StatusRegister >> 8) & 7))) return;
+            if (_debugInstructionHalted) return;
+            if (level <= 0 || level != 7 && level <= ((State.StatusRegister >> 8) & 7)) return;
             var sr = State.StatusRegister;
             var pc = State.ProgramCounter;
             State.Stopped = false;
@@ -310,6 +356,12 @@ namespace Copper68k
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + vectorAddress);
             DiscardInstructionPrefetch();
             CompleteTiming(M68kInstructionTimingKey.InterruptAcknowledge);
+        }
+
+        public override void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
+        {
+            if (_debugInstructionHalted) return;
+            base.BeginSubroutine(address, stackPointer, returnAddress);
         }
 
         private M68kEmulationException Unavailable(string feature, ushort opcode)

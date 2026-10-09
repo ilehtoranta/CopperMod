@@ -1,0 +1,8 @@
+--- gencpu.cpp (025b999239800357e95065fe5b9a15ea5b300fa7)
++++ gencpu-word-division.cpp (M68000PM 4-96 defined carry on DIVU overflow)
+@@
+ 		out("if (newv > 0xffff) {\n");
+ 		out("setdivuflags((uae_u32)dst, (uae_u16)src);\n");
++		out("SET_CFLG(0);\n");
+ 		out("} else {\n");
+ 		genflags (flag_logical, sz_word, "newv", "", "");

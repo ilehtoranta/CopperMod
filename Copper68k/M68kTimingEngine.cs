@@ -266,6 +266,7 @@ namespace Copper68k
         GeneralMove,
         GeneralMovem,
         GeneralArithmetic,
+        GeneralLogical,
         FullIndexedMoveToMemory,
         FullIndexedRegisterToMemory,
         FullIndexedClear,
@@ -1611,6 +1612,13 @@ namespace Copper68k
         private uint _fetchMmuGeneration;
         private uint _fetchMapGeneration;
         private bool _fetchSupervisor;
+        private uint _exceptionFetchBase;
+        private uint _exceptionFetchNext;
+        private uint _exceptionFetchFirst;
+        private uint _exceptionFetchSecond;
+        private uint _exceptionFetchThird;
+        private uint _exceptionFetchFourth;
+        private bool _exceptionFetchValid;
 
         public M68kTimedBusAdapter(
             IM68kBus bus,
@@ -1687,7 +1695,32 @@ namespace Copper68k
             return value;
         }
 
-        internal void ResetInstructionFetchBuffer() => _fetchValidLongs = 0;
+        internal void ResetInstructionFetchBuffer()
+        {
+            _fetchValidLongs = 0;
+            _exceptionFetchValid = false;
+        }
+
+        internal bool PrefetchM68040AccessErrorHandler(uint address)
+        {
+            ResetInstructionFetchBuffer();
+            if (!_useM68040UncachedHalfLine || _timing.InstructionCache.Enabled || _state.M68040Mmu.Enabled)
+                return false;
+            // MC68040UM 8.1, figure 8-1: four longwords precede handler
+            // execution. Table 7-3 starts uncached fetches at a half-line.
+            // Publish only a complete window; a failed entry remains fatal.
+            _exceptionFetchBase = address & ~7u;
+            _exceptionFetchFirst = ReadM68040InstructionLong(_exceptionFetchBase, out _);
+            _exceptionFetchSecond = ReadM68040InstructionLong(unchecked(_exceptionFetchBase + 4), out _);
+            _exceptionFetchThird = ReadM68040InstructionLong(unchecked(_exceptionFetchBase + 8), out _);
+            _exceptionFetchFourth = ReadM68040InstructionLong(unchecked(_exceptionFetchBase + 12), out _);
+            _exceptionFetchNext = address;
+            _fetchSupervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
+            _fetchMmuGeneration = _state.M68040Mmu.Generation;
+            _fetchMapGeneration = _physicalAddressMap?.CpuPhysicalAddressMapGeneration ?? 0;
+            _exceptionFetchValid = true;
+            return true;
+        }
 
         private ushort ReadM68040UncachedInstructionWord(
             uint address,
@@ -1702,6 +1735,28 @@ namespace Copper68k
             var supervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
             var mmuGeneration = _state.M68040Mmu.Generation;
             var mapGeneration = _physicalAddressMap?.CpuPhysicalAddressMapGeneration ?? 0;
+            if (_exceptionFetchValid)
+            {
+                var offset = unchecked(address - _exceptionFetchBase);
+                if (address == _exceptionFetchNext && offset < 16 &&
+                    _fetchSupervisor == supervisor && _fetchMmuGeneration == mmuGeneration &&
+                    _fetchMapGeneration == mapGeneration)
+                {
+                    var retained = (offset >> 2) switch {
+                        0 => _exceptionFetchFirst, 1 => _exceptionFetchSecond,
+                        2 => _exceptionFetchThird, _ => _exceptionFetchFourth
+                    };
+                    _exceptionFetchNext = unchecked(address + 2);
+                    if (offset == 14) _exceptionFetchValid = false;
+                    cacheHit = false;
+                    requiresSynchronization = false;
+                    completedMachineCycle = _state.Cycles;
+                    return (ushort)(retained >> ((address & 2) == 0 ? 16 : 0));
+                }
+                // A changed flow/context must not turn the entry window into
+                // an instruction cache, including a branch back into it.
+                ResetInstructionFetchBuffer();
+            }
             if (_fetchHalfLineAddress != halfLine || _fetchSupervisor != supervisor ||
                 _fetchMmuGeneration != mmuGeneration || _fetchMapGeneration != mapGeneration)
             {

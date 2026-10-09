@@ -45,6 +45,8 @@ internal sealed class AddressingFixture(SyntheticMachine machine, int width, Lis
 {
     public Func<uint>? SourcePointerTarget { get; private set; }
     public Func<uint>? DestinationPointerTarget { get; private set; }
+    public uint? SourcePointerAddress { get; private set; }
+    public uint? DestinationPointerAddress { get; private set; }
     public uint NextPc => SyntheticMachine.Code + (uint)words.Count * 2;
     public uint Resolve(OperandForm form, bool source)
     {
@@ -96,8 +98,8 @@ internal sealed class AddressingFixture(SyntheticMachine machine, int width, Lis
         var pointer = source ? 0x200000u : 0x300000u;
         machine.InitializePhysical(pointerLocation, pointer, 4);
         Func<uint> finalTarget = () => unchecked(machine.PeekPhysical(pointerLocation, 4) + od + (spec.Indirect >= 5 ? index : 0u));
-        if (source) SourcePointerTarget = finalTarget;
-        else DestinationPointerTarget = finalTarget;
+        if (source) { SourcePointerTarget = finalTarget; SourcePointerAddress = pointerLocation; }
+        else { DestinationPointerTarget = finalTarget; DestinationPointerAddress = pointerLocation; }
         return unchecked(pointer + od + (spec.Indirect >= 5 ? index : 0u));
     }
 

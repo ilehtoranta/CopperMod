@@ -1,0 +1,18 @@
+--- a/gencpu/gencpu.cpp
++++ b/gencpu/gencpu.cpp
+@@
+ 			if (cpu_level >= 4) {
+ 				// 68040: register update order swapped
+-				out("m68k_dreg(regs, (extra >> 16) & 7) = (m68k_dreg(regs, (extra >> 16) & 7) & ~0xffff) | (dst1 & 0xffff);\n");
+ 				out("m68k_dreg(regs, (extra >> 0) & 7) = (m68k_dreg(regs, (extra >> 0) & 7) & ~0xffff) | (dst2 & 0xffff);\n");
++				// M68000PM 4-68: a shared Dc receives memory operand 1.
++				out("m68k_dreg(regs, (extra >> 16) & 7) = (m68k_dreg(regs, (extra >> 16) & 7) & ~0xffff) | (dst1 & 0xffff);\n");
+ 			} else {
+@@
+ 			if (cpu_level >= 4) {
+ 				// 68040: register update order swapped
+-				out("m68k_dreg(regs, (extra >> 16) & 7) = dst1;\n");
+ 				out("m68k_dreg(regs, (extra >> 0) & 7) = dst2;\n");
++				// M68000PM 4-68: a shared Dc receives memory operand 1.
++				out("m68k_dreg(regs, (extra >> 16) & 7) = dst1;\n");
+ 			} else {

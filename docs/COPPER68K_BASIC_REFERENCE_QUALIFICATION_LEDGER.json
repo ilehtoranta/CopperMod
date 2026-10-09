@@ -1,0 +1,1489 @@
+{
+  "schema": 1,
+  "scope": "Observed first failures only; qualified counterpart presence never makes a raw Basic directory pass or qualifies unseen later cases.",
+  "sourceScope": "Frozen production CPU/test inputs used by full integration; focused private frame fixtures are outside this raw selection.",
+  "generatorPin": "025b999239800357e95065fe5b9a15ea5b300fa7",
+  "runnerPin": "7a83745d6c6159bc74ab0471578ffc8bc244e66e",
+  "rawManifestSha256": "b5741ca90fa75d3510ef25bac33d2d36d6a92ab2283f0666e762a5f1853a38ed",
+  "rawNativeSha256": "135d8c7d01137bbef2467e34207444984fd47a9076041a0c251848d2518b32ce",
+  "rawReportSha256": "4a08c9eac033fcf8320f9da5b8ff8c430ebb6695bcf60e86cb3705a73f507fa7",
+  "rawInputRecordSha256": "9386f2a388943515f85cc5182cfbf285ae086c54ce6dee96fd13437576502f88",
+  "rawExecutionRecordSha256": "dcbaf9a37da1edb1ad7bfa1791909a7b3fb2f25b79dce67a67d4ca4ca06cfd3f",
+  "fullIntegrationProofSha256": "a17fb76bcca015c9cebfc86072bc7c6ff977a69070295f79bc765589bdd43c4b",
+  "qualifiedReports": {
+    "winuae-breakpoint-audit.json": "71d97459ce449fadb386c7993cd6c53c6de9afa842a53d53561876ea1f285a4f",
+    "winuae-moves-audit.json": "2f85216f60919a2bb5ca880ec223d23d986d075a639292ad756c8518072087c9",
+    "winuae-trap-bounds-audit.json": "5560b6f7b2f42e4a99ca4e7b52359d4a0ed1e2e25f0b8cddbdd5ed941e15d9dc",
+    "winuae-long-arithmetic-audit.json": "983fe3820cfd053846b785874932b1addeceb3bce891f6182f03ca4f4b5a62bd",
+    "winuae-word-division-audit.json": "572a65f0b64a69773813b4e6d5acdc39a6301dab3bf9fc1db64b799f54a95655",
+    "winuae-cas2-audit.json": "69ab78d322335c3298787bf69e2406362e58e2940dfb7b64cdf5f941523c2743",
+    "winuae-cache-encodings-audit.json": "6b1d51c0e068907e8998ae2a9b587a3929489c649c8bec9d63259fc6906b569b",
+    "winuae-cas-audit.json": "4668d2566f2a26ebcb384c5f6594240bfb6f0439c65c9eaa3d8ca1a204b57656",
+    "winuae-lpstop-audit.json": "959afa70a7ced5d7a0be0366e26c942b91106d481cb79536d76fb7314853e1d4",
+    "winuae-move16-audit.json": "6810ed54ef8773a89f6280ab8ebf529f1e5270665dc19f64d1c0ee7808553d3a"
+  },
+  "rawCounts": {
+    "passing": 1327,
+    "mismatching": 46,
+    "unsupported": 8,
+    "untested": 0,
+    "executedCases": 11478371,
+    "exceptionFrames": 1668069
+  },
+  "classifications": {
+    "qualified-reference-correction": 40,
+    "reserved-or-undefined-input": 12,
+    "unresolved-architecture": 2
+  },
+  "entries": [
+    {
+      "model": "68010",
+      "family": "BKPT",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "4848",
+        "4E71",
+        "4AFC",
+        "00FA",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "1b5856db0d26f0d44d1eea1eae7665462c0757aa204ac71d47e253bc29b4fae2",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Fallback illegal exception must save opcode PC; the reference advances its internal PC before fallback.",
+      "qualifiedCounterpart": {
+        "report": "winuae-breakpoint-audit.json",
+        "model": "68010",
+        "family": "BKPT",
+        "executedCases": 32,
+        "documentationSection": "breakpoint-fallback-qualification-and-shared-audit-runner-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68010",
+      "family": "MOVES.L",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 783,
+      "firstWords": [
+        "0E9D",
+        "DA5E",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "4099fb46e796a43a80a036a9266a560bdbd59af57ce1854f6efb6351e83f82bb",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed extension has nonzero reserved fields; some stored same-An values are also undefined. Legal inputs have a separately qualified counterpart.",
+      "qualifiedCounterpart": {
+        "report": "winuae-moves-audit.json",
+        "model": "68010",
+        "family": "MOVES.L",
+        "executedCases": 4810,
+        "documentationSection": "moves-legal-input-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68010",
+      "family": "RTE",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 12,
+      "firstWords": [
+        "4E73",
+        "4AFC",
+        "4E71",
+        "00FA",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "9824f38311ee678ca512ecf3e677b589a04986ea1500655666ac198c92ce0c9b",
+      "firstFailureClassification": "unresolved-architecture",
+      "reason": "Invalid format/version RTE changes N/Z/V in the reference; manual evidence has not settled those flags. No hardware available.",
+      "qualifiedCounterpart": null,
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68EC020",
+      "family": "BKPT",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "4848",
+        "4E71",
+        "4AFC",
+        "00FA",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "e022201a2bc6ef453bb570e31d016cad1ec9974f028ed30a40b1102a33972867",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Fallback illegal exception must save opcode PC; the reference advances its internal PC before fallback.",
+      "qualifiedCounterpart": {
+        "report": "winuae-breakpoint-audit.json",
+        "model": "68EC020",
+        "family": "BKPT",
+        "executedCases": 32,
+        "documentationSection": "breakpoint-fallback-qualification-and-shared-audit-runner-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68EC020",
+      "family": "CHK2.B",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "00D0",
+        "0800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "429198949debe4ff5524f50f2f9cd4e10e06538d5fb357ef7ff318ac313d8134",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68EC020",
+        "family": "CHK2.B",
+        "executedCases": 1074,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68EC020",
+      "family": "CHK2.L",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "04D0",
+        "0800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "64f5ff0673fbe41ccb719704bba12dc8eeda500c936a68c4b36ae6fc95e1958f",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68EC020",
+        "family": "CHK2.L",
+        "executedCases": 1130,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68EC020",
+      "family": "CHK2.W",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 3,
+      "firstWords": [
+        "02D0",
+        "A800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "a638b4fa8c023eb69f00cfaa7b8088ad00129632b96f1f116f343ece1d0ff5a5",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68EC020",
+        "family": "CHK2.W",
+        "executedCases": 1048,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68EC020",
+      "family": "DIVL.L",
+      "diagnosticProfile": false,
+      "rawStatus": "unsupported",
+      "rawExecutedCases": 0,
+      "firstWords": [
+        "4C40",
+        "0031",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "d9f4c8b551d185d3c2d6550f6913ceef8c11381944eba44612cb1de7fd328ce9",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed extension has nonzero reserved long-arithmetic fields; this is not a legal form failing qualified execution.",
+      "qualifiedCounterpart": {
+        "report": "winuae-long-arithmetic-audit.json",
+        "model": "68EC020",
+        "family": "DIVL.L",
+        "executedCases": 2422,
+        "documentationSection": "long-arithmetic-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68EC020",
+      "family": "DIVU.W",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1480,
+      "firstWords": [
+        "84C0",
+        "4AFC",
+        "4E71",
+        "4E71",
+        "4E71",
+        "4E71"
+      ],
+      "rawDetailSha256": "c32eecf185cf86cb03f5a694278763ae06dee3c8055f07e5738fda99341261ec",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "The reference retains carry in a defined divide-overflow outcome; the qualified source clears it.",
+      "qualifiedCounterpart": {
+        "report": "winuae-word-division-audit.json",
+        "model": "68EC020",
+        "family": "DIVU.W",
+        "executedCases": 9670,
+        "documentationSection": "word-division-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68EC020",
+      "family": "MULL.L",
+      "diagnosticProfile": false,
+      "rawStatus": "unsupported",
+      "rawExecutedCases": 0,
+      "firstWords": [
+        "4C00",
+        "0084",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "dfe09db6939bab1cb31cdc3661baa67f65814e0a6dff3861feea28d4440eb559",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed extension has nonzero reserved long-arithmetic fields; this is not a legal form failing qualified execution.",
+      "qualifiedCounterpart": {
+        "report": "winuae-long-arithmetic-audit.json",
+        "model": "68EC020",
+        "family": "MULL.L",
+        "executedCases": 2456,
+        "documentationSection": "long-arithmetic-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68EC020",
+      "family": "TRAPcc",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "50FA",
+        "0095",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "17bdbd8c4876674a450c2214ae7fee8525a4d34caf8ee82001b1a3016c3d885e",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68EC020",
+        "family": "TRAPcc",
+        "executedCases": 156160,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68020",
+      "family": "BKPT",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "4848",
+        "4E71",
+        "4AFC",
+        "00FA",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "17f895252545f4d72e284def60c376361090cf33dda5d6912e8c3265dcc238bf",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Fallback illegal exception must save opcode PC; the reference advances its internal PC before fallback.",
+      "qualifiedCounterpart": {
+        "report": "winuae-breakpoint-audit.json",
+        "model": "68020",
+        "family": "BKPT",
+        "executedCases": 32,
+        "documentationSection": "breakpoint-fallback-qualification-and-shared-audit-runner-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68020",
+      "family": "CHK2.B",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "00D0",
+        "0800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "bae4e7f3ebd2bc265909b314660a03c7a7efb19b894599dc9d4ea35856ef1367",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68020",
+        "family": "CHK2.B",
+        "executedCases": 912,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68020",
+      "family": "CHK2.L",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "04D0",
+        "0800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "abe623c8d6a146ec5515737bf6516865cacbdbfff3c7f28f5526824cc28b76ab",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68020",
+        "family": "CHK2.L",
+        "executedCases": 874,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68020",
+      "family": "CHK2.W",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 5,
+      "firstWords": [
+        "02D0",
+        "2800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "2c509be6a42b92f94458ed412fa4f50aaefc131dfa687c60412f26c085765e3b",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68020",
+        "family": "CHK2.W",
+        "executedCases": 900,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68020",
+      "family": "DIVL.L",
+      "diagnosticProfile": false,
+      "rawStatus": "unsupported",
+      "rawExecutedCases": 0,
+      "firstWords": [
+        "4C40",
+        "0031",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "0a2bdbf2caca549f964b9d4baea55bf7b92bc381f434c5252aabc542f96c0bc9",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed extension has nonzero reserved long-arithmetic fields; this is not a legal form failing qualified execution.",
+      "qualifiedCounterpart": {
+        "report": "winuae-long-arithmetic-audit.json",
+        "model": "68020",
+        "family": "DIVL.L",
+        "executedCases": 2040,
+        "documentationSection": "long-arithmetic-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68020",
+      "family": "DIVU.W",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1344,
+      "firstWords": [
+        "84C0",
+        "4AFC",
+        "4E71",
+        "4E71",
+        "4E71",
+        "4AFC"
+      ],
+      "rawDetailSha256": "aad488a5adcd0a3a2a226877572b52b404f538f0baa14e07e47f307118f5a88c",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "The reference retains carry in a defined divide-overflow outcome; the qualified source clears it.",
+      "qualifiedCounterpart": {
+        "report": "winuae-word-division-audit.json",
+        "model": "68020",
+        "family": "DIVU.W",
+        "executedCases": 8870,
+        "documentationSection": "word-division-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68020",
+      "family": "MULL.L",
+      "diagnosticProfile": false,
+      "rawStatus": "unsupported",
+      "rawExecutedCases": 2,
+      "firstWords": [
+        "4C00",
+        "5B2B",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "0cd6614750402f09bcdb23940fa9a1d5c10f376e24bd5103deb75d4bcedf6763",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed extension has nonzero reserved long-arithmetic fields; this is not a legal form failing qualified execution.",
+      "qualifiedCounterpart": {
+        "report": "winuae-long-arithmetic-audit.json",
+        "model": "68020",
+        "family": "MULL.L",
+        "executedCases": 2046,
+        "documentationSection": "long-arithmetic-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68020",
+      "family": "TRAPcc",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "50FA",
+        "0038",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "009d54b9aad60448c50dca1404fa63254dee092d885c409c828a6fd501aba2c6",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68020",
+        "family": "TRAPcc",
+        "executedCases": 156160,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68030",
+      "family": "BKPT",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "4848",
+        "4E71",
+        "4AFC",
+        "00FA",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "17f895252545f4d72e284def60c376361090cf33dda5d6912e8c3265dcc238bf",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Fallback illegal exception must save opcode PC; the reference advances its internal PC before fallback.",
+      "qualifiedCounterpart": {
+        "report": "winuae-breakpoint-audit.json",
+        "model": "68030",
+        "family": "BKPT",
+        "executedCases": 32,
+        "documentationSection": "breakpoint-fallback-qualification-and-shared-audit-runner-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68030",
+      "family": "CHK2.B",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "00D0",
+        "0800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "bae4e7f3ebd2bc265909b314660a03c7a7efb19b894599dc9d4ea35856ef1367",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68030",
+        "family": "CHK2.B",
+        "executedCases": 912,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68030",
+      "family": "CHK2.L",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "04D0",
+        "0800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "abe623c8d6a146ec5515737bf6516865cacbdbfff3c7f28f5526824cc28b76ab",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68030",
+        "family": "CHK2.L",
+        "executedCases": 874,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68030",
+      "family": "CHK2.W",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 5,
+      "firstWords": [
+        "02D0",
+        "2800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "2c509be6a42b92f94458ed412fa4f50aaefc131dfa687c60412f26c085765e3b",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68030",
+        "family": "CHK2.W",
+        "executedCases": 900,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68030",
+      "family": "DIVL.L",
+      "diagnosticProfile": false,
+      "rawStatus": "unsupported",
+      "rawExecutedCases": 0,
+      "firstWords": [
+        "4C40",
+        "0031",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "1b5e08f127d5d0ef108c2795225e17687673505f9c9fbc9d5ea7620db713045a",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed extension has nonzero reserved long-arithmetic fields; this is not a legal form failing qualified execution.",
+      "qualifiedCounterpart": {
+        "report": "winuae-long-arithmetic-audit.json",
+        "model": "68030",
+        "family": "DIVL.L",
+        "executedCases": 2040,
+        "documentationSection": "long-arithmetic-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68030",
+      "family": "DIVU.W",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1344,
+      "firstWords": [
+        "84C0",
+        "4AFC",
+        "4E71",
+        "4E71",
+        "4E71",
+        "4AFC"
+      ],
+      "rawDetailSha256": "aad488a5adcd0a3a2a226877572b52b404f538f0baa14e07e47f307118f5a88c",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "The reference retains carry in a defined divide-overflow outcome; the qualified source clears it.",
+      "qualifiedCounterpart": {
+        "report": "winuae-word-division-audit.json",
+        "model": "68030",
+        "family": "DIVU.W",
+        "executedCases": 8870,
+        "documentationSection": "word-division-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68030",
+      "family": "MULL.L",
+      "diagnosticProfile": false,
+      "rawStatus": "unsupported",
+      "rawExecutedCases": 2,
+      "firstWords": [
+        "4C00",
+        "5B2B",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "4008e6b3b722aa284490c0e35bf4c42e3ad3c8a174a88f645059e2672062c0e4",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed extension has nonzero reserved long-arithmetic fields; this is not a legal form failing qualified execution.",
+      "qualifiedCounterpart": {
+        "report": "winuae-long-arithmetic-audit.json",
+        "model": "68030",
+        "family": "MULL.L",
+        "executedCases": 2046,
+        "documentationSection": "long-arithmetic-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68030",
+      "family": "TRAPcc",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "50FA",
+        "0038",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "009d54b9aad60448c50dca1404fa63254dee092d885c409c828a6fd501aba2c6",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68030",
+        "family": "TRAPcc",
+        "executedCases": 156160,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68040",
+      "family": "BKPT",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "4848",
+        "4E71",
+        "4AFC",
+        "00FA",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "17f895252545f4d72e284def60c376361090cf33dda5d6912e8c3265dcc238bf",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Fallback illegal exception must save opcode PC; the reference advances its internal PC before fallback.",
+      "qualifiedCounterpart": {
+        "report": "winuae-breakpoint-audit.json",
+        "model": "68040",
+        "family": "BKPT",
+        "executedCases": 32,
+        "documentationSection": "breakpoint-fallback-qualification-and-shared-audit-runner-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68040",
+      "family": "CAS2.W",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 23,
+      "firstWords": [
+        "0CFC",
+        "8083",
+        "E043",
+        "4E71",
+        "4AFC",
+        "00C7"
+      ],
+      "rawDetailSha256": "3e219ae3fba0a2effd4ce9b599af03eaa800d846428e6aeba50d5d5dc195105a",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "The reference mishandles shared compare-register operands; the qualified source preserves both original compare values.",
+      "qualifiedCounterpart": {
+        "report": "winuae-cas2-audit.json",
+        "model": "68040",
+        "family": "CAS2.W",
+        "executedCases": 42,
+        "documentationSection": "cas2-compare-alias-and-unimplemented-frame-reference-qualification--2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68040",
+      "family": "CHK2.B",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "00D0",
+        "0800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "e1510c242961a6117944bb5bed58213e5af97b2835bb7ea35fead26b38ba0b7d",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68040",
+        "family": "CHK2.B",
+        "executedCases": 912,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68040",
+      "family": "CHK2.L",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "04D0",
+        "0800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "4bc02c90b024c1dfe4258f6b0dcf1629227caf65e20fe2cdd010930e767f97a4",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68040",
+        "family": "CHK2.L",
+        "executedCases": 874,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68040",
+      "family": "CHK2.W",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 5,
+      "firstWords": [
+        "02D0",
+        "2800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "2c509be6a42b92f94458ed412fa4f50aaefc131dfa687c60412f26c085765e3b",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68040",
+        "family": "CHK2.W",
+        "executedCases": 900,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68040",
+      "family": "ILLEGAL",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 29331,
+      "firstWords": [
+        "F400",
+        "4E71",
+        "4AFC",
+        "00FA",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "c6a594c68e2acbb4861f1ca1f4a715706bd5d1065dace267b458f7216a31b752",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Observed F400 is cache scope zero: the documented outcome is illegal instruction, not the reference line-F expectation.",
+      "qualifiedCounterpart": {
+        "report": "winuae-cache-encodings-audit.json",
+        "model": "68040",
+        "family": "ILLEGAL",
+        "executedCases": 256,
+        "documentationSection": "cache-encoding-reference-qualification-and-consolidation--2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68040",
+      "family": "TRAPcc",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "50FA",
+        "0095",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "57f567ad2b8cbb714a652ac5b1921f21b559287d54d95ed3cc2bc003f0bbd66d",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68040",
+        "family": "TRAPcc",
+        "executedCases": 156160,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "BKPT",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "4848",
+        "4E71",
+        "4AFC",
+        "00FA",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "fcdb71a50a1926d4c8c4f7c96ec24e5d33f0bfd645fa91bcd7385ed35ea66759",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Fallback illegal exception must save opcode PC; the reference advances its internal PC before fallback.",
+      "qualifiedCounterpart": {
+        "report": "winuae-breakpoint-audit.json",
+        "model": "68060",
+        "family": "BKPT",
+        "executedCases": 32,
+        "documentationSection": "breakpoint-fallback-qualification-and-shared-audit-runner-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "CAS.L",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 273,
+      "firstWords": [
+        "0EE3",
+        "00C1",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "90471b386709ac245e0f05dcdefd967854d3f0381796956d6b853e314a714a4b",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "060 unimplemented misaligned integer entry requires original opcode PC before operand effects.",
+      "qualifiedCounterpart": {
+        "report": "winuae-cas-audit.json",
+        "model": "68060",
+        "family": "CAS.L",
+        "executedCases": 2652,
+        "documentationSection": "cas-legal-input-and-unimplemented-frame-reference-qualification--2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "CAS.W",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 273,
+      "firstWords": [
+        "0CE3",
+        "0043",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "c922cb23b983b72cd59d7c28ea8255c1b93fd876c4d3d1d1b97a9d8326528514",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "060 unimplemented misaligned integer entry requires original opcode PC before operand effects.",
+      "qualifiedCounterpart": {
+        "report": "winuae-cas-audit.json",
+        "model": "68060",
+        "family": "CAS.W",
+        "executedCases": 2442,
+        "documentationSection": "cas-legal-input-and-unimplemented-frame-reference-qualification--2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "DIVL.L",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 7,
+      "firstWords": [
+        "4C40",
+        "2406",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "a5f36f5d46b59462252e8e9a04cc5ae0c82aedcf7971d39e59ccbf89612e2b95",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "060 unimplemented-integer entry is detected before PC/EA effects; the qualified source separates that outcome from ordinary divide-by-zero.",
+      "qualifiedCounterpart": {
+        "report": "winuae-long-arithmetic-audit.json",
+        "model": "68060",
+        "family": "DIVL.L",
+        "executedCases": 3178,
+        "documentationSection": "long-arithmetic-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "ILLEGAL",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 29331,
+      "firstWords": [
+        "F400",
+        "4E71",
+        "4AFC",
+        "00FA",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "3fcf4ac0460ea40687b469b1a515bb86463b45822401afa9b11b2f71e2dad715",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Observed F400 is cache scope zero: the documented outcome is illegal instruction, not the reference line-F expectation.",
+      "qualifiedCounterpart": {
+        "report": "winuae-cache-encodings-audit.json",
+        "model": "68060",
+        "family": "ILLEGAL",
+        "executedCases": 256,
+        "documentationSection": "cache-encoding-reference-qualification-and-consolidation--2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "LPSTOP",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "F800",
+        "01C0",
+        "0000",
+        "4E71",
+        "4AFC",
+        "00C7"
+      ],
+      "rawDetailSha256": "03e01387ca4c514f4593358b3e2702366fd6bfac9e6b51fa18fde41692ad6bf4",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "The reference fixed-word helper advances its PC; the qualified source uses nonadvancing fetches and the documented opcode-PC privilege frame.",
+      "qualifiedCounterpart": {
+        "report": "winuae-lpstop-audit.json",
+        "model": "68060",
+        "family": "LPSTOP",
+        "executedCases": 245760,
+        "documentationSection": "lpstop-independent-exception-qualification-and-consolidation-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "MOVE16",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 617,
+      "firstWords": [
+        "F626",
+        "6000",
+        "4E71",
+        "4AFC",
+        "4E71",
+        "00C7"
+      ],
+      "rawDetailSha256": "baa71721b3d5390a170ac120090f36545905e0417ce0c3ef9919359619204920",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed post-post extension lacks its fixed bit 15; the reference also needs qualified same-register increment and supervisor-stack serialization.",
+      "qualifiedCounterpart": {
+        "report": "winuae-move16-audit.json",
+        "model": "68060",
+        "family": "MOVE16",
+        "executedCases": 43856,
+        "documentationSection": "canonical-move16-reference-qualification--2026-10-06"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "MOVES.B",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1073,
+      "firstWords": [
+        "0E22",
+        "AF26",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "73350e54aa1b80d460eb0c28373fa866da0c218cf2d9de589f86b2ae1fcf0743",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed extension has nonzero reserved fields; some stored same-An values are also undefined. Legal inputs have a separately qualified counterpart.",
+      "qualifiedCounterpart": {
+        "report": "winuae-moves-audit.json",
+        "model": "68060",
+        "family": "MOVES.B",
+        "executedCases": 5238,
+        "documentationSection": "moves-legal-input-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "MOVES.L",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 483,
+      "firstWords": [
+        "0E98",
+        "8BA2",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "218e9690228abd411907b6b72f3cea3c1c1a0e07e9eb0f2e4e580c654706e5a1",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed extension has nonzero reserved fields; some stored same-An values are also undefined. Legal inputs have a separately qualified counterpart.",
+      "qualifiedCounterpart": {
+        "report": "winuae-moves-audit.json",
+        "model": "68060",
+        "family": "MOVES.L",
+        "executedCases": 5334,
+        "documentationSection": "moves-legal-input-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "MULL.L",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 5,
+      "firstWords": [
+        "4C00",
+        "5C07",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "0e301d11a5ccb7cb396dfd9c3946abb48166656419d5927961e2b369e710d599",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "060 unimplemented-integer entry is detected before PC/EA effects; the qualified source separates that outcome from ordinary divide-by-zero.",
+      "qualifiedCounterpart": {
+        "report": "winuae-long-arithmetic-audit.json",
+        "model": "68060",
+        "family": "MULL.L",
+        "executedCases": 3226,
+        "documentationSection": "long-arithmetic-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "STOP",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 3,
+      "firstWords": [
+        "4E72",
+        "0000",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "13a35d482d96532a469d9e8bfbadfa811dbb2e7a4d3ed9c58c115c3e6898ca07",
+      "firstFailureClassification": "unresolved-architecture",
+      "reason": "Ordinary STOP with S clear in the immediate word disagrees on returned SR and privilege outcome; no hardware evidence is available.",
+      "qualifiedCounterpart": null,
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "68060",
+      "family": "TRAPcc",
+      "diagnosticProfile": true,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "50FA",
+        "0095",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "18e7014b6b4a23eb2fe8fc332067c57778147ad3987e7b7f6bc096ced6a41959",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "68060",
+        "family": "TRAPcc",
+        "executedCases": 156160,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "A1200",
+      "family": "BKPT",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "4848",
+        "4E71",
+        "4AFC",
+        "00FA",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "e022201a2bc6ef453bb570e31d016cad1ec9974f028ed30a40b1102a33972867",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Fallback illegal exception must save opcode PC; the reference advances its internal PC before fallback.",
+      "qualifiedCounterpart": {
+        "report": "winuae-breakpoint-audit.json",
+        "model": "A1200",
+        "family": "BKPT",
+        "executedCases": 32,
+        "documentationSection": "breakpoint-fallback-qualification-and-shared-audit-runner-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "A1200",
+      "family": "CHK2.B",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "00D0",
+        "0800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "429198949debe4ff5524f50f2f9cd4e10e06538d5fb357ef7ff318ac313d8134",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "A1200",
+        "family": "CHK2.B",
+        "executedCases": 1074,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "A1200",
+      "family": "CHK2.L",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "04D0",
+        "0800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "64f5ff0673fbe41ccb719704bba12dc8eeda500c936a68c4b36ae6fc95e1958f",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "A1200",
+        "family": "CHK2.L",
+        "executedCases": 1130,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "A1200",
+      "family": "CHK2.W",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 3,
+      "firstWords": [
+        "02D0",
+        "A800",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "a638b4fa8c023eb69f00cfaa7b8088ad00129632b96f1f116f343ece1d0ff5a5",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "A1200",
+        "family": "CHK2.W",
+        "executedCases": 1048,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "A1200",
+      "family": "DIVL.L",
+      "diagnosticProfile": false,
+      "rawStatus": "unsupported",
+      "rawExecutedCases": 0,
+      "firstWords": [
+        "4C40",
+        "0031",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "e222262e2a84424385a6678649000dc0fa06667834cfe5b105ed676323056eb2",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed extension has nonzero reserved long-arithmetic fields; this is not a legal form failing qualified execution.",
+      "qualifiedCounterpart": {
+        "report": "winuae-long-arithmetic-audit.json",
+        "model": "A1200",
+        "family": "DIVL.L",
+        "executedCases": 2422,
+        "documentationSection": "long-arithmetic-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "A1200",
+      "family": "DIVU.W",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1480,
+      "firstWords": [
+        "84C0",
+        "4AFC",
+        "4E71",
+        "4E71",
+        "4E71",
+        "4E71"
+      ],
+      "rawDetailSha256": "c32eecf185cf86cb03f5a694278763ae06dee3c8055f07e5738fda99341261ec",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "The reference retains carry in a defined divide-overflow outcome; the qualified source clears it.",
+      "qualifiedCounterpart": {
+        "report": "winuae-word-division-audit.json",
+        "model": "A1200",
+        "family": "DIVU.W",
+        "executedCases": 9670,
+        "documentationSection": "word-division-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "A1200",
+      "family": "MULL.L",
+      "diagnosticProfile": false,
+      "rawStatus": "unsupported",
+      "rawExecutedCases": 0,
+      "firstWords": [
+        "4C00",
+        "0084",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "2f52c4f268edef8d7961345392d034c51efc8a76909acdb27d607e01c1ee097b",
+      "firstFailureClassification": "reserved-or-undefined-input",
+      "reason": "Observed extension has nonzero reserved long-arithmetic fields; this is not a legal form failing qualified execution.",
+      "qualifiedCounterpart": {
+        "report": "winuae-long-arithmetic-audit.json",
+        "model": "A1200",
+        "family": "MULL.L",
+        "executedCases": 2456,
+        "documentationSection": "long-arithmetic-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    },
+    {
+      "model": "A1200",
+      "family": "TRAPcc",
+      "diagnosticProfile": false,
+      "rawStatus": "mismatching",
+      "rawExecutedCases": 1,
+      "firstWords": [
+        "50FA",
+        "0095",
+        "4E71",
+        "4AFC",
+        "0400",
+        "00C7"
+      ],
+      "rawDetailSha256": "17bdbd8c4876674a450c2214ae7fee8525a4d34caf8ee82001b1a3016c3d885e",
+      "firstFailureClassification": "qualified-reference-correction",
+      "reason": "Saved-PC synchronization differs; the qualified source computes the documented trap/bounds continuation PC.",
+      "qualifiedCounterpart": {
+        "report": "winuae-trap-bounds-audit.json",
+        "model": "A1200",
+        "family": "TRAPcc",
+        "executedCases": 156160,
+        "documentationSection": "trapcc-and-chk2-saved-pc-reference-qualification-2026-10-05"
+      },
+      "rawDirectoryResolved": false,
+      "laterRawFailuresUnobserved": true
+    }
+  ],
+  "rawGatePassed": false,
+  "architecturalPromotion": false,
+  "roadmapComplete": false
+}

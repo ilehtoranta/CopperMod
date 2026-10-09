@@ -66,16 +66,18 @@ Useful MC68040 environment variables:
 - `COPPER68K_MUSASHI_M68040_MAX_INSTRUCTIONS`: per-program execution cap; default is `1000000`.
 - `COPPER68K_MUSASHI_M68040_INCLUDE_KNOWN_FAILING`: include MC68040 programs that currently expose unsupported or divergent behavior.
 
-The MC68040 runner uses the interpreter backend. The default run excludes one
-known divergent program so the test remains useful in regular explicit audit
+The MC68040 runner uses the interpreter backend. The default run excludes two
+reviewed incompatible programs so the test remains useful in regular explicit audit
 passes:
 
+- `chk2.bin`: the final `02D7 8800` instruction is word-sized against long
+  bounds but asserts a long-sized trap; see the independent model audit notes.
 - `cmp2.bin`: the byte-size CMP2 carry expectation follows Musashi but conflicts
   with the test source author's inline note about the expected branch condition;
   SingleStepTests remain the authority when an instruction is covered there.
 
-With that exclusion, the current MC68040 Musashi baseline covers the bitfield
-programs, `cas.bin`, `chk2.bin`, long multiply/divide, `interrupt.bin`,
+With those exclusions, the current MC68040 Musashi baseline covers the bitfield
+programs, `cas.bin`, long multiply/divide, `interrupt.bin`,
 `jmp.bin`, `rtd.bin`, `shifts3.bin`, and `trapcc.bin`. Use
 `COPPER68K_MUSASHI_M68040_INCLUDE_KNOWN_FAILING=1` as an audit mode when working
 on the excluded program.
@@ -124,3 +126,14 @@ exception differences, and a few exact instruction forms found by the fixture
 prologues. Use
 `COPPER68K_M68KRS_EXTRA_INCLUDE_KNOWN_FAILING=1` as audit mode when working down
 those buckets.
+
+## Cross-model integer audit
+
+`test-copper68k-synthetic.ps1 -MusashiPath <pinned-repository-root>` reuses this
+program runner for all selected models, including the public A1200 factory.
+Both complete directories are required. The report records per-program/profile
+passes, mismatches, explicit exclusions, input hashes and retirement counts.
+See [qualification notes](../docs/COPPER68K_REFERENCE_QUALIFICATION.md) for
+source pins, reviewed exclusions and the distinction between independent
+software assertions and hardware qualification. Motorola manuals establish
+architectural expectations; third-party assertions require review.

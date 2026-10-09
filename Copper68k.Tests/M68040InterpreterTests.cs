@@ -16,7 +16,7 @@ public sealed class M68040InterpreterTests
 	}
 
 	[Fact]
-	public void MovecM68060ProcessorConfigurationRegisterProbeRaisesLineF()
+	public void MovecM68060ProcessorConfigurationRegisterProbeRaisesIllegalInstruction()
 	{
 		var bus = new Copper68kTestBus();
 		WriteWords(bus, CodeBase, 0x4E7A, 0x1808); // MOVEC PCR,D1
@@ -28,18 +28,18 @@ public sealed class M68040InterpreterTests
 
 		cpu.ExecuteInstruction();
 
-		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x3000u, cpu.State.ProgramCounter);
 		Assert.Equal(4u, cpu.State.D[1]);
 		Assert.Equal(StackBase - 8u, cpu.State.A[7]);
 		Assert.Equal(CodeBase, bus.ReadLong(StackBase - 6u));
-		Assert.Equal(11 * 4, bus.ReadWord(StackBase - 2u));
+		Assert.Equal(4 * 4, bus.ReadWord(StackBase - 2u));
 	}
 
 	[Fact]
 	public void Move16CopiesAlignedBlockAndAdvancesAddressRegisters()
 	{
 		var bus = new Copper68kTestBus();
-		WriteWords(bus, CodeBase, 0xF620, 0x1000); // MOVE16 (A0)+,(A1)+
+		WriteWords(bus, CodeBase, 0xF620, 0x9000); // MOVE16 (A0)+,(A1)+
 		for (var offset = 0u; offset < 16; offset += 4)
 		{
 			bus.WriteLong(0x3000 + offset, 0x1111_0000u + offset);
@@ -65,7 +65,7 @@ public sealed class M68040InterpreterTests
 	public void Move16SameRegisterCopiesLineOverItselfAndAdvancesOnce()
 	{
 		var bus = new Copper68kTestBus();
-		WriteWords(bus, CodeBase, 0xF620, 0x0000); // MOVE16 (A0)+,(A0)+
+		WriteWords(bus, CodeBase, 0xF620, 0x8000); // MOVE16 (A0)+,(A0)+
 		for (var offset = 0u; offset < 16; offset += 4)
 		{
 			bus.WriteLong(0x3000 + offset, 0xA0A0_0000u + offset);

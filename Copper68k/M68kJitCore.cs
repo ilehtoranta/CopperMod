@@ -1163,6 +1163,9 @@ namespace Copper68k
             bool allowV2TraceHandoff = true)
         {
             _pendingFallbackReason = M68kJitFallbackReason.Unknown;
+            // An RTE MOVEM continuation must consume its saved EA before any
+            // warmed compiled route can perform ordinary address calculation.
+            if (_fallback is M68kAdvancedTimingInterpreter { HasPendingM68040MovemContinuation: true }) return 0;
             // Architectural tracing requires an exception after each instruction.
             if ((State.StatusRegister & M68kCpuState.Trace) != 0)
                 return 0;
@@ -2511,6 +2514,11 @@ namespace Copper68k
                 State.M68040Mmu.Status = faultStatus;
                 RaiseM68040Format0Exception(2, stackedProgramCounter, 34);
             }
+            catch (M68040MmuFaultException)
+            {
+                ((M68040Interpreter)_fallback).LatchAccessErrorDoubleFault();
+                AddCycles(34); // Retain the compiled access-fault timing policy.
+            }
             finally
             {
                 State.M68040Mmu.BypassTranslation = bypass;
@@ -2561,7 +2569,7 @@ namespace Copper68k
         {
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
-            State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Master);
+            State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~0xc000);
             PushWord((ushort)((vector * 4) & 0x0FFF));
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
@@ -2590,6 +2598,7 @@ namespace Copper68k
             uint effectiveAddress,
             int cycles)
         {
+            var pending = State.M68040PendingFpuExceptions.Begin(format, vector, stackedProgramCounter);
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(vector, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((State.StatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Master);
@@ -2598,6 +2607,7 @@ namespace Copper68k
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
             State.ProgramCounter = ReadLong(State.VectorBaseRegister + ((uint)vector * 4));
+            State.M68040PendingFpuExceptions.Complete(pending);
             AddCycles(cycles);
         }
 
@@ -2613,7 +2623,7 @@ namespace Copper68k
                 return true;
             }
 
-            if ((opcode & 0xFFC0) == 0xF500 || (opcode & 0xFF00) == 0xF400)
+            if ((opcode & 0xFFE0) == 0xF500 || (opcode & 0xFFD8) == 0xF548 || (opcode & 0xFF00) == 0xF400)
             {
                 return true;
             }
@@ -3275,12 +3285,14 @@ namespace Copper68k
                     plan.Root,
                     plan.TraceInstructions,
                     emitBoundaryCalls: true,
+                    guardM68000Alignment: plan.M68000MemoryHelpers,
                     pinM68000Registers: false);
             var pureCompiled = !compileV2Only && plan.PureCpuBatchEligible
                 ? Compile(
                     plan.Root,
                     plan.TraceInstructions,
                     emitBoundaryCalls: false,
+                    guardM68000Alignment: plan.M68000MemoryHelpers,
                     pinM68000Registers: plan.M68000MemoryHelpers)
                 : null;
             var v2Compiled = plan.V2Trace.IsEmpty
@@ -4087,6 +4099,7 @@ namespace Copper68k
             uint root,
             ReadOnlySpan<M68kDecodedInstruction> instructions,
             bool emitBoundaryCalls,
+            bool guardM68000Alignment,
             bool pinM68000Registers)
         {
             var method = new DynamicMethod(
@@ -4130,6 +4143,10 @@ namespace Copper68k
             for (var i = 0; i < instructions.Length; i++)
             {
                 var instruction = instructions[i];
+                if (guardM68000Alignment)
+                {
+                    M68kOperationEmitter.EmitM68000AlignmentGuard(il, instruction, emitContext, returnLabels[i]);
+                }
                 il.Emit(OpCodes.Ldarg_0);
                 il.Emit(OpCodes.Ldarg_1);
                 il.Emit(OpCodes.Ldc_I4, i);
@@ -6163,6 +6180,10 @@ namespace Copper68k
                     fastReadFailureEnabled,
                     fastReadFailureLabel);
                 context.EmitCanContinuePure(exit);
+                if (!useM68020BriefIndexedAddressing)
+                {
+                    context.EmitM68000AlignmentGuard(instruction, exit);
+                }
                 if (fastReadFailureEnabled)
                 {
                     context.EmitSaveFastReadFailureBookkeeping();
@@ -6290,6 +6311,10 @@ namespace Copper68k
                     var instruction = instructions[i];
                     il.MarkLabel(labels[i]);
                     context.EmitCanContinue(exit);
+                    if (useM68000MemoryHelpers)
+                    {
+                        context.EmitM68000AlignmentGuard(instruction, exit);
+                    }
                     context.EmitStartInstruction(instruction);
                     EmitV2Instruction(
                         il,
@@ -6337,6 +6362,10 @@ namespace Copper68k
                 foreach (var instruction in instructions)
                 {
                     context.EmitCanContinue(exit);
+                    if (useM68000MemoryHelpers)
+                    {
+                        context.EmitM68000AlignmentGuard(instruction, exit);
+                    }
                     context.EmitStartInstruction(instruction);
                     EmitV2Instruction(
                         il,
@@ -13898,7 +13927,7 @@ namespace Copper68k
 
         private ushort ReadWord(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
-            if ((address & 1) != 0)
+            if (_cpuModel == M68kJitCpuModel.M68000 && (address & 1) != 0)
             {
                 throw new M68kEmulationException($"Odd MC68000 word read at 0x{address:X8}.");
             }
@@ -13923,7 +13952,7 @@ namespace Copper68k
 
         private uint ReadLong(uint address)
         {
-            if ((address & 1) != 0)
+            if (_cpuModel == M68kJitCpuModel.M68000 && (address & 1) != 0)
             {
                 throw new M68kEmulationException($"Odd MC68000 long read at 0x{address:X8}.");
             }
@@ -13979,7 +14008,7 @@ namespace Copper68k
 
         private void WriteWord(uint address, ushort value)
         {
-            if ((address & 1) != 0)
+            if (_cpuModel == M68kJitCpuModel.M68000 && (address & 1) != 0)
             {
                 throw new M68kEmulationException($"Odd MC68000 word write at 0x{address:X8}.");
             }
@@ -14011,7 +14040,7 @@ namespace Copper68k
 
         private void WriteLong(uint address, uint value)
         {
-            if ((address & 1) != 0)
+            if (_cpuModel == M68kJitCpuModel.M68000 && (address & 1) != 0)
             {
                 throw new M68kEmulationException($"Odd MC68000 long write at 0x{address:X8}.");
             }
@@ -14150,6 +14179,7 @@ namespace Copper68k
 
         private uint ReadClassicCompiledMemoryByte(uint address)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) return ReadByte(address);
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: false, prefetchPhase: 0);
             address = Normalize(address);
             var cycle = _classicCompiledCpuBusCycle;
@@ -14180,6 +14210,7 @@ namespace Copper68k
 
         private uint ReadClassicCompiledMemoryWord(uint address)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) return ReadWord(address);
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: false, prefetchPhase: 0);
             address = Normalize(address);
             if ((address & 1) != 0)
@@ -14217,6 +14248,7 @@ namespace Copper68k
 
         private uint ReadClassicCompiledMemoryLong(uint address)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) return ReadLong(address);
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: false, prefetchPhase: 0);
             address = Normalize(address);
             if ((address & 1) != 0)
@@ -14255,6 +14287,7 @@ namespace Copper68k
 
         private void WriteClassicCompiledMemoryByte(uint address, uint value)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) { WriteByte(address, (byte)value); return; }
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: true, prefetchPhase: 4);
             address = Normalize(address);
             var cycle = _classicCompiledCpuBusCycle;
@@ -14284,6 +14317,7 @@ namespace Copper68k
 
         private void WriteClassicCompiledMemoryWord(uint address, uint value)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) { WriteWord(address, (ushort)value); return; }
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: true, prefetchPhase: 4);
             address = Normalize(address);
             if ((address & 1) != 0)
@@ -14320,6 +14354,7 @@ namespace Copper68k
 
         private void WriteClassicCompiledMemoryLong(uint address, uint value)
         {
+            if (_cpuModel != M68kJitCpuModel.M68000) { WriteLong(address, value); return; }
             BeginClassicCompiledBusPhase(prefetchBeforeAccess: true, prefetchPhase: 4);
             address = Normalize(address);
             if ((address & 1) != 0)
@@ -15883,6 +15918,14 @@ namespace Copper68k
                 _il.Emit(OpCodes.Ldloc, Executed);
                 _il.Emit(OpCodes.Brfalse, returnZero);
             }
+
+            public void EmitM68000AlignmentGuard(M68kDecodedInstruction instruction, Label exit)
+                => M68kJitAlignmentEmitter.Emit(
+                    _il,
+                    instruction,
+                    register => EmitLoadDataRegister(register, M68kOperandSize.Long),
+                    EmitLoadAddressRegister,
+                    exit);
 
             public void EmitStartInstruction(M68kDecodedInstruction instruction)
             {

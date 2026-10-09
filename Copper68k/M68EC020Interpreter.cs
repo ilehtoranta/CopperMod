@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
 
 namespace Copper68k
 {
-    internal class M68EC020AddressMaskedBus :
+    internal class M68EC020AddressMaskedBus : IM68kModuleAccessBus,
         IM68kBus,
         IM68kFastMemoryBus,
         IM68kPhysicalAddressMap
@@ -18,6 +18,7 @@ namespace Copper68k
         private readonly IM68kCodeReader? _codeReader;
         private readonly IM68kFastMemoryBus? _fastMemoryBus;
         private readonly IM68kPhysicalAddressMap? _physicalAddressMap;
+        internal bool HasPhysicalAddressMap => _physicalAddressMap is not null;
 
         internal M68EC020AddressMaskedBus(IM68kBus bus)
         {
@@ -26,6 +27,16 @@ namespace Copper68k
             _fastMemoryBus = bus as IM68kFastMemoryBus;
             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
         }
+
+        bool IM68kModuleAccessBus.TryReadModuleByte(uint address, out byte value)
+        {
+            if (_bus is IM68kModuleAccessBus module) return module.TryReadModuleByte(address, out value);
+            value = 0; return false;
+        }
+        bool IM68kModuleAccessBus.TryWriteModuleByte(uint address, byte value)
+            => _bus is IM68kModuleAccessBus module && module.TryWriteModuleByte(address, value);
+        bool IM68kModuleAccessBus.TryWriteModuleLong(uint address, uint value)
+            => _bus is IM68kModuleAccessBus module && module.TryWriteModuleLong(address, value);
 
         internal static M68EC020AddressMaskedBus Create(IM68kBus bus)
             => bus is IM68kCodeReader ? new CodeReadableBus(bus) : new M68EC020AddressMaskedBus(bus);
@@ -108,7 +119,25 @@ namespace Copper68k
             => Mask(address) <= AddressMask - 3 && (_fastMemoryBus?.TryWriteFastLong(Mask(address), value, accessKind) ?? false);
 
         public bool IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind accessKind)
-            => _physicalAddressMap?.IsCpuPhysicalAddressMapped(Mask(address), byteCount, accessKind) ?? false;
+        {
+            if (_physicalAddressMap is not { } map) return false;
+            var physical = Mask(address);
+            var firstSpan = (int)(AddressMask - physical + 1);
+            if (byteCount <= firstSpan)
+                return map.IsCpuPhysicalAddressMapped(physical, byteCount, accessKind);
+            // The host map uses full physical addresses. Match the existing
+            // timed-bus wrapping without asking about fictitious bytes above
+            // the EC020's address space. These are predicates, not bus cycles.
+            var remaining = byteCount;
+            while (remaining > 0)
+            {
+                var count = Math.Min(remaining, (int)(AddressMask - physical + 1));
+                if (!map.IsCpuPhysicalAddressMapped(physical, count, accessKind)) return false;
+                remaining -= count;
+                physical = 0;
+            }
+            return true;
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static uint Mask(uint address) => address & AddressMask;

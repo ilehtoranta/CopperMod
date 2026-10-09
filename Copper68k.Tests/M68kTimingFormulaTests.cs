@@ -192,7 +192,7 @@ public sealed class M68kTimingFormulaTests
 	}
 
 	private static bool IsDynamicTimingKey(M68kInstructionTimingKey key)
-		=> key is M68kInstructionTimingKey.GeneralArithmetic or M68kInstructionTimingKey.GeneralMove or M68kInstructionTimingKey.GeneralMovem or M68kInstructionTimingKey.FullIndexedMoveToRegister or
+		=> key is M68kInstructionTimingKey.GeneralLogical or M68kInstructionTimingKey.GeneralArithmetic or M68kInstructionTimingKey.GeneralMove or M68kInstructionTimingKey.GeneralMovem or M68kInstructionTimingKey.FullIndexedMoveToRegister or
 			M68kInstructionTimingKey.FullIndexedMoveToMemory or M68kInstructionTimingKey.FullIndexedRegisterToMemory or
 			M68kInstructionTimingKey.FullIndexedClear or M68kInstructionTimingKey.FullIndexedLea or M68kInstructionTimingKey.FullIndexedPea or
 			M68kInstructionTimingKey.FullIndexedJump or M68kInstructionTimingKey.FullIndexedSubroutine or

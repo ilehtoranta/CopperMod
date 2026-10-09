@@ -5,6 +5,41 @@ namespace Copper68k.Tests;
 public sealed class M68kAddressErrorTests
 {
 	[Fact]
+	public void HostRequestedHaltStillAllowsExplicitSubroutineEntry()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x4000, 0x747b, 0x4e71);
+		var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68000, bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.Halted = true; // host convention, not a latched architectural double fault
+		cpu.BeginSubroutine(0x4000, 0x3000, 0x5000);
+		cpu.ExecuteInstruction();
+		Assert.False(cpu.State.Halted);
+		Assert.Equal(123u, cpu.State.D[2]);
+		Assert.Equal(0x2ffcu, cpu.State.A[7]);
+		Assert.Equal(0x5000u, bus.ReadLong(0x2ffc));
+	}
+
+	[Fact]
+	public void OddAddressErrorHandlerHaltsBeforeBuildingAnotherFrame()
+	{
+		var bus = new Copper68kTestBus();
+		bus.WriteWords(0x1000, 0x3010, 0x4e71);
+		bus.WriteLong(3 * 4, 0x4001);
+		var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68000, bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2001;
+
+		cpu.ExecuteInstruction();
+
+		Assert.True(cpu.State.Halted);
+		Assert.False(cpu.State.Stopped);
+		Assert.Equal(0x2ff2u, cpu.State.A[7]); // first frame only
+		Assert.Equal(3, cpu.State.LastExceptionVector);
+		Assert.Equal(0x4001u, cpu.State.ProgramCounter);
+	}
+
+	[Fact]
 	public void OddWordDataReadRaisesAddressErrorWith68000Frame()
 	{
 		var bus = new Copper68kTestBus();

@@ -1,0 +1,15 @@
+--- a/gencpu/gencpu.cpp
++++ b/gencpu/gencpu.cpp
+@@
+ 	case i_LPSTOP: /* 68060 */
+-		out("uae_u16 sw = %s(2);\n", srcwi);
++		out("uae_u16 sw = get_word_test_prefetch(2);\n");
+ 		out("if (sw != 0x01c0) {\n");
+@@
+ 		out("if (!(regs.sr & 0x2000)) {\n");
+ 		out("Exception(8);\n");
+ 		write_return_cycles(0);
+ 		out("}\n");
+-		out("uae_u16 newsr = %s(4);\n", srcwi);
++		out("uae_u16 newsr = get_word_test_prefetch(4);\n");
+ 		out("if (!(newsr & 0x2000)) {\n");

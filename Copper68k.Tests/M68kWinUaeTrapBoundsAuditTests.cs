@@ -1,0 +1,202 @@
+using System.Text.Json;
+using Copper68k.Tests.Synthetic;
+using Xunit.Sdk;
+
+namespace Copper68k.Tests;
+
+public sealed partial class M68kWinUaeCpuTesterConformanceTests
+{
+    private const string TrapBoundsSourceHash = "3ef386033792e585b093e55a44242b32d2cee16be7a597aa687bae7191ca449d";
+    private const string TrapBoundsPatchHash = "ca94d93ec49447e853769bb93bd4e823fe313854aba59601161b35ef8f7bcca4";
+
+    [EnvironmentFact("COPPER68K_RUN_WINUAE_TRAP_BOUNDS_AUDIT", "audit qualified WinUAE TRAPcc/CHK2 saved PCs")]
+    public void WinUaeTrapAndBoundsAcrossAdvancedModelsWhenEnabled() => RunQualifiedExceptionPreset(new(
+        "TrapBounds", "TRAP_BOUNDS", "gencpu-trap-bounds.cpp", "trap-bounds-pc.patch", "TrapBounds",
+        TrapBoundsSourceHash, TrapBoundsPatchHash, "winuae-trap-bounds-audit.json",
+        ["68020", "68030", "68040", "68060", "68EC020"],
+        ["68EC020", "68020", "68030", "68040", "68060", "A1200"], TrapBoundsFamilies, TrapBoundsCounts,
+        "TRAPcc on EC020/A1200/020/030/040/060; CHK2 B/W/L on EC020/A1200/020/030/040. Basic CCR 0/31 and user/supervisor, full extensions enabled, no incoming trace/bus faults. CHK2 is unavailable on 060 and is covered architecturally by synthetic tests, not this generated preset. Patched software reference, not unchanged upstream or silicon qualification."));
+
+    [EnvironmentFact("COPPER68K_RUN_WINUAE_BREAKPOINT_AUDIT", "audit qualified WinUAE BKPT illegal-exception saved PCs")]
+    public void WinUaeBreakpointExceptionsAcrossSelectedModelsWhenEnabled() => RunQualifiedExceptionPreset(new(
+        "Breakpoints", "BREAKPOINT", "gencpu-breakpoints.cpp", "breakpoint-pc.patch", "Breakpoint",
+        "d83606b597e5bd38efc289e0ecbd1d41843e67ecedaac72e4b9335312d2ead21", "27b0fb21a7fadbe0bf92ae42074ceaf665d7c19a83efdc841bc7730befc87a7b", "winuae-breakpoint-audit.json",
+        ["68010", "68020", "68030", "68040", "68060", "68EC020"],
+        ["68010", "68EC020", "68020", "68030", "68040", "68060", "A1200"],
+        _ => ["BKPT"], (_, _) => (32, 32),
+        "BKPT illegal-exception fallback on 010/EC020/A1200/020/030/040/060. Basic CCR 0/31 and user/supervisor. No incoming trace/bus faults or external breakpoint instruction replacement; acknowledge pins and physical cycles are unqualified. Patched software reference, not unchanged upstream or silicon qualification."));
+
+    private void RunQualifiedExceptionPreset(QualifiedExceptionPreset preset)
+    {
+        var root = Environment.GetEnvironmentVariable($"COPPER68K_WINUAE_{preset.EnvironmentKey}_PATH");
+        var library = Environment.GetEnvironmentVariable($"COPPER68K_WINUAE_{preset.EnvironmentKey}_LIBRARY")
+            ?? Environment.GetEnvironmentVariable(LibraryVariable);
+        var output = Environment.GetEnvironmentVariable("COPPER68K_SYNTHETIC_REPORT_DIR");
+        if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(library) || string.IsNullOrWhiteSpace(output))
+            throw new XunitException($"{preset.Name} audit requires qualified fixtures, native library and report directory.");
+        var manifestFile = Path.Combine(root, "manifest.json");
+        var json = File.ReadAllText(manifestFile);
+        var manifest = JsonSerializer.Deserialize<WinUaeManifest>(json) ?? throw new XunitException($"Missing {preset.Name} manifest.");
+        using var identity = JsonDocument.Parse(json);
+        var fields = identity.RootElement;
+        var sourcePath = Path.Combine(root, preset.SourceName);
+        if (preset.InputIdentity is { } input)
+        {
+            var inputPath = Path.Combine(root, input.SourceName);
+            var normalizedInputHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(File.ReadAllText(inputPath).Replace("\r\n", "\n")))).ToLowerInvariant();
+            if (normalizedInputHash != input.SourceHash ||
+                Hash(inputPath) != fields.GetProperty(preset.ManifestPrefix + "InputSourceSha256").GetString() ||
+                fields.GetProperty(preset.ManifestPrefix + "InputPatchSha256").GetString() != input.PatchHash ||
+                Hash(Path.Combine(root, input.PatchName)) != input.PatchHash)
+                throw new XunitException($"{preset.Name} input source or patch identity is unqualified.");
+        }
+        var normalizedSourceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(File.ReadAllText(sourcePath).Replace("\r\n", "\n")))).ToLowerInvariant();
+        if (manifest.Schema != 1 || manifest.GeneratorCommit != GeneratorPin || manifest.RunnerCommit != RunnerPin ||
+            fields.GetProperty("Preset").GetString() != preset.Name || normalizedSourceHash != preset.SourceHash ||
+            fields.GetProperty(preset.ManifestPrefix + "PatchSha256").GetString() != preset.PatchHash ||
+            Hash(sourcePath) != fields.GetProperty(preset.ManifestPrefix + "SourceSha256").GetString() ||
+            Hash(Path.Combine(root, preset.PatchName)) != preset.PatchHash ||
+            Hash(Path.Combine(root, "cputester.exe")) != fields.GetProperty("GeneratorExecutableSha256").GetString() ||
+            Hash(library) != manifest.NativeLibrarySha256)
+            throw new XunitException($"{preset.Name} source, patch, generator or native identity is unqualified.");
+        var profileIds = preset.ProfileIds;
+        if (manifest.Profiles.Length != profileIds.Length || !manifest.Profiles.Select(x => x.Id).Order().SequenceEqual(profileIds.Order()))
+            throw new XunitException($"{preset.Name} audit requires its complete profile selection, without empty or duplicate selections.");
+        var models = preset.ModelIds.Select(id => ModelSpec.All.Single(x => x.Id == id)).ToArray();
+        foreach (var model in models) ValidateWinUaeProfile(root, manifest, model, requiredOpcodes: preset.Families(model));
+        var rows = new List<WinUaeQualifiedExceptionRow>();
+        var probes = new List<WinUaeQualifiedExceptionProbe>();
+        using var tester = NativeTester.Load(library);
+        foreach (var model in models)
+        {
+            var fixture = manifest.Profiles.Single(x => x.Id == FixtureId(model.Id));
+            var path = Path.Combine(root, fixture.Id);
+            foreach (var family in preset.Families(model))
+            {
+                var expected = preset.Counts(model, family);
+                // A frame corruption control applies only to a corpus containing
+                // exception frames. Zero-frame selections still require exact
+                // zero-frame counts and independent register/SR controls.
+                var frameRequired = !preset.AllowFrameFreeFamilies || expected.Frames != 0;
+                var register = tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptResult: true);
+                var sr = tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptSr: 0x10);
+                var frame = frameRequired ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptFrame: true) : default;
+                var frameDetected = !frameRequired || (!frame.Passed && tester.FrameChecks > 0 &&
+                    frame.Detail.Contains("frame byte", StringComparison.Ordinal));
+                var pcRequired = preset.SavedPcControls && frameRequired;
+                var pc = pcRequired ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptSavedPc: true) : default;
+                var pcDetected = !pcRequired || (!pc.Passed && pc.ExecutedCases > 0 && tester.FrameChecks > 0 &&
+                    pc.Detail.Contains("frame byte 5", StringComparison.Ordinal));
+                var aliasRequired = preset.CompareAliasControls?.Invoke(model, family) == true;
+                var alias = aliasRequired ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptCas2CompareAlias: true) : default;
+                var aliasDetected = !aliasRequired || (!alias.Passed && alias.ExecutedCases > 0 &&
+                    alias.Detail.Contains(":D", StringComparison.Ordinal));
+                var detected = !register.Passed && register.ExecutedCases > 0 && !sr.Passed && sr.ExecutedCases > 0 &&
+                    sr.Detail.Contains("SR:", StringComparison.Ordinal) && frameDetected && pcDetected && aliasDetected;
+                var carry = preset.ArithmeticFlagControls ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptSr: 1) : default;
+                var carryDetected = !preset.ArithmeticFlagControls || (!carry.Passed && carry.ExecutedCases > 0 && carry.Detail.Contains("SR:", StringComparison.Ordinal));
+                var ignored = preset.ArithmeticFlagControls ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptIgnoredSr: true) : default;
+                var ignoredAccepted = !preset.ArithmeticFlagControls || (ignored.Passed && ignored.ExecutedCases > 0 && tester.MaskedCases > 0);
+                detected &= carryDetected && ignoredAccepted;
+                var memory = preset.MemoryControls ? tester.Run(path, family, fixture.CpuLevel, false, false, model, corruptMove16Memory: true) : default;
+                var memoryDetected = !preset.MemoryControls || (!memory.Passed && memory.ExecutedCases > 0 &&
+                    memory.Detail.Contains("Memory", StringComparison.Ordinal));
+                detected &= memoryDetected;
+                probes.Add(new(model.Id, family, detected, register.ExecutedCases, sr.ExecutedCases, frame.ExecutedCases,
+                    preset.ArithmeticFlagControls, carryDetected, carry.ExecutedCases, ignoredAccepted, ignored.ExecutedCases,
+                    frameRequired, frameDetected, pcRequired, pcDetected, pc.ExecutedCases,
+                    pcRequired ? pc.Detail : null, aliasRequired, aliasDetected, alias.ExecutedCases,
+                    aliasRequired ? alias.Detail : null, preset.MemoryControls, memoryDetected, memory.ExecutedCases,
+                    preset.MemoryControls ? memory.Detail : null));
+                var result = tester.Run(path, family, fixture.CpuLevel, false, false, model,
+                    fixtureClassifier: preset.ClassifyForm is null ? null : (opcode, inputSr) => preset.ClassifyForm(opcode, inputSr, family),
+                    fixtureWordsClassifier: preset.ClassifyWords is null ? null : (opcode, extension, followingWord, inputSr) => preset.ClassifyWords(model, opcode, extension, followingWord, inputSr, family),
+                    fixtureRegisterClassifier: preset.ClassifyRegisters is null ? null : (opcode, extension, followingWord, inputSr, registers) => preset.ClassifyRegisters(model, opcode, extension, followingWord, inputSr, registers, family));
+                var forms = new SortedDictionary<string, int>(tester.FixtureForms.ToDictionary(x => x.Key, x => x.Value), StringComparer.Ordinal);
+                var expectedForms = preset.FormCounts?.Invoke(model, family) ?? 0;
+                var formDistributionMatches = preset.ExpectedForms is null || forms.SequenceEqual(preset.ExpectedForms(model, family).OrderBy(x => x.Key, StringComparer.Ordinal));
+                var formDistributionSha256 = WinUaeFormDistributionSha256(forms);
+                if (preset.ExpectedFormHash is not null)
+                    formDistributionMatches &= formDistributionSha256 == preset.ExpectedFormHash(model, family);
+                var expectedMasked = preset.MaskedCounts?.Invoke(model, family) ?? (family.StartsWith("CHK2.", StringComparison.Ordinal) ? (uint)expected.Cases : 0);
+                var referenceGaps = preset.ReferenceGaps?.Invoke(forms) ?? [];
+                var passing = detected && result.Passed && result.ExecutedCases == expected.Cases &&
+                    tester.FrameChecks == expected.Frames && tester.MaskedCases == expectedMasked &&
+                    forms.Count == expectedForms && formDistributionMatches && (!preset.RequireCompleteReferenceCoverage || referenceGaps.Count == 0) && ((preset.ClassifyForm is null && preset.ClassifyWords is null && preset.ClassifyRegisters is null) || forms.Values.Sum() == result.ExecutedCases);
+                var detail = $"{result.Detail} Expected/actual callbacks={expected.Cases}/{result.ExecutedCases}, frames={expected.Frames}/{tester.FrameChecks}, masked={expectedMasked}/{tester.MaskedCases}, forms={expectedForms}/{forms.Count}, formDistributionMatches={formDistributionMatches}.";
+                rows.Add(new(model.Id, family, passing ? "passing" : tester.UnsupportedExecution ? "unsupported" : result.ExecutedCases == 0 ? "untested" : "mismatching",
+                    result.ExecutedCases, tester.FrameChecks, tester.MaskedCases, detected, forms, detail, formDistributionSha256, referenceGaps));
+                _output.WriteLine($"{model.Id}/{family}: {result.ExecutedCases} callbacks, {tester.FrameChecks} frames; controls={detected}.");
+            }
+        }
+        Directory.CreateDirectory(output);
+        File.WriteAllText(Path.Combine(output, preset.ReportName), JsonSerializer.Serialize(new
+        {
+            schema = 1, reference = $"WinUAE {preset.Name} preset with explicit Motorola-qualified reference correction",
+            manifest.GeneratorCommit, manifest.RunnerCommit, manifest.NativeLibrarySha256,
+            manifestSha256 = Hash(manifestFile), generatorSourceSha256 = Hash(sourcePath),
+            generatorNormalizedSourceSha256 = preset.SourceHash, generatorPatchSha256 = preset.PatchHash,
+            inputIdentity = preset.InputIdentity,
+            adapterAssemblySha256 = Hash(typeof(M68kWinUaeCpuTesterConformanceTests).Assembly.Location),
+            cpuAssemblySha256 = Hash(typeof(Copper68k.M68kCoreFactory).Assembly.Location),
+            qualification = preset.Qualification,
+            passing = rows.Count(x => x.Status == "passing"), mismatching = rows.Count(x => x.Status == "mismatching"),
+            unsupported = rows.Count(x => x.Status == "unsupported"), executedCases = rows.Sum(x => (long)x.ExecutedCases),
+            untested = rows.Count(x => x.Status == "untested"),
+            exceptionFrames = rows.Sum(x => (long)x.ExceptionFrames), maskedSrCases = rows.Sum(x => (long)x.MaskedSrCases),
+            architecturalForms = rows.Sum(x => x.Forms.Count),
+            unavailableReferenceCombinations = rows.Sum(x => x.ReferenceGaps.Count),
+            probes, rows
+        }, new JsonSerializerOptions { WriteIndented = true }));
+        Assert.True(rows.All(x => x.Status == "passing"), string.Join(Environment.NewLine,
+            rows.Where(x => x.Status != "passing").Select(x => $"{x.Model}/{x.Family}: controls={x.Controls}; {x.Detail}")));
+    }
+
+    private static string[] TrapBoundsFamilies(ModelSpec model) => model.Id == "68060"
+        ? ["TRAPcc"] : ["CHK2.B", "CHK2.W", "CHK2.L", "TRAPcc"];
+    private static (int Cases, uint Frames) TrapBoundsCounts(ModelSpec model, string family) =>
+        (FixtureId(model.Id), family) switch
+        {
+            (_, "TRAPcc") => (156160, 78080),
+            ("68EC020", "CHK2.B") => (1074, 628),
+            ("68EC020", "CHK2.W") => (1048, 534),
+            ("68EC020", "CHK2.L") => (1130, 546),
+            (_, "CHK2.B") => (912, 542),
+            (_, "CHK2.W") => (900, 533),
+            (_, "CHK2.L") => (874, 406),
+            _ => throw new XunitException($"Unqualified trap/bounds family: {model.Id}/{family}")
+        };
+    private sealed record QualifiedExceptionPreset(string Name, string EnvironmentKey, string SourceName, string PatchName,
+        string ManifestPrefix, string SourceHash, string PatchHash, string ReportName, string[] ProfileIds, string[] ModelIds,
+        Func<ModelSpec, string[]> Families, Func<ModelSpec, string, (int Cases, uint Frames)> Counts, string Qualification,
+        bool ArithmeticFlagControls = false, Func<ModelSpec, string, uint>? MaskedCounts = null,
+        Func<ushort, ushort, string, string>? ClassifyForm = null, Func<ModelSpec, string, int>? FormCounts = null,
+        Func<ModelSpec, ushort, ushort, ushort, ushort, string, string>? ClassifyWords = null,
+        Func<ModelSpec, string, IReadOnlyDictionary<string, int>>? ExpectedForms = null,
+        QualifiedInputIdentity? InputIdentity = null, bool AllowFrameFreeFamilies = false, bool SavedPcControls = false,
+        Func<ModelSpec, ushort, ushort, ushort, ushort, IReadOnlyList<uint>, string, string>? ClassifyRegisters = null,
+        Func<ModelSpec, string, bool>? CompareAliasControls = null, bool MemoryControls = false,
+        Func<ModelSpec, string, string>? ExpectedFormHash = null,
+        Func<IReadOnlyDictionary<string, int>, IReadOnlyList<string>>? ReferenceGaps = null,
+        bool RequireCompleteReferenceCoverage = false);
+    private sealed record QualifiedInputIdentity(string SourceName, string PatchName, string SourceHash, string PatchHash);
+    private sealed record WinUaeQualifiedExceptionRow(string Model, string Family, string Status, int ExecutedCases,
+        uint ExceptionFrames, uint MaskedSrCases, bool Controls, SortedDictionary<string, int> Forms, string Detail,
+        string FormDistributionSha256, IReadOnlyList<string> ReferenceGaps);
+    private sealed record WinUaeQualifiedExceptionProbe(string Model, string Family, bool Detected,
+        int RegisterCases, int SrCases, int FrameCases, bool ArithmeticFlagControls,
+        bool CarryDetected, int CarryCases, bool IgnoredAccepted, int IgnoredCases,
+        bool FrameControlRequired, bool FrameDetected, bool SavedPcControlRequired,
+        bool SavedPcDetected, int SavedPcCases, string? SavedPcDetail,
+        bool CompareAliasControlRequired, bool CompareAliasDetected, int CompareAliasCases, string? CompareAliasDetail,
+        bool MemoryControlRequired, bool MemoryDetected, int MemoryCases, string? MemoryDetail);
+
+    internal static string WinUaeFormDistributionSha256(IReadOnlyDictionary<string, int> forms)
+    {
+        var text = string.Concat(forms.OrderBy(x => x.Key, StringComparer.Ordinal)
+            .Select(x => $"{x.Key}={x.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n"));
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+    }
+}
