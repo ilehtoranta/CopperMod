@@ -31,7 +31,7 @@ public sealed class M68040FpuContinuationStateTests
         IM68kCore core = engine == "accurate" ? M68kCoreFactory.Default.Create(M68kCpuModel.M68040, bus)
             : M68kJitCore.CreateM68040ForTesting(bus, engine == "v2");
         using var disposable = core as IDisposable;
-        core.Reset(0x1000, 0x8000); core.State.A[0] = 0x4200; core.State.CacheControlRegister = 1;
+        core.Reset(0x1000, 0x8000); core.State.A[0] = 0x4200; core.State.CacheControlRegister = 0x8000;
         core.State.M68040Fpu.FP[1] = ExtF80.FromBits(0x3fff, 0x8000000000000000);
         var format = post ? 3 : 2; var vector = post ? 55 : 11;
         for (var n = 0; n < (engine == "accurate" ? 1 : 300); n++)
@@ -109,7 +109,7 @@ public sealed class M68040FpuContinuationStateTests
         IM68kCore core = engine == "accurate" ? M68kCoreFactory.Default.Create(M68kCpuModel.M68040, bus)
             : M68kJitCore.CreateM68040ForTesting(bus, engine == "v2");
         using var disposable = core as IDisposable;
-        core.Reset(0x1000, 0x8000); core.State.A[0] = 0x4200; core.State.CacheControlRegister = 1;
+        core.Reset(0x1000, 0x8000); core.State.A[0] = 0x4200; core.State.CacheControlRegister = 0x8000;
         core.State.M68040Fpu.FP[1] = ExtF80.FromBits(0x3fff, 0x8000000000000000);
         for (var n = 0; n < (engine == "accurate" ? 1 : 300); n++)
         { core.State.ProgramCounter = 0x1000; ExecuteOne(core); }

@@ -40,14 +40,14 @@ public sealed class SyntheticM68040AccessDoubleFaultTests(ITestOutputHelper outp
                 IM68kCore core = engine == "accurate" ? M68kCoreFactory.Default.Create(M68kCpuModel.M68040, executionBus)
                     : M68kJitCore.CreateM68040ForTesting(executionBus, engine == "v2");
                 using var disposable = core as IDisposable;
-                core.Reset(0x2000, 0x4700); core.State.A[0] = 0x4200; core.State.CacheControlRegister = 1;
+                core.Reset(0x2000, 0x4700); core.State.A[0] = 0x4200; core.State.CacheControlRegister = 0x8000;
                 for (var n = 0; n < 300; n++) Execute(core);
                 if (core is M68kJitCore warm && warm.Counters.TraceHits + warm.Counters.V2TraceHits == 0)
                     throw new InvalidOperationException("No actual compiled warm dispatch");
                 // Keep compiled code, clear dispatch continuation from the warm loop.
                 if (core is M68kJitCore prepared) prepared.ResetForBenchmark(form == "RTE" ? 0x1000u : 0x2000u, 0x4700);
                 else core.Reset(form == "RTE" ? 0x1000u : 0x2000u, 0x4700);
-                core.State.A[0] = 0x4200 + alignment; core.State.CacheControlRegister = 1;
+                core.State.A[0] = 0x4200 + alignment; core.State.CacheControlRegister = 0x8000;
                 var frame = (bank == "MSP" ? 0x7400u : 0x4700u) + alignment;
                 core.State.SetInterruptStackPointer(0x4700 + alignment); core.State.SetMasterStackPointer(0x7400 + alignment);
                 core.State.StatusRegister = (ushort)((bank == "MSP" ? 0x3000 : 0x2000) | ccr);

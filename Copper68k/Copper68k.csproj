@@ -9,9 +9,9 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.5.2</Version>
-    <PackageVersion>1.5.2</PackageVersion>
-    <PackageReleaseNotes>Development candidate: completes synthetic MOVE/MOVEA, transfer/address and arithmetic/comparison milestones across seven CPU models and A1200 EC020 with 2945168 deterministic logical cases. Adds remaining arithmetic EAs, full indexed arithmetic, memory ADDX/SUBX and PACK/UNPK. Fixes active stack-bank updates, decimal operand alias ordering, signed word division overflow and model-specific divide-by-zero frames and returns. Earlier MOVE/MOVEM, address-width and partial-execution fixes are retained. Logical/bit/shift and control/system milestones and cross-model external qualification remain untested. Existing admitted brief timing policies remain approximate; physical timing is not qualified. This version is unpublished until explicitly released.</PackageReleaseNotes>
+    <Version>1.5.4-synthetic-dev.1</Version>
+    <PackageVersion>1.5.4-synthetic-dev.1</PackageVersion>
+    <PackageReleaseNotes>Development integration of mainline 1.5.3 with the synthetic instruction suite. Includes qualified integer, exception and continuation coverage; retains mainline 040/060 paging and 060 FPU support. Unclear architectural protocols remain explicitly deferred. Not authorized for publication.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

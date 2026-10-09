@@ -43,6 +43,7 @@ public sealed class KeyboardDeviceServicesTests
         var state = new M68kCpuState { Cycles = 100, ProgramCounter = 0x2000 };
         state.A[7] = 0x5000;
         service.ProcessPending(state);
+        CompleteInputOpen(bus, state);
         Assert.Equal(Input - 30, state.ProgramCounter);
         Assert.Equal(Input, bus.ReadLong(state.A[1] + 0x14));
         Assert.Equal(11, bus.ReadWord(state.A[1] + 0x1C));
@@ -98,6 +99,7 @@ public sealed class KeyboardDeviceServicesTests
         Assert.True(service.QueueKeyDown(AmigaRawKey.A));
         state.A[7] = 0x5000;
         service.ProcessPending(state);
+        CompleteInputOpen(bus, state);
         Assert.Equal(Input - 30, state.ProgramCounter);
         Assert.Empty(replies);
     }
@@ -114,11 +116,17 @@ public sealed class KeyboardDeviceServicesTests
         var state = new M68kCpuState { Cycles = 10, ProgramCounter = 0x2200 };
         state.A[7] = 0x5000;
         service.ProcessPending(state);
+        CompleteInputOpen(bus, state);
         Assert.Equal(Input - 30, state.ProgramCounter);
+        state.A[7] += 4; // native BeginIO returns
         Assert.True(Invoke(bus, 0x00F0_8600, state));
+        Assert.Equal(Input - 12, state.ProgramCounter);
+        state.A[7] += 4; // native Close returns
+        Assert.True(Invoke(bus, 0x00F0_8630, state));
 
         state.Cycles = service.GetNextDeadline(10, long.MaxValue);
         service.ProcessPending(state);
+        CompleteInputOpen(bus, state);
         var inputEvent = bus.ReadLong(state.A[1] + 0x28);
         Assert.Equal((ushort)AmigaRawKey.A, bus.ReadWord(inputEvent + 6));
         Assert.NotEqual(0, bus.ReadWord(inputEvent + 8) & 0x0200);
@@ -208,8 +216,7 @@ public sealed class KeyboardDeviceServicesTests
         const uint firstHandler = 0x3A00, secondHandler = 0x3A40;
         var bus = CreateBus(); InitializeDevices(bus);
         var calls = new List<(uint Entry, uint Continuation, uint Data)>(); var resets = 0;
-        uint scratch = 0x4000;
-        using var service = new KeyboardDeviceServices(bus, new ExecMemoryOperations((_, _) => scratch, (_, _) => { }, (address, length) => bus.ClearMemory(address, length)), _ => { }, _ => { }, () => 0,
+        using var service = new KeyboardDeviceServices(bus, CreateMemory(bus), _ => { }, _ => { },
             (state, entry, continuation) => calls.Add((entry, continuation, state.A[1])), () => resets++);
         Assert.True(service.TryInstall(ExecBase)); Open(bus);
         WriteResetHandler(bus, firstHandler, priority: 16, data: 0x1111, code: 0x2000);
@@ -238,8 +245,8 @@ public sealed class KeyboardDeviceServicesTests
     {
         const uint handler = 0x3A00;
         var bus = CreateBus(); InitializeDevices(bus);
-        var calls = new List<uint>(); var resets = 0; uint scratch = 0x4000;
-        using var service = new KeyboardDeviceServices(bus, new ExecMemoryOperations((_, _) => scratch, (_, _) => { }, (address, length) => bus.ClearMemory(address, length)), _ => { }, _ => { }, () => 0,
+        var calls = new List<uint>(); var resets = 0;
+        using var service = new KeyboardDeviceServices(bus, CreateMemory(bus), _ => { }, _ => { },
             (_, entry, _) => calls.Add(entry), () => resets++);
         Assert.True(service.TryInstall(ExecBase)); Open(bus);
         WriteResetHandler(bus, handler, priority: 0, data: 0, code: 0x2000);
@@ -258,8 +265,8 @@ public sealed class KeyboardDeviceServicesTests
     {
         const uint handler = 0x3A00;
         var bus = CreateBus(); InitializeDevices(bus);
-        var resets = 0; uint scratch = 0x4000;
-        using var service = new KeyboardDeviceServices(bus, new ExecMemoryOperations((_, _) => scratch, (_, _) => { }, (address, length) => bus.ClearMemory(address, length)), _ => { }, _ => { }, () => 0,
+        var resets = 0;
+        using var service = new KeyboardDeviceServices(bus, CreateMemory(bus), _ => { }, _ => { },
             (_, _, _) => { }, () => resets++);
         Assert.True(service.TryInstall(ExecBase)); Open(bus);
         WriteResetHandler(bus, handler, priority: 0, data: 0, code: 0x2000);
@@ -276,10 +283,30 @@ public sealed class KeyboardDeviceServicesTests
     {
         var allocation = 0x4000u;
         scratch = allocation;
-        return new KeyboardDeviceServices(bus, new ExecMemoryOperations((_, _) => allocation, (_, _) => { }, (address, length) => bus.ClearMemory(address, length)), (replies ?? new List<uint>()).Add, _ => { }, getCurrentTask ?? (() => 0));
+        return new KeyboardDeviceServices(bus, CreateMemory(bus, getCurrentTask), (replies ?? new List<uint>()).Add, _ => { });
     }
 
+    private static ExecMemoryContext CreateMemory(AmigaBus bus, Func<uint>? getCurrentTask = null)
+        => new(bus, (bytes, flags) =>
+        {
+            const uint allocation = 0x4000;
+            if ((flags & (uint)global::Amiga.Exec.MemoryFlags.Clear) != 0)
+                bus.ClearMemory(allocation, bytes);
+            return allocation;
+        }, (_, _) => 0, (_, _) => { }, _ => 0, (_, _, _) => 0,
+            (_, _, _) => { }, _ => 0, (_, _, _) => { }, (_, _, _) => { }, (_, _) => { },
+            getExecBase: () => ExecBase, getCurrentTask: getCurrentTask ?? (() => 0));
+
     private static AmigaBus CreateBus() => new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithLiveAgnusDma(false)).Bus;
+
+    private static void CompleteInputOpen(AmigaBus bus, M68kCpuState state)
+    {
+        Assert.Equal(Input - 6, state.ProgramCounter);
+        Assert.Equal(0x00F0_8620u, bus.ReadLong(state.A[7]));
+        bus.WriteByte(state.A[1] + 0x1F, 0, state.Cycles);
+        state.A[7] += 4; // successful native Open returns
+        Assert.True(Invoke(bus, 0x00F0_8620, state));
+    }
 
     private static void Open(AmigaBus bus)
     {

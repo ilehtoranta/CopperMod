@@ -5,6 +5,59 @@ namespace Copper68k.Tests;
 
 public sealed class M68010InterpreterTests
 {
+    [Fact]
+    public void InvalidRteFrameIsRetainedBelowFormatErrorFrame()
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, CodeBase, 0x4E73);
+        bus.WriteLong(14 * 4, 0x2000);
+        WriteWords(bus, 0x3000, 0x2700, 0, 0x1800, 0x1000);
+        var cpu = new M68010Interpreter(bus); cpu.Reset(CodeBase, 0x3000);
+        cpu.ExecuteInstruction();
+        Assert.Equal(14, cpu.State.LastExceptionVector);
+        Assert.Equal(0x2FF8u, cpu.State.A[7]); Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+        Assert.Equal(0x1000, bus.ReadWord(0x3006));
+        Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
+    }
+
+    [Fact]
+    public void Format8RteConsumesEntireFrameAndRetainsLiveStackBank()
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, CodeBase, 0x3211);
+        WriteWords(bus, 0x2000, 0x4E73);
+        bus.WriteLong(12, 0x2000);
+        var cpu = new M68010Interpreter(bus); cpu.Reset(CodeBase, 0x3000); cpu.State.A[1] = 1;
+        cpu.ExecuteInstruction();
+        // Exercise an unmarked structural frame, not a marked MOVE restart.
+        bus.WriteWord(cpu.State.A[7] + 28, 0);
+        bus.WriteLong(cpu.State.A[7] + 2, CodeBase + 2);
+        cpu.ExecuteInstruction();
+        Assert.Equal(0x3000u, cpu.State.A[7]);
+        Assert.Equal(0x3000u, cpu.State.SupervisorStackPointer);
+        Assert.Equal(CodeBase + 2, cpu.State.ProgramCounter);
+    }
+
+    [Fact]
+    public void MoveFromSrIsPrivilegedButMoveFromCcrIsAvailableInUserMode()
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, CodeBase, 0x42C0, 0x40C1);
+        bus.WriteLong(8 * 4, 0x2000);
+        var cpu = new M68010Interpreter(bus); cpu.Reset(CodeBase, 0x3000);
+        cpu.State.ResetStackPointers(0x3000, 0x4000, supervisorMode: false);
+        cpu.State.StatusRegister = 0x15;
+        cpu.ExecuteInstruction(); Assert.Equal(0x15u, cpu.State.D[0]);
+        cpu.ExecuteInstruction(); Assert.Equal(8, cpu.State.LastExceptionVector); Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+    }
+
+    [Fact]
+    public void RtdPopsReturnPcAndAppliesSignedStackDisplacement()
+    {
+        var bus = new ZeroWaitCodeBus(); WriteWords(bus, CodeBase, 0x4E74, 0xFFF8);
+        bus.WriteLong(0x3000, 0x2000);
+        var cpu = new M68010Interpreter(bus); cpu.Reset(CodeBase, 0x3000);
+        cpu.ExecuteInstruction(); Assert.Equal(0x2000u, cpu.State.ProgramCounter); Assert.Equal(0x2FFCu, cpu.State.A[7]);
+    }
+
 	[Fact]
 	public void FactoryCreatesM68010CoreWithoutM68020StackMode()
 	{
@@ -150,11 +203,61 @@ public sealed class M68010InterpreterTests
 		cpu.State.A[1] = 1;
 		cpu.ExecuteInstruction();
 		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
-		Assert.Equal(0x2FC6u, cpu.State.A[7]);
-		Assert.Equal(M68kCpuState.ResetStatusRegister, bus.ReadWord(0x2FC6));
-		Assert.Equal(CodeBase, bus.ReadLong(0x2FC8));
-		Assert.Equal(0x800Cu, bus.ReadWord(0x2FCC));
+        Assert.Equal(0x2FC6u, cpu.State.A[7]);
+        Assert.Equal(M68kCpuState.ResetStatusRegister, bus.ReadWord(0x2FC6));
+        Assert.Equal(CodeBase, bus.ReadLong(0x2FC8));
+        Assert.Equal(0x800Cu, bus.ReadWord(0x2FCC));
+        Assert.Equal(0x1105, bus.ReadWord(0x2FCE));
+        Assert.Equal(1u, bus.ReadLong(0x2FD0));
+        Assert.Equal(0, bus.ReadWord(0x2FDE)); // Instruction input is unqualified.
+	}
+
+	[Fact]
+	public void RejectsM68020OnlyExtbLong()
+	{
+		var bus = new ZeroWaitCodeBus();
+		WriteWords(bus, CodeBase, 0x49C0); // EXTB.L D0
+		bus.WriteLong(4u * 4u, 0x0000_2000);
+		var cpu = new M68010Interpreter(bus);
+		cpu.Reset(CodeBase, 0x3000);
+		cpu.State.D[0] = 0x0000_0080;
+		cpu.ExecuteInstruction();
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x0000_0080u, cpu.State.D[0]);
+		Assert.Equal(0x2FF8u, cpu.State.A[7]);
+		Assert.Equal(CodeBase, bus.ReadLong(0x2FFA));
+		Assert.Equal(4 * 4, bus.ReadWord(0x2FFE));
 	}
 
 	private const uint CodeBase = 0x1000;
+    [Theory]
+    [InlineData(0x0E10, 0x1800, 0x123456ABu, 0xABu)]
+    [InlineData(0x0E50, 0x1800, 0x1234FEDCu, 0xFEDCu)]
+    [InlineData(0x0E90, 0x1800, 0x12345678u, 0x12345678u)]
+    public void MovesWritesSizedOperandWithoutChangingCcr(int opcode, int extension, uint value, uint expected)
+    {
+        var bus = new Copper68kTestBus(0x10000);
+        bus.WriteWords(CodeBase, (ushort)opcode, (ushort)extension);
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68010, bus);
+        cpu.Reset(CodeBase, 0x7000); cpu.State.StatusRegister = 0x271F;
+        cpu.State.A[0] = 0x2000; cpu.State.D[1] = value;
+        cpu.ExecuteInstruction();
+        var actual = (opcode & 0xC0) switch { 0 => bus.Memory[0x2000], 0x40 => bus.ReadWord(0x2000), _ => bus.ReadLong(0x2000) };
+        Assert.Equal(expected, actual); Assert.Equal(0x271F, cpu.State.StatusRegister);
+        Assert.Equal(CodeBase + 4, cpu.State.ProgramCounter);
+    }
+
+    [Fact]
+    public void MovesWordSignExtendsAddressRegisterAndIsPrivileged()
+    {
+        var bus = new Copper68kTestBus(0x10000);
+        bus.WriteWords(CodeBase, 0x0E50, 0x9000); bus.WriteWord(0x2000, 0xFEDC);
+        bus.WriteLong(32, 0x4000);
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68010, bus);
+        cpu.Reset(CodeBase, 0x7000); cpu.State.A[0] = 0x2000;
+        cpu.ExecuteInstruction(); Assert.Equal(0xFFFFFEDCu, cpu.State.A[1]);
+        cpu.Reset(CodeBase, 0x7000); cpu.State.A[0] = 0x2000; cpu.State.StatusRegister = 0;
+        cpu.ExecuteInstruction(); Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+        Assert.Equal(8, cpu.State.LastExceptionVector); Assert.Equal(0x2000u, cpu.State.A[0]);
+    }
 }

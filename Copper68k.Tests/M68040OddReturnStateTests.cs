@@ -20,7 +20,7 @@ public sealed class M68040OddReturnStateTests
         IM68kCore core = engine == "accurate" ? M68kCoreFactory.Default.Create(M68kCpuModel.M68040, executionBus)
             : M68kJitCore.CreateM68040ForTesting(executionBus, engine == "v2");
         using var disposable = core as IDisposable;
-        core.Reset(0x2000, 0x4700); core.State.CacheControlRegister = 1;
+        core.Reset(0x2000, 0x4700); core.State.CacheControlRegister = 0x8000;
         for (var n = 0; n < (engine == "accurate" ? 1 : 300); n++) Execute(core);
         if (core is M68kJitCore warmed)
             Assert.True(warmed.Counters.TraceHits + warmed.Counters.V2TraceHits > 0, "Require actual compiled warm dispatch before testing RTE fallback");

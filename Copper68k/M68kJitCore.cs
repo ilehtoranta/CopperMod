@@ -92,7 +92,7 @@ namespace Copper68k
         public M68040Move16CopyStrategy Move16CopyStrategy { get; }
     }
 
-    internal sealed class M68kJitCore : IM68kBatchCore, IM68kInstructionFrequencyProvider, IM68000InterruptRecognition, IM68000PrefetchDiagnostics
+    internal sealed class M68kJitCore : IM68kBatchCore, IM68kInstructionFrequencyProvider, IM68000InterruptRecognition, IM68000PrefetchDiagnostics, IM68kJitDiagnostics
     {
         private const int CompileThreshold = 16;
         private const int MaxTraceInstructions = 64;
@@ -126,7 +126,7 @@ namespace Copper68k
         private const int BlacklistHits = 256;
         private const int CodeGenerationPageShift = 8;
         private const int CodeGenerationPageSize = 1 << CodeGenerationPageShift;
-        private const uint M68040InstructionCacheEnable = 0x0000_0001;
+        private const uint M68040InstructionCacheEnable = 0x0000_8000;
         private const ushort LogicFlags = M68kCpuState.Negative |
             M68kCpuState.Zero |
             M68kCpuState.Overflow |
@@ -985,6 +985,11 @@ namespace Copper68k
                 : (int)(State.Cycles - startCycles);
         }
 
+        /// <inheritdoc />
+        public M68kJitStatistics GetJitStatistics() => new(
+            _counters.CompiledTraces, _counters.DirectIlInstructions + _counters.HelperIlInstructions,
+            _counters.FallbackInstructions, _counters.Invalidations);
+
         public int ExecuteInstructions(int maxInstructions, long? targetCycle, IM68kInstructionBoundary boundary)
         {
             ArgumentNullException.ThrowIfNull(boundary);
@@ -1015,7 +1020,10 @@ namespace Copper68k
                 int traced;
                 try
                 {
-                    traced = TryExecuteTrace(maxInstructions - instructions, targetCycle, boundary);
+                    // Paged/transparent accesses retain the interpreter's timed
+                    // walks, permission checks and model-specific fault frames.
+                    traced = _cpuModel == M68kJitCpuModel.M68040 && !State.M68040Mmu.DirectIdentityAccessEnabled
+                        ? 0 : TryExecuteTrace(maxInstructions - instructions, targetCycle, boundary);
                 }
                 catch (M68040MmuFaultException ex) when (_cpuModel == M68kJitCpuModel.M68040)
                 {
@@ -2819,8 +2827,10 @@ namespace Copper68k
                         $"MC68040 MMU table read from unmapped physical address 0x{physicalAddress:X8}.");
                 }
 
-                var cycle = State.Cycles;
-                return _bus.ReadLong(Normalize(physicalAddress), ref cycle, M68kBusAccessKind.CpuDataRead);
+                if (_bus is not IM68kJitBus codeBus)
+                    throw new M68kEmulationException("MMU compilation requires side-effect-free code access.");
+                return ((uint)codeBus.ReadJitCodeWord(Normalize(physicalAddress)) << 16) |
+                    codeBus.ReadJitCodeWord(Normalize(physicalAddress + 2));
             }
             finally
             {

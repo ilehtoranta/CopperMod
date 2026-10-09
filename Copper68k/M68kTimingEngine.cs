@@ -1873,7 +1873,8 @@ namespace Copper68k
             out bool requiresSynchronization,
             out long completedMachineCycle)
         {
-            if (_codeReader is not null && _timing.TryReadInstructionCacheWord(address, out var cachedValue))
+            if ((_m68040LogicalBus is null || _state.M68040Mmu.DirectIdentityAccessEnabled) &&
+                _codeReader is not null && _timing.TryReadInstructionCacheWord(address, out var cachedValue))
             {
                 cacheHit = true;
                 requiresSynchronization = false;
@@ -1899,7 +1900,7 @@ namespace Copper68k
             _timing.RecordPostedBusCompletion(cycle);
             requiresSynchronization = true;
             completedMachineCycle = cycle;
-            if (_codeReader is not null)
+            if (_codeReader is not null && (_m68040LogicalBus is null || _state.M68040Mmu.DirectIdentityAccessEnabled))
             {
                 _timing.CaptureInstructionCacheLine(address, _codeReader);
             }
@@ -2030,7 +2031,7 @@ namespace Copper68k
 
         private bool CanUseFastInstructionFetch(uint address, M68kBusAccessKind accessKind)
         {
-            if (!_profile.FastInstructionFetch ||
+            if ((_m68040LogicalBus is not null && !_state.M68040Mmu.DirectIdentityAccessEnabled) || !_profile.FastInstructionFetch ||
                 accessKind != M68kBusAccessKind.CpuInstructionFetch)
             {
                 return false;

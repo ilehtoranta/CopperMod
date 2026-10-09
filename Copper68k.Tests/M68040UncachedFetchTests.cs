@@ -67,19 +67,20 @@ public sealed class M68040UncachedFetchTests
         var bus = new FetchBus();
         bus.Memory.WriteWords(0x2000, 0x7201);
         bus.Memory.WriteWords(0x3000, 0x7203);
-        bus.Memory.WriteLong(0x4004, 0x2001);
-        bus.Memory.WriteLong(0x5004, 0x3001);
-        bus.Memory.WriteLong(0x6004, 0x2001);
+        bus.Memory.WriteLong(0x4000, 0x4202); bus.Memory.WriteLong(0x4200, 0x4402); bus.Memory.WriteLong(0x4404, 0x2001);
+        bus.Memory.WriteLong(0x5000, 0x5202); bus.Memory.WriteLong(0x5200, 0x5402); bus.Memory.WriteLong(0x5404, 0x3001);
+        bus.Memory.WriteLong(0x6000, 0x6202); bus.Memory.WriteLong(0x6200, 0x6402); bus.Memory.WriteLong(0x6404, 0x2001);
         using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68040, bus);
         cpu.Reset(0x1000, 0x8000);
         cpu.State.M68040Mmu.SupervisorRootPointer = 0x4000;
         cpu.State.M68040Mmu.UserRootPointer = 0x5000;
-        cpu.State.M68040Mmu.TranslationControl = 0x80000000;
+        cpu.State.M68040Mmu.TranslationControl = 0x8000;
         cpu.ExecuteInstruction(); Assert.Equal(1u, cpu.State.D[1]);
         cpu.State.StatusRegister = 0;
         cpu.State.ProgramCounter = 0x1000;
         cpu.ExecuteInstruction(); Assert.Equal(3u, cpu.State.D[1]);
         cpu.State.M68040Mmu.UserRootPointer = 0x6000;
+        cpu.State.M68040Mmu.Flush(); // MOVEC alone does not invalidate the ATC.
         cpu.State.ProgramCounter = 0x1000;
         cpu.ExecuteInstruction(); Assert.Equal(1u, cpu.State.D[1]);
         Assert.Equal(new uint[] { 0x2000, 0x3000, 0x2000 }, bus.Fetches.Select(f => f.Address));

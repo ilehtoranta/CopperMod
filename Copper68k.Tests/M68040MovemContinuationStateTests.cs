@@ -53,7 +53,7 @@ public sealed class M68040MovemContinuationStateTests
         var bus = Fixture();
         using var core = M68kJitCore.CreateM68040ForTesting(new ContinuationJitBus(bus), v2);
         core.Reset(0x1000, 0x4700); core.State.A[0] = 0x4200;
-        core.State.CacheControlRegister = 1;
+        core.State.CacheControlRegister = 0x8000;
         for (var n = 0; n < 300; n++) ExecuteOne(core);
         core.State.ProgramCounter = 0x1000;
         var warmedHits = Hits(core);

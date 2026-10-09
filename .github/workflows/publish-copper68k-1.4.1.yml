@@ -3,6 +3,7 @@ name: Publish Copper68k approved tags
 on:
   push:
     tags:
+      - copper68k-v1.5.3
       - copper68k-v1.5.1
       - copper68k-v1.5.1-retry-1
       - copper68k-v1.5.1-retry-2
@@ -47,6 +48,7 @@ jobs:
         shell: pwsh
         run: |
           $version = switch -Regex ($env:GITHUB_REF_NAME) {
+            '^copper68k-v1\.5\.3$' { '1.5.3'; break }
             '^copper68k-v1\.5\.1(?:-retry-[1-3])?$' { '1.5.1'; break }
             '^copper68k-v1\.5\.0(?:-retry-[1-3])?$' { '1.5.0'; break }
             '^copper68k-v1\.4\.2-ocs020\.52(?:-retry-[1-3])?$' { '1.4.2-ocs020.52'; break }
@@ -58,11 +60,23 @@ jobs:
       - name: Run Copper68k CPU tests
         run: dotnet test Copper68k.Tests\Copper68k.Tests.csproj --configuration Release
 
+      - name: Run AHX shared CPU consumer tests
+        run: dotnet test CopperMod.Ahx.Tests\CopperMod.Ahx.Tests.csproj --configuration Release
+
       - name: Build and validate Copper68k packages
         shell: pwsh
         env:
           PACKAGE_VERSION: ${{ steps.package.outputs.version }}
         run: .\scripts\nuget\pack-copper68k.ps1 -Configuration Release -Version $env:PACKAGE_VERSION -SkipTests
+
+      - name: Retain validated release packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: copper68k-release-packages
+          path: |
+            artifacts/packages/Copper68k.${{ steps.package.outputs.version }}.nupkg
+            artifacts/packages/Copper68k.${{ steps.package.outputs.version }}.snupkg
+          if-no-files-found: error
 
       - name: Exchange GitHub identity for a temporary NuGet API key
         uses: NuGet/login@v1

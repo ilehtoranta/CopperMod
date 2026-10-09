@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <CopperStartRoot Condition="'$(CopperStartRoot)' == ''">$(MSBuildThisFileDirectory)..\..\CopperStart</CopperStartRoot>
+    <CopperStartHostSourceRoot>$([MSBuild]::NormalizePath('$(CopperStartRoot)', 'host', 'CopperStart.CopperMod'))</CopperStartHostSourceRoot>
+  </PropertyGroup>
+</Project>

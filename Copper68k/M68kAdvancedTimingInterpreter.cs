@@ -4486,7 +4486,10 @@ namespace Copper68k
                 }
 
                 var previousCycle = State.Cycles;
-                ExecuteInstructionCore();
+                if (_bus is M68040LogicalBus && !State.M68040Mmu.DirectIdentityAccessEnabled)
+                    ExecuteInstruction();
+                else
+                    ExecuteInstructionCore();
                 boundary.AfterInstruction(previousCycle, State.Cycles);
                 instructions++;
             }
@@ -4636,7 +4639,7 @@ namespace Copper68k
         {
             executedInstructions = 0;
             stopBatch = false;
-            if (maxInstructions <= 0 ||
+            if ((_bus is M68040LogicalBus && !State.M68040Mmu.DirectIdentityAccessEnabled) || maxInstructions <= 0 ||
                 State.Halted ||
                 State.Stopped ||
                 HasPendingM68040MovemContinuation ||
@@ -5264,7 +5267,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool TryExecuteFastInstruction(ushort opcode)
         {
-            if (!_enableAdvancedFastPath)
+            if (!_enableAdvancedFastPath || (_bus is M68040LogicalBus && !State.M68040Mmu.DirectIdentityAccessEnabled))
             {
                 return false;
             }

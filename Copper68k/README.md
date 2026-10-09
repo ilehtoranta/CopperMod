@@ -1,6 +1,50 @@
 # Copper68k
 
-## Mainline development candidate 1.5.2
+## Mainline release 1.5.3
+
+This release retains the preceding 1.5.2 development integer fixes and adds consumer
+integration for 68010, 040/060 paging and the 060 FPU. The 010 forwards motherboard
+bus timing and implements SR privilege, MOVE from CCR, MOVEC USP/VBR/SFC/DFC,
+MOVES, RTD and the 58-byte format-8 address-error frame. RTE consumes that frame;
+internal fault continuation/retry state is still incomplete.
+
+040/060 paging uses the documented three-level descriptors, 4/8 KiB pages,
+indirection, supervisor/write protection, used/modified updates, transparent
+translation and explicit PFLUSH. MOVEC root/TC writes retain the ATC until guest
+invalidation. Physical table walks use the timed bus; compiler peeks do not
+modify descriptors or populate the ATC. Faults use translated supervisor stacks
+and model-specific frames. Full 040 format-7 continuation/writeback recovery and
+partially completed operand recovery remain incomplete; this is not qualification
+for general-purpose virtual-memory OS operation. The 030 PMMU is outside this slice.
+
+The 060 shares the ext80 arithmetic implementation, with its own 12-byte
+NULL/IDLE/EXCP frames, exceptional operand state and deferred arithmetic
+exceptions. Removed FPU forms trap for guest FPSP handling. The supported older
+Amiga ROM task frames remain incompatible; native 060-aware OS boot is unverified.
+BUSCR, complete trace/exception conformance and physical cache/pipeline timing
+remain incomplete. External 68881/68882 emulation and 060 JIT are not provided.
+
+The optional 040 JIT exposes `IM68kJitDiagnostics` counters and falls back to
+the interpreter when paging or transparent translation is active. Its instruction
+cache enable check uses architectural CACR bit 15. The consumer supplies immutable
+code snapshots, write/map invalidation and device/interrupt boundaries. Compilation
+and cache invalidation may allocate; no throughput acceptance is implied.
+
+These contracts follow [MC68000UM](https://www.nxp.com/docs/en/reference-manual/MC68000UM.pdf),
+[MC68040UM](https://www.nxp.com/docs/en/reference-manual/MC68040UM.pdf) and
+[MC68060UM](https://www.nxp.com/docs/en/data-sheet/MC68060UM.pdf).
+Consumer evidence and remaining integration limits are recorded in
+[CopperScreen CPU support](https://github.com/ilehtoranta/CopperScreen/blob/main/docs/engine/CPU_SUPPORT.md).
+Publication of this stable version was explicitly authorized on 2026-10-07.
+The advanced CPU profiles remain experimental; a stable package version does
+not certify complete CPU, virtual-memory OS or physical timing conformance.
+The shared suite passes 4,433 tests; seven optional external/seeded checks are
+unavailable. CopperScreen additionally passes 1,163 engine tests, 180 host tests
+and 74 disk tests, including native 68010 disk boot and actual 040 JIT execution.
+Six optional native host cases remain unavailable. No new throughput acceptance
+is claimed.
+
+## Preceding integer development milestone 1.5.2
 
 This source version is unpublished and requires explicit release authorization.
 

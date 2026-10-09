@@ -33,6 +33,20 @@ dotnet run --project CopperMod -c Release -- "path/to/tune.sid"
 Without a filename, the player tries the default MED test tune if it is available
 locally.
 
+The separate `CopperMod.Amiga.Emulator` integration imports its replacement-OS
+services and boot controller from CopperStart. Check out CopperStart beside
+CopperMod, or set `-p:CopperStartRoot=<absolute checkout path>` when building
+that project, the complete solution, or its Amiga integration tests. Hardware,
+disk/filesystem adapters and raster providers remain in CopperMod. This shared
+source import preserves the existing assembly and has no duplicate service tree
+here. The ownership move and existing integration build gaps are documented in
+`CopperStart/Docs/CopperModHostSourceMove.md`.
+
+For this development cutover, use CopperStart's `ci/github-actions-build` branch
+at [commit 8eeac19](https://github.com/ilehtoranta/CopperStart/commit/8eeac19c9e54726f50f53fefc028c7f9307f35ce),
+or a descendant containing `host/CopperStart.CopperMod`. CopperStart's default
+`main` branch does not yet contain this shared host integration.
+
 ## Export audio
 
 `CopperMod.Tools` renders supported modules without opening the player:

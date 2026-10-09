@@ -58,7 +58,7 @@ jobs:
 
       - name: Pack Copper68k NuGet
         shell: pwsh
-        run: .\scripts\nuget\pack-copper68k.ps1
+        run: .\scripts\nuget\pack-copper68k.ps1 -SkipTests
 
       - name: Test Copper68k
         env:
