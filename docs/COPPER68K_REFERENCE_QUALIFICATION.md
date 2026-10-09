@@ -8,6 +8,70 @@ The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
 maps the accepted requirements to current evidence and outstanding gates.
 The dated records below remain scoped historical evidence.
 
+### Full private context candidate qualification, 2026-10-09
+
+The same frozen private candidate now completes full CPU execution with actual
+exit 0: **5,363 passing rows / 89 unavailable / zero failures**, total **5,452**.
+Independent proof verifies every loaded definition/method, exact row outcomes,
+all **1,027 reports / 87,250,840 passing logical cases**, ten pinned native
+WinUAE reference presets and the unchanged integer-family inventory.
+It retains all 5,408 rows of the qualified production checkpoint. The 44 added
+rows are independently enumerated from their fixture declarations: 18 passes
+and 26 optional rows unavailable under this selection. Optional unavailability
+does not become successful coverage. Discovery's 5,420 display entries include
+one nonserializable method for 33 executed matrix rows; twelve other argument
+display differences are bound to unchanged fixture sources. The final TRX,
+not discovery count, establishes the exact execution roster.
+
+All 983 prior synthetic coverage reports have identical contents and combination
+keys/statuses/weights. The 44 new reports add 394,830 cases and match independently
+qualified predecrement controls, context transfer, repeated/heterogeneous nested
+reference examples and first-read recovery/mapping reference fixtures. Incoming
+CPU sources remain unchanged after execution, and all full/deep/guard runs load
+the same three pinned candidate DLLs. The native adapter reports preserve every
+prior field/count except their explicitly checked new CPU/adapter DLL hashes;
+manifest entries, sizes, hashes and exact `.dat` inventories remain pinned.
+These native software-reference presets are separate from Amiga ROM/media boot.
+
+The current maintained report-only ordinary gate, checked against its frozen
+predecessor after newline normalization, exits 0 on this result directory:
+**86,663,530 deterministic cases / 783 xUnit batches**. This gate does not clear
+the optional broader restoration inventory or disputed software-reference cases.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Full exact roster/report/reference/ordinary-gate proof | `9c6c91a0abe28aafffbd8cad848800a9393c10117b9358062025d0b61d8b5fea` |
+| Full input snapshot | `2304bca366f27a166cbf706778f844ee577e753793ede91d33cea63ab0fdd69c` |
+| Full TRX | `13baf0b767d6be7aafdd35948822ab3a64a4cc8cdfc9116d2ad699f7034ce737` |
+| Same-source full/deep/guards/API/standard-consumer linkage | `d5a0e81a6a472d82847b4b313437bea5198fb7d01a95592489b2a49c5d425eb6` |
+
+The full producer uses the selected candidate's already-built assemblies with
+`--no-build --no-restore`, Release and isolated outputs, the ten declared pinned
+reference settings, and both context-transfer/snapshot discovery flags enabled.
+All other undeclared `COPPER68K_*` variables are removed before execution. The
+separate independent verifier checks the producer's exact command/settings,
+source/assembly identities, prior/focused report proofs, reference manifests,
+and then invokes `test-copper68k-synthetic.ps1 -ValidateReportsOnly` against the
+completed directory. Requested broad Basic and 480-case failing discovery gates
+are not selected or relabeled as passing.
+
+The linkage includes the previously qualified seed 68020 deep/reference audit,
+eight actual rejection controls, zero managed API changes across 20 types / 211
+records, and the clean CopperScreen `a4e80b6` standard consumer checks through
+local-only `1.5.2-synthetic-dev.81`. It confirms that all 37 packaged CPU source
+inputs equal the executed candidate source inputs; package-version metadata
+produces a separately checked packaged DLL identity. The original consumer flow
+still exits 1 because native input validation cannot find the old ROM directory.
+No native consumer replay or full consumer integration is claimed. A native-only
+resume is prepared for the original pinned ROM after relocation, preserving the
+completed standard suites and failed initial flow.
+
+The candidate remains an unimported two-file prototype. Production behavior,
+the failed broad 010/060 audit, disputed 030/040 trace boundaries and wider
+restoration gates remain unchanged. This checkpoint is neither physical timing
+qualification nor a release. Milestone 6 remains **in progress**,
+`roadmapComplete=false`.
+
 ### Private context candidate: same-build references and standard consumers, 2026-10-09
 
 This checkpoint extends the selected private candidate proof
@@ -48,7 +112,7 @@ native reference presets. Its discovery display entries do not establish final
 execution rows or report coverage. Milestone 6 remains in progress, with no
 full-integration, hardware, production-import or release claim.
 
-Current source checkpoint `c284b94` has fresh seeded and SingleStepTests/Musashi
+Earlier source checkpoint `c284b94` has fresh seeded and SingleStepTests/Musashi
 evidence bound to one frozen assembly pair: 320,000 seeded cases, 312,500
 SingleStepTests cases and 536 Musashi programs pass, with 88 explicit Musashi
 exclusions. Six actual invalid/missing/empty adapter requests reject. The frozen full

@@ -1,5 +1,20 @@
 # Copper68k synthetic instruction suite
 
+### Milestone 6 checkpoint — full private context candidate, 2026-10-09
+
+The frozen 238-input / 37-CPU private context candidate completes full execution
+with 5,363 passes, 89 explicitly unavailable rows and zero failures. Independent
+qualification verifies the exact 5,452-row roster, every loaded method, all
+1,027 reports / 87,250,840 passing cases and ten pinned native reference presets.
+All 5,408 prior rows remain; the 44 additions have 18 passes / 26 unavailable.
+All 983 prior coverage reports are unchanged; 44 new reports add 394,830 cases
+matching their qualified focused fixtures. The ordinary gate passes 86,663,530
+cases / 783 batches. Full, deep, rejection controls, API and local `.81` standard
+consumers are linked to the same executed CPU source graph. Native consumer boot
+remains unavailable because the original ROM directory is missing. No candidate
+is imported or published; the broad reference/restoration gates remain open.
+Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
 ### Milestone 6 checkpoint — context candidate reference and consumer checks, 2026-10-09
 
 The frozen 238-input private context candidate passes same-build deep audits:

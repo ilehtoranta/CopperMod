@@ -23,12 +23,25 @@ it does not replace or discard their remaining gaps.
 | Reuse SingleStepTests, Musashi and WinUAE with pinned identities and caveats | Adapter source, reference manifests, source/input hashes, actual execution and documented exclusions | Implemented. SingleStepTests supplies 000 semantic fixtures; Musashi runs independent self-checking programs, not its CPU as an oracle. WinUAE remains a software reference. |
 | Replacement detects absolute decoding, extension length, index sign, alias order, A7 stride and flags defects | Six distinct isolated mutation proofs with precise replacement IDs and current source linkage | The maintained mutation command defines all six. Fresh isolated 51444ea executions detect all six against a 75,214-case clean baseline. Exact source/roster/report linkage and every mismatch ID are verified. |
 | Retire an old regression only after a mapped replacement detects its defect | Exact pinned old method/rows, before-removal proof, mutation witness and after-removal sibling verification | NOT displacement, EOR postincrement, ANDI displacement and aliased MOVEA word retirements have exact proofs. EOR replaces one fact with 32,768 passing cases and retains four siblings. Schema-2 retirement replay now requires execution DLL hashes and exact loaded definition/method linkage; fresh MOVEA/EOR executions, 20 corruption controls each and strict replay are qualified. No blanket regression deletion is authorized. |
-| Retain cache, prefetch, bus ordering, fault sequencing, JIT and native regressions unless separately proven redundant | Exact test-source diff and full named roster, with every removal accounted for | Specialized tests remain. The exact 5,408-test frozen roster is compared with its predecessor: eight retired ANDI/MOVEA rows and sixteen replacement batches are accounted for. All 63 unavailable rows remain explicit. |
+| Retain cache, prefetch, bus ordering, fault sequencing, JIT and native regressions unless separately proven redundant | Exact test-source diff and full named roster, with every removal accounted for | Specialized tests remain. The private context candidate retains all 5,408 prior rows and adds 44: 18 pass / 26 unavailable. Its exact 5,452-row roster has 89 explicitly unavailable rows. Prior retirement mappings and evidence remain separate. |
 | Production CPU fixes pass full CPU and affected consumers | Same-source full CPU proof; isolated NuGet package; CopperScreen production, host/disk/engine and applicable native results | MOVE16 recovery has full-suite and local .77 consumer evidence. Subsequent consolidation leaves all 37 CPU source inputs unchanged. No new consumer execution is claimed. |
 | Preserve successful ordering and timing policy; no automatic retry after partial effects | Relevant sequence/fault tests and change review, separate from timing qualification | Existing checks and scoped explicit-RTE continuation proofs remain. Private candidate results are not production behavior or physical timing qualification. |
 | Test-internal framework; public factory; NuGet consumer boundary; immutable published versions | Source/project/package diffs and consumer dependency inspection | Preserved. Private 39-input CPU candidates remain separate from the production 37-input CPU graph. No publication is authorized by this audit. |
 
 ## Completion gates and evidence status
+
+Full private context-candidate qualification is complete on its frozen
+238-input / 37-CPU graph: 5,363 passes, 89 unavailable rows, zero failures,
+87,250,840 passing cases / 1,027 reports and ten pinned native reference presets.
+The independent verifier checks exact named rows, loaded definitions, every
+report key/status/weight and reference-input identities. All 983 prior reports
+remain unchanged; 44 additions match qualified focused evidence. The ordinary
+gate passes 86,663,530 cases / 783 batches. Full proof:
+`9c6c91a0abe28aafffbd8cad848800a9393c10117b9358062025d0b61d8b5fea`.
+Same-source full/deep/guards/API/standard-consumer linkage proof:
+`d5a0e81a6a472d82847b4b313437bea5198fb7d01a95592489b2a49c5d425eb6`.
+Native consumer boot remains unavailable; full integration and production
+readiness are not claimed. The candidate is not imported or published.
 
 The same frozen private context candidate now has independently verified
 same-build deep/reference evidence: 320,000 seeded cases, 312,500 SingleStepTests
@@ -39,8 +52,8 @@ confirms exactly two intended semantic changes. A local-only `.81` package
 passes a clean committed CopperScreen build, 172 host tests with six unavailable,
 74 disk tests and 1,080 engine tests. Native boot could not start because the
 original ROM directory is missing; the failed flow is retained separately from
-the independently verified standard tests. Full CPU execution is still active,
-so full/API/consumer integration is not yet complete. Exact identities appear
+the independently verified standard tests. Full CPU execution is qualified,
+but native consumer integration is not yet complete. Exact identities appear
 in the qualification record. No candidate import or publication occurs.
 
 A private two-file CP context snapshot candidate now passes the selected
@@ -50,10 +63,10 @@ failures. Independent proof:
 `802db3def3cbc940e545fb0cc2efcc80120009f72d1bb59ee335e6c0b26d45e7`.
 The candidate copies suspended delivery identities as task-local state without
 changing the public API. It is not imported; production and the broader 480-case
-gate remain unchanged. Full CPU qualification is running on its frozen
+gate remain unchanged. Full CPU qualification is complete on its frozen
 238-input graph with ten pinned native presets. Discovery display entries are
-not the executed-row count; final full roster/report and native consumer
-qualification are still required before production readiness can be assessed.
+separate from the verified execution roster. Native consumer qualification is
+still required before production readiness can be assessed.
 
 CP context transfer now has actual failed discovery evidence rather than only
 an untested label. With supplied pending vectors 49–55 and user/ISP/MSP frames,

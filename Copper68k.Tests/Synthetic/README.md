@@ -1876,3 +1876,17 @@ passes all 21 named rows and 126 reported cases, preserving local reports and
 the sixteen retained delivery tests. It still rejects a foreign frame without
 saved delivery state. Full CPU, API and isolated NuGet consumer qualification
 remain separate gates; the candidate is not imported or published.
+
+The frozen 238-input / 37-CPU candidate now has qualified full execution:
+5,363 passes / 89 unavailable / zero failures across 5,452 exact named rows;
+87,250,840 passing cases / 1,027 reports and ten pinned native reference presets.
+All prior rows and 983 prior reports remain; the 44 new reports match their
+qualified focused fixtures. The report-only ordinary gate passes 86,663,530
+cases / 783 batches. Same-source full/deep/guard/API/standard-consumer linkage
+is verified. The local-only `.81` package passes the clean committed CopperScreen
+build and 172 host / 74 disk / 1,080 engine tests, with six optional host rows
+unavailable. Native consumer boot has not run because its original ROM directory
+is missing. These are private snapshot qualifications; broader restoration and
+reference disagreements remain, and no CPU import or publication occurs.
+See the [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#full-private-context-candidate-qualification-2026-10-09)
+for exact identities and separation of execution rows from discovery display.
