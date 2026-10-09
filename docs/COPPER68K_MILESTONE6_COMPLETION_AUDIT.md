@@ -30,6 +30,16 @@ it does not replace or discard their remaining gaps.
 
 ## Completion gates and evidence status
 
+CP context transfer now has actual failed discovery evidence rather than only
+an untested label. With supplied pending vectors 49–55 and user/ISP/MSP frames,
+local scalar/batch controls pass 42 cases. Public task-context copy/switch loses
+the source vector on fresh destinations (42 unsupported cases) and reuses an
+unrelated destination event (42 exact wrong-vector cases). The optional request
+exits 1 with two named passes / two failures. Independent proof:
+`ccd22c898d1a092ecf8c31d73e45f5560b573823eae1a88a3048d3201688d4db`.
+This diagnoses the emulator transfer path; it does not establish a hardware
+frame-migration ABI or clear the broader 480-case failing gate.
+
 The first-read entry/recovery/persistent test-bus repair selection now has a
 maintained isolated execution/replay command. Its fresh complete selection passes
 14 named tests / 492,672 checks / ten reports; controls pass eight / 1,152 / four.

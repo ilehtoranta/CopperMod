@@ -1829,3 +1829,28 @@ evidence without executing its recorded command; a valid relocated copy can pass
 Missing/extra reports, wrong weights, empty/skipped/failed selections, substituted
 methods or assemblies, and changed sources/DLLs reject. Replay requires this
 source checkpoint, with only CRLF-to-LF checkout normalization permitted.
+
+### CP context-transfer discovery
+
+`SyntheticM68040ContextTransferDiscoveryTests` diagnoses the retained vector
+ownership gap using supplied suspended delivery, public task-context copy and
+switch APIs, and the existing guarded format-7 fixture. Local scalar/batch
+controls cover vectors 49–55 and user/ISP/MSP: 42 passing cases total. The
+optional transferred requirement covers fresh and unrelated-pending destinations
+at CCR=31, trace zero. It currently **fails**: 42 unsupported fresh cases and 42
+wrong-vector cases across both routes. These are implementation gaps, not
+expected processor exceptions. Ordinary unavailable discovery rows are not
+successful context-transfer coverage.
+
+```powershell
+$env:COPPER68K_RUN_040_CONTEXT_TRANSFER_DISCOVERY = '1'
+$env:COPPER68K_SYNTHETIC_REPORT_DIR = 'artifacts/040-context-transfer/reports'
+dotnet test Copper68k.Tests/Copper68k.Tests.csproj -c Release --artifacts-path artifacts/040-context-transfer/build --filter 'FullyQualifiedName~SyntheticM68040ContextTransferDiscoveryTests' --logger 'trx;LogFileName=audit.trx' --results-directory artifacts/040-context-transfer/results
+Remove-Item Env:COPPER68K_RUN_040_CONTEXT_TRANSFER_DISCOVERY
+Remove-Item Env:COPPER68K_SYNTHETIC_REPORT_DIR
+```
+
+The requested selection must retain all four named rows and four reports, with
+two passing local rows and two failing discovery rows until the gap is resolved.
+The source pending vector is an explicit fixture input; no FPU arithmetic,
+hardware frame migration/FSAVE ABI, original access entry or trace is qualified.

@@ -14407,6 +14407,53 @@ the broader 480-case gate and reference disagreements remain. Milestone 6 stays
 **in progress**, `roadmapComplete=false`; no production CPU semantics/timing
 change, private import, publication or new package/API/consumer execution occurs.
 
+## CP context-transferred vector discovery — 2026-10-09
+
+`SyntheticM68040ContextTransferDiscoveryTests` gives the retained CP vector
+ownership requirement a bounded executable witness. The original selected vector
+is supplied pending integer-delivery state, following the established local CP
+fixture. Vectors 49–55 and user/ISP/MSP frames run at CCR=31, trace zero. Literal
+vector-table addresses distinguish every handler. Common architectural checks
+verify local conversion, saved SR/PC, format/vector/EA and guarded frame memory.
+
+For transferred cases, a new `M68kCpuState` is saved through public
+`CopyTaskContextFrom`, then installed on a second factory-created core through
+`SwitchTaskContext`. Both cores share fixture memory; only one executes each
+case. A fresh destination has no pending vector. The other destination has a
+deliberately unrelated pending event: 55 when the source is 49–54, or 49 when
+the source is 55. Neither is an architectural expectation calculated from CPU
+helpers. This is an emulator API discovery, not a guest scheduler/FSAVE ABI or
+hardware frame migration qualification.
+
+Fresh isolated `ContextTransferDiscoveryV3` **exits 1**, with **two passing
+local rows / two failing discovery rows / four reports**. Both routes have 21
+local passing cases, 21 unsupported fresh transfers and 21 wrong-vector transfers:
+**42 passing / 42 unsupported / 42 mismatching** overall. Wrong-vector diagnostics
+retain the expected/observed vector and exact distinct handler PC for every case.
+Fresh scalar execution exposes `UnsupportedM68040InstructionException`; batch
+exposes `UnsupportedM68kTimingException`. Both are reported as unsupported,
+without turning an implementation gap into an expected processor exception.
+
+Independent verification binds the exact command/settings, 237 raw source/project
+inputs, three DLLs, loaded method definitions, named outcomes, report keys/weights
+and every precise failure diagnostic. The only source addition is this class;
+all 236 predecessor inputs, including all 37 production CPU inputs, remain
+raw-identical. Proof SHA-256:
+`ccd22c898d1a092ecf8c31d73e45f5560b573823eae1a88a3048d3201688d4db`.
+The first workspace discovery classified the batch unsupported exception as a
+mismatch through a shared helper. Its replacement uses scoped explicit exception
+classification and preserves actual failures. A later independent-verifier
+attempt rejected its assumption that scalar/batch wrapper messages were equal;
+V3 verification requires each route's exact observed exception message.
+
+Reproduction is documented in the
+[test README](../Copper68k.Tests/Synthetic/README.md#cp-context-transfer-discovery).
+Ordinary unavailable discovery rows supply no transfer coverage. This diagnoses
+two concrete gaps; it does not qualify all CCRs/trace states, original access
+entry, FPU arithmetic or hardware state migration. No CPU change or private
+implementation import occurs. The broader 480-case inventory remains unchanged
+and failing. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
 ## Maintained first-read recovery audit — 2026-10-09
 
 `scripts/test-copper68k-040-operand-read-recovery.py` now maintains isolated

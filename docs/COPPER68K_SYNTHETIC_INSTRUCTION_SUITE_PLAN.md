@@ -1,5 +1,17 @@
 # Copper68k synthetic instruction suite
 
+### Milestone 6 checkpoint — CP context-transfer failure, 2026-10-09
+
+The previously untested context-transferred-vector requirement now has a bounded
+failed discovery fixture using supplied pending delivery and public task APIs.
+Local controls pass 42 cases; transferred fresh destinations produce 42
+unsupported cases and unrelated-pending destinations produce 42 wrong-vector
+cases across scalar/batch routes. Actual xUnit exit is 1, with two passing and
+two failing named rows. Independent source/assembly/method/report verification
+retains exact diagnostics. No production CPU fix or migration ABI is claimed.
+The 237-input graph preserves all 37 CPU inputs; broader 480-case requirements
+remain. Milestone 6 stays **in progress**, `roadmapComplete=false`.
+
 ### Milestone 6 checkpoint — maintained first-read audit, 2026-10-09
 
 The entry/recovery/persistent test-bus mapping slice now has a maintained isolated
