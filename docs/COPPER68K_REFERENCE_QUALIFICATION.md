@@ -8,6 +8,46 @@ The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
 maps the accepted requirements to current evidence and outstanding gates.
 The dated records below remain scoped historical evidence.
 
+### Private context candidate: same-build references and standard consumers, 2026-10-09
+
+This checkpoint extends the selected private candidate proof
+`802db3def3cbc940e545fb0cc2efcc80120009f72d1bb59ee335e6c0b26d45e7`.
+It does not import the two-file CPU patch or change the failed broader gates.
+All executions use the frozen candidate's 238 source inputs / 37 CPU inputs;
+deep and guard executions load the exact DLLs used by its selected gate and
+active full run.
+
+| Check | Independently verified result | Proof SHA-256 |
+| --- | --- | --- |
+| Compiled API and normalized source review | 20 exported types / 211 public/protected records per assembly; zero signature additions/removals. Exactly two CPU source files have semantic changes after newline normalization. This does not qualify serialization/layout or physical behavior. | `55a13349df7c0b50482f3e0b849e61e2db6267d29f66838bb14a5c44a0b96fad` |
+| Seeded and reference audits | Three named passes, no skips: seed 68020, 10,000 samples/family/profile, 320,000 cases / 32 reports; 312,500 SingleStepTests 000 cases / 125 files; 536 Musashi programs / 88 exclusions / 624 rows across all eight profiles. | `74959ff987e9b6f42765b900935ad230c7dd30e64ac1a781238310b7cca0b722` |
+| Invalid-request controls | Eight actual requests each exit 1 with one exact named failure and no case reports: zero seed, zero samples, empty models, missing/empty SingleStepTests, missing Musashi, adjacent/separated duplicate models. | `a1738f233166e8c8f2c395c2cad1386b807dc1563a90e8634060d813c6a78ba4` |
+| Standard CopperScreen consumers | Clean archived commit `a4e80b68a7b58e6c12b940b9d786b2ac73757965`; build succeeds with zero warnings/errors; 172 host passes / six unavailable, 74 disk passes and 1,080 engine passes. Exact named rosters retain prior rows and add only the committed null-list regression. All three loaded CPU DLLs match the local package; projects retain the NuGet boundary. | `d418329545540e794067f7519cb2ba079d2ddb7473cf4e94c5940098f4b2e99d` |
+
+SingleStepTests remains pinned to
+`64b253116a3de04aaac4346c43680960dc9b67e5`, with TAS/TRAPV explicitly excluded.
+Musashi remains pinned to `72c1d74800f3087b45a0c1a7342601bbed898881`;
+its self-checking programs do not use the Musashi CPU as an oracle.
+The isolated package is `1.5.2-synthetic-dev.81`, never published. Its 39 pack
+inputs include the 37 executed CPU source/project inputs plus README/icon.
+Package verification SHA-256:
+`15b96db03d9bdcdea9e60e7f4eb3172c0b813d5300bc711fa930141ab98c3528`.
+The consumer scope excludes unrelated dirty working changes.
+
+The original consumer command exits 1 after the three standard test suites:
+`C:/Users/ilkle/Koodit/TestData/ROM/kickstart-3.1-a500.rom` is missing, so
+native input validation fails before either Workbench replay starts. This is
+unavailable native coverage, not a passing replay. The original failed producer,
+flow log and execution record are preserved and hashed by the standard proof.
+The retained Workbench ADF is still available; the ROM must be relocated or
+restored with its original pinned hash before a separate native-only resume.
+Completed build and test results need not be rerun for an input-path repair.
+
+Full CPU execution remains active on the same frozen assemblies with ten pinned
+native reference presets. Its discovery display entries do not establish final
+execution rows or report coverage. Milestone 6 remains in progress, with no
+full-integration, hardware, production-import or release claim.
+
 Current source checkpoint `c284b94` has fresh seeded and SingleStepTests/Musashi
 evidence bound to one frozen assembly pair: 320,000 seeded cases, 312,500
 SingleStepTests cases and 536 Musashi programs pass, with 88 explicit Musashi

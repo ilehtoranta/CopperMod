@@ -30,6 +30,19 @@ it does not replace or discard their remaining gaps.
 
 ## Completion gates and evidence status
 
+The same frozen private context candidate now has independently verified
+same-build deep/reference evidence: 320,000 seeded cases, 312,500 SingleStepTests
+000 cases and 536 Musashi programs pass, with 88 explicit exclusions. All eight
+invalid-request controls fail. Compiled public/protected API comparison finds
+zero changes across 20 types / 211 records, and normalized CPU source review
+confirms exactly two intended semantic changes. A local-only `.81` package
+passes a clean committed CopperScreen build, 172 host tests with six unavailable,
+74 disk tests and 1,080 engine tests. Native boot could not start because the
+original ROM directory is missing; the failed flow is retained separately from
+the independently verified standard tests. Full CPU execution is still active,
+so full/API/consumer integration is not yet complete. Exact identities appear
+in the qualification record. No candidate import or publication occurs.
+
 A private two-file CP context snapshot candidate now passes the selected
 21-row gate, including all 126 reported cases, nested snapshot ownership and
 sixteen retained delivery tests. The baseline still has 18 passes / three
@@ -39,8 +52,8 @@ The candidate copies suspended delivery identities as task-local state without
 changing the public API. It is not imported; production and the broader 480-case
 gate remain unchanged. Full CPU qualification is running on its frozen
 238-input graph with ten pinned native presets. Discovery display entries are
-not the executed-row count; final roster/report/API/consumer qualification is
-still required before production readiness can be assessed.
+not the executed-row count; final full roster/report and native consumer
+qualification are still required before production readiness can be assessed.
 
 CP context transfer now has actual failed discovery evidence rather than only
 an untested label. With supplied pending vectors 49–55 and user/ISP/MSP frames,

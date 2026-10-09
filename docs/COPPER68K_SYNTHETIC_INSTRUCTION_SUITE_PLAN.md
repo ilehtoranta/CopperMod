@@ -1,5 +1,20 @@
 # Copper68k synthetic instruction suite
 
+### Milestone 6 checkpoint — context candidate reference and consumer checks, 2026-10-09
+
+The frozen 238-input private context candidate passes same-build deep audits:
+320,000 seeded cases, 312,500 pinned SingleStepTests 000 cases and 536 Musashi
+programs, with 88 explicit exclusions. All eight invalid-request controls fail
+as required. Independent source, assembly, loaded-method and report checks bind
+these results. Compiled public/protected API comparison finds no changes across
+20 exported types / 211 records; normalized review confirms only the two intended
+CPU source changes. A local-only `.81` package builds the clean CopperScreen
+commit `a4e80b6`: 172 host tests pass with six unavailable, 74 disk tests and
+1,080 engine tests pass. Native boot remains unavailable because the original
+ROM directory disappeared before replay; the failed consumer flow is retained.
+Full CPU execution remains active and unqualified. No production import or
+publication occurs. Milestone 6 remains **in progress**, `roadmapComplete=false`.
+
 ### Milestone 6 checkpoint — private context snapshot candidate, 2026-10-09
 
 A reviewed two-file private patch copies suspended integer-delivery state with
