@@ -265,8 +265,12 @@ produces a format error for type-1 modules; ordinary RAM is never used as one.
 
 Detailed RTE bus-fault restart/internal-state restoration on 010/020/030,
 020/030 coprocessor midinstruction restoration and detailed 040 access-fault
-entry/validation, writeback handlers and CP context transfer remain **untested**. They are
-listed separately in report qualification boundaries rather than reported as
+entry/validation, writeback handlers and CP context transfer retain broader
+**untested** requirements. Later bounded fixtures have separately recorded
+execution, including failed production CP transfer discovery and a passing private
+zero-trace/all-CCR snapshot candidate. Those results do not complete the broader
+480-case fault/context inventory or import the candidate into production. These
+requirements are listed separately in report qualification boundaries rather than reported as
 invalid frame formats or passing coverage. External BKPT instruction replacement,
 physical MOVES function-code buses and LPSTOP CPU-space broadcast are also
 unavailable qualification. Cache/prefetch/fault/JIT/native suites remain retained;

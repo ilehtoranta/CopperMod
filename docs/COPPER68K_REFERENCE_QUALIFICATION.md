@@ -8,6 +8,29 @@ The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
 maps the accepted requirements to current evidence and outstanding gates.
 The dated records below remain scoped historical evidence.
 
+### Broader context-gate diagnostic correction, 2026-10-09
+
+The broad access-frame gate no longer describes CP context transfer as lacking
+any qualified fixture. Its diagnostic distinguishes failed production discovery
+from the privately qualified zero-trace/all-CCR snapshot candidate and preserves
+the remaining foreign-frame, trace/fault/context and native-consumer gaps. The
+command's limitation and README use the same distinction. No status, identifier,
+case count, enable flag or acceptance condition changes.
+
+A fresh isolated production-source selection has three passing control tests and
+one expected failing broad-gate test, actual xUnit exit 1. Independent verification
+checks all **480 exact IDs / 15 combinations**, each still **untested**, plus
+**29,952 passing control cases** whose reports remain byte-identical to the frozen
+full checkpoint. The gate's only C# change is one diagnostic string; all 37 CPU
+inputs and every other test source remain unchanged. This focused selection is
+not a new whole-suite execution or candidate import.
+
+Proof SHA-256:
+`5166dfc8ba84b853f8747c6a174d1c935b2d007930d48e6607431f57c7b33022`.
+The frozen 239-input full candidate retains its prior source identity. Broader
+gates remain failed/incomplete; milestone 6 stays **in progress**,
+`roadmapComplete=false`.
+
 ### Full all-CCR candidate qualification, 2026-10-09
 
 The frozen **239-input / 37-CPU** graph finishes full execution with actual exit

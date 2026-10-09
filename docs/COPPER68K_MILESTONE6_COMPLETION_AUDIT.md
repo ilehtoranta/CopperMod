@@ -30,6 +30,16 @@ it does not replace or discard their remaining gaps.
 
 ## Completion gates and evidence status
 
+The broader access-frame diagnostic now acknowledges failed production CP
+transfer discovery and private zero-trace/all-CCR candidate qualification, without
+clearing the wider requirement. Fresh isolated execution verifies all 480 exact
+IDs remain untested and the named gate fails, actual xUnit exit 1. Three control
+rows pass with 29,952 cases and byte-identical reports. Only one C# diagnostic
+string changes; all 37 CPU inputs and remaining test sources stay unchanged.
+Independent proof:
+`5166dfc8ba84b853f8747c6a174d1c935b2d007930d48e6607431f57c7b33022`.
+This focused production-source check does not relabel the frozen full candidate.
+
 The 239-input all-CCR graph now has independently verified same-build references,
 eight invalid-request controls and compiled API review. Deep execution passes
 320,000 seeded cases, 312,500 SingleStepTests cases and 536 Musashi programs,
