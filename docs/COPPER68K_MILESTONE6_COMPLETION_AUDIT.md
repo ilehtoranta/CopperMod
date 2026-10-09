@@ -30,6 +30,17 @@ it does not replace or discard their remaining gaps.
 
 ## Completion gates and evidence status
 
+The 239-input all-CCR graph now has independently verified same-build references,
+eight invalid-request controls and compiled API review. Deep execution passes
+320,000 seeded cases, 312,500 SingleStepTests cases and 536 Musashi programs,
+with 88 explicit exclusions. Full/deep/guards share exact DLL identities; API
+comparison finds no changes across 20 types / 211 records. All 37 CPU inputs
+match the retained `.81` standard-consumer package. Linkage proof:
+`c0e002d8c8c24b159e81dfef72087042c66243aa7a11bc67c9bb54d722db97ec`.
+Full execution of this graph is active with all-CCR discovery enabled; the
+238-input full proof is not relabeled. No new consumer execution is claimed.
+Missing native ROM input and unresolved broader gates still prevent completion.
+
 A later selected 239-input graph extends context transfer across all 32 initial
 CCRs with complementary saved CCRs. The candidate passes all 23 named rows /
 4,158 cases; baseline has 18 passes / five failures. All 4,032 new cases cover

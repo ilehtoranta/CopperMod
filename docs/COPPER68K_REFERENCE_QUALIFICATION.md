@@ -8,6 +8,34 @@ The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
 maps the accepted requirements to current evidence and outstanding gates.
 The dated records below remain scoped historical evidence.
 
+### Current all-CCR candidate reference linkage, 2026-10-09
+
+The frozen 239-input / 37-CPU all-CCR candidate has independently verified
+reference evidence on the exact DLLs used by its active full execution.
+
+| Evidence | Verified result | SHA-256 |
+| --- | --- | --- |
+| Same-build deep and pinned references | Three named passes, no skips; seed 68020 / 10,000 samples yields 320,000 cases / 32 reports. SingleStepTests 000 yields 312,500 cases / 125 files; Musashi yields 536 programs / 88 explicit exclusions across eight profiles. | `2de4bc5bb95aba6fd9ec6bb72fbfa5d52626a959c5893e959226bf5b5ef09d40` |
+| Eight actual invalid requests | Each exits 1 with one exact named failure and no case reports: zero seed/samples, empty models, missing/empty SingleStepTests, missing Musashi and adjacent/separated duplicate models. | `9260f6bbef7a5f5c68d6a0e05ea66b63872f55a9841e4b3107bb510d1ce92d0b` |
+| Compiled API and normalized CPU source review | Separate reflection processes find zero public/protected signature changes across 20 types / 211 records; exactly two intended CPU source changes. No serialization/layout/hardware claim. | `685f2689f5d0bac8de47406f3c2d292088dfd5a64ce7bb935f0a10268be141d5` |
+| Same-source/assembly and retained package linkage | Full/deep/guards share DLL identities; all 37 CPU source/project inputs match the previously verified local `.81` package. Its consumer scope remains clean committed CopperScreen `a4e80b6`, not unrelated dirty code. | `c0e002d8c8c24b159e81dfef72087042c66243aa7a11bc67c9bb54d722db97ec` |
+
+Corpus pins, exclusions, case IDs/weights, named methods, source and binary
+identities are checked as in the preceding qualified checkpoint. SingleStepTests
+remains pinned to `64b253116a3de04aaac4346c43680960dc9b67e5` with TAS/TRAPV
+explicitly excluded; Musashi remains pinned to
+`72c1d74800f3087b45a0c1a7342601bbed898881` and supplies self-checking programs,
+not its CPU as an oracle. The retained consumer package is not repacked or
+published. Source linkage does not become a new consumer execution or native
+replay; its original ROM directory remains unavailable.
+
+Full execution remains active on the same candidate DLLs with the current CCR
+request enabled and ten pinned native reference presets. It has 5,422 discovery
+display entries, which are not the final executed-row count. Its exact full
+roster/report verifier is prepared but has not yet qualified terminal results.
+The preceding 238-input full proof remains immutable and separately scoped.
+No production CPU changes/import, new release or roadmap completion is claimed.
+
 ### All-CCR context transfer and live-Z mutation, 2026-10-09
 
 The later frozen **239-input / 37-CPU** graph extends the shared context-transfer

@@ -1,5 +1,20 @@
 # Copper68k synthetic instruction suite
 
+### Milestone 6 checkpoint — current all-CCR reference linkage, 2026-10-09
+
+The frozen 239-input candidate now has same-build independently verified deep
+evidence: 320,000 seeded cases, 312,500 SingleStepTests 000 cases and 536 Musashi
+programs, with 88 exclusions retained. Eight actual invalid requests fail with
+exact diagnostics. Compiled API comparison finds zero changes across 20 types /
+211 records and only the two intended normalized CPU source changes. Full,
+deep and guard runs share exact candidate DLL identities; all 37 CPU source
+inputs match the retained local `.81` standard-consumer package. This source
+linkage is not a new consumer replay. Full execution of the 239-input graph
+is active with the CCR request enabled and ten pinned reference presets; the
+earlier 238-input full proof remains separate. Native boot is unavailable,
+and broader reference/restoration gates remain open. No import/publication
+occurs; milestone 6 stays **in progress**, `roadmapComplete=false`.
+
 ### Milestone 6 checkpoint — all-CCR context transfer, 2026-10-09
 
 The selected context-transfer fixture now covers all 32 initial CCR images,
