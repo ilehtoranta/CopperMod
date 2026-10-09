@@ -1788,3 +1788,23 @@ later MOVEM transfers, incoming trace, actual mapping repair, enabled MMU and
 physical cache/pipeline behavior remain separate. This execution command emits
 results; [independent qualification](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#first-indirect-operand-read-recovery--2026-10-09)
 binds source, binary, methods, inventories and retained evidence separately.
+
+### Executed persistent test-bus mapping repair
+
+`SyntheticM68040OperandReadMappingRepairTests` keeps the selected read denied
+until the handler executes `MOVE.W #1,$4500.L`, then RTE. `$4500` is a fixture
+controller register, not an Amiga device or MMU. Fixed examples require two
+successive denials before enabling the map and validate the literal handler.
+Every recovery program checks the single controller store, neighboring memory,
+handler flags, saved-frame preservation, restored CCR and one accepted read.
+
+Enable `COPPER68K_RUN_040_OPERAND_READ_MAPPING_REPAIR=1` for its generated
+matrix and select `SyntheticM68040OperandReadMappingRepairTests`. With the
+preceding two classes and their flags also enabled, the focused selection
+requires 14 passing rows / ten reports: 205,440 new phase checks for 41,088
+repair programs, plus 287,232 retained phase/entry checks. All CCRs, lanes,
+rejected bytes and four banks use the same first-read scope. The mapping class
+alone has five rows / four reports when its generated matrix is enabled.
+The [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#persistent-test-bus-mapping-repair--2026-10-09)
+binds exact execution and retained identities. Enabled MMU, hardware devices,
+other EAs/later transfers and incoming trace remain separate requirements.

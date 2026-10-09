@@ -117,7 +117,7 @@ public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHel
 
     internal static void Case(CoverageBatch report, bool batch,
         (string Family, int Width, ushort Opcode, bool Movem) instruction,
-        string bank, ushort trace, int ccr, int lane, int faultByte, bool recover = false, string cohort = "")
+        string bank, ushort trace, int ccr, int lane, int faultByte, bool recover = false, string cohort = "", bool repairMapping = false)
     {
         var id = $"68040/{instruction.Family}/operand-read-fault/size={instruction.Width}/bank={bank}/T={trace:X4}/lane={lane}/byte={faultByte}/op={instruction.Opcode:X4}/ccr={ccr:X2}";
         if (recover)
@@ -128,7 +128,10 @@ public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHel
         }
         try
         {
-            var bus = new SyntheticM68040AccessDoubleFaultTests.FaultBus();
+            if (repairMapping && !recover) throw new ArgumentException("Mapping repair requires executed recovery");
+            SyntheticM68040AccessDoubleFaultTests.FaultBus bus = repairMapping
+                ? new MappingRepairBus(Operand + (uint)(lane + faultByte))
+                : new SyntheticM68040AccessDoubleFaultTests.FaultBus();
             var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);
             m.Reset(ccr);
             m.Core.State.A[0] = Operand + (uint)lane;
@@ -146,6 +149,12 @@ public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHel
             m.InitializePhysical(8, Handler, 4);
             m.InitializePhysical(Handler, 0x4e73, 2);
             m.InitializePhysical(Handler + 2, 0x4e71, 2);
+            if (repairMapping)
+            {
+                for (var n = -4; n < 8; n++) m.InitializePhysical(unchecked(MappingRepairBus.Control + (uint)n), 0x5a, 1);
+                m.InitializePhysical(MappingRepairBus.Control, 0, 2);
+                InitializeMappingRepair(m, Handler);
+            }
             foreach (var top in new uint[] { 0x4700, 0x7400 })
                 for (var n = -64; n < 4; n++) m.InitializePhysical(unchecked(top + (uint)n), (uint)(n ^ 0x5a), 1);
             m.Start();
@@ -192,7 +201,9 @@ public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHel
             bus.Arm(Operand + (uint)(lane + faultByte), M68kBusAccessKind.CpuDataRead);
             // Exactly one faulting attempt. Do not retry partially executed instructions.
             if (!recover) { M68040StackFixture.Step(m, e, report, id, batch); return; }
-            string[] phases = ["fault-entry", "handler-RTE", "completed-read", "following-MOVEQ"];
+            string[] phases = repairMapping
+                ? ["fault-entry", "mapping-repair", "handler-RTE", "completed-read", "following-MOVEQ"]
+                : ["fault-entry", "handler-RTE", "completed-read", "following-MOVEQ"];
             string PhaseId(string name) => id.Replace("/op=", "/phase=" + name + "/op=");
             var phase = 0;
             bool Step()
@@ -203,7 +214,17 @@ public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHel
             }
             e.ControlChecks["accepted operand reads"] = (_ => (uint)bus.Accesses.Count(a =>
                 !a.Write && a.Kind == M68kBusAccessKind.CpuDataRead && a.Address == Operand + (uint)lane), 0);
+            if (repairMapping) e.ControlChecks["mapping repair stores"] = (_ => (uint)bus.Accesses.Count(a =>
+                a.Write && a.Address == MappingRepairBus.Control), 0);
             if (!Step()) return;
+            if (repairMapping)
+            {
+                e.Write(MappingRepairBus.Control, 1, 2, m.Model);
+                e.Pc = Handler + 8; e.Sr &= 0xfff0; // MOVE.W #1,abs.L preserves X, clears N/Z/V/C.
+                e.ControlChecks["mapping repair stores"] = (_ => (uint)bus.Accesses.Count(a =>
+                    a.Write && a.Address == MappingRepairBus.Control && a.Width == 2 && a.Value == 1), 1);
+                if (!Step()) return;
+            }
             // The handler executes RTE. Only the first read was rejected, with
             // no committed operand effects; no automatic opcode retry is used.
             pointers[exceptionBank] += 60;
@@ -239,5 +260,27 @@ public sealed class SyntheticM68040OperandReadFaultDiscoveryTests(ITestOutputHel
         }
         catch (NotSupportedException ex) { report.Record(id, "unsupported", ex.Message); }
         catch (Exception ex) { report.Record(id, "mismatching", ex.Message); }
+    }
+
+    internal static void InitializeMappingRepair(SyntheticMachine m, uint handler)
+    {
+        // MOVE.W #1,$00004500.L; RTE; NOP. This register belongs to the test bus.
+        ushort[] words = [0x33fc, 1, 0, 0x4500, 0x4e73, 0x4e71];
+        for (var n = 0; n < words.Length; n++) m.InitializePhysical(handler + (uint)n * 2, words[n], 2);
+    }
+
+    internal sealed class MappingRepairBus(uint faultByte) : SyntheticM68040AccessDoubleFaultTests.FaultBus, IM68kPhysicalAddressMap
+    {
+        internal const uint Control = 0x4500;
+        // Reimplement the interface so the persistent mapping is used by the
+        // public CPU factory, even when the fixture holds the base bus type.
+        public new bool IsCpuPhysicalAddressMapped(uint address, int byteCount, M68kBusAccessKind kind)
+        {
+            if (kind != M68kBusAccessKind.CpuDataRead || unchecked(faultByte - address) >= byteCount)
+                return base.IsCpuPhysicalAddressMapped(address, byteCount, kind);
+            if (Peek(Control, 2) == 1) return true;
+            Rejected.Add((address, byteCount, kind, Accesses.Count));
+            return false;
+        }
     }
 }

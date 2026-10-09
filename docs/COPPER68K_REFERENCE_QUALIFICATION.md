@@ -14357,3 +14357,52 @@ Earlier whole-class and whole-CPU graphs retain their original identities. The
 All launched workers are terminal. Milestone 6 stays **in progress**,
 `roadmapComplete=false`; no CPU semantics/timing change, private import,
 publication or new package/API/consumer execution occurs.
+
+## Persistent test-bus mapping repair — 2026-10-09
+
+`SyntheticM68040OperandReadMappingRepairTests` extends the shared first-read
+recovery fixture with a persistent physical map. The selected read stays denied
+until a word value 1 is stored at fixture controller `$4500`. This register is
+test-bus state; no Amiga device or enabled MMU behavior is implied. The handler
+executes literal `MOVE.W #1,$00004500.L; RTE`, and each program verifies exactly
+one accepted repair store, register canaries, changed handler flags, preserved
+saved frame, restored CCR/stacks, one accepted operand read and following MOVEQ.
+Its mapping-interface reimplementation is checked through the same interface
+the public CPU factory uses. Fixed examples require two successive denied
+requests with no repair, permit unrelated accesses, then enable the mapping and
+validate the handler's literal words. Those fixture examples are separate from
+the CPU's executed repair qualification.
+
+The bounded smoke passes both scalar/batch rows and the fixed-example fact.
+Fresh isolated `OperandReadMappingRepairV1` execution then exits 0 with **14
+passing named rows / ten reports**. It qualifies **41,088 repair programs /
+205,440 new phase checks**: fault entry, controller store, handler RTE, completed
+read and following MOVEQ. Ordinary examples cover 128 programs / 640 checks;
+the optional matrix covers 40,960 programs / 204,800 checks. All CCRs, four lanes,
+rejected bytes and user/user-M/ISP/MSP cover the sixteen earlier indirect forms.
+The six retained reports remain byte-identical: 164,352 one-shot recovery phase
+checks and 122,880 fault-entry cases. Existing literal encoding and indexed MOVEM
+controls also pass. The persistent map does not expire after its first rejection.
+
+Independent verification enumerates every new and retained combination key and
+weight, checks exact 14 loaded methods/definitions and completed counters,
+command/settings, all raw source/asset/output identities, three DLLs and exact
+source scope. One test file is added and only the shared read fixture changes;
+all 37 CPU inputs remain raw-identical to the preceding 235-input snapshot. The
+new selected graph has 236 inputs. Proof SHA-256:
+`3e3762420c06d0939afb23df4138a42e47ada188e6daa2ab45de21aa9091d607`.
+
+For focused execution enable `COPPER68K_RUN_040_OPERAND_READ_MAPPING_REPAIR=1`
+and select `SyntheticM68040OperandReadMappingRepairTests`. To reproduce the
+14-row selection, also enable the preceding recovery/discovery flags and include
+their two classes. Use fresh reports/build/results directories as shown in the
+[test README](../Copper68k.Tests/Synthetic/README.md#executed-persistent-test-bus-mapping-repair).
+Execution generates results; independent artifact qualification is distinct.
+
+This is software bus-map repair at a rejected first indirect read. It does not
+qualify a real controller, enabled MMU, partially accepted transfers, other EAs,
+later MOVEM transfers, incoming trace epochs or physical pipeline/cache timing.
+Earlier graphs retain their frozen evidence. All launched workers are terminal;
+the broader 480-case gate and reference disagreements remain. Milestone 6 stays
+**in progress**, `roadmapComplete=false`; no production CPU semantics/timing
+change, private import, publication or new package/API/consumer execution occurs.

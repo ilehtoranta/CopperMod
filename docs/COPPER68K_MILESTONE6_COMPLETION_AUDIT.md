@@ -222,6 +222,15 @@ it does not replace or discard their remaining gaps.
    rejection is one-shot and whole-request, with no earlier operand effects;
    other EAs/later transfers, incoming trace and actual mapping repair remain
    open. This does not qualify the wider 480-case restoration inventory.
+   A subsequent persistent test-bus map qualifies executed software repair:
+   14 rows / ten reports, 41,088 repair programs / 205,440 new phase checks,
+   plus 287,232 byte-identical retained checks. The handler's literal word store
+   enables the fixture map before RTE and the completed operand read; each store
+   and saved/restored state is checked. Independent proof:
+   `3e3762420c06d0939afb23df4138a42e47ada188e6daa2ab45de21aa9091d607`.
+   The 236-input snapshot keeps all 37 CPU inputs unchanged. This is controlled
+   bus coverage, not enabled MMU or physical device qualification; wider
+   EA/partial-effect/trace and the 480-case protocols remain open.
 3. **Frozen snapshot coherence is verified.** The frozen `86469f7` graph has
    complete full-suite, ordinary-gate and same-assembly deep/reference/guard
    evidence. Schema-2 EOR/MOVEA retirement Current graphs match all 230 inputs;

@@ -2149,6 +2149,21 @@ repair and trace/interrupt protocols remain open. The broader 480-case gate and
 reference disagreements remain. Milestone 6 stays **in progress**,
 `roadmapComplete=false`; no production CPU change, private import or release.
 
+### Milestone 6 checkpoint — executed test-bus mapping repair, 2026-10-09
+
+A persistent physical-map fixture now requires the handler to execute a
+controller word store before RTE and successful first-read completion. Fixed
+examples prove repeated denial without repair and validate the literal program.
+Fresh execution passes 14 named rows / ten reports: 41,088 new repair programs /
+205,440 phase checks, plus 287,232 byte-identical retained phase/entry checks.
+All CCRs, lanes, rejected bytes and four banks cover the same sixteen indirect
+read forms. Independent source/assembly/method/inventory/report linkage passes;
+the 236-input snapshot preserves all 37 production CPU inputs. The control
+register is test-bus state, not a hardware device or enabled MMU. Other EAs,
+later/partial-effect transfers, trace/interrupts and the broad reference gate
+remain open; all 480 broader protocol IDs stay untested in their required gate.
+Milestone 6 remains **in progress**, `roadmapComplete=false`; no import or release.
+
 ### Milestone 6 checkpoint — maintained nested-writeback audit, 2026-10-09
 
 A maintained command executes isolated sources and independently validates
