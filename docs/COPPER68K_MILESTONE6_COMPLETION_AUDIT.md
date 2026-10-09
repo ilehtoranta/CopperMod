@@ -39,6 +39,10 @@ reference/API and .81 standard/native consumer evidence exactly. Independent
 promotion linkage proof:
 `c1e006019ea3c3db0a331aa58f66e2a8b412d0f9943d7cb4ccc864bc66ebae33`.
 No whole-suite claim is added for the changed diagnostic/test-attribute graph.
+The subsequent broad-gate diagnostic/command wording describes the approved
+production fix; exact replacement verification preserves every case/status and
+CPU source, with no new execution claim. Scope proof:
+`2e4831b30e02d57158be76b3073dceab8c63c3f071101891389a807c4b6197e2`.
 Other private candidates, disputed architectural rules and broader gates remain
 unchanged. No publication occurs; earlier no-import statements are historical.
 

@@ -132,7 +132,7 @@ if (-not $ValidateReportsOnly) {
             @{file=$_; sha256=(Get-FileHash -LiteralPath (Join-Path $repo $_) -Algorithm SHA256).Hash.ToLowerInvariant()}
         }
         limitations=@('Synthetic frames and supervisor-stack physical map faults, not hardware captures or enabled-MMU access faults',
-            'The broader 480-case fault/context protocol inventory remains untested and fails the gate; separately qualified failed production CP transfer discovery and private zero-trace/all-CCR snapshot evidence do not complete it',
+            'The broader 480-case fault/context protocol inventory remains untested and fails the gate; historical failed CP transfer discovery and the approved zero-trace/all-CCR context-copy fix do not complete it',
             'Multiple continuation bits are architecturally undefined and excluded',
             'Selected active accurate-batch paths verify counts/callbacks and scalar/batch bus/cycle policy; generic short operand frames do not qualify architectural format-7 data restart',
             'Instruction-fault fixtures use cache-disabled accurate execution and physical-map rejection; speculative deferral, enabled caches/MMU and compiled fetch PC provenance remain unqualified',

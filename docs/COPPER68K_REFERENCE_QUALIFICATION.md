@@ -39,6 +39,12 @@ An exact newline-only comparison permitted restoring the already qualified
 source bytes; the repaired execution then passed without weakened checks.
 Independent production promotion proof:
 `c1e006019ea3c3db0a331aa58f66e2a8b412d0f9943d7cb4ccc864bc66ebae33`.
+After promotion, one broad-gate diagnostic and one command limitation are updated
+to describe the fix as approved production behavior. Static exact-replacement
+verification proves that case generation, statuses, acceptance conditions and
+all CPU sources are unchanged. It adds no execution claim or gate promotion.
+Scope proof:
+`2e4831b30e02d57158be76b3073dceab8c63c3f071101891389a807c4b6197e2`.
 Earlier no-import records remain historical. Broad architectural/restoration
 gates are unchanged; no package publication occurs. Milestone 6 remains
 **in progress**, `roadmapComplete=false`.
