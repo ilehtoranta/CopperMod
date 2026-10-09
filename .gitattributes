@@ -3,3 +3,4 @@ scripts/reference/m68020-predecrement-write-candidate.patch text eol=lf whitespa
 scripts/reference/m68020-predecrement-read-candidate.patch text eol=lf whitespace=-blank-at-eol
 scripts/reference/m68020-read-write-recovery-candidate.patch text eol=lf whitespace=-blank-at-eol,-blank-at-eof
 scripts/reference/m68020-private-predecrement-manifest.json text eol=lf
+scripts/reference/m68040-context-pending-candidate.patch text eol=lf whitespace=-blank-at-eol

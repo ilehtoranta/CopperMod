@@ -1854,3 +1854,25 @@ The requested selection must retain all four named rows and four reports, with
 two passing local rows and two failing discovery rows until the gap is resolved.
 The source pending vector is an explicit fixture input; no FPU arithmetic,
 hardware frame migration/FSAVE ABI, original access entry or trace is qualified.
+
+### Private pending-delivery snapshot candidate
+
+`SyntheticM68040ContextSnapshotDiscoveryTests` checks nested LIFO order,
+distinct identity for equal-valued deliveries, replacement rather than append,
+self-copy, independent completion/reset, empty-context clearing, and the existing
+machine-time policy of `CopyFrom` versus `CopyTaskContextFrom`. Enable
+`COPPER68K_RUN_040_CONTEXT_SNAPSHOT_DISCOVERY=1` when explicitly requesting it.
+Production currently fails this test; unavailable execution supplies no coverage.
+
+The reviewed `scripts/reference/m68040-context-pending-candidate.patch` changes
+only an isolated CPU copy. It clones delivery entries when saving/restoring CPU
+state and clears unrelated destination entries. It adds no public API. Apply it
+only to a separate source copy matching this checkpoint, after normalizing its
+two affected files from CRLF to LF; require `git apply --check` before applying.
+Select the snapshot and context-transfer discovery classes plus
+`M68040FpuContinuationStateTests`, with both discovery flags enabled. The clean
+production baseline has 18 named passes / three failures. The private candidate
+passes all 21 named rows and 126 reported cases, preserving local reports and
+the sixteen retained delivery tests. It still rejects a foreign frame without
+saved delivery state. Full CPU, API and isolated NuGet consumer qualification
+remain separate gates; the candidate is not imported or published.

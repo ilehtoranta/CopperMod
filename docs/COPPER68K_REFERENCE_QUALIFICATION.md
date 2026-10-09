@@ -14407,6 +14407,61 @@ the broader 480-case gate and reference disagreements remain. Milestone 6 stays
 **in progress**, `roadmapComplete=false`; no production CPU semantics/timing
 change, private import, publication or new package/API/consumer execution occurs.
 
+## Private pending-delivery context snapshot candidate — 2026-10-09
+
+The existing public task-switch contract replaces task-local state while keeping
+machine time. A supplied suspended CP event is already integer-delivery state;
+its selected vector cannot be reconstructed from handler-modified FPU registers.
+The private candidate therefore copies this state with CPU snapshots. The patch
+adds an internal deep-copy method to `M68040PendingFpuExceptions` and calls it from
+`M68kCpuState.CopyFrom` and `CopyTaskContextFrom`. It replaces destination entries,
+preserves nested order, assigns independent identities to equal-valued entries,
+and leaves self-copy unchanged. No public signature or instruction timing policy
+change is proposed. Production CPU source remains untouched.
+
+`SyntheticM68040ContextSnapshotDiscoveryTests` requests both copy APIs and checks
+independent completion/reset, LIFO order, equal-valued nested identities, repeated
+replacement, self-copy, clearing from an empty incoming context, PC and machine
+time. Together with context-transfer discovery and the sixteen retained
+`M68040FpuContinuationStateTests` rows, a fresh isolated baseline has **18 passes /
+three failures / actual exit 1**. Its four transfer reports are byte-identical to
+the earlier failed V3 evidence, and its snapshot fails with expected vector 55
+versus stale destination vector 53. The isolated candidate has **21 passes / zero
+failures / actual exit 0**, including **126 passing reported cases**. Local
+reports remain byte-identical. The retained tests cover accurate and warmed
+JIT V1/V2 delivery, nested/reset/redirect behavior, and completed-store non-replay.
+A foreign CP frame without supplied delivery state still rejects explicitly.
+
+Independent checks bind all 238 source/project inputs, both isolated source
+graphs, exact two-file normalized patch reconstruction, three DLLs per graph,
+commands/settings, 21 named outcomes and loaded methods, every report key/weight
+and the exact before-failure diagnostic. All 237 preceding source inputs remain
+raw-identical in the production baseline; only the snapshot test is added.
+
+| Review/evidence | SHA-256 |
+| --- | --- |
+| Two-file candidate patch | `e18ec5c9ebb583ac3da579e70e3cc43b39a2a356be174973e461f3d533bdb5de` |
+| Independent selected baseline/candidate proof | `802db3def3cbc940e545fb0cc2efcc80120009f72d1bb59ee335e6c0b26d45e7` |
+
+Full qualification is running from the same candidate source and compiled DLLs
+under `ContextPendingCandidateV1/full-v4`, with the ten pinned native reference
+presets from `CurrentReferenceFullV2`. All native input hashes are checked before
+execution. Preflight records 5,420 discovery display entries, **not executed
+rows**. One non-serializable MemberData method represents 33 old execution rows;
+twelve argument displays differ at encoding/truncation boundaries. Their exact
+method groups and unchanged fixture sources are bound separately, and the
+original 5,408 execution names are retained for final roster checks. Three earlier
+preflights rejected incorrect display assumptions or a source filename before
+full CPU execution; only the corrected V4 full request starts. No final full
+roster/report, API or consumer qualification is claimed while it runs.
+
+The [test README](../Copper68k.Tests/Synthetic/README.md#private-pending-delivery-snapshot-candidate)
+records reproduction constraints and selected expectations. This is an emulator
+context snapshot candidate, not a silicon/FSAVE migration ABI or qualification
+of original access-frame construction. Broader restoration/trace and reference
+gaps remain. Milestone 6 stays **in progress**, `roadmapComplete=false`; no private
+production import, package publication or consumer qualification occurs here.
+
 ## CP context-transferred vector discovery — 2026-10-09
 
 `SyntheticM68040ContextTransferDiscoveryTests` gives the retained CP vector

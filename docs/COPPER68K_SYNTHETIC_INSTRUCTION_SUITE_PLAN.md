@@ -1,5 +1,19 @@
 # Copper68k synthetic instruction suite
 
+### Milestone 6 checkpoint — private context snapshot candidate, 2026-10-09
+
+A reviewed two-file private patch copies suspended integer-delivery state with
+saved CPU contexts, preserving independent nested identities and replacing stale
+destination events. A new opt-in snapshot test covers self-copy, completion/reset
+independence, empty-context clearing and existing machine-time policy. The
+production baseline fails three of 21 selected rows; the private candidate passes
+all 21 and 126 reported cases, including sixteen retained delivery tests. Exact
+source/patch/assembly/method/report linkage is independently verified. Full CPU
+qualification has started on the frozen 238-input graph with ten pinned native
+presets; final full/API/consumer evidence is pending. No production CPU import
+or public API change occurs. Milestone 6 stays **in progress**,
+`roadmapComplete=false`; broader restoration/reference gaps remain.
+
 ### Milestone 6 checkpoint — CP context-transfer failure, 2026-10-09
 
 The previously untested context-transferred-vector requirement now has a bounded

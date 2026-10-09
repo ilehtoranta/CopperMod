@@ -30,6 +30,18 @@ it does not replace or discard their remaining gaps.
 
 ## Completion gates and evidence status
 
+A private two-file CP context snapshot candidate now passes the selected
+21-row gate, including all 126 reported cases, nested snapshot ownership and
+sixteen retained delivery tests. The baseline still has 18 passes / three
+failures. Independent proof:
+`802db3def3cbc940e545fb0cc2efcc80120009f72d1bb59ee335e6c0b26d45e7`.
+The candidate copies suspended delivery identities as task-local state without
+changing the public API. It is not imported; production and the broader 480-case
+gate remain unchanged. Full CPU qualification is running on its frozen
+238-input graph with ten pinned native presets. Discovery display entries are
+not the executed-row count; final roster/report/API/consumer qualification is
+still required before production readiness can be assessed.
+
 CP context transfer now has actual failed discovery evidence rather than only
 an untested label. With supplied pending vectors 49–55 and user/ISP/MSP frames,
 local scalar/batch controls pass 42 cases. Public task-context copy/switch loses
