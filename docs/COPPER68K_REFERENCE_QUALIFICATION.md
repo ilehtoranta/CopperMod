@@ -8,6 +8,37 @@ The [milestone 6 completion audit](COPPER68K_MILESTONE6_COMPLETION_AUDIT.md)
 maps the accepted requirements to current evidence and outstanding gates.
 The dated records below remain scoped historical evidence.
 
+### Recovered native consumer boot qualification, 2026-10-09
+
+The ROM relocated under `C:\Data\ROM` has the exact required SHA-256
+`8c8a0cf04f91b88eaf0c4f1126041987067e2286a8ee590bdbae447a8000c5ee`.
+The retained Workbench ADF also retains its pin. A separate native-only resume
+uses the already built local `.81` consumer; it preserves the original failed
+flow and standard evidence rather than rewriting them as successful.
+
+Both `SuppliedNativeWorkbench31BootsThroughTheDesktopSession` rows pass,
+**two executed / zero skipped / zero failed**, with 0 and 2 MiB Fast RAM.
+Each renders 10,000 fields and checks no fault, ROM overlay removal, exact cycles
+1,420,928,790 / 1,420,928,894, PC `F81476`, Fast RAM mapping and framebuffer
+SHA-256 `aae907938c788bd6f3f29521d2f3fffccc5ee4db0acc0634b19bc024080dd84f`.
+These are functional native boot regressions, not throughput measurements.
+
+Independent verification binds the exact command/settings, media pins, named
+TRX rows and loaded definitions, immutable local package, three loaded CPU DLLs,
+39 package inputs / 37 CPU inputs and archived clean consumer source commit
+`a4e80b68a7b58e6c12b940b9d786b2ac73757965`. The prior build and 172 passing host
+tests with six unavailable, 74 disk tests and 1,080 engine tests remain unchanged.
+All CPU inputs match the separately qualified frozen all-CCR candidate's full,
+reference and API evidence. Native consumer integration for this scope is now
+complete. Independent proof:
+`41629e60cdc0da0ef43f35893110d29422907f1c01cd951536034aaf263977bf`.
+
+This does not qualify unrelated primary changes, hard disk boot, the current
+diagnostic-only source edit as a whole-suite execution, or broader architectural
+restoration protocols. Production readiness, candidate import and publication
+remain false; reference disagreements remain unresolved. Milestone 6 stays
+**in progress**, `roadmapComplete=false`.
+
 ### Broader context-gate diagnostic correction, 2026-10-09
 
 The broad access-frame gate no longer describes CP context transfer as lacking

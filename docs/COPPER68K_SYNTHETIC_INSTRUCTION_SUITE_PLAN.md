@@ -1,5 +1,21 @@
 # Copper68k synthetic instruction suite
 
+### Milestone 6 checkpoint — recovered native consumer input, 2026-10-09
+
+The relocated Kickstart 3.1 A500 ROM matches the original pinned hash. Two
+native Workbench floppy replays now pass on the retained local-only `.81`
+package and clean CopperScreen commit `a4e80b6`, with 0 and 2 MiB Fast RAM.
+Each executes 10,000 fields and verifies no host fault, ROM overlay removal,
+exact cycle count, CPU PC, Fast RAM mapping and the reviewed desktop framebuffer
+hash. Independent verification checks the exact named rows/loaded methods,
+media, package/CPU identities, archived consumer sources and unchanged standard
+results. Proof:
+`41629e60cdc0da0ef43f35893110d29422907f1c01cd951536034aaf263977bf`.
+This completes consumer integration for that frozen private candidate scope;
+the original failed flow remains retained. No primary dirty code, new CPU build,
+candidate import or publication is included. Broader architectural/reference
+gates remain open; milestone 6 stays **in progress**, `roadmapComplete=false`.
+
 ### Milestone 6 checkpoint — full all-CCR candidate, 2026-10-09
 
 The frozen 239-input / 37-CPU candidate completes full execution with 5,365

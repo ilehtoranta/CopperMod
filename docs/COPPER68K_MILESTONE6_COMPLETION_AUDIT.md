@@ -30,6 +30,20 @@ it does not replace or discard their remaining gaps.
 
 ## Completion gates and evidence status
 
+The native consumer input is recovered with its exact pinned hash. Two Workbench
+floppy boot rows pass on the retained local `.81` package and clean consumer
+commit `a4e80b6`, with 0 and 2 MiB Fast RAM, no skips and exact cycle/PC/mapping/
+framebuffer assertions after 10,000 fields each. Independent verification binds
+media, command, loaded methods, archived sources, package and all 37 CPU inputs
+to the frozen all-CCR full/reference/API evidence. The standard build and host/
+disk/engine results remain unchanged; the original failed flow is preserved.
+Proof:
+`41629e60cdc0da0ef43f35893110d29422907f1c01cd951536034aaf263977bf`.
+Consumer integration for this frozen private candidate scope is complete.
+Production readiness and broader reference/restoration gates remain unresolved;
+no candidate import or publication occurs. Earlier unavailable-native records
+retain their historical scope.
+
 The broader access-frame diagnostic now acknowledges failed production CP
 transfer discovery and private zero-trace/all-CCR candidate qualification, without
 clearing the wider requirement. Fresh isolated execution verifies all 480 exact
@@ -58,7 +72,8 @@ Final same-build full/reference/API and retained standard-consumer CPU-source
 linkage proof:
 `ba5125866548de59170b367d3e23ce94f4a0fd6fc16b9dcf92f302c320d1ec43`.
 The 238-input full proof is not relabeled. No new consumer execution is claimed.
-Missing native ROM input and unresolved broader gates still prevent completion.
+Native boot is now independently qualified as recorded above; unresolved broader
+gates still prevent completion.
 
 A later selected 239-input graph extends context transfer across all 32 initial
 CCRs with complementary saved CCRs. The candidate passes all 23 named rows /
