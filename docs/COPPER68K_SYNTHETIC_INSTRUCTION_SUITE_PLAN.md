@@ -1,5 +1,17 @@
 # Copper68k synthetic instruction suite
 
+### Milestone 6 checkpoint — maintained first-read audit, 2026-10-09
+
+The entry/recovery/persistent test-bus mapping slice now has a maintained isolated
+command with strict evidence replay and independent phase/CCR inventories.
+Fresh complete execution passes fourteen named tests / 492,672 checks / ten
+reports; controls pass eight / 1,152 / four. All reports and raw source inputs
+match the earlier qualified 236-input snapshot. Relocated evidence passes and
+eight copied corruptions reject; two invalid requests fail before execution.
+Exact commands and proof identities are in the qualification log and test README.
+All 37 CPU inputs remain unchanged. Milestone 6 stays **in progress**,
+`roadmapComplete=false`; broader restoration/reference gaps are retained.
+
 ## Scope and status
 
 Accepted implementation plan, 2026-10-03. Source baseline: PR #19, commit

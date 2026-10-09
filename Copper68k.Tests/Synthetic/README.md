@@ -1808,3 +1808,24 @@ alone has five rows / four reports when its generated matrix is enabled.
 The [qualification record](../../docs/COPPER68K_REFERENCE_QUALIFICATION.md#persistent-test-bus-mapping-repair--2026-10-09)
 binds exact execution and retained identities. Enabled MMU, hardware devices,
 other EAs/later transfers and incoming trace remain separate requirements.
+
+### Maintained first-read recovery audit
+
+The maintained command isolates source and build outputs, enumerates the required
+phase/CCR keys independently, and checks source, DLL, loaded-method and report
+identities. `controls` requires eight passing tests / 1,152 checks / four reports;
+`complete` requires fourteen / 492,672 / ten. Neither selection is a whole CPU
+suite or hardware qualification. Existing environment flags are cleared before
+the selected audit flags are supplied.
+
+```powershell
+python scripts/test-copper68k-040-operand-read-recovery.py --selection complete --output artifacts/040-read-recovery
+python scripts/test-copper68k-040-operand-read-recovery.py --selection complete --validate-only --output artifacts/040-read-recovery
+python scripts/prove-copper68k-040-operand-read-recovery-integrity.py --source artifacts/040-read-recovery --output artifacts/040-read-recovery-integrity
+```
+
+Use a fresh directory for execution and integrity controls. Replay reads recorded
+evidence without executing its recorded command; a valid relocated copy can pass.
+Missing/extra reports, wrong weights, empty/skipped/failed selections, substituted
+methods or assemblies, and changed sources/DLLs reject. Replay requires this
+source checkpoint, with only CRLF-to-LF checkout normalization permitted.

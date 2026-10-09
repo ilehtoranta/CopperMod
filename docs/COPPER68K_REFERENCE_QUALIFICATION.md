@@ -14406,3 +14406,40 @@ Earlier graphs retain their frozen evidence. All launched workers are terminal;
 the broader 480-case gate and reference disagreements remain. Milestone 6 stays
 **in progress**, `roadmapComplete=false`; no production CPU semantics/timing
 change, private import, publication or new package/API/consumer execution occurs.
+
+## Maintained first-read recovery audit — 2026-10-09
+
+`scripts/test-copper68k-040-operand-read-recovery.py` now maintains isolated
+execution and strict replay for the three entry/recovery/mapping classes. The
+independent inventory preserves every recovery phase and CCR key; entry keys
+retain their documented weight 32. Exact named tests, completed counters, loaded
+methods, three DLL identities, command/settings, source/asset snapshot and report
+roster/counts/statuses are required. Empty or substituted selections cannot pass.
+Replay never executes a recorded command and accepts a relocated valid copy.
+
+Fresh `MaintainedReadRecoveryControlsV1` passes **eight named tests / 1,152
+checks / four reports**. `MaintainedReadRecoveryCompleteV1` passes **fourteen /
+492,672 / ten**. Both strict replays pass. Independent verification confirms all
+236 source/project inputs and 37 production CPU inputs remain raw-identical to
+the earlier mapping-repair snapshot; every report is byte-identical to that
+qualified evidence. This is new focused execution, not a whole-CPU run.
+
+The maintained integrity command accepts relocated evidence and rejects eight
+copied corruptions: missing/extra report, wrong weight, empty selection, wrong
+method/assembly, changed DLL and changed source. Original evidence is unchanged.
+Two actual unknown-selection/missing-output requests reject before creating
+output or executing a CPU. Exact commands are in the
+[test README](../Copper68k.Tests/Synthetic/README.md#maintained-first-read-recovery-audit).
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Maintained controls | `d4eb079ba41fb8681f3bcf31ab686d98f152cbd0b0269b0bb8fa87a8061c9d59` |
+| Maintained complete selection | `9a655e6e32e40f637c2f73f99c66130a0e9fb8f476c9921b738515f267f379c5` |
+| Relocation and eight corruption controls | `1c341129c56b746163f98ab1241fba8fb5a6ae6fd9fcfc5f12ab4d5f294b3c86` |
+| Independent source/execution/report linkage and request guards | `ba48688f47a6d9d81114640240259f6dac37784e7c1f9ac11fdaebfe0a29d437` |
+
+Earlier full-suite and candidate evidence retains its frozen identities. First
+indirect reads, zero incoming trace and fictional test-bus repair are the scope;
+other operands, partial effects, trace/interrupts and hardware mapping remain
+open. The broader 480-case gate is unchanged. Milestone 6 remains **in progress**,
+`roadmapComplete=false`; no production CPU change, private import or publication.

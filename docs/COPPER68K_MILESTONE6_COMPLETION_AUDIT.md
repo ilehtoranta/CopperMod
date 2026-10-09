@@ -30,6 +30,16 @@ it does not replace or discard their remaining gaps.
 
 ## Completion gates and evidence status
 
+The first-read entry/recovery/persistent test-bus repair selection now has a
+maintained isolated execution/replay command. Its fresh complete selection passes
+14 named tests / 492,672 checks / ten reports; controls pass eight / 1,152 / four.
+All reports and raw source inputs match the earlier qualified 236-input snapshot.
+Relocated evidence passes, eight copied corruptions reject, and two actual
+invalid requests reject before execution. Independent linkage proof:
+`ba48688f47a6d9d81114640240259f6dac37784e7c1f9ac11fdaebfe0a29d437`.
+This satisfies maintained reproduction for that bounded slice. It does not clear
+the broader 480-case restoration gate or reference disagreements below.
+
 1. **The broad software-reference gate is failed.** The retained
    `QualifiedBasicMove16RecoveryV1` audit reports 1,379 passing directories and
    two mismatching directories, with actual test exit 1. The first failures are
