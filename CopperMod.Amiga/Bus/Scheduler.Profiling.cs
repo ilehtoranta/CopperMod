@@ -364,6 +364,7 @@ namespace CopperMod.Amiga.Bus
                 HasDiskWorkThrough(cycle, mask))
             {
                 var start = Stopwatch.GetTimestamp();
+                SettleDisplayBeforeDisk(cycle, mask);
                 if ((mask & (AmigaHardwareEventMask.ForceCatchUp | AmigaHardwareEventMask.DiskPassiveInput)) != 0)
                 {
                     SynchronizeDiskThrough(cycle);
@@ -534,6 +535,7 @@ namespace CopperMod.Amiga.Bus
                     (HasDiskWakeSourceThrough(targetCycle, mask) && HasDiskWorkThrough(targetCycle, mask))))
             {
                 var start = Stopwatch.GetTimestamp();
+                SettleDisplayBeforeDisk(targetCycle, mask);
                 if (forceCatchUp || (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0)
                 {
                     SynchronizeDiskThrough(targetCycle);

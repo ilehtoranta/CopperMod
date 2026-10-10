@@ -24,7 +24,13 @@ namespace CopperMod.Amiga.Bus
                 access.Request.Address != MaskChipDmaAddress(access.Request.Address) ||
                 access.GrantedCycle < _chipDataBusLatchCycle)
             {
-                throw new InvalidOperationException("The bitplane output does not match its accepted physical reservation.");
+                throw new InvalidOperationException(
+                    $"The bitplane output does not match its accepted physical reservation: " +
+                    $"slot={_hrmSlotEngine.MatchesAcceptedBitplaneWord(in access)}, " +
+                    $"address=${access.Request.Address:X8}, masked=${MaskChipDmaAddress(access.Request.Address):X8}, " +
+                    $"input={access.Request.RequestedCycle}, output={access.GrantedCycle}, " +
+                    $"completed={access.CompletedCycle}, bus={_chipDataBusLatchCycle}, " +
+                    $"owner={_chipDataBusLatchRequester}/{_chipDataBusLatchKind}, dma={_chipDataBusLatchWasDma}.");
             }
 
             var execution = ExecuteDmaWordRead(access.Request.Address, granted: true, access);

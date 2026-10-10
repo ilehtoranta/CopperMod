@@ -703,6 +703,7 @@ namespace CopperMod.Amiga.Bus
             if ((mask & (AmigaHardwareEventMask.DiskEvents | AmigaHardwareEventMask.DiskPassiveInput)) != 0 &&
                 ShouldPublishDiskThrough(cycle, mask))
             {
+                SettleDisplayBeforeDisk(cycle, mask);
                 if ((mask & (AmigaHardwareEventMask.ForceCatchUp | AmigaHardwareEventMask.DiskPassiveInput)) != 0)
                 {
                     SynchronizeDiskThrough(cycle);
@@ -957,6 +958,7 @@ namespace CopperMod.Amiga.Bus
                 (forceCatchUp ||
                     ShouldPublishDiskThrough(targetCycle, mask)))
             {
+                SettleDisplayBeforeDisk(targetCycle, mask);
                 if (forceCatchUp || (mask & AmigaHardwareEventMask.DiskPassiveInput) != 0)
                 {
                     SynchronizeDiskThrough(targetCycle);
@@ -985,6 +987,22 @@ namespace CopperMod.Amiga.Bus
             {
                 SynchronizeBlitterThrough(targetCycle);
                 InvalidateWakeAgenda();
+            }
+        }
+
+        private void SettleDisplayBeforeDisk(long cycle, AmigaHardwareEventMask mask)
+        {
+            // A CPU access may leave a bitplane's accepted IN/OUT pair between
+            // phases. The scheduler cursor can already be beyond that OUT, so
+            // clamping wake candidates to the cursor does not order it before
+            // the next disk word. Finish the display prefix before disk moves
+            // the shared Chip-bus horizon. Advance the display itself because
+            // the beam clock can already be ahead of its outstanding output.
+            if ((mask & AmigaHardwareEventMask.Agnus) != 0 && cycle > 0 &&
+                _bus.Disk.HasSlotDmaWakeSourceThrough(cycle) &&
+                _bus.GetNextAgnusEventCycle(0, cycle - 1) < cycle)
+            {
+                _bus.Display.AdvanceLiveDmaTo(cycle - 1);
             }
         }
 
