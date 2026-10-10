@@ -1,0 +1,28 @@
+--- a/gencpu/cputest.cpp
++++ b/gencpu/cputest.cpp
+@@
+ 	case i_DIVL:
+ 	case i_MULL:
+ 	{
+-		if (cpu_lvl >= 4) {
+-			// same as BF instructions but also other bits need clearing
+-			// or results are unexplained..
+-			uae_u16 extra = get_word_test(opcode_memory_start + 2);
+-			if (extra & 0x83f8) {
+-				extra &= ~0x83f8;
+-				put_word_test(opcode_memory_start + 2, extra);
+-			}
+-		}
++		// M68000PM 4-94/98/136/140: these extension fields are zero.
++		// Qualify legal encodings on every model before reference execution.
++		uae_u16 extra = get_word_test(opcode_memory_start + 2);
++		extra &= ~0x83f8;
++		// A 64-bit multiply with Dh == Dl has undefined results (4-136/140).
++		// Select a distinct Dh while retaining all other generated fields.
++		if (dp->mnemo == i_MULL && (extra & 0x0400) &&
++			((extra >> 12) & 7) == (extra & 7)) {
++			extra ^= 1;
++		}
++		put_word_test(opcode_memory_start + 2, extra);
+ 		break;
+ 	}

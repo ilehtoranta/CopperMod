@@ -18,7 +18,7 @@ internal static class SyntheticExecution
 
     public static void ExpectException(SyntheticMachine machine, ArchitecturalExpectation expected, int vector, uint? savedProgramCounter = null)
     {
-        var format2 = vector == 5 && machine.Model.FullIndex;
+        var format2 = vector is 5 or 6 or 7 or 9 && machine.Model.FullIndex;
         var frameSize = format2 ? 12u : machine.Model.Model == M68kCpuModel.M68000 ? 6u : 8u;
         var savedSr = expected.Sr;
         var savedPc = savedProgramCounter ?? SyntheticMachine.Code;
@@ -36,17 +36,19 @@ internal static class SyntheticExecution
         if (frameSize >= 8) expected.Write(expected.A[7] + 6, (format2 ? 0x2000u : 0) | (uint)vector * 4, 2, machine.Model);
         if (format2) expected.Write(expected.A[7] + 8, SyntheticMachine.Code, 4, machine.Model);
         expected.Sr = (ushort)((savedSr | 0x2000) & ~0xc000);
-        expected.Pc = 0x9000u + (uint)vector * 0x10;
+        uint handler = 0;
+        for (var i = 0; i < 4; i++) handler = (handler << 8) | expected.Memory.GetValueOrDefault(machine.Model.Physical(machine.Core.State.VectorBaseRegister + (uint)vector * 4 + (uint)i));
+        expected.Pc = handler;
         expected.ExceptionVector = vector;
     }
 
-    public static void Run(SyntheticMachine machine, ArchitecturalExpectation expected, CoverageBatch report, string id)
+    public static void Run(SyntheticMachine machine, ArchitecturalExpectation expected, CoverageBatch report, string id, bool followingInstruction = true)
     {
         try
         {
             machine.Core.ExecuteInstruction();
             var mismatch = expected.Verify(machine);
-            if (mismatch == null && expected.ExceptionVector == null)
+            if (mismatch == null && expected.ExceptionVector == null && followingInstruction)
             {
                 machine.Core.ExecuteInstruction();
                 expected.Pc += 2;

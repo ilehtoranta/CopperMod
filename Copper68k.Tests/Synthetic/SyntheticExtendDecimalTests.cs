@@ -29,6 +29,38 @@ public sealed class SyntheticExtendDecimalTests(ITestOutputHelper output)
     }
 
     [Theory, MemberData(nameof(Models)), Trait("Suite", "Synthetic")]
+    public void PackingMemoryWordStrideAliasesAndAddressBoundaries(string modelId)
+    {
+        var machine = new SyntheticMachine(ModelSpec.All.Single(m => m.Id == modelId));
+        var report = new CoverageBatch(modelId, "arithmetic-packing-memory");
+        // Fixed M68000PM 4-157/196 examples: the unpacked operand is a
+        // contiguous two-byte value. A7's special stride applies to the
+        // packed byte operand, not independently to both halves of the word.
+        Assert.Equal(0x814f, 0x8140 | 8 | 7); // PACK -(A7),-(A0)
+        Assert.Equal(0x8f89, 0x8180 | 7 << 9 | 8 | 1); // UNPK -(A1),-(A7)
+        foreach (var family in new[] { "PACK", "UNPK" })
+        for (var src = 0; src < 8; src++)
+        for (var dst = 0; dst < 8; dst++)
+        foreach (var supervisor in new[] { false, true })
+        for (var ccr = 0; ccr < 32; ccr++)
+            Pack(machine, report, family, family == "UNPK" ? 0x85u : 0x1234u,
+                0xffff, ccr, src, dst, true, supervisor);
+        // 000/010 lack both instructions; canonical cases above verify their
+        // vector-4 outcomes. Unaligned/wrapping operands are legal on 020+.
+        if (machine.Model.FullIndex)
+        foreach (var family in new[] { "PACK", "UNPK" })
+        foreach (var value in new uint[] { 0, 0x1234, 0x9abc, 0x8000, 0xffff, 0x85, 0x99 })
+        foreach (var adjustment in new ushort[] { 0, 1, 0xffff, 0xff, 0xff00, 0x8888 })
+        foreach (var (src, dst) in new[] { (7, 0), (0, 7), (7, 7), (0, 0), (0, 1), (1, 0) })
+        foreach (var supervisor in new[] { false, true })
+        foreach (var (sourceBase, destinationBase) in new[]
+        { (0x4103u, 0x4705u), (0xffff8002u, 0xffff9001u), (1u, 0x01000001u), (0x4103u, 0x4103u) })
+            Pack(machine, report, family, value, adjustment, 31, src, dst, true,
+                supervisor, sourceBase, destinationBase);
+        report.Complete(output);
+    }
+
+    [Theory, MemberData(nameof(Models)), Trait("Suite", "Synthetic")]
     public void DecimalAndPacking(string modelId)
     {
         var machine = new SyntheticMachine(ModelSpec.All.Single(m => m.Id == modelId));
@@ -134,23 +166,35 @@ public sealed class SyntheticExtendDecimalTests(ITestOutputHelper output)
         SyntheticExecution.Run(machine, fixture.Expected, report, $"{machine.Model.Id}/NBCD/1/{form.Id}/{index?.Id ?? "brief"}/op={opcode:X4}/value={value:X2}/ccr={ccr:X2}");
     }
 
-    private static void Pack(SyntheticMachine machine, CoverageBatch report, string family, uint value, ushort adjustment, int ccr, int src, int dst, bool memory, bool supervisor)
+    private static void Pack(SyntheticMachine machine, CoverageBatch report, string family, uint value, ushort adjustment, int ccr, int src, int dst, bool memory, bool supervisor,
+        uint? sourceBase = null, uint? destinationBase = null)
     {
         machine.Reset(ccr, supervisor); var unpack = family == "UNPK";
         var opcode = (ushort)((unpack ? 0x8180 : 0x8140) | dst << 9 | (memory ? 8 : 0) | src);
         var sourceWidth = unpack ? 1 : 2; var destinationWidth = unpack ? 2 : 1;
+        if (sourceBase.HasValue)
+        {
+            if (src == 7) machine.Core.State.SetActiveStackPointer(sourceBase.Value);
+            else machine.Core.State.A[src] = sourceBase.Value;
+            if (dst != src)
+            {
+                if (dst == 7) machine.Core.State.SetActiveStackPointer(destinationBase!.Value);
+                else machine.Core.State.A[dst] = destinationBase!.Value;
+            }
+        }
         var a = (uint[])machine.Core.State.A.Clone(); var writes = new List<uint>();
         uint source = 0;
         if (!memory) machine.Core.State.D[src] = ArithmeticSpecification.RegisterBits(value, sourceWidth);
         else
         {
-            for (var i = 0; i < sourceWidth; i++)
-            {
-                a[src] -= src == 7 ? 2u : 1u;
-                machine.InitializePhysical(a[src], value >> (8 * i), 1);
-                source |= (uint)machine.Bus.Peek(machine.Model.Physical(a[src])) << (8 * i);
-            }
-            for (var i = 0; i < destinationWidth; i++) { a[dst] -= dst == 7 ? 2u : 1u; writes.Add(a[dst]); }
+            foreach (var operandBase in new[] { a[src], a[dst] })
+                for (var offset = -8; offset <= 4; offset++)
+                    machine.InitializePhysical(unchecked(operandBase + (uint)offset), (uint)(0xd0 + offset), 1);
+            a[src] = unchecked(a[src] - (sourceWidth == 2 ? 2u : src == 7 ? 2u : 1u));
+            machine.InitializePhysical(a[src], value, sourceWidth);
+            source = value & MoveSpecification.Mask(sourceWidth);
+            a[dst] = unchecked(a[dst] - (destinationWidth == 2 ? 2u : dst == 7 ? 2u : 1u));
+            for (var i = 0; i < destinationWidth; i++) writes.Add(unchecked(a[dst] + (uint)(destinationWidth - 1 - i)));
         }
         var expected = SyntheticExecution.Prepare(machine, [opcode, adjustment]);
         if (!memory) source = expected.D[src];
@@ -166,6 +210,6 @@ public sealed class SyntheticExtendDecimalTests(ITestOutputHelper output)
                 for (var i = 0; i < writes.Count; i++) expected.Write(writes[i], result >> (8 * i), 1, machine.Model);
             }
         }
-        SyntheticExecution.Run(machine, expected, report, $"{machine.Model.Id}/{family}/packed/r{src}-r{dst}/memory={memory}/super={supervisor}/op={opcode:X4}/value={value:X4}/adjust={adjustment:X4}/ccr={ccr:X2}");
+        SyntheticExecution.Run(machine, expected, report, $"{machine.Model.Id}/{family}/packed/r{src}-r{dst}/memory={memory}/super={supervisor}/source-base={sourceBase:X8}/destination-base={destinationBase:X8}/op={opcode:X4}/value={value:X4}/adjust={adjustment:X4}/ccr={ccr:X2}");
     }
 }

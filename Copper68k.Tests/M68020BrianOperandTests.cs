@@ -184,15 +184,19 @@ public sealed class M68020BrianOperandTests
     }
 
     [Fact]
-    public void OrFullIndexedRemainsExplicitlyUnsupported()
+    public void OrFullIndexedExecutesWithLongBaseDisplacementAndPreservesUpperWord()
     {
         var bus = new ZeroWaitCodeBus();
         WriteWords(bus, 0xF80000, 0x8C70, 0x0130, 0, 0x20);
         using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
         cpu.Reset(0xF80000, 0x4000);
         cpu.State.D[6] = 0x12345678;
-        Assert.Throws<UnsupportedM68kTimingException>(() => cpu.ExecuteInstruction());
-        Assert.Equal(0x12345678u, cpu.State.D[6]);
+        cpu.State.A[0] = 0x5000; cpu.State.D[0] = 0;
+        bus.WriteWord(0x5020, 0x8001);
+        cpu.ExecuteInstruction();
+        Assert.Equal(0x1234D679u, cpu.State.D[6]);
+        Assert.Equal(0xF80008u, cpu.State.ProgramCounter);
+        Assert.Equal(8, cpu.State.StatusRegister & 15);
     }
 
     [Theory]

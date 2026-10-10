@@ -1675,6 +1675,7 @@ namespace Copper68k
                     M68kTimingOperandForm.PostIncrement => 6,
                     M68kTimingOperandForm.Predecrement => 7,
                     M68kTimingOperandForm.AddressDisplacement => 7,
+                    M68kTimingOperandForm.PcDisplacement => 7,
                     M68kTimingOperandForm.BriefIndexed => 9,
                     M68kTimingOperandForm.AbsoluteWord => 7,
                     M68kTimingOperandForm.AbsoluteLong => 8,

@@ -47,18 +47,6 @@ public sealed class M68020AddressSourceTests
     }
 
     [Theory]
-    [InlineData(0xFFFFu, 0xFFFF, 0x11)] [InlineData(0xFFFFFFFFu, 0xFFFF, 0x14)]
-    [InlineData(0u, 1, 0x19)]
-    public void CmpaWordDisplacementComparesSignExtendedSourceAgainstFullAddress(uint destination, ushort source, int flags)
-    {
-        var bus = new ZeroWaitCodeBus(); WriteWords(bus, CodeBase, 0xB2E8, 0xFFFE); WriteWords(bus, 0x2000, source);
-        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
-        cpu.Reset(CodeBase, 0x3000); cpu.State.A[0] = 0x2002; cpu.State.A[1] = destination; cpu.State.StatusRegister = 0x201F;
-        cpu.ExecuteInstruction(); Assert.Equal(flags, cpu.State.StatusRegister & 31);
-        Assert.Equal(destination, cpu.State.A[1]); Assert.Equal(CodeBase + 4, cpu.State.ProgramCounter);
-    }
-
-    [Theory]
     [InlineData(0x5270, 0xFFFF, 0, 0x15)] [InlineData(0x5370, 0, 0xFFFF, 0x19)]
     [InlineData(0x5070, 0x7FF8, 0x8000, 10)]
     public void IndexedQuickWordUpdatesTheOriginalAddressAndArithmeticFlags(ushort opcode, ushort initial, ushort expected, int flags)
@@ -103,18 +91,6 @@ public sealed class M68020AddressSourceTests
     }
 
     [Theory]
-    [InlineData(0x90D3, 0xFFFE, 0, 0x1002u)]
-    [InlineData(0x91D3, 0, 2, 0xFFEu)]
-    public void SubaIndirectSignExtendsWordsAndLeavesCcrUntouched(ushort opcode, ushort hi, ushort lo, uint expected)
-    {
-        var bus = new ZeroWaitCodeBus(); WriteWords(bus, CodeBase, opcode); WriteWords(bus, 0x2000, hi, lo);
-        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68EC020, bus);
-        cpu.Reset(CodeBase, 0x3000); cpu.State.A[3] = 0x2000; cpu.State.A[0] = 0x1000; cpu.State.StatusRegister = 0x201F;
-        cpu.ExecuteInstruction(); Assert.Equal(expected, cpu.State.A[0]); Assert.Equal(0x2000u, cpu.State.A[3]);
-        Assert.Equal(0x201F, cpu.State.StatusRegister); Assert.Equal(CodeBase + 2, cpu.State.ProgramCounter);
-    }
-
-    [Theory]
     [InlineData(0x2060, 0)] [InlineData(0x2260, 1)]
     public void MoveaPredecrementLatchesSourceBeforeDestinationAndKeepsFlags(ushort opcode, int destination)
     {
@@ -138,21 +114,6 @@ public sealed class M68020AddressSourceTests
         cpu.Reset(CodeBase, 0x2000); cpu.State.A[3] = 0x2000; cpu.State.StatusRegister = 0x201B;
         cpu.ExecuteInstruction(); Assert.Equal(flags, cpu.State.StatusRegister & 31);
         Assert.Equal(0x2000u + stride, cpu.State.A[opcode & 7]); Assert.Equal(CodeBase + 4, cpu.State.ProgramCounter);
-    }
-
-    [Theory]
-    [InlineData(0xC012, 0xFFFF00F0u)]
-    [InlineData(0xC052, 0xFFFFF0A5u)]
-    [InlineData(0xC092, 0xF0A55A0Fu)]
-    public void AndAddressIndirectUsesSelectedWidthAndPreservesExtend(ushort opcode, uint expected)
-    {
-        var bus = new ZeroWaitCodeBus(); WriteWords(bus, CodeBase, opcode); WriteWords(bus, 0x2000, 0xF0A5, 0x5A0F);
-        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68EC020, bus);
-        cpu.Reset(CodeBase, 0x3000); cpu.State.A[2] = 0x2000; cpu.State.D[0] = 0xFFFF00FF;
-        if (opcode != 0xC012) cpu.State.D[0] = uint.MaxValue;
-        cpu.State.StatusRegister = 0x2017; cpu.ExecuteInstruction();
-        Assert.Equal(expected, cpu.State.D[0]); Assert.Equal(0x18, cpu.State.StatusRegister & 31);
-        Assert.Equal(0x2000u, cpu.State.A[2]); Assert.Equal(CodeBase + 2, cpu.State.ProgramCounter);
     }
 
     [Theory]

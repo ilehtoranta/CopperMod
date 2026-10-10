@@ -5,6 +5,337 @@ namespace Copper68k.Tests;
 public sealed class M68000JitDirectZeroWaitTests
 {
     [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void WarmJitAlignmentExitPreservesOperandOrderingAndExceptionFrame(int jitMode)
+    {
+        // Fixed Motorola encodings. Expected fault locations are independent of the JIT decoder.
+        (string Name, ushort[] Words, int OddRegister, uint FaultAddress)[] cases =
+        [
+            ("word-read", [0x3010], 0, 0x2001),
+            ("long-read", [0x2010], 0, 0x2001),
+            ("word-post-read", [0x3018], 0, 0x2001),
+            ("long-pre-read", [0x2020], 0, 0x1ffd),
+            ("word-write", [0x3080], 0, 0x2001),
+            ("long-post-write", [0x20c0], 0, 0x2001),
+            ("word-pre-write", [0x3100], 0, 0x1fff),
+            ("source-post-destination-fault", [0x3298], 1, 0x3001),
+            ("source-post-destination-pre-fault", [0x3318], 1, 0x2fff),
+            ("post-alias", [0x30d8], 0, 0x2001),
+            ("pre-alias", [0x3120], 0, 0x1fff),
+            ("word-displacement", [0x3028, 0x0001], -1, 0x2001),
+            ("long-displacement", [0x2028, 0xffff], -1, 0x1fff),
+            ("data-word-index", [0x3030, 0x6000], 6, 0x2003),
+            ("data-long-index", [0x2030, 0x6800], 6, 0x2003),
+            ("address-index", [0x3030, 0x9000], 1, 0x5001),
+            ("destination-index", [0x3198, 0x6000], 6, 0x2005),
+            ("pc-index", [0x303b, 0x6000], 6, 0x1005),
+            ("cmpm-destination-fault", [0xb348], 1, 0x3001),
+            ("rmw", [0x5250], 0, 0x2001),
+            ("movem-read", [0x4cd8, 0x0003], 0, 0x2001),
+            ("movem-pre-write", [0x48e0, 0xc000], 0, 0x1fff) // Low word is the first predecrement bus transfer.
+        ];
+        foreach (var scenario in cases)
+        foreach (var prefix in new[] { false, true })
+        {
+            try
+            {
+                var referenceBus = new DirectZeroWaitBus();
+                var jitBus = new DirectZeroWaitBus();
+                var words = (prefix ? new ushort[] { 0x7a7b, 0x5285 } : []) // MOVEQ #123,D5; ADDQ.L #1,D5
+                    .Concat(scenario.Words).ToArray();
+                var branch = (ushort)(0x6000 | ((-2 * (words.Length + 1)) & 0xff));
+                foreach (var bus in new[] { referenceBus, jitBus })
+                {
+                    bus.WriteWords(0x1000, words.Concat(new[] { branch }).ToArray());
+                    bus.WriteWords(0x5000, [0x4e71]);
+                    bus.WriteLongValue(12, 0x5000);
+                    for (uint address = 0x1f00; address < 0x6000; address += 2)
+                        if (address != 0x5000) bus.WriteWords(address, [0x1234]);
+                }
+                using var reference = new M68kInterpreter(referenceBus);
+                using var jit = new M68kJitCore(jitBus, enableV2: jitMode != 0,
+                    enableV2BusAccess: jitMode != 0, enableV2FastRead: jitMode == 2);
+                reference.Reset(0x1000, 0x8000); jit.Reset(0x1000, 0x8000);
+                foreach (var state in new[] { reference.State, jit.State })
+                {
+                    state.A[0] = 0x2000; state.A[1] = 0x3000; state.D[6] = 2;
+                }
+                // Displacement forms with odd constant offsets need an odd base while warming.
+                if (scenario.OddRegister == -1)
+                    reference.State.A[0] = jit.State.A[0] = 0x2001;
+                var loopInstructions = prefix ? 4 : 2;
+                Assert.Equal(400, reference.ExecuteInstructions(400, null, new BatchBoundary()));
+                Assert.Equal(400, jit.ExecuteInstructions(400, 500_000, new BatchBoundary()));
+                Assert.True(jit.Counters.TraceHits > 0, scenario.Name);
+                Assert.Equal(0x1000u, jit.State.ProgramCounter);
+                foreach (var state in new[] { reference.State, jit.State })
+                {
+                    state.A[0] = 0x2000; state.A[1] = 0x3000; state.D[6] = 2;
+                    state.D[0] = 0xcafe1234; state.D[1] = 0x87654321;
+                    state.D[5] = 0xdeadbeef; state.StatusRegister = 0x201f;
+                    if (scenario.OddRegister == 6) state.D[6] = 3;
+                    else if (scenario.OddRegister >= 0) state.A[scenario.OddRegister]++;
+                }
+                referenceBus.WordWrites.Clear(); jitBus.WordWrites.Clear();
+                var referenceStart = reference.State.Cycles; var jitStart = jit.State.Cycles;
+                var referenceNativeStart = reference.State.NativeCycles; var jitNativeStart = jit.State.NativeCycles;
+                var fallbackBefore = jit.Counters.FallbackInstructions;
+                var faultInstructions = loopInstructions - 1;
+                Assert.Equal(faultInstructions, reference.ExecuteInstructions(faultInstructions, null, new BatchBoundary()));
+                Assert.Equal(faultInstructions, jit.ExecuteInstructions(faultInstructions, jit.State.Cycles + 100_000, new BatchBoundary()));
+                Assert.True(jit.Counters.FallbackInstructions > fallbackBefore, scenario.Name);
+                Assert.False(jit.State.Halted);
+                Assert.Equal(3, jit.State.LastExceptionVector);
+                Assert.Equal(0x5000u, jit.State.ProgramCounter);
+                Assert.Equal(0x7ff2u, jit.State.A[7]);
+                var faultAddress = scenario.FaultAddress + (prefix && scenario.Name == "pc-index" ? 4u : 0u);
+                Assert.Equal(faultAddress, jitBus.ReadLongValue(0x7ff4));
+                // The IR can already contain the successor opcode on a write-side fault.
+                // Retained pipeline tests qualify that sequencing; here compare every frame word.
+                for (uint address = 0x7ff2; address < 0x8000; address += 2)
+                    Assert.Equal(referenceBus.ReadHostWord(address), jitBus.ReadHostWord(address));
+                Assert.Equal(reference.State.D, jit.State.D);
+                Assert.Equal(reference.State.A, jit.State.A);
+                Assert.Equal(reference.State.StatusRegister, jit.State.StatusRegister);
+                Assert.Equal(reference.State.LastOpcode, jit.State.LastOpcode);
+                Assert.Equal(reference.State.LastInstructionProgramCounter, jit.State.LastInstructionProgramCounter);
+                Assert.Equal(reference.State.LastExceptionStackedProgramCounter, jit.State.LastExceptionStackedProgramCounter);
+                Assert.Equal(reference.State.LastExceptionStatusRegister, jit.State.LastExceptionStatusRegister);
+                Assert.Equal(reference.State.Cycles - referenceStart, jit.State.Cycles - jitStart);
+                Assert.Equal(reference.State.NativeCycles - referenceNativeStart, jit.State.NativeCycles - jitNativeStart);
+                Assert.Equal(referenceBus.WordWrites, jitBus.WordWrites);
+                Assert.True(referenceBus.SnapshotMemory().AsSpan().SequenceEqual(jitBus.SnapshotMemory()), scenario.Name);
+                if (prefix) Assert.Equal(124u, jit.State.D[5]);
+                if (scenario.Name == "source-post-destination-fault") Assert.Equal(0x2002u, jit.State.A[0]);
+            }
+            catch (Exception error)
+            {
+                throw new Xunit.Sdk.XunitException($"{scenario.Name}/jit-{jitMode}/prefix-{prefix}: {error}");
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WarmJitColdConstantAddressFaultsLeaveCompletedGraphInstructionsIntact(bool enableV2)
+    {
+        (string Name, ushort[] Words, uint FaultAddress)[] cases =
+        [
+            ("absolute-word", [0x3038, 0x2001], 0x2001),
+            ("negative-absolute-word", [0x3038, 0xffff], 0xffffffff),
+            ("absolute-long", [0x2039, 0x0000, 0x2001], 0x2001),
+            ("pc-displacement", [0x303a, 0x0001], 0x100b),
+            ("absolute-write", [0x33c0, 0x0000, 0x2001], 0x2001)
+        ];
+        foreach (var scenario in cases)
+        {
+            var referenceBus = new DirectZeroWaitBus(); var jitBus = new DirectZeroWaitBus();
+            foreach (var bus in new[] { referenceBus, jitBus })
+            {
+                bus.WriteWords(0x1000, new ushort[] { 0x4a87, 0x6604, 0x60fa, 0x4e71 }
+                    .Concat(scenario.Words).Concat(new ushort[] { 0x4e71 }).ToArray());
+                bus.WriteWords(0x5000, [0x4e71]); bus.WriteLongValue(12, 0x5000);
+            }
+            using var reference = new M68kInterpreter(referenceBus);
+            using var jit = new M68kJitCore(jitBus, enableV2: enableV2, enableV2BusGraph: true);
+            reference.Reset(0x1000, 0x8000); jit.Reset(0x1000, 0x8000);
+            Assert.Equal(399, reference.ExecuteInstructions(399, null, new BatchBoundary()));
+            Assert.Equal(399, jit.ExecuteInstructions(399, 500_000, new BatchBoundary()));
+            Assert.True(enableV2 ? jit.Counters.V2TraceHits > 0 : jit.Counters.TraceHits > 0, scenario.Name);
+            reference.State.D[7] = jit.State.D[7] = 1;
+            reference.State.D[0] = jit.State.D[0] = 0xcafe1234;
+            referenceBus.WordWrites.Clear(); jitBus.WordWrites.Clear();
+            var referenceStart = reference.State.Cycles; var jitStart = jit.State.Cycles;
+            Assert.Equal(3, reference.ExecuteInstructions(3, null, new BatchBoundary()));
+            Assert.Equal(3, jit.ExecuteInstructions(3, jit.State.Cycles + 100_000, new BatchBoundary()));
+            Assert.Equal(3, jit.State.LastExceptionVector);
+            Assert.Equal(0x5000u, jit.State.ProgramCounter);
+            Assert.Equal(scenario.FaultAddress, jitBus.ReadLongValue(0x7ff4));
+            Assert.Equal(reference.State.D, jit.State.D); Assert.Equal(reference.State.A, jit.State.A);
+            Assert.Equal(reference.State.StatusRegister, jit.State.StatusRegister);
+            Assert.Equal(reference.State.LastExceptionStackedProgramCounter, jit.State.LastExceptionStackedProgramCounter);
+            Assert.Equal(reference.State.Cycles - referenceStart, jit.State.Cycles - jitStart);
+            Assert.Equal(referenceBus.WordWrites, jitBus.WordWrites);
+            Assert.True(referenceBus.SnapshotMemory().AsSpan().SequenceEqual(jitBus.SnapshotMemory()), scenario.Name);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WarmJitLegalOddByteAndAddressOperandsRemainExecutable(bool enableV2)
+    {
+        var referenceBus = new DirectZeroWaitBus(); var jitBus = new DirectZeroWaitBus();
+        foreach (var bus in new[] { referenceBus, jitBus })
+        {
+            bus.WriteWords(0x1000,
+                [0x1010, 0x0308, 0x0000, 0x43d0, 0x4850, 0x588f, 0x60f2]);
+            // MOVE.B (A0),D0; MOVEP.W (0,A0),D1; LEA (A0),A1; PEA (A0); ADDQ.L #4,A7; BRA
+            bus.WriteLongValue(0x2000, 0x12345678);
+        }
+        using var reference = new M68kInterpreter(referenceBus);
+        using var jit = new M68kJitCore(jitBus, enableV2: enableV2);
+        reference.Reset(0x1000, 0x8000); jit.Reset(0x1000, 0x8000);
+        reference.State.A[0] = jit.State.A[0] = 0x2001;
+        Assert.Equal(600, reference.ExecuteInstructions(600, null, new BatchBoundary()));
+        Assert.Equal(600, jit.ExecuteInstructions(600, 500_000, new BatchBoundary()));
+        Assert.True(jit.Counters.TraceHits > 0);
+        Assert.Equal(-1, jit.State.LastExceptionVector);
+        Assert.Equal(0x2001u, jit.State.A[1]);
+        Assert.Equal(reference.State.D, jit.State.D); Assert.Equal(reference.State.A, jit.State.A);
+        Assert.Equal(reference.State.StatusRegister, jit.State.StatusRegister);
+        Assert.Equal(reference.State.Cycles, jit.State.Cycles);
+        Assert.True(referenceBus.SnapshotMemory().AsSpan().SequenceEqual(jitBus.SnapshotMemory()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WarmJitOddStackOperandsDispatchWithoutLeakingHostExceptions(bool enableV2)
+    {
+        (string Name, ushort[] Main, ushort[] Target, uint WarmInstructions)[] cases =
+        [
+            ("pea", [0x4850, 0x588f, 0x60fa], [0x4e75], 399), // PEA (A0); ADDQ.L #4,A7; BRA
+            ("jsr", [0x4e90, 0x60fc], [0x4e75], 399),
+            ("bsr", [0x6100, 0x1ffe, 0x60fa], [0x4e75], 399),
+            ("rts", [0x4e75], [0x598f, 0x4ef9, 0x0000, 0x1000], 399)
+        ];
+        foreach (var scenario in cases)
+        {
+            var referenceBus = new DirectZeroWaitBus(); var jitBus = new DirectZeroWaitBus();
+            foreach (var bus in new[] { referenceBus, jitBus })
+            {
+                bus.WriteWords(0x1000, scenario.Main);
+                bus.WriteWords(0x3000, scenario.Target);
+                bus.WriteWords(0x5000, [0x4e71]);
+                bus.WriteLongValue(12, 0x5000);
+                bus.WriteLongValue(0x8000, 0x3000);
+            }
+            using var reference = new M68kInterpreter(referenceBus);
+            using var jit = new M68kJitCore(jitBus, enableV2: enableV2);
+            reference.Reset(0x1000, 0x8000); jit.Reset(0x1000, 0x8000);
+            reference.State.A[0] = jit.State.A[0] = 0x3000;
+            Assert.Equal((int)scenario.WarmInstructions, reference.ExecuteInstructions((int)scenario.WarmInstructions, null, new BatchBoundary()));
+            Assert.Equal((int)scenario.WarmInstructions, jit.ExecuteInstructions((int)scenario.WarmInstructions, 500_000, new BatchBoundary()));
+            Assert.Equal(0x1000u, jit.State.ProgramCounter);
+            Assert.True(jit.Counters.TraceHits > 0, scenario.Name);
+            reference.State.SetActiveStackPointer(0x8001); jit.State.SetActiveStackPointer(0x8001);
+            referenceBus.WordWrites.Clear(); jitBus.WordWrites.Clear();
+            Assert.Equal(1, reference.ExecuteInstructions(10, reference.State.Cycles + 1000, new BatchBoundary()));
+            Assert.Equal(1, jit.ExecuteInstructions(10, jit.State.Cycles + 1000, new BatchBoundary()));
+            Assert.True(jit.State.Halted, scenario.Name);
+            Assert.Equal(reference.State.ProgramCounter, jit.State.ProgramCounter);
+            Assert.Equal(reference.State.StatusRegister, jit.State.StatusRegister);
+            Assert.Equal(reference.State.D, jit.State.D); Assert.Equal(reference.State.A, jit.State.A);
+            Assert.Equal(reference.State.Cycles, jit.State.Cycles);
+            Assert.Equal(reference.State.NativeCycles, jit.State.NativeCycles);
+            Assert.Equal(referenceBus.WordWrites, jitBus.WordWrites);
+            Assert.True(referenceBus.SnapshotMemory().AsSpan().SequenceEqual(jitBus.SnapshotMemory()), scenario.Name);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WarmJitOddJumpTargetsDispatchBeforeLinkAndFetchEffects(bool enableV2)
+    {
+        foreach (var link in new[] { false, true })
+        {
+            var referenceBus = new DirectZeroWaitBus(); var jitBus = new DirectZeroWaitBus();
+            foreach (var bus in new[] { referenceBus, jitBus })
+            {
+                bus.WriteWords(0x1000, link ? [0x4e90, 0x60fc] : [0x4ed0]);
+                bus.WriteWords(0x3000, link ? [0x4e75] : [0x4ef9, 0x0000, 0x1000]);
+                bus.WriteWords(0x5000, [0x4e71]); bus.WriteLongValue(12, 0x5000);
+            }
+            using var reference = new M68kInterpreter(referenceBus);
+            using var jit = new M68kJitCore(jitBus, enableV2: enableV2);
+            reference.Reset(0x1000, 0x8000); jit.Reset(0x1000, 0x8000);
+            reference.State.A[0] = jit.State.A[0] = 0x3000;
+            var warmCount = link ? 399 : 400;
+            Assert.Equal(warmCount, reference.ExecuteInstructions(warmCount, null, new BatchBoundary()));
+            Assert.Equal(warmCount, jit.ExecuteInstructions(warmCount, 500_000, new BatchBoundary()));
+            Assert.Equal(0x1000u, jit.State.ProgramCounter);
+            Assert.True(jit.Counters.TraceHits > 0);
+            reference.State.A[0] = jit.State.A[0] = 0x3001;
+            referenceBus.WordWrites.Clear(); jitBus.WordWrites.Clear();
+            Assert.Equal(1, reference.ExecuteInstructions(1, null, new BatchBoundary()));
+            Assert.Equal(1, jit.ExecuteInstructions(1, jit.State.Cycles + 1000, new BatchBoundary()));
+            Assert.Equal(3, jit.State.LastExceptionVector);
+            Assert.Equal(0x5000u, jit.State.ProgramCounter);
+            Assert.Equal(reference.State.D, jit.State.D); Assert.Equal(reference.State.A, jit.State.A);
+            Assert.Equal(reference.State.StatusRegister, jit.State.StatusRegister);
+            Assert.Equal(reference.State.Cycles, jit.State.Cycles);
+            Assert.Equal(referenceBus.WordWrites, jitBus.WordWrites);
+            Assert.True(referenceBus.SnapshotMemory().AsSpan().SequenceEqual(jitBus.SnapshotMemory()));
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void WarmJitDoubleFaultMatchesInterpreterAndRequiresReset(bool enableV2, bool trace)
+    {
+        foreach (var dispatch in Enum.GetValues<M68kOpcodePlanDispatch>())
+        foreach (var oddStack in new[] { false, true })
+        {
+            var referenceBus = new DirectZeroWaitBus();
+            var jitBus = new DirectZeroWaitBus();
+            foreach (var bus in new[] { referenceBus, jitBus })
+            {
+                bus.WriteWords(0x1000, [0x3010, 0x60fc]); // MOVE.W (A0),D0; BRA.S start
+                bus.WriteWords(0x5000, [0x747b, 0x4e71]);
+                bus.WriteLongValue(3 * 4, oddStack ? 0x5000u : 0x5001u);
+                bus.WriteWords(0x2000, [0xcafe]);
+            }
+            var reference = new M68kInterpreter(referenceBus, dispatch);
+            using var jit = new M68kJitCore(jitBus, enableV2: enableV2);
+            reference.Reset(0x1000, 0x8000); jit.Reset(0x1000, 0x8000);
+            reference.State.A[0] = jit.State.A[0] = 0x2000;
+            Assert.Equal(400, reference.ExecuteInstructions(400, 500_000, new BatchBoundary()));
+            Assert.Equal(400, jit.ExecuteInstructions(400, 500_000, new BatchBoundary()));
+            Assert.True(enableV2 ? jit.Counters.V2TraceHits > 0 : jit.Counters.TraceHits > 0);
+            reference.State.A[0] = jit.State.A[0] = 0x2001;
+            reference.State.StatusRegister = jit.State.StatusRegister = trace ? (ushort)0xa01f : (ushort)0x201f;
+            reference.State.SetActiveStackPointer(oddStack ? 0x8001u : 0x8000u);
+            jit.State.SetActiveStackPointer(oddStack ? 0x8001u : 0x8000u);
+
+            Assert.Equal(1, reference.ExecuteInstructions(20, reference.State.Cycles + 1000, new BatchBoundary()));
+            Assert.Equal(1, jit.ExecuteInstructions(20, jit.State.Cycles + 1000, new BatchBoundary()));
+            Assert.True(jit.State.Halted);
+            Assert.False(jit.State.Stopped);
+            Assert.Equal(reference.State.D, jit.State.D);
+            Assert.Equal(reference.State.A, jit.State.A);
+            Assert.Equal(reference.State.ProgramCounter, jit.State.ProgramCounter);
+            Assert.Equal(reference.State.StatusRegister, jit.State.StatusRegister);
+            Assert.Equal(reference.State.LastOpcode, jit.State.LastOpcode);
+            Assert.Equal(reference.State.LastExceptionVector, jit.State.LastExceptionVector);
+            Assert.Equal(reference.State.LastExceptionStackedProgramCounter, jit.State.LastExceptionStackedProgramCounter);
+            Assert.Equal(reference.State.LastExceptionStatusRegister, jit.State.LastExceptionStatusRegister);
+            Assert.Equal(reference.State.Cycles, jit.State.Cycles); // retained machine-cycle policy
+            Assert.Equal(reference.State.NativeCycles, jit.State.NativeCycles);
+            Assert.Equal(referenceBus.WordWrites, jitBus.WordWrites);
+            var stack = jit.State.A[7]; var pc = jit.State.ProgramCounter;
+            var reads = jitBus.DataReads; var writes = jitBus.WordWrites.Count;
+            jit.RequestInterrupt(7, 31 * 4);
+            jit.BeginSubroutine(0x5000, 0x8000, 0x6000);
+            jit.ExecuteInstruction();
+            Assert.True(jit.State.Halted);
+            Assert.Equal(stack, jit.State.A[7]); Assert.Equal(pc, jit.State.ProgramCounter);
+            Assert.Equal(reads, jitBus.DataReads); Assert.Equal(writes, jitBus.WordWrites.Count);
+            jit.Reset(0x5000, 0x8000);
+            jit.ExecuteInstruction();
+            Assert.False(jit.State.Halted);
+            Assert.Equal(123u, jit.State.D[2]);
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void ArchitecturalTraceUsesInterpreterEvenWithAWarmCompiledLoop(bool enableV2)
@@ -845,6 +1176,8 @@ public sealed class M68000JitDirectZeroWaitTests
         public int DirectWriteCompletions { get; private set; }
 
         public List<(uint Address, ushort Value)> WordWrites { get; } = new();
+
+        public byte[] SnapshotMemory() => (byte[])_memory.Clone();
 
         public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
         {

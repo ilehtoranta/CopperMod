@@ -51,6 +51,8 @@ internal sealed class MoveFixture
     public OperandForm Source { get; }
     public OperandForm Destination { get; }
     public int Width { get; }
+    public uint DestinationAddress { get; private set; }
+    public uint OperandValue { get; private set; }
     public string Id { get; }
     private readonly uint value;
     private readonly int ccr;
@@ -113,6 +115,8 @@ internal sealed class MoveFixture
             operand = machine.PeekPhysical(sourceAddress, Width);
         }
         destinationAddress = addressing.DestinationPointerTarget?.Invoke() ?? destinationAddress;
+        DestinationAddress = destinationAddress;
+        OperandValue = operand;
         ExpectedMemory = new(machine.Bus.Memory);
         if (Destination.Mode == 0)
         {

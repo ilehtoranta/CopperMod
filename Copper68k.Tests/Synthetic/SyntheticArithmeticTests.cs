@@ -74,6 +74,20 @@ public sealed class SyntheticArithmeticTests(ITestOutputHelper output)
             for (var dst = 0; dst < 8; dst++)
                 Case(machine, report, family, width, new(0, src), 0x8002, 0x7ffffffe, 31, reg: dst, scenario: "all-register-fields");
         }
+        // Address-register sources have separate encodings. Include every
+        // source/destination field and A7 bank, with alias CCR preservation
+        // and nonzero upper source words that expose missing sign extension.
+        foreach (var width in new[] { 2, 4 })
+        foreach (var family in new[] { "ADDA", "SUBA", "CMPA" })
+        foreach (var source in width == 2
+            ? new[] { 0u, 1u, 0x12348000u, 0xffff7fffu }
+            : new[] { 0u, 1u, 0x80000000u, uint.MaxValue })
+        for (var src = 0; src < 8; src++)
+        for (var dst = 0; dst < 8; dst++)
+        foreach (var supervisor in new[] { false, true })
+        foreach (var ccr in src == dst ? Enumerable.Range(0, 32) : new[] { 0, 31 })
+            Case(machine, report, family, width, new(1, src), source, 0x7ffffffe, ccr,
+                reg: dst, supervisor: supervisor, scenario: "all-address-register-fields");
         report.Complete(output);
     }
 

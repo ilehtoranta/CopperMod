@@ -174,8 +174,11 @@ namespace Copper68k
         private static M68010AddressMaskedBus CreateBus(IM68kBus bus)
             => new(bus);
 
+        protected override bool SupportsMoves => true;
+
         protected override bool TryExecuteModelSpecificLine4(ushort opcode, uint instructionPc)
         {
+            if (TryExecuteM68010StatusAndReturn(opcode, instructionPc)) return true;
             if (opcode is not (0x4E7A or 0x4E7B))
             {
                 return false;
@@ -228,13 +231,56 @@ namespace Copper68k
         protected override bool IsSupportedRteFrameFormat(ushort format)
             => (format & 0xF000) is 0x0000 or 0x8000;
 
-        protected override bool TryConsumeModelSpecificRteFrame(ushort format)
+        private ushort[]? _rteInternalWords;
+        private ushort _rteSpecialStatus, _rteDataOutput, _rteDataInput, _rteInstructionInput;
+        private uint _rteFaultAddress;
+
+        // MC68000UM 6.4: validate before changing SP, then probe the final
+        // word before loading the rest. Unmarked images retain structural-only
+        // compatibility; marked images carry private word/long-MOVE continuations.
+        protected override bool ValidateRteFrame(ushort format, uint framePointer)
         {
-            if (!IsSupportedRteFrameFormat(format)) return false;
-            if ((format & 0xF000) == 0x8000)
-                for (var offset = 8; offset < 58; offset += 2)
-                    if (offset is 14 or 18 or 22) State.SetActiveStackPointer(State.A[7] + 2);
-                    else _ = PullWord();
+            _rteInternalWords = null;
+            if ((format & 0xF000) != 0x8000) return true;
+            var version = ReadWord(framePointer + 26);
+            if ((version & 0x3C00) != 0) return false;
+            var words = new ushort[16]; words[0] = version;
+            words[15] = ReadWord(framePointer + 56);
+            ushort addressHigh = 0;
+            for (uint offset = 8; offset < 56; offset += 2)
+            {
+                if (offset is 14 or 18 or 22 or 26) continue;
+                var value = ReadWord(framePointer + offset);
+                if (offset >= 28) words[(offset - 26) / 2] = value;
+                else switch (offset)
+                {
+                    case 8: _rteSpecialStatus = value; break;
+                    case 10: addressHigh = value; break;
+                    case 12: _rteFaultAddress = ((uint)addressHigh << 16) | value; break;
+                    case 16: _rteDataOutput = value; break;
+                    case 20: _rteDataInput = value; break;
+                    case 24: _rteInstructionInput = value; break;
+                }
+            }
+            if (words[1] == M68010WordMoveResumeFrame.Marker && !M68010WordMoveResumeFrame.IsValid(words)) return false;
+            if (words[1] == M68010LongMoveResumeFrame.Marker && !M68010LongMoveResumeFrame.IsValid(words)) return false;
+            _rteInternalWords = words;
+            return true;
+        }
+
+        protected override bool TryResumeRteFrame(ushort format, uint framePointer, ushort statusRegister, uint programCounter)
+        {
+            if ((format & 0xF000) != 0x8000 || _rteInternalWords is not { } words ||
+                words[1] is not (M68010WordMoveResumeFrame.Marker or M68010LongMoveResumeFrame.Marker)) return false;
+            var specialStatus = _rteSpecialStatus; var faultAddress = _rteFaultAddress;
+            var output = _rteDataOutput; var input = _rteDataInput; var instructionInput = _rteInstructionInput;
+            _rteInternalWords = null;
+            State.SetActiveStackPointer(framePointer + 58);
+            State.StatusRegister = statusRegister;
+            AddInstructionCycles(20); // Retained RTE policy; physical restart timing is unqualified.
+            if (words[1] == M68010LongMoveResumeFrame.Marker)
+                ResumeM68010LongMove(words, programCounter, faultAddress, specialStatus, output, input, instructionInput);
+            else ResumeM68010WordMove(words, programCounter, faultAddress, specialStatus, output, input, instructionInput);
             return true;
         }
 
@@ -253,29 +299,29 @@ namespace Copper68k
             uint faultAddress,
             bool isWrite,
             M68kBusAccessKind accessKind,
-            bool useDataAccessStackedProgramCounter)
+            bool useDataAccessStackedProgramCounter,
+            ushort dataOutput)
         {
-            _ = useDataAccessStackedProgramCounter;
+            var internalWords = CaptureM68010LongMoveResumeFrame(isWrite, accessKind, useDataAccessStackedProgramCounter)
+                ?? CaptureM68010WordMoveResumeFrame(isWrite, accessKind, useDataAccessStackedProgramCounter);
             var stackedProgramCounter = State.LastInstructionProgramCounter;
             var savedStatusRegister = State.StatusRegister;
             State.RecordException(3, stackedProgramCounter, savedStatusRegister);
             State.StatusRegister = (ushort)((savedStatusRegister | M68kCpuState.Supervisor) & ~M68kCpuState.Trace);
-            // MC68000UM fig. 6-8: 29 words, three reserved slots unwritten.
-            // Internal pipeline information is represented by the interpreter's
-            // instruction PC/opcode; it is not a physical pipeline snapshot.
-            for (var word = 0; word < 16; word++) PushWord(0);
-            PushWord(State.LastOpcode);
-            State.SetActiveStackPointer(State.A[7] - 2);
-            PushWord(0);
-            State.SetActiveStackPointer(State.A[7] - 2);
-            PushWord(0);
-            State.SetActiveStackPointer(State.A[7] - 2);
+            // Figure 6-8: 58 bytes, 26 information words, three unwritten
+            // reserved words. Only marked word/long-MOVE images encode continuation;
+            // other internal/input state remains structurally unqualified.
+            for (var i = 15; i >= 0; i--) PushWord(internalWords?[i] ?? 0);
+            PushWord(0); // instruction input buffer (unqualified)
+            State.SetActiveStackPointer(State.A[7] - 2); // reserved
+            PushWord(0); // data input buffer (unqualified)
+            State.SetActiveStackPointer(State.A[7] - 2); // reserved
+            PushWord(dataOutput);
+            State.SetActiveStackPointer(State.A[7] - 2); // reserved
             PushLong(faultAddress);
             var instruction = accessKind == M68kBusAccessKind.CpuInstructionFetch;
-            var supervisor = (savedStatusRegister & M68kCpuState.Supervisor) != 0;
-            var status = (instruction ? 0x2000 : 0x1000) | (!isWrite ? 0x0100 : 0) |
-                (supervisor ? 4 : 0) | (instruction ? 2 : 1);
-            PushWord((ushort)status);
+            var functionCode = (instruction ? 2 : 1) | ((savedStatusRegister & M68kCpuState.Supervisor) != 0 ? 4 : 0);
+            PushWord((ushort)((instruction ? 0x2000 : 0x1000) | (isWrite ? 0 : 0x0100) | functionCode));
             PushWord(0x800C);
             PushLong(stackedProgramCounter);
             PushWord(savedStatusRegister);
@@ -293,11 +339,11 @@ namespace Copper68k
                 case 0x001:
                     value = State.DestinationFunctionCode;
                     return true;
-                case 0x801:
-                    value = State.VectorBaseRegister;
-                    return true;
                 case 0x800:
                     value = State.UserStackPointer;
+                    return true;
+                case 0x801:
+                    value = State.VectorBaseRegister;
                     return true;
                 default:
                     RaiseException(4, instructionPc, 34);
@@ -316,11 +362,11 @@ namespace Copper68k
                 case 0x001:
                     State.DestinationFunctionCode = value & 0x7;
                     return true;
-                case 0x801:
-                    State.VectorBaseRegister = value;
-                    return true;
                 case 0x800:
                     State.SetUserStackPointer(value);
+                    return true;
+                case 0x801:
+                    State.VectorBaseRegister = value;
                     return true;
                 default:
                     RaiseException(4, instructionPc, 34);

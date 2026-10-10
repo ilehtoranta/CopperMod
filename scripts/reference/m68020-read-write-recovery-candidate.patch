@@ -1,0 +1,749 @@
+--- production/Copper68k/M68kAdvancedTimingInterpreter.Access020.cs
++++ candidate/Copper68k/M68kAdvancedTimingInterpreter.Access020.cs
+@@ -52,6 +52,10 @@
+         var ssw = ReadRteFrameWord(frame + 10);
+         if (format == 11 && context == RteValidationContext020)
+             return RestoreRteValidation020(frame, sr, pc, ssw);
++        if (format == 11 && context == OperandReadContext020)
++            return RestoreOperandRead020(frame, sr, pc, ssw);
++        if (format == 10 && context == FinalMoveWriteContext020)
++            return RestoreFinalMoveWrite020(frame, sr, pc, ssw);
+         // Data faults and foreign opaque images remain implementation gaps.
+         // Never silently consume them as ordinary frame-size pops.
+         if (format != 11 || context != InstructionPrefetchContext020 || (ssw & 0xcf00) != 0)
+--- production/Copper68k/M68kAdvancedTimingInterpreter.FinalWrite020.cs
++++ candidate/Copper68k/M68kAdvancedTimingInterpreter.FinalWrite020.cs
+@@ -0,0 +1,146 @@
++/* Copyright (C) 2026 Ilkka Lehtoranta. SPDX-License-Identifier: MIT */
++// Isolated candidate only; copied into an audit snapshot by the test command.
++namespace Copper68k;
++
++internal partial class M68kAdvancedTimingInterpreter
++{
++    private const ushort FinalMoveWriteContext020 = 0xc023;
++    private bool _enteringFinalMoveWrite020, _resumingFinalMoveWrite020;
++    private ushort? _restoredWriteFunctionCode020;
++
++    private sealed class FinalMoveWriteFault020(uint address, uint value, ushort opcode,
++        uint nextPc, ushort functionCode, M68kAdvancedInstructionPipe pipe) :
++        M68kEmulationException($"020/030 final MOVE write fault at {address:X8}.")
++    {
++        internal readonly uint Address = address, Value = value, NextPc = nextPc;
++        internal readonly ushort Opcode = opcode, FunctionCode = functionCode;
++        internal readonly M68kAdvancedInstructionPipe Pipe = pipe;
++    }
++
++    private static bool IsSimpleFinalMove020(ushort opcode) => opcode >> 12 is >= 1 and <= 3 &&
++        ((opcode >> 6) & 7) == 2 && ((opcode >> 3) & 7) is 2 or 3 or 4;
++
++    private static M68kOperandSize FinalMoveSize020(ushort opcode) => (opcode >> 12) switch
++    { 1 => M68kOperandSize.Byte, 3 => M68kOperandSize.Word, _ => M68kOperandSize.Long };
++
++    private static M68kInstructionTimingKey FinalMoveTiming020(ushort opcode) =>
++        (((opcode >> 3) & 7) == 3, opcode >> 12) switch
++        {
++            (false, 1) => M68kInstructionTimingKey.MoveByteAddressIndirectToAddressIndirect,
++            (false, 3) => M68kInstructionTimingKey.MoveWordAddressIndirectToAddressIndirect,
++            (false, _) => M68kInstructionTimingKey.MoveLongAddressIndirectToAddressIndirect,
++            (true, 1) => M68kInstructionTimingKey.MoveBytePostIncrementToAddressIndirect,
++            (true, 3) => M68kInstructionTimingKey.MoveWordPostIncrementToAddressIndirect,
++            _ => M68kInstructionTimingKey.MoveLongPostIncrementToAddressIndirect
++        };
++
++    private void CompleteFinalMoveWriteTiming020(ushort opcode)
++    {
++        if (((opcode >> 3) & 7) != 4) { CompleteTiming(FinalMoveTiming020(opcode)); return; }
++        // This shape already uses the general-EA route on mapped execution.
++        // Only its pending destination write remains; preserve that same plan.
++        var cycles = _profile.FixedInstructionNativeCycles ?? 9;
++        var plan = _profile.Model == M68kAcceleratorModel.M68030
++            ? M68kInstructionPlan.CreateHeadTail(M68kInstructionTimingKey.GeneralMove, "MOVE/MOVEA general EA", cycles, 2, 0)
++            : M68kInstructionPlan.CreateFlat(M68kInstructionTimingKey.GeneralMove, "MOVE/MOVEA general EA", cycles);
++        CompleteTimingPlan(plan);
++    }
++
++    private void WriteFinalMoveDestination020(uint address, uint value, M68kOperandSize size)
++    {
++        var width = size == M68kOperandSize.Byte ? 1 : size == M68kOperandSize.Word ? 2 : 4;
++        if (_has020PhysicalMap && !_physicalAddressMap!.IsCpuPhysicalAddressMapped(address, width, M68kBusAccessKind.CpuDataWrite))
++        {
++            if (!IsSimpleFinalMove020(State.LastOpcode) || size != FinalMoveSize020(State.LastOpcode) ||
++                State.ProgramCounter != unchecked(State.LastInstructionProgramCounter + 2))
++                throw new UnsupportedM68kTimingException(State.LastOpcode, State.LastInstructionProgramCounter, _profile);
++            // Normal mapped execution keeps its existing ordering. On this
++            // final-write fault the completed MOVE flags belong in saved SR.
++            // A repeated pending write must retain the returned SR verbatim.
++            if (!_resumingFinalMoveWrite020) SetMoveFlags(value, size);
++            var fc = _restoredWriteFunctionCode020 ?? (ushort)((State.StatusRegister & 0x2000) != 0 ? 5 : 1);
++            throw new FinalMoveWriteFault020(address, value, State.LastOpcode, State.ProgramCounter, fc, _instructionPipe);
++        }
++        WriteSized(address, value, size);
++    }
++
++    private void RaiseFinalMoveWriteFault020(FinalMoveWriteFault020 fault)
++    {
++        if (_enteringFinalMoveWrite020) { State.Halted = true; _instructionPipe.Reset(); return; }
++        var sr = State.StatusRegister;
++        var size = FinalMoveSize020(fault.Opcode);
++        var words = new ushort[16];
++        void Long(int offset, uint value) { words[offset / 2] = (ushort)(value >> 16); words[offset / 2 + 1] = (ushort)value; }
++        words[0] = sr; Long(2, fault.NextPc); words[3] = 0xa008;
++        words[4] = FinalMoveWriteContext020;
++        words[5] = (ushort)(0x100 | (size == M68kOperandSize.Byte ? 0x10 : size == M68kOperandSize.Word ? 0x20 : 0) | fault.FunctionCode);
++        Long(16, fault.Address); words[10] = fault.Opcode;
++        words[11] = (ushort)(1 | (fault.Pipe.Count << 8)); Long(24, fault.Value);
++        var pipe = fault.Pipe;
++        for (var n = 0; n < fault.Pipe.Count; n++)
++        {
++            var address = pipe.HeadAddress;
++            _ = pipe.TryConsumeKnownHead(out var word, out _);
++            if (address != unchecked(fault.NextPc + (uint)n * 2))
++                throw new UnsupportedM68kTimingException(fault.Opcode, unchecked(fault.NextPc - 2), _profile);
++            words[n == 0 ? 6 : n == 1 ? 7 : 14] = word;
++        }
++        if (fault.Pipe.Count != 0 && fault.Pipe.NextAddress != unchecked(fault.NextPc + (uint)fault.Pipe.Count * 2))
++            throw new UnsupportedM68kTimingException(fault.Opcode, unchecked(fault.NextPc - 2), _profile);
++        State.RecordException(2, fault.NextPc, sr);
++        State.StatusRegister = (ushort)((sr | M68kCpuState.Supervisor) & ~0xc000);
++        _enteringFinalMoveWrite020 = true;
++        try
++        {
++            for (var n = words.Length - 1; n >= 0; n--)
++            {
++                State.SetActiveStackPointer(unchecked(State.A[7] - 2));
++                if (!_physicalAddressMap!.IsCpuPhysicalAddressMapped(State.A[7], 2, M68kBusAccessKind.CpuDataWrite))
++                { State.Halted = true; _instructionPipe.Reset(); return; }
++                WriteWord(State.A[7], words[n]);
++            }
++            _instructionPipe.Reset();
++            State.ProgramCounter = ReadLong(unchecked(State.VectorBaseRegister + 8));
++            CompleteTiming(M68kInstructionTimingKey.IllegalInstruction);
++        }
++        catch (OperandReadFault020) { State.Halted = true; _instructionPipe.Reset(); }
++        finally { _enteringFinalMoveWrite020 = false; }
++    }
++
++    private bool RestoreFinalMoveWrite020(uint frame, ushort sr, uint pc, ushort ssw)
++    {
++        var address = ReadRteFrameLong(unchecked(frame + 16));
++        var opcode = ReadRteFrameWord(unchecked(frame + 20));
++        var metadata = ReadRteFrameWord(unchecked(frame + 22));
++        var value = ReadRteFrameLong(unchecked(frame + 24));
++        var reserved = ReadRteFrameWord(unchecked(frame + 30));
++        var count = metadata >> 8;
++        var size = FinalMoveSize020(opcode);
++        var expectedSsw = (size == M68kOperandSize.Byte ? 0x10 : size == M68kOperandSize.Word ? 0x20 : 0) | (ssw & 4) | 1;
++        if (!IsSimpleFinalMove020(opcode) || (metadata & 0xff) != 1 || count > M68kAdvancedInstructionPipe.Capacity || reserved != 0 ||
++            (ssw & ~0x100) != expectedSsw || (sr & 0xc000) != 0 || (pc & 1) != 0)
++            throw new UnsupportedM68kTimingException(0x4e73, State.LastInstructionProgramCounter, _profile);
++        M68kAdvancedInstructionPipe pipe = default; pipe.Reset(pc);
++        for (var n = 0; n < count; n++)
++        {
++            var offset = n == 0 ? 12u : n == 1 ? 14u : 28u;
++            pipe.Append(unchecked(pc + (uint)n * 2), ReadRteFrameWord(unchecked(frame + offset)), default);
++        }
++        // Read the full private state before committing stack, SR or the write.
++        for (var offset = 12u; offset < 32; offset += 2) _ = ReadRteFrameWord(unchecked(frame + offset));
++        State.SetActiveStackPointer(unchecked(frame + 32)); State.StatusRegister = sr; State.ProgramCounter = pc;
++        CompleteTiming(M68kInstructionTimingKey.Rte); _instructionPipe = pipe;
++        State.LastOpcode = opcode; State.LastInstructionProgramCounter = unchecked(pc - 2);
++        var previous = _resumingFinalMoveWrite020; var previousFc = _restoredWriteFunctionCode020;
++        _resumingFinalMoveWrite020 = true; _restoredWriteFunctionCode020 = (ushort)(ssw & 7);
++        try
++        {
++            // DF clear means software completed the cycle. No opcode fetch,
++            // source read, EA calculation, source update or flag recomputation.
++            if ((ssw & 0x100) != 0) WriteFinalMoveDestination020(address, value, size);
++        }
++        finally { _resumingFinalMoveWrite020 = previous; _restoredWriteFunctionCode020 = previousFc; }
++        CompleteFinalMoveWriteTiming020(opcode);
++        return true;
++    }
++}
+--- production/Copper68k/M68kAdvancedTimingInterpreter.Move.cs
++++ candidate/Copper68k/M68kAdvancedTimingInterpreter.Move.cs
+@@ -36,10 +36,18 @@
+             value = size == M68kOperandSize.Long ? FetchLong() : FetchWord();
+         else
+         {
+-            var source = ResolveMoveAddress(sourceMode, sourceRegister, size, opcode);
+-            value = ReadSized(source, size);
+-            if (sourceMode == 3) WriteGeneralRegister(true, sourceRegister,
+-                unchecked(source + M68kIntegerSemantics.AddressIncrement(sourceRegister, size)));
++            if (destinationMode <= 1 && (sourceMode == 6 || sourceMode == 7 && sourceRegister == 3))
++            {
++                var baseAddress = sourceMode == 6 ? State.A[sourceRegister] : State.ProgramCounter;
++                value = ReadIndexedMoveSource020(baseAddress, FetchWord(), opcode, M68kInstructionTimingKey.GeneralMove);
++            }
++            else
++            {
++                var source = ResolveMoveAddress(sourceMode, sourceRegister, size, opcode);
++                value = ReadSized(source, size);
++                if (sourceMode == 3) WriteGeneralRegister(true, sourceRegister,
++                    unchecked(source + M68kIntegerSemantics.AddressIncrement(sourceRegister, size)));
++            }
+         }
+         if (destinationMode == 0) WriteDataRegisterSized(destinationRegister, value, size);
+         else if (destinationMode == 1)
+@@ -47,7 +55,9 @@
+         else
+         {
+             var destination = ResolveMoveAddress(destinationMode, destinationRegister, size, opcode);
+-            WriteSized(destination, value, size);
++            if (destinationMode == 2 && sourceMode == 4)
++                WriteFinalMoveDestination020(destination, value, size);
++            else WriteSized(destination, value, size);
+             if (destinationMode == 3) WriteGeneralRegister(true, destinationRegister,
+                 unchecked(destination + M68kIntegerSemantics.AddressIncrement(destinationRegister, size)));
+         }
+--- production/Copper68k/M68kAdvancedTimingInterpreter.Operand020.cs
++++ candidate/Copper68k/M68kAdvancedTimingInterpreter.Operand020.cs
+@@ -0,0 +1,283 @@
++/* Copyright (C) 2026 Ilkka Lehtoranta. SPDX-License-Identifier: MIT */
++namespace Copper68k;
++
++internal partial class M68kAdvancedTimingInterpreter
++{
++    // Isolated development. The selected simple MOVE suffix can resume;
++    // other pending operations remain explicit unsupported continuations.
++    private const ushort OperandReadContext020 = 0xc022;
++    private readonly bool _has020PhysicalMap;
++    private bool _entering020ReadFault;
++    private bool _resumingMoveRead020, _readingTraceVector020;
++    private ushort? _restoredOperandFunctionCode020;
++    private enum PendingReadKind020 : ushort { Unknown, MoveSource, TraceVector, MoveIndexedSource, MoveIndexedPointer }
++    private readonly record struct IndexedReadContext020(ushort Extension, M68kInstructionTimingKey TimingKey,
++        uint PointerOffset, PendingReadKind020 Kind);
++    private IndexedReadContext020 _indexedReadContext020;
++
++    private uint ReadIndexedMoveSource020(uint baseAddress, ushort extension, ushort opcode, M68kInstructionTimingKey timingKey)
++    {
++        var previous = _indexedReadContext020;
++        _indexedReadContext020 = new(extension, timingKey, 0, PendingReadKind020.MoveIndexedSource);
++        try
++        {
++            var address = CalculateIndexedOperandAddress(baseAddress, extension, opcode);
++            var top = opcode >> 12;
++            return ReadSized(address, top == 1 ? M68kOperandSize.Byte : top == 3 ? M68kOperandSize.Word : M68kOperandSize.Long);
++        }
++        finally { _indexedReadContext020 = previous; }
++    }
++
++    private uint ReadIndexedPointer020(uint address, uint pointerOffset)
++    {
++        if (_indexedReadContext020.Kind != PendingReadKind020.MoveIndexedSource) return ReadLong(address);
++        var previous = _indexedReadContext020;
++        _indexedReadContext020 = previous with { Kind = PendingReadKind020.MoveIndexedPointer, PointerOffset = pointerOffset };
++        try { return ReadLong(address); }
++        finally { _indexedReadContext020 = previous; }
++    }
++
++    private uint ReadPendingIndexed020(uint address, M68kOperandSize size, IndexedReadContext020 context)
++    {
++        var previous = _indexedReadContext020; _indexedReadContext020 = context;
++        try { return ReadPendingMoveSource020(address, size); }
++        finally { _indexedReadContext020 = previous; }
++    }
++
++    private sealed class OperandReadFault020(uint address, int width, uint instructionPc,
++        uint nextPc, ushort opcode, uint guestStack, M68kAdvancedInstructionPipe pipe, PendingReadKind020 kind, int indexedExtraCycles, ushort functionCode, IndexedReadContext020 indexedContext) :
++        M68kEmulationException($"020/030 operand read fault at {address:X8}.")
++    {
++        internal readonly uint Address = address, InstructionPc = instructionPc, NextPc = nextPc, GuestStack = guestStack;
++        internal readonly int Width = width;
++        internal readonly ushort Opcode = opcode;
++        internal readonly M68kAdvancedInstructionPipe Pipe = pipe;
++        internal readonly PendingReadKind020 Kind = kind;
++        internal readonly int IndexedExtraCycles = indexedExtraCycles;
++        internal readonly ushort FunctionCode = functionCode;
++        internal readonly IndexedReadContext020 IndexedContext = indexedContext;
++    }
++
++    private void CheckOperandRead020(uint address, int width, M68kBusAccessKind kind)
++    {
++        if (!_has020PhysicalMap || kind != M68kBusAccessKind.CpuDataRead ||
++            _physicalAddressMap!.IsCpuPhysicalAddressMapped(address, width, kind)) return;
++        var opcode = State.LastOpcode; var top = opcode >> 12;
++        var mode = (opcode >> 3) & 7; var register = opcode & 7; var destination = (opcode >> 6) & 7;
++        var memoryDestination = top is >= 1 and <= 3 && destination == 2 && mode is 2 or 3 or 4;
++        var moveSource = top is >= 1 and <= 3 && (destination <= 1 || memoryDestination) && !(top == 1 && destination == 1) &&
++            (mode is >= 2 and <= 5 || mode == 7 && register <= 2) && width == (top == 1 ? 1 : top == 3 ? 2 : 4) &&
++            State.ExceptionSequence == ExecutionBoundaryExceptionSequence &&
++            (_resumingMoveRead020 || State.LastInstructionProgramCounter == ExecutionBoundaryProgramCounter);
++        var indexed = _indexedReadContext020.Kind is PendingReadKind020.MoveIndexedSource or PendingReadKind020.MoveIndexedPointer;
++        var phase = _readingTraceVector020 ? PendingReadKind020.TraceVector : indexed ? _indexedReadContext020.Kind :
++            moveSource ? PendingReadKind020.MoveSource : PendingReadKind020.Unknown;
++        var functionCode = _readingTraceVector020 ? (ushort)5 : _restoredOperandFunctionCode020 ??
++            (ushort)(((State.StatusRegister & 0x2000) != 0 ? 4 : 0) |
++            (mode == 7 && (phase == PendingReadKind020.MoveSource && register == 2 || indexed && register == 3) ? 2 : 1));
++        throw new OperandReadFault020(address, width, State.LastInstructionProgramCounter,
++            State.ProgramCounter, opcode, State.A[7], _instructionPipe, phase, _indexedOperandExtraCycles, functionCode, indexed ? _indexedReadContext020 : default);
++    }
++
++    private uint ReadPendingTraceVector020(uint address)
++    {
++        var previous = _readingTraceVector020; _readingTraceVector020 = true;
++        try { return ReadLong(address); }
++        finally { _readingTraceVector020 = previous; }
++    }
++
++    private uint ReadPendingMoveSource020(uint address, M68kOperandSize size)
++    {
++        var previous = _resumingMoveRead020; _resumingMoveRead020 = true;
++        try { return ReadSized(address, size); }
++        finally { _resumingMoveRead020 = previous; }
++    }
++
++    private void RaiseOperandReadFault020(OperandReadFault020 fault)
++    {
++        if (_entering020ReadFault) { State.Halted = true; _instructionPipe.Reset(); return; }
++        var sr = State.StatusRegister;
++        State.RecordException(2, fault.InstructionPc, sr);
++        State.StatusRegister = (ushort)((sr | M68kCpuState.Supervisor) & ~0xc000);
++        var words = new ushort[46];
++        void Long(int offset, uint value) { words[offset / 2] = (ushort)(value >> 16); words[offset / 2 + 1] = (ushort)value; }
++        words[0] = sr; Long(2, fault.InstructionPc); words[3] = 0xb008;
++        words[4] = OperandReadContext020;
++        words[5] = (ushort)(0x140 | (fault.Width == 1 ? 0x10 : fault.Width == 2 ? 0x20 : 0) |
++            fault.FunctionCode);
++        Long(0x10, fault.Address); Long(0x14, fault.NextPc); Long(0x1c, fault.GuestStack);
++        words[0x28 / 2] = fault.Opcode; words[0x2a / 2] = (ushort)fault.Width;
++        words[0x30 / 2] = (ushort)fault.Pipe.Count; Long(0x32, fault.Pipe.NextAddress);
++        words[0x50 / 2] = (ushort)fault.Kind;
++        Long(0x52, (uint)fault.IndexedExtraCycles);
++        if (fault.Kind is PendingReadKind020.MoveIndexedSource or PendingReadKind020.MoveIndexedPointer)
++        {
++            words[0x18 / 2] = fault.IndexedContext.Extension;
++            words[0x1a / 2] = (ushort)fault.IndexedContext.TimingKey;
++            Long(0x20, fault.IndexedContext.PointerOffset);
++            words[0x56 / 2] = 1; // private indexed suffix context version, not a silicon frame claim
++        }
++        var pipe = fault.Pipe;
++        for (var n = 0; n < fault.Pipe.Count; n++)
++        {
++            var address = pipe.HeadAddress;
++            _ = pipe.TryConsumeKnownHead(out var word, out _);
++            Long(0x38 + n * 6, address); words[(0x3c + n * 6) / 2] = word;
++            if (n < 2) words[6 + n] = word;
++            if (n == 1) Long(0x24, address);
++        }
++        _entering020ReadFault = true;
++        try
++        {
++            for (var n = words.Length - 1; n >= 0; n--)
++            {
++                State.SetActiveStackPointer(unchecked(State.A[7] - 2));
++                if (!_physicalAddressMap!.IsCpuPhysicalAddressMapped(State.A[7], 2, M68kBusAccessKind.CpuDataWrite))
++                { State.Halted = true; _instructionPipe.Reset(); return; }
++                WriteWord(State.A[7], words[n]);
++            }
++            _instructionPipe.Reset();
++            State.ProgramCounter = ReadLong(unchecked(State.VectorBaseRegister + 8));
++            CompleteTiming(M68kInstructionTimingKey.IllegalInstruction);
++        }
++        catch (OperandReadFault020) { State.Halted = true; _instructionPipe.Reset(); }
++        finally { _entering020ReadFault = false; }
++    }
++
++    private bool RestoreOperandRead020(uint frame, ushort sr, uint pc, ushort ssw)
++    {
++        var address = ReadRteFrameLong(unchecked(frame + 0x10));
++        var nextPc = ReadRteFrameLong(unchecked(frame + 0x14));
++        _ = ReadRteFrameLong(unchecked(frame + 0x1c)); // retain provenance read and fault sequencing
++        var opcode = ReadRteFrameWord(unchecked(frame + 0x28));
++        var width = ReadRteFrameWord(unchecked(frame + 0x2a));
++        var input = ReadRteFrameLong(unchecked(frame + 0x2c));
++        var count = ReadRteFrameWord(unchecked(frame + 0x30));
++        var pipeNext = ReadRteFrameLong(unchecked(frame + 0x32));
++        var kind = (PendingReadKind020)ReadRteFrameWord(unchecked(frame + 0x50));
++        var indexedExtraCycles = ReadRteFrameLong(unchecked(frame + 0x52));
++        var indexedExtension = ReadRteFrameWord(unchecked(frame + 0x18));
++        var indexedTimingKey = (M68kInstructionTimingKey)ReadRteFrameWord(unchecked(frame + 0x1a));
++        var pointerOffset = ReadRteFrameLong(unchecked(frame + 0x20));
++        var indexedVersion = ReadRteFrameWord(unchecked(frame + 0x56));
++        var top = opcode >> 12; var mode = (opcode >> 3) & 7; var register = opcode & 7;
++        var destinationMode = (opcode >> 6) & 7;
++        var expectedWidth = top == 1 ? 1 : top == 3 ? 2 : 4;
++        var extensions = mode == 5 || mode == 7 && register is 0 or 2 ? 2u : mode == 7 && register == 1 ? 4u : 0u;
++        var indexed = kind is PendingReadKind020.MoveIndexedSource or PendingReadKind020.MoveIndexedPointer;
++        var programReference = mode == 7 && (kind == PendingReadKind020.MoveSource && register == 2 || indexed && register == 3);
++        if (indexed)
++        {
++            var full = (indexedExtension & 0x100) != 0;
++            var baseSize = (indexedExtension >> 4) & 3;
++            var indirect = indexedExtension & 7;
++            var suppressIndex = (indexedExtension & 0x40) != 0;
++            var indexedLength = 2u + (full ? (baseSize == 2 ? 2u : baseSize == 3 ? 4u : 0) +
++                ((indirect & 3) == 2 ? 2u : (indirect & 3) == 3 ? 4u : 0) : 0);
++            var extra = full ? 4 + (baseSize == 2 ? 2 : baseSize == 3 ? 6 : 0) +
++                (indirect == 0 ? 0 : 5 + ((indirect & 3) >= 2 ? 2 : 0)) : 0;
++            var briefKey = destinationMode == 0 ? expectedWidth switch
++            {
++                1 => M68kInstructionTimingKey.MoveByteBriefIndexedToData,
++                2 => M68kInstructionTimingKey.MoveWordBriefIndexedToData,
++                _ => M68kInstructionTimingKey.MoveLongBriefIndexedToData
++            } : expectedWidth == 4 ? M68kInstructionTimingKey.MoveLongBriefIndexedToAddress :
++                mode == 7 ? M68kInstructionTimingKey.MoveWordPcBriefIndexedToAddress : M68kInstructionTimingKey.MoveWordBriefIndexedToAddress;
++            if (top is < 1 or > 3 || destinationMode > 1 || top == 1 && destinationMode == 1 ||
++                !(mode == 6 || mode == 7 && register == 3) || indexedVersion != 1 ||
++                width != (kind == PendingReadKind020.MoveIndexedPointer ? 4 : expectedWidth) ||
++                nextPc != unchecked(pc + 2 + indexedLength) || indexedExtraCycles != extra ||
++                indexedTimingKey != briefKey && indexedTimingKey != M68kInstructionTimingKey.GeneralMove ||
++                full && (baseSize == 0 || (indexedExtension & 8) != 0 || indirect == 4 || suppressIndex && indirect >= 4) ||
++                kind == PendingReadKind020.MoveIndexedPointer && (!full || indirect == 0) ||
++                kind == PendingReadKind020.MoveIndexedSource && pointerOffset != 0)
++                throw new UnsupportedM68kTimingException(0x4e73, State.LastInstructionProgramCounter, _profile);
++        }
++        // The saved data-cycle address space belongs to the faulted access.
++        // A handler may edit the returned SR without changing that cycle's FC.
++        // Keep size/direction/reference-kind checks independent of returned S.
++        var expectedSsw = 0x40 | (width == 1 ? 0x10 : width == 2 ? 0x20 : 0) |
++            (kind == PendingReadKind020.TraceVector ? 5 : (ssw & 4) | (programReference ? 2 : 1));
++        if (kind is not (PendingReadKind020.MoveSource or PendingReadKind020.TraceVector or PendingReadKind020.MoveIndexedSource or PendingReadKind020.MoveIndexedPointer) ||
++            count > M68kAdvancedInstructionPipe.Capacity || indexedExtraCycles > int.MaxValue || (ssw & ~0x100) != expectedSsw ||
++            kind == PendingReadKind020.TraceVector && width != 4 ||
++            kind == PendingReadKind020.MoveSource && (top is < 1 or > 3 ||
++            destinationMode > 1 && !(top is >= 1 and <= 3 && destinationMode == 2 && mode is 2 or 3 or 4) || top == 1 && destinationMode == 1 ||
++            !(mode is >= 2 and <= 5 || mode == 7 && register <= 2) || width != expectedWidth ||
++            nextPc != unchecked(pc + 2 + extensions) || indexedExtraCycles != 0))
++            throw new UnsupportedM68kTimingException(0x4e73, State.LastInstructionProgramCounter, _profile);
++        // RTE consumes the selected active frame. Its fault-time A7 provenance
++        // does not require the frame to remain at its original stack address.
++        // The completed effective address is already serialized separately.
++        M68kAdvancedInstructionPipe pipe = default;
++        pipe.Reset(pipeNext);
++        for (var n = 0; n < count; n++)
++        {
++            var wordAddress = ReadRteFrameLong(unchecked(frame + 0x38u + (uint)n * 6));
++            var word = ReadRteFrameWord(unchecked(frame + 0x3cu + (uint)n * 6));
++            if (wordAddress != unchecked(nextPc + (uint)n * 2))
++                throw new UnsupportedM68kTimingException(0x4e73, State.LastInstructionProgramCounter, _profile);
++            pipe.Append(wordAddress, word, default);
++        }
++        if (count != 0 && pipe.NextAddress != pipeNext)
++            throw new UnsupportedM68kTimingException(0x4e73, State.LastInstructionProgramCounter, _profile);
++        for (var offset = 0x10u; offset < 92; offset += 2) _ = ReadRteFrameWord(unchecked(frame + offset));
++        State.SetActiveStackPointer(unchecked(frame + 92)); State.StatusRegister = sr; State.ProgramCounter = nextPc;
++        CompleteTiming(M68kInstructionTimingKey.Rte);
++        _instructionPipe = pipe;
++        State.LastInstructionProgramCounter = pc; State.LastOpcode = opcode; _indexedOperandExtraCycles = (int)indexedExtraCycles;
++        if (kind == PendingReadKind020.TraceVector)
++        {
++            // Trace's frame and the traced instruction's effects already exist.
++            // Complete only the saved vector read, with its original address.
++            State.ProgramCounter = (ssw & 0x100) == 0 ? input : ReadPendingTraceVector020(address);
++            CompleteTiming(M68kInstructionTimingKey.IllegalInstruction);
++            return true;
++        }
++        var size = expectedWidth == 1 ? M68kOperandSize.Byte : expectedWidth == 2 ? M68kOperandSize.Word : M68kOperandSize.Long;
++        // No BeginInstruction, FetchWord, extension consumption or EA calculation:
++        // only the suspended read and its not-yet-completed register/flag suffix.
++        uint value;
++        var previousFunctionCode = _restoredOperandFunctionCode020;
++        _restoredOperandFunctionCode020 = (ushort)(ssw & 7);
++        try
++        {
++        if (indexed)
++        {
++            var context = new IndexedReadContext020(indexedExtension, indexedTimingKey, pointerOffset, kind);
++            if (kind == PendingReadKind020.MoveIndexedPointer)
++            {
++                // Only the suspended pointer read remains. The index/base/outer
++                // components and extensions have already been evaluated.
++                var pointer = (ssw & 0x100) == 0 ? input : ReadPendingIndexed020(address, M68kOperandSize.Long, context);
++                var sourceAddress = unchecked(pointer + pointerOffset);
++                context = context with { Kind = PendingReadKind020.MoveIndexedSource, PointerOffset = 0 };
++                value = ReadPendingIndexed020(sourceAddress, size, context);
++            }
++            else value = (ssw & 0x100) == 0 ? input : ReadPendingIndexed020(address, size, context);
++        }
++        else value = (ssw & 0x100) == 0 ? input : ReadPendingMoveSource020(address, size);
++        }
++        finally { _restoredOperandFunctionCode020 = previousFunctionCode; }
++        if (mode == 3) WriteGeneralRegister(true, register, unchecked(address + M68kIntegerSemantics.AddressIncrement(register, size)));
++        var destination = (opcode >> 9) & 7;
++        if (destinationMode == 0) { WriteDataRegisterSized(destination, value, size); SetMoveFlags(value, size); }
++        else if (destinationMode == 2) { WriteFinalMoveDestination020(State.A[destination], value, size); SetMoveFlags(value, size); }
++        else WriteGeneralRegister(true, destination, expectedWidth == 2 ? unchecked((uint)(int)(short)value) : value);
++        if (destinationMode == 2)
++            CompleteFinalMoveWriteTiming020(opcode);
++        else if (indexed && indexedTimingKey != M68kInstructionTimingKey.GeneralMove)
++            CompleteIndexedMoveTiming(indexedTimingKey, indexedExtension);
++        else
++        {
++        var cycles = _profile.FixedInstructionNativeCycles ?? 4 + MoveEaPolicyCycles(mode, register) + (indexed ? (int)indexedExtraCycles : 0);
++        var plan = _profile.Model == M68kAcceleratorModel.M68030
++            ? M68kInstructionPlan.CreateHeadTail(M68kInstructionTimingKey.GeneralMove, "MOVE resumed read suffix", cycles, 2, 0)
++            : M68kInstructionPlan.CreateFlat(M68kInstructionTimingKey.GeneralMove, "MOVE resumed read suffix", cycles);
++        CompleteTimingPlan(plan);
++        }
++        if ((sr & 0x8000) != 0) RaiseFormat0Exception(9, State.ProgramCounter, M68kInstructionTimingKey.IllegalInstruction);
++        return true;
++    }
++}
++
+--- production/Copper68k/M68kAdvancedTimingInterpreter.Rte020.cs
++++ candidate/Copper68k/M68kAdvancedTimingInterpreter.Rte020.cs
+@@ -34,7 +34,8 @@
+     {
+         if (!IsRte020Mapped(address, width, M68kBusAccessKind.CpuDataRead))
+             throw new RteReadFault020(null, address, width);
+-        return width == 2 ? ReadWord(address) : ReadLong(address);
++        return width == 2 ? _timedBus.ReadWord(address, M68kBusAccessKind.CpuDataRead) :
++            _timedBus.ReadLong(address, M68kBusAccessKind.CpuDataRead);
+     }
+ 
+     private uint ReadRteValidation020(RteValidation020 context, ref uint? supplied)
+@@ -45,7 +46,8 @@
+         {
+             if (!IsRte020Mapped(context.Address, context.Width, M68kBusAccessKind.CpuDataRead))
+                 throw new RteReadFault020(context, context.Address, context.Width);
+-            value = context.Width == 2 ? ReadWord(context.Address) : ReadLong(context.Address);
++            value = context.Width == 2 ? _timedBus.ReadWord(context.Address, M68kBusAccessKind.CpuDataRead) :
++                _timedBus.ReadLong(context.Address, M68kBusAccessKind.CpuDataRead);
+         }
+         return context.Width == 2 ? value & 0xffff : value;
+     }
+--- production/Copper68k/M68kAdvancedTimingInterpreter.cs
++++ candidate/Copper68k/M68kAdvancedTimingInterpreter.cs
+@@ -4126,6 +4126,8 @@
+ 
+         internal uint NextAddress { get; private set; }
+ 
++        internal uint HeadAddress => _address0;
++
+         internal bool IsEmpty => Count == 0;
+ 
+         internal void Reset(uint nextAddress = 0)
+@@ -4382,6 +4384,8 @@
+                 ? null : bus as IM68kCodeReader;
+             _jitBus = bus as IM68kJitBus;
+             _physicalAddressMap = bus as IM68kPhysicalAddressMap;
++            _has020PhysicalMap = Has020AccessFrames && _physicalAddressMap is not null &&
++                _physicalAddressMap is not M68EC020AddressMaskedBus { HasPhysicalAddressMap: false };
+             _hasModelSpecificInstructions = hasModelSpecificInstructions;
+             _enableAdvancedFastPath =
+                 enableAdvancedFastPath &&
+@@ -4514,6 +4518,14 @@
+             try
+             {
+                 ExecuteInstructionWithTrace();
++            }
++            catch (OperandReadFault020 fault)
++            {
++                RaiseOperandReadFault020(fault);
++            }
++            catch (FinalMoveWriteFault020 fault)
++            {
++                RaiseFinalMoveWriteFault020(fault);
+             }
+             catch (M68040MmuFaultException ex)
+             {
+@@ -4724,6 +4736,16 @@
+                         exitBlock = true;
+                     }
+                     else ExecuteHotInstruction(hotInstruction.Kind, opcode);
++                }
++                catch (OperandReadFault020 fault)
++                {
++                    RaiseOperandReadFault020(fault);
++                    exitBlock = true;
++                }
++                catch (FinalMoveWriteFault020 fault)
++                {
++                    RaiseFinalMoveWriteFault020(fault);
++                    exitBlock = true;
+                 }
+                 catch (M68040MmuFaultException ex)
+                 {
+@@ -4825,6 +4847,16 @@
+                             throw new InvalidOperationException("The MC68040 FPU hot instruction was not handled.");
+                     }
+                     else ExecuteHotInstruction(hotInstruction.Kind, opcode);
++                }
++                catch (OperandReadFault020 fault)
++                {
++                    RaiseOperandReadFault020(fault);
++                    exitBlock = true;
++                }
++                catch (FinalMoveWriteFault020 fault)
++                {
++                    RaiseFinalMoveWriteFault020(fault);
++                    exitBlock = true;
+                 }
+                 catch (M68040MmuFaultException ex)
+                 {
+@@ -5512,6 +5544,7 @@
+             var destination = (opcode >> 9) & 7;
+             var source = opcode & 7;
+             var address = State.A[source];
++            CheckOperandRead020(address, 4, M68kBusAccessKind.CpuDataRead);
+             var value = _timedBus.ReadDataLongHot(address);
+             State.D[destination] = value;
+             WriteGeneralRegister(true, source, address + 4);
+@@ -11160,7 +11193,7 @@
+             var destination = (opcode >> 9) & 7;
+             var baseRegister = opcode & 7;
+             var extension = FetchWord();
+-            var value = ReadLong(CalculateIndexedOperandAddress(State.A[baseRegister], extension, opcode));
++            var value = ReadIndexedMoveSource020(State.A[baseRegister], extension, opcode, M68kInstructionTimingKey.MoveLongBriefIndexedToData);
+             State.D[destination] = value;
+             SetMoveFlags(value, M68kOperandSize.Long);
+             CompleteIndexedMoveTiming(M68kInstructionTimingKey.MoveLongBriefIndexedToData, extension);
+@@ -11173,7 +11206,7 @@
+             var destination = (opcode >> 9) & 7;
+             var baseRegister = opcode & 7;
+             var extension = FetchWord();
+-            var value = ReadLong(CalculateIndexedOperandAddress(State.A[baseRegister], extension, opcode));
++            var value = ReadIndexedMoveSource020(State.A[baseRegister], extension, opcode, M68kInstructionTimingKey.MoveLongBriefIndexedToAddress);
+             WriteGeneralRegister(true, destination, value);
+             CompleteIndexedMoveTiming(M68kInstructionTimingKey.MoveLongBriefIndexedToAddress, extension);
+         }
+@@ -11185,7 +11218,7 @@
+             var destination = (opcode >> 9) & 7;
+             var extensionAddress = State.ProgramCounter;
+             var extension = FetchWord();
+-            var value = ReadLong(CalculateIndexedOperandAddress(extensionAddress, extension, opcode));
++            var value = ReadIndexedMoveSource020(extensionAddress, extension, opcode, M68kInstructionTimingKey.MoveLongBriefIndexedToAddress);
+             WriteGeneralRegister(true, destination, value);
+             CompleteIndexedMoveTiming(M68kInstructionTimingKey.MoveLongBriefIndexedToAddress, extension);
+         }
+@@ -11255,7 +11288,7 @@
+             var destination = (opcode >> 9) & 7;
+             var source = opcode & 7;
+             var value = ReadLong(State.A[source]);
+-            WriteLong(State.A[destination], value);
++            WriteFinalMoveDestination020(State.A[destination], value, M68kOperandSize.Long);
+             SetMoveFlags(value, M68kOperandSize.Long);
+             CompleteTiming(M68kInstructionTimingKey.MoveLongAddressIndirectToAddressIndirect);
+         }
+@@ -11448,7 +11481,7 @@
+             var destination = (opcode >> 9) & 7;
+             var source = opcode & 7;
+             var value = ReadByte(State.A[source]);
+-            WriteByte(State.A[destination], value);
++            WriteFinalMoveDestination020(State.A[destination], value, M68kOperandSize.Byte);
+             SetMoveFlags(value, M68kOperandSize.Byte);
+             CompleteTiming(M68kInstructionTimingKey.MoveByteAddressIndirectToAddressIndirect);
+         }
+@@ -11486,7 +11519,7 @@
+             var destination = (opcode >> 9) & 7;
+             var baseRegister = opcode & 7;
+             var extension = FetchWord();
+-            var value = ReadByte(CalculateIndexedOperandAddress(State.A[baseRegister], extension, opcode));
++            var value = (byte)ReadIndexedMoveSource020(State.A[baseRegister], extension, opcode, M68kInstructionTimingKey.MoveByteBriefIndexedToData);
+             WriteDataRegisterByte(destination, value);
+             SetMoveFlags(value, M68kOperandSize.Byte);
+             CompleteIndexedMoveTiming(M68kInstructionTimingKey.MoveByteBriefIndexedToData, extension);
+@@ -11499,7 +11532,7 @@
+             var destination = (opcode >> 9) & 7;
+             var extensionAddress = State.ProgramCounter;
+             var extension = FetchWord();
+-            var value = ReadByte(CalculateIndexedOperandAddress(extensionAddress, extension, opcode));
++            var value = (byte)ReadIndexedMoveSource020(extensionAddress, extension, opcode, M68kInstructionTimingKey.MoveByteBriefIndexedToData);
+             WriteDataRegisterByte(destination, value);
+             SetMoveFlags(value, M68kOperandSize.Byte);
+             CompleteIndexedMoveTiming(M68kInstructionTimingKey.MoveByteBriefIndexedToData, extension);
+@@ -11546,7 +11579,7 @@
+             _ = FetchWord();
+             var extensionAddress = State.ProgramCounter;
+             var extension = FetchWord();
+-            var value = unchecked((uint)(int)(short)ReadWord(CalculateIndexedOperandAddress(extensionAddress, extension, opcode)));
++            var value = unchecked((uint)(int)(short)ReadIndexedMoveSource020(extensionAddress, extension, opcode, M68kInstructionTimingKey.MoveWordPcBriefIndexedToAddress));
+             WriteGeneralRegister(true, (opcode >> 9) & 7, value);
+             CompleteIndexedMoveTiming(M68kInstructionTimingKey.MoveWordPcBriefIndexedToAddress, extension);
+         }
+@@ -11616,7 +11649,7 @@
+             BeginInstruction(opcode);
+             _ = FetchWord();
+             var value = ReadWord(State.A[opcode & 7]);
+-            WriteWord(State.A[(opcode >> 9) & 7], value);
++            WriteFinalMoveDestination020(State.A[(opcode >> 9) & 7], value, M68kOperandSize.Word);
+             SetMoveFlags(value, M68kOperandSize.Word);
+             CompleteTiming(M68kInstructionTimingKey.MoveWordAddressIndirectToAddressIndirect);
+         }
+@@ -11692,7 +11725,7 @@
+             var value = ReadSized(address, size);
+             WriteGeneralRegister(true, sourceRegister, unchecked(address + M68kIntegerSemantics.AddressIncrement(sourceRegister, size)));
+             // Resolve the destination after source EA side effects, including An aliasing.
+-            WriteSized(State.A[(opcode >> 9) & 7], value, size);
++            WriteFinalMoveDestination020(State.A[(opcode >> 9) & 7], value, size);
+             SetMoveFlags(value, size);
+             CompleteTiming(size switch
+             {
+@@ -11723,7 +11756,7 @@
+             var destination = (opcode >> 9) & 7;
+             var source = opcode & 7;
+             var extension = FetchWord();
+-            var value = ReadWord(CalculateIndexedOperandAddress(State.A[source], extension, opcode));
++            var value = (ushort)ReadIndexedMoveSource020(State.A[source], extension, opcode, M68kInstructionTimingKey.MoveWordBriefIndexedToData);
+             WriteDataRegisterWord(destination, value);
+             SetMoveFlags(value, M68kOperandSize.Word);
+             CompleteIndexedMoveTiming(M68kInstructionTimingKey.MoveWordBriefIndexedToData, extension);
+@@ -11750,7 +11783,7 @@
+             var destination = (opcode >> 9) & 7;
+             var extensionAddress = State.ProgramCounter;
+             var extension = FetchWord();
+-            var value = ReadLong(CalculateIndexedOperandAddress(extensionAddress, extension, opcode));
++            var value = ReadIndexedMoveSource020(extensionAddress, extension, opcode, M68kInstructionTimingKey.MoveLongBriefIndexedToData);
+             State.D[destination] = value;
+             SetMoveFlags(value, M68kOperandSize.Long);
+             CompleteIndexedMoveTiming(M68kInstructionTimingKey.MoveLongBriefIndexedToData, extension);
+@@ -11763,7 +11796,7 @@
+             var destination = (opcode >> 9) & 7;
+             var extensionAddress = State.ProgramCounter;
+             var extension = FetchWord();
+-            var value = ReadWord(CalculateIndexedOperandAddress(extensionAddress, extension, opcode));
++            var value = (ushort)ReadIndexedMoveSource020(extensionAddress, extension, opcode, M68kInstructionTimingKey.MoveWordBriefIndexedToData);
+             WriteDataRegisterWord(destination, value);
+             SetMoveFlags(value, M68kOperandSize.Word);
+             CompleteIndexedMoveTiming(M68kInstructionTimingKey.MoveWordBriefIndexedToData, extension);
+@@ -18597,7 +18630,8 @@
+             PushWord((ushort)((vector is 5 or 6 or 7 or 9 ? 0x2000 : Format0ExceptionFrame) | ((vector * 4) & 0x0FFF)));
+             PushLong(stackedProgramCounter);
+             PushWord(savedStatusRegister);
+-            State.ProgramCounter = ReadLong(State.VectorBaseRegister + ((uint)vector * 4));
++            var vectorAddress = unchecked(State.VectorBaseRegister + ((uint)vector * 4));
++            State.ProgramCounter = Has020AccessFrames && vector == 9 ? ReadPendingTraceVector020(vectorAddress) : ReadLong(vectorAddress);
+             CompleteTiming(timingKey);
+         }
+ 
+@@ -18875,16 +18909,19 @@
+ 
+         protected byte ReadByte(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
+         {
++            CheckOperandRead020(address, 1, accessKind);
+             return _timedBus.ReadByte(address, accessKind);
+         }
+ 
+         protected ushort ReadWord(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
+         {
++            CheckOperandRead020(address, 2, accessKind);
+             return _timedBus.ReadWord(address, accessKind);
+         }
+ 
+         protected uint ReadLong(uint address)
+         {
++            CheckOperandRead020(address, 4, M68kBusAccessKind.CpuDataRead);
+             return _timedBus.ReadLong(address, M68kBusAccessKind.CpuDataRead);
+         }
+ 
+@@ -19269,8 +19306,7 @@
+             BeginInstruction(opcode);
+             _ = FetchWord();
+             var extension = FetchWord();
+-            var address = CalculateIndexedOperandAddress(State.A[opcode & 7], extension, opcode);
+-            var value = unchecked((uint)(int)(short)ReadWord(address));
++            var value = unchecked((uint)(int)(short)ReadIndexedMoveSource020(State.A[opcode & 7], extension, opcode, M68kInstructionTimingKey.MoveWordBriefIndexedToAddress));
+             WriteGeneralRegister(true, (opcode >> 9) & 7, value);
+             CompleteIndexedMoveTiming(M68kInstructionTimingKey.MoveWordBriefIndexedToAddress, extension);
+         }
+@@ -19298,7 +19334,7 @@
+             var address = unchecked(((extension & 0x80) != 0 ? 0u : baseAddress) + baseDisplacement);
+             if (indirect == 0) return unchecked(address + index);
+             // Both levels use ordinary timed data reads on the host's single bus clock.
+-            var pointer = ReadLong(unchecked(address + (indirect < 4 ? index : 0u)));
++            var pointer = ReadIndexedPointer020(unchecked(address + (indirect < 4 ? index : 0u)), unchecked(outerDisplacement + (indirect >= 5 ? index : 0u)));
+             return unchecked(pointer + outerDisplacement + (indirect >= 5 ? index : 0u));
+         }
+ 

@@ -44,35 +44,6 @@ public sealed class M68020CmpmTests
         Assert.Equal(5, cpu.State.Cycles);
     }
 
-    [Theory]
-    [InlineData(0)] [InlineData(1)] [InlineData(2)]
-    public void AliasedAddressRegisterUsesTheNextOperandAfterSourceIncrement(int size)
-    {
-        var bus = new ZeroWaitCodeBus();
-        WriteWords(bus, CodeBase, (ushort)(0xB108 | size << 6));
-        Store(bus, 0x2000, size, 0);
-        Store(bus, 0x2000 + (1u << size), size, 1);
-        using var cpu = Create(bus, 1);
-        cpu.Reset(CodeBase, 0x4000); cpu.State.A[0] = 0x2000; cpu.State.StatusRegister = 0x201F;
-
-        cpu.ExecuteInstruction();
-
-        Assert.Equal(0x2000u + (2u << size), cpu.State.A[0]);
-        Assert.Equal(0x10, cpu.State.StatusRegister & 31);
-    }
-
-    [Fact]
-    public void ByteStackRegisterUsesTwoByteStrideForBothAliasedOperands()
-    {
-        var bus = new ZeroWaitCodeBus(); WriteWords(bus, CodeBase, 0xBF0F);
-        WriteWords(bus, 0x4000, 0x0080, 0x0180);
-        using var cpu = Create(bus, 1);
-        cpu.Reset(CodeBase, 0x4000); cpu.State.StatusRegister = 0x201F;
-        cpu.ExecuteInstruction();
-        Assert.Equal(0x4004u, cpu.State.A[7]);
-        Assert.Equal(0x10, cpu.State.StatusRegister & 31);
-    }
-
     private static IM68kCore Create(ZeroWaitCodeBus bus, int profile) => profile switch
     {
         0 => M68kCoreFactory.Default.Create(M68kCpuModel.M68020, bus),

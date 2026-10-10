@@ -131,7 +131,11 @@ internal sealed class M68040MmuState
     public void Probe(uint address, M68kBusAccessKind kind, bool write, bool supervisor, Func<uint, uint> read, Action<uint, uint>? store = null)
     {
         // PTEST explicitly replaces the matching ATC entry.
-        Flush(address, supervisor, includeGlobal: true);
+        var key = ((ulong)(address & ~OffsetMask) << 2) |
+            (kind == M68kBusAccessKind.CpuInstructionFetch ? 2ul : 0ul) | (supervisor ? 1ul : 0ul);
+        Generation++;
+        for (var i = 0; i < _atc.Length; i++)
+            if (_atc[i].Valid && _atc[i].Key == key) _atc[i].Valid = false;
         if (TryTranslate(address, kind, write, supervisor, read, out var physical, out var fault, store))
         {
             var transparent = TryTransparent(address, kind, supervisor, out var attributes);

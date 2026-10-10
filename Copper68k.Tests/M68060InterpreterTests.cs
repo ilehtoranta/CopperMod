@@ -98,21 +98,9 @@ public sealed class M68060InterpreterTests
         }
     }
 
-    [Fact]
-    public void ProcessorIdentificationIsReadOnlyAndResetClearsControls()
-    {
-        var bus = new Copper68kTestBus(0x10000);
-        bus.WriteWords(0x1000, 0x4E7B, 0x0808, 0x4E7A, 0x1808);
-        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
-        cpu.Reset(0x1000, 0x7000);
-        cpu.State.D[0] = uint.MaxValue;
-        cpu.ExecuteInstruction(); cpu.ExecuteInstruction();
-        Assert.Equal(0x04300083u, cpu.State.D[1]);
-        cpu.Reset(0x1004, 0x7000);
-        cpu.ExecuteInstruction();
-        Assert.Equal(0x04300000u, cpu.State.D[1]);
-        Assert.Equal(0x2700, cpu.State.StatusRegister);
-    }
+    // PCR identification/reset regression consolidated into SyntheticPcrTests.
+    // Replacement cases and three before/after mutation proofs are recorded in
+    // docs/COPPER68K_REFERENCE_QUALIFICATION.md (68060 PCR qualification).
 
     [Theory]
     [InlineData(0x802)] // No CAAR, MSP, ISP or MMUSR.
@@ -179,14 +167,30 @@ public sealed class M68060InterpreterTests
     }
 
     [Theory]
-    [InlineData(0x008, 0x20000000u)]
-    public void UnimplementedSystemFeaturesStopExplicitly(int control, uint value)
+    [InlineData(0x003, 0x8000u)]
+    [InlineData(0x004, 0x8000u)]
+    public void EnabledTranslationControlTransfersWithoutAnEmulatorException(int control, uint value)
     {
         var bus = new Copper68kTestBus(0x10000);
         bus.WriteWords(0x1000, 0x4E7B, (ushort)control);
         using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
         cpu.Reset(0x1000, 0x7000); cpu.State.D[0] = value;
-        Assert.Throws<M68kEmulationException>(() => cpu.ExecuteInstruction());
+        cpu.ExecuteInstruction();
+        Assert.Equal(value, control == 3 ? cpu.State.M68040Mmu.TranslationControl
+            : cpu.State.M68040Mmu.InstructionTransparentTranslation0);
+        Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+    }
+
+    [Fact]
+    public void BusControlEnableTransfersWithoutInventingExternalLockActivity()
+    {
+        var bus = new Copper68kTestBus(0x10000);
+        bus.WriteWords(0x1000, 0x4E7B, 0x0008, 0x4E7A, 0x1008);
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
+        cpu.Reset(0x1000, 0x7000); cpu.State.D[0] = 0x20000000;
+        cpu.ExecuteInstruction(); cpu.ExecuteInstruction();
+        Assert.Equal(0x20000000u, cpu.State.D[1]);
+        Assert.Equal(0x1008u, cpu.State.ProgramCounter);
     }
 
     [Theory]

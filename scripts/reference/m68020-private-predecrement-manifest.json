@@ -1,0 +1,2382 @@
+{
+  "schema": 1,
+  "scope": "Private predecrement read/write and retained handlers; no production import or full-suite/hardware qualification.",
+  "baseSourceNormalizedSha256": {
+    "Copper68k.Tests/Copper68k.Tests.csproj": "312981fb35dc8af78a7b8e32ed5332d3dcadf184374c240448af5fbb1fa268e0",
+    "Copper68k.Tests/Copper68kTestBus.cs": "a097e924ddd25ac38cd38920bce3bef830b7c6022e33762add89f8ac4d457f3b",
+    "Copper68k.Tests/EnvironmentFactAttribute.cs": "419f7a9e25cdacbf6588b899c111288999c7c936a8486ebab6bfeac11529eafc",
+    "Copper68k.Tests/M68000CachedDbraInterruptFenceTests.cs": "8d5abf2a13af9a36561e7560d8f9e1ddb94afd32ddfe823c348b2c5f047781c2",
+    "Copper68k.Tests/M68000JitDirectZeroWaitTests.cs": "9637222279f77fd46640936d75ebd25a31da5d24800173476e317ed81b2ee6d8",
+    "Copper68k.Tests/M68000TraceExceptionTests.cs": "4599a73d61e68efc62c982f9abf2313bbdb2069690f2cb788d615244f22b070c",
+    "Copper68k.Tests/M68010InterpreterTests.cs": "6fbac278c5729fb31d6919f24c0bd3c406a5f8608f57ea07b9ad97cf7e950a49",
+    "Copper68k.Tests/M68020AdditionalAgaOperandTests.cs": "022269e754b7f2ee9d5aa865e4d6f24e913582e6af5e4e52c06d320c20bc29b4",
+    "Copper68k.Tests/M68020AddressSourceTests.cs": "5f90d7aaff3238acbe2b8cb5e38b82a571f59b5d2ca96f45efb52dbd9db86ab1",
+    "Copper68k.Tests/M68020BrianOperandTests.cs": "8e8af93ca91a94095e1c7bd21666c48197cf43748719d6b3e661f6125cd1d90e",
+    "Copper68k.Tests/M68020ChipInstructionCacheTests.cs": "759028d902e71583c49162cb678b2e5f09b9c3cad44facfa2f21577a3069557c",
+    "Copper68k.Tests/M68020CmpmTests.cs": "66ae2c196d8dcb363715d97f15b876232d2393ea4a5be0d06cfb577c2bc0b590",
+    "Copper68k.Tests/M68020ContinuationTests.cs": "632d09785081458abd880867d60526853f6598b6d567b257acc77866f89002a9",
+    "Copper68k.Tests/M68020ExpansionTests.cs": "7fc005e59ee5425073c9305ea66f86d0eb51e71a1da8fc3431be973cfccfe843",
+    "Copper68k.Tests/M68020FastRamBootTests.cs": "293aa6a05fc52e5cac3698f641970e0d46ebb3b05384e6cc880b726da2995152",
+    "Copper68k.Tests/M68020FullIndexedMoveTests.cs": "12812dc140954206bee3d5d233cb4a61fb3dd655e78bda39fe61f8c0f15364af",
+    "Copper68k.Tests/M68020GameContinuationTests.cs": "78887fb291011a4d1499e53d76a2806ed746586084d7db8e13b49d6aa8b45e78",
+    "Copper68k.Tests/M68020HdfBootTests.cs": "45cb463d20e580dd1688d69098dd4dcf3455c3a1139aebd8bf7ed37db99d5930",
+    "Copper68k.Tests/M68020IndexedJsrTests.cs": "e2962592f981f76bb4222777dfd568e9c15faa0941a280dd121f5a6da05ef117",
+    "Copper68k.Tests/M68020InterpreterTests.cs": "4579066275f830f3959065e2404edec22790d7c338994a1fb595a5b1d4964688",
+    "Copper68k.Tests/M68020NativeGameOperandTests.cs": "0b1880b05941913b16062c81a2110b69c7374abee598b2d60db9282044b7962c",
+    "Copper68k.Tests/M68040CacheControlTests.cs": "3dd0c7219624c5184a066452265042d6443f1adaf17de6ff7be1b04e2eb0cae4",
+    "Copper68k.Tests/M68040FpuContinuationStateTests.cs": "db9c79aea818cf7adb5ef52012a9ddb7ef53b95336e80b2e329ddaa1cf8ab495",
+    "Copper68k.Tests/M68040FpuTests.cs": "54fdc51597d6fd8a146d2ba9563f11395c44130b5c193d51ffac19edcd599b1b",
+    "Copper68k.Tests/M68040InterpreterTests.cs": "8dfd53cf9af488256834a5aaefd0e926c9cc1d519b1373aed398e96151f36708",
+    "Copper68k.Tests/M68040MmuTests.cs": "1f1f4d12072cb80236bc10cc9f1df335d7f3ffc20d373ff6972a788e5dfd1bcb",
+    "Copper68k.Tests/M68040MovemContinuationStateTests.cs": "46ab523a9152f1017ef6ec613637807e57da5d2dfd58e6ef7aca32c0c081bcb4",
+    "Copper68k.Tests/M68040OddReturnStateTests.cs": "c43044017ab1f664a82d0e94ffe7906f5a99d1766c8880d9ea07d46657b40e8e",
+    "Copper68k.Tests/M68040UncachedFetchTests.cs": "698e4fe59ee62c862a9abd83d5f03435110dd3dc2e734130d709df6232caac18",
+    "Copper68k.Tests/M68060InterpreterTests.cs": "969ae07caf3cfa001a4933ac8a4fb1fcb4d3ef3b6a3dc43bc2a1802c61fa2ae8",
+    "Copper68k.Tests/M68EC020InterpreterTests.cs": "0a5ba9a009f0766255a52c8b5eb2c04f238fc70d6295905cbea7fd6d1f23a0a7",
+    "Copper68k.Tests/M68kAddTests.cs": "5e3b5021c86c7fec4cc9faf207823835523cd6e07a46fc755e26955642d21662",
+    "Copper68k.Tests/M68kAddressBusWidthTests.cs": "3fd32d1e180fa09980f7c2e14c43345aeca52ac69d51bc9585c9050bb10495fb",
+    "Copper68k.Tests/M68kAddressErrorTests.cs": "d845279ac810f6ae6da5505c8c193509754c27a900ba34b1f7e3c15bc50d1e8f",
+    "Copper68k.Tests/M68kAdvancedFastPathTests.cs": "34da2dad29e285051b9db5dad7b1db5b90b1fb8e929d483c4619ef8fc48fea76",
+    "Copper68k.Tests/M68kBcdTests.cs": "f9a9ec702a34201baa4fa657d7222e07b286a4dad991102bc7c40bfed397ed2f",
+    "Copper68k.Tests/M68kBitTests.cs": "e4718e2e229b682b688d8a091a3c4c106f5382df41e593c95e24741d22250829",
+    "Copper68k.Tests/M68kBranchTests.cs": "8565ba85c89eab8b4967fd649cfc7cacb2722d9cfe07535023987d42a990a1e6",
+    "Copper68k.Tests/M68kChkTests.cs": "0a1f6e684375c83a7c818631385c198a6f05c1897d19b2110e7063c47166f4bf",
+    "Copper68k.Tests/M68kCmpTests.cs": "05baa5db6ddb2ed27f420944b7f13f7d00c6a737bf7d1d4d2d33dca0a1940f61",
+    "Copper68k.Tests/M68kCodeSnapshotTests.cs": "18ef7fa8414ed1d35f96b8846a36e5f41b2decc86d50ee2e25a9c9a959ad8497",
+    "Copper68k.Tests/M68kDecoderTests.cs": "ece24606f04b2fffded6867dfc3f8bc898f422c442f046130eff89e001bb834b",
+    "Copper68k.Tests/M68kDispatchTierTests.cs": "a277d5c94679bfe5dbd9bbe604ad8b0f02348cb887d91c38eb14c3d4a9c57235",
+    "Copper68k.Tests/M68kDivideTests.cs": "ec9bfaf0561512acaadc646f09981d06d28db463528fc5d9bea18f9842392800",
+    "Copper68k.Tests/M68kInstructionFrequencyTests.cs": "fc23174f22587068f574ba77b29273ad52fa10c11023dbf4e19e388c831fcbf9",
+    "Copper68k.Tests/M68kInterpreterCoreBehaviorTests.cs": "0d5b94828064e1237c0e2c99b3174a1119cf197820f13d48d11d69be1909a9a0",
+    "Copper68k.Tests/M68kInterpreterHierarchyTests.cs": "ee2a78c5c35b8fc94c578cb3fd848b041ac7cc8bc4ca2c9275d4825cf1a6ebc2",
+    "Copper68k.Tests/M68kInterpreterTestHelpers.cs": "9ab827d132947331429fa2febd23d513ae9dbc92381507b9c21c35989684e0ca",
+    "Copper68k.Tests/M68kJumpTests.cs": "38e5f539c3b05b8a06aff0465175adf7dc1d1e6e3bc5d186d7aa377960c243ce",
+    "Copper68k.Tests/M68kLogicalTests.cs": "344102f71fa3e65c25c738b5986534b78764e0337bee068568d751022deabd2b",
+    "Copper68k.Tests/M68kMoveTests.cs": "09bf9857b506c9897909fe91637644a101d96259560117d85dec9e59778ed64a",
+    "Copper68k.Tests/M68kMovemModelIsolationTests.cs": "36c35951eaf2a3e2af0c2f47e43a242c3dc9b03073d736786b312e296f5cb528",
+    "Copper68k.Tests/M68kMovemTests.cs": "ad33ede82e2dfbb83609e2965a812a8b5198a2a53a189c15f38a2aa175d30431",
+    "Copper68k.Tests/M68kMultiplyTests.cs": "81ded2574ce3b74f4b7c9b278a546fec00beee6cae1bcedff9eeac554ddc9f19",
+    "Copper68k.Tests/M68kMusashiConformanceTests.cs": "c35416f212c8e9de50592b73a7c942b125d3678d4371efa8a39db85cc09a1c35",
+    "Copper68k.Tests/M68kMusashiModelAuditTests.cs": "2f8842d9de580b9ab24287356dd0bd081f8f9565aaa18c1805c3be7056d9b818",
+    "Copper68k.Tests/M68kOpcodeMatrixTests.cs": "512cc6dd8d13c908e3143b9f901e7d7954d301aebbe170070cbca848b4be2b50",
+    "Copper68k.Tests/M68kPlanTierDifferentialTests.cs": "021e529f2eb249809ed4250c83a17d21561e4bd698ba7609b6045da85b0a8632",
+    "Copper68k.Tests/M68kShiftTests.cs": "275d017006f919a8b3ceffa5586540731f6a26e94826451496a67da2a7f44b15",
+    "Copper68k.Tests/M68kSingleStepConformanceTests.cs": "fc93b034b7ad2745b0ce228f3d02d99e55d0fdc51efb671908d957853597fa94",
+    "Copper68k.Tests/M68kStoppedFastForwardTests.cs": "d2f7ed39b80e27320292b1ba61f86e5f2870ed8e951cefa7c0d2283c8379b96c",
+    "Copper68k.Tests/M68kSystemTests.cs": "1df6f61c5729635e5b1952dab0e0db5c17a116dcca0dfd3808d4f5feffa0742a",
+    "Copper68k.Tests/M68kTimingFormulaTests.cs": "f22eb91b684b39aacf15d57ff6d43119aecc502861412390d08f26067e693caa",
+    "Copper68k.Tests/M68kWinUaeCacheEncodingAuditTests.cs": "03f162f668addd29c4e62795d9256505b4ba651ae98ce21d0af516e4027e78b3",
+    "Copper68k.Tests/M68kWinUaeCas2AuditTests.cs": "d8b1df312e26bfb6cc05c3d91203d2549ab92405ee81ba55b35c3d82dd4c72ca",
+    "Copper68k.Tests/M68kWinUaeCasAuditTests.cs": "d4c5d7cbf81fce9164b010f57caed441d13dd7403399358ef63ba825c4199cd3",
+    "Copper68k.Tests/M68kWinUaeCpuTesterConformanceTests.cs": "efe49abb9610adf6b7d8d344b1b91d53d821b9349c3a7736685efba8b152688f",
+    "Copper68k.Tests/M68kWinUaeInputValidationTests.cs": "cbaabb136e9d7db37f386d336a2008956c1878a3f85a6a4ead0087c2c8644c57",
+    "Copper68k.Tests/M68kWinUaeLongArithmeticAuditTests.cs": "927162ff30aebfb5d253e6987c2c686fbb97d1ecd82185fbf53a5cdefad0ab7e",
+    "Copper68k.Tests/M68kWinUaeLowPowerStopAuditTests.cs": "0f6d06344b6b8c40ee0a41a49df7774e6878ad4195a64ec9ca87dc80e55fb91e",
+    "Copper68k.Tests/M68kWinUaeModelAuditTests.cs": "ab18f5640cad70d9bb1cd355a3a538b199f7dd652f677bf109202d6ecf1a04b1",
+    "Copper68k.Tests/M68kWinUaeMove16AuditTests.cs": "a36b17f83fd67b3ff06de5f131739f96c7aef23657a1af21b12020094191a3d4",
+    "Copper68k.Tests/M68kWinUaeMovesAuditTests.cs": "9754a27f8d461fdf776e57184ddfcfb9dca94c4af4a42a7f0743030c8860a6e1",
+    "Copper68k.Tests/M68kWinUaeTrapBoundsAuditTests.cs": "47a3ab6f85bd6b9c89087edd7ad1367310aa3df67ee936432e26cb3b15e94671",
+    "Copper68k.Tests/M68kWinUaeTrapTraceAuditTests.cs": "16f2402a7c08940e4145ea210212cd941d0742434c94ad9d8c15e5162379540f",
+    "Copper68k.Tests/M68kWinUaeWordDivisionAuditTests.cs": "02640e5bc67dd136f1fefa8f6fae58df332cf91a8d52cef0e97eeaa0c1004195",
+    "Copper68k.Tests/M68kWriteOrderingTests.cs": "647d696811143182659a9c1333894504aaf49761595a278c3315e2a8b54df614",
+    "Copper68k.Tests/MoveByteImmediatePostIncrementTests.cs": "75d6e18e081ac2a2617bec2e66275b0ba9d3574d52805ca5835990f0189e3d71",
+    "Copper68k.Tests/MovemAbsoluteLongExecutionTests.cs": "7db15ba7e91382c7c635abcfd792fa9e93157e5d245052f2b0b0c3697691c679",
+    "Copper68k.Tests/Synthetic/AddressingFixtures.cs": "bdd223021245fc1e0df644e0790d728d131daf4b240e84f93fe526e3d6374ff7",
+    "Copper68k.Tests/Synthetic/ArchitecturalExpectation.cs": "0b882f6bdd81e0997c9cb0c10dbf136b64e4682296e5ac76a5f29eee2d2baba9",
+    "Copper68k.Tests/Synthetic/ArithmeticSpecification.cs": "a898f60fa259b0c6124da0fe6353cd2508908d17d2bd24b79f2523e93b503bb3",
+    "Copper68k.Tests/Synthetic/ControlSpecification.cs": "c7eecce18ec7ea405b1e1c27ea339dad8219cb24e457d5d48385632705253e51",
+    "Copper68k.Tests/Synthetic/IntegerInventory.cs": "9e488d6bdac9afa748e81bad281e4227bd4ba3135836bc80fcf99bf3eee84937",
+    "Copper68k.Tests/Synthetic/InvalidOperandScenario.cs": "c93f0b7df5183294fd892dceefb49c31812149cb19c9c527042b453175529176",
+    "Copper68k.Tests/Synthetic/LogicalSpecification.cs": "e78b87680e28e30ef9dc59cbdbd3dd333c1c4ab0648962efca6cdcce9ca96f7c",
+    "Copper68k.Tests/Synthetic/M68010RteFormatDiscoveryTests.cs": "00895386634fff0bbc583d57bee96db86cc405979825be33f17407664eabf408",
+    "Copper68k.Tests/Synthetic/M68040CmLifetimeDiscoveryTests.cs": "de5569b32b1998505b01605d3952d2cac82119c33fe9684f93f491d7dab556a0",
+    "Copper68k.Tests/Synthetic/M68040MixedEpochRetryDiscoveryTests.cs": "8b059fb83c71dd2e758565aa1c47b4ae92e697feef925e937f0c90d2621176f2",
+    "Copper68k.Tests/Synthetic/M68060StopDiscoveryTests.cs": "727010c363a4fa9481ff2bc32d23b5ca0386c3aa8ecf73c3e07515af94dd18ee",
+    "Copper68k.Tests/Synthetic/MoveSpecification.cs": "9af8fe887088bd23fb5a56e784ae705b4170ed0f241ad052f23e752bc45d74c3",
+    "Copper68k.Tests/Synthetic/SyntheticAndIndirectTests.cs": "83637399d652f79db89c00a4c3c1422684bed32602f5a8ef54d3648a549e889e",
+    "Copper68k.Tests/Synthetic/SyntheticAndiDisplacementTests.cs": "a7a91b0182b70ed5a4e3c470acd76e8476b4dcad7da535a7cd6c704e4966889e",
+    "Copper68k.Tests/Synthetic/SyntheticArithmeticTests.cs": "03615ee297bb765eca939d8e9e4a6aaaa6f0e07692852647afc2602063a706cc",
+    "Copper68k.Tests/Synthetic/SyntheticAtomicTests.cs": "f6a6f7fc2466fbcb9554bb2df45aed8a45c1a372b308a60b6ab4173178106b34",
+    "Copper68k.Tests/Synthetic/SyntheticBitFieldTests.cs": "58e01a76ebfc9586214d251f98540382538c9ba2e0efb5a2e6e1d799689c7823",
+    "Copper68k.Tests/Synthetic/SyntheticBitShiftTests.cs": "f077c1ccc01522271318fdcd4a43b11220ab3debc8720bdd627309e304c33a83",
+    "Copper68k.Tests/Synthetic/SyntheticBoundsTests.cs": "ffb1679a76fc344aa53cdeca082345bc3e11819ff8750b82362bae1aeb53c1cd",
+    "Copper68k.Tests/Synthetic/SyntheticBusControlTests.cs": "e1f5a13110b22b8eafdf8d423ea37b61c8202b6a2dd9d705a18c5a2510b04d49",
+    "Copper68k.Tests/Synthetic/SyntheticCacheEncodingTests.cs": "a3c96aa137ee85e159fcf99ed55cf877c80292a39cc4abee7309c021acf1df8c",
+    "Copper68k.Tests/Synthetic/SyntheticCmpaDisplacementTests.cs": "a5c3538d3b3126bb12ca9256830b1f9613ccbac6b6822c4d5d5ac0e67dade7d6",
+    "Copper68k.Tests/Synthetic/SyntheticControlTests.cs": "55037302bedf9657ce1c730abe2b226b25e21bd7a4c01b9bae5111d34cb35b8d",
+    "Copper68k.Tests/Synthetic/SyntheticDebugInstructionTests.cs": "a67ff5029d531e0847b87807e361e8d697466d76428c40234f8b35ab884716a9",
+    "Copper68k.Tests/Synthetic/SyntheticDeepAuditTests.cs": "46cfdc181702386f9d5d56a1ec3c396ec82810f90d5a135511cd4d133a8fdb45",
+    "Copper68k.Tests/Synthetic/SyntheticEorPostincrementTests.cs": "e9df29be9467e97efb5a3621ee00f71459c5b6220b3cbf9f84d31a95fe20be3d",
+    "Copper68k.Tests/Synthetic/SyntheticExceptionControlTests.cs": "9e9248c26a858c49710ea51da303e49764979192dd2adae17b343dfa0699acdb",
+    "Copper68k.Tests/Synthetic/SyntheticExecution.cs": "60f4cdb0e8e3044c0594a4378e4af9779b83c4dab8ec00d8e5e78e6d23ff1bef",
+    "Copper68k.Tests/Synthetic/SyntheticExgRegisterTests.cs": "baa2dfd8f0ad030dcb69ff4b6d60992a7574415cd4804edc6df1e85cab202979",
+    "Copper68k.Tests/Synthetic/SyntheticExtendDecimalTests.cs": "9c26bec55e717d1fc1dc02ac6b94dfd999b99a1bdb725b45f290dc9600f9758d",
+    "Copper68k.Tests/Synthetic/SyntheticInvalidAddressOperationTests.cs": "2d95941ed986e8bc0ab79158396582c2e30e33e95aa80480145852bbcb73e29d",
+    "Copper68k.Tests/Synthetic/SyntheticInvalidArithmeticAtomicTests.cs": "db9b484676f8278aa2ca9b1a57c93871ccabd13bc1ff6c5ae86937d28b3c7827",
+    "Copper68k.Tests/Synthetic/SyntheticInvalidBinaryOperandTests.cs": "b65b0f1cf6f40334d3fc88a0e1a22222a7a3f60eaa6bfc13b656d06d5ab9e944",
+    "Copper68k.Tests/Synthetic/SyntheticInvalidBoundsBitfieldTests.cs": "3f1cc9e1379f3a797b1a109b2bf737d93a58da10e8237394017bd7b9a777a446",
+    "Copper68k.Tests/Synthetic/SyntheticInvalidLogicalTests.cs": "e60d00feac370e31820c89ba77a747e68f6629a09c98cefa93d18c2425e6bade",
+    "Copper68k.Tests/Synthetic/SyntheticInvalidMemoryShiftTests.cs": "5162c069b8a2cb49fbdda5c05bd7abaa934ec5163e410708548480b642b9efc2",
+    "Copper68k.Tests/Synthetic/SyntheticInvalidQuickConditionTests.cs": "8edb9df20ece5dcc2f11d6e05b6a279b77951a99dad8a6eec5ef3ae2a6619e74",
+    "Copper68k.Tests/Synthetic/SyntheticInvalidSystemTests.cs": "43c2f84f04c2715915ccad8280f4f046de563298b6985a6a681b1cbe5edb5a15",
+    "Copper68k.Tests/Synthetic/SyntheticInvalidUnaryMultiplyDivideTests.cs": "bb5e6add68535fbf459442e0bae51114000248d73ddb148a3132b23beec379d6",
+    "Copper68k.Tests/Synthetic/SyntheticLineFEncodingTests.cs": "afad4a7ab59d8565b5d0dd673d80bdb63afaf13dc0bd238b72730e71223d67a8",
+    "Copper68k.Tests/Synthetic/SyntheticLogicalTests.cs": "1c27fec573c732576d042a1a0037c97081c0ddbf21f2fb3bf2f585f96465cb5e",
+    "Copper68k.Tests/Synthetic/SyntheticLowPowerStopTests.cs": "61a87aa642ad1e53216ddc7189d93c05e8533b04e7466cb1c7e165049928fd77",
+    "Copper68k.Tests/Synthetic/SyntheticM68000DoubleFaultTests.cs": "9624c41ac9f9e646c7c6b84a7a61a03a3406b720dc9863676912e71dd462a007",
+    "Copper68k.Tests/Synthetic/SyntheticM68010Format8Tests.cs": "b9bf810644c5b0f2c908a2ee3c300bd8de8906e1d261f22b3b5aeafff47733be",
+    "Copper68k.Tests/Synthetic/SyntheticM68010LongMoveRestartTests.cs": "cca94e3314d691c963f4aca355943687deade26dd0c2f1d1383815d2c4ae05b3",
+    "Copper68k.Tests/Synthetic/SyntheticM68010MoveRestartTests.cs": "485c6f193e858bb27f5af4e692af5b58e46e41ebb94b06840563eed55406151b",
+    "Copper68k.Tests/Synthetic/SyntheticM68010MovecTests.cs": "e41dd92e251f5c9b84a71e6ce8953ce0ab6b2654a05ea325ad9936702bcd22d7",
+    "Copper68k.Tests/Synthetic/SyntheticM68020AddressFrameDiscoveryTests.cs": "e60b54560d6aabc43f3f5c02c35366e8f7490c0f26498a1b9177c57cc089611f",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MemoryDestinationRecoveryTests.cs": "bf15b553122fc37c846f74230ff6eb069b4a3d07020966fa112b21257808a491",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MemoryReadWriteTests.cs": "423ef41897c53c59d849cff7df45606802cfa526133a6ef8ca37f2d0276dd212",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MoveOriginEntryFaultTests.cs": "554ab3cec9b71eef1470996a524a0865efd1f2154677c79d7a4162b1cbce9c96",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MoveWriteChangedInputTests.cs": "1c58a6384f334714c2825f24cd0f46948c05fcf23ea1954a07bb92b54b50c87f",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MoveWriteEntryFaultTests.cs": "332d29f2edfcc5aa216b05563e33ef91bbd9c7efbfc67a99e1fba101ccb3eb8c",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MoveWriteFaultTests.cs": "f3b9c74338137347907b09a2cef42ede2825b2010658a0243b5e2d348bfea474",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MoveWriteFrameFaultTests.cs": "9d764420d2f76bf2402adfd2d58a0588d18a25827963da647e8e9c15f912cd94",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MoveWriteFrameTests.cs": "96298919fd26e35754c44b7e5949a2522685de24272141974c3754b218c90740",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MoveWriteHandlerTests.cs": "a7090579d8f738be07a03eb5bd01ef1e0dfc35c05204c8fda5598e965716c4bf",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MoveWritePipeTests.cs": "160fdaa629acb3ca6ff12b03d88c586beba08bea9e0f7f55fee1631554569b50",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MoveWriteRefaultTests.cs": "d3b136290411f027f9f89960e64b63fd9e0b6c82bb844d4a5734a0d396aabaa5",
+    "Copper68k.Tests/Synthetic/SyntheticM68020MoveWriteValidationTests.cs": "fe282ee21603d26aa42d85094ab053895ecbf390eb39a57c01ce30d482597462",
+    "Copper68k.Tests/Synthetic/SyntheticM68020PredecrementReadTests.cs": "5427d03ab43d753a2307ea2a41e83ed5f3325f20f9c83d27d3e0574768843bed",
+    "Copper68k.Tests/Synthetic/SyntheticM68020PredecrementWriteTests.cs": "129c13cf4549091eacc6a6334534f0be3497003500a33373b9463c0b72b6b770",
+    "Copper68k.Tests/Synthetic/SyntheticM68020PrefetchRecoveryTests.cs": "10953cc31cfaeea328e154f94381b43966a9c31d82beadfe001206b2669f6a77",
+    "Copper68k.Tests/Synthetic/SyntheticM68020RteAddressTransportTests.cs": "a79b1c10097a44454dd26aa677c288cbd944d359328fb090593b440f23090cc3",
+    "Copper68k.Tests/Synthetic/SyntheticM68020RteFaultTests.cs": "52f52a95ac6346964988c0df8d59341302e1c2066205ef7e308d6e7124ff83e6",
+    "Copper68k.Tests/Synthetic/SyntheticM68020RteMetadataTests.cs": "dc6945345b3bef2840ee2d2360e047bde9a5ec6eaccd935cb04e744680f51b9d",
+    "Copper68k.Tests/Synthetic/SyntheticM68030PmmuPrivilegeTests.cs": "b2208dd5e3c130f02e4c8ce96d732bfb83d18cca2c91649a501b870d4d5841f5",
+    "Copper68k.Tests/Synthetic/SyntheticM68040AccessDoubleFaultTests.cs": "4d2da25611284027c5841aecf71493abfbf10a8dbb3735d7b11e436961bdec68",
+    "Copper68k.Tests/Synthetic/SyntheticM68040AccessFrameAuditTests.cs": "9f3f7ca9fdd96d56c87a3d00938e1a9a05e0b427d147cdbceef46735373336b7",
+    "Copper68k.Tests/Synthetic/SyntheticM68040BatchFaultTests.cs": "9b74e0208635b1bdb694afbb06d01a09ee0d0f31715817989dddfacdd0b579e9",
+    "Copper68k.Tests/Synthetic/SyntheticM68040ChainedOddReturnTests.cs": "3fbee0ebaf25ce06641ef03d6ee07ebf293f13fe5f19fd7cbe670745e3f9829a",
+    "Copper68k.Tests/Synthetic/SyntheticM68040FpuContinuationTests.cs": "ab3aba621e9c590ee47ec27b486398bd5ff3d2d3fc6d0f03598c78442f2d0ef2",
+    "Copper68k.Tests/Synthetic/SyntheticM68040HandlerPrefetchTests.cs": "5826e8304602df3dac94048eb73f80608fa2c1ec0f080dd052532c067d5dfbf9",
+    "Copper68k.Tests/Synthetic/SyntheticM68040InstructionFaultTests.cs": "80914da4fa41dffaaff04fd2070a2730937d300a8e9497fc1f54413bda20cb6a",
+    "Copper68k.Tests/Synthetic/SyntheticM68040MmuInstructionTests.cs": "247e44c5ba0116ed393624a0b1921b724f35ae11d830375ea449786fe6f6f1e6",
+    "Copper68k.Tests/Synthetic/SyntheticM68040Move16FaultTests.cs": "da4d61987b162ddf6f3bdd2fc13d15f2a2b87260042edaed0710f25c20795625",
+    "Copper68k.Tests/Synthetic/SyntheticM68040MovemContinuationTests.cs": "8bf800c5c10d69f3b88ad9944dd75b598abd36a1e8c02418bcfa34f1490d2e4b",
+    "Copper68k.Tests/Synthetic/SyntheticM68040MovemMaskFaultTests.cs": "51f6acedd3beec8d008559cda54489a108d4bd8ff4bf7cd3205848e55c8a2237",
+    "Copper68k.Tests/Synthetic/SyntheticM68040MovemReadRecoveryTests.cs": "b01b57d372f95f2ff825f0ca992b4c4571f757b876e44d09a3e6075562e4fc6e",
+    "Copper68k.Tests/Synthetic/SyntheticM68040MovemWriteFaultDiscoveryTests.cs": "6c7ccea7523a87a612e693c9132da170e8abf4a237226be0bdfe9c8fd987101e",
+    "Copper68k.Tests/Synthetic/SyntheticM68040MovemWriteRecoveryTests.cs": "3e25ad2091d5a6b90818b9aa14935e62f3ebef75ed5f15e880d9e40fb80e34b8",
+    "Copper68k.Tests/Synthetic/SyntheticM68040MovesFaultDiscoveryTests.cs": "9f9fcc646b2a093477e4825c584138ad878f8ba52559a314f714dc3c9d8ea9e8",
+    "Copper68k.Tests/Synthetic/SyntheticM68040MovesReadFaultTests.cs": "18cd5b985be7fb566995c3799562228b9fe56b3d0710134119d8ca4ae48fca3e",
+    "Copper68k.Tests/Synthetic/SyntheticM68040MovesWriteFaultTests.cs": "c0b786b5c5ff98af96ee0e96991d76173d7d04e3ac591ab900075eb043231b13",
+    "Copper68k.Tests/Synthetic/SyntheticM68040NestedWritebackFaultTests.cs": "ed932469f093927943f726b0250eb27bf1bad5634734d0d974cc659ddc02713d",
+    "Copper68k.Tests/Synthetic/SyntheticM68040OddReturnTests.cs": "e09eba013db34fb576c9cae7637389eb040bee33f7723741a916b0634cf9749c",
+    "Copper68k.Tests/Synthetic/SyntheticM68040OperandReadFaultDiscoveryTests.cs": "a2b74358cd457607d2e1a2a8c6945342a80cd9543c5385b072bd8078d42019a4",
+    "Copper68k.Tests/Synthetic/SyntheticM68040OperandWriteFaultTests.cs": "1ccefa627a5333f44262441f11088e9acb074ebfe7bd242455990920db38b74f",
+    "Copper68k.Tests/Synthetic/SyntheticM68040RteRepairTests.cs": "f8df7d6ee9e29ead38696b70193f766ebe40a25f393cf5914a6668a68fbe4ac5",
+    "Copper68k.Tests/Synthetic/SyntheticM68040RteValidationFaultTests.cs": "a20a53696e3d59aae3112ccda4af1101817c33b513f49b5c8dbf313ced12d933",
+    "Copper68k.Tests/Synthetic/SyntheticM68040SoftwareTraceProgram.cs": "631b91374fd570b8d848d2e479e9c3db9faa33dd16bd41388f3e0dc45988250e",
+    "Copper68k.Tests/Synthetic/SyntheticM68040ThrowawayTests.cs": "fe301f287b45a95dd00e30fddba19f313c1a34d42fe37235f8c12a29382f8cf8",
+    "Copper68k.Tests/Synthetic/SyntheticM68040UserRteFaultTests.cs": "30df0643c9d8ed668805552a86a273aef96682885bf33eea7365fb364e201aee",
+    "Copper68k.Tests/Synthetic/SyntheticM68040WritebackProgram.cs": "5b44b67e305aeca279c552c570eacc1d65cbecafcdc8c105415e802fbc6d0563",
+    "Copper68k.Tests/Synthetic/SyntheticM68040WritebackTests.cs": "7381fdff0a0f8655f04edb18a2cf5069922fdaaae9adf64c1d7665efe08642dd",
+    "Copper68k.Tests/Synthetic/SyntheticMachine.cs": "03342a838cb5862e622285350b5615d94b08bdfd0ef7074882b4390026261b59",
+    "Copper68k.Tests/Synthetic/SyntheticModelSystemTests.cs": "61c2227cd4165505b6cdc115ffbd9874fbb0c62101dbc0ff984109b74a045727",
+    "Copper68k.Tests/Synthetic/SyntheticModuleTests.cs": "de1ff9a2fc78ba198e47b07fb71d06368116428c71ad8fd34c68fa995ee68bb1",
+    "Copper68k.Tests/Synthetic/SyntheticMoveExceptionTests.cs": "99a156eb3c1b4c45989db4ef9eb757606439dba4d1e48730a331036034d15382",
+    "Copper68k.Tests/Synthetic/SyntheticMoveTests.cs": "669d5c70c9cf8f1128f2274d27ad6297c22694f0ca54ecba720636a63f926f85",
+    "Copper68k.Tests/Synthetic/SyntheticMoveaDisplacementTests.cs": "3c7a704c0035442ee6bb3d14f6a609dfb95fdfd0c377d89d930541512be15237",
+    "Copper68k.Tests/Synthetic/SyntheticMovecControlEncodingTests.cs": "8d243c796b604cd7c6d47a11bd4b2fc02182922e6eb01fbd737ac299c1adca33",
+    "Copper68k.Tests/Synthetic/SyntheticMovecRegisterFixture.cs": "e395c928f2a0f5c62350d3f86072baef6340b389f0e6eb92e433fc94684bdc5e",
+    "Copper68k.Tests/Synthetic/SyntheticMultiplyDivideTests.cs": "f6f5edd725d2eab5a612dceb974f10a4ec52e1669e8c3a91bc9724076ae43de9",
+    "Copper68k.Tests/Synthetic/SyntheticNotDisplacementTests.cs": "33fa6019413337ff67f3884e8c32c867ffb1a201377e56a804d3ead5a3836038",
+    "Copper68k.Tests/Synthetic/SyntheticPcrTests.cs": "ce06df810c1c4ece8aaf5132e429c60ac98ef3731d36c86e909073c41ab7fdb3",
+    "Copper68k.Tests/Synthetic/SyntheticReservedMove16Tests.cs": "b22226f77f16cf1ec838ae3fec53963a1dbd2659c85af2ef2b42e4cf2d4d958c",
+    "Copper68k.Tests/Synthetic/SyntheticSubaIndirectTests.cs": "9cc0e770e97b6d5b6d3254aad268c321f37b20819999fde54f75623af8672ca2",
+    "Copper68k.Tests/Synthetic/SyntheticSystemTests.cs": "c95bebeaaa9692d1ee56e8e7dd1b97571070deef839fa89a44dd850a01340b16",
+    "Copper68k.Tests/Synthetic/SyntheticTransferTests.cs": "3454c5c21143a9eaf70257bcba1b992af6574ee2a44de29739f9ab798851d4f5",
+    "Copper68k.Tests/Synthetic/SyntheticTranslationControlTests.cs": "c93eee77197dbfcd6e9d6f18b103628d55b67ae08d42685b8ba46e41d4553b5d",
+    "Copper68k.Tests/Synthetic/SyntheticTransparentControlTests.cs": "c983f09745425abc7f8c0c4998ab12f60f2c564101b46fd1ed220a37f65a8729",
+    "Copper68k.Tests/Synthetic/SyntheticTrapTraceTests.cs": "7576393e17dcf1afc3172b9d187e6e39d66a515e70420ac79d181c99fb26397a",
+    "Copper68k.Tests/Synthetic/SyntheticUnassignedFourLineTests.cs": "c6311d02ea4866dd20a1e95bb8ac458c9425b9425ee0122ea610bdba5f216f41",
+    "Copper68k.Tests/Synthetic/SyntheticUnassignedMoveQuickTests.cs": "6533833d88cbc244df36dbcde1753a6a4aed7836f9cf4563924c82c2626db05d",
+    "Copper68k.Tests/WinUaeArchitecturalFlags.cs": "ea0c66b81d231066c0fd3930e7b1ae44744ddc0b8da3183254870902cc31afe2",
+    "Copper68k.Tests/WinUaeArchitecturalFlagsTests.cs": "cc892d9f0830238a7b8215555000e921b442eaf2da0856670742033b8c6d303d",
+    "Copper68k/AssemblyInfo.cs": "ffeccb35cd2e966f4ba10a70f45d05619a45244e011ddc67a3cfd10268d98439",
+    "Copper68k/Copper68k.csproj": "a1e043e2e4f69cb4d5354bf68f0e2613ebef26de9607a069f7c613a4e921d7ad",
+    "Copper68k/M68010Interpreter.cs": "ee664c4a6bd807cdf1512b7a48d69d87144b17af426f5f649300119fe761cd4c",
+    "Copper68k/M68010LongMoveResumeFrame.cs": "c7e4a0bddbcfd376ccc27eb52bdd780c01332f473e3e8046c0ec93b35654316c",
+    "Copper68k/M68010WordMoveResumeFrame.cs": "8390df13f239402c99d4d3433daf943f02e7b1b2b52e3e3ad958176e6c85dbad",
+    "Copper68k/M68020CpuProfile.cs": "e2f512ea84aa21b2309f177f12b9c72ff033b00cffac3b3cba5d88eed9773d55",
+    "Copper68k/M68020Interpreter.cs": "bb329f18d45d28492dbfc83a82cf4c414cf61e4fd9a8b11f708ccb4bed5738d3",
+    "Copper68k/M68030Interpreter.cs": "7ed874780bb15ec995c21fd2d32c8d38b34e6c12a2ae6b961e6685b67e409963",
+    "Copper68k/M68040PendingFpuExceptions.cs": "f1698c97090fc14aa5d28ea89117ef838d1e12abffebfcbb41dac2b6469d3f54",
+    "Copper68k/M68040Support.cs": "5e047b8f5a03215ae9d471ad3a51b97f5bfbe6c3547d7c6e6882aaa3d3c7648e",
+    "Copper68k/M68060Interpreter.cs": "9e7a6e3251f34882305001f3776ef7fdd9e2173d1de42afc9291c2cca6a570f2",
+    "Copper68k/M68EC020Interpreter.cs": "ee4c389d0a5af22627e9436184c2fde770a4f727d32804ceb0c279ca6dfe421c",
+    "Copper68k/M68kAdvancedTimingInterpreter.Access020.cs": "6dcb0143af04d9a27270fafd0b108482b02ca7bea6fdee91961fee75abc7104c",
+    "Copper68k/M68kAdvancedTimingInterpreter.Arithmetic.cs": "d20c7f9bdbd981769f60f6508971803d98bb09d97bec9beedda850d4c8bff8af",
+    "Copper68k/M68kAdvancedTimingInterpreter.Logical.cs": "244eac71f349421c917e945912382d51a0d50b381e2eed7a3058c4769601a6a0",
+    "Copper68k/M68kAdvancedTimingInterpreter.Module.cs": "58ef45198c2c8b97553584382ae63f37e335c9bcc761613555b82c235fc25cbb",
+    "Copper68k/M68kAdvancedTimingInterpreter.Move.cs": "373b22e7e0a994a73555f087fed9bbce2fa73b71d449aa1292d4000d56288ef4",
+    "Copper68k/M68kAdvancedTimingInterpreter.Movem.cs": "63509842aade92b33c57473e8c70452d4898a3b468f8e9d1f12fc2aca704d500",
+    "Copper68k/M68kAdvancedTimingInterpreter.Rte.cs": "5a3fe6b849689c81682a051cde92aa0a7d319bc633d0f8d24a2a84a3dac0a82e",
+    "Copper68k/M68kAdvancedTimingInterpreter.Rte020.cs": "4438b55f9e522eb8c4aa082cd734b0be4145b3b8c87c874c8a42b9922af319ef",
+    "Copper68k/M68kAdvancedTimingInterpreter.System.cs": "12e5050ea0e1c67fb41046161480b1b5bc3626c9aebdbcd11ef772c034e607dc",
+    "Copper68k/M68kAdvancedTimingInterpreter.cs": "dd7a1f20ec2c6685d6bb3c3d890f0ad2f6d721c4fbf5e69a1af2a4bf087ab821",
+    "Copper68k/M68kBusAccessKind.cs": "e92bedcb7ce4d1f7ee7f184f122681dbf010d2c61727b5e445cd853fd805ce93",
+    "Copper68k/M68kCodeSnapshot.cs": "76a38f3ffd4dff95b3dde8ddffa86ad94e68bdfbb06f0d087f1100edc33ef9c7",
+    "Copper68k/M68kCore.cs": "45f0eb7b27f844fea8fc5f685b25f2fc0595c0f8563c647fe395af5e889e7d20",
+    "Copper68k/M68kDecodedInstruction.cs": "50471481b4075fe0c38f935315b98dfab060ba0eab201387c11a5e7be7e1e868",
+    "Copper68k/M68kEmulationException.cs": "2256c5e1abee5139489acab7bf2f6f5c54bb2a99c6be8d0e7f3b1c4813781b74",
+    "Copper68k/M68kInstructionFrequency.cs": "97ea9d9339515ff5555c887a70eef2ec936b932e65672eeca0803b04901d0a84",
+    "Copper68k/M68kIntegerSemantics.cs": "57da61c7f13d0c9832feabae99ad8fcc72e5eac86c87049270d2e18e3d417f9b",
+    "Copper68k/M68kJitAlignmentEmitter.cs": "196a82783670a934c48fb4e32270434317996839e55ee5bdc5c7b4f3d8e777b6",
+    "Copper68k/M68kJitBus.cs": "82222fb54e1b4a9daa90850b08cd2f092488deb29ec97d245c8368ae904a746c",
+    "Copper68k/M68kJitCore.cs": "c7e20808260bfb3da46801fbbefcac56e2049b4f53322f23e6a31ab0b5a2e4cd",
+    "Copper68k/M68kJitCpuModel.cs": "3acf8e1ff354dd96229a4a5f6b6e0e554fb71a54516c608226f5117c8ff1af06",
+    "Copper68k/M68kJitEmitters.cs": "6745e3ca4751da8469bce17ae9ef769be917c56c50e1a9c7233d79512e43c256",
+    "Copper68k/M68kOpcodePlan.cs": "bfa2628d4e05aac56f4cec21e901e62140225a7264d739aaeb9fdb1ceda32609",
+    "Copper68k/M68kTimingEngine.cs": "d04f7f93c69a1735864f234305c9acb0a8a012cc4a0533c152d1aceee72bfda1",
+    "Copper68k/M68kTimingFormula.cs": "6724346efc1e7b6c8a89dd91b4387eaac9e12a5e2916343f4346a6111f4a8277"
+  },
+  "candidateCpuNormalizedSha256": {
+    "Copper68k/AssemblyInfo.cs": "ffeccb35cd2e966f4ba10a70f45d05619a45244e011ddc67a3cfd10268d98439",
+    "Copper68k/Copper68k.csproj": "a1e043e2e4f69cb4d5354bf68f0e2613ebef26de9607a069f7c613a4e921d7ad",
+    "Copper68k/M68010Interpreter.cs": "ee664c4a6bd807cdf1512b7a48d69d87144b17af426f5f649300119fe761cd4c",
+    "Copper68k/M68010LongMoveResumeFrame.cs": "c7e4a0bddbcfd376ccc27eb52bdd780c01332f473e3e8046c0ec93b35654316c",
+    "Copper68k/M68010WordMoveResumeFrame.cs": "8390df13f239402c99d4d3433daf943f02e7b1b2b52e3e3ad958176e6c85dbad",
+    "Copper68k/M68020CpuProfile.cs": "e2f512ea84aa21b2309f177f12b9c72ff033b00cffac3b3cba5d88eed9773d55",
+    "Copper68k/M68020Interpreter.cs": "bb329f18d45d28492dbfc83a82cf4c414cf61e4fd9a8b11f708ccb4bed5738d3",
+    "Copper68k/M68030Interpreter.cs": "7ed874780bb15ec995c21fd2d32c8d38b34e6c12a2ae6b961e6685b67e409963",
+    "Copper68k/M68040PendingFpuExceptions.cs": "f1698c97090fc14aa5d28ea89117ef838d1e12abffebfcbb41dac2b6469d3f54",
+    "Copper68k/M68040Support.cs": "5e047b8f5a03215ae9d471ad3a51b97f5bfbe6c3547d7c6e6882aaa3d3c7648e",
+    "Copper68k/M68060Interpreter.cs": "9e7a6e3251f34882305001f3776ef7fdd9e2173d1de42afc9291c2cca6a570f2",
+    "Copper68k/M68EC020Interpreter.cs": "ee4c389d0a5af22627e9436184c2fde770a4f727d32804ceb0c279ca6dfe421c",
+    "Copper68k/M68kAdvancedTimingInterpreter.Access020.cs": "ac67a04180f3f01bd4c9b637133a009d9febb477853a5f1c17bb041ed4b12ef2",
+    "Copper68k/M68kAdvancedTimingInterpreter.Arithmetic.cs": "d20c7f9bdbd981769f60f6508971803d98bb09d97bec9beedda850d4c8bff8af",
+    "Copper68k/M68kAdvancedTimingInterpreter.FinalWrite020.cs": "db1e6b0b8a88a817431254f70a1614df2326f02f721ec6d2056df30cc2f44ee1",
+    "Copper68k/M68kAdvancedTimingInterpreter.Logical.cs": "244eac71f349421c917e945912382d51a0d50b381e2eed7a3058c4769601a6a0",
+    "Copper68k/M68kAdvancedTimingInterpreter.Module.cs": "58ef45198c2c8b97553584382ae63f37e335c9bcc761613555b82c235fc25cbb",
+    "Copper68k/M68kAdvancedTimingInterpreter.Move.cs": "827d8537122e23fa0153d3876bde1d948bfce0685326f538098764fe26437963",
+    "Copper68k/M68kAdvancedTimingInterpreter.Movem.cs": "63509842aade92b33c57473e8c70452d4898a3b468f8e9d1f12fc2aca704d500",
+    "Copper68k/M68kAdvancedTimingInterpreter.Operand020.cs": "b0e6725c9e95ea848ada71e68700aeb86986aa422902b2046ad1886a74b2a256",
+    "Copper68k/M68kAdvancedTimingInterpreter.Rte.cs": "5a3fe6b849689c81682a051cde92aa0a7d319bc633d0f8d24a2a84a3dac0a82e",
+    "Copper68k/M68kAdvancedTimingInterpreter.Rte020.cs": "0565aa8b3c04a2e904241481ab078c477e2048f7f1a4c40d98e3520673e91904",
+    "Copper68k/M68kAdvancedTimingInterpreter.System.cs": "12e5050ea0e1c67fb41046161480b1b5bc3626c9aebdbcd11ef772c034e607dc",
+    "Copper68k/M68kAdvancedTimingInterpreter.cs": "438092ff0fe2f8b8efec0bfa66ca3fcf877e805f714cad84ba0fb02957e8b2a1",
+    "Copper68k/M68kBusAccessKind.cs": "e92bedcb7ce4d1f7ee7f184f122681dbf010d2c61727b5e445cd853fd805ce93",
+    "Copper68k/M68kCodeSnapshot.cs": "76a38f3ffd4dff95b3dde8ddffa86ad94e68bdfbb06f0d087f1100edc33ef9c7",
+    "Copper68k/M68kCore.cs": "45f0eb7b27f844fea8fc5f685b25f2fc0595c0f8563c647fe395af5e889e7d20",
+    "Copper68k/M68kDecodedInstruction.cs": "50471481b4075fe0c38f935315b98dfab060ba0eab201387c11a5e7be7e1e868",
+    "Copper68k/M68kEmulationException.cs": "2256c5e1abee5139489acab7bf2f6f5c54bb2a99c6be8d0e7f3b1c4813781b74",
+    "Copper68k/M68kInstructionFrequency.cs": "97ea9d9339515ff5555c887a70eef2ec936b932e65672eeca0803b04901d0a84",
+    "Copper68k/M68kIntegerSemantics.cs": "57da61c7f13d0c9832feabae99ad8fcc72e5eac86c87049270d2e18e3d417f9b",
+    "Copper68k/M68kJitAlignmentEmitter.cs": "196a82783670a934c48fb4e32270434317996839e55ee5bdc5c7b4f3d8e777b6",
+    "Copper68k/M68kJitBus.cs": "82222fb54e1b4a9daa90850b08cd2f092488deb29ec97d245c8368ae904a746c",
+    "Copper68k/M68kJitCore.cs": "c7e20808260bfb3da46801fbbefcac56e2049b4f53322f23e6a31ab0b5a2e4cd",
+    "Copper68k/M68kJitCpuModel.cs": "3acf8e1ff354dd96229a4a5f6b6e0e554fb71a54516c608226f5117c8ff1af06",
+    "Copper68k/M68kJitEmitters.cs": "6745e3ca4751da8469bce17ae9ef769be917c56c50e1a9c7233d79512e43c256",
+    "Copper68k/M68kOpcodePlan.cs": "bfa2628d4e05aac56f4cec21e901e62140225a7264d739aaeb9fdb1ceda32609",
+    "Copper68k/M68kTimingEngine.cs": "d04f7f93c69a1735864f234305c9acb0a8a012cc4a0533c152d1aceee72bfda1",
+    "Copper68k/M68kTimingFormula.cs": "6724346efc1e7b6c8a89dd91b4387eaac9e12a5e2916343f4346a6111f4a8277"
+  },
+  "patchSha256": "624a9134a9f88dacda50d15508f5418106a77da766c7051a53322fa079e13490",
+  "expectedTests": {
+    "Copper68k.Tests.Synthetic.SyntheticM68020PredecrementReadTests.DirectWidthControls(batch: True)": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020MemoryReadWriteTests.DirectWidthControls(batch: True)": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020PredecrementReadTests.DirectWidthControls(batch: False)": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020MemoryReadWriteTests.DirectWidthControls(batch: False)": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020MemoryReadWriteTests.BatchReadWriteContinuations": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020PredecrementWriteTests.BatchFinalWriteFaults": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020MemoryReadWriteTests.ScalarReadWriteContinuations": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020MoveWriteHandlerTests.ScalarPendingWriteHandlers": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020PredecrementWriteTests.DirectFinalWriteControls(batch: False)": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020PredecrementWriteTests.ScalarFinalWriteFaults": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020PredecrementWriteTests.DirectFinalWriteControls(batch: True)": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020MoveWriteHandlerTests.BatchPendingWriteHandlers": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020PredecrementReadTests.BatchReadWriteContinuations": "Passed",
+    "Copper68k.Tests.Synthetic.SyntheticM68020PredecrementReadTests.ScalarReadWriteContinuations": "Passed"
+  },
+  "reports": {
+    "68020-memory-read-write-1-control-0-batch.json": {
+      "sha256": "a8e01d35e88fafec027ca815b0178e246ca036aa7a612890268d1827fe0eefa0",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-1-control-0-scalar.json": {
+      "sha256": "f5cbae86648a29fff2e44115bb24a12832dd82c687d3fb720395ddb23575ac93",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-1-read-0-batch.json": {
+      "sha256": "d601a70290a82a24326f7e5e106d137b21c0559ae18cda1f30e91857420d85b9",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-1-read-0-scalar.json": {
+      "sha256": "b47f4b536206517af79b0f1dfa086d085c744961729881d2222706b0db25350a",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-1-read-write-0-batch.json": {
+      "sha256": "81e537a1201a8d2b2336f087f9a0be1db21a752163d341569ef0f843a0e7eb2a",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-1-read-write-0-scalar.json": {
+      "sha256": "357b47003cb007e08dbdfa39ed49768d259933515833147abf3c5abf62c9798a",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-1-read-write-refault-0-batch.json": {
+      "sha256": "9e62523bc8113d21ec219d85dbe95af9220536ef0231a2ce5ed5e21bc78c59db",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-1-read-write-refault-0-scalar.json": {
+      "sha256": "c43d04fde9db4e8a63729273c801cf21bdcaa9f0f7a679a47e6f98393c3df887",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-control-0-batch.json": {
+      "sha256": "5779a39987805d05985a275d1367fe720f51c2141308f0ddd97e58dbe8282c01",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-control-0-scalar.json": {
+      "sha256": "8e58bce4dfe6e78ed3d14be393c3fb298ecee5f39612f9c46626dd8fcb70b9cb",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-0-batch.json": {
+      "sha256": "2eaa5f8484e40b9bcbbd908c181288c2eb3b7f89c2cc8423a5a7bcc32b9c0952",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-0-scalar.json": {
+      "sha256": "69d60abdd505908e63a550126cd6f7f17a9518da7c1cf51227c889330a11bddb",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-1-batch.json": {
+      "sha256": "748652e0db41fa208f8529612ff2dfcb6c3497829bdb9d7f065e81f8157fe626",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-1-scalar.json": {
+      "sha256": "4dacdfddf2d3a1a95cc349f79c79a7fef11cc591a0d3d9ea73c6485d03ac0d02",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-write-0-batch.json": {
+      "sha256": "ba2773a94b407f706f7fd6ca647e0244b162bd59b8ebdea8c731008894c78a91",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-write-0-scalar.json": {
+      "sha256": "b4fe6c93956674fabd7523e26b51fe09b3d682df110e86d261c81faf11dfe7a6",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-write-1-batch.json": {
+      "sha256": "ea7dde79f261d7a590afd84f9828da993ac8514694b04799a0fd6cd3ff8ddd47",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-write-1-scalar.json": {
+      "sha256": "61f2ab6f6bbf5069538a24450536c625f6fc22094d77ae91dfe76ebcd0158710",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-write-refault-0-batch.json": {
+      "sha256": "c35efdbbdbae35dbed7ccabd10d8570b8309e0a6b8c2406c850566b132323784",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-write-refault-0-scalar.json": {
+      "sha256": "94031d2ecd00095c32f6b4f0ee5d058f7cec0dda8f5de65ac50fdc1783df1d0f",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-write-refault-1-batch.json": {
+      "sha256": "fda41ac47698baf51e8c15ea7879dff9f3bc6be18845d292737a8757fc955bb6",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-2-read-write-refault-1-scalar.json": {
+      "sha256": "15b1118512576ac59acb70e9256b781f557859509c2fcfa1c7b4834b8d91c513",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-control-0-batch.json": {
+      "sha256": "770564e769e780b5c212585fab76e4c7320a12903017465158df75eaf0b91eac",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-control-0-scalar.json": {
+      "sha256": "9dc9fb4ffae20d161c13884f5a2b54e2642a33a50c6420da82d3e3db8e7a8f0f",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-0-batch.json": {
+      "sha256": "4ed34652abb7043f7a59de99cdb55f292dd9d54ed8937064183d22c5c512c2b1",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-0-scalar.json": {
+      "sha256": "f0090e5b6fac0ec6c910793187a8be4322c0f577a5ba873c57bf20c1f02be2c0",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-1-batch.json": {
+      "sha256": "11c7b288b8c9533e00ba39cfae81fc432afda946f348a10c23c795688212b1db",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-1-scalar.json": {
+      "sha256": "6e3101b30fc72a633116916877e40b74d3d1f5b7fad29791cb8cd866610904ce",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-2-batch.json": {
+      "sha256": "748c45e5806fdb0efc73b23ca4b9aad2f3a4b4c736442919b4ab7f76f97bead7",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-2-scalar.json": {
+      "sha256": "6d2ec62e65649abaad556f2495d130a8d108c9be64825b74933420c56f16713b",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-3-batch.json": {
+      "sha256": "653d1f09a80912be15789f3155b36a2ae5d252752633cb2acf64314e7d43b393",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-3-scalar.json": {
+      "sha256": "a910f252f2fafc328e6d5fad9e5dfd83cd1a679b7693a827cdf06131a9a3df87",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-0-batch.json": {
+      "sha256": "4a03bb38879a43e5b3d94781584f186f1a01c79ae34b986271ab0b9bf27ff442",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-0-scalar.json": {
+      "sha256": "b0f08fc6747ed09d4ded085ac2574a385a4ea4ca0f1b0be4219466c560c1105e",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-1-batch.json": {
+      "sha256": "b59e359390aa1bb003926fbc5ce45e6bea5d3ff9c488a41ea3885bb528d9ee04",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-1-scalar.json": {
+      "sha256": "4ed6f2e76f038b1294ee5700ed0bf8dd196f89d0622104947977bc0a3d8c8c6c",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-2-batch.json": {
+      "sha256": "c300c4e3ad413ad2366e0e5781b90dbfff92331a46bb2d7955bfe05decf3b6ed",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-2-scalar.json": {
+      "sha256": "39366c78c6af530afeccab2b6fe36480abb1fdc222f96db683b0f216f7cf8df9",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-3-batch.json": {
+      "sha256": "e683aa4205b2f0b13718403367781fe106433f7e7405905fe2adf82cb33350b9",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-3-scalar.json": {
+      "sha256": "a5847c484fbe83bc266c8bfd49b6375349afcbc757c75938a9b5fa3d0cc2edd8",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-refault-0-batch.json": {
+      "sha256": "62a6f3904930b4e43f484ff69be145624a43d9d85f6969e8862b0511824decd1",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-refault-0-scalar.json": {
+      "sha256": "f35d36901ece7174c987a300789f42c972400e3455b84db1e14428fe7c03d7e7",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-refault-1-batch.json": {
+      "sha256": "a391109febd4990ce3edf1690ce678ac350909decd7dbc27b4e7979b762ae3f0",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-refault-1-scalar.json": {
+      "sha256": "cbb867223c80b8bee67fa92cd4c244c06340bf773469bb569f0345bc53a19a9b",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-refault-2-batch.json": {
+      "sha256": "7fdc77f5f7fbf84f94b6b889c039168e3b852ae5647e8b75bb5967418d6f84fb",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-refault-2-scalar.json": {
+      "sha256": "1299d3571eab66b729d1736f4c82da139747709795ef87310746053701abc634",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-refault-3-batch.json": {
+      "sha256": "0ce6505468d63439c9a3763106488a79c022f608dd5616db0ecc60f142c03b89",
+      "logicalCases": 4096
+    },
+    "68020-memory-read-write-4-read-write-refault-3-scalar.json": {
+      "sha256": "8af89ad868a4b5653cbe040cf499846cf36fc1b34daa6ac07ef255abc3552b4e",
+      "logicalCases": 4096
+    },
+    "68020-move-predecrement-write-controls-batch.json": {
+      "sha256": "bebe91efcbbdbc906239ac952d8e44c41f9ae1c7e71e18c7ac0dd0d06766a0a4",
+      "logicalCases": 24576
+    },
+    "68020-move-predecrement-write-controls-scalar.json": {
+      "sha256": "f48352f74a7b335de6779733f8eab7bcfb58c18badc7a8f64b1d8872171adee1",
+      "logicalCases": 24576
+    },
+    "68020-move-predecrement-write-fault-batch.json": {
+      "sha256": "bdae975cb7658dd49b776d3656dde229df70db80ebafccf5855bbd66418e8ac9",
+      "logicalCases": 24576
+    },
+    "68020-move-predecrement-write-fault-scalar.json": {
+      "sha256": "704e3524b374272cda4e9b1c40dfc03895381ff1e2cc0a2cac01c0f5e0b0b21c",
+      "logicalCases": 24576
+    },
+    "68020-move-write-handlers-1-edited-refault-batch.json": {
+      "sha256": "ecb54d6bc7f4a7667f8dfb260270bf14fefac5dcc1866eed62c8dff4f8183213",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-1-edited-refault-scalar.json": {
+      "sha256": "f86e09e7f9b79c741db1cc38dd032ee16cd1ea51949b339077858838c6234409",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-1-original-batch.json": {
+      "sha256": "fb7badb503c6284cef9bde0bda620ac827e392069143d407dc408e1143543144",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-1-original-scalar.json": {
+      "sha256": "58a83506a1698c92adc43be3b584fbb69cf06214e99d132668970aeddd91a1db",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-1-output-batch.json": {
+      "sha256": "c87c91a68cea9c42c23efbf488f7b38bec1973ca8255f45c66b4bf7ab1c2b9eb",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-1-output-scalar.json": {
+      "sha256": "5c218c5112795a115a291ef103e809a3ad988984fb046217ee8628782a20c63e",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-1-refault-batch.json": {
+      "sha256": "caf567545cc6860061d6dfaf9a7bcf6afbb553a330f30d13a5453f2d3d5b131e",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-1-refault-scalar.json": {
+      "sha256": "514c997477c61cb236c08ce66b1a5019183f3fd27818b2b60430ad7b6cba1eed",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-1-software-batch.json": {
+      "sha256": "0e4588c6c7d22e736935ab6aa1a145867bfd78ed0ced9a04ac046880787d9fe1",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-1-software-scalar.json": {
+      "sha256": "74e877fe74008d02b70e301c1386f4ffc76388be2c3ce5456f2c89f8a4728f56",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-2-edited-refault-batch.json": {
+      "sha256": "3e02cf23d5a4c69600716fa298601c52780c4974df580a20e3a70b58c9f7de3c",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-2-edited-refault-scalar.json": {
+      "sha256": "ba4d74e65bec574d7ebf8585f250f78851b6db478fdf1bdba281e14351d57818",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-2-original-batch.json": {
+      "sha256": "f4fd14515049c02ea9921f9ff090465f58c6ba8831629ff2931319d2181b41f6",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-2-original-scalar.json": {
+      "sha256": "4b42933467f786d8f686cac308c4a10fad3b30eb5384ff08609ca9697f0626bd",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-2-output-batch.json": {
+      "sha256": "0fda62af8ae14a04eb7d8662821e914c1d8d640bd16b361496672ea453b95d27",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-2-output-scalar.json": {
+      "sha256": "599175b6b53e30d8dabef21557c923260a647fd130497fc5e466bb2eed95eef9",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-2-refault-batch.json": {
+      "sha256": "9b425b761ddae7640422a0c9862c014c14a1a4eec7ddda7f1d7ddceb112fff2e",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-2-refault-scalar.json": {
+      "sha256": "ef4d26145bb3b82c184fb899f754579175f82af9c1323f41e17d598dd4760704",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-2-software-batch.json": {
+      "sha256": "a14d6b6c24a68771e0bab2e419e2bb35f2c8b81bb518d29fc2d53df0a353a2e5",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-2-software-scalar.json": {
+      "sha256": "9b4cfe2e6ced896aa20c36282d07149478f229d0d3c21a5ee57e139331e65168",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-4-edited-refault-batch.json": {
+      "sha256": "406225f4f9c2900c8b7b8e7f0353eb6d55a4f4b9fc3a60b90797ee07d6dce77d",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-4-edited-refault-scalar.json": {
+      "sha256": "7fbfc8e02dad922ce5481bc8d6b342c30adfb42a3ba3557b77108d3607e97281",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-4-original-batch.json": {
+      "sha256": "2c1b6edb8bf60ec6cf0bc52bc4109669d6875eb51abbf38c3b76b5f1afb6ecac",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-4-original-scalar.json": {
+      "sha256": "22b07c4b9486dea59580860c6a3a521e42c34c88cce925c36682b5b0bd55fe1d",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-4-output-batch.json": {
+      "sha256": "debb4c8b6b6f38206fcbb20642c66940e723025183dbc7fe20138a55d871db68",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-4-output-scalar.json": {
+      "sha256": "b31c954bb3c76abef26fe7559f115fdfbe8fa937b1021205ff3688c0d60f1196",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-4-refault-batch.json": {
+      "sha256": "05767991b2964bb63aa14c54b422fb3946e662eb9b97b38a06568f35643cbffc",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-4-refault-scalar.json": {
+      "sha256": "47f009c04f6d5d9df0804ac77521b39565e9151c0087e30b9e7786eb5cd29a9c",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-4-software-batch.json": {
+      "sha256": "42fabb9870eb741c94c4672a3ddf1d63fc032c55133df06cc7aa902cb92191ff",
+      "logicalCases": 4096
+    },
+    "68020-move-write-handlers-4-software-scalar.json": {
+      "sha256": "cc76bf86d4dc3afd9d5fbea1383d6c72e4dc032654641bbc330f98f070befffb",
+      "logicalCases": 4096
+    },
+    "68020-predecrement-read-write-1-control-0-batch.json": {
+      "sha256": "02ca955acf205c45760b24d8cac51b7df6ab8b912ebda119fc308aa2172ea117",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-1-control-0-scalar.json": {
+      "sha256": "48f55a27c3d3f65a3d52e64d36e7d5a6bb96f8f67920bc37ced5d4a02082e4d5",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-1-read-0-batch.json": {
+      "sha256": "210ea9592bf03b1b90af6ecc2f20d79902231e5ac488ee34c61e91f066502eb7",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-1-read-0-scalar.json": {
+      "sha256": "06d78daf1507f25eb9d64de7ccbeae856d0664d7094027b0c61319013bb4241e",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-1-read-write-0-batch.json": {
+      "sha256": "fe608fcd43ca372d418f92a18e89ffb5580b507bb7c25fc35ba9a37f9a641c68",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-1-read-write-0-scalar.json": {
+      "sha256": "0720d68bcc7a0b8206f51faf8ac1a5090a235a1f5aeb90781ebb397db74bdda4",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-1-read-write-refault-0-batch.json": {
+      "sha256": "426393fdc33a3633217c3e9d3f0a28b304244ebb75f77aed232d3f60bbe0f1db",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-1-read-write-refault-0-scalar.json": {
+      "sha256": "ffff14c1fd19339b64e55160be63619acbf5e8cab10c358de5e84dfdc81bedc4",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-control-0-batch.json": {
+      "sha256": "72392c2ca77c9e781f96eecf0c98ebadac8bc707fa06cf16488c749d29baad04",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-control-0-scalar.json": {
+      "sha256": "79748c2ec3f69b92a0fd9d0b0d3898c9d80557c7a77e16f10295ea63dabee18e",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-0-batch.json": {
+      "sha256": "294f7e4ab1f3440ecb39a59e4e70770a68860124c32b1bd5e80bc04155a1250b",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-0-scalar.json": {
+      "sha256": "be5daab3ad6f4c71bccf8709768a032931f686d71254ef71d3d50e8d6cb51fed",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-1-batch.json": {
+      "sha256": "d754237f30b879eeb32b0e1c8c3acef0a6ed12a6ff23339880a396216d731b16",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-1-scalar.json": {
+      "sha256": "173a0708e4340b74b7217ffbcacc8ac624985401c24c625729721982e862d425",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-write-0-batch.json": {
+      "sha256": "2cb8fa2022fbba847c81c2f0d5dca174bf200e80b2486e4794b7aca14661e3f6",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-write-0-scalar.json": {
+      "sha256": "c6351264ebd31127061a6fe57c788ddb570d727b3e13fb200fa40a3bff88dbff",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-write-1-batch.json": {
+      "sha256": "d369f5fde510350d9bb79d507977bae88a6d0c94b52fbdf6338ff627a35d59dc",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-write-1-scalar.json": {
+      "sha256": "39564eb7a780c9258a5578e5ec450630d81dd9e7bbf2fe47239b1f4214878230",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-write-refault-0-batch.json": {
+      "sha256": "52467feadb6b14f0dfc456ab873d2f6f0e9f95d699a351258213cfb304d77da8",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-write-refault-0-scalar.json": {
+      "sha256": "bcf4f912d54e1f2d1add0eed4f15fa9a5973ba0650b4db8dd132fd541b2170c5",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-write-refault-1-batch.json": {
+      "sha256": "673cc59f7ede1c45dfdca52d3c74dd40532cc23e8e15dd22432452c4e29e090b",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-2-read-write-refault-1-scalar.json": {
+      "sha256": "5611bfa67026acf670b94efb7498d7d3be29ae0876b071c50696b94868e25618",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-control-0-batch.json": {
+      "sha256": "f02bfdf038ed9c4a61ee72326689af179b2f34609a592999f89bbfe73792cba6",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-control-0-scalar.json": {
+      "sha256": "8282f977db828abc6f0c494bb544e179a473ddfbad18c5b868772d5fa2a693db",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-0-batch.json": {
+      "sha256": "ff0c62d60d89c9fa8423ae901afad205b95cc4dbde9545d20e5b25059d8bc7f1",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-0-scalar.json": {
+      "sha256": "fb6e98409e5ebd1cf8788b89017f261929f797df80738800b569a529fd279bf6",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-1-batch.json": {
+      "sha256": "c9d637186e02823fd780ee825cc343f356bd2b04857e6087c14a944e266ffd59",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-1-scalar.json": {
+      "sha256": "1562d382dd7c521723ecbfe500a121cf3f25f8dfe9b67b5edf77d9daaf999df0",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-2-batch.json": {
+      "sha256": "f21a3227d630a1efb4c4ef57e132cb81c2f8252be052c4b83f09ce9c5b69cc31",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-2-scalar.json": {
+      "sha256": "91556569025b721206e3a2c38c00dc74354f539d905f519c6dac7810e4115750",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-3-batch.json": {
+      "sha256": "e24d53b03a06c5129cbcd184bf2fb390a349257efb713cf0603f8df7d24ddb3f",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-3-scalar.json": {
+      "sha256": "6774d1c5ec46a691fb3bbaaaf14b6729d51180ac4e4f0128bf078a98ab56fc55",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-0-batch.json": {
+      "sha256": "cb1e9026f6ea0f20ca0be5a1dc6356220ae67fbcc4b8bde402a6dae7c933682a",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-0-scalar.json": {
+      "sha256": "b430b89a30925583a064781bd8659244afbc0ce2d014eb4dacb22ee1dc626231",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-1-batch.json": {
+      "sha256": "94f778fa16fe93f3b35c7d21afa4209b2d90655cee4fc4e450c22cc7deec352f",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-1-scalar.json": {
+      "sha256": "8b6899a80a16fc4d053b0e0911c43028e319fc9fcace01d347c1b33b15bcf232",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-2-batch.json": {
+      "sha256": "92912154bb8819d9d59e56a261da11a6227405327f763106fdf1217a461698ab",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-2-scalar.json": {
+      "sha256": "c80565e1283a83dc2df2e8e30ffc6ca1da16f7ef2331b2461b1bacd81c44b2df",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-3-batch.json": {
+      "sha256": "88ec73cc9ca6dc71951a4aabf84dcc52f97527f034e39e168c389de36e1ea2e7",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-3-scalar.json": {
+      "sha256": "df2a2c3bc81105f55a97954ff721d09344124f2b71f28c647f9eba51f5b0dfa9",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-refault-0-batch.json": {
+      "sha256": "2152d9139fd90ec93d6938e7d6ccd8cf9d4fa93c13fb7a5a20c8cfa64a04aa99",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-refault-0-scalar.json": {
+      "sha256": "2dca8fbf9f4ade772d9654609794dbc4f72c120bbd1c2c3dccbfbd70e2b72de2",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-refault-1-batch.json": {
+      "sha256": "96f522717967ba3f3a0a10250cc8b31a08f199469a13a9c51cd4bce5820e6719",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-refault-1-scalar.json": {
+      "sha256": "a041713c07b1cc48fae178a4c1453f673b97270d5b01878954cdf454833f2b9a",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-refault-2-batch.json": {
+      "sha256": "bd892a306637d0eff5879a669831655924d7beceda876cdbc798db57c32122fb",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-refault-2-scalar.json": {
+      "sha256": "1fba3c6aa4c32debd8779b43d46aa52ad24bbed496498a9f67bf1b53e816d861",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-refault-3-batch.json": {
+      "sha256": "d98bb21c4a449cc4e771f499bbf6e6ccf5b9b9432317e0fdea86863b79d7cddb",
+      "logicalCases": 8192
+    },
+    "68020-predecrement-read-write-4-read-write-refault-3-scalar.json": {
+      "sha256": "44d2c95961581923937e54602ca07c30aa7f2689e20f7deba8392eb6ed8ae6fb",
+      "logicalCases": 8192
+    },
+    "68030-memory-read-write-1-control-0-batch.json": {
+      "sha256": "15e3f0981528d8b236c86751b1dd96691a7d7c59fc3e3df8c954e4c2f2eafa4a",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-1-control-0-scalar.json": {
+      "sha256": "6feaf4de7fc243cfc7d49cb7c351594cf09280783c078d55a4d588032a8fca33",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-1-read-0-batch.json": {
+      "sha256": "be0406dea775706449cc30daf7602a55b9b12a17a21fc1890e6e3943645698d1",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-1-read-0-scalar.json": {
+      "sha256": "b8b43b1176339ef26e8525cb7b1ecdea4318afb9276375367cc7302ca2fadd19",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-1-read-write-0-batch.json": {
+      "sha256": "0c20d017f94b12e302ff8e1ae5ce002b26baece711549000961c74eb71e18475",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-1-read-write-0-scalar.json": {
+      "sha256": "68760948f6168ea1a32ee40d9713c84fa74da021c9152921174c9751eb49770f",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-1-read-write-refault-0-batch.json": {
+      "sha256": "75dd52830e48aacddcc1d09469b8206f6d51df785eaccbb247fdfc5568466b49",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-1-read-write-refault-0-scalar.json": {
+      "sha256": "1ab2b0e918ba747a18c2904f3735410d712d863c4c6976316b31366342884e45",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-control-0-batch.json": {
+      "sha256": "b63872a2294526205e6dbf5c7c2ac1b24810b574e4249ba832ba9a95bd92cc5f",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-control-0-scalar.json": {
+      "sha256": "4303e0ec085d320dfb0cd0c807937e8fad74560c9bb4d88a2bb610cfb3d6e747",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-0-batch.json": {
+      "sha256": "ea7b73c1253d57053f315bcbe411a01441df4600bccd5ee2172aaba6c793986d",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-0-scalar.json": {
+      "sha256": "f57d72b503b34bf34d1b0ec2838aa4be36999208977866d5e8be0e6f3fe0eccc",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-1-batch.json": {
+      "sha256": "6ef7a194d9f062b335743a29c6579c9517e5e5da480dc0c6228d2679fd2f32e3",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-1-scalar.json": {
+      "sha256": "7a65009eced672b1050c1c7bfeb51607d9ddc285b174bd44d3902855977939e5",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-write-0-batch.json": {
+      "sha256": "aade661c042444f908ea27bcd842b9eeebb71f9972c95ade2f71571ad28c8065",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-write-0-scalar.json": {
+      "sha256": "71567da4379510bf283eb62beef9cd0a56b83cdd887c41124e50277735d0b921",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-write-1-batch.json": {
+      "sha256": "0f7fb5e2986e4986960459f4f22127852ebc5b1c0fe68b4c5cd52150710ac66a",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-write-1-scalar.json": {
+      "sha256": "6998a0f62185b02cee73e6ec2b7289b0bb5d20bdb618ace7435c51a50a65fc8d",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-write-refault-0-batch.json": {
+      "sha256": "31e147a3e4cbf859a4815ed62e83d20be3c6e78b6952f6e6223b95f3e85aa845",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-write-refault-0-scalar.json": {
+      "sha256": "53be7d0278264122aa27607e7f9f7ae853f86be3c8346df19d5f310dc2b32c43",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-write-refault-1-batch.json": {
+      "sha256": "9ff9e39bc22f27d65ca96f695d1a8b48ca41366984c0d2164dd14555614548ba",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-2-read-write-refault-1-scalar.json": {
+      "sha256": "04f540eced6a560f01a85a849bfacbe2b6024200c2d86544b84a2e095ccceddf",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-control-0-batch.json": {
+      "sha256": "bad3ebdb092372c1d0131bb9ab9969658f6adbfa291a1be867b54b3488b860f9",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-control-0-scalar.json": {
+      "sha256": "d8f5fbad11000b4198a75d657ba19ac7f3f526f42d7d57b03bedc2c545970336",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-0-batch.json": {
+      "sha256": "1491566b8f577053da7079309c174f4b51e964c3e0419028c53e314e8693c3a2",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-0-scalar.json": {
+      "sha256": "f9f8a1e40d22f3091d0e413a38417e9e51513922764f63577b96a59fbb323b50",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-1-batch.json": {
+      "sha256": "bcdc13d67b6451f568899a697b8cca675a8e031d93da997c2b08dd906aa2643f",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-1-scalar.json": {
+      "sha256": "a65cbb031ccc65351f1631a83a999e851730ac621a629f862a5780e89778845b",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-2-batch.json": {
+      "sha256": "1d744bd25555437f13bc0c2d3bc9be98dba4231482425a9b5d4ddabe33773802",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-2-scalar.json": {
+      "sha256": "acb2b43e71681978a3df3d9248d12c45dec6ec18f9496fdaf78f3aaad473f7e8",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-3-batch.json": {
+      "sha256": "cb0d844ced692c4e4d6db5bac5d9c0f0846bcf52a9acee030517a82c2a1cc449",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-3-scalar.json": {
+      "sha256": "80c217d0b86d05a9c00658654325ce348a26ce8c24c17bcc332bfff71c180c1d",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-0-batch.json": {
+      "sha256": "258d52d69ef46cf679f7f593a23c53c6a37d210953a89ddf32b4808a69684dae",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-0-scalar.json": {
+      "sha256": "d26162bf7496a29644956533a06d8ff9a673966e6693322ca349e1f1f33660e3",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-1-batch.json": {
+      "sha256": "3c8255aa43a0c9dcbedb0e8b8f3168cf9a52960d2635500a5e5f5064b0a05c9a",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-1-scalar.json": {
+      "sha256": "405ead2b127cd39f78bdf1457437a209ffa08b2999b94f468a77ec2bbc1e64b2",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-2-batch.json": {
+      "sha256": "1f1476b18970f3b2722309bb8c8d6ba1358aa479db8918e69f69cda7c3647d53",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-2-scalar.json": {
+      "sha256": "c927cc81d106a5783f6cb55f550a12d339b0ca52681bf9b87b156d9dc164d71c",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-3-batch.json": {
+      "sha256": "915e87fb7ebf304009c332f1c26dcc5fadb008bed77ad4d87a385b3438e8e345",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-3-scalar.json": {
+      "sha256": "c5f35357137978a0971e833831a469ce2847c4a6774f06180d7a4bee8a3f6e41",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-refault-0-batch.json": {
+      "sha256": "49abd1bdf8b63ee9ca207a13b6d154a213ce9e08990d42edd0b91289dab71140",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-refault-0-scalar.json": {
+      "sha256": "dd8d6df7db911cc2b334f1a4fbfbd80b182f76224a76a23946820ee6b35c9cf2",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-refault-1-batch.json": {
+      "sha256": "aba737a591c0f895931c47eb7f9ff80debb2171fa635ee36eaf03215c4f15e57",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-refault-1-scalar.json": {
+      "sha256": "b4a489c546e336f84f0ddaa232ec9f327d0e6f6e6be8649814d350ac18df189a",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-refault-2-batch.json": {
+      "sha256": "7fb0570d7fa442649050e3445816712b9c39d5a70ad3ed4cc27c6976d88c3922",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-refault-2-scalar.json": {
+      "sha256": "1adb0984cd8b7a72d2069c21a4a89302e823c9884813fbe9c96b032f23a6104f",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-refault-3-batch.json": {
+      "sha256": "bf412372934246bd91696668acf656d61e08c815bf620dd126afa850c1fbaf89",
+      "logicalCases": 4096
+    },
+    "68030-memory-read-write-4-read-write-refault-3-scalar.json": {
+      "sha256": "fac0ff14769f0b49c39d34bfb47f1bb37d9c9f32ebab1968d482ed37f257b5b2",
+      "logicalCases": 4096
+    },
+    "68030-move-predecrement-write-controls-batch.json": {
+      "sha256": "2034d25b2d181701deed0de71f36361c52fe1f0f4b3d6072a77a948bc102b0e5",
+      "logicalCases": 24576
+    },
+    "68030-move-predecrement-write-controls-scalar.json": {
+      "sha256": "fe4975a97c6a0248a16e1375a1c6c53af91f19a48e558941646c6774f89d566c",
+      "logicalCases": 24576
+    },
+    "68030-move-predecrement-write-fault-batch.json": {
+      "sha256": "3eb0ce32318cfeb06b308dbef9fd837a07ed958d3ab4b2a2f49f6c580f0e6122",
+      "logicalCases": 24576
+    },
+    "68030-move-predecrement-write-fault-scalar.json": {
+      "sha256": "16a771af470323604d0e9e51c920d868b7136c0803bd15934b46d316cd586545",
+      "logicalCases": 24576
+    },
+    "68030-move-write-handlers-1-edited-refault-batch.json": {
+      "sha256": "5133b32bd9f4ca56a23fd1f63675d175f1d983f815e31c22db04eb802f82af89",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-1-edited-refault-scalar.json": {
+      "sha256": "f1176d4088f0bd561079ac47f1134e7f0693da826f8ebe19aaeb7ce1edac92f9",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-1-original-batch.json": {
+      "sha256": "9887912025b8c9fb4c70c4ecc0d2029e3832389a856e19b2d4b780940b090b2c",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-1-original-scalar.json": {
+      "sha256": "fbfc02e54ea946a152a4cd613f5b07b305277348d6a8d1af5404a600c1b1337d",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-1-output-batch.json": {
+      "sha256": "7ba52147406bf58981bb6456c33a05df3857c652530e8d5c7d1748511213a9a5",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-1-output-scalar.json": {
+      "sha256": "667f9c29d5dd16229426db3a2a3ccf7bfa6d012b3c3a8b1d48e6f9d4dcb42693",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-1-refault-batch.json": {
+      "sha256": "4e5e8e92fd77c5f0d48116404e72dc923091319bd6cae2bf34c72e67b4ccb41b",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-1-refault-scalar.json": {
+      "sha256": "810cf73ad10bf804518ba79e0295b5b8ee0e4f04f5bfc5450138c4e9460bd262",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-1-software-batch.json": {
+      "sha256": "67a77f3f62afd38e85701b9a0eec2ca501ded03f88bc793280a2286d021fa6a2",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-1-software-scalar.json": {
+      "sha256": "95c813c6fdee96aa5bb1cba666c36f65226bd456c569813858da3bc152ebed8d",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-2-edited-refault-batch.json": {
+      "sha256": "1099fd8345510f05513162782bb76eda6ee1998c9c92bd204910b6e78742c5c1",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-2-edited-refault-scalar.json": {
+      "sha256": "af99b353dbe1f4a6b57119e86055d5484227e175a58249c295b4a37001a18878",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-2-original-batch.json": {
+      "sha256": "94f7f408516c3719c7d67f8d229455c3e46b2b7aac660995a48a098e86ade2f9",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-2-original-scalar.json": {
+      "sha256": "b04d150080be5e4969a28b9475d45350c8308bcc750ec55942fea751a992f1b1",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-2-output-batch.json": {
+      "sha256": "2bd9048f9c1cda57be51d4cb825f7bd83a172adc99c3c3f3b17f94068c5b1c63",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-2-output-scalar.json": {
+      "sha256": "9fdc9c1c3cef93abc3623962ada40c23ab347b84507a3ab371f7a924764a5561",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-2-refault-batch.json": {
+      "sha256": "107c9765f2f570ce3594c0a30ae8b2c8f0b677179d39d7964e23188d9d7c6ae1",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-2-refault-scalar.json": {
+      "sha256": "933da98947483c5c4b05be1f0da868d827ff40b300779b99c202da77eeb8efd3",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-2-software-batch.json": {
+      "sha256": "650e22b21ebfec62ab41ebc7ace422a7553aabd873d4321ea8f77ffa63887233",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-2-software-scalar.json": {
+      "sha256": "579df631c6b17ecceaca5051a247efbd7eba23967185063490676e43aad8d4aa",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-4-edited-refault-batch.json": {
+      "sha256": "4502c70af1f75dd13fcfeef2a2fea9e11877fac824d15507a70f9131bcf8ce7a",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-4-edited-refault-scalar.json": {
+      "sha256": "b250dd958287a68689149ba13871685b5f774032ada45b8dcd0bac6788986ac0",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-4-original-batch.json": {
+      "sha256": "577c33a67eba7a4ef7087dea88da047a3ec0a0550f3652dc56202e66fef160a0",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-4-original-scalar.json": {
+      "sha256": "057a2b0d2f31f76edc8add740ae2ade365c7a5946d410227e66edab64f87d995",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-4-output-batch.json": {
+      "sha256": "52ce9679321d2ac50e34d06d78f3b16983e63bd2bbb59447538ef87cc67d074e",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-4-output-scalar.json": {
+      "sha256": "6a2d82ff9e7d1ce46cf99a90b99803892a8b89633963712b65008d11f6cb5cca",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-4-refault-batch.json": {
+      "sha256": "43436e50e9227d9908839e815fbde22c1d74e6b67a5cf291c0eed5b24758e005",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-4-refault-scalar.json": {
+      "sha256": "9f825c2e4afe14d257ef13b59422a53ef16e5022a50fd4f16ec86c8c1dcb638c",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-4-software-batch.json": {
+      "sha256": "b03ad013a6856b7b727e2f0317580815c6cf2bae9c547af391ede73a4bbd4f54",
+      "logicalCases": 4096
+    },
+    "68030-move-write-handlers-4-software-scalar.json": {
+      "sha256": "953a0ad3a5467f8aa3f413f1701c907fcbb30bc3e79efbaf8504d954d808c205",
+      "logicalCases": 4096
+    },
+    "68030-predecrement-read-write-1-control-0-batch.json": {
+      "sha256": "8ad5e2219e2b54a3253e1cee7da59e3ca8685cc9beeac8958939499044e24dcf",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-1-control-0-scalar.json": {
+      "sha256": "6f4d9a2ab3a3691c9ffcd55dee734a264edcf8db974543ef85f35513ce6e7750",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-1-read-0-batch.json": {
+      "sha256": "88be8ca38cce9206c6a96e9f53223cc1cac7d1f1ae9c762b6279d4ad44151f13",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-1-read-0-scalar.json": {
+      "sha256": "9b5e651bea6c21e8999458d029fa3d1d28e7e32c074629d8024efe41b1abe8fd",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-1-read-write-0-batch.json": {
+      "sha256": "03405ed4262c95e79f97f6d460bd873dc394e95db6555d259eaea805e9dfd1b7",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-1-read-write-0-scalar.json": {
+      "sha256": "9895792b50c3b0f334e0ef0b853787106efcf256a2dd02241501619d37dc37c6",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-1-read-write-refault-0-batch.json": {
+      "sha256": "3afa22d002f92c29957f3677e7f407e2962d7f47975035dbe35fe7ca422c8aed",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-1-read-write-refault-0-scalar.json": {
+      "sha256": "cc19f9de48f024500a4c6204f6fb3c30f9e2d7e09dae5aafb4939b90a8a80e53",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-control-0-batch.json": {
+      "sha256": "5fa7c669c6566bb9ceaafd7a8b16beea9f720c4916e4c48ad43661876adcdbe8",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-control-0-scalar.json": {
+      "sha256": "4470c2b500cacdf89db69913ccee6946ee6d7cb0787e393706607276c75720e1",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-0-batch.json": {
+      "sha256": "447be5ac1f22a2398eb0c35777fcd9a71a2b8a4f36897253b2fc35b3478c79b2",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-0-scalar.json": {
+      "sha256": "bd034c9536dcfd2f2bebec7ebaa73658fa5b95d86a2f2431d8cbc646e05cfba3",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-1-batch.json": {
+      "sha256": "aefcd45d5d023e032bc4e28a0b41d35c43079167eeb517576cb7789eef6551e7",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-1-scalar.json": {
+      "sha256": "f5c7d13a651220c7101cee4354cc292761edf010d693e7938d69e9f8ac02b328",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-write-0-batch.json": {
+      "sha256": "0e239c3a6342364dbc6328bf857e5cd305a0b968fb1e6ba0a47c2541c9024686",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-write-0-scalar.json": {
+      "sha256": "fe351b3132feb4ab95e85a0ac18c4f49e453b7031fcf413cecabbc7ab3fdf2f5",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-write-1-batch.json": {
+      "sha256": "c180e40ef90b38461c1506e7144f85461e705a7941c816e869c59dadf36e3c41",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-write-1-scalar.json": {
+      "sha256": "293f2e64090478696cb01b1ab419fa6a405894c5317b0cbf821d386d5a75c131",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-write-refault-0-batch.json": {
+      "sha256": "1f1f2749a0537c08dccf8fe8dd35bf488dbb0b13ea6d6a872aeb4a5d2543078e",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-write-refault-0-scalar.json": {
+      "sha256": "b061f867f009ed6c297e344fd6b35fc935a35c4a9bd199243c22a70c8d01222f",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-write-refault-1-batch.json": {
+      "sha256": "980fe2b23d0e3318c26de2713310a6faf13749acf495da18fc24b9ad66b49d44",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-2-read-write-refault-1-scalar.json": {
+      "sha256": "708b0372d573f70db3c31b4555a8f08631fe0d8cac5f6e70d84665eae7158745",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-control-0-batch.json": {
+      "sha256": "129829e459e98558ac7ba4c58ad41f0119e6e067cc1aa5280c40a558c5250736",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-control-0-scalar.json": {
+      "sha256": "c0540304569987514d9441114fa62920840f117727dce3fd032a373a40cc0143",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-0-batch.json": {
+      "sha256": "faa0c4ad16c653a0d6967fedb4c83de7d8b119210d62cbdec5c3099234b01951",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-0-scalar.json": {
+      "sha256": "f2fe163a00f4ff09b9705c675faddcd0a31a82ec0ea16805333ac6bcadbbf232",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-1-batch.json": {
+      "sha256": "9875e8628ae50647add8c2f01d99b3b16b968fe0eefadad860822a961d36d465",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-1-scalar.json": {
+      "sha256": "1b20aa4b6672b5e79e530b0adc4cae1cf83c4cb334bcb8f87bec0cc1d9f444b2",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-2-batch.json": {
+      "sha256": "428e449dcb47a0621028f2d147baa99bed62b4f642b6c76e58d38030ab5e726e",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-2-scalar.json": {
+      "sha256": "9623532bfe4ae154e8ae2a3bded51386a736b96b9528b31d7241a9a0f96b9fff",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-3-batch.json": {
+      "sha256": "7825cb95e58e35ccbf99949bf2e78cb67f5e4a50d21a1330c00097ef32fd470a",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-3-scalar.json": {
+      "sha256": "69962586bb5778193c1a068bd7ee7489e7b0c03f601e6eb9064794a8ccabe16a",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-0-batch.json": {
+      "sha256": "6b86de31044fabdc439552b997acc605430762c5ced3c2ac1d41879260eb711c",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-0-scalar.json": {
+      "sha256": "d4314a84b5f79665d199ac14b92dd548796e2789625ae80746b7b58dd3094f22",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-1-batch.json": {
+      "sha256": "ec4d49bc398b74e4b0a619bc32e9f57f2ccddafca71a27fe933444cab1f6f93b",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-1-scalar.json": {
+      "sha256": "7b82ae12d617c98f05781b020a62c06d5ae10629f7f8d0d1d0910fe433dd5162",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-2-batch.json": {
+      "sha256": "aabf32deda14c5bdd6561969afad5a6f5ec4de581cb1e2ce453b8a61205c988b",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-2-scalar.json": {
+      "sha256": "6fd2836629e2b29a4ec274036c9fde6df637dc87306fd101da05f0cb68117ec1",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-3-batch.json": {
+      "sha256": "0829ffaa6ee0aacf0f6d7cc536663d38dbad05189e3c43650e704010388c7cdd",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-3-scalar.json": {
+      "sha256": "358e4b15f8cd6f88e255b22c1ad83d790d53d01b2cf7f0f4ac6cc740fe4dd14d",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-refault-0-batch.json": {
+      "sha256": "ee2960c22e558efc45cf49dcaba3d7ee5175bfef3fa92aa444c39a8070dc2b46",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-refault-0-scalar.json": {
+      "sha256": "5192824c1cb69f115e4450cfc1ab2c00f497881defae8588723b6deec39ac4a3",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-refault-1-batch.json": {
+      "sha256": "782188730a26d67d649ff2c35c16109faa5a30f9f5350d1b1db3239c625888fb",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-refault-1-scalar.json": {
+      "sha256": "db8adfb1e4c560c696fd6363e1af0165e9d0d84426ee248088ff0d579b44d100",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-refault-2-batch.json": {
+      "sha256": "b69bb018be155d3588c56f333f2b0ca5e0477b610e74417941a94082ba0865a5",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-refault-2-scalar.json": {
+      "sha256": "b52aee3b26f75ba49d8062f52b09bba35ee245426a0e8f58215e2e8004a2928e",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-refault-3-batch.json": {
+      "sha256": "f38ac9f5be51d46e4d5539320d20d8495cf2e3d50f6132ac096e9829d86f10d5",
+      "logicalCases": 8192
+    },
+    "68030-predecrement-read-write-4-read-write-refault-3-scalar.json": {
+      "sha256": "6d7eaafe5d66aa008d3393cbbf420d961a13d9bdf142aa4bc7ff1f14d3d87e63",
+      "logicalCases": 8192
+    },
+    "68EC020-memory-read-write-1-control-0-batch.json": {
+      "sha256": "3f3177551d448fe111207d2527f5f8aace610f8f0fbd1c75b80814ff19d1bd3a",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-1-control-0-scalar.json": {
+      "sha256": "0aea3e19af9ca72998875b28b5b9fb5ceabe6bedfd1aecd8a0acde53d6155171",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-1-read-0-batch.json": {
+      "sha256": "a5e96bbaaa135d97e06c1d675afbb2a9366591d9a6bef9064091d1780c7e5bf2",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-1-read-0-scalar.json": {
+      "sha256": "f7b03d79aafd81a717771ba00d52f88b6dce178b9f61b8db7184a706bd993aa6",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-1-read-write-0-batch.json": {
+      "sha256": "c5427f9ef5a45f5e944fe7aa8e128b365cda4643d792ca35b245cba7db3b857d",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-1-read-write-0-scalar.json": {
+      "sha256": "e81397fa416a0da11fcc5b006caa22d22ff6c95e098cb0d8ce87a793b91a1646",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-1-read-write-refault-0-batch.json": {
+      "sha256": "e39c7a2ecde6ea99e4f2036f3874050575c897b59821a793c4cd805820cf724a",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-1-read-write-refault-0-scalar.json": {
+      "sha256": "6b8a7fbf91126d4755c620cd50cca81496f9b021cd507353d3779e91110d508f",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-control-0-batch.json": {
+      "sha256": "08a7305f57370a5aaf1eaff7e5f97b0a1fb8876f9b132fd3143ba333ebf21916",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-control-0-scalar.json": {
+      "sha256": "a761b4a7e8359d33bd62cc9ac5a73abe5ce801166abe987f0e5b7b6462df4312",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-0-batch.json": {
+      "sha256": "d304624baa2e2866066c089581de869715a4b846a09b441bdd3bbed5cf3acfcc",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-0-scalar.json": {
+      "sha256": "1ce298daf5fa68667c00bfaf9a80d03a33e21c8f42dfc070bad3f9b1327475ca",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-1-batch.json": {
+      "sha256": "3e4753936eb7f274c8d6a8383107c69217a3ff611055bdc6c060c03ce703c8b0",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-1-scalar.json": {
+      "sha256": "1f4da85515dd236709079b94054cbcc158676cc630b50191980fbd3fdbafdcf1",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-write-0-batch.json": {
+      "sha256": "4d09bea2b9bd2c55eaf43eb748dae2d53e0d85a73f7b1a0e7d6adad69a06e1e8",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-write-0-scalar.json": {
+      "sha256": "2b3dec7eb666f071a44d0ff452cc13c671b670c02f527b7854dce582fe505107",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-write-1-batch.json": {
+      "sha256": "5876b1152862c4b77e4d6dcd94c31057b655c911d87f930f8e7e0c0bb39b5d2e",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-write-1-scalar.json": {
+      "sha256": "e03a0d6095d20ebb39ebe3d5c1ebea38cfaebad194428b6b5b097edd3bbca677",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-write-refault-0-batch.json": {
+      "sha256": "fc3f3dd3fb920d65577f831488e6c6d25046d043768090828ff48feb39274f92",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-write-refault-0-scalar.json": {
+      "sha256": "c8f81fa41c26c18a9b0444c92894b552d42e754cedcdc406458fd1c305d36bf1",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-write-refault-1-batch.json": {
+      "sha256": "28875737e4e5dd4d2ccb5b400adcce072e1b1c9767903d392fdfc3d10304d482",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-2-read-write-refault-1-scalar.json": {
+      "sha256": "74f3b289f72f89b25a194162860a73a49b7eec3b67a9bcf50786c233ec341ee5",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-control-0-batch.json": {
+      "sha256": "3fadf7169f29ddc891a7a017a0f136512b01b3919427242e722768b007ac05bb",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-control-0-scalar.json": {
+      "sha256": "9fce5db11349a64e7754ed23708ae21ab7d053d4aa4d9f9dd169a4a6d06e9974",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-0-batch.json": {
+      "sha256": "26d8d7e85becbd98c8d65431c6a49726de88eb7159dd08bcc732c37ce8134a8c",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-0-scalar.json": {
+      "sha256": "564afb89ad87512b4671e1b76a5e188a4b860c40227ba0ebdb93fc130f01f54d",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-1-batch.json": {
+      "sha256": "31b07f09350d777c189a41c92e341adb89780e86aacfacd0d5bf1fac750bb593",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-1-scalar.json": {
+      "sha256": "b28e1536420b95249c1471b61e297684ee1ba4e7475db1dc1a33a6dd037474bd",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-2-batch.json": {
+      "sha256": "996c2a6e3838f6b43a045e5e5e2e7a9d5ff2832adbc5621c7e11b738aac6ac2d",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-2-scalar.json": {
+      "sha256": "84d6c1f89988d3217723b6ae3d4ef3eaf40d2ee7417d5ff3071aeedf7f345b0a",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-3-batch.json": {
+      "sha256": "ff6da683dc5393027ce77baf97b379fd0e658b63b61db72ec437dc5244540b4a",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-3-scalar.json": {
+      "sha256": "7251896d89ca61242cfe7ce1c6197c4cbf408a627cf1d73b780d7c527d84688b",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-0-batch.json": {
+      "sha256": "f18810455201d2b3f80eeb66972afd654cfee8876a823e753bdaf36c52cf2c05",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-0-scalar.json": {
+      "sha256": "cf20047845d76303372cb41ee63722a5260effd46c5faa9563acfa45278a18f4",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-1-batch.json": {
+      "sha256": "f29b60dea3841f67fde94dea5dc5c6d49fe39318789dd74edebf273174193f67",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-1-scalar.json": {
+      "sha256": "40d3ae2cbf00c3f5869085dc51865d646bf2bbc3f2379e9d646ffda6f1f54a77",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-2-batch.json": {
+      "sha256": "dfd57922b4928b0ebd9bc8f3eff3c567e07d338fa3e3a216a336bfdfa65ed036",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-2-scalar.json": {
+      "sha256": "1c2e813376216a3ec4a6a7c919f63a0cd3399b04e3da5d8200ee83437630fe79",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-3-batch.json": {
+      "sha256": "454a7438da7cdf2a345faeb45e477b9ec007cfafc913d544e0c3bd90603c6d29",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-3-scalar.json": {
+      "sha256": "9ab2051b615ad92558f402b78fc9ace6e25cd39dc783a1551ec5853e08b0012d",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-refault-0-batch.json": {
+      "sha256": "7b20bfa9f41529059f7e86fee0e07c2c7d262b98d9785454a499b54a88215465",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-refault-0-scalar.json": {
+      "sha256": "0f162cb56692efdb3a731ed56088481a5c9277586593bb83f30d2918363451f8",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-refault-1-batch.json": {
+      "sha256": "69840836363d5c4949ec3a42923eeb21510221583fc79413db5883dd4fdffbd4",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-refault-1-scalar.json": {
+      "sha256": "40ce0f8af427ea227adc1bba89fac2262d1d0ca84a789cd162d1e5fd7f870aa6",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-refault-2-batch.json": {
+      "sha256": "896e46dc979c999697491e861fe6377ebf2bdf72140649899d52251b2b7795cf",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-refault-2-scalar.json": {
+      "sha256": "3ac1618e2dafe31f5764f1fc65300ac601d75536b68031dae5ab0c9379a257f6",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-refault-3-batch.json": {
+      "sha256": "a3502185a60e0754811ca4567effbef4b50791bc1a75ea56edf81a69ae7e296e",
+      "logicalCases": 4096
+    },
+    "68EC020-memory-read-write-4-read-write-refault-3-scalar.json": {
+      "sha256": "8db3392cf7a363ee23b597c266024af969af45f72d0fdb499f636cd413cbe7c0",
+      "logicalCases": 4096
+    },
+    "68EC020-move-predecrement-write-controls-batch.json": {
+      "sha256": "81588c9aa34e465704509155b76294d1277648719f2fdc29ad00cfbdbf1e5b92",
+      "logicalCases": 24576
+    },
+    "68EC020-move-predecrement-write-controls-scalar.json": {
+      "sha256": "a95eb7fc9107a4f3f1ab1d3601fdd699b215ebe5a019e88b70724aef9998b1e3",
+      "logicalCases": 24576
+    },
+    "68EC020-move-predecrement-write-fault-batch.json": {
+      "sha256": "46817d979921a90dd8788fd19abb4f478d11ed52e4387cffa277c313dc78698f",
+      "logicalCases": 24576
+    },
+    "68EC020-move-predecrement-write-fault-scalar.json": {
+      "sha256": "22798b8cb4cbef2c7a7ca154402de31b469eb983d88e4a5dbf4104b4c2ee3ea4",
+      "logicalCases": 24576
+    },
+    "68EC020-move-write-handlers-1-edited-refault-batch.json": {
+      "sha256": "af3c9c19543ae43eae95dc6b973edf30fa755a19b69b9ae7ec54bd70931bef44",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-1-edited-refault-scalar.json": {
+      "sha256": "bfae1d207b0d0a8518c902340fbc1dbe53f8e4c35841faa6c4e62b9b45323960",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-1-original-batch.json": {
+      "sha256": "c7272dafb0ae7849b78be2e3af16c2e1d784a7356822c6f7fcbf447ef60aea7a",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-1-original-scalar.json": {
+      "sha256": "7680784db06cc59cda3658fabadae1b73b907e12c1f588effc8243b3b7366a50",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-1-output-batch.json": {
+      "sha256": "f5c96ffab8c622f4b7515e50f2fd0587916bfc7da7c94e7141b404559060840c",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-1-output-scalar.json": {
+      "sha256": "d6236c80198218dfd7155c6a92d2c1ac2370898aca9eb6de198850a4f6c3861c",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-1-refault-batch.json": {
+      "sha256": "b33c205379e9a7f91be22d66b909c8d8d558bec39d065c7d61377e69a3946034",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-1-refault-scalar.json": {
+      "sha256": "66c1ed6aaac03568d4971db6391c935b9f09727d5ca1eaa074315ea948eb13e8",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-1-software-batch.json": {
+      "sha256": "82709bf0cf34bab7c56dcd7bddf7457a7696832e1e26982e1475c70a28ea5ff5",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-1-software-scalar.json": {
+      "sha256": "ac5a4259898be7ff41819c806c5f1e537ca00b6608f4ad67b9b784521cc86349",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-2-edited-refault-batch.json": {
+      "sha256": "aa03378cb7809622fc16d92308d22aa57883c39a40499ae43da5ecc86153112b",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-2-edited-refault-scalar.json": {
+      "sha256": "703c9792948db1caa7ff15984e014033cca5d5813a54a9038e931f6c38c548c6",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-2-original-batch.json": {
+      "sha256": "7c571bfb67ab68334b826c0fb37e6ce60dca203f03d1a88ba713fc5d9eb2b8c6",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-2-original-scalar.json": {
+      "sha256": "a379c537d03370f0696ff49c80b80ea40c6761ea16667088265ec65591f46a18",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-2-output-batch.json": {
+      "sha256": "99cbf7d7f1385f623c8277340b4993b6612474044ce29d80ac20857aafa1edb5",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-2-output-scalar.json": {
+      "sha256": "f6c4b59200e48bee492b75f7dca5e1d9a9fa4600829637ba7c8b152e6779dcb4",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-2-refault-batch.json": {
+      "sha256": "a55a87fe8c87603834029b886e8c5ca15b3489ea39891d6ecbec560ad195611d",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-2-refault-scalar.json": {
+      "sha256": "a4615929ac1ee3707f222c79f41673660fd39643c31227e78b97b2901c8f4a01",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-2-software-batch.json": {
+      "sha256": "8e2696a25c091d89b23c9fa67c78b8faecddfa67ea376f8ac9c63e4c87dec50b",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-2-software-scalar.json": {
+      "sha256": "2b6cda252421e99fcd6fa695d999174abeb30aa7592c91967a1fd00f8657cb2c",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-4-edited-refault-batch.json": {
+      "sha256": "802a4afccdbc99512d2d8b4aab480ba3faccd5f89ed44b0ea985a813c5d04f94",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-4-edited-refault-scalar.json": {
+      "sha256": "1414675503d92252df69a240491ed164928edaebee94c91d01d7720ec438aa2e",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-4-original-batch.json": {
+      "sha256": "c0bde4eebae103a3ea0c7efbf8e7f0a57a3964722f82fcda00ad4f137d0bfdda",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-4-original-scalar.json": {
+      "sha256": "90347f312fa223b2cc828f7c28e9191d91c47497afdde2f92d1b1dae44210c26",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-4-output-batch.json": {
+      "sha256": "0665fc677f15c111156927f8413a241e8eeb5776a0fbbdf35aeadebbabbe66e5",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-4-output-scalar.json": {
+      "sha256": "bff66a702d87630fd6138e569ec9c24a4472ce1161b0eb18bc00e5d1700c36b8",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-4-refault-batch.json": {
+      "sha256": "cb9cb534104a6fe40c6a62da51628dab7356ad8602b7a13d85270c72150198c4",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-4-refault-scalar.json": {
+      "sha256": "8c86e9461ca2dcbf651fb1fe16396ebe1b823d5d7c33be2037c1c5182ff81bbb",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-4-software-batch.json": {
+      "sha256": "856f99ddc4a25e96ea95647d0107890789148126ca97e4ba5c3b1f0d0c2f88e3",
+      "logicalCases": 4096
+    },
+    "68EC020-move-write-handlers-4-software-scalar.json": {
+      "sha256": "19d13c96361e839324153c206242bf849b444e6fd461a79e34ead82d05542bbd",
+      "logicalCases": 4096
+    },
+    "68EC020-predecrement-read-write-1-control-0-batch.json": {
+      "sha256": "7ab46f2954ee6f3110405f97bbfb082301fc605230a7a512ecaa6b5c9fb3a0ee",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-1-control-0-scalar.json": {
+      "sha256": "2f8991943e30172629425dc55d901c5978a0c33f3123953fbee3750717c86265",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-1-read-0-batch.json": {
+      "sha256": "b2c46af2121533770caeff0f51b114e00281c8f540a939488f6444428be101b1",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-1-read-0-scalar.json": {
+      "sha256": "4b867c6b42c0f9e98c922743d89ad2a99d6a37c0ea042ea3fec2895fa849c5b6",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-1-read-write-0-batch.json": {
+      "sha256": "a9dc46c4c50fb5dc8b03cfb2dcffc66f1b4f08d48580aff4cd444ac74820c4fd",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-1-read-write-0-scalar.json": {
+      "sha256": "87428d04fb787624f09ca9f33908f0048ef10f45153759afbeb224640659ff00",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-1-read-write-refault-0-batch.json": {
+      "sha256": "c5407913b84ad1369b64864d978895c8b80b0b24bb28d638cbd11b9d0910551d",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-1-read-write-refault-0-scalar.json": {
+      "sha256": "784711c2248af017cd39f6317e4514bfbdf77258485c946b869e28a3d5ea2039",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-control-0-batch.json": {
+      "sha256": "a12f4ba9a692bd19853d217159742a19422473f12237a708cc1e115268f0ec82",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-control-0-scalar.json": {
+      "sha256": "52a8e775b5ca3f498ead4ca9633522c8afdfd23c25da5a498ed9bc6b5da7288d",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-0-batch.json": {
+      "sha256": "441319012b84f0e750168dda9b73bb556145d20a4437b5bd526724d24d2cd2ab",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-0-scalar.json": {
+      "sha256": "e87207d9de4c866c17105973b39fd3ad7e4cb760b10c415a8cf3af2a5ab22109",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-1-batch.json": {
+      "sha256": "47a86f1c04c5055329573bc2dc55843f5f88ee47824f5823f64733bd21e236d3",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-1-scalar.json": {
+      "sha256": "ebf7746d1094134991f59d032d89e67460287e6ab230c5388de990a7d7c7e2d2",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-write-0-batch.json": {
+      "sha256": "1d0ed43d5bca842bde55aac8b853752d5608160b8c573cede402ebab2d48c07b",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-write-0-scalar.json": {
+      "sha256": "73963c7c75cd0bcf72a1f1d6838f744931e0142fbb5c68ec7a07e43840fee9e0",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-write-1-batch.json": {
+      "sha256": "cc3ac357b1e6a8fb083967997bf1699b69ae92595a797795b1ef9eadd0ccebd4",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-write-1-scalar.json": {
+      "sha256": "5e9dcb9f854446799694746751142308dfe90d1e12d276c58284d640af2e0e69",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-write-refault-0-batch.json": {
+      "sha256": "2c060b1635a6984fa23ed3db18e2f8d93610bd679a6c4e93c650f311debd2920",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-write-refault-0-scalar.json": {
+      "sha256": "7b55aeb3cf65277e37c542903d931ef4d7db6899771763e1214674187d1cb2a9",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-write-refault-1-batch.json": {
+      "sha256": "2f296d14aebce3c18208546c47d7ec9c8dbafee6e512e78c24beacbf7d445575",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-2-read-write-refault-1-scalar.json": {
+      "sha256": "227197c540fa856ef610e6f878a39c364b915bf73d7c23a12ce93fc36fb47ad5",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-control-0-batch.json": {
+      "sha256": "f76ae70768a8596dfb4659e7fe56abfe61eabb53a3b51b494752d9fa40afb456",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-control-0-scalar.json": {
+      "sha256": "d08cffbf4b3e9a548291e9b06bcaaf1f7979888e172b8c90b6dc401cd60025fb",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-0-batch.json": {
+      "sha256": "57ae6a75f0f62e8107f588f11313a0e798acaf61813fc0398e0ea72e5d934e5d",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-0-scalar.json": {
+      "sha256": "3b1867039e19920a0a8be162147aee5722cf975a2ea2860f9dce2d84cd9aae3e",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-1-batch.json": {
+      "sha256": "9ea7582734a387df233439e1036d5c09c7ad398278601ff2bd1bf273716287e8",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-1-scalar.json": {
+      "sha256": "6ec6087be7bbc4bff6a497fd9e4834b1ffdb6f01236edc0480e4f32f93aa697f",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-2-batch.json": {
+      "sha256": "2997c8db34011ebd07e6a28093157e59eaeca5f224d6f8cb1ceef4a40ed39dfc",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-2-scalar.json": {
+      "sha256": "814a9a094f100b05175781c07ab910fe1808a9d08a6350d41f4bb1f9f536fa12",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-3-batch.json": {
+      "sha256": "5c72c1c88f286cf789289b1c046bfb5fff2aa036ab8bdb57d59430e94b073d59",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-3-scalar.json": {
+      "sha256": "a120b6c326de69e76ca91d9e10f26eb719542634dd75e9ee7447d6e10ba32c17",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-0-batch.json": {
+      "sha256": "bf37525d74f8257ff56b57d22246771cc8225d6ce44cb117409d1cd4d5493f09",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-0-scalar.json": {
+      "sha256": "4d043e73c5eea8a3804bbd2b43261e0972bf5ebc204389d3b5a64ea4e0c7362a",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-1-batch.json": {
+      "sha256": "a61e533be4603cddd6745fe3659017d7dc7d85159bed6ce44ebc405f9eaf441c",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-1-scalar.json": {
+      "sha256": "a13a250972dcd0cd7d4fd9f4b370463ea7738c7c81e2255c94be6144adfd6ee3",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-2-batch.json": {
+      "sha256": "ac47a7c52775768fffb9168a86e46673b02b8f65bd5bb2ffc431bf42a93e1028",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-2-scalar.json": {
+      "sha256": "b8d9894f8574d84209229e47e0078c2dad8548a8bc028959d7b934b60b7ba55f",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-3-batch.json": {
+      "sha256": "6fefbff2f6165355a485f5bfe0626c790e52b1aa6e1c3fe4b53ed09a4e89e5f2",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-3-scalar.json": {
+      "sha256": "cf0326185cdc8d11cdef2172b09b475e454658b8c2d3f8682e50f0e0427d8d71",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-refault-0-batch.json": {
+      "sha256": "b4a9c31785736cc57bacd227af7bd42b7cb81d7ee5136c050510298348c3c8b3",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-refault-0-scalar.json": {
+      "sha256": "8097c98def5dd2c7eec9771e52071a6e533cbdefdcb650ee9f716071580ab51d",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-refault-1-batch.json": {
+      "sha256": "5dd828df8e2f600c412261e4057a9f01810321d7eace42cddb8d88dfdba0afc2",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-refault-1-scalar.json": {
+      "sha256": "0c3caf798eb514d664c711e1e4e0b65dedd28c04492e524d89bb729821286c1a",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-refault-2-batch.json": {
+      "sha256": "26e016321aa75e55f6a4dae750cf500ded3aafee932d0d2b96ec9a1c7fed8045",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-refault-2-scalar.json": {
+      "sha256": "95229953b4eb5abad065511cb4a6113a4cf07f56d475496025c9d77326a4ef43",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-refault-3-batch.json": {
+      "sha256": "848d3372a0f7dc5dc8432ed51a534731669a03dc9e546f5539a8e38b14db28d0",
+      "logicalCases": 8192
+    },
+    "68EC020-predecrement-read-write-4-read-write-refault-3-scalar.json": {
+      "sha256": "bc3f22627b436a7e5cd35c42eda52e4c7bca9856b4c1d60b0bad027600be8e70",
+      "logicalCases": 8192
+    },
+    "A1200-memory-read-write-1-control-0-batch.json": {
+      "sha256": "44064b5c4fdbf2d8e7b66d17ba9937e5a333d936515ae4f283ee82d09e5d7fb4",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-1-control-0-scalar.json": {
+      "sha256": "885b4d2a9f47844ae93db61223763688e2a4e1c35b42c287006dc37f74ff334d",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-1-read-0-batch.json": {
+      "sha256": "8491f6a4d4a4537219b5e364c26455a78f1718fbba59859099180b4773c9cc34",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-1-read-0-scalar.json": {
+      "sha256": "2f14498077d69ee557047944f8f71e8519e41e769bf19928e21d29484174b64a",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-1-read-write-0-batch.json": {
+      "sha256": "72711338ea86a58d9dd821535c814d60ecf327f3cba9124379ceebfcdc094d77",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-1-read-write-0-scalar.json": {
+      "sha256": "a30b59de9136e1d13e67341b1d894f0244d88396cc237931e5a4d6735a566236",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-1-read-write-refault-0-batch.json": {
+      "sha256": "9ba5db1beb1da5a6e50b35bc0a27d0fd47eb181be692dde3916e3809ac13982d",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-1-read-write-refault-0-scalar.json": {
+      "sha256": "119b8d89b6dce53c34e5027ca3e73fe6039493a9b44d574929853bf40fdcecee",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-control-0-batch.json": {
+      "sha256": "ad1d71c45911021093fed5d7b7b742465153459ffb84973925a8cf4e25468fdb",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-control-0-scalar.json": {
+      "sha256": "3c617cc4a6960e7ef50eb37f29e9e838c19d34dcb09bd0c1950b58adbdc5ce14",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-0-batch.json": {
+      "sha256": "37b2bbb7d5b820a569e3c6b36a3ce08fd4dc17f38f6c731d640477cebffa4ae2",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-0-scalar.json": {
+      "sha256": "65c4c9cea7db4409ecdfe32ba0da9955d871afaab8cace65c4cc9eba89ade87c",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-1-batch.json": {
+      "sha256": "b1ab7cffbcd8c98020fa9f9b75c2a8129db0f1fc18a268295ff539728120d3f0",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-1-scalar.json": {
+      "sha256": "e215a6f1949050883ed8f49cc1105b93776c87d3b4687e2ce1d97a8ffbc0f047",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-write-0-batch.json": {
+      "sha256": "4829b858840e516cda0cc2b0fe8af06e31ca20c592eb472a7a911b0741c19baa",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-write-0-scalar.json": {
+      "sha256": "2fcac28583cd42bb62cae14c93ca52fea1369b2fd9706681a9418b5b0119ec1a",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-write-1-batch.json": {
+      "sha256": "b7b9cd5b5e1198a1bf9c15260fc66aedc42d005b277ade8a3603740951318e4e",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-write-1-scalar.json": {
+      "sha256": "0317ba313da5f277f42bd71f5a28927770fcdff60797edd6d9325c0b05230274",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-write-refault-0-batch.json": {
+      "sha256": "c96a5f7d4cc9a0471f2466259aa9841fc117b3dade525108331004494686e8ca",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-write-refault-0-scalar.json": {
+      "sha256": "30fc73ead9dff6ed2340af8a50841154509e70776bba5a4e6edef3188d864d8c",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-write-refault-1-batch.json": {
+      "sha256": "e45111a692f19b5756602dd0036c3e0a28f6f49537905d76ee8597888865a5b3",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-2-read-write-refault-1-scalar.json": {
+      "sha256": "11e5531669888c6b59e7aca067122fdd770e321e522b3c25abffbaa8254e9408",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-control-0-batch.json": {
+      "sha256": "01f9c5cb93ec80bf664208dcf40daba62cfdf6786c530143089ab90ff8326534",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-control-0-scalar.json": {
+      "sha256": "741585c01a8af45e402e470be726f61e2e2194cd21cb4d0f244e962c52d0a9e1",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-0-batch.json": {
+      "sha256": "250059a56817d65ffa78604219d6a7d77e31d08a8d1bf59a891ca0be7337f54e",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-0-scalar.json": {
+      "sha256": "a881e4bfdd7ef9d0eebdd9b6443c48324c9f0828a07820a60476e3b6ee888549",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-1-batch.json": {
+      "sha256": "983fc72bc56e59a32aad8830d1001f6f41c0fd6703e38a326aff94ce5c6458e8",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-1-scalar.json": {
+      "sha256": "0f1b23d28fbbea5c8e5e1332fdfc907728cc5df090b53ead3032a54c6a3a73c0",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-2-batch.json": {
+      "sha256": "5fa0224ae11a9df9b5652bb6d7f1516afe337c641ae108393a72517b8784ef99",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-2-scalar.json": {
+      "sha256": "9ddf6d7a61ab76524484c73c82cd43d0c9d7c17c30df208b6ee6148b19491fc4",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-3-batch.json": {
+      "sha256": "5725d0eeca2c520eab47a603e3699c515790d65e8760b31f7d7e75cdfb1c4475",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-3-scalar.json": {
+      "sha256": "2555cf9878aa3219ca9de7efe258d9e6d65a9c97d96f9c4ff9adfa4d5d7233b7",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-0-batch.json": {
+      "sha256": "cc39c674e5ff62216a2b9fded28f1f1298f6f9a3ada9186ff1ae523e5462e33a",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-0-scalar.json": {
+      "sha256": "314d1730af31521ccfbfd8cdc0ddcfb542324a977fc3e147d322c0207f7d230b",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-1-batch.json": {
+      "sha256": "0d70fd3d0bffb620aba6afa41c20bcabb8d1eefba32dfa394b4f4c683b28914e",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-1-scalar.json": {
+      "sha256": "6928f5ea3f822ce1e3fa12044c6bf8fb50231d795fe6cebb65a77eb79169c768",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-2-batch.json": {
+      "sha256": "c0960606f5fd737a0fa1cd3401f4bb4f11a67591a73b834d85ea99d10a38b8bb",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-2-scalar.json": {
+      "sha256": "34382bfc3c1fb888e5b75e696b9c490904254cb0a0ec3b2cd9747523b03ea90d",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-3-batch.json": {
+      "sha256": "b002f89d1d959b17308ef7bd53f8da9d7673a8628a1290fad468f61f63ecf75a",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-3-scalar.json": {
+      "sha256": "0653ef9cc7045eb4275a96df238409b33d5c3b85ed89cd1cfd38bdcaf99d156d",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-refault-0-batch.json": {
+      "sha256": "0837d7a5575c8fa7529c4b04d5d2989c6fdbca065c921d63e6325022bdad79b5",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-refault-0-scalar.json": {
+      "sha256": "2565305afb8f84103d9b704fd6796f2d44aceea9c6f953be50c008025625437c",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-refault-1-batch.json": {
+      "sha256": "0ed8557f2cbdac3dec428bef6088051d6287f2aa16f5a268dffa6d3009011fab",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-refault-1-scalar.json": {
+      "sha256": "baeafdf0da1d8799b349d676d1c295bd0dc8cbe6e223fc914e20c8870b165788",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-refault-2-batch.json": {
+      "sha256": "7f02f4fce885f96b1ca51aedcef91f17d5c9959f02f46663754fb995bd2f8a53",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-refault-2-scalar.json": {
+      "sha256": "21498a2f1a72999bdd06da3d0bd514e4838d1b3bcdcba4142c2e896391774281",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-refault-3-batch.json": {
+      "sha256": "7e9f4a7322698052d66c93f0df7745091fe974c12f92034c1d1570b7a8aaefff",
+      "logicalCases": 4096
+    },
+    "A1200-memory-read-write-4-read-write-refault-3-scalar.json": {
+      "sha256": "6e7df33367d855d8d72095802c8490a52f30737b0a939df6935d9e15be67d5ce",
+      "logicalCases": 4096
+    },
+    "A1200-move-predecrement-write-controls-batch.json": {
+      "sha256": "c8ba73a367c95a1ba3388f85fcdf0b95db0c02c5390da62ee975f5fcd3e9367e",
+      "logicalCases": 24576
+    },
+    "A1200-move-predecrement-write-controls-scalar.json": {
+      "sha256": "e8a035b31a1481381e275ad1a3b2b071755e07c049b46135f468e823c57a76c8",
+      "logicalCases": 24576
+    },
+    "A1200-move-predecrement-write-fault-batch.json": {
+      "sha256": "6bf77fa4d295017feca8afb1b896479889fd2bbbbfeeed3e720a4fed83ed4404",
+      "logicalCases": 24576
+    },
+    "A1200-move-predecrement-write-fault-scalar.json": {
+      "sha256": "1fac843c1105f886450107bf0c429d13ef18e75cf520f8900f122eb8473539d3",
+      "logicalCases": 24576
+    },
+    "A1200-move-write-handlers-1-edited-refault-batch.json": {
+      "sha256": "feff2b8754e0a051fb7ba2f00e3006c0b3f3fb6739a875aeee19471933599b4f",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-1-edited-refault-scalar.json": {
+      "sha256": "90bc38d81965663e98eab8fbb53d7970ea0d033142080e62a66e5b8f0935523a",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-1-original-batch.json": {
+      "sha256": "5adda8549ded6c7e5c9c693958e7b85ae9131799d434d327d2db5d1e5b4443de",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-1-original-scalar.json": {
+      "sha256": "4f804ff9cae2811beb28d30330d701aed74872003f0648fcd6fa94f290d2cf16",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-1-output-batch.json": {
+      "sha256": "459f61cb43fdb90017e59037a77a0d4f54b725028a22df00bb76cb717bf3da6c",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-1-output-scalar.json": {
+      "sha256": "006183b5125bef8f654f3952ee4f34d03f714f402f6cb369937f248ff83f4726",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-1-refault-batch.json": {
+      "sha256": "02380ac59ba9fdaa0d7a4c07cab53c2438618f98290f570c134ce456b4616310",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-1-refault-scalar.json": {
+      "sha256": "fcfc96ba0cca5d89e32a8acd193c11c1df88ce933047c0ce84d26e938152192e",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-1-software-batch.json": {
+      "sha256": "3680b2972e61cedc7275e247139eab04709c6c91a5c06a5a931980525bf8bccc",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-1-software-scalar.json": {
+      "sha256": "bf8487e1379678c4f2ba9a250565cf0ec75afb9a9d37400f391c5a470ece53bc",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-2-edited-refault-batch.json": {
+      "sha256": "7517ad86f0074e98b2b685cc72f063d4b2313bdcc911a9b878303a2ba45b1f6e",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-2-edited-refault-scalar.json": {
+      "sha256": "f47cb126d020e29187fcee168f308df06daae644a2b5802f88629bbc89bfb309",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-2-original-batch.json": {
+      "sha256": "b297eaaacc4d1bf21e3ac7e75b5b1ed33793337e5aaeb8b5ba624aa562d2a3c7",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-2-original-scalar.json": {
+      "sha256": "187eec36fefe3f62549964a1b4b224a68112dc6698634a86bd893110958cf1c4",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-2-output-batch.json": {
+      "sha256": "e16ac7c379c38413d65bb665922e020dd752edc1239f1fdfc262131630c404d1",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-2-output-scalar.json": {
+      "sha256": "4b125407cc949a8e7336c608f77cb2d2e5b4796098e75d8a1c890c90fb5b70ad",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-2-refault-batch.json": {
+      "sha256": "ef19e3e1059887d84932b82ef5e3abe06bbfec9b45400b44e9b6298b2592ea2e",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-2-refault-scalar.json": {
+      "sha256": "1655068e37ea7139eeb64fc2c94311d0787512116f32c32c37ab37f6bba7a9c2",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-2-software-batch.json": {
+      "sha256": "88b052dccb70c18aa943a3c1b5b20b545301d70af2092c88171a2ecc2cf53f91",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-2-software-scalar.json": {
+      "sha256": "ffb67be49d1a21f7f4362e845411a488e6bd39f4044ce8fbfb123a285b96fc75",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-4-edited-refault-batch.json": {
+      "sha256": "7a9802e8fb0f19b626312a3a265ee407c6a85079bb1d3132e6524d2fc485befa",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-4-edited-refault-scalar.json": {
+      "sha256": "527218a7995303a599448a22332180ae8fe9e156c5d0c2d0061bcd49f596d4fd",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-4-original-batch.json": {
+      "sha256": "3a1b7542155e08352e76cf7537bd78f28891ebc0b58e561c6142aedf7f722456",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-4-original-scalar.json": {
+      "sha256": "3ea18c4b129a14df436e85f5febc1d5a90249dba3625b7423927bf26cb94b023",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-4-output-batch.json": {
+      "sha256": "751d6603b811632a9b26f8817673233f3dfc6e72d349b21b79cc78689d4931ae",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-4-output-scalar.json": {
+      "sha256": "a131f544ceab72bac003f1cc7fbc60be2f2b9540604e101b7ddc59d15225d28a",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-4-refault-batch.json": {
+      "sha256": "3019db04069ecaba6faa330230bb8bc6b1a45bc3f4c358a588433d91a5be65e3",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-4-refault-scalar.json": {
+      "sha256": "14cead8a8da3d8a4b73d812d13ad7e93c17f58a25a8020dd8b78caa4340f2bb4",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-4-software-batch.json": {
+      "sha256": "1b52012dab5dc4d001dce1c4e813627ad8ce826f5e9ec3148ac97587111948f8",
+      "logicalCases": 4096
+    },
+    "A1200-move-write-handlers-4-software-scalar.json": {
+      "sha256": "0136317d9e79fc06f5db5033797a0e3ed828e1930ba47038c66ec54592b0f4cd",
+      "logicalCases": 4096
+    },
+    "A1200-predecrement-read-write-1-control-0-batch.json": {
+      "sha256": "f3f2eeb891c98445dc7f5f272df59135901e1b1bdac28705bbd81ad5f620a78a",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-1-control-0-scalar.json": {
+      "sha256": "56d200fb889ca394613f583324343e88165a08142c2a6d4de2f49508a325bff9",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-1-read-0-batch.json": {
+      "sha256": "5d0a0137b9377f71f65a8314c9ca1d5252191237e426a47dd17c958f1b845f21",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-1-read-0-scalar.json": {
+      "sha256": "dfbfb4cdae50a50e73d80d683e2e6546df50ace9d27a89ecd5dcc682cf1b231c",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-1-read-write-0-batch.json": {
+      "sha256": "32c800f61200c87a3c6b0924ee94d7a94af10fb95d86ce6e13b10fe3736ea427",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-1-read-write-0-scalar.json": {
+      "sha256": "b080376bb8f9d0a4084aaa234a4bc7f65951f7e6ea7a831be9730360584d2e60",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-1-read-write-refault-0-batch.json": {
+      "sha256": "0504a7bf8186ca385a85ad736fb9f96d163942ef2ba48bd22938b43627135d0b",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-1-read-write-refault-0-scalar.json": {
+      "sha256": "08861fb4d572b6e13aa21784782c8f81db696023e39b8ecfcf6487be847c65f2",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-control-0-batch.json": {
+      "sha256": "baa86f66363f6fbe65cea471b7c8bef0b33f5316620f5d79f1650c5943fff815",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-control-0-scalar.json": {
+      "sha256": "1f2991e396c2159b9846f8c32217534e7cd7b3ceee95118491ef56cc18e6012a",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-0-batch.json": {
+      "sha256": "5f24f70cdeefdb9ae01f771e7aa1e243d2de28aa01fb1362b38caeb5d3d0f43a",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-0-scalar.json": {
+      "sha256": "d82bf3f22d262d142c39e9244679043609283ddab33d10cdeff32940c6148db3",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-1-batch.json": {
+      "sha256": "b6329358c42020f0c9ad2223e823b39a7ca310fdc4413278342268fc9b6e9763",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-1-scalar.json": {
+      "sha256": "8f9db392a9722906f45aea76f7a62e654cb4ff5667cd3e4b9f870962f0eb6a3c",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-write-0-batch.json": {
+      "sha256": "82554670f3fc400e36c7e044b2830200bd5e5880b6c5821193fb244eca9b15db",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-write-0-scalar.json": {
+      "sha256": "e424f22c9639e75d92afc40f181e65bacea4f2e690710e82af9271e19e46b7e3",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-write-1-batch.json": {
+      "sha256": "12d4dc8fd9873219e0d3bf751f108f656420a5a81e941d18f35c01ae1e6ff72e",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-write-1-scalar.json": {
+      "sha256": "4aaa6563c5bb854be577cb85198723b56c2c8c54993b040edd931717aac6159c",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-write-refault-0-batch.json": {
+      "sha256": "31846203a08b526d10362b921ca0cdbe980462eecc1d5e5bbd8ded91852849bb",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-write-refault-0-scalar.json": {
+      "sha256": "e9624e84e23f2bbf5a3cced10d8486cd387c381d9cff1604e217c6ad1fc55e9b",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-write-refault-1-batch.json": {
+      "sha256": "22ceeae34be81d9d1f3980ca3061b675db8d4df643f63e001237b76d461bb486",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-2-read-write-refault-1-scalar.json": {
+      "sha256": "e5b920fdb7b59c4976a7751980d904ee5b2afe4146b41ad03ffb9fa85296c607",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-control-0-batch.json": {
+      "sha256": "ccebbd7aef4322edb8050ead1e88aca3e598cfe84bebbf4ef063e6456ba454ae",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-control-0-scalar.json": {
+      "sha256": "db83eba1075f6c88e6fd88ca41c838609665b50dcd05f6ed7e0c55cdea9a3d2f",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-0-batch.json": {
+      "sha256": "b35d4555da2a5cae745c473b4314d4f6dacfbe63119ccfb5d8e3f49e6ab64893",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-0-scalar.json": {
+      "sha256": "1933a4d6945b0da7da89d7d1f4d910469a5e8045466195d80db7573b5c7a7111",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-1-batch.json": {
+      "sha256": "0e176196a931b342d906aa9a66fcc26d5207fa81e76c709d3086529571eabbf9",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-1-scalar.json": {
+      "sha256": "8d2562acf5e22770ba5fe64ea058382fd81f789786e8e9c2caf781431707030c",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-2-batch.json": {
+      "sha256": "25f9f27d787bfacbd18a8a6c586580a7abb6b08e0c5797e0b8f56806950ea221",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-2-scalar.json": {
+      "sha256": "effd251f5696601e4dfa7ff4caff9987378f1e580058950ed73b17135d4a7c55",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-3-batch.json": {
+      "sha256": "ed7d089f5ba77f4d41492201b2beb9b7da685fab0aa1a1db0cbd7928b2d30909",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-3-scalar.json": {
+      "sha256": "63f587eaabe025e8b00fd70d8e1892a2a0b128706393f69c30d868204060e292",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-0-batch.json": {
+      "sha256": "a8f87f0ec95222b4b13f20e31a5623919ab0255a824409aeb98f1416899e2f3c",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-0-scalar.json": {
+      "sha256": "1b7281ac30822c157d5c95085b690d7c794a484aca7e28c140d189c2d53a549d",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-1-batch.json": {
+      "sha256": "16d94af2f2b2e30c1f8bbab510e7a669e80d7e296d4c88c6622efe5097041a05",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-1-scalar.json": {
+      "sha256": "177f3cec9df09f9a1db7230a039daf63d102b45eac7ffe3833f782c20dced08d",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-2-batch.json": {
+      "sha256": "7cc5ce6cc7dcee86f007f564a76370bbe7140b6563d8a26b248bf531d1394f66",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-2-scalar.json": {
+      "sha256": "451ad9cc66c91fc6758b998bceefddbb09705e58d29cc143d0db5e12f58c7b22",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-3-batch.json": {
+      "sha256": "f25b1d624d0b49169a271b218544e7becd43d37cbc3de94857f62e0c437537c0",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-3-scalar.json": {
+      "sha256": "c86abe7cff0f75223a042291fbc6fc1278fb3f82d2558fcdf313fceb4b0108ca",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-refault-0-batch.json": {
+      "sha256": "4c47312d394f3c0f9f4112d27224043a42285cddb07b91615788d72f6299e504",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-refault-0-scalar.json": {
+      "sha256": "8a5df6cd8352655209e6d08f77dc7d1aaaf4909b39fe8a2b3cd45030969034db",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-refault-1-batch.json": {
+      "sha256": "5b2f95c8bdaf9c889a9fba032252da737308c6d081ac40b01aef3ce6ebbdf0c0",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-refault-1-scalar.json": {
+      "sha256": "e9ef46e8fbcc8d7495bd0cddcc13400ddb0b6063ed7dd14fe02486449e9fef02",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-refault-2-batch.json": {
+      "sha256": "f07e2beda988b6c0ca7c56d33eac8f60d583aa4844d5b0be44644f34d99e17ec",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-refault-2-scalar.json": {
+      "sha256": "1a7050574ccb6be498fa49712aebc51c42c8bc385c51353805a62668e8bc2013",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-refault-3-batch.json": {
+      "sha256": "4c79b82a81e99f4738ac662839ea41cd70c3dc3e5c25834e71a504f9bb7aae93",
+      "logicalCases": 8192
+    },
+    "A1200-predecrement-read-write-4-read-write-refault-3-scalar.json": {
+      "sha256": "dd3a087fdf19d7d5cb784045393fab4e668dff3672b4bcb42d6592351dfcf4aa",
+      "logicalCases": 8192
+    }
+  },
+  "logicalCases": 3244032,
+  "referenceProofSha256": "28cd5d79924c841bb10ad47134a955412b6f552195b4c940c95300f729af4de2",
+  "artifactDevelopmentCommit": "ec3c285ded9c6c6fc256bebb3a58407f00d2ac44"
+}

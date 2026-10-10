@@ -8,6 +8,8 @@ internal sealed class ArchitecturalExpectation
     public Dictionary<uint, byte> MemoryMasks { get; } = [];
     public HashSet<uint> ForbiddenOperandReads { get; } = [];
     public int? ExpectedByteOperandAccesses { get; set; }
+    public HashSet<uint> OperandAccessAddresses { get; } = [];
+    public List<(bool Write, int Width)>? ExpectedOperandTransfers { get; set; }
     public ushort Sr { get; set; }
     public ushort DefinedSrMask { get; set; } = 0xffff;
     public uint Pc { get; set; }
@@ -15,7 +17,9 @@ internal sealed class ArchitecturalExpectation
     public bool Halted { get; set; }
     public int? ExceptionVector { get; set; }
     public uint? InactiveStackPointer { get; set; }
-    public uint? MasterStackPointer { get; init; }
+    public uint? MasterStackPointer { get; set; }
+    public Dictionary<string, (Func<Copper68k.M68kCpuState, uint> Read, uint Value)> ControlChecks { get; } = [];
+    public int? ExpectedDeviceResets { get; set; }
 
     public static ArchitecturalExpectation Capture(SyntheticMachine machine) => new()
     {
@@ -41,10 +45,21 @@ internal sealed class ArchitecturalExpectation
             if (state.A[i] != A[i]) return $"A{i} expected {A[i]:X8}, actual {state.A[i]:X8}";
         }
         var supervisor = (Sr & 0x2000) != 0;
-        if (supervisor && state.SupervisorStackPointer != A[7]) return $"Active SSP expected {A[7]:X8}, actual {state.SupervisorStackPointer:X8}";
+        var master = machine.Model.FullIndex && machine.Model.Id != "68060" && (Sr & 0x3000) == 0x3000;
+        if (supervisor && !master && state.SupervisorStackPointer != A[7]) return $"Active SSP expected {A[7]:X8}, actual {state.SupervisorStackPointer:X8}";
+        if (master && state.MasterStackPointer != A[7]) return $"Active MSP expected {A[7]:X8}, actual {state.MasterStackPointer:X8}";
         if (!supervisor && state.UserStackPointer != A[7]) return $"Active USP expected {A[7]:X8}, actual {state.UserStackPointer:X8}";
         if (InactiveStackPointer.HasValue && InactiveStackPointer != (supervisor ? state.UserStackPointer : state.SupervisorStackPointer)) return "Inactive stack pointer changed";
         if (MasterStackPointer.HasValue && MasterStackPointer != state.MasterStackPointer) return "Master stack pointer changed";
+        foreach (var (name, check) in ControlChecks)
+            if (check.Read(state) != check.Value) return $"{name} expected {check.Value:X8}, actual {check.Read(state):X8}";
+        if (ExpectedDeviceResets.HasValue && ExpectedDeviceResets != machine.Bus.DeviceResets) return "RESET device notification count differs";
+        if (ExpectedOperandTransfers != null)
+        {
+            var transfers = machine.Bus.Accesses.Where(a => a.Kind is Copper68k.M68kBusAccessKind.CpuDataRead or Copper68k.M68kBusAccessKind.CpuDataWrite)
+                .Where(a => OperandAccessAddresses.Contains(a.Address)).Select(a => (a.Write, a.Width));
+            if (!transfers.SequenceEqual(ExpectedOperandTransfers)) return "Operand transfer order/width/count differs";
+        }
         if (ForbiddenOperandReads.Count != 0 || ExpectedByteOperandAccesses.HasValue)
         {
             var operandAccesses = machine.Bus.Accesses.Where(a => a.Kind is Copper68k.M68kBusAccessKind.CpuDataRead or Copper68k.M68kBusAccessKind.CpuDataWrite).ToArray();

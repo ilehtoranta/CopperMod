@@ -3,6 +3,32 @@ namespace Copper68k.Tests;
 public sealed class M68040ArchitecturalPagingTests
 {
     [Theory]
+    [InlineData(M68kCpuModel.M68040, 60, 0x7008)]
+    [InlineData(M68kCpuModel.M68060, 16, 0x4008)]
+    public void TransparentWriteProtectionUsesAccessErrorFrameWithPagingDisabled(M68kCpuModel model, int frameBytes, int format)
+    {
+        var bus = new Copper68kTestBus(0x10000);
+        bus.WriteWords(0x1000, 0x23C0, 0x0100, 0x2000); // MOVE.L D0,$01002000
+        bus.WriteLong(8, 0x3000);
+        using var cpu = M68kCoreFactory.Default.Create(model, bus);
+        cpu.Reset(0x1000, 0x8000);
+        cpu.State.D[0] = 0x12345678;
+        cpu.State.M68040Mmu.DataTransparentTranslation0 = 0x0100C004;
+        cpu.ExecuteInstruction();
+        Assert.False(cpu.State.M68040Mmu.Enabled);
+        Assert.False(cpu.State.Halted);
+        Assert.Equal(2, cpu.State.LastExceptionVector);
+        Assert.Equal(0x3000u, cpu.State.ProgramCounter);
+        var sp = 0x8000u - (uint)frameBytes;
+        Assert.Equal(sp, cpu.State.A[7]);
+        Assert.Equal(0x2700, bus.ReadWord(sp));
+        Assert.Equal(0x1000u, bus.ReadLong(sp + 2));
+        Assert.Equal(format, bus.ReadWord(sp + 6));
+        Assert.Equal(0x01002000u, bus.ReadLong(sp + (model == M68kCpuModel.M68040 ? 20u : 8u)));
+        Assert.Equal(0x12345678u, cpu.State.D[0]);
+    }
+
+    [Theory]
     [InlineData(M68kCpuModel.M68040)] [InlineData(M68kCpuModel.M68060)]
     public void MovecRootAndTcKeepAtcUntilGuestPflush(M68kCpuModel model)
     {
