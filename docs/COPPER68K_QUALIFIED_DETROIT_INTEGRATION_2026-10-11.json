@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "packageVersion": "1.5.4-qualified-dev.1",
+  "executionSourceChanged": false,
+  "sourceBase": "5b849dbff704d5a339b64a9ceb46c39b66c5b74e",
+  "packageSha256": "83fc06cb715a5a394611e0c73f4e7d5a0f5f5c171db63860b9d8458ca1e16b6d",
+  "consumers": {
+    "detroitFieldsPerMode": 34000,
+    "ahxPassed": 18,
+    "sourceCommit": "b64fc62f86039d357a055dff61d1fd1f7832444f",
+    "buildErrors": 0,
+    "captureMismatches": 0,
+    "hostUnavailable": 6,
+    "detroitCapturesPerMode": 1027,
+    "sameCpuBinary": true,
+    "engineUnavailable": 7,
+    "diskPassed": 74,
+    "enginePassed": 1183,
+    "hostPassed": 195,
+    "buildWarnings": 0,
+    "nativeCpuPassed": 4
+  },
+  "roadmapComplete": false,
+  "releaseAuthorized": false,
+  "packagePublished": false,
+  "fullCpu": {
+    "passed": 5393,
+    "trxSha256": "8878a80fdb71acea7cd6838fc6d59abd34df72b6221b946227bd5630e24cb940",
+    "requiredReportGate": "passed",
+    "failed": 0,
+    "unavailableOrDeferred": 109,
+    "deterministicLogicalCases": 86663530,
+    "deterministicXunitBatches": 783,
+    "reportSummarySha256": "fe812f6de1a3215fcd491641ffba8145efddafef1b2f018d65bb63960bd955d0"
+  },
+  "date": "2026-10-11",
+  "oldDetroitDedicatedPathImported": false,
+  "deferredAreaCount": 5,
+  "baseline": {
+    "failed": 0,
+    "interpretation": "The merged general logical handler supersedes the older dedicated Detroit fix",
+    "mainlineSemanticPassed": 10
+  },
+  "regression": {
+    "focusedPassed": 230,
+    "checks": [
+      "sized memory result",
+      "one write per destination byte",
+      "guard memory",
+      "all data registers",
+      "untouched address registers",
+      "exact PC",
+      "CCR",
+      "byte A7 stride"
+    ],
+    "failed": 0,
+    "sparseBusCases": 10
+  },
+  "acceptance": "known-coverage-only",
+  "cpuDllSha256": "f445a7d289cf6545c46731a0d94e59e7c8c56b189a0c43768f4009874c0cb6f2"
+}
