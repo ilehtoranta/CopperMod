@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>CopperMod.Amiga.Tests</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <ProjectReference Include="../CopperMod.Amiga/CopperMod.Amiga.csproj" />
+    <Using Include="Xunit" />
+    <Using Include="Copper68k" />
+    <Using Include="CopperMod.Amiga.Runtime" />
+    <Using Include="CopperMod.Amiga.Bus.Bus" Alias="AmigaBus" />
+  </ItemGroup>
+</Project>

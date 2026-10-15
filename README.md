@@ -118,3 +118,8 @@ emulator application, including the Lightweight A500 engine and CopperDisk.
 ## License
 
 MIT; see [LICENSE](LICENSE) and [third-party notices](THIRD-PARTY-NOTICES.md).
+
+CopperStart native production ROMs use a versioned, private bootstrap setup
+extension before native OS startup. See
+[CopperStart bootstrap ABI](CopperMod.Amiga/CopperStartBootstrap.md) for the
+protocol, missing-handler behavior and the focused emulator test command.
