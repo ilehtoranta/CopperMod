@@ -75,7 +75,10 @@ public sealed class CopperStartBootstrapTests
         bus.WriteLong(0x2C,0x790);
         byte[] fallback = [0x70,0,0x2F,0x7C,0,0,7,0x86,0,2,0x4E,0x73];
         fallback.CopyTo(bus.ChipRam,0x790);
-        byte[] code = [0x4E,0xB9,0,0,7,0x80,0x4E,0x72,0x27,0]; // JSR $780; STOP #$2700
+        byte[] code = [0x4E,0xB9,0,0,7,0x80, // JSR $780
+            0x24,0x39,0,0,7,0x70, // MOVE.L $770,D2
+            0x26,0x39,0,0,7,0x78, // MOVE.L $778,D3
+            0x4E,0x72,0x27,0]; // STOP #$2700
         var rom = new byte[256]; code.CopyTo(rom,0);
         bus.MapReadOnlyMemory(0xF80000,rom);
         using var cpu = AmigaM68kCoreFactory.Default.Create((M68kBackendKind)backend,bus);
@@ -83,7 +86,9 @@ public sealed class CopperStartBootstrapTests
         cpu.State.D[0] = 0x43534231; cpu.State.D[1] = 1; cpu.State.A[0] = 0x760;
         for(var i=0;i<100 && !cpu.State.Stopped && !cpu.State.Halted;i++) cpu.ExecuteInstruction();
         Assert.True(cpu.State.Stopped, $"PC={cpu.State.ProgramCounter:X8} halted={cpu.State.Halted} vector={cpu.State.LastExceptionVector} calls={bus.CopperStartBootstrapCalls} D0={cpu.State.D[0]:X8}"); Assert.False(cpu.State.Halted);
-        Assert.Equal(enabled ? 0x43504D31u : 0u,cpu.State.D[0]); Assert.Equal(0x7FFF0u,cpu.State.A[7]);
+        Assert.Equal(enabled ? 0x43504D31u : 0u,cpu.State.D[0]);
+        Assert.Equal(enabled ? 0x43504D31u : 0u,cpu.State.D[2]);
+        Assert.Equal(enabled ? 0x12345678u ^ 0x43504D31u ^ 1u : 0u,cpu.State.D[3]); Assert.Equal(0x7FFF0u,cpu.State.A[7]);
         Assert.Equal(enabled,bus.CopperStartBootstrapReady); Assert.Equal(enabled ? 1 : 0,bus.CopperStartBootstrapCalls);
         if (!enabled) Assert.Equal(11,cpu.State.LastExceptionVector);
     }

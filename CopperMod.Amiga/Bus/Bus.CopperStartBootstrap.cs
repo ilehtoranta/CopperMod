@@ -51,10 +51,10 @@ internal sealed partial class Bus
             BinaryPrimitives.ReadUInt32BigEndian(r[12..]) != 1)
             return M68kHostGatewayResult.Completed;
         var challenge = BinaryPrimitives.ReadUInt32BigEndian(r[8..]);
-        BinaryPrimitives.WriteUInt32BigEndian(r[16..], reply);
-        BinaryPrimitives.WriteUInt32BigEndian(r[20..], version);
-        BinaryPrimitives.WriteUInt32BigEndian(r[24..], challenge ^ reply ^ version);
-        BinaryPrimitives.WriteUInt32BigEndian(r[28..], 1); // native-ROM bootstrap capability
+        WriteHostLong(receipt+16, reply);
+        WriteHostLong(receipt+20, version);
+        WriteHostLong(receipt+24, challenge ^ reply ^ version);
+        WriteHostLong(receipt+28, 1); // native-ROM bootstrap capability
         state.D[0] = reply; CopperStartBootstrapReady = true;
         return M68kHostGatewayResult.Completed;
     }
