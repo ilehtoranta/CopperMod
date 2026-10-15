@@ -831,6 +831,7 @@ namespace CopperMod.Amiga.Bus
             CiaB.Reset();
             LiveAgnusDmaEnabled = _liveAgnusDmaDefault;
             AudioDmaMinimumPeriod = audioDmaMinimumPeriod;
+            ConfigureCopperStartBootstrap();
             RebuildCpuBusBankTable();
         }
 
@@ -1653,6 +1654,7 @@ namespace CopperMod.Amiga.Bus
             _autoconfig.ColdReset();
             _hostTrapStubs.Clear();
             _relocatableHostTrapStubs.Clear();
+            ConfigureCopperStartBootstrap();
             _hostTrapStubAddresses.Clear();
             Array.Clear(_hostTrapStubPages);
             _nextHostTrapId = 1;
@@ -1856,6 +1858,7 @@ namespace CopperMod.Amiga.Bus
         private uint AllocateHostGatewayToken()
         {
             var token = _nextHostTrapId++;
+            if (token == CopperStartBootstrapToken) token = _nextHostTrapId++;
             if (token == 0)
             {
                 throw new AmigaEmulationException("Host gateway token space exhausted.");
@@ -1868,6 +1871,7 @@ namespace CopperMod.Amiga.Bus
         {
             _ = cycle;
             _externalResetCount++;
+            ResetCopperStartBootstrapSession();
             _pendingCiaInterrupts.Clear();
             _busAccesses.Clear();
             _cpuBusPhases.Clear();
