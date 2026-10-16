@@ -7786,10 +7786,10 @@ namespace Copper68k
             var bit = FetchWord() & 31;
             var bitEa = ResolvePlannedEa(mode, register, size);
             var value = ReadPlannedEaValue(in bitEa);
-            if (mode != 0 && !_useM68020BriefIndexedAddressing)
-                CommitRequiredSequentialFinalPrefetch();
             var maskedBit = mode == 0 ? bit : bit & 7;
             State.SetFlag(M68kCpuState.Zero, (value & (1u << (int)maskedBit)) == 0);
+            if (mode != 0 && !_useM68020BriefIndexedAddressing)
+                CommitRequiredSequentialFinalPrefetch();
             AddInstructionCycles(GetImmediateBtstCycles(mode, register));
         }
 
@@ -7799,9 +7799,9 @@ namespace Copper68k
             var register = opcode & 7;
             var bit = FetchWord() & 7;
             var value = ReadByte(State.A[register]);
+            State.SetFlag(M68kCpuState.Zero, (value & (1u << (int)bit)) == 0);
             if (!_useM68020BriefIndexedAddressing)
                 CommitRequiredSequentialFinalPrefetch();
-            State.SetFlag(M68kCpuState.Zero, (value & (1u << (int)bit)) == 0);
             AddInstructionCycles(GetImmediateBtstCycles(2, register));
         }
 
@@ -8615,10 +8615,10 @@ namespace Copper68k
             var bit = FetchWord() & 31;
             var bitEa = ResolvePlannedEa(plan.DestinationMode, plan.DestinationRegister, plan.Size);
             var value = ReadPlannedEaValue(in bitEa);
-            if (plan.DestinationMode != 0 && !_useM68020BriefIndexedAddressing)
-                CommitRequiredSequentialFinalPrefetch();
             var maskedBit = plan.DestinationMode == 0 ? bit : bit & 7;
             State.SetFlag(M68kCpuState.Zero, (value & (1u << (int)maskedBit)) == 0);
+            if (plan.DestinationMode != 0 && !_useM68020BriefIndexedAddressing)
+                CommitRequiredSequentialFinalPrefetch();
             AddInstructionCycles(GetImmediateBtstCycles(plan.DestinationMode, plan.DestinationRegister));
         }
 
@@ -10203,9 +10203,9 @@ namespace Copper68k
                 var value = bitEa.Read();
                 var bit = State.D[bitRegister] & (bitMode == 0 ? 31u : 7u);
                 var mask = 1u << (int)bit;
+                State.SetFlag(M68kCpuState.Zero, (value & mask) == 0);
                 if (operation == 0 && !_useM68020BriefIndexedAddressing)
                     CommitRequiredSequentialFinalPrefetch();
-                State.SetFlag(M68kCpuState.Zero, (value & mask) == 0);
                 if (operation != 0)
                 {
                     value = operation switch
@@ -11144,9 +11144,9 @@ namespace Copper68k
                 var address = FetchLong();
                 var absoluteMaskedBit = bit & 7;
                 var absoluteValue = ReadByte(address);
+                State.SetFlag(M68kCpuState.Zero, (absoluteValue & (1u << absoluteMaskedBit)) == 0);
                 if (!_useM68020BriefIndexedAddressing)
                     CommitRequiredSequentialFinalPrefetch();
-                State.SetFlag(M68kCpuState.Zero, (absoluteValue & (1u << absoluteMaskedBit)) == 0);
                 AddInstructionCycles(GetImmediateBtstCycles(mode, reg));
                 return true;
             }
@@ -11154,10 +11154,10 @@ namespace Copper68k
             var bitSize = mode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
             var bitEa = ResolveEa(mode, reg, bitSize);
             var value = bitEa.Read();
-            if (mode != 0 && !_useM68020BriefIndexedAddressing)
-                CommitRequiredSequentialFinalPrefetch();
             var maskedBit = mode == 0 ? bit : bit & 7;
             State.SetFlag(M68kCpuState.Zero, (value & (1u << maskedBit)) == 0);
+            if (mode != 0 && !_useM68020BriefIndexedAddressing)
+                CommitRequiredSequentialFinalPrefetch();
             AddInstructionCycles(GetImmediateBtstCycles(mode, reg));
             return true;
         }

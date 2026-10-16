@@ -28,6 +28,7 @@ public sealed class M68000BtstPrefetchTests
         bus.Words[0x1002] = 0x4E71;
         for (var i = 0; i < words.Count; i++) bus.Words[0x1004u + (uint)i * 2] = words[i];
         var cpu = new M68kInterpreter(bus, (M68kOpcodePlanDispatch)dispatch);
+        bus.ReadStatus = () => cpu.State.StatusRegister;
         cpu.Reset(0x1000, 0x3000);
         cpu.State.A[0] = 0x2000;
         cpu.State.D[1] = 7;
@@ -42,6 +43,7 @@ public sealed class M68000BtstPrefetchTests
         // DTACK has already carried execution past the nominal cycle count.
         var final = Assert.Single(bus.Accesses.Where(a => a.Cycle > data.Cycle));
         Assert.Equal(next + 2, final.Address);
+        Assert.Equal(0x271B, final.Status); // BTST updates Z before the required prefetch
         Assert.Equal(nominalCycles + wait, elapsed);
         Assert.Equal(next, cpu.State.ProgramCounter);
         Assert.Equal(0x271B, cpu.State.StatusRegister);
@@ -54,7 +56,8 @@ public sealed class M68000BtstPrefetchTests
     private sealed class WaitedReadBus(int wait) : IM68kBus, IM68000BusCycleTiming
     {
         internal Dictionary<uint, ushort> Words { get; } = [];
-        internal List<(uint Address, long Cycle)> Accesses { get; } = [];
+        internal List<(uint Address, long Cycle, ushort Status)> Accesses { get; } = [];
+        internal Func<ushort>? ReadStatus { get; set; }
         public int M68000BusCycleStartDelay => 2;
         public bool RequiresExactM68000PipelineFallback => true;
         public M68000BusAccessTiming GetM68000BusAccessTiming(uint a, M68kOperandSize s, M68kBusAccessKind k, bool w, long requested, long completed)
@@ -62,10 +65,10 @@ public sealed class M68000BtstPrefetchTests
         public byte ReadByte(uint a, ref long c, M68kBusAccessKind k)
         {
             Assert.Equal(0x2000u, a);
-            c += wait + 2; Accesses.Add((a, c)); return 0x80;
+            c += wait + 2; Accesses.Add((a, c, ReadStatus?.Invoke() ?? 0)); return 0x80;
         }
         public ushort ReadWord(uint a, ref long c, M68kBusAccessKind k)
-        { c += 2; Accesses.Add((a, c)); return Words.GetValueOrDefault(a); }
+        { c += 2; Accesses.Add((a, c, ReadStatus?.Invoke() ?? 0)); return Words.GetValueOrDefault(a); }
         public uint ReadLong(uint a, ref long c, M68kBusAccessKind k)
             => ((uint)ReadWord(a, ref c, k) << 16) | ReadWord(a + 2, ref c, k);
         public void WriteByte(uint a, byte v, ref long c, M68kBusAccessKind k) => throw new InvalidOperationException("BTST must not write");

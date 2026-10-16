@@ -9,8 +9,8 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.5.4-nitro-dev.1</Version>
-    <PackageVersion>1.5.4-nitro-dev.1</PackageVersion>
+    <Version>1.5.4-nitro-dev.2</Version>
+    <PackageVersion>1.5.4-nitro-dev.2</PackageVersion>
     <PackageReleaseNotes>Development candidate retaining the previous qualified source and completing the mandatory MC68000-family memory BTST prefetch after waited reads. Includes static/dynamic bit-number and scalar/planned dispatch regressions. Native integration qualification is recorded separately; broader deferred architectural coverage remains excluded. Not authorized for publication.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
