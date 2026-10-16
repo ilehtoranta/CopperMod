@@ -33,18 +33,21 @@ dotnet run --project CopperMod -c Release -- "path/to/tune.sid"
 Without a filename, the player tries the default MED test tune if it is available
 locally.
 
-The separate `CopperMod.Amiga.Emulator` integration imports its replacement-OS
-services and boot controller from CopperStart. Check out CopperStart beside
-CopperMod, or set `-p:CopperStartRoot=<absolute checkout path>` when building
-that project, the complete solution, or its Amiga integration tests. Hardware,
+`CopperMod.Amiga` imports the shared graphics.library image layout from
+`CopperStart/native/CopperStart.Graphics/Firmware`. The separate
+`CopperMod.Amiga.Emulator` integration imports its replacement-OS services and
+boot controller from CopperStart. Check out CopperStart beside CopperMod, or set
+`-p:CopperStartRoot=<absolute checkout path>` when building the Amiga core or its
+consumers (including AHX), the complete solution, or its integration tests. Hardware,
 disk/filesystem adapters and raster providers remain in CopperMod. This shared
 source import preserves the existing assembly and has no duplicate service tree
 here. The ownership move and existing integration build gaps are documented in
 `CopperStart/Docs/CopperModHostSourceMove.md`.
 
-For this development cutover, use CopperStart's `ci/github-actions-build` branch
-at [commit 8eeac19](https://github.com/ilehtoranta/CopperStart/commit/8eeac19c9e54726f50f53fefc028c7f9307f35ce),
-or a descendant containing `host/CopperStart.CopperMod`. CopperStart's default
+For this development cutover, use CopperStart's `codex/copperstart-native-graphics-20261017` branch
+at [commit 65a37e1](https://github.com/ilehtoranta/CopperStart/commit/65a37e1837d728484df39ace69c743294b03530c),
+or a descendant containing `host/CopperStart.CopperMod` and
+`native/CopperStart.Graphics/Firmware`. CopperStart's default
 `main` branch does not yet contain this shared host integration.
 
 ## Export audio

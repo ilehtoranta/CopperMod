@@ -51,6 +51,13 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
+      - name: Check out CopperStart-owned firmware layouts
+        uses: actions/checkout@v4
+        with:
+          repository: ilehtoranta/CopperStart
+          ref: 65a37e1837d728484df39ace69c743294b03530c
+          path: CopperStart
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -77,4 +84,4 @@ jobs:
           path: artifacts/synthetic-suite
 
       - name: Test AHX shared Amiga dependency
-        run: dotnet test CopperMod.Ahx.Tests\CopperMod.Ahx.Tests.csproj --configuration Release
+        run: dotnet test CopperMod.Ahx.Tests\CopperMod.Ahx.Tests.csproj --configuration Release -p:CopperStartRoot="${{ github.workspace }}/CopperStart"
