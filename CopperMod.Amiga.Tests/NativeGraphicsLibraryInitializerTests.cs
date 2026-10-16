@@ -4,6 +4,7 @@ namespace CopperMod.Amiga.Tests;
 
 public sealed class NativeGraphicsLibraryInitializerTests
 {
+    private const uint ExecBaseAddress = 0x00770000;
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
@@ -67,6 +68,8 @@ public sealed class NativeGraphicsLibraryInitializerTests
             Assert.Equal(0x00600000u, result);
             var expected = GraphicsLibraryImageLayout.CreateGuestImage(0x00600000, 0x280,
                 0x444, 0x280, 40, 68, "graphics.library", "graphics.library 40.68", profile, descriptor);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+                expected.AsSpan(GraphicsLayouts.GfxBaseExecBase), ExecBaseAddress);
             Assert.Equal(expected.Take(size), Enumerable.Range(0, size).Select(i => bus.ReadByte(0x00600000u + (uint)i)));
             Assert.All(Enumerable.Range(size, 0x280 - size).Select(i => bus.ReadByte(0x00600000u + (uint)i)), b => Assert.Equal((byte)0xA5, b));
         }
@@ -104,6 +107,7 @@ public sealed class NativeGraphicsLibraryInitializerTests
         cpu.State.D[0] = suppliedBase;
         for (var i = 2; i < 8; i++) cpu.State.D[i] = 0xD0000000u + (uint)i;
         for (var i = 2; i < 7; i++) cpu.State.A[i] = 0xA0000000u + (uint)i;
+        cpu.State.A[6] = ExecBaseAddress; // AUTOINIT's documented Exec context
         var returns = 0;
         for (var instruction = 0; instruction < 3000 && cpu.State.ProgramCounter != returned; instruction++)
         {
@@ -115,7 +119,7 @@ public sealed class NativeGraphicsLibraryInitializerTests
         Assert.Equal(1, returns);
         Assert.Equal(stack + 4, cpu.State.A[7]);
         for (var i = 2; i < 8; i++) Assert.Equal(0xD0000000u + (uint)i, cpu.State.D[i]);
-        for (var i = 2; i < 7; i++) Assert.Equal(0xA0000000u + (uint)i, cpu.State.A[i]);
+        for (var i = 2; i < 7; i++) Assert.Equal(i == 6 ? ExecBaseAddress : 0xA0000000u + (uint)i, cpu.State.A[i]);
         Assert.Equal(0x5A5A5A5Au, bus.ReadLong(stack - 8));
         Assert.Equal(0xA5A5A5A5u, bus.ReadLong(0x005FFFFC));
         Assert.Equal(0xA5A5A5A5u, bus.ReadLong(0x00600280));
