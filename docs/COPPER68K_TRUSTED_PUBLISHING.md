@@ -21,6 +21,21 @@ owner profile, not an email address or credential; no GitHub secret is needed.
 
 ## Approved releases
 
+The stable `1.5.4` release was authorized on 2026-10-22. Tag the reviewed stable
+release commit as `copper68k-v1.5.4`. The existing policy and workflow path stay
+unchanged. The workflow runs the CPU suite, validates required synthetic reports
+and their exact case counts, tests AHX, validates package contents, and publishes
+the NuGet package and symbols. It retains the approved known-coverage scope and
+five deferred qualification areas. The source promotion adds no CPU execution
+changes beyond the already merged qualified suite and memory BTST prefetch fix.
+
+If an unchanged `1.5.4` release needs a transient/partial-upload retry, use the
+next explicit `copper68k-v1.5.4-retry-1` through `-retry-3` tag at the exact same
+reviewed commit. Never replace an existing package or tag; changed content needs
+a new version.
+
+The following notes retain the earlier approved release protocol.
+
 The existing trusted-publishing policy is bound to the workflow file
 `publish-copper68k-1.4.1.yml`; keep that path unchanged unless the NuGet policy
 is updated. The workflow accepts only its explicit version tags. For the

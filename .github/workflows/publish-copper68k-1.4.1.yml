@@ -3,6 +3,10 @@ name: Publish Copper68k approved tags
 on:
   push:
     tags:
+      - copper68k-v1.5.4
+      - copper68k-v1.5.4-retry-1
+      - copper68k-v1.5.4-retry-2
+      - copper68k-v1.5.4-retry-3
       - copper68k-v1.5.3
       - copper68k-v1.5.1
       - copper68k-v1.5.1-retry-1
@@ -48,6 +52,7 @@ jobs:
         shell: pwsh
         run: |
           $version = switch -Regex ($env:GITHUB_REF_NAME) {
+            '^copper68k-v1\.5\.4(?:-retry-[1-3])?$' { '1.5.4'; break }
             '^copper68k-v1\.5\.3$' { '1.5.3'; break }
             '^copper68k-v1\.5\.1(?:-retry-[1-3])?$' { '1.5.1'; break }
             '^copper68k-v1\.5\.0(?:-retry-[1-3])?$' { '1.5.0'; break }
@@ -58,7 +63,20 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Run Copper68k CPU tests
+        env:
+          COPPER68K_SYNTHETIC_REPORT_DIR: ${{ github.workspace }}/artifacts/synthetic-suite
         run: dotnet test Copper68k.Tests\Copper68k.Tests.csproj --configuration Release
+
+      - name: Require accepted synthetic coverage and report deferred qualification
+        shell: pwsh
+        run: ./scripts/test-copper68k-synthetic.ps1 -ValidateReportsOnly -OutputDirectory artifacts/synthetic-suite
+
+      - name: Retain architectural coverage reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: copper68k-release-coverage
+          path: artifacts/synthetic-suite
 
       - name: Run AHX shared CPU consumer tests
         run: dotnet test CopperMod.Ahx.Tests\CopperMod.Ahx.Tests.csproj --configuration Release
