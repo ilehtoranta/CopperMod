@@ -1,6 +1,36 @@
 # Copper68k
 
-## Mainline release 1.5.3
+## Mainline release 1.5.4
+
+This release promotes the qualified integer instruction suite and mainline
+corrections previously supplied as development packages. The required semantic
+matrices cover MOVE/MOVEA, transfer/address, arithmetic/comparison,
+logical/bit/shift/atomic and control/system instructions across 68000, 68010,
+68EC020, 68020, 68030, 68040, 68060 and the A1200 EC020 profile. The retained
+qualification gate requires 86,663,530 architectural cases in 783 reporting
+batches, with no required mismatches, unsupported execution or untested cases.
+Logical case counts are separate from xUnit test counts.
+
+The general logical handler includes EORI byte/word/long postincrement; Detroit's
+ten explicit semantic regressions and first-month native gameplay record are
+retained. The release also retains independent pending-delivery state when CPU
+contexts are copied and completes mandatory memory BTST prefetch after waited
+reads, including static/dynamic bit-number and planned/scalar dispatch checks.
+No new CPU execution changes are introduced by the stable version promotion.
+
+Acceptance covers the approved known integer behavior. Five unresolved areas
+remain deferred: 010 rejected-RTE CCR, 060 ordinary STOP privilege, disputed
+030/040 trace boundaries, broader architectural restoration, and other private
+continuation candidates. They are never counted as passing. Physical CPU timing,
+FPU arithmetic, enabled-MMU and general OS qualification remain outside this
+integer gate. Advanced CPU profiles retain their experimental limits.
+
+Publication was authorized on 2026-10-22. The release workflow runs the CPU suite,
+validates required architectural reports, tests the AHX shared consumer and
+validates package contents before publishing the package and symbols. Earlier
+release and development evidence below retains its original scope and counts.
+
+## Historical mainline release 1.5.3
 
 This release retains the preceding 1.5.2 development integer fixes and adds consumer
 integration for 68010, 040/060 paging and the 060 FPU. The 010 forwards motherboard
