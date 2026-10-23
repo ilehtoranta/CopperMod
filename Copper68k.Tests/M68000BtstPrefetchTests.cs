@@ -34,6 +34,7 @@ public sealed class M68000BtstPrefetchTests
         cpu.State.D[1] = 7;
         cpu.State.StatusRegister = 0x271F;
         cpu.ExecuteInstruction();
+        var priorReady = bus.Accesses[^1].Cycle;
         bus.Accesses.Clear();
 
         var elapsed = cpu.ExecuteInstruction();
@@ -50,7 +51,14 @@ public sealed class M68000BtstPrefetchTests
         var pipeline = ((IM68000PipelineStateTransfer)cpu).ExportM68000PipelineState();
         Assert.Equal(2, pipeline.PrefetchCount);
         Assert.Equal(next, pipeline.PrefetchAddress);
-        Assert.Equal(final.Cycle, ((IM68000InterruptRecognition)cpu).LastInterruptSampleCycle);
+        // CE000 BTST polls IPL before its operand read, not on the later
+        // mandatory prefetch. Operand DTACK must not move that earlier poll.
+        var beforeOperand = bus.Accesses.Where(a => a.Cycle < data.Cycle)
+            .Select(a => a.Cycle).DefaultIfEmpty(priorReady).Last();
+        var recognition = (IM68000InterruptRecognition)cpu;
+        Assert.Equal(beforeOperand, recognition.LastInterruptSampleCycle);
+        if (wait != 0)
+            Assert.False(recognition.HasRecognizedInterrupt(3, data.Cycle - wait / 2, 0));
     }
 
     private sealed class WaitedReadBus(int wait) : IM68kBus, IM68000BusCycleTiming

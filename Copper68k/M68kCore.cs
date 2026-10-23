@@ -7785,6 +7785,8 @@ namespace Copper68k
             var size = mode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
             var bit = FetchWord() & 31;
             var bitEa = ResolvePlannedEa(mode, register, size);
+            if (mode != 0)
+                SampleM68000IplAtCurrentBusPhase();
             var value = ReadPlannedEaValue(in bitEa);
             var maskedBit = mode == 0 ? bit : bit & 7;
             State.SetFlag(M68kCpuState.Zero, (value & (1u << (int)maskedBit)) == 0);
@@ -7798,6 +7800,7 @@ namespace Copper68k
         {
             var register = opcode & 7;
             var bit = FetchWord() & 7;
+            SampleM68000IplAtCurrentBusPhase();
             var value = ReadByte(State.A[register]);
             State.SetFlag(M68kCpuState.Zero, (value & (1u << (int)bit)) == 0);
             if (!_useM68020BriefIndexedAddressing)
@@ -8614,6 +8617,8 @@ namespace Copper68k
 
             var bit = FetchWord() & 31;
             var bitEa = ResolvePlannedEa(plan.DestinationMode, plan.DestinationRegister, plan.Size);
+            if (plan.DestinationMode != 0)
+                SampleM68000IplAtCurrentBusPhase();
             var value = ReadPlannedEaValue(in bitEa);
             var maskedBit = plan.DestinationMode == 0 ? bit : bit & 7;
             State.SetFlag(M68kCpuState.Zero, (value & (1u << (int)maskedBit)) == 0);
@@ -10143,6 +10148,8 @@ namespace Copper68k
                 }
 
                 var bitEa = ResolveEa(bitMode, bitReg, bitSize, write: operation != 0);
+                if (operation == 0)
+                    SampleM68000IplAtCurrentBusPhase();
                 var value = bitEa.Read();
                 var mask = 1u << (int)(bitMode == 0 ? bit : bit & 7);
                 State.SetFlag(M68kCpuState.Zero, (value & mask) == 0);
@@ -10200,6 +10207,8 @@ namespace Copper68k
                 }
 
                 var bitEa = ResolveEa(bitMode, bitReg, bitSize, write: operation != 0);
+                if (operation == 0)
+                    SampleM68000IplAtCurrentBusPhase();
                 var value = bitEa.Read();
                 var bit = State.D[bitRegister] & (bitMode == 0 ? 31u : 7u);
                 var mask = 1u << (int)bit;
@@ -11143,6 +11152,7 @@ namespace Copper68k
             {
                 var address = FetchLong();
                 var absoluteMaskedBit = bit & 7;
+                SampleM68000IplAtCurrentBusPhase();
                 var absoluteValue = ReadByte(address);
                 State.SetFlag(M68kCpuState.Zero, (absoluteValue & (1u << absoluteMaskedBit)) == 0);
                 if (!_useM68020BriefIndexedAddressing)
@@ -11153,6 +11163,8 @@ namespace Copper68k
 
             var bitSize = mode == 0 ? M68kOperandSize.Long : M68kOperandSize.Byte;
             var bitEa = ResolveEa(mode, reg, bitSize);
+            if (mode != 0)
+                SampleM68000IplAtCurrentBusPhase();
             var value = bitEa.Read();
             var maskedBit = mode == 0 ? bit : bit & 7;
             State.SetFlag(M68kCpuState.Zero, (value & (1u << maskedBit)) == 0);
