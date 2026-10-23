@@ -1,5 +1,21 @@
 # Copper68k
 
+## Development 1.5.5-nitro.1
+
+This unpublished development version samples MC68000 memory BTST interrupt
+pins after effective-address extensions and before the operand read. The later
+mandatory prefetch, flag update ordering and total instruction cycles remain
+unchanged. This follows the bus-phase ordering in WinUAE's generated CE000
+[immediate absolute-long BTST](https://github.com/tonioni/WinUAE/blob/master/cpuemu_13.cpp)
+and corresponding dynamic forms; it is implementation evidence, not a physical
+CPU timing measurement.
+
+The regression covers static/dynamic bit numbers, address-indirect/absolute-long
+operands, all three dispatch paths and operand DTACK waits. It distinguishes
+interrupts arriving during a waited operand from the earlier IPL poll. The
+CopperScreen Nitro replay supplies consumer integration evidence. This change
+does not authorize package publication or revise the historical integer gate.
+
 ## Mainline release 1.5.4
 
 This release promotes the qualified integer instruction suite and mainline

@@ -9,9 +9,9 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.5.4</Version>
-    <PackageVersion>1.5.4</PackageVersion>
-    <PackageReleaseNotes>Stable release of the qualified integer instruction suite and mainline corrections across seven CPU models and the A1200 profile. Includes generic logical/immediate addressing with EORI postincrement, approved context-copy ownership fixes, and mandatory MC68000-family memory BTST prefetch after waited reads. Required integer semantic matrices, scoped architectural exceptions and shared-consumer tests gate publication. Five unresolved qualification areas remain explicitly deferred; physical CPU timing, FPU, enabled-MMU and general OS qualification are not implied. Publication authorized on 2026-10-22.</PackageReleaseNotes>
+    <Version>1.5.5-nitro.1</Version>
+    <PackageVersion>1.5.5-nitro.1</PackageVersion>
+    <PackageReleaseNotes>Unpublished development source: sample MC68000 memory BTST interrupts before the operand read while retaining the mandatory final prefetch and waited-read retirement. Physical timing and release qualification are not implied.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
