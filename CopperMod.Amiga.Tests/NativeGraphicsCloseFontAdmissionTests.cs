@@ -598,7 +598,9 @@ public sealed class NativeGraphicsCloseFontAdmissionTests
                     NativeGraphicsLibraryImageBuilder.PositiveImageSize),
                 ReadBytes(_residentAddress, _residentByteCount),
                 ReadBytes(CallerAddress, 8),
-                ReadBytes(StackAddress, 0x2C0).Concat(ReadBytes(StackPointer, 0x300)).ToArray());
+                // The public frame plus internal helper calls may use this
+                // stack span. Guard caller storage and the lower canary region.
+                ReadBytes(StackAddress, 0x280).Concat(ReadBytes(StackPointer, 0x300)).ToArray());
 
         internal MemorySnapshot CaptureMemoryExcludingFont(uint font)
         {
@@ -681,11 +683,13 @@ public sealed class NativeGraphicsCloseFontAdmissionTests
             for (var instruction = 0; instruction < 1_000; instruction++)
             {
                 var pc = _cpu.State.ProgramCounter;
+                Assert.InRange(_cpu.State.A[7], StackPointer - 128u, StackPointer);
                 Assert.True(pc >= _nativeCodeAddress &&
                     (ulong)pc < (ulong)_nativeCodeAddress + (uint)Image.Value.Code.Length,
                     $"Unexpected execution address 0x{pc:X8}; no host graphics/Exec gateway is installed.");
                 usedFallback |= pc == _nativeCodeAddress + (uint)Image.Value.Fallback;
-                if (_bus.ReadWord(pc) == 0x4E75)
+                // Internal helper returns are not returns to the public caller.
+                if (_bus.ReadWord(pc) == 0x4E75 && _cpu.State.A[7] == StackPointer - 4u)
                 {
                     nativeReturnCount++;
                     usedFallback |= _cpu.State.D[0] == CapturedD0;
