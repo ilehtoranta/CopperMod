@@ -10,6 +10,10 @@ Supported input formats are the formats registered by `CopperMod.Rendering`:
 - Amiga CUST players
 - SID tunes
 
+ZIP and LhA/LZH archives are supported. By default the first playable member
+is rendered; use `--archive-member <path>` to select a member explicitly.
+Companion files must be in the same archive directory as the selected tune.
+
 ## Usage
 
 From the repository root:

@@ -1,5 +1,6 @@
 using CopperMod.Abstractions;
 using CopperMod.Rendering;
+using CopperMod.Replayers;
 using CopperMod.Sid;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -25,8 +26,13 @@ internal sealed class ModuleAudioPlayer : IDisposable
 	private WaveformDisplayMode _waveformDisplayMode = WaveformDisplayMode.MixedOutput;
 	private IWavePlayer? _output;
 	private bool _disposed;
+	private ModuleArchive? _archive;
+	private IReadOnlyList<string> _archiveMembers = Array.Empty<string>();
 
 	public event EventHandler? StateChanged;
+	public event EventHandler? SongEnded;
+	public IReadOnlyList<string> ArchiveMembers => _archiveMembers;
+	public int ArchiveMemberIndex { get; private set; } = -1;
 
 	public string? FilePath { get; private set; }
 
@@ -157,20 +163,67 @@ internal sealed class ModuleAudioPlayer : IDisposable
 		}
 
 		path = Path.GetFullPath(path);
-		var song = ModuleFormatRegistry.LoadFile(path, _formats);
+		var data = File.ReadAllBytes(path);
+		ModuleArchive? archive = null;
+		IReadOnlyList<string> members = Array.Empty<string>();
+		IModuleSong song;
+		if (ModuleArchive.IsArchive(data))
+		{
+			archive = ModuleArchive.Open(data);
+			members = ModuleFormatRegistry.GetArchiveMembers(archive, _formats);
+			if (members.Count == 0) throw new ModuleLoadException("Archive contains no playable modules.");
+			song = ModuleFormatRegistry.LoadArchiveMember(archive, members[0], _formats);
+		}
+		else song = ModuleFormatRegistry.Load(new ModuleLoadContext(data, path), _formats);
+		InstallSong(song, path, startupOptions);
+		_archive = archive;
+		_archiveMembers = members;
+		ArchiveMemberIndex = archive == null ? -1 : 0;
+		OnStateChanged();
+	}
 
+	public void SelectArchiveMember(int index)
+	{
+		ThrowIfDisposed();
+		if (_archive == null || index < 0 || index >= _archiveMembers.Count) throw new ArgumentOutOfRangeException(nameof(index));
+		var song = ModuleFormatRegistry.LoadArchiveMember(_archive, _archiveMembers[index], _formats);
+		InstallSong(song, FilePath!, null);
+		ArchiveMemberIndex = index;
+		OnStateChanged();
+	}
+
+	private void InstallSong(IModuleSong song, string path, PlayerStartupOptions? startupOptions)
+	{
+		ModuleSampleProvider? provider = null;
+		IWavePlayer? output = null;
+		try
+		{
+			startupOptions?.Apply(song);
+			song.LoopingEnabled = false;
+			provider = new ModuleSampleProvider(song, SampleRate, ChannelCount, _outputProfile, InitialOutputLeadIn, _c64OutputProfile, _sidEmulationProfile);
+			provider.WaveformEnabled = _waveformEnabled;
+			provider.WaveformDisplayMode = _waveformDisplayMode;
+			output = CreateOutputDevice();
+			output.Init(provider.ToWaveProvider());
+		}
+		catch
+		{
+			output?.Dispose();
+			provider?.Dispose();
+			song.Dispose();
+			throw;
+		}
 		DisposePlaybackObjects();
-
-		startupOptions?.Apply(song);
 		_song = song;
-		_song.LoopingEnabled = false;
-		_sampleProvider = new ModuleSampleProvider(_song, SampleRate, ChannelCount, _outputProfile, InitialOutputLeadIn, _c64OutputProfile, _sidEmulationProfile);
-		_sampleProvider.WaveformEnabled = _waveformEnabled;
-		_sampleProvider.WaveformDisplayMode = _waveformDisplayMode;
-		_sampleProvider.EndOfSongReached += (_, _) => OnStateChanged();
-		_output = CreateOutputDevice();
-		_output.Init(_sampleProvider.ToWaveProvider());
-		_output.PlaybackStopped += (_, _) => OnStateChanged();
+		_sampleProvider = provider;
+		_output = output;
+		provider.EndOfSongReached += (_, _) =>
+		{
+			if (!ReferenceEquals(provider, _sampleProvider)) return;
+			OnStateChanged();
+			SongEnded?.Invoke(this, EventArgs.Empty);
+		};
+		output.PlaybackStopped += (_, _) => OnStateChanged();
 		FilePath = path;
 		OnStateChanged();
 	}

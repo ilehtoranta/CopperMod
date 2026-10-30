@@ -30,7 +30,7 @@ public sealed class EaglePlayerSession : IDisposable
             Path.GetExtension(source).Equals(".tfx", StringComparison.OrdinalIgnoreCase))
         {
             var filename = Path.GetFileName(source);
-            loadContext = new ModuleLoadContext(module, source, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            loadContext = loadContext.WithRelativeFileAliases(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["smpl." + filename] = Path.ChangeExtension(filename, ".sam")
             });

@@ -1,6 +1,7 @@
 using CopperMod.Abstractions;
 using CopperMod.Rendering;
 using CopperMod.Sid;
+using CopperMod.Replayers;
 using NAudio.MediaFoundation;
 using NAudio.Wave;
 
@@ -57,7 +58,9 @@ internal static class CopperModTools
 			throw new CommandLineException("Output file already exists. Use --overwrite to replace it.");
 		}
 
-		using var song = ModuleFormatRegistry.LoadFile(options.InputPath);
+		using var song = options.ArchiveMember == null
+			? ModuleFormatRegistry.LoadFile(options.InputPath)
+			: ModuleFormatRegistry.LoadArchiveMember(ModuleArchive.Open(File.ReadAllBytes(options.InputPath)), options.ArchiveMember);
 		ConfigureSong(song, options);
 		var fixedDuration = ResolveFixedDuration(song, options, output);
 		Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(options.OutputPath)) ?? ".");

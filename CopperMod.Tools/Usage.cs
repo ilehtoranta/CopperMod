@@ -13,6 +13,7 @@ internal static class Usage
 		  --format wav|pcm|mp3|bmp   Optional when output extension is .wav, .pcm, .mp3, or .bmp.
 		  --seconds <number|auto>    Render a fixed duration, or auto-detect SID duration.
 		  --subsong <number>         Select a 1-based subtune.
+		  --archive-member <path>    Select a tune within a ZIP or LhA archive.
 		  --sample-rate <hz>         Default: 44100.
 		  --channels <count>         Default: 2.
 		  --sid-solo <1|2|3>         Render only one SID voice.

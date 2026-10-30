@@ -40,6 +40,13 @@ dotnet run --project CopperMod -c Release -- "path/to/Cyber Swats.tfx"
 Without a filename, the player tries the default MED test tune if it is available
 locally.
 
+The player also opens ZIP and Amiga LhA/LZH archives. Playable members are
+ordered by path; use the track buttons to move between them, independently of
+the subtune buttons. Use Tracks to view the list and enter a track number to
+select it. The next track starts when a tune reaches its natural end;
+looping tunes require manual navigation. Companion files are read from the same
+archive directory. Nested archives are not supported.
+
 `CopperMod.Amiga` imports the shared graphics.library image layout from
 `CopperStart/native/CopperStart.Graphics/Firmware`. The separate
 `CopperMod.Amiga.Emulator` integration imports its replacement-OS services and
@@ -65,6 +72,7 @@ or a descendant containing `host/CopperStart.CopperMod` and
 dotnet run --project CopperMod.Tools -- render "path/to/tune.mod" --out tune.wav --seconds 30
 dotnet run --project CopperMod.Tools -- render "path/to/tune.sid" --out tune.pcm --seconds 30
 dotnet run --project CopperMod.Tools -- render "path/to/tune.sid" --out tune.mp3 --seconds 30 --mp3-bitrate 192
+dotnet run --project CopperMod.Tools -- render "path/to/tunes.lha" --archive-member "music/tune.mod" --out tune.wav --seconds 30
 ```
 
 The packaged player includes the same exporter:
@@ -85,7 +93,8 @@ EaglePlayer replay can be tested separately through the shared Amiga audio host:
 .\scripts\Render-EaglePlayer.ps1 -InputPath "path\Cyber Swats.tfx" -OutputPath "Cyber Swats.wav" -Player tfmx-pro -Seconds 30
 ```
 
-Extract both `.tfx` and `.sam` files into the same directory first. The script
+Keep both `.tfx` and `.sam` files in the same directory, or pass an archive
+and select the tune with `-ArchiveMember 'music/tune.tfx'`. The script
 requires the .NET 10 SDK and acquires the authenticated EaglePlayer binary on
 first use. Output is stereo Float32 WAV at 44.1 kHz; `-SubSong` selects a
 zero-based subsong. This render path is independent of the terminal player's

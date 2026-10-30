@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)][string]$OutputPath,
     [string]$Player = 'tfmx-pro',
     [ValidateRange(1, 3600)][int]$Seconds = 30,
-    [ValidateRange(0, 255)][int]$SubSong = 0
+    [ValidateRange(0, 255)][int]$SubSong = 0,
+    [string]$ArchiveMember = ''
 )
 $ErrorActionPreference = 'Stop'
 $inputFile = (Resolve-Path -LiteralPath $InputPath).Path
@@ -24,10 +25,18 @@ New-Item -ItemType Directory -Path $scratch -Force | Out-Null
 @'
 using CopperMod.Abstractions;
 using CopperMod.EaglePlayer;
+using CopperMod.Replayers;
 var input = args[0]; var output = args[1]; var player = args[2];
 var seconds = int.Parse(args[3]); var subsong = int.Parse(args[4]);
 var data = File.ReadAllBytes(input);
-using var session = EaglePlayerSession.LoadConfigured(EaglePlayerReplayerCatalog.Get(player), data, new ModuleLoadContext(data, input));
+var context = new ModuleLoadContext(data, input);
+var member = args.Length > 5 ? args[5] : "";
+if (ModuleArchive.IsArchive(data)) {
+    if (string.IsNullOrWhiteSpace(member)) throw new ArgumentException("ArchiveMember is required for archive input.");
+    context = ModuleArchive.Open(data).CreateContext(member);
+    data = context.Data.ToArray();
+} else if (!string.IsNullOrWhiteSpace(member)) throw new ArgumentException("ArchiveMember requires archive input.");
+using var session = EaglePlayerSession.LoadConfigured(EaglePlayerReplayerCatalog.Get(player), data, context);
 if (subsong != 0) session.SelectSubSong(subsong);
 const int rate = 44100, channels = 2;
 var target = seconds * rate;
@@ -53,5 +62,5 @@ Console.WriteLine($"Rendered {seconds}s, subsong {subsong + 1}/{session.SubSongC
 foreach (var diagnostic in session.Diagnostics) Console.WriteLine(diagnostic);
 if (session.Diagnostics.Any(d => d.Code == "CUST_CPU_OVERRUN" || d.Severity == ModuleDiagnosticSeverity.Error)) Environment.ExitCode = 1;
 '@ | Set-Content -LiteralPath (Join-Path $scratch 'Program.cs')
-dotnet run --project (Join-Path $scratch 'Render.csproj') -c Release -- $inputFile $outputFile $Player $Seconds $SubSong
+dotnet run --project (Join-Path $scratch 'Render.csproj') -c Release -- $inputFile $outputFile $Player $Seconds $SubSong $ArchiveMember
 if ($LASTEXITCODE -ne 0) { throw "EaglePlayer render failed with exit code $LASTEXITCODE." }

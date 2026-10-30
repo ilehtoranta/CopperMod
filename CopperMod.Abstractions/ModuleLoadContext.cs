@@ -10,6 +10,7 @@ namespace CopperMod.Abstractions
     public sealed class ModuleLoadContext
     {
         private readonly IReadOnlyDictionary<string, string>? _relativeFileAliases;
+        private readonly Func<string, byte[]?>? _relativeFileResolver;
         /// <summary>
         /// Creates a load context from module bytes and an optional source path.
         /// </summary>
@@ -20,7 +21,14 @@ namespace CopperMod.Abstractions
 
         /// <summary>Creates a context with filename aliases for companion files, resolved within the source directory.</summary>
         public ModuleLoadContext(ReadOnlyMemory<byte> data, string? sourcePath, IReadOnlyDictionary<string, string>? relativeFileAliases)
+            : this(data, sourcePath, relativeFileAliases, null)
         {
+        }
+
+        /// <summary>Creates a context with a custom companion-file resolver.</summary>
+        public ModuleLoadContext(ReadOnlyMemory<byte> data, string? sourcePath, IReadOnlyDictionary<string, string>? relativeFileAliases, Func<string, byte[]?>? relativeFileResolver)
+        {
+            _relativeFileResolver = relativeFileResolver;
             Data = data;
             SourcePath = string.IsNullOrWhiteSpace(sourcePath) ? null : Path.GetFullPath(sourcePath);
             _relativeFileAliases = relativeFileAliases;
@@ -46,6 +54,10 @@ namespace CopperMod.Abstractions
         /// </summary>
         public string? SourceDirectory => SourcePath == null ? null : Path.GetDirectoryName(SourcePath);
 
+        /// <summary>Adds companion aliases while preserving the file resolver.</summary>
+        public ModuleLoadContext WithRelativeFileAliases(IReadOnlyDictionary<string, string> aliases)
+            => new ModuleLoadContext(Data, SourcePath, aliases, _relativeFileResolver);
+
         /// <summary>
         /// Reads a file below <see cref="SourceDirectory" /> without allowing traversal outside that directory.
         /// </summary>
@@ -60,6 +72,14 @@ namespace CopperMod.Abstractions
             if (_relativeFileAliases != null && _relativeFileAliases.TryGetValue(relativePath, out var alias))
             {
                 relativePath = alias;
+            }
+
+            if (_relativeFileResolver != null)
+            {
+                var resolved = _relativeFileResolver(relativePath);
+                if (resolved == null) return false;
+                data = resolved;
+                return true;
             }
 
             var fullDirectory = Path.GetFullPath(SourceDirectory);
