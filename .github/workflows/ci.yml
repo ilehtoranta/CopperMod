@@ -90,3 +90,12 @@ jobs:
 
       - name: Test native graphics CloseFont admission
         run: dotnet test CopperMod.Amiga.Graphics.Tests\CopperMod.Amiga.Graphics.Tests.csproj --configuration Release -p:CopperStartRoot="${{ github.workspace }}/CopperStart"
+
+      - name: Test archives and TFMX registration
+        run: dotnet test CopperMod.Tests\CopperMod.Tests.csproj --configuration Release -p:CopperStartRoot="${{ github.workspace }}/CopperStart" --filter "FullyQualifiedName~ModuleArchiveTests|FullyQualifiedName~TfmxPlaybackTests|FullyQualifiedName~ModuleFormatRegistryContextTests"
+
+      - name: Test archive rendering
+        run: dotnet test CopperMod.Tools.Tests\CopperMod.Tools.Tests.csproj --configuration Release -p:CopperStartRoot="${{ github.workspace }}/CopperStart" --filter "FullyQualifiedName~RendersSelectedZipMember"
+
+      - name: Test CopperStart bootstrap
+        run: dotnet test CopperMod.Amiga.Bootstrap.Tests\CopperMod.Amiga.Bootstrap.Tests.csproj --configuration Release -p:CopperStartRoot="${{ github.workspace }}/CopperStart"
