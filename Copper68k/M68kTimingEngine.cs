@@ -897,7 +897,10 @@ namespace Copper68k
         MoveBytePostIncrementToBriefIndexed,
         MoveWordPostIncrementToBriefIndexed,
         MoveLongPostIncrementToBriefIndexed,
-        AsrWordAddressDisplacement
+        AsrWordAddressDisplacement,
+        EoriByteImmediateToPostIncrement,
+        EoriWordImmediateToPostIncrement,
+        EoriLongImmediateToPostIncrement
     }
 
     internal readonly record struct M68kInstructionPlan(

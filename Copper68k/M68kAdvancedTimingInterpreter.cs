@@ -479,6 +479,7 @@ namespace Copper68k
         ImmediateLogicalData,
         EoriImmediateToAddressDisplacement,
         EoriImmediateToAddressIndirect,
+        EoriImmediateToPostIncrement,
         EoriImmediateToAbsoluteLong,
         BtstByteImmediateAbsoluteLong,
         BtstByteImmediateAbsoluteWord,
@@ -1314,6 +1315,10 @@ namespace Copper68k
             if ((opcode & 0xFF38) == 0x0A10 && (opcode & 0xC0) != 0xC0)
             {
                 return M68020OpcodeKind.EoriImmediateToAddressIndirect;
+            }
+            if ((opcode & 0xFF38) == 0x0A18 && (opcode & 0xC0) != 0xC0)
+            {
+                return M68020OpcodeKind.EoriImmediateToPostIncrement;
             }
             if (opcode is 0x0A39 or 0x0A79 or 0x0AB9)
             {
@@ -7246,6 +7251,10 @@ namespace Copper68k
                 case M68020OpcodeKind.EoriImmediateToAddressIndirect:
                     if (_profile.Model == M68kAcceleratorModel.M68040) return false;
                     ExecuteEoriImmediateToAddressMemory(opcode, displacement: false);
+                    return true;
+                case M68020OpcodeKind.EoriImmediateToPostIncrement:
+                    if (_profile.Model == M68kAcceleratorModel.M68040) return false;
+                    ExecuteEoriImmediateToAddressMemory(opcode, displacement: false, postIncrement: true);
                     return true;
                 case M68020OpcodeKind.EoriImmediateToAbsoluteLong:
                     if (_profile.Model == M68kAcceleratorModel.M68040) return false;
@@ -13410,7 +13419,7 @@ namespace Copper68k
             CompleteTiming(!subtract ? M68kInstructionTimingKey.AddqWordAddressIndirect : size == M68kOperandSize.Byte ? M68kInstructionTimingKey.SubqByteAddressIndirect : M68kInstructionTimingKey.SubqWordAddressIndirect);
         }
 
-        private void ExecuteEoriImmediateToAddressMemory(ushort opcode, bool displacement, bool absoluteLong = false)
+        private void ExecuteEoriImmediateToAddressMemory(ushort opcode, bool displacement, bool absoluteLong = false, bool postIncrement = false)
         {
             BeginInstruction(opcode);
             _ = FetchWord();
@@ -13420,6 +13429,8 @@ namespace Copper68k
             var address = absoluteLong ? FetchLong() : unchecked((uint)(State.A[opcode & 7] + offset));
             var result = ReadSized(address, size) ^ immediate;
             WriteSized(address, result, size); SetMoveFlags(result, size);
+            if (postIncrement)
+                WriteGeneralRegister(true, opcode & 7, unchecked(address + M68kIntegerSemantics.AddressIncrement(opcode & 7, size)));
             CompleteTiming(absoluteLong ? size switch
             {
                 M68kOperandSize.Byte => M68kInstructionTimingKey.EoriByteImmediateToAbsoluteLong,
@@ -13430,6 +13441,11 @@ namespace Copper68k
                 M68kOperandSize.Byte => M68kInstructionTimingKey.EoriByteImmediateToAddressDisplacement,
                 M68kOperandSize.Word => M68kInstructionTimingKey.EoriWordImmediateToAddressDisplacement,
                 _ => M68kInstructionTimingKey.EoriLongImmediateToAddressDisplacement
+            } : postIncrement ? size switch
+            {
+                M68kOperandSize.Byte => M68kInstructionTimingKey.EoriByteImmediateToPostIncrement,
+                M68kOperandSize.Word => M68kInstructionTimingKey.EoriWordImmediateToPostIncrement,
+                _ => M68kInstructionTimingKey.EoriLongImmediateToPostIncrement
             } : size switch
             {
                 M68kOperandSize.Byte => M68kInstructionTimingKey.EoriByteImmediateToAddressIndirect,
