@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
 
 namespace CopperMod.Abstractions
 {
@@ -8,13 +9,21 @@ namespace CopperMod.Abstractions
     /// </summary>
     public sealed class ModuleLoadContext
     {
+        private readonly IReadOnlyDictionary<string, string>? _relativeFileAliases;
         /// <summary>
         /// Creates a load context from module bytes and an optional source path.
         /// </summary>
         public ModuleLoadContext(ReadOnlyMemory<byte> data, string? sourcePath = null)
+            : this(data, sourcePath, null)
+        {
+        }
+
+        /// <summary>Creates a context with filename aliases for companion files, resolved within the source directory.</summary>
+        public ModuleLoadContext(ReadOnlyMemory<byte> data, string? sourcePath, IReadOnlyDictionary<string, string>? relativeFileAliases)
         {
             Data = data;
             SourcePath = string.IsNullOrWhiteSpace(sourcePath) ? null : Path.GetFullPath(sourcePath);
+            _relativeFileAliases = relativeFileAliases;
         }
 
         /// <summary>
@@ -46,6 +55,11 @@ namespace CopperMod.Abstractions
             if (string.IsNullOrWhiteSpace(relativePath) || SourceDirectory == null)
             {
                 return false;
+            }
+
+            if (_relativeFileAliases != null && _relativeFileAliases.TryGetValue(relativePath, out var alias))
+            {
+                relativePath = alias;
             }
 
             var fullDirectory = Path.GetFullPath(SourceDirectory);

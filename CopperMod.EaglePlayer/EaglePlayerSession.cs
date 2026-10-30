@@ -25,6 +25,17 @@ public sealed class EaglePlayerSession : IDisposable
             throw new UnsupportedModuleFormatException("The configured EaglePlayer replay binary does not expose supported DeliTracker player tags.");
         }
 
+        // PC archives commonly use .tfx/.sam instead of Amiga mdat./smpl. prefixes.
+        if (module.AsSpan().StartsWith("TFMX"u8) && loadContext?.SourcePath is { } source &&
+            Path.GetExtension(source).Equals(".tfx", StringComparison.OrdinalIgnoreCase))
+        {
+            var filename = Path.GetFileName(source);
+            loadContext = new ModuleLoadContext(module, source, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["smpl." + filename] = Path.ChangeExtension(filename, ".sam")
+            });
+        }
+
         _machine = new CustMachine(hunk, tags, loadContext, module);
     }
 

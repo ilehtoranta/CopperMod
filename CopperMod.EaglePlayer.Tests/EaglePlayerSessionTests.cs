@@ -191,9 +191,47 @@ public sealed class EaglePlayerSessionTests
                 player.Length,
                 Convert.ToHexString(SHA256.HashData(player))));
 
-    private static byte[] CreateMinimalPlayerHunk(bool includeCustomPlayerTag = true)
+    [Fact]
+    public void RejectsModuleBeforeInitializationWhenPlayerCheckFails()
     {
-        const int segmentWords = 20;
+        var player = CreateMinimalPlayerHunk();
+        WriteLong(player, 32 + 16, CustConstants.DtpCheck2);
+        player[32 + 72] = 0x70; // moveq #-1,d0; rts
+        player[32 + 73] = 0xFF;
+        player[32 + 74] = 0x4E;
+        player[32 + 75] = 0x75;
+        Assert.Throws<UnsupportedModuleFormatException>(() =>
+            EaglePlayerSession.Create(Descriptor(player), player, new byte[] { 1 }));
+    }
+
+    [Fact]
+    public void ExternalLoadPublishesCompanionBytesAndReloadsThemOnReset()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "coppermod-external-" + Guid.NewGuid());
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Combine(directory, "samples.bin");
+            byte[] samples = [0x12, 0x34, 0xAB, 0xCD];
+            File.WriteAllBytes(path, samples);
+            var player = CreateMinimalPlayerHunk(loadExternal: true);
+            using var session = EaglePlayerSession.Create(Descriptor(player), player, new byte[] { 1 }, new ModuleLoadContext(new byte[] { 1 }, path));
+            foreach (var reset in new[] { false, true })
+            {
+                if (reset) session.Reset();
+                // Guest InitPlayer copies the first companion byte into the module.
+                Assert.Equal(samples[0], session.Machine.ReadListData()[0]);
+                Assert.Empty(session.Diagnostics);
+            }
+            File.Delete(path);
+            Assert.Throws<ModuleLoadException>(() => session.Reset());
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    private static byte[] CreateMinimalPlayerHunk(bool includeCustomPlayerTag = true, bool loadExternal = false)
+    {
+        const int segmentWords = 40;
         const uint routineOffset = 72;
         var segment = new byte[segmentWords * 4];
         var tagOffset = 0;
@@ -214,6 +252,20 @@ public sealed class EaglePlayerSessionTests
         WriteLong(segment, initSoundValueOffset, routineOffset);
         WriteLong(segment, tagOffset + 24, CustConstants.TagDone);
         WriteLong(segment, tagOffset + 28, 0);
+        if (loadExternal)
+        {
+            WriteLong(segment, tagOffset + 24, CustConstants.DtpExtLoad);
+            WriteLong(segment, tagOffset + 28, 80);
+            WriteLong(segment, tagOffset + 32, CustConstants.TagDone);
+            // movea.l dtg_CopyFile(a5),a0; jsr (a0); movea.l dtg_LoadFile(a5),a0; jsr (a0); rts
+            byte[] code = [0x20, 0x6D, 0, 0x44, 0x4E, 0x90, 0x20, 0x6D, 0, 0x3C, 0x4E, 0x90, 0x4E, 0x75];
+            code.CopyTo(segment, 80);
+            WriteLong(segment, initPlayerValueOffset, 100);
+            // GetListData(0), save pointer in a1, GetListData(1), copy its first byte.
+            byte[] init = [0x70, 0, 0x20, 0x6D, 0, 0x38, 0x4E, 0x90, 0x22, 0x48,
+                0x70, 1, 0x20, 0x6D, 0, 0x38, 0x4E, 0x90, 0x12, 0x90, 0x4E, 0x75];
+            init.CopyTo(segment, 100);
+        }
         segment[routineOffset] = 0x4E;
         segment[routineOffset + 1] = 0x75;
 
@@ -234,10 +286,11 @@ public sealed class EaglePlayerSessionTests
         }
 
         words.Add(HunkParser.HunkReloc32);
-        words.Add(2);
+        words.Add(loadExternal ? 3u : 2u);
         words.Add(0);
         words.Add((uint)initPlayerValueOffset);
         words.Add((uint)initSoundValueOffset);
+        if (loadExternal) words.Add((uint)(tagOffset + 28));
         words.Add(0);
         words.Add(HunkParser.HunkEnd);
 

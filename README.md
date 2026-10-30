@@ -62,6 +62,18 @@ MP3 export uses the Windows Media Foundation encoder. See the
 [export tool reference](CopperMod.Tools/README.md) for output shaping,
 voice selection, duration detection and other options.
 
+EaglePlayer replay can be tested separately through the shared Amiga audio host:
+
+```powershell
+.\scripts\Render-EaglePlayer.ps1 -InputPath "path\Cyber Swats.tfx" -OutputPath "Cyber Swats.wav" -Player tfmx-pro -Seconds 30
+```
+
+Extract both `.tfx` and `.sam` files into the same directory first. The script
+requires the .NET 10 SDK and acquires the authenticated EaglePlayer binary on
+first use. Output is stereo Float32 WAV at 44.1 kHz; `-SubSong` selects a
+zero-based subsong. This render path is independent of the terminal player's
+format registry.
+
 ## Reusable libraries
 
 Playback backends render audio in small slices and can be used independently

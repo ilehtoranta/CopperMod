@@ -70,6 +70,20 @@ public sealed class AmigaKickstartTests
 	}
 
 	[Fact]
+	public void HostShim13RoutesCloseLibraryToItsCallback()
+	{
+		var bus = new AmigaBus();
+		var closedBase = 0u;
+		var host = new AmigaKickstartHost(KickstartConfiguration.HostShim13);
+		host.Install(bus, CreateTrapTable(closeLibrary: state => closedBase = state.A[1]));
+		var state = new M68kCpuState();
+		state.A[1] = AmigaKickstartHost.GraphicsLibraryBase;
+
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -414), state));
+		Assert.Equal(AmigaKickstartHost.GraphicsLibraryBase, closedBase);
+	}
+
+	[Fact]
 	public void HostShim13RoutesIntuitionAllocRememberToAllocator()
 	{
 		var bus = new AmigaBus();
@@ -194,6 +208,7 @@ public sealed class AmigaKickstartTests
 		Action<M68kCpuState>? nullCallback = null,
 		Action<M68kCpuState>? ok = null,
 		Action<M68kCpuState>? openLibrary = null,
+		Action<M68kCpuState>? closeLibrary = null,
 		Action<M68kCpuState>? allocMem = null,
 		Action<M68kCpuState>? allocMemAndStore = null,
 		Action<M68kCpuState>? freeMem = null,
@@ -217,6 +232,7 @@ public sealed class AmigaKickstartTests
 			nullCallback ?? Ok,
 			ok ?? Ok,
 			openLibrary ?? Ok,
+			closeLibrary ?? Ok,
 			allocMem ?? Ok,
 			allocMemAndStore ?? Ok,
 			freeMem ?? Ok,

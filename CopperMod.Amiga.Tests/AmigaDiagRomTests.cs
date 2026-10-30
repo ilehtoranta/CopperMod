@@ -129,6 +129,7 @@ public sealed class AmigaDiagRomTests
 			Ok,
 			Ok,
 			Ok,
+			Ok,
 			Ok);
 	}
 }
