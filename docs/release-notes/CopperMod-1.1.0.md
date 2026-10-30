@@ -12,6 +12,11 @@ convention. Extract ZIP archives before opening the song. On first use the playe
 downloads and verifies the required EaglePlayer binary from its registered
 Aminet archive. A cached or manually configured binary supports offline playback.
 
+SID loop detection now tolerates up to one raster line of call-start jitter in
+scheduled PSID players. Register values, write order and timing between writes
+remain checked; larger programmed delays and continuous-program timing remain
+significant.
+
 ```powershell
 CopperMod.exe "C:\Music\Cyber Swats.tfx"
 CopperMod.exe --render "C:\Music\Cyber Swats.tfx" --out voice.wav --seconds 6
@@ -31,13 +36,16 @@ corpus coverage have not been established. Replay accuracy remains in progress.
 
 - Player tests: 69 passed, including the supplied TFMX Pro fixture.
 - EaglePlayer tests: 23 passed; replayer acquisition tests: 9 passed.
-- Exporter tests: 35 passed, 8 failed. Seven need unavailable external MOD,
-  CUST or SID fixtures. The remaining failure is
-  `SidLoopDetectionCanResolveUnknownSidDuration`; the SID implementation and
-  that test are unchanged from the current main branch.
+- SID loop/duration detector tests: 8 passed, including guards for inter-write
+  timing and larger programmed delays.
+- Exporter tests: 37 passed, 6 skipped, no failures. The exact Galway Arkanoid
+  SID fixture is available in the local HVSC collection. `failright.mod` and
+  `AlteredBeast.CUST` were not found in the local tune collections, workspaces,
+  downloads or data directories; six tests explicitly report unavailable media.
 - Both extracted release flavors report version 1.1.0, acquire the replayer
   with an empty cache and render six seconds of Cyber Swats with finite,
   non-silent output and matching audio hashes.
 
-The complete exporter suite is not green. This candidate is prepared for
-review; it has not been tagged or published.
+Available checks pass. The six skipped Amiga fixture tests remain unavailable
+coverage. This candidate is prepared for review; it has not been tagged or
+published.

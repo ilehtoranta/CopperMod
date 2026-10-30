@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory)][string]$InputPath,
     [string]$Version = '1.1.0',
-    [string]$PrivateRomPath = ''
+    [string]$PrivateRomPath = '',
+    [string]$SidLoopFixturePath = ''
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
@@ -15,6 +16,17 @@ Add-Type -TypeDefinition @'
 using System;
 using System.IO;
 public static class CopperModReleaseWave {
+    public static double DurationSeconds(string path) {
+        using var r = new BinaryReader(File.OpenRead(path));
+        r.BaseStream.Position = 12; int channels = 0, rate = 0, bits = 0;
+        while (r.BaseStream.Position + 8 <= r.BaseStream.Length) {
+            var id = new string(r.ReadChars(4)); var size = r.ReadUInt32(); var end = r.BaseStream.Position + size;
+            if (id == "fmt ") { r.ReadUInt16(); channels = r.ReadUInt16(); rate = r.ReadInt32(); r.ReadInt32(); r.ReadUInt16(); bits = r.ReadUInt16(); }
+            if (id == "data") return size / (double)(channels * rate * (bits / 8));
+            r.BaseStream.Position = end + (size & 1);
+        }
+        throw new Exception("Missing audio data");
+    }
     public static bool ContainsRomSignature(string path, byte[] signature) =>
         File.ReadAllBytes(path).AsSpan().IndexOf(signature) >= 0;
     public static double Peak(string path) {
@@ -80,7 +92,15 @@ try {
         & $executable @prefix --render $fixture --out $wave --seconds 6
         if ($LASTEXITCODE -ne 0) { throw "Packaged render failed: $flavor" }
         $peak = [CopperModReleaseWave]::Peak($wave)
-        $results += [pscustomobject]@{ flavor = $flavor; version = $versionText; peak = $peak; waveSha256 = (Get-FileHash $wave).Hash; archiveSha256 = $hash }
+        $loopSeconds = $null
+        if ($SidLoopFixturePath) {
+            $sidWave = Join-Path $smoke "$flavor-sid-loop.wav"
+            & $executable @prefix --render $SidLoopFixturePath --out $sidWave --sid-detect-loop --sid-detect-max-seconds 8
+            if ($LASTEXITCODE -ne 0) { throw "Packaged SID loop detection failed: $flavor" }
+            $loopSeconds = [CopperModReleaseWave]::DurationSeconds($sidWave)
+            if ($loopSeconds -lt 2.4 -or $loopSeconds -gt 2.7) { throw 'Unexpected generated SID loop duration.' }
+        }
+        $results += [pscustomobject]@{ flavor = $flavor; version = $versionText; peak = $peak; sidLoopSeconds = $loopSeconds; waveSha256 = (Get-FileHash $wave).Hash; archiveSha256 = $hash }
     }
     if ($results[0].waveSha256 -ne $results[1].waveSha256) { throw 'The release flavors rendered different audio.' }
     $results | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $smoke 'results.json')

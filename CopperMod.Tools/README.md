@@ -94,7 +94,7 @@ The output format is inferred from the output extension when it is `.wav`,
 | `--channels` | positive integer | `2` | Sets the interleaved output channel count. |
 | `--sid-solo` | `1`, `2`, `3` | none | Renders only one SID voice. This option is SID-specific. |
 | `--sid-profile` | `balanced`, `reference` | `balanced` | Selects the core SID emulation profile. `reference` enables opt-in measured analog behavior. |
-| `--sid-detect-loop` | flag | off | Uses exact SID write-loop detection as the render duration. This option is SID-specific and cannot be combined with numeric `--seconds` or `--sid-detect-duration`. |
+| `--sid-detect-loop` | flag | off | Uses repeating SID register-write patterns as the render duration. Scheduled PSID calls allow up to one raster line of start jitter; write order, values and spacing remain checked. This option is SID-specific and cannot be combined with numeric `--seconds` or `--sid-detect-duration`. |
 | `--sid-detect-duration` | flag | off | Detects SID duration from either an exact write-loop restart or sustained silence. This option is SID-specific and cannot be combined with numeric `--seconds` or `--sid-detect-loop`. |
 | `--sid-detect-max-seconds` | positive number | `600` | Maximum emulated SID playback time to scan for SID loop or duration detection. |
 | `--output` | `raw`, `player` | `raw` | `raw` writes direct renderer output. `player` applies the same Amiga or C64 output stage used by the player. |
@@ -179,3 +179,11 @@ Successful renders print:
 ```text
 Rendered <filename>
 ```
+## Local test fixtures
+
+Set `SID_CORPUS_ROOT` to the local HVSC `C64Music` directory for the
+composer-qualified SID integration tests. Set `COPPERMOD_TEST_TUNES` to a
+fixture directory containing `ProTracker/failright.mod` and
+`Amiga.CUST/AlteredBeast.CUST`, or restore the historical `TestTunes` layout.
+The six Amiga exporter tests explicitly skip when those external files are
+absent; a skip is unavailable media coverage, not a verified replay.
