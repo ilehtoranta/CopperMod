@@ -60,6 +60,19 @@ public sealed class ModuleArchiveTests
     }
 
     [Fact]
+    public void RegistryRecognizesTfmxInArchiveWithCompanion()
+    {
+        var module = new byte[512];
+        "TFMX-SONG"u8.CopyTo(module);
+        var archive = ModuleArchive.Open(Zip(("music/song.tfx", module), ("music/song.sam", new byte[] { 1, 2, 3 })));
+        Assert.Equal(new[] { "music/song.tfx" }, ModuleFormatRegistry.GetArchiveMembers(archive));
+        var context = archive.CreateContext("music/song.tfx").WithRelativeFileAliases(
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["smpl.song.tfx"] = "song.sam" });
+        Assert.True(context.TryReadRelativeFile("smpl.song.tfx", out var samples));
+        Assert.Equal(new byte[] { 1, 2, 3 }, samples);
+    }
+
+    [Fact]
     public void RejectsMalformedAndExcessiveArchives()
     {
         Assert.Throws<ModuleLoadException>(() => ModuleArchive.Open(new byte[] { 0x50, 0x4b, 3, 4 }));
