@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\build\CopperStartIntegration.props" />
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>CopperMod.Amiga.Tests</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
+    <ProjectReference Include="$(CopperStartRoot)\src\CopperStart.Layers\CopperStart.Layers.csproj" />
+    <Compile Include="..\CopperMod.Amiga.Tests\NativeGraphicsCloseFontAdmissionTests.cs" Link="NativeGraphicsCloseFontAdmissionTests.cs" />
+    <Compile Include="..\CopperMod.Amiga.Emulator\AmigaHunkProgramLoader.cs" Link="AmigaHunkProgramLoader.cs" />
+    <Compile Include="$(CopperStartHostSourceRoot)\CopperStart\Graphics\Portable\*.cs" Link="Graphics\%(Filename)%(Extension)" />
+    <Using Include="Xunit" />
+    <Using Include="Copper68k" />
+    <Using Include="CopperMod.Amiga.Core" />
+    <Using Include="CopperMod.Amiga.Firmware" />
+    <Using Include="CopperMod.Amiga.Runtime" />
+    <Using Include="CopperMod.Amiga.Bus.Bus" Alias="AmigaBus" />
+  </ItemGroup>
+  <Target Name="RequireCopperStartGraphicsSources" BeforeTargets="PrepareForBuild"
+          Condition="!Exists('$(CopperStartHostSourceRoot)\CopperStart\Graphics\Portable\NativeGraphicsRasterBodies.cs')">
+    <Error Text="CopperStart graphics sources are required. Set CopperStartRoot to the documented checkout." />
+  </Target>
+</Project>

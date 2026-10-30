@@ -1,11 +1,34 @@
 using CopperMod.Abstractions;
 using CopperMod.EaglePlayer;
 using CopperMod.Rendering;
+using System.IO.Compression;
 
 namespace CopperMod.Tests;
 
 public sealed class TfmxPlaybackTests
 {
+    [TfmxFixtureFact]
+    public void ArchivedTfmxMatchesExtractedCompanionPlayback()
+    {
+        var modulePath = Environment.GetEnvironmentVariable("COPPERMOD_TFMX_TEST_MODULE")!;
+        var samplesPath = Path.ChangeExtension(modulePath, ".sam");
+        Assert.True(File.Exists(samplesPath), "TFMX .sam companion is required for this test.");
+        using var stream = new MemoryStream();
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, true))
+        {
+            using (var output = archive.CreateEntry("music/" + Path.GetFileName(modulePath)).Open())
+                output.Write(File.ReadAllBytes(modulePath));
+            using (var output = archive.CreateEntry("music/" + Path.GetFileName(samplesPath)).Open())
+                output.Write(File.ReadAllBytes(samplesPath));
+        }
+
+        using var extracted = ModuleFormatRegistry.LoadFile(modulePath);
+        using var archived = ModuleFormatRegistry.Load(stream.ToArray());
+        var expected = Render(extracted);
+        Assert.Contains(expected, value => Math.Abs(value) > 0.001f);
+        Assert.Equal(expected, Render(archived));
+    }
+
     [Fact]
     public void DefaultRegistryRecognizesTfmxButRejectsShortOrUnrelatedHeaders()
     {
