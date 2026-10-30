@@ -8,8 +8,6 @@ namespace CopperMod.Cust
 {
     internal sealed class CustSong : IModuleSong, IAmigaHardwareStateProvider, IModuleChannelWaveformProvider, IModuleSubSongSelector
     {
-        private readonly HunkFile _hunk;
-        private readonly DeliTagTable _tags;
         private readonly ModuleMetadata _metadata;
         private readonly ModulePlaybackCapabilities _capabilities;
         private readonly List<ModuleSubSongMetadata> _subSongs;
@@ -19,12 +17,20 @@ namespace CopperMod.Cust
         private bool _channelWaveformCaptureEnabled;
 
         public CustSong(HunkFile hunk, DeliTagTable tags, ModuleLoadContext? loadContext = null)
+            : this(new CustMachine(hunk, tags, loadContext), hunk)
         {
-            _hunk = hunk ?? throw new ArgumentNullException(nameof(hunk));
-            _tags = tags ?? throw new ArgumentNullException(nameof(tags));
-            _machine = new CustMachine(hunk, tags, loadContext);
+        }
+
+        private CustSong(CustMachine machine, HunkFile hunk)
+            : this(machine, CreateMetadata(hunk, machine.SubSongCount, machine.KickstartDescription))
+        {
+        }
+
+        internal CustSong(CustMachine machine, ModuleMetadata metadata)
+        {
+            _machine = machine;
             _subSongs = BuildSubSongs(_machine.SubSongCount);
-            _metadata = CreateMetadata(hunk, _machine.SubSongCount, _machine.KickstartDescription);
+            _metadata = metadata;
             _capabilities = new ModulePlaybackCapabilities(
                 canSeekByTime: true,
                 canSeekByTrackerPosition: false,

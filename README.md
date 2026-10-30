@@ -16,10 +16,16 @@ reusable C# playback libraries and a command-line audio exporter.
   a locally supplied, hash-verified AHX 2.3d replay binary.
 - **SID / RSID:** C64/SID emulation with cycle-counted register scheduling.
 - **Amiga CUST:** custom-player execution in an Amiga/Paula playback sandbox.
+- **TFMX:** automatic EaglePlayer replayer selection, companion samples and
+  subsongs through the normal player and exporter. Keep `.tfx`/`.sam` files
+  together, or use `mdat.name`/`smpl.name`. The authenticated replay binary is
+  acquired from Aminet on first use and cached for offline playback.
 
 Replay accuracy is a work in progress. Advanced effects, difficult RSID tunes
 and SID analog behavior remain areas of ongoing development. Music files and
 third-party replay binaries are not distributed with the player.
+CopperStart ROM binaries and music files are excluded from public release
+archives. Standalone playback uses the C# host firmware.
 
 ## Build and run
 
@@ -28,6 +34,7 @@ Requires the .NET 10 SDK. The terminal player uses Terminal.Gui and NAudio.
 ```powershell
 dotnet build CopperMod/CopperMod.csproj -c Release
 dotnet run --project CopperMod -c Release -- "path/to/tune.sid"
+dotnet run --project CopperMod -c Release -- "path/to/Cyber Swats.tfx"
 ```
 
 Without a filename, the player tries the default MED test tune if it is available
@@ -55,6 +62,13 @@ or a descendant containing `host/CopperStart.CopperMod`. CopperStart's default
 dotnet run --project CopperMod.Tools -- render "path/to/tune.mod" --out tune.wav --seconds 30
 dotnet run --project CopperMod.Tools -- render "path/to/tune.sid" --out tune.pcm --seconds 30
 dotnet run --project CopperMod.Tools -- render "path/to/tune.sid" --out tune.mp3 --seconds 30 --mp3-bitrate 192
+```
+
+The packaged player includes the same exporter:
+
+```powershell
+CopperMod.exe --render "path\Cyber Swats.tfx" --out tune.wav --seconds 30
+CopperMod.exe --version
 ```
 
 WAV output is 32-bit float; raw PCM is interleaved little-endian Float32.

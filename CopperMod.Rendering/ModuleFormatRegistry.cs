@@ -1,6 +1,7 @@
 using CopperMod.Abstractions;
 using CopperMod.Ahx;
 using CopperMod.Cust;
+using CopperMod.EaglePlayer;
 using CopperMod.Med;
 using CopperMod.ProTracker;
 using CopperMod.Sid;
@@ -17,6 +18,7 @@ public static class ModuleFormatRegistry
 			new MmdFormat(),
 			new ProTrackerFormat(),
 			new CustFormat(),
+			new TfmxFormat(),
 			new SidFormat()
 		};
 	}

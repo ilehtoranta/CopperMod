@@ -206,6 +206,8 @@ internal sealed class PlayerStartupOptions
 		return """
 			Usage:
 			  CopperMod.exe [module-path] [options]
+			  CopperMod.exe --render <module-path> --out <file.wav> --seconds <number>
+			  CopperMod.exe --version
 
 			Options:
 			  --c64-autostart-key a,return Schedule C64/PRG startup keys.

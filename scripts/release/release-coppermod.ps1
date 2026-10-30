@@ -1,12 +1,12 @@
 param(
-    [string]$Version = "1.0.0",
+    [string]$Version = "1.1.0",
     [switch]$TagOnly
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $tag = "coppermod-v$Version"
-$out = Join-Path $repoRoot "artifacts\release\CopperMod"
+$out = Join-Path $repoRoot "artifacts\release\CopperMod\$Version"
 $publishScript = ".\scripts\release\publish-coppermod.ps1"
 
 function Get-ReleaseAssets {
@@ -14,7 +14,7 @@ function Get-ReleaseAssets {
         throw "Release artifacts were not found at '$out'. Run $publishScript -Version $Version first."
     }
 
-    $zipAssets = @(Get-ChildItem $out -Filter *.zip -File | ForEach-Object { $_.FullName })
+    $zipAssets = @(Get-ChildItem $out -Filter "CopperMod-$Version-*.zip" -File | ForEach-Object { $_.FullName })
     if ($zipAssets.Count -eq 0) {
         throw "No zip assets were found at '$out'. Run $publishScript -Version $Version first."
     }
