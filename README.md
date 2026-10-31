@@ -16,10 +16,16 @@ reusable C# playback libraries and a command-line audio exporter.
   a locally supplied, hash-verified AHX 2.3d replay binary.
 - **SID / RSID:** C64/SID emulation with cycle-counted register scheduling.
 - **Amiga CUST:** custom-player execution in an Amiga/Paula playback sandbox.
+- **TFMX:** automatic EaglePlayer replayer selection, companion samples and
+  subsongs through the normal player and exporter. Keep `.tfx`/`.sam` files
+  together, or use `mdat.name`/`smpl.name`. The authenticated replay binary is
+  acquired from Aminet on first use and cached for offline playback.
 
 Replay accuracy is a work in progress. Advanced effects, difficult RSID tunes
 and SID analog behavior remain areas of ongoing development. Music files and
 third-party replay binaries are not distributed with the player.
+CopperStart ROM binaries and music files are excluded from public release
+archives. Standalone playback uses the C# host firmware.
 
 ## Build and run
 
@@ -28,23 +34,34 @@ Requires the .NET 10 SDK. The terminal player uses Terminal.Gui and NAudio.
 ```powershell
 dotnet build CopperMod/CopperMod.csproj -c Release
 dotnet run --project CopperMod -c Release -- "path/to/tune.sid"
+dotnet run --project CopperMod -c Release -- "path/to/Cyber Swats.tfx"
 ```
 
 Without a filename, the player tries the default MED test tune if it is available
 locally.
 
-The separate `CopperMod.Amiga.Emulator` integration imports its replacement-OS
-services and boot controller from CopperStart. Check out CopperStart beside
-CopperMod, or set `-p:CopperStartRoot=<absolute checkout path>` when building
-that project, the complete solution, or its Amiga integration tests. Hardware,
+The player also opens ZIP and Amiga LhA/LZH archives. Playable members are
+ordered by path; use the track buttons to move between them, independently of
+the subtune buttons. Use Tracks to view the list and enter a track number to
+select it. The next track starts when a tune reaches its natural end;
+looping tunes require manual navigation. Companion files are read from the same
+archive directory. Nested archives are not supported.
+
+`CopperMod.Amiga` imports the shared graphics.library image layout from
+`CopperStart/native/CopperStart.Graphics/Firmware`. The separate
+`CopperMod.Amiga.Emulator` integration imports its replacement-OS services and
+boot controller from CopperStart. Check out CopperStart beside CopperMod, or set
+`-p:CopperStartRoot=<absolute checkout path>` when building the Amiga core or its
+consumers (including AHX), the complete solution, or its integration tests. Hardware,
 disk/filesystem adapters and raster providers remain in CopperMod. This shared
 source import preserves the existing assembly and has no duplicate service tree
 here. The ownership move and existing integration build gaps are documented in
 `CopperStart/Docs/CopperModHostSourceMove.md`.
 
-For this development cutover, use CopperStart's `ci/github-actions-build` branch
-at [commit 8eeac19](https://github.com/ilehtoranta/CopperStart/commit/8eeac19c9e54726f50f53fefc028c7f9307f35ce),
-or a descendant containing `host/CopperStart.CopperMod`. CopperStart's default
+For this development cutover, use CopperStart's `codex/copperstart-native-graphics-20261017` branch
+at [commit 65a37e1](https://github.com/ilehtoranta/CopperStart/commit/65a37e1837d728484df39ace69c743294b03530c),
+or a descendant containing `host/CopperStart.CopperMod` and
+`native/CopperStart.Graphics/Firmware`. CopperStart's default
 `main` branch does not yet contain this shared host integration.
 
 ## Export audio
@@ -55,12 +72,33 @@ or a descendant containing `host/CopperStart.CopperMod`. CopperStart's default
 dotnet run --project CopperMod.Tools -- render "path/to/tune.mod" --out tune.wav --seconds 30
 dotnet run --project CopperMod.Tools -- render "path/to/tune.sid" --out tune.pcm --seconds 30
 dotnet run --project CopperMod.Tools -- render "path/to/tune.sid" --out tune.mp3 --seconds 30 --mp3-bitrate 192
+dotnet run --project CopperMod.Tools -- render "path/to/tunes.lha" --archive-member "music/tune.mod" --out tune.wav --seconds 30
+```
+
+The packaged player includes the same exporter:
+
+```powershell
+CopperMod.exe --render "path\Cyber Swats.tfx" --out tune.wav --seconds 30
+CopperMod.exe --version
 ```
 
 WAV output is 32-bit float; raw PCM is interleaved little-endian Float32.
 MP3 export uses the Windows Media Foundation encoder. See the
 [export tool reference](CopperMod.Tools/README.md) for output shaping,
 voice selection, duration detection and other options.
+
+EaglePlayer replay can be tested separately through the shared Amiga audio host:
+
+```powershell
+.\scripts\Render-EaglePlayer.ps1 -InputPath "path\Cyber Swats.tfx" -OutputPath "Cyber Swats.wav" -Player tfmx-pro -Seconds 30
+```
+
+Keep both `.tfx` and `.sam` files in the same directory, or pass an archive
+and select the tune with `-ArchiveMember 'music/tune.tfx'`. The script
+requires the .NET 10 SDK and acquires the authenticated EaglePlayer binary on
+first use. Output is stereo Float32 WAV at 44.1 kHz; `-SubSong` selects a
+zero-based subsong. This render path is independent of the terminal player's
+format registry.
 
 ## Reusable libraries
 
@@ -118,3 +156,8 @@ emulator application, including the Lightweight A500 engine and CopperDisk.
 ## License
 
 MIT; see [LICENSE](LICENSE) and [third-party notices](THIRD-PARTY-NOTICES.md).
+
+CopperStart native production ROMs use a versioned, private bootstrap setup
+extension before native OS startup. See
+[CopperStart bootstrap ABI](CopperMod.Amiga/CopperStartBootstrap.md) for the
+protocol, missing-handler behavior and the focused emulator test command.

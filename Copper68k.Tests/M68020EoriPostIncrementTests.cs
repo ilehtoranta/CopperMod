@@ -5,6 +5,17 @@ namespace Copper68k.Tests;
 
 public sealed class M68020EoriPostIncrementTests
 {
+    [Theory]
+    [InlineData((int)M68kInstructionTimingKey.EoriByteImmediateToPostIncrement)]
+    [InlineData((int)M68kInstructionTimingKey.EoriWordImmediateToPostIncrement)]
+    [InlineData((int)M68kInstructionTimingKey.EoriLongImmediateToPostIncrement)]
+    public void PostIncrementPlansRetainReadModifyWriteBarrier(int keyValue)
+    {
+        var key = (M68kInstructionTimingKey)keyValue;
+        Assert.True((M68020TimingModel.GetPlan(key).Barriers & M68kTimingBarrier.ReadModifyWrite) != 0);
+        Assert.True((M68030TimingModel.GetPlan(key).Barriers & M68kTimingBarrier.ReadModifyWrite) != 0);
+    }
+
     // Motorola M68000PRM sections 2.2.4 and EORI: sized writes, one EA
     // increment (two for byte A7), X preserved, N/Z from result, V/C cleared.
     [Theory]

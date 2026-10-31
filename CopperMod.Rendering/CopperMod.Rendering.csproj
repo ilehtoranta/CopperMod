@@ -8,9 +8,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\CopperMod.Replayers\CopperMod.Replayers.csproj" />
     <ProjectReference Include="..\CopperMod.Abstractions\CopperMod.Abstractions.csproj" />
     <ProjectReference Include="..\CopperMod.Ahx\CopperMod.Ahx.csproj" />
     <ProjectReference Include="..\CopperMod.Cust\CopperMod.Cust.csproj" />
+    <ProjectReference Include="..\CopperMod.EaglePlayer\CopperMod.EaglePlayer.csproj" />
     <ProjectReference Include="..\CopperMod.Med\CopperMod.Med.csproj" />
     <ProjectReference Include="..\CopperMod.ProTracker\CopperMod.ProTracker.csproj" />
     <ProjectReference Include="..\CopperMod.Sid\CopperMod.Sid.csproj" />

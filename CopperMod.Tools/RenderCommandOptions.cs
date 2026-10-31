@@ -62,6 +62,8 @@ internal sealed class RenderCommandOptions
 
 	public string InputPath { get; }
 
+	public string? ArchiveMember { get; private init; }
+
 	public string OutputPath { get; }
 
 	public RenderFileFormat Format { get; }
@@ -139,6 +141,7 @@ internal sealed class RenderCommandOptions
 
 		var positional = new List<string>();
 		string? outputPath = null;
+		string? archiveMember = null;
 		RenderFileFormat? format = null;
 		double? seconds = null;
 		int? subSong = null;
@@ -180,6 +183,9 @@ internal sealed class RenderCommandOptions
 			{
 				case "--out":
 					outputPath = RequireValue(args, ref i, arg);
+					break;
+				case "--archive-member":
+					archiveMember = RequireValue(args, ref i, arg);
 					break;
 				case "--format":
 					format = ParseFormat(RequireValue(args, ref i, arg));
@@ -334,7 +340,7 @@ internal sealed class RenderCommandOptions
 			c64AutostartHoldSeconds,
 			c64AutostartGapSeconds,
 			c64RomPath,
-			overwrite);
+			overwrite) { ArchiveMember = archiveMember };
 	}
 
 	private static bool IsHelp(string value)

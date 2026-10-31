@@ -1,5 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <Import Project="..\build\CopperStartIntegration.props" />
+  <ItemGroup>
+    <Compile Include="$(CopperStartRoot)\native\CopperStart.Graphics\Firmware\GraphicsLibraryImageLayout.cs"
+             Link="Firmware\GraphicsLibraryImageLayout.cs" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>

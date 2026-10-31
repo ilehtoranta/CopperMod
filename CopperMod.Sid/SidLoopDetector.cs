@@ -47,7 +47,8 @@ namespace CopperMod.Sid
                 machine.RenderFrame(Span<float>.Empty, DetectionRenderOptions, ReadOnlySpan<long>.Empty, tickCycles);
                 machine.Sid.AdvanceTo(machine.Cycle);
 
-                var fingerprint = CreateFingerprint(machine.SidWrites, tickStartCycle, tickCycles);
+                var fingerprint = CreateFingerprint(machine.SidWrites, tickStartCycle, tickCycles,
+                    startJitterTolerance: !module.RunsContinuously && module.PlayAddress != 0 ? machine.Clock.CyclesPerRasterLine : 0);
                 history.Add(fingerprint);
                 tickBoundaries.Add(machine.Cycle);
                 var currentTick = history.Count - 1;
@@ -63,6 +64,7 @@ namespace CopperMod.Sid
                         candidates,
                         occurrences,
                         fingerprint,
+                        history,
                         currentTick,
                         tickBoundaries,
                         minimumStartCycles,
@@ -127,7 +129,8 @@ namespace CopperMod.Sid
                 machine.Sid.AdvanceTo(machine.Cycle);
                 sampleClock.AdvanceFrames(frames);
 
-                var fingerprint = CreateFingerprint(machine.SidWrites, tickStartCycle, tickCycles);
+                var fingerprint = CreateFingerprint(machine.SidWrites, tickStartCycle, tickCycles,
+                    startJitterTolerance: !module.RunsContinuously && module.PlayAddress != 0 ? machine.Clock.CyclesPerRasterLine : 0);
                 history.Add(fingerprint);
                 tickBoundaries.Add(machine.Cycle);
                 var currentTick = history.Count - 1;
@@ -143,6 +146,7 @@ namespace CopperMod.Sid
                         candidates,
                         occurrences,
                         fingerprint,
+                        history,
                         currentTick,
                         tickBoundaries,
                         minimumStartCycles,
@@ -190,7 +194,8 @@ namespace CopperMod.Sid
             {
                 var candidate = candidates[i];
                 var expectedTick = candidate.StartTick + candidate.MatchedTicks;
-                if (!history[currentTick].Equals(history[expectedTick]))
+                if (!history[currentTick].Equals(history[expectedTick]) ||
+                    !history[currentTick].HasCompatibleStartTime(history[expectedTick]))
                 {
                     candidates.RemoveAt(i);
                     continue;
@@ -224,6 +229,7 @@ namespace CopperMod.Sid
             List<SidLoopCandidate> candidates,
             IReadOnlyDictionary<SidTickFingerprint, List<int>> occurrences,
             SidTickFingerprint fingerprint,
+            IReadOnlyList<SidTickFingerprint> history,
             int currentTick,
             IReadOnlyList<long> tickBoundaries,
             long minimumStartCycles,
@@ -238,6 +244,7 @@ namespace CopperMod.Sid
             for (var i = 0; i < previousTicks.Count; i++)
             {
                 var startTick = previousTicks[i];
+                if (!fingerprint.HasCompatibleStartTime(history[startTick])) continue;
                 var lengthTicks = currentTick - startTick;
                 if (lengthTicks <= 0)
                 {
@@ -357,8 +364,15 @@ namespace CopperMod.Sid
             buffer = new float[Math.Max(length, Math.Max(1, buffer.Length * 2))];
         }
 
-        private static SidTickFingerprint CreateFingerprint(IReadOnlyList<SidRegisterWrite> writes, long tickStartCycle, long tickCycles)
+        private static SidTickFingerprint CreateFingerprint(IReadOnlyList<SidRegisterWrite> writes, long tickStartCycle, long tickCycles, int startJitterTolerance)
         {
+            // A scheduled PSID call can reach its first SID write later because of
+            // VIC-II bus contention. Compare the burst's internal timing instead
+            // of treating a uniform call-start delay as a different musical tick.
+            // Continuous programs retain their frame-relative timing, including
+            // raster/digi placement. Write spacing is preserved in both cases.
+            var firstWriteOffset = writes.Count == 0 ? 0 : writes[0].Cycle - tickStartCycle;
+            var origin = startJitterTolerance > 0 && writes.Count != 0 ? writes[0].Cycle : tickStartCycle;
             var hash1 = FnvaOffset1;
             var hash2 = FnvaOffset2;
             AddLong(ref hash1, ref hash2, tickCycles);
@@ -366,13 +380,13 @@ namespace CopperMod.Sid
             for (var i = 0; i < writes.Count; i++)
             {
                 var write = writes[i];
-                AddLong(ref hash1, ref hash2, write.Cycle - tickStartCycle);
+                AddLong(ref hash1, ref hash2, write.Cycle - origin);
                 AddInt(ref hash1, ref hash2, write.ChipIndex);
                 AddByte(ref hash1, ref hash2, write.Register);
                 AddByte(ref hash1, ref hash2, write.Value);
             }
 
-            return new SidTickFingerprint(Avalanche(hash1), Avalanche(hash2), writes.Count);
+            return new SidTickFingerprint(Avalanche(hash1), Avalanche(hash2), writes.Count, firstWriteOffset, startJitterTolerance);
         }
 
         private static void AddInt(ref ulong hash1, ref ulong hash2, int value)
@@ -437,11 +451,13 @@ namespace CopperMod.Sid
 
         private readonly struct SidTickFingerprint : IEquatable<SidTickFingerprint>
         {
-            public SidTickFingerprint(ulong hash1, ulong hash2, int writeCount)
+            public SidTickFingerprint(ulong hash1, ulong hash2, int writeCount, long firstWriteOffset, int startJitterTolerance)
             {
                 Hash1 = hash1;
                 Hash2 = hash2;
                 WriteCount = writeCount;
+                FirstWriteOffset = firstWriteOffset;
+                StartJitterTolerance = startJitterTolerance;
             }
 
             public ulong Hash1 { get; }
@@ -449,6 +465,14 @@ namespace CopperMod.Sid
             public ulong Hash2 { get; }
 
             public int WriteCount { get; }
+
+            private long FirstWriteOffset { get; }
+            private int StartJitterTolerance { get; }
+
+            // The dictionary groups identical bursts; candidate verification also
+            // bounds their phase shift so substantial programmed delays are kept.
+            public bool HasCompatibleStartTime(SidTickFingerprint other) =>
+                Math.Abs(FirstWriteOffset - other.FirstWriteOffset) <= Math.Min(StartJitterTolerance, other.StartJitterTolerance);
 
             public bool Equals(SidTickFingerprint other)
             {

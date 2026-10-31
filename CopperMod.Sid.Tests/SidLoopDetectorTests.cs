@@ -25,6 +25,36 @@ public sealed class SidLoopDetectorTests
 	}
 
 	[Fact]
+	public void DetectLoopPreservesTimingBetweenWritesInScheduledCalls()
+	{
+		using var song = new SidFormat().Load(SidFixtureBuilder.CreatePsid(
+			new byte[] {
+				0xA9, 1, 0x8D, 0, 0x20, 0x60, // init counter
+				0xA9, 0x10, 0x8D, 0, 0xD4,    // first, constant SID write
+				0xAE, 0, 0x20,                // delay grows every call
+				0xCA, 0xD0, 0xFD,             // dex; bne delay
+				0xA9, 0x20, 0x8D, 1, 0xD4,    // second, constant SID write
+				0xEE, 0, 0x20, 0x60
+			}, playAddress: 0x1006, songs: 1, startSong: 1));
+		var result = ((ISidLoopDetector)song).DetectLoop(FastOptions(TimeSpan.FromMilliseconds(300)));
+		Assert.False(result.Detected);
+	}
+
+	[Fact]
+	public void DetectLoopDoesNotIgnoreLargeProgrammedDelaysBeforeFirstWrite()
+	{
+		using var song = new SidFormat().Load(SidFixtureBuilder.CreatePsid(
+			new byte[] {
+				0xA9, 1, 0x8D, 0, 0x20, 0x60,
+				0xAE, 0, 0x20, 0xCA, 0xD0, 0xFD, // growing delay before the only write
+				0xA9, 0x10, 0x8D, 0, 0xD4,
+				0xEE, 0, 0x20, 0x60
+			}, playAddress: 0x1006, songs: 1, startSong: 1));
+		var result = ((ISidLoopDetector)song).DetectLoop(new SidLoopDetectionOptions(maxSearchDuration: TimeSpan.FromSeconds(5)));
+		Assert.False(result.Detected);
+	}
+
+	[Fact]
 	public void DetectLoopDoesNotMoveCurrentSongPosition()
 	{
 		var song = (SidSong)new SidFormat().Load(SidFixtureBuilder.CreatePsid(

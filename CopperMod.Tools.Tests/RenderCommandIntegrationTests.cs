@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO.Compression;
 using CopperMod.TestSupport;
 
 namespace CopperMod.Tools.Tests;
@@ -6,6 +7,27 @@ namespace CopperMod.Tools.Tests;
 public sealed class RenderCommandIntegrationTests
 {
 	[Fact]
+	public void RendersSelectedZipMember()
+	{
+		using var temp = TemporaryDirectory.Create();
+		var input = Path.Combine(temp.Path, "tunes.zip");
+		var output = Path.Combine(temp.Path, "tune.wav");
+		var sid = new byte[0x7e];
+		"PSID"u8.CopyTo(sid);
+		BinaryPrimitives.WriteUInt16BigEndian(sid.AsSpan(4), 2);
+		BinaryPrimitives.WriteUInt16BigEndian(sid.AsSpan(6), 0x7c);
+		BinaryPrimitives.WriteUInt16BigEndian(sid.AsSpan(8), 0x1000);
+		BinaryPrimitives.WriteUInt16BigEndian(sid.AsSpan(10), 0x1000);
+		BinaryPrimitives.WriteUInt16BigEndian(sid.AsSpan(12), 0x1001);
+		BinaryPrimitives.WriteUInt16BigEndian(sid.AsSpan(14), 1);
+		BinaryPrimitives.WriteUInt16BigEndian(sid.AsSpan(16), 1);
+		sid[0x7c] = 0x60; sid[0x7d] = 0x60;
+		using (var zip = ZipFile.Open(input, ZipArchiveMode.Create))
+		using (var stream = zip.CreateEntry("music/test.sid").Open()) stream.Write(sid);
+		Assert.Equal(0, Run("render", input, "--archive-member", "music/test.sid", "--out", output, "--seconds", "0.1"));
+		Assert.True(new FileInfo(output).Length > 44);
+	}
+	[LocalTuneFact("ProTracker", "failright.mod")]
 	public void RendersProTrackerFixtureToFloatWav()
 	{
 		using var temp = TemporaryDirectory.Create();
@@ -23,7 +45,7 @@ public sealed class RenderCommandIntegrationTests
 		Assert.All(wav.Samples, sample => Assert.True(float.IsFinite(sample)));
 	}
 
-	[Fact]
+	[LocalTuneFact("ProTracker", "failright.mod")]
 	public void RendersProTrackerFixtureToRawFloatPcm()
 	{
 		using var temp = TemporaryDirectory.Create();
@@ -41,7 +63,7 @@ public sealed class RenderCommandIntegrationTests
 		Assert.All(samples, sample => Assert.True(float.IsFinite(sample)));
 	}
 
-	[Fact]
+	[LocalTuneFact("ProTracker", "failright.mod")]
 	public void RendersProTrackerFixtureToWaveformBitmap()
 	{
 		using var temp = TemporaryDirectory.Create();
@@ -84,7 +106,7 @@ public sealed class RenderCommandIntegrationTests
 		Assert.True(new FileInfo(output).Length > 0);
 	}
 
-	[Fact]
+	[LocalTuneFact("Amiga.CUST", "AlteredBeast.CUST")]
 	public void RendersCustFixtureToRawFloatPcm()
 	{
 		using var temp = TemporaryDirectory.Create();
@@ -99,7 +121,7 @@ public sealed class RenderCommandIntegrationTests
 		Assert.All(samples, sample => Assert.True(float.IsFinite(sample)));
 	}
 
-	[Fact]
+	[LocalTuneFact("ProTracker", "failright.mod")]
 	public void RawAndPlayerOutputModesDiffer()
 	{
 		using var temp = TemporaryDirectory.Create();
@@ -113,7 +135,7 @@ public sealed class RenderCommandIntegrationTests
 		Assert.NotEqual(File.ReadAllBytes(raw), File.ReadAllBytes(player));
 	}
 
-	[Fact]
+	[LocalTuneFact("ProTracker", "failright.mod")]
 	public void Mp3RenderEitherSucceedsOrReportsMediaFoundationRequirement()
 	{
 		using var temp = TemporaryDirectory.Create();
@@ -152,8 +174,14 @@ public sealed class RenderCommandIntegrationTests
 		return exitCode;
 	}
 
-	private static string FindWorkspaceFile(params string[] parts)
+	internal static string FindWorkspaceFile(params string[] parts)
 	{
+		var root = Environment.GetEnvironmentVariable("COPPERMOD_TEST_TUNES");
+		if (!string.IsNullOrWhiteSpace(root))
+		{
+			var path = Path.Combine(root, Path.Combine(parts.Skip(1).ToArray()));
+			return File.Exists(path) ? path : throw new FileNotFoundException("External fixture unavailable under COPPERMOD_TEST_TUNES: " + path);
+		}
 		var relativePath = Path.Combine(parts);
 		var directory = new DirectoryInfo(AppContext.BaseDirectory);
 		while (directory != null)
@@ -274,4 +302,14 @@ public sealed class RenderCommandIntegrationTests
 	private readonly record struct WavData(short FormatTag, short Channels, int SampleRate, float[] Samples);
 
 	private readonly record struct BitmapData(int Width, int Height, short BitsPerPixel, int PixelOffset, byte[] Bytes);
+}
+
+/// <summary>Optional copyrighted media is unavailable coverage, not a passing replay test.</summary>
+public sealed class LocalTuneFactAttribute : FactAttribute
+{
+	public LocalTuneFactAttribute(string directory, string name)
+	{
+		try { RenderCommandIntegrationTests.FindWorkspaceFile("TestTunes", directory, name); }
+		catch (FileNotFoundException) { Skip = $"External fixture unavailable: {directory}/{name}. Set COPPERMOD_TEST_TUNES or restore TestTunes."; }
+	}
 }

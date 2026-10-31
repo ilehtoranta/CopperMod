@@ -4,6 +4,10 @@ namespace CopperMod.Sid
 {
     /// <summary>
     /// Controls SID write-stream loop detection.
+    /// Scheduled PSID calls are compared relative to their first write; write
+    /// order, values and spacing are preserved, with at most one raster line of
+    /// call-start jitter allowed. Continuous programs retain
+    /// frame-relative write timing.
     /// </summary>
     public sealed class SidLoopDetectionOptions
     {

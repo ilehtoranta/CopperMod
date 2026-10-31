@@ -35,6 +35,11 @@ namespace CopperMod.Cust
         private readonly uint _hostAudioFreeAddress = CustConstants.HostCallbackBaseAddress + 0x60;
         private readonly uint _hostWaitAudioDmaAddress = CustConstants.HostCallbackBaseAddress + 0x70;
         private readonly uint _hostNoOpAddress = CustConstants.HostCallbackBaseAddress + 0x80;
+        private readonly uint _hostLoadFileAddress = CustConstants.HostCallbackBaseAddress + 0x90;
+        private readonly uint _hostCopyFileAddress = CustConstants.HostCallbackBaseAddress + 0xA0;
+        private const uint HostFileNameAddress = 0x0000_3200;
+        private const uint HostDirectoryAddress = 0x0000_3400;
+        private readonly List<(uint Address, int Length)> _externalListData = new();
         private IReadOnlyDictionary<uint, uint> _tags = new Dictionary<uint, uint>();
         private uint _nextExternalAllocationAddress = 0x0010_0000;
         private uint _nextFileHandle = 0x100;
@@ -182,6 +187,7 @@ namespace CopperMod.Cust
             LastChannelWaveform = null;
             _diagnostics.Clear();
             _fileHandles.Clear();
+            _externalListData.Clear();
             _allocations.Clear();
             _nextFileHandle = 0x100;
             _hostPath = string.Empty;
@@ -202,6 +208,20 @@ namespace CopperMod.Cust
             InstallHostEnvironment();
             PublishDeliBasePointer();
             Cpu.Reset(0, CustConstants.StackTopAddress);
+            if (_separateListData != null && _tags.ContainsKey(CustConstants.DtpCheck2))
+            {
+                CallIfPresent(CustConstants.DtpCheck2, dispatchHostInterrupts: false, advanceTimedHardwareDuringRun: false);
+                if (Cpu.State.D[0] != 0)
+                    throw new UnsupportedModuleFormatException("The selected EaglePlayer replayer rejected this module.");
+            }
+            CallIfPresent(
+                CustConstants.DtpExtLoad,
+                dispatchHostInterrupts: false,
+                advanceTimedHardwareDuringRun: false);
+            if (_tags.ContainsKey(CustConstants.DtpExtLoad) && Cpu.State.D[0] != 0)
+            {
+                throw new ModuleLoadException("The DeliTracker player could not load its external data files.");
+            }
             CallIfPresent(
                 CustConstants.DtpInitPlayer,
                 dispatchHostInterrupts: false,
@@ -352,7 +372,7 @@ namespace CopperMod.Cust
                 throw new ModuleLoadException("The DeliTracker player and module data exceed the emulated chip RAM budget.");
             }
 
-            _nextExternalAllocationAddress = Math.Max(0x0010_0000u, (uint)Align(checked((int)next), 0x100));
+            _nextExternalAllocationAddress = (uint)Align(checked((int)next), 0x100);
         }
 
         private void LoadSegments()
@@ -483,6 +503,8 @@ namespace CopperMod.Cust
             Bus.RegisterHostGateway(_hostAudioFreeAddress, HostAudioFree);
             Bus.RegisterHostGateway(_hostWaitAudioDmaAddress, HostWaitAudioDma);
             Bus.RegisterHostGateway(_hostNoOpAddress, HostNoOp);
+            Bus.RegisterHostGateway(_hostLoadFileAddress, HostLoadFile);
+            Bus.RegisterHostGateway(_hostCopyFileAddress, HostCopyFile);
             Machine.Kickstart.Install(
                 Bus,
                 new KickstartTrapTable(
@@ -490,6 +512,7 @@ namespace CopperMod.Cust
                      HostNullCallback,
                      HostOk,
                      HostOpenLibrary,
+                     HostNoOp,
                      HostAllocMem,
                     HostAllocAndStore,
                     HostFreeMem,
@@ -504,6 +527,8 @@ namespace CopperMod.Cust
                     HostDosSeek));
 
             WriteNullTerminatedString(AmigaKickstartHost.HostPathBufferAddress, string.Empty, AmigaKickstartHost.HostPathBufferLength);
+            WriteNullTerminatedString(HostFileNameAddress, System.IO.Path.GetFileName(_loadContext?.SourcePath) ?? string.Empty, AmigaKickstartHost.HostPathBufferLength);
+            WriteNullTerminatedString(HostDirectoryAddress, string.Empty, AmigaKickstartHost.HostPathBufferLength);
 
             WriteHostLong(CustConstants.DtgAslBaseOffset, 0);
             WriteHostLong(CustConstants.DtgDosBaseOffset, AmigaKickstartHost.DosLibraryBase);
@@ -511,8 +536,8 @@ namespace CopperMod.Cust
             WriteHostLong(CustConstants.DtgGfxBaseOffset, AmigaKickstartHost.GraphicsLibraryBase);
             WriteHostLong(CustConstants.DtgGadToolsBaseOffset, 0);
             WriteHostLong(CustConstants.DtgReservedLibraryBaseOffset, 0);
-            WriteHostLong(CustConstants.DtgDirArrayPtrOffset, AmigaKickstartHost.HostPathBufferAddress);
-            WriteHostLong(CustConstants.DtgFileArrayPtrOffset, AmigaKickstartHost.HostPathBufferAddress);
+            WriteHostLong(CustConstants.DtgDirArrayPtrOffset, HostDirectoryAddress);
+            WriteHostLong(CustConstants.DtgFileArrayPtrOffset, HostFileNameAddress);
             WriteHostLong(CustConstants.DtgPathArrayPtrOffset, AmigaKickstartHost.HostPathBufferAddress);
             WriteHostLong(CustConstants.DtgCheckDataOffset, _listDataAddress);
             WriteHostLong(CustConstants.DtgCheckSizeOffset, (uint)_listDataLength);
@@ -523,9 +548,9 @@ namespace CopperMod.Cust
             WriteHostWord(CustConstants.DtgLedOffset, 0);
             WriteHostWord(CustConstants.DtgTimerOffset, 0);
             WriteHostLong(CustConstants.DtgGetListDataOffset, _hostGetListDataAddress);
-            WriteHostLong(CustConstants.DtgLoadFileOffset, _hostOkAddress);
+            WriteHostLong(CustConstants.DtgLoadFileOffset, _hostLoadFileAddress);
             WriteHostLong(CustConstants.DtgCopyDirOffset, _hostNoOpAddress);
-            WriteHostLong(CustConstants.DtgCopyFileOffset, _hostNoOpAddress);
+            WriteHostLong(CustConstants.DtgCopyFileOffset, _hostCopyFileAddress);
             WriteHostLong(CustConstants.DtgCopyStringOffset, _hostAppendPathOrOkAddress);
             WriteHostLong(CustConstants.DtgAudioAllocOffset, _hostAudioAllocAddress);
             WriteHostLong(CustConstants.DtgAudioFreeOffset, _hostAudioFreeAddress);
@@ -546,8 +571,10 @@ namespace CopperMod.Cust
         {
             if (state.D[0] != 0)
             {
-                state.A[0] = 0;
-                state.D[0] = 0;
+                var index = state.D[0] - 1;
+                var item = index < _externalListData.Count ? _externalListData[(int)index] : default;
+                state.A[0] = item.Address;
+                state.D[0] = (uint)item.Length;
                 return;
             }
 
@@ -772,6 +799,30 @@ namespace CopperMod.Cust
             _ = state;
             _hostPath = string.Empty;
             WriteNullTerminatedString(AmigaKickstartHost.HostPathBufferAddress, _hostPath, AmigaKickstartHost.HostPathBufferLength);
+        }
+
+        private void HostCopyFile(M68kCpuState state)
+        {
+            var path = ReadNullTerminatedString(AmigaKickstartHost.HostPathBufferAddress, AmigaKickstartHost.HostPathBufferLength);
+            var file = ReadNullTerminatedString(HostFileNameAddress, AmigaKickstartHost.HostPathBufferLength);
+            WriteNullTerminatedString(AmigaKickstartHost.HostPathBufferAddress, path + file, AmigaKickstartHost.HostPathBufferLength);
+        }
+
+        private void HostLoadFile(M68kCpuState state)
+        {
+            var path = NormalizeAmigaPath(ReadNullTerminatedString(AmigaKickstartHost.HostPathBufferAddress, AmigaKickstartHost.HostPathBufferLength));
+            state.D[0] = 0xFFFF_FFFF;
+            if (_loadContext == null || !_loadContext.TryReadRelativeFile(path, out var data))
+            {
+                AddDiagnostic(ModuleDiagnosticSeverity.Warning, $"DeliTracker external data file is unavailable: {path}", "CUST_EXTERNAL_DATA_MISSING");
+                return;
+            }
+
+            var address = AllocateExternalMemory(data.Length);
+            if (address == 0) return;
+            data.CopyTo(Bus.ChipRam.AsSpan((int)address, data.Length));
+            _externalListData.Add((address, data.Length));
+            state.D[0] = 0;
         }
 
         private void HostAppendPathOrOk(M68kCpuState state)
@@ -1578,8 +1629,8 @@ namespace CopperMod.Cust
         private uint AllocateExternalMemory(int size)
         {
             var address = _nextExternalAllocationAddress;
-            _nextExternalAllocationAddress += (uint)Align(size + 1, 2);
-            if (_nextExternalAllocationAddress >= CustConstants.ExternalAllocationLimitAddress)
+            var end = (long)address + Align(size + 1, 2);
+            if (end > Math.Min(Bus.ChipRam.Length, CustConstants.ExternalAllocationLimitAddress))
             {
                 AddDiagnostic(
                     ModuleDiagnosticSeverity.Warning,
@@ -1588,6 +1639,7 @@ namespace CopperMod.Cust
                 return 0;
             }
 
+            _nextExternalAllocationAddress = (uint)end;
             return address;
         }
 

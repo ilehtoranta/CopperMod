@@ -31,6 +31,8 @@ internal sealed class PlayerWindow : Window, IDisposable
 	private readonly Label _titleLabel;
 	private readonly Label _formatLabel;
 	private readonly Label _subSongLabel;
+	private readonly Label _archiveLabel;
+	private readonly TextField _archiveTrackField;
 	private readonly Label _stateLabel;
 	private readonly Label _timeLabel;
 	private readonly ProgressBar _progressBar;
@@ -216,6 +218,22 @@ internal sealed class PlayerWindow : Window, IDisposable
 		};
 		_nextSubSongButton.Accepted += (_, _) => SelectRelativeSubSong(1);
 
+		var previousTrackButton = new Button { X = Pos.Right(_nextSubSongButton) + 1, Y = 2, Text = "-Track" };
+		previousTrackButton.Accepted += (_, _) => SelectArchiveTrack(-1);
+		var nextTrackButton = new Button { X = Pos.Right(previousTrackButton), Y = 2, Text = "+Track" };
+		nextTrackButton.Accepted += (_, _) => SelectArchiveTrack(1);
+		_archiveTrackField = new TextField { X = 16, Y = 4, Width = 6, Text = "1" };
+		var chooseTrackButton = new Button { X = 23, Y = 4, Text = "Track" };
+		chooseTrackButton.Accepted += (_, _) => RunPlayerAction(() =>
+		{
+			if (!int.TryParse(_archiveTrackField.Text?.ToString(), out var number) || number < 1 || number > _player.ArchiveMembers.Count)
+				throw new InvalidOperationException("Enter a valid archive track number.");
+			SelectArchiveTrack(number - 1 - _player.ArchiveMemberIndex);
+		});
+		var listTracksButton = new Button { X = 34, Y = 4, Text = "Tracks" };
+		listTracksButton.Accepted += (_, _) => ShowModalDialog(() => MessageBox.Query(_application, ComputeInfoDialogWidth(), ComputeInfoDialogHeight(), "Archive tracks", string.Join("\n", _player.ArchiveMembers.Select((name, index) => $"{index + 1}. {name}")), "OK"));
+		_archiveLabel = new Label { X = 46, Y = 4, Width = Dim.Fill(2), Text = string.Empty };
+
 		_stateLabel = new Label
 		{
 			X = 1,
@@ -239,7 +257,7 @@ internal sealed class PlayerWindow : Window, IDisposable
 			Width = Dim.Fill(2)
 		};
 
-		Add(_pathField, loadButton, previousFileButton, nextFileButton, _previousSubSongButton, _nextSubSongButton, _playPauseButton, stopButton, rewindButton, forwardButton, _outputProfileButton, _waveformModeButton, _c64FocusButton, _infoButton, quitButton,
+		Add(_pathField, loadButton, previousFileButton, nextFileButton, _previousSubSongButton, _nextSubSongButton, previousTrackButton, nextTrackButton, _archiveTrackField, chooseTrackButton, listTracksButton, _archiveLabel, _playPauseButton, stopButton, rewindButton, forwardButton, _outputProfileButton, _waveformModeButton, _c64FocusButton, _infoButton, quitButton,
 			_titleLabel, _formatLabel, _subSongLabel, _stateLabel, _timeLabel, _progressBar);
 
 		if (WaveformUiEnabled)
@@ -248,6 +266,16 @@ internal sealed class PlayerWindow : Window, IDisposable
 		}
 
 		_player.StateChanged += (_, _) => _application.Invoke(RefreshView);
+		_player.SongEnded += (_, _) =>
+		{
+			var path = _player.FilePath;
+			var index = _player.ArchiveMemberIndex;
+			_application.Invoke(() =>
+			{
+				if (!_disposed && path == _player.FilePath && index == _player.ArchiveMemberIndex && index >= 0 && index + 1 < _player.ArchiveMembers.Count)
+					SelectArchiveTrack(1, true);
+			});
+		};
 		_application.Keyboard.KeyDown += OnApplicationKeyDown;
 		_application.Keyboard.KeyUp += OnApplicationKeyUp;
 		if (WaveformUiEnabled)
@@ -417,6 +445,20 @@ internal sealed class PlayerWindow : Window, IDisposable
 			{
 				_player.Play();
 			}
+		});
+	}
+
+	private void SelectArchiveTrack(int delta, bool forcePlay = false)
+	{
+		RunPlayerAction(() =>
+		{
+			var index = _player.ArchiveMemberIndex + delta;
+			if (_player.ArchiveMemberIndex < 0 || index < 0 || index >= _player.ArchiveMembers.Count) return;
+			var play = forcePlay || _player.PlaybackState == PlaybackState.Playing;
+			_player.SelectArchiveMember(index);
+			SetC64KeyboardFocus(false, refresh: false);
+			_displayMode = _player.HasC64Video ? PlayerDisplayMode.C64Video : PlayerDisplayMode.Waveform;
+			if (play) _player.Play();
 		});
 	}
 
@@ -835,6 +877,8 @@ internal sealed class PlayerWindow : Window, IDisposable
 
 	private void RefreshView()
 	{
+		_archiveLabel.Text = _player.ArchiveMemberIndex < 0 ? string.Empty :
+			$"Track {_player.ArchiveMemberIndex + 1}/{_player.ArchiveMembers.Count}: {_player.ArchiveMembers[_player.ArchiveMemberIndex]}";
 		if (!CanRefreshWindow())
 		{
 			return;

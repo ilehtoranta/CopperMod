@@ -51,6 +51,15 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
+      - name: Check out CopperStart-owned firmware layouts
+        uses: actions/checkout@v4
+        with:
+          repository: ilehtoranta/CopperStart
+          ref: 65a37e1837d728484df39ace69c743294b03530c
+          path: CopperStart
+          token: ${{ secrets.COPPERSTART_READ_TOKEN }}
+          persist-credentials: false
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -77,4 +86,16 @@ jobs:
           path: artifacts/synthetic-suite
 
       - name: Test AHX shared Amiga dependency
-        run: dotnet test CopperMod.Ahx.Tests\CopperMod.Ahx.Tests.csproj --configuration Release
+        run: dotnet test CopperMod.Ahx.Tests\CopperMod.Ahx.Tests.csproj --configuration Release -p:CopperStartRoot="${{ github.workspace }}/CopperStart"
+
+      - name: Test native graphics CloseFont admission
+        run: dotnet test CopperMod.Amiga.Graphics.Tests\CopperMod.Amiga.Graphics.Tests.csproj --configuration Release -p:CopperStartRoot="${{ github.workspace }}/CopperStart"
+
+      - name: Test archives and TFMX registration
+        run: dotnet test CopperMod.Tests\CopperMod.Tests.csproj --configuration Release -p:CopperStartRoot="${{ github.workspace }}/CopperStart" --filter "FullyQualifiedName~ModuleArchiveTests|FullyQualifiedName~TfmxPlaybackTests|FullyQualifiedName~ModuleFormatRegistryContextTests"
+
+      - name: Test archive rendering
+        run: dotnet test CopperMod.Tools.Tests\CopperMod.Tools.Tests.csproj --configuration Release -p:CopperStartRoot="${{ github.workspace }}/CopperStart" --filter "FullyQualifiedName~RendersSelectedZipMember"
+
+      - name: Test CopperStart bootstrap
+        run: dotnet test CopperMod.Amiga.Bootstrap.Tests\CopperMod.Amiga.Bootstrap.Tests.csproj --configuration Release -p:CopperStartRoot="${{ github.workspace }}/CopperStart"
