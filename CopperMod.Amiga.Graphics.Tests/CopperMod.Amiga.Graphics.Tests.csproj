@@ -11,10 +11,11 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="CopperSharp.Sdk.Amiga" Version="0.1.0-preview.1" />
     <PackageReference Include="xunit" Version="2.5.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
     <ProjectReference Include="..\CopperMod.Amiga\CopperMod.Amiga.csproj" />
-    <ProjectReference Include="$(CopperStartRoot)\src\CopperStart.Layers\CopperStart.Layers.csproj" />
+    <Compile Include="$(CopperStartRoot)\src\CopperStart.Layers\LayersRegisterFrame.cs" Link="Graphics\LayersRegisterFrame.cs" />
     <Compile Include="..\CopperMod.Amiga.Tests\NativeGraphicsCloseFontAdmissionTests.cs" Link="NativeGraphicsCloseFontAdmissionTests.cs" />
     <Compile Include="..\CopperMod.Amiga.Emulator\AmigaHunkProgramLoader.cs" Link="AmigaHunkProgramLoader.cs" />
     <Compile Include="$(CopperStartHostSourceRoot)\CopperStart\Graphics\Portable\*.cs" Link="Graphics\%(Filename)%(Extension)" />
