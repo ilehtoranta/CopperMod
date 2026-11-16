@@ -128,7 +128,7 @@ if (-not $ValidateReportsOnly) {
         inputs=@('Copper68k.Tests/Synthetic/SyntheticM68040AccessFrameAuditTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040MovemContinuationTests.cs','scripts/test-copper68k-040-access-frames.ps1','Copper68k.Tests/Synthetic/SyntheticM68040FpuContinuationTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040ThrowawayTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040OddReturnTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040ChainedOddReturnTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040RteValidationFaultTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040AccessDoubleFaultTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040BatchFaultTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040RteRepairTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040SoftwareTraceProgram.cs','Copper68k.Tests/Synthetic/SyntheticM68040InstructionFaultTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040HandlerPrefetchTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040UserRteFaultTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040WritebackTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040WritebackProgram.cs','Copper68k.Tests/Synthetic/SyntheticM68040OperandWriteFaultTests.cs','Copper68k.Tests/Synthetic/MoveSpecification.cs','Copper68k.Tests/Synthetic/AddressingFixtures.cs','scripts/copper68k-040-operand-write-keys.ps1') | ForEach-Object {
             @{file=$_; sha256=(Get-FileHash -LiteralPath (Join-Path $repo $_) -Algorithm SHA256).Hash.ToLowerInvariant()}
         }
-        assemblies=@('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll') | ForEach-Object {
+        assemblies=@('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll') | ForEach-Object {
             @{file=$_; sha256=(Get-FileHash -LiteralPath (Join-Path $repo $_) -Algorithm SHA256).Hash.ToLowerInvariant()}
         }
         limitations=@('Synthetic frames and supervisor-stack physical map faults, not hardware captures or enabled-MMU access faults',
@@ -161,7 +161,7 @@ foreach ($source in $identity.cpuSourceFiles) {
     if ($source.file -notin $cpuFiles -or $source.sha256 -cne (Get-FileHash -LiteralPath (Join-Path $repo $source.file) -Algorithm SHA256).Hash.ToLowerInvariant()) { throw '040 access-frame CPU source identity differs' }
 }
 foreach ($assembly in $identity.assemblies) {
-    if ($assembly.file -notin @('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll') -or
+    if ($assembly.file -notin @('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll') -or
         $assembly.sha256 -cne (Get-FileHash -LiteralPath (Join-Path $repo $assembly.file) -Algorithm SHA256).Hash.ToLowerInvariant()) { throw '040 access-frame assembly identity differs' }
 }
 [xml]$trx = Get-Content -LiteralPath (Join-Path $output 'audit.trx') -Raw

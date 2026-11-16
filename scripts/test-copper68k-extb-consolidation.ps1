@@ -25,7 +25,7 @@ if(-not $ValidateReportsOnly){
     if(Test-Path -LiteralPath $output){throw "Use a fresh output directory: $output"}
     New-Item -ItemType Directory -Path $output | Out-Null
     $sourceIds=@($identities | ForEach-Object {@{path=$_;sha256=(Hash (Join-Path $repo $_))}})
-    $normal=@(foreach($file in @('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll')){
+    $normal=@(foreach($file in @('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll')){
         if(Test-Path -LiteralPath (Join-Path $repo $file)){@{path=$file;sha256=(Hash (Join-Path $repo $file))}}
     })
     $fixture | Set-Content -LiteralPath (Join-Path $output 'historical-regression.cs.txt')

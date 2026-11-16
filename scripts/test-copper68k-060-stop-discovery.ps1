@@ -15,7 +15,7 @@ $fixtures=@('Copper68k.Tests/Synthetic/M68060StopDiscoveryTests.cs','Copper68k.T
     'Copper68k.Tests/Synthetic/SyntheticMoveTests.cs','Copper68k.Tests/Synthetic/SyntheticSystemTests.cs',
     'Copper68k.Tests/Synthetic/SyntheticM68040ThrowawayTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040AccessFrameAuditTests.cs',
     'scripts/reference/m68060-stop.cpp','scripts/test-copper68k-060-stop-discovery.ps1',
-    'Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll')
+    'Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll')
 $referenceFiles=@('build68k.cpp','table68k','gencpu.cpp','readcpu.cpp','missing.cpp','od-win32/unicode.cpp','newcpu.cpp')+
     @(& git -C $source ls-files 'include/*' 'od-win32/sysconfig.h')
 $generated=@('build68k.exe','cpudefs.cpp','gencpu.exe','cpuemu_33.cpp','winuae-stop-sr.inc','winuae-stop-op.inc','observer.exe')

@@ -39,7 +39,7 @@ public sealed class BinaryReplayerLoaderTests : IDisposable
     {
         byte[] trusted = [0x4E, 0x75];
         var descriptor = Descriptor(Identity("rts", trusted));
-        var nested = Path.Combine(_root, "bin", "Debug", "net10.0");
+        var nested = Path.Combine(_root, "bin", "Debug", "net11.0");
         var binaryPath = Path.Combine(_root, descriptor.DefaultRelativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(binaryPath)!);
         Directory.CreateDirectory(nested);

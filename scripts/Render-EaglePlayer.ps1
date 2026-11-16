@@ -18,7 +18,7 @@ $scratch = Join-Path ([IO.Path]::GetTempPath()) 'coppermod-eagleplayer-render'
 New-Item -ItemType Directory -Path $scratch -Force | Out-Null
 @"
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net11.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>
   <ItemGroup><Compile Include="Program.cs" /><ProjectReference Include="$projectReference" /></ItemGroup>
 </Project>
 "@ | Set-Content -LiteralPath (Join-Path $scratch 'Render.csproj')

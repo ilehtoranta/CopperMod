@@ -67,8 +67,8 @@ try {
     foreach ($entryName in @(
         "README.md",
         "copper6510-icon.png",
-        "lib/net10.0/Copper6510.dll",
-        "lib/net10.0/Copper6510.xml")) {
+        "lib/net11.0/Copper6510.dll",
+        "lib/net11.0/Copper6510.xml")) {
         if (-not $zip.GetEntry($entryName)) {
             throw "Package '$packagePath' is missing required entry '$entryName'."
         }
@@ -116,8 +116,8 @@ finally {
 if (Test-Path $symbolPackagePath) {
     $symbolZip = [System.IO.Compression.ZipFile]::OpenRead($symbolPackagePath)
     try {
-        if (-not $symbolZip.GetEntry("lib/net10.0/Copper6510.pdb")) {
-            throw "Symbol package '$symbolPackagePath' is missing 'lib/net10.0/Copper6510.pdb'."
+        if (-not $symbolZip.GetEntry("lib/net11.0/Copper6510.pdb")) {
+            throw "Symbol package '$symbolPackagePath' is missing 'lib/net11.0/Copper6510.pdb'."
         }
     }
     finally {

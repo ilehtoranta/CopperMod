@@ -17,7 +17,7 @@ $fixtures=@('Copper68k.Tests/Synthetic/M68040CmLifetimeDiscoveryTests.cs',
     'Copper68k.Tests/Synthetic/SyntheticMachine.cs','Copper68k.Tests/Synthetic/SyntheticExecution.cs',
     'Copper68k.Tests/Synthetic/ArchitecturalExpectation.cs','Copper68k.Tests/Synthetic/SyntheticMoveTests.cs',
     'scripts/reference/m68040-cm-lifetime.cpp','scripts/test-copper68k-040-cm-lifetime-discovery.ps1',
-    'Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll')
+    'Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll')
 $generated=@('build68k.exe','cpudefs.cpp','gencpu.exe','cpuemu_31.cpp','winuae-cm-sr.inc','winuae-cm-rte-helper.inc','winuae-cm-ops.inc','observer.exe')
 if($MmuExceptionEntry){$generated=@('build68k.exe','cpudefs.cpp','gencpu.exe','cpuemu_31.cpp','winuae-cm-native-sr.inc','winuae-cm-exception.inc','winuae-cm-rte-helper.inc','winuae-cm-ops.inc','observer.exe')}
 $groups=@('rte-cm-lifetime-discovery-scalar','rte-cm-lifetime-discovery-batch')

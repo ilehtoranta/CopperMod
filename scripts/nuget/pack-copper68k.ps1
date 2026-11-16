@@ -78,8 +78,8 @@ if (-not $SkipPackageContentValidation) {
         $requiredEntries = @(
             "README.md",
             "copper68k-icon.png",
-            "lib/net10.0/Copper68k.dll",
-            "lib/net10.0/Copper68k.xml"
+            "lib/net11.0/Copper68k.dll",
+            "lib/net11.0/Copper68k.xml"
         )
 
         foreach ($entryName in $requiredEntries) {
@@ -100,7 +100,7 @@ if (-not $SkipPackageContentValidation) {
             throw "Package README starts with '$readmeFirstLine', expected '# Copper68k'."
         }
 
-        $xmlReader = New-Object System.IO.StreamReader($zip.GetEntry("lib/net10.0/Copper68k.xml").Open())
+        $xmlReader = New-Object System.IO.StreamReader($zip.GetEntry("lib/net11.0/Copper68k.xml").Open())
         try {
             $xmlText = $xmlReader.ReadToEnd()
         }
@@ -149,8 +149,8 @@ if (-not $SkipPackageContentValidation) {
     if (Test-Path $symbolPackagePath) {
         $symbolZip = [System.IO.Compression.ZipFile]::OpenRead($symbolPackagePath)
         try {
-            if (-not $symbolZip.GetEntry("lib/net10.0/Copper68k.pdb")) {
-                throw "Symbol package '$symbolPackagePath' is missing 'lib/net10.0/Copper68k.pdb'."
+            if (-not $symbolZip.GetEntry("lib/net11.0/Copper68k.pdb")) {
+                throw "Symbol package '$symbolPackagePath' is missing 'lib/net11.0/Copper68k.pdb'."
             }
         }
         finally {

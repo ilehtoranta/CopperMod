@@ -20,7 +20,7 @@ if (-not $ValidateReportsOnly) {
     if (Test-Path -LiteralPath $output) { throw "Use a fresh output directory: $output" }
     New-Item -ItemType Directory -Path $output | Out-Null
     $identities = @($sources | ForEach-Object { @{path=$_;sha256=(Hash (Join-Path $repo $_))} })
-    $protected = @(@('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll') |
+    $protected = @(@('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll') |
         Where-Object { Test-Path -LiteralPath (Join-Path $repo $_) } | ForEach-Object { @{path=$_;sha256=(Hash (Join-Path $repo $_))} })
     $settings = @{COPPER68K_RUN_040_MOVEM_WRITE_DISCOVERY='1';COPPER68K_SYNTHETIC_REPORT_DIR=$output}
     $saved = @{}

@@ -57,7 +57,7 @@ try{
         'Copper68k.Tests/Synthetic/SyntheticMachine.cs','Copper68k.Tests/Synthetic/SyntheticExecution.cs','Copper68k.Tests/Synthetic/ArchitecturalExpectation.cs',
         'Copper68k.Tests/Synthetic/SyntheticMoveTests.cs','Copper68k.Tests/M68010InterpreterTests.cs','Copper68k.Tests/Copper68k.Tests.csproj',
         'scripts/test-copper68k-010-movec.ps1','scripts/test-copper68k-synthetic.ps1','scripts/test-copper68k-synthetic-mutations.ps1')
-    $binaries=@('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll')
+    $binaries=@('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll')
     $evidence=@($groups.Keys|ForEach-Object{[IO.Path]::GetRelativePath($repo,(Join-Path $output "68010-$_.json"))})+
         @([IO.Path]::GetRelativePath($repo,(Join-Path $output 'movec.trx')))
     if(-not $ValidateReportsOnly){

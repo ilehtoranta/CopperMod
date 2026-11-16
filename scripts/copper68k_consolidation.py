@@ -65,7 +65,7 @@ class Audit:
         return result
 
     def protected(self):
-        paths = ["Copper68k/bin/Release/net10.0/Copper68k.dll", "Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll"]
+        paths = ["Copper68k/bin/Release/net11.0/Copper68k.dll", "Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll"]
         return {p: sha(self.repo / p) for p in paths if (self.repo / p).exists()}
 
     @staticmethod

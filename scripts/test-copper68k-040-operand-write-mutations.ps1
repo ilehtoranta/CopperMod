@@ -64,7 +64,7 @@ try {
         'Copper68k.Tests/Synthetic/SyntheticM68040OperandWriteFaultTests.cs','Copper68k.Tests/Synthetic/SyntheticMachine.cs',
         'Copper68k.Tests/Synthetic/ArchitecturalExpectation.cs','Copper68k.Tests/Synthetic/SyntheticM68040ThrowawayTests.cs',
         'Copper68k.Tests/Synthetic/SyntheticMoveTests.cs','scripts/test-copper68k-040-operand-write-mutations.ps1')|Sort-Object -Unique)
-    $normal=@('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll'|Where-Object{Test-Path -LiteralPath (Join-Path $repo $_)})
+    $normal=@('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll'|Where-Object{Test-Path -LiteralPath (Join-Path $repo $_)})
     $filter='FullyQualifiedName~SyntheticM68040OperandWriteFaultTests.MovePostincrement|FullyQualifiedName~SyntheticM68040OperandWriteFaultTests.PredecrementFault|FullyQualifiedName~SyntheticM68040OperandWriteFaultTests.FullIndexedFault|FullyQualifiedName~SyntheticM68040OperandWriteFaultTests.TraceFrameWriteFault'
     if(-not $ValidateReportsOnly){
         if(Test-Path -LiteralPath $output){throw 'Use a fresh writeback mutation directory'}

@@ -29,7 +29,7 @@ archives. Standalone playback uses the C# host firmware.
 
 ## Build and run
 
-Requires the .NET 10 SDK. The terminal player uses Terminal.Gui and NAudio.
+Requires the .NET 11 SDK. The terminal player uses Terminal.Gui and NAudio.
 
 ```powershell
 dotnet build CopperMod/CopperMod.csproj -c Release
@@ -95,7 +95,7 @@ EaglePlayer replay can be tested separately through the shared Amiga audio host:
 
 Keep both `.tfx` and `.sam` files in the same directory, or pass an archive
 and select the tune with `-ArchiveMember 'music/tune.tfx'`. The script
-requires the .NET 10 SDK and acquires the authenticated EaglePlayer binary on
+requires the .NET 11 SDK and acquires the authenticated EaglePlayer binary on
 first use. Output is stereo Float32 WAV at 44.1 kHz; `-SubSong` selects a
 zero-based subsong. This render path is independent of the terminal player's
 format registry.

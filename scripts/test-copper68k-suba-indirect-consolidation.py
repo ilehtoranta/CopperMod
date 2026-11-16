@@ -73,7 +73,7 @@ def inventory(source):
 
 
 def protected():
-    paths = ["Copper68k/bin/Release/net10.0/Copper68k.dll", "Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll"]
+    paths = ["Copper68k/bin/Release/net11.0/Copper68k.dll", "Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll"]
     return {p: sha(REPO / p) for p in paths if (REPO / p).exists()}
 
 

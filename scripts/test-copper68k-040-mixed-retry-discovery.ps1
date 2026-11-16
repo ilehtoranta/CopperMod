@@ -8,7 +8,7 @@ $manifest=Join-Path $output 'identities.json'
 $fixtures=@('Copper68k.Tests/Synthetic/M68040MixedEpochRetryDiscoveryTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040RteRepairTests.cs',
     'Copper68k.Tests/Synthetic/SyntheticM68040ThrowawayTests.cs','Copper68k.Tests/Synthetic/SyntheticM68040RteValidationFaultTests.cs',
     'Copper68k.Tests/Synthetic/SyntheticMachine.cs','Copper68k.Tests/Synthetic/SyntheticExecution.cs','Copper68k.Tests/Synthetic/SyntheticMoveTests.cs',
-    'scripts/test-copper68k-040-mixed-retry-discovery.ps1','Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll')
+    'scripts/test-copper68k-040-mixed-retry-discovery.ps1','Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll')
 if(-not $ValidateReportsOnly) {
     if(Test-Path -LiteralPath $output){throw "Use fresh outputs: $output"}
     New-Item -ItemType Directory -Path $output|Out-Null

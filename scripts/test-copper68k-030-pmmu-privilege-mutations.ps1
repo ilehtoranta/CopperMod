@@ -65,7 +65,7 @@ try{
   'Copper68k.Tests/Synthetic/SyntheticM68030PmmuPrivilegeTests.cs','Copper68k.Tests/Synthetic/SyntheticMachine.cs',
   'Copper68k.Tests/Synthetic/ArchitecturalExpectation.cs','Copper68k.Tests/Synthetic/SyntheticExecution.cs',
   'scripts/test-copper68k-030-pmmu-privilege-mutations.ps1')|Sort-Object -Unique)
- $normal=@('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll')
+ $normal=@('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll')
  $filter='FullyQualifiedName~SyntheticM68030PmmuPrivilegeTests.UndefinedPmmuWord|FullyQualifiedName~SyntheticM68030PmmuPrivilegeTests.RuleIsSpecific|FullyQualifiedName~SyntheticM68030PmmuPrivilegeTests.NonzeroCpIds'
  if(-not $ValidateReportsOnly){
   if(Test-Path -LiteralPath $output){throw 'Use a fresh PMMU mutation directory'}

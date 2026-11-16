@@ -362,7 +362,7 @@ memory map, devices, interrupt sources, and host integration.
 dotnet add package Copper68k
 ```
 
-Copper68k currently targets `.NET 10`.
+Copper68k currently targets `.NET 11`.
 
 ## Development version 1.4.2-ocs020.52
 

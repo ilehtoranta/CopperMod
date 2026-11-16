@@ -22,7 +22,7 @@ if(-not $ValidateReportsOnly){
     New-Item -ItemType Directory -Path $output | Out-Null
     $repositoryInputs=@($files+$helpers | Sort-Object -Unique | ForEach-Object {@{path=$_;sha256=(Hash (Join-Path $repo $_))}})
     $normal=@{}
-    foreach($file in @('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll')){
+    foreach($file in @('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll')){
         if(Test-Path -LiteralPath (Join-Path $repo $file)){$normal[$file]=Hash (Join-Path $repo $file)}
     }
     foreach($mode in @('Clean','AliasOrder','ByteStackStride')){

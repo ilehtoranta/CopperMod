@@ -47,7 +47,7 @@ $saved=[Environment]::GetEnvironmentVariable('COPPER68K_SYNTHETIC_REPORT_DIR')
 Push-Location $repo
 try {
     $inputs=@(@(& git ls-files Copper68k Copper68k.Tests)+@('scripts/test-copper68k-010-long-move-mutations.ps1')|Sort-Object -Unique)
-    $normal=@('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll'|Where-Object{Test-Path -LiteralPath (Join-Path $repo $_)})
+    $normal=@('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll'|Where-Object{Test-Path -LiteralPath (Join-Path $repo $_)})
     if(-not $ValidateReportsOnly){
         if(Test-Path -LiteralPath $output){throw 'Use a fresh mutation output directory'}
         New-Item -ItemType Directory -Path $output|Out-Null

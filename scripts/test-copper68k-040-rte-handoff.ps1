@@ -17,7 +17,7 @@ $fixtures=@('Copper68k.Tests/Synthetic/SyntheticM68040ChainedOddReturnTests.cs',
     'Copper68k.Tests/Synthetic/SyntheticMachine.cs','Copper68k.Tests/Synthetic/SyntheticExecution.cs',
     'Copper68k.Tests/Synthetic/ArchitecturalExpectation.cs','Copper68k.Tests/Synthetic/SyntheticMoveTests.cs',
     'scripts/reference/m68040-rte-handoff.cpp','scripts/test-copper68k-040-rte-handoff.ps1',
-    'Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll')
+    'Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll')
 $generated=@('gencpu-test-mode.cpp','cpudefs.cpp','gencpu.exe','cpuemu_94_test.cpp','winuae-sr.inc','winuae-rte.inc','observer.exe')
 $groups=[ordered]@{
     'rte-chained-odd-canonical-scalar'=@{cases=82944;combinations=2592;weight=32}

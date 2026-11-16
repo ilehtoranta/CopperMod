@@ -64,7 +64,7 @@ try {
         'Copper68k.Tests/Copper68k.Tests.csproj', 'Copper68k.Tests/M68060InterpreterTests.cs',
         'scripts/test-copper68k-060-pcr.ps1', 'scripts/test-copper68k-synthetic.ps1', 'scripts/test-copper68k-synthetic-mutations.ps1')
     $inputPaths = @($inputPaths | Sort-Object -Unique)
-    $binaryPaths = @('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll')
+    $binaryPaths = @('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll')
     $evidencePaths = @($groups.Keys | ForEach-Object { [IO.Path]::GetRelativePath($repo,(Join-Path $output "68060-$_.json")) }) +
         @([IO.Path]::GetRelativePath($repo,(Join-Path $output 'pcr.trx')))
     if (-not $ValidateReportsOnly) {

@@ -14,7 +14,7 @@ $fixtures=@('Copper68k.Tests/Synthetic/M68010RteFormatDiscoveryTests.cs','Copper
     'Copper68k.Tests/Synthetic/SyntheticExecution.cs','Copper68k.Tests/Synthetic/ArchitecturalExpectation.cs',
     'Copper68k.Tests/Synthetic/SyntheticMoveTests.cs','Copper68k.Tests/EnvironmentFactAttribute.cs','Copper68k.Tests/Copper68k.Tests.csproj',
     'scripts/reference/m68010-rte-format.cpp','scripts/test-copper68k-010-rte-format-discovery.ps1',
-    'Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll')
+    'Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll')
 $referenceFiles=@('build68k.cpp','table68k','gencpu.cpp','readcpu.cpp','missing.cpp','od-win32/unicode.cpp','newcpu.cpp')+
     @(& git -C $source ls-files 'include/*' 'od-win32/sysconfig.h')
 $generated=@('build68k.exe','cpudefs.cpp','gencpu.exe','cpuemu_0.cpp','cpuemu_11.cpp','winuae-rte-format-sr.inc','winuae-rte-format-op.inc','observer.exe')

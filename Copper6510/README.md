@@ -4,7 +4,7 @@ Copper6510 is a cycle-stepped NMOS 6510 CPU core for C64-class emulators. It
 supports official and common undocumented opcodes, observable bus cycles,
 hardware IRQ/NMI/RESET inputs, and RDY/AEC bus arbitration.
 
-The package targets .NET 10.
+The package targets .NET 11.
 
 ## Install
 

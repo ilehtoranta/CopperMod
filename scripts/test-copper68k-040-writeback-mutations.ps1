@@ -56,7 +56,7 @@ try {
         'Copper68k.Tests/Synthetic/SyntheticM68040WritebackTests.cs','Copper68k.Tests/Synthetic/SyntheticMachine.cs',
         'Copper68k.Tests/Synthetic/ArchitecturalExpectation.cs','Copper68k.Tests/Synthetic/SyntheticM68040ThrowawayTests.cs',
         'Copper68k.Tests/Synthetic/SyntheticMoveTests.cs','scripts/test-copper68k-040-writeback-mutations.ps1')|Sort-Object -Unique)
-    $normal=@('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll'|Where-Object{Test-Path -LiteralPath (Join-Path $repo $_)})
+    $normal=@('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll'|Where-Object{Test-Path -LiteralPath (Join-Path $repo $_)})
     $filter='FullyQualifiedName~HandlerCompletesMemoryAlignedByteAtLaneOne|FullyQualifiedName~HandlerCompletesOverlappingMixedWritebacksInOrder'
     if(-not $ValidateReportsOnly){
         if(Test-Path -LiteralPath $output){throw 'Use a fresh writeback mutation directory'}

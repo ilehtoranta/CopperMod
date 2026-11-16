@@ -25,7 +25,7 @@ if (-not $ValidateReportsOnly) {
         $identities[$name]=Hash $to
         if ((Hash $from) -ne $identities[$name]) { throw "Source changed while freezing: $name" }
     }
-    $protected=@(@('Copper68k/bin/Release/net10.0/Copper68k.dll','Copper68k.Tests/bin/Release/net10.0/Copper68k.Tests.dll') |
+    $protected=@(@('Copper68k/bin/Release/net11.0/Copper68k.dll','Copper68k.Tests/bin/Release/net11.0/Copper68k.Tests.dll') |
         Where-Object { Test-Path -LiteralPath (Join-Path $repo $_) } |
         ForEach-Object { @{path=$_;sha256=(Hash (Join-Path $repo $_))} })
     $selection='FullyQualifiedName~SyntheticM68040MovemMaskFaultTests|FullyQualifiedName~SyntheticM68040MovemWriteRecoveryTests|FullyQualifiedName~FixedManualStoreEncodings|FullyQualifiedName~CanonicalStoreFixturesExecuteWithoutFault'
