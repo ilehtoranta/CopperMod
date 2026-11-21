@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net11.0</TargetFramework>
+    <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>1701;1702;NU1900</NoWarn>
@@ -9,9 +9,9 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.5.5-nitro.1</Version>
-    <PackageVersion>1.5.5-nitro.1</PackageVersion>
-    <PackageReleaseNotes>Unpublished development source: sample MC68000 memory BTST interrupts before the operand read while retaining the mandatory final prefetch and waited-read retirement. Physical timing and release qualification are not implied.</PackageReleaseNotes>
+    <Version>1.5.5</Version>
+    <PackageVersion>1.5.5</PackageVersion>
+    <PackageReleaseNotes>Add guarded 68040 Fast RAM loop promotion and resumption at device deadlines, correct accelerated register-shift timing, and include .NET 10 and .NET 11 assets.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

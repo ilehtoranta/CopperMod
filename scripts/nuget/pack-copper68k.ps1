@@ -78,6 +78,8 @@ if (-not $SkipPackageContentValidation) {
         $requiredEntries = @(
             "README.md",
             "copper68k-icon.png",
+            "lib/net10.0/Copper68k.dll",
+            "lib/net10.0/Copper68k.xml",
             "lib/net11.0/Copper68k.dll",
             "lib/net11.0/Copper68k.xml"
         )
@@ -149,6 +151,9 @@ if (-not $SkipPackageContentValidation) {
     if (Test-Path $symbolPackagePath) {
         $symbolZip = [System.IO.Compression.ZipFile]::OpenRead($symbolPackagePath)
         try {
+            if (-not $symbolZip.GetEntry("lib/net10.0/Copper68k.pdb")) {
+                throw "Symbol package is missing the .NET 10 PDB."
+            }
             if (-not $symbolZip.GetEntry("lib/net11.0/Copper68k.pdb")) {
                 throw "Symbol package '$symbolPackagePath' is missing 'lib/net11.0/Copper68k.pdb'."
             }
