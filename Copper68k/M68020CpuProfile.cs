@@ -199,16 +199,22 @@ namespace Copper68k
             => new(name, model, nativeCyclesPerMachineCycle, busTiming);
 
         internal long NativeToMachineCycles(long nativeCycles)
-            => (nativeCycles + NativeCyclesPerMachineCycle - 1) / NativeCyclesPerMachineCycle;
+        {
+            var ratio = NativeCyclesPerMachineCycle;
+            return ratio == 1 ? nativeCycles : (nativeCycles + ratio - 1) / ratio;
+        }
 
         internal long MachineToNativeCycles(long machineCycles)
             => machineCycles * NativeCyclesPerMachineCycle;
 
-        internal M68020BusTimingRule GetBusTimingRule(uint address)
-        {
-            var target = ReferenceEquals(this, A1200Ec02014Mhz) && IsA1200PlatformIoAddress(address)
+        internal M68020MemoryTarget GetBusTimingTarget(uint address)
+            => ReferenceEquals(this, A1200Ec02014Mhz) && IsA1200PlatformIoAddress(address)
                 ? M68020MemoryTarget.PlatformIo
                 : ClassifyTarget(address);
+
+        internal M68020BusTimingRule GetBusTimingRule(uint address)
+        {
+            var target = GetBusTimingTarget(address);
             for (var i = 0; i < BusTiming.Count; i++)
             {
                 if (BusTiming[i].Target == target)

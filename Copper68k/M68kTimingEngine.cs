@@ -1183,13 +1183,15 @@ namespace Copper68k
         public bool TryReadInstructionCacheWord(uint address, out ushort value)
         {
             value = 0;
-            return _profile.IsInstructionCacheableAddress(address) &&
+            return InstructionCache.Enabled &&
+                _profile.IsInstructionCacheableAddress(address) &&
                 InstructionCache.TryReadInstructionWord(address, out value);
         }
 
         public void CaptureInstructionCacheLine(uint address, IM68kCodeReader codeReader)
         {
-            if (_profile.IsInstructionCacheableAddress(address))
+            if (InstructionCache.Enabled && !InstructionCache.Frozen &&
+                _profile.IsInstructionCacheableAddress(address))
             {
                 InstructionCache.CaptureInstructionLine(address, codeReader);
             }
@@ -1352,7 +1354,11 @@ namespace Copper68k
             var end = start + elapsed;
             _state.NativeCycles = end;
             long machineCycles;
-            if (_nativeCyclesPerMachineCycle == 2)
+            if (_nativeCyclesPerMachineCycle == 1)
+            {
+                machineCycles = end;
+            }
+            else if (_nativeCyclesPerMachineCycle == 2)
             {
                 machineCycles = (end + 1) >> 1;
             }
@@ -1634,8 +1640,8 @@ namespace Copper68k
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _timing = timing ?? throw new ArgumentNullException(nameof(timing));
             _codeReader = bus as IM68kCodeReader;
-            _fastMemoryBus = bus as IM68kFastMemoryBus;
             _m68040LogicalBus = bus as M68040LogicalBus;
+            _fastMemoryBus = _m68040LogicalBus is { HasFastMemoryBus: false } ? null : bus as IM68kFastMemoryBus;
             _m68040PhysicalBus = _m68040LogicalBus?.PhysicalBus;
             _directUncachedInstructionFetch = !profile.FastInstructionFetch;
             _useM68040UncachedHalfLine =
@@ -1651,27 +1657,28 @@ namespace Copper68k
             }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal ushort ReadInstructionFetchWordHot(
             uint address,
             out bool cacheHit,
-            out bool requiresSynchronization,
-            out long completedMachineCycle)
+            out bool requiresSynchronization)
         {
             if (!_directUncachedInstructionFetch || _timing.InstructionCache.Enabled)
             {
-                ResetInstructionFetchBuffer();
+                if (_useM68040UncachedHalfLine)
+                {
+                    ResetInstructionFetchBuffer();
+                }
+
                 return ReadInstructionFetchWord(
                     address,
                     out cacheHit,
-                    out requiresSynchronization,
-                    out completedMachineCycle);
+                    out requiresSynchronization);
             }
 
             if (_useM68040UncachedHalfLine)
             {
                 return ReadM68040UncachedInstructionWord(
-                    address, out cacheHit, out requiresSynchronization, out completedMachineCycle);
+                    address, out cacheHit, out requiresSynchronization);
             }
 
             cacheHit = false;
@@ -1694,7 +1701,6 @@ namespace Copper68k
 
             _timing.RecordPostedBusCompletion(cycle);
             requiresSynchronization = true;
-            completedMachineCycle = cycle;
             return value;
         }
 
@@ -1713,10 +1719,10 @@ namespace Copper68k
             // execution. Table 7-3 starts uncached fetches at a half-line.
             // Publish only a complete window; a failed entry remains fatal.
             _exceptionFetchBase = address & ~7u;
-            _exceptionFetchFirst = ReadM68040InstructionLong(_exceptionFetchBase, out _);
-            _exceptionFetchSecond = ReadM68040InstructionLong(unchecked(_exceptionFetchBase + 4), out _);
-            _exceptionFetchThird = ReadM68040InstructionLong(unchecked(_exceptionFetchBase + 8), out _);
-            _exceptionFetchFourth = ReadM68040InstructionLong(unchecked(_exceptionFetchBase + 12), out _);
+            _exceptionFetchFirst = ReadM68040InstructionLong(_exceptionFetchBase);
+            _exceptionFetchSecond = ReadM68040InstructionLong(unchecked(_exceptionFetchBase + 4));
+            _exceptionFetchThird = ReadM68040InstructionLong(unchecked(_exceptionFetchBase + 8));
+            _exceptionFetchFourth = ReadM68040InstructionLong(unchecked(_exceptionFetchBase + 12));
             _exceptionFetchNext = address;
             _fetchSupervisor = (_state.StatusRegister & M68kCpuState.Supervisor) != 0;
             _fetchMmuGeneration = _state.M68040Mmu.Generation;
@@ -1728,8 +1734,7 @@ namespace Copper68k
         private ushort ReadM68040UncachedInstructionWord(
             uint address,
             out bool cacheHit,
-            out bool requiresSynchronization,
-            out long completedMachineCycle)
+            out bool requiresSynchronization)
         {
             // MC68040UM table 7-3 and following paragraph: instruction transfers are
             // aligned longwords, starting at the eight-byte half-line boundary.
@@ -1753,7 +1758,6 @@ namespace Copper68k
                     if (offset == 14) _exceptionFetchValid = false;
                     cacheHit = false;
                     requiresSynchronization = false;
-                    completedMachineCycle = _state.Cycles;
                     return (ushort)(retained >> ((address & 2) == 0 ? 16 : 0));
                 }
                 // A changed flow/context must not turn the entry window into
@@ -1768,10 +1772,9 @@ namespace Copper68k
 
             cacheHit = false; // The holding register is independent of CACR.IE.
             requiresSynchronization = false;
-            completedMachineCycle = _state.Cycles;
             if (_fetchValidLongs == 0)
             {
-                _fetchFirstLong = ReadM68040InstructionLong(halfLine, out completedMachineCycle);
+                _fetchFirstLong = ReadM68040InstructionLong(halfLine);
                 _fetchHalfLineAddress = halfLine;
                 _fetchSupervisor = supervisor;
                 _fetchMmuGeneration = mmuGeneration;
@@ -1781,7 +1784,7 @@ namespace Copper68k
             }
             if ((address & 4) != 0 && _fetchValidLongs == 1)
             {
-                _fetchSecondLong = ReadM68040InstructionLong(halfLine + 4, out completedMachineCycle);
+                _fetchSecondLong = ReadM68040InstructionLong(halfLine + 4);
                 _fetchValidLongs = 2;
                 requiresSynchronization = true;
             }
@@ -1796,7 +1799,7 @@ namespace Copper68k
             return word;
         }
 
-        private uint ReadM68040InstructionLong(uint address, out long completedMachineCycle)
+        private uint ReadM68040InstructionLong(uint address)
         {
             var cycle = GetBusRequestMachineCycle();
             var value = _m68040LogicalBus is { } logicalBus &&
@@ -1808,7 +1811,6 @@ namespace Copper68k
                 AddProfileWaitStates(address, M68020BusWidth.Long, ref cycle);
             }
             _timing.RecordPostedBusCompletion(cycle);
-            completedMachineCycle = cycle;
             return value;
         }
 
@@ -1870,18 +1872,16 @@ namespace Copper68k
             _timing.RecordPostedBusCompletion(cycle);
         }
 
-        internal ushort ReadInstructionFetchWord(
+        private ushort ReadInstructionFetchWord(
             uint address,
             out bool cacheHit,
-            out bool requiresSynchronization,
-            out long completedMachineCycle)
+            out bool requiresSynchronization)
         {
             if ((_m68040LogicalBus is null || _state.M68040Mmu.DirectIdentityAccessEnabled) &&
                 _codeReader is not null && _timing.TryReadInstructionCacheWord(address, out var cachedValue))
             {
                 cacheHit = true;
                 requiresSynchronization = false;
-                completedMachineCycle = _state.Cycles;
                 return cachedValue;
             }
 
@@ -1890,7 +1890,6 @@ namespace Copper68k
             {
                 cacheHit = false;
                 requiresSynchronization = false;
-                completedMachineCycle = _state.Cycles;
                 var directValue = _codeReader.ReadHostWord(address);
                 _timing.CaptureInstructionCacheLine(address, _codeReader);
                 return directValue;
@@ -1902,7 +1901,6 @@ namespace Copper68k
             AddProfileWaitStates(address, M68020BusWidth.Word, ref cycle);
             _timing.RecordPostedBusCompletion(cycle);
             requiresSynchronization = true;
-            completedMachineCycle = cycle;
             if (_codeReader is not null && (_m68040LogicalBus is null || _state.M68040Mmu.DirectIdentityAccessEnabled))
             {
                 _timing.CaptureInstructionCacheLine(address, _codeReader);
@@ -1912,16 +1910,16 @@ namespace Copper68k
 
         public byte ReadByte(uint address, M68kBusAccessKind accessKind)
         {
-            if (CanUseFastCiaAPortAAccess(address, accessKind) &&
-                _fastMemoryBus is not null &&
+            if (_fastMemoryBus is not null &&
+                CanUseFastCiaAPortAAccess(address, accessKind) &&
                 _fastMemoryBus.TryReadFastByte(address, accessKind, out var ciaFastValue))
             {
                 CompleteMinimalBlockingFastAccess();
                 return ciaFastValue;
             }
 
-            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _fastMemoryBus is not null &&
+            if (_fastMemoryBus is not null &&
+                CanUseFastNonChipMemoryAccess(address, accessKind) &&
                 _fastMemoryBus.TryReadFastByte(address, accessKind, out var fastValue))
             {
                 return fastValue;
@@ -1942,8 +1940,8 @@ namespace Copper68k
                 return _codeReader.ReadHostWord(address);
             }
 
-            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _fastMemoryBus is not null &&
+            if (_fastMemoryBus is not null &&
+                CanUseFastNonChipMemoryAccess(address, accessKind) &&
                 _fastMemoryBus.TryReadFastWord(address, accessKind, out var fastValue))
             {
                 return fastValue;
@@ -1958,8 +1956,8 @@ namespace Copper68k
 
         public uint ReadLong(uint address, M68kBusAccessKind accessKind)
         {
-            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _fastMemoryBus is not null &&
+            if (_fastMemoryBus is not null &&
+                CanUseFastNonChipMemoryAccess(address, accessKind) &&
                 _fastMemoryBus.TryReadFastLong(address, accessKind, out var fastValue))
             {
                 return fastValue;
@@ -1974,16 +1972,16 @@ namespace Copper68k
 
         public void WriteByte(uint address, byte value, M68kBusAccessKind accessKind)
         {
-            if (CanUseFastCiaAPortAAccess(address, accessKind) &&
-                _fastMemoryBus is not null &&
+            if (_fastMemoryBus is not null &&
+                CanUseFastCiaAPortAAccess(address, accessKind) &&
                 _fastMemoryBus.TryWriteFastByte(address, value, accessKind))
             {
                 RecordMinimalPostedFastAccess();
                 return;
             }
 
-            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _fastMemoryBus is not null &&
+            if (_fastMemoryBus is not null &&
+                CanUseFastNonChipMemoryAccess(address, accessKind) &&
                 _fastMemoryBus.TryWriteFastByte(address, value, accessKind))
             {
                 return;
@@ -1997,8 +1995,8 @@ namespace Copper68k
 
         public void WriteWord(uint address, ushort value, M68kBusAccessKind accessKind)
         {
-            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _fastMemoryBus is not null &&
+            if (_fastMemoryBus is not null &&
+                CanUseFastNonChipMemoryAccess(address, accessKind) &&
                 _fastMemoryBus.TryWriteFastWord(address, value, accessKind))
             {
                 return;
@@ -2012,8 +2010,8 @@ namespace Copper68k
 
         public void WriteLong(uint address, uint value, M68kBusAccessKind accessKind)
         {
-            if (CanUseFastNonChipMemoryAccess(address, accessKind) &&
-                _fastMemoryBus is not null &&
+            if (_fastMemoryBus is not null &&
+                CanUseFastNonChipMemoryAccess(address, accessKind) &&
                 _fastMemoryBus.TryWriteFastLong(address, value, accessKind))
             {
                 return;
@@ -2040,7 +2038,7 @@ namespace Copper68k
                 return false;
             }
 
-            return M68020CpuProfile.IsInstructionCacheableTarget(_profile.GetBusTimingRule(address).Target);
+            return M68020CpuProfile.IsInstructionCacheableTarget(_profile.GetBusTimingTarget(address));
         }
 
         private bool CanUseFastNonChipMemoryAccess(uint address, M68kBusAccessKind accessKind)
@@ -2051,7 +2049,7 @@ namespace Copper68k
                 return false;
             }
 
-            var target = _profile.GetBusTimingRule(address).Target;
+            var target = _profile.GetBusTimingTarget(address);
             return target is
                 M68020MemoryTarget.ExpansionRam or
                 M68020MemoryTarget.RealFastRam or
@@ -2075,6 +2073,11 @@ namespace Copper68k
 
         private void AddProfileWaitStates(uint address, M68020BusWidth transferWidth, ref long cycle)
         {
+            if (!_hasInstructionFetchWaitStates)
+            {
+                return;
+            }
+
             var rule = _profile.GetBusTimingRule(address);
             var transfers = CountProfileTransfers(address, transferWidth, rule.Width);
             cycle += (long)Math.Max(0, rule.WaitStates) * transfers;

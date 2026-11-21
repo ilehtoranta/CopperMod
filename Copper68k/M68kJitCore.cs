@@ -48,7 +48,9 @@ namespace Copper68k
             bool cacheFlushOnlyInvalidation,
             bool minimalCycleTiming,
             M68kJitFallbackFactory? fallbackFactory = null,
-            M68040Move16CopyStrategy move16CopyStrategy = M68040Move16CopyStrategy.Auto)
+            M68040Move16CopyStrategy move16CopyStrategy = M68040Move16CopyStrategy.Auto,
+            bool enableTraceAttribution = true,
+            bool enableUncachedFastRamTraces = false)
         {
             CpuModel = cpuModel;
             EnableV2 = enableV2;
@@ -63,6 +65,8 @@ namespace Copper68k
             MinimalCycleTiming = minimalCycleTiming;
             FallbackFactory = fallbackFactory;
             Move16CopyStrategy = move16CopyStrategy;
+            EnableTraceAttribution = enableTraceAttribution;
+            EnableUncachedFastRamTraces = enableUncachedFastRamTraces;
         }
 
         public M68kJitCpuModel CpuModel { get; }
@@ -90,9 +94,13 @@ namespace Copper68k
         public M68kJitFallbackFactory? FallbackFactory { get; }
 
         public M68040Move16CopyStrategy Move16CopyStrategy { get; }
+
+        public bool EnableTraceAttribution { get; }
+
+        public bool EnableUncachedFastRamTraces { get; }
     }
 
-    internal sealed class M68kJitCore : IM68kBatchCore, IM68kInstructionFrequencyProvider, IM68000InterruptRecognition, IM68000PrefetchDiagnostics, IM68kJitDiagnostics
+    internal sealed partial class M68kJitCore : IM68kBatchCore, IM68kInstructionFrequencyProvider, IM68000InterruptRecognition, IM68000PrefetchDiagnostics, IM68kJitDiagnostics
     {
         private const int CompileThreshold = 16;
         private const int MaxTraceInstructions = 64;
@@ -131,8 +139,6 @@ namespace Copper68k
             M68kCpuState.Zero |
             M68kCpuState.Overflow |
             M68kCpuState.Carry;
-        private const ushort ArithmeticFlags = LogicFlags | M68kCpuState.Extend;
-
         private readonly IM68kBus _bus;
         private readonly IM68kJitBus? _jitBus;
         private readonly IM68kJitFastMemoryBus? _fastMemoryBus;
@@ -156,6 +162,9 @@ namespace Copper68k
         private readonly Func<uint, uint> _readPhysicalLongForM68040Mmu;
         private readonly M68kJitCpuModel _cpuModel;
         private readonly bool _cacheFlushOnlyInvalidation;
+        private readonly bool _uncachedFastRamTraces;
+        private bool _uncachedCodeChanged;
+        private bool _guardedBatchMustExit;
         private readonly bool _minimalCycleTiming;
         private readonly bool _v2Enabled;
         private readonly bool _v2Tier3Enabled;
@@ -199,15 +208,17 @@ namespace Copper68k
         private readonly Dictionary<M68kJitFallbackInstructionKey, long> _fallbackInstructionCauses = new Dictionary<M68kJitFallbackInstructionKey, long>();
         private readonly Dictionary<M68kJitFallbackRootKey, long> _fallbackRootCauses = new Dictionary<M68kJitFallbackRootKey, long>();
         private readonly Dictionary<ulong, string> _fallbackInstructionCauseCache = new Dictionary<ulong, string>();
-        private readonly Dictionary<ulong, TraceEntry> _v2HandoffTraceCache = new Dictionary<ulong, TraceEntry>();
+        private readonly HashSet<ulong> _v2HandoffTraceCache = new HashSet<ulong>();
         private readonly Dictionary<ulong, V2HandoffBlockCacheEntry> _v2HandoffBlockCache = new Dictionary<ulong, V2HandoffBlockCacheEntry>();
         private M68kJitFallbackReason _pendingFallbackReason;
         private bool _v2PendingOutOfBlockBranch;
+#pragma warning disable CS0649 // Written by generated code when a branch exits.
         private uint _v2PendingOutOfBlockBranchRoot;
         private uint _v2PendingOutOfBlockBranchTarget;
         private uint _v2PendingOutOfBlockBranchCodeStart;
         private int _v2PendingOutOfBlockBranchByteLength;
         private bool _v2PendingOutOfBlockBranchIsFallthrough;
+#pragma warning restore CS0649
         private bool _disposed;
         private bool _subscribedToWriteInvalidation;
         private int _directPseudoFastAccessCount;
@@ -219,7 +230,6 @@ namespace Copper68k
         private bool _fallbackFetchSynchronized;
         private uint _fallbackExpectedProgramCounter;
         private int _asyncCompileEpoch;
-        private int _asyncCompileSequence;
         private static readonly MethodInfo CheckV2ConditionMethod =
             typeof(M68kJitCore).GetMethod(nameof(CheckV2Condition), BindingFlags.Static | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(CheckV2Condition));
@@ -371,6 +381,12 @@ namespace Copper68k
         private static readonly MethodInfo PullLongMethod =
             typeof(M68kJitCore).GetMethod(nameof(PullLong), BindingFlags.Instance | BindingFlags.NonPublic) ??
             throw new MissingMethodException(typeof(M68kJitCore).FullName, nameof(PullLong));
+        private static readonly MethodInfo TryReadUncachedLeafReturnMethod =
+            RequiredV2MemoryHelper(nameof(TryReadUncachedLeafReturn), typeof(uint), typeof(uint), typeof(uint).MakeByRefType());
+        private static readonly MethodInfo TryPushZeroWaitReturnMethod =
+            RequiredV2MemoryHelper(nameof(TryPushZeroWaitReturn), typeof(uint), typeof(uint));
+        private static readonly MethodInfo TryPullZeroWaitReturnMethod =
+            RequiredV2MemoryHelper(nameof(TryPullZeroWaitReturn), typeof(uint), typeof(uint).MakeByRefType());
         private static readonly MethodInfo ExecuteV2JumpToMethod =
             typeof(M68kJitCore).GetMethod(
                 nameof(ExecuteV2JumpTo),
@@ -656,7 +672,7 @@ namespace Copper68k
                     minimalCycleTiming: false,
                     fallbackFactory));
 
-        internal static M68kJitCore CreateM68040(IM68kBus bus)
+        internal static M68kJitCore CreateM68040(IM68kBus bus, bool enableUncachedFastRamTraces = false)
             => new M68kJitCore(
                 bus,
                 new M68kJitOptions(
@@ -670,12 +686,16 @@ namespace Copper68k
                     enableAsyncJit: true,
                     enableAsyncJitSyncFallback: true,
                     cacheFlushOnlyInvalidation: true,
-                    minimalCycleTiming: true));
+                    minimalCycleTiming: true,
+                    enableTraceAttribution: IsFeatureEnabledByDefault(
+                        "COPPER_M68K_JIT_TRACE_ATTRIBUTION", defaultValue: false),
+                    enableUncachedFastRamTraces: enableUncachedFastRamTraces));
 
         internal static M68kJitCore CreateM68040ForTesting(
             IM68kBus bus,
             bool enableV2,
-            M68040Move16CopyStrategy move16CopyStrategy = M68040Move16CopyStrategy.Auto)
+            M68040Move16CopyStrategy move16CopyStrategy = M68040Move16CopyStrategy.Auto,
+            bool enableUncachedFastRamTraces = false)
             => new M68kJitCore(
                 bus,
                 new M68kJitOptions(
@@ -690,7 +710,8 @@ namespace Copper68k
                     enableAsyncJitSyncFallback: false,
                     cacheFlushOnlyInvalidation: true,
                     minimalCycleTiming: true,
-                    move16CopyStrategy: move16CopyStrategy));
+                    move16CopyStrategy: move16CopyStrategy,
+                    enableUncachedFastRamTraces: enableUncachedFastRamTraces));
 
         private M68kJitCore(IM68kBus bus, M68kJitOptions options)
         {
@@ -739,6 +760,11 @@ namespace Copper68k
             _readPhysicalLongForM68040Mmu = ReadPhysicalLongForM68040Mmu;
             _cpuModel = options.CpuModel;
             _cacheFlushOnlyInvalidation = options.CacheFlushOnlyInvalidation;
+            // Deferred direct writes do not publish until the batch retires.
+            _uncachedFastRamTraces = options.EnableUncachedFastRamTraces && options.EnableV2 &&
+                _directRamBus == null && bus is IM68kCodeReader;
+            _canPromoteFastRamLoops = _cpuModel == M68kJitCpuModel.M68040 && options.EnableV2BusAccess &&
+                _uncachedFastRamTraces && _fastMemoryBus?.CanBindUnwatchedFastRam == true;
             _minimalCycleTiming = options.MinimalCycleTiming;
             _v2Enabled = options.EnableV2;
             _v2Tier3Enabled = options.EnableV2Tier3;
@@ -751,6 +777,7 @@ namespace Copper68k
             _m68040Move16CopyStrategy = ResolveM68040Move16CopyStrategy(options.Move16CopyStrategy);
             State = new M68kCpuState();
             FallbackAttributionEnabled = IsFallbackAttributionEnabledByDefault();
+            TraceAttributionEnabled = options.EnableTraceAttribution;
             _fallback = options.FallbackFactory?.Invoke(State, _instructionFrequency, _cpuModel) ??
                 CreateFallback(bus, State, _instructionFrequency, _cpuModel);
             _fallbackFetchSynchronization = _cpuModel == M68kJitCpuModel.M68000
@@ -778,7 +805,7 @@ namespace Copper68k
                     AsyncCompileQueueCapacity);
             }
 
-            if (_jitBus != null && !_cacheFlushOnlyInvalidation)
+            if (_jitBus != null && (!_cacheFlushOnlyInvalidation || _uncachedFastRamTraces))
             {
                 _jitBus.JitCodeRangeWritten += InvalidateWrittenCodeRange;
                 _subscribedToWriteInvalidation = true;
@@ -797,6 +824,7 @@ namespace Copper68k
         public M68kCpuState State { get; }
 
         internal bool FallbackAttributionEnabled { get; set; }
+        internal bool TraceAttributionEnabled { get; }
 
         internal bool AsyncCompilationIdle => _asyncCompiler?.IsIdle ?? true;
 
@@ -983,6 +1011,18 @@ namespace Copper68k
             return ExecuteInstructions(1, null, NoOpBoundary.Instance) == 0
                 ? 0
                 : (int)(State.Cycles - startCycles);
+        }
+
+        // The host can widen an accelerated guarded batch only when it can
+        // request a return to the motherboard boundary after a timed access.
+        internal Action? GetTimedBusBoundaryRequest()
+            => _uncachedFastRamTraces && _cpuModel == M68kJitCpuModel.M68040
+                ? RequireTimedBusBoundary
+                : null;
+
+        private void RequireTimedBusBoundary()
+        {
+            _guardedBatchMustExit = true;
         }
 
         /// <inheritdoc />
@@ -1189,9 +1229,28 @@ namespace Copper68k
                 return 0;
             }
 
+            if (_fastRamResume?.Loop != null)
+            {
+                var resumed = TryResumeFastRamLoop(maxInstructions, targetCycle, boundary);
+                if (resumed != 0)
+                    return resumed;
+                if (Normalize(State.ProgramCounter) != pc)
+                    return 0;
+            }
+
             if (!_traces.TryGetValue(pc, out var trace))
             {
-                _pendingFallbackReason = GetNoTraceFallbackReason(pc);
+                if (_canPromoteFastRamLoops && targetCycle.HasValue &&
+                    boundary is IM68kBusAccessTraceBatchBoundary loopBoundary)
+                {
+                    var loopInstructions = TryExecuteFirstEntryFastRamLoop(pc, maxInstructions,
+                        targetCycle.Value, loopBoundary);
+                    if (loopInstructions != 0)
+                        return loopInstructions;
+                }
+
+                if (FallbackAttributionEnabled)
+                    _pendingFallbackReason = GetNoTraceFallbackReason(pc);
                 return 0;
             }
 
@@ -1229,6 +1288,15 @@ namespace Copper68k
                 }
 
                 return v2BatchExecuted.Value;
+            }
+
+            // Only the V2 delegate retires an instruction before checking
+            // whether an uncached opcode changed during that instruction.
+            if (_uncachedFastRamTraces &&
+                (_uncachedCodeChanged || !InstructionCacheEnabled && IsUncachedFastCode(pc)))
+            {
+                _pendingFallbackReason = M68kJitFallbackReason.V2OnlyNoBatch;
+                return 0;
             }
 
             var pureBatchExecuted = TryExecutePureTraceBatch(trace, maxInstructions, targetCycle, boundary);
@@ -1340,7 +1408,13 @@ namespace Copper68k
             }
 
             var previousCycle = State.Cycles;
-            if (!batchBoundary.TryBeginPureCpuTraceBatch(State, targetCycle.Value, out var batchTargetCycle))
+            if (_uncachedFastRamTraces)
+            {
+                _uncachedCodeChanged = false;
+                _guardedBatchMustExit = false;
+            }
+            if (!batchBoundary.TryBeginPureCpuTraceBatch(State, targetCycle.Value, out var batchTargetCycle) ||
+                _guardedBatchMustExit)
             {
                 return null;
             }
@@ -1407,7 +1481,7 @@ namespace Copper68k
             IM68kInstructionBoundary boundary,
             out TraceEntry outOfBlockHandoffTrace)
         {
-            outOfBlockHandoffTrace = default;
+            outOfBlockHandoffTrace = TraceEntry.Empty;
             var totalExecuted = 0;
             var remaining = maxInstructions;
             var current = trace;
@@ -1441,6 +1515,11 @@ namespace Copper68k
                     pendingHandoff = false;
                 }
 
+                if (_guardedBatchMustExit)
+                {
+                    ClearPendingV2OutOfBlockBranch();
+                    break;
+                }
                 MaybePromoteV2Trace(current, executed);
                 if (!_v2PendingOutOfBlockBranch)
                 {
@@ -1526,7 +1605,7 @@ namespace Copper68k
 
         private bool TryGetV2PureHandoffTrace(uint sourceRoot, uint pc, out TraceEntry trace, out string blockReason)
         {
-            trace = default;
+            trace = TraceEntry.Empty;
             blockReason = string.Empty;
             if (Normalize(State.ProgramCounter) != pc)
             {
@@ -1545,7 +1624,7 @@ namespace Copper68k
                 return true;
             }
 
-            if (!_traces.TryGetValue(pc, out trace))
+            if (!TryGetTraceEntry(pc, out trace))
             {
                 if (IsPendingV2GraphHoleTarget(pc))
                 {
@@ -1623,7 +1702,7 @@ namespace Copper68k
             out TraceEntry trace,
             out string blockReason)
         {
-            trace = default;
+            trace = TraceEntry.Empty;
             blockReason = string.Empty;
             if (!_v2BusAccessEnabled)
             {
@@ -1678,7 +1757,7 @@ namespace Copper68k
                 return true;
             }
 
-            if (!_traces.TryGetValue(pc, out trace))
+            if (!TryGetTraceEntry(pc, out trace))
             {
                 if (IsPendingV2GraphHoleTarget(pc))
                 {
@@ -1747,17 +1826,28 @@ namespace Copper68k
             return true;
         }
 
+        private bool TryGetTraceEntry(uint address, out TraceEntry trace)
+        {
+            if (_traces.TryGetValue(address, out var installed))
+            {
+                trace = installed;
+                return true;
+            }
+
+            trace = TraceEntry.Empty;
+            return false;
+        }
+
         private bool TryGetCachedV2HandoffTrace(uint sourceRoot, uint target, out TraceEntry trace)
         {
-            trace = default;
+            trace = TraceEntry.Empty;
             var key = GetV2HandoffCacheKey(sourceRoot, target);
-            if (!_v2HandoffTraceCache.TryGetValue(key, out var cached))
+            if (!_v2HandoffTraceCache.Contains(key))
             {
                 return false;
             }
 
-            if (!_traces.TryGetValue(target, out trace) ||
-                trace.Root != cached.Root ||
+            if (!TryGetTraceEntry(target, out trace) ||
                 trace.V2Compiled == null ||
                 _v2DisabledRoots.Contains(trace.Root) ||
                 !TryValidateTraceGeneration(target, ref trace))
@@ -1766,7 +1856,6 @@ namespace Copper68k
                 return false;
             }
 
-            _v2HandoffTraceCache[key] = trace;
             return true;
         }
 
@@ -1841,9 +1930,10 @@ namespace Copper68k
         {
             if (trace.V2Compiled != null)
             {
+                var key = GetV2HandoffCacheKey(sourceRoot, target);
                 _v2HandoffQueuePressures.Remove(Normalize(target));
-                _v2HandoffTraceCache[GetV2HandoffCacheKey(sourceRoot, target)] = trace;
-                _v2HandoffBlockCache.Remove(GetV2HandoffCacheKey(sourceRoot, target));
+                _v2HandoffTraceCache.Add(key);
+                _v2HandoffBlockCache.Remove(key);
             }
         }
 
@@ -1884,7 +1974,7 @@ namespace Copper68k
 
         private bool TryMakeV2HandoffTargetTrace(uint target, out TraceEntry trace, out string blockReason)
         {
-            trace = default;
+            trace = TraceEntry.Empty;
             blockReason = string.Empty;
             target = Normalize(target);
             if (!_v2Enabled)
@@ -1994,9 +2084,9 @@ namespace Copper68k
 
         private bool TryGetInstalledV2HandoffTargetTrace(uint target, out TraceEntry trace)
         {
-            trace = default;
+            trace = TraceEntry.Empty;
             target = Normalize(target);
-            if (!_traces.TryGetValue(target, out trace) ||
+            if (!TryGetTraceEntry(target, out trace) ||
                 trace.V2Compiled == null ||
                 _v2DisabledRoots.Contains(trace.Root) ||
                 !TryValidateTraceGeneration(target, ref trace))
@@ -2067,7 +2157,13 @@ namespace Copper68k
             }
 
             var previousCycle = State.Cycles;
-            if (!batchBoundary.TryBeginBusAccessTraceBatch(State, targetCycle.Value, out var batchTargetCycle))
+            if (_uncachedFastRamTraces)
+            {
+                _uncachedCodeChanged = false;
+                _guardedBatchMustExit = false;
+            }
+            if (!batchBoundary.TryBeginBusAccessTraceBatch(State, targetCycle.Value, out var batchTargetCycle) ||
+                _guardedBatchMustExit)
             {
                 unavailableReason = "boundary-refused";
                 return null;
@@ -2079,7 +2175,7 @@ namespace Copper68k
                 trace,
                 maxInstructions,
                 batchTargetCycle,
-                boundary,
+                batchBoundary,
                 out var directCpuInstructions,
                 out var directMemoryInstructions);
             if (executed == 0)
@@ -2119,7 +2215,7 @@ namespace Copper68k
             TraceEntry trace,
             int maxInstructions,
             long batchTargetCycle,
-            IM68kInstructionBoundary boundary,
+            IM68kBusAccessTraceBatchBoundary boundary,
             out int directCpuInstructions,
             out int directMemoryInstructions)
         {
@@ -2144,14 +2240,31 @@ namespace Copper68k
                 ClearPendingV2OutOfBlockBranch();
                 var currentIsPure = current.V2PureCpuBatchEligible;
                 _fallbackFetchSynchronized = false;
+                var loopInstructions = TryExecuteFastRamLoop(
+                    current, remaining, batchTargetCycle, boundary, out var wholeLapInstructions);
+                if (loopInstructions != 0)
+                {
+                    _counters.V2BoundLapInstructions += wholeLapInstructions;
+                    _counters.V2BoundLapBatches++;
+                    directMemoryInstructions += loopInstructions;
+                    return totalExecuted + loopInstructions;
+                }
+
                 int executed;
-                try
+                if (_directRamBus == null)
                 {
                     executed = current.V2Compiled(this, remaining, batchTargetCycle, boundary);
                 }
-                finally
+                else
                 {
-                    FlushM68040DirectRamWork();
+                    try
+                    {
+                        executed = current.V2Compiled(this, remaining, batchTargetCycle, boundary);
+                    }
+                    finally
+                    {
+                        FlushM68040DirectRamWork();
+                    }
                 }
                 if (executed == 0)
                 {
@@ -2181,6 +2294,11 @@ namespace Copper68k
                     directMemoryInstructions += executed;
                 }
 
+                if (_guardedBatchMustExit)
+                {
+                    ClearPendingV2OutOfBlockBranch();
+                    break;
+                }
                 MaybePromoteV2Trace(current, executed);
                 if (!_v2PendingOutOfBlockBranch)
                 {
@@ -2210,7 +2328,20 @@ namespace Copper68k
                     break;
                 }
 
+                if (_canPromoteFastRamLoops)
+                    ObserveFastRamLoopBackedge(current.Root, pc, boundary);
+
                 _counters.V2TraceHandoffAttempts++;
+                if (_uncachedFastRamTraces &&
+                    Normalize(State.ProgramCounter) == pc &&
+                    TryGetCachedV2HandoffTrace(current.Root, pc, out var linked))
+                {
+                    ClearPendingV2OutOfBlockBranch();
+                    current = linked;
+                    pendingHandoff = true;
+                    continue;
+                }
+
                 if (TryGetCachedV2HandoffBlock(current.Root, pc, out var cachedBlockReason))
                 {
                     RecordV2TraceHandoffBlock(cachedBlockReason, pc);
@@ -2331,7 +2462,17 @@ namespace Copper68k
 
             var previousCycle = State.Cycles;
             var root = Normalize(State.ProgramCounter);
-            var opcodeAvailable = TryReadInstructionWord(root, out var opcode);
+            // The 040 max-speed interpreter already publishes the fetched
+            // opcode for uncached Fast RAM. Require a different prior PC so
+            // a fetch fault cannot make stale instruction metadata look new.
+            var reuseFastRamOpcode = _cpuModel == M68kJitCpuModel.M68040 &&
+                (State.CacheControlRegister & M68040InstructionCacheEnable) == 0 &&
+                State.M68040Mmu.DirectIdentityAccessEnabled &&
+                State.LastInstructionProgramCounter != root &&
+                M68020CpuProfile.ClassifyTarget(root) == M68020MemoryTarget.RealFastRam &&
+                _bus is IM68kCodeReader;
+            ushort opcode = 0;
+            var opcodeAvailable = !reuseFastRamOpcode && TryReadInstructionWord(root, out opcode);
             if (_fallbackPipelineStateTransfer != null &&
                 _m68000PipelineStateValid)
             {
@@ -2344,6 +2485,18 @@ namespace Copper68k
             }
 
             _fallback.ExecuteInstruction();
+            if (reuseFastRamOpcode)
+            {
+                if (State.LastInstructionProgramCounter == root)
+                {
+                    opcode = State.LastOpcode;
+                    opcodeAvailable = true;
+                }
+                else
+                {
+                    opcodeAvailable = TryReadInstructionWord(root, out opcode);
+                }
+            }
             CaptureFallbackM68000PipelineState();
             _fallbackFetchSynchronized = true;
             _fallbackExpectedProgramCounter = State.ProgramCounter;
@@ -2447,8 +2600,8 @@ namespace Copper68k
 
         private string FormatFallbackInstructionCause(uint pc, bool opcodeAvailable, ushort opcode)
         {
-            if (_amigaBus != null &&
-                M68kDecoder.TryDecode(_amigaBus, pc, out var instruction, out _, _cpuModel))
+            if (opcodeAvailable && _amigaBus != null &&
+                M68kDecoder.TryDecode(CreateTraceCodeReader(), pc, out var instruction, out _, _cpuModel))
             {
                 return FormatV2InstructionCause(instruction);
             }
@@ -2699,8 +2852,17 @@ namespace Copper68k
                     byteCount: 2,
                     out var physicalAddress,
                     out _) &&
-                IsPhysicalJitCodeAddress(physicalAddress, byteCount: 2);
+                IsPhysicalJitCodeAddress(physicalAddress, byteCount: 2) &&
+                (!_uncachedFastRamTraces || InstructionCacheEnabled ||
+                    IsUncachedFastCode(logicalAddress) ||
+                    _amigaBus.IsJitReadOnlyCodeAddress(physicalAddress, 2, M68kBusAccessKind.CpuInstructionFetch));
         }
+
+        private bool InstructionCacheEnabled
+            => (State.CacheControlRegister & M68040InstructionCacheEnable) != 0;
+
+        private static bool IsUncachedFastCode(uint address)
+            => M68020CpuProfile.ClassifyTarget(address) == M68020MemoryTarget.RealFastRam;
 
         private bool IsPhysicalJitCodeAddress(uint physicalAddress, int byteCount)
             => _amigaBus != null &&
@@ -2728,7 +2890,10 @@ namespace Copper68k
                         byteCount: 2,
                         out var physical,
                         out _) ||
-                    !IsPhysicalJitCodeAddress(physical, byteCount: 2))
+                    !IsPhysicalJitCodeAddress(physical, byteCount: 2) ||
+                    (_uncachedFastRamTraces && !InstructionCacheEnabled &&
+                        !IsUncachedFastCode(logical) &&
+                        !_amigaBus!.IsJitReadOnlyCodeAddress(physical, 2, M68kBusAccessKind.CpuInstructionFetch)))
                 {
                     return false;
                 }
@@ -2790,7 +2955,13 @@ namespace Copper68k
             }
 
             var supervisor = (State.StatusRegister & M68kCpuState.Supervisor) != 0;
-            if (!State.M68040Mmu.TryTranslate(
+            var mmu = State.M68040Mmu;
+            if (mmu.DirectIdentityAccessEnabled)
+            {
+                physicalAddress = logicalAddress;
+                fault = default;
+            }
+            else if (!mmu.TryTranslate(
                 logicalAddress,
                 accessKind,
                 write,
@@ -2906,6 +3077,9 @@ namespace Copper68k
 
             public bool TryCaptureJitCodeSnapshot(uint root, int maxBytes, out M68kJitCodeSnapshot snapshot)
                 => _jitBus.TryCaptureJitCodeSnapshot(NormalizeAddress(root), maxBytes, out snapshot);
+
+            public bool CanCaptureJitCodeSnapshot(uint root, int maxBytes)
+                => _jitBus.CanCaptureJitCodeSnapshot(NormalizeAddress(root), maxBytes);
 
             public bool TryReadJitZeroWaitMemory(uint address, M68kOperandSize size, out uint value)
             {
@@ -3146,7 +3320,7 @@ namespace Copper68k
 
         private bool TryCompileTrace(uint root, M68kJitCompileReason reason, out TraceEntry trace)
         {
-            trace = default;
+            trace = TraceEntry.Empty;
             var allocationStart = GC.GetAllocatedBytesForCurrentThread();
             var compileStart = Stopwatch.GetTimestamp();
             if (!CanUseJitForCacheState(root))
@@ -3271,6 +3445,7 @@ namespace Copper68k
                 compilationOptions.CpuModel == M68kJitCpuModel.M68000,
                 compilationOptions.M68040TranslationChecksEnabled,
                 compilationOptions.M68040DirectRamEnabled,
+                compilationOptions.GuardCodeWrites,
                 compilationOptions.MinimalCycleTiming,
                 compilationOptions.M68040MmuGeneration);
             return true;
@@ -3309,6 +3484,7 @@ namespace Copper68k
                     plan.M68000MemoryHelpers,
                     plan.M68040TranslationChecksEnabled,
                     plan.M68040DirectRamEnabled,
+                    plan.GuardCodeWrites,
                     plan.MinimalCycleTiming);
             return new TraceEntry(
                 plan.Root,
@@ -3645,6 +3821,7 @@ namespace Copper68k
                 input.Options.CpuModel == M68kJitCpuModel.M68000,
                 input.Options.M68040TranslationChecksEnabled,
                 input.Options.M68040DirectRamEnabled,
+                input.Options.GuardCodeWrites,
                 input.Options.MinimalCycleTiming,
                 input.Options.M68040MmuGeneration);
             return true;
@@ -3692,6 +3869,7 @@ namespace Copper68k
                 input.Options.CpuModel == M68kJitCpuModel.M68000,
                 input.Options.M68040TranslationChecksEnabled,
                 input.Options.M68040DirectRamEnabled,
+                input.Options.GuardCodeWrites,
                 input.Options.MinimalCycleTiming,
                 input.Options.M68040MmuGeneration);
             return true;
@@ -3761,6 +3939,7 @@ namespace Copper68k
             fastReadOnlyBatchEligible = false;
             externalHandoffTargets = Array.Empty<uint>();
             var (maxInstructions, maxBytes) = GetV2TierLimits(tier);
+            var collectCalls = options.GuardCodeWrites && tier == V2TraceTier.Tier3;
             var collected = new Dictionary<uint, M68kDecodedInstruction>();
             var queued = new HashSet<uint>();
             List<uint>? externalTargets = null;
@@ -3822,6 +4001,17 @@ namespace Copper68k
                             return false;
                         }
 
+                        break;
+                    }
+
+                    if (collectCalls && instruction.Operation == M68kJitOperation.Bsr)
+                    {
+                        collected.Add(pc, instruction);
+                        codeStart = candidateCodeStart;
+                        codeEnd = candidateCodeEnd;
+                        hasBusAccess = true;
+                        EnqueueV2GraphAddress(GetBranchTarget(instruction), codeStart, codeEnd, maxBytes, work, queued);
+                        EnqueueV2GraphAddress(GetInstructionFallthrough(instruction), codeStart, codeEnd, maxBytes, work, queued);
                         break;
                     }
 
@@ -4225,6 +4415,7 @@ namespace Copper68k
                 _cpuModel == M68kJitCpuModel.M68000,
                 _cpuModel == M68kJitCpuModel.M68040 && State.M68040Mmu.Enabled,
                 _cpuModel == M68kJitCpuModel.M68040 && _directRamBus != null && _directRamMap.IsValid,
+                _uncachedFastRamTraces,
                 _minimalCycleTiming);
             RecordV2CompiledTrace(tier);
             return true;
@@ -4293,6 +4484,7 @@ namespace Copper68k
             bool useM68000MemoryHelpers,
             bool m68040TranslationChecksEnabled,
             bool m68040DirectRamEnabled,
+            bool guardCodeWrites,
             bool minimalCycleTiming)
         {
             var compiled = CompileV2(
@@ -4307,6 +4499,7 @@ namespace Copper68k
                 useM68000MemoryHelpers,
                 m68040TranslationChecksEnabled,
                 m68040DirectRamEnabled,
+                guardCodeWrites,
                 minimalCycleTiming);
             return new V2TraceCompilation(
                 compiled,
@@ -4348,6 +4541,7 @@ namespace Copper68k
 
             var (maxInstructions, maxBytes) = GetV2TierLimits(tier);
             var codeReader = CreateTraceCodeReader();
+            var collectCalls = _uncachedFastRamTraces && tier == V2TraceTier.Tier3;
             var collected = new Dictionary<uint, M68kDecodedInstruction>();
             var queued = new HashSet<uint>();
             List<uint>? externalTargets = null;
@@ -4423,6 +4617,17 @@ namespace Copper68k
                         }
 
                         RecordV2UnsupportedInstruction(instructionRejectionReason, instruction);
+                        break;
+                    }
+
+                    if (collectCalls && instruction.Operation == M68kJitOperation.Bsr)
+                    {
+                        collected.Add(pc, instruction);
+                        codeStart = candidateCodeStart;
+                        codeEnd = candidateCodeEnd;
+                        hasBusAccess = true;
+                        EnqueueV2GraphAddress(GetBranchTarget(instruction), codeStart, codeEnd, maxBytes, work, queued);
+                        EnqueueV2GraphAddress(GetInstructionFallthrough(instruction), codeStart, codeEnd, maxBytes, work, queued);
                         break;
                     }
 
@@ -4546,10 +4751,17 @@ namespace Copper68k
                 return;
             }
 
+            _v2TraceBranchExits.TryGetValue(trace.Root, out var branchExits);
+            if (_uncachedFastRamTraces && !trace.V2HasInternalLoop && branchExits == 0)
+            {
+                // Linked straight-line traces can be promoted after a side exit.
+                // Execution count alone only promotes traces with an internal loop.
+                return;
+            }
+
             _v2TraceHits.TryGetValue(trace.Root, out var hits);
             hits++;
             _v2TraceHits[trace.Root] = hits;
-            _v2TraceBranchExits.TryGetValue(trace.Root, out var branchExits);
             var nextTier = GetNextV2PromotionTier(
                 trace,
                 hits,
@@ -6039,6 +6251,7 @@ namespace Copper68k
             bool useM68000MemoryHelpers,
             bool m68040TranslationChecksEnabled,
             bool m68040DirectRamEnabled,
+            bool guardCodeWrites,
             bool minimalCycleTiming)
         {
             if (m68040TranslationChecksEnabled)
@@ -6052,6 +6265,18 @@ namespace Copper68k
                 out var loadAddressRegisters,
                 out var dirtyDataRegisters,
                 out var dirtyAddressRegisters);
+            if (guardCodeWrites)
+            {
+                foreach (var instruction in instructions)
+                {
+                    if (instruction.Operation is M68kJitOperation.Bsr or M68kJitOperation.Rts)
+                    {
+                        loadAddressRegisters |= 1 << 7;
+                        dirtyAddressRegisters |= 1 << 7;
+                        break;
+                    }
+                }
+            }
             if (V2TraceNeedsFullEntryRegisterLoad(instructions))
             {
                 loadDataRegisters = 0xFF;
@@ -6088,6 +6313,7 @@ namespace Copper68k
                     dirtyAddressRegisters,
                     m68040TranslationChecksEnabled,
                     m68040DirectRamEnabled,
+                    guardCodeWrites,
                     minimalCycleTiming);
         }
 
@@ -6270,6 +6496,7 @@ namespace Copper68k
             int dirtyAddressRegisters,
             bool m68040TranslationChecksEnabled,
             bool m68040DirectRamEnabled,
+            bool guardCodeWrites,
             bool minimalCycleTiming)
         {
             var method = new DynamicMethod(
@@ -6292,6 +6519,7 @@ namespace Copper68k
             context.SetM68040TranslationChecks(m68040TranslationChecksEnabled);
             context.SetM68000MemoryHelpers(useM68000MemoryHelpers);
             context.SetM68040DirectRamEnabled(m68040DirectRamEnabled);
+            context.GuardCodeWrites = guardCodeWrites;
             context.SetFpuExceptionRegisterWriteback(dirtyDataRegisters, dirtyAddressRegisters);
             context.EmitLoadState(root, returnZero, loadDataRegisters, loadAddressRegisters);
 
@@ -6305,12 +6533,111 @@ namespace Copper68k
                     addressToIndex[instructions[i].ProgramCounter] = i;
                 }
 
+                if (guardCodeWrites && tier == V2TraceTier.Tier3)
+                {
+                    var returns = new HashSet<uint>();
+                    foreach (var instruction in instructions)
+                    {
+                        if (instruction.Operation == M68kJitOperation.Bsr &&
+                            addressToIndex.ContainsKey(GetBranchTarget(instruction)))
+                        {
+                            var continuation = GetInstructionFallthrough(instruction);
+                            if (addressToIndex.ContainsKey(continuation))
+                                returns.Add(continuation);
+                        }
+                    }
+
+                    context.CallGraphReturns = [.. returns];
+                }
+
+                var entryPoints = guardCodeWrites && minimalCycleTiming
+                    ? CollectV2RegisterRunEntries(instructions, root, context.CallGraphReturns)
+                    : null;
+                List<(Label Label, M68kDecodedInstruction Last, int Count)>? partialRuns = null;
+                var registerBudget = entryPoints != null ? il.DeclareLocal(typeof(long)) : null;
                 il.Emit(OpCodes.Br, labels[addressToIndex[root]]);
                 for (var i = 0; i < instructions.Length; i++)
                 {
                     var instruction = instructions[i];
                     il.MarkLabel(labels[i]);
                     context.EmitCanContinue(exit);
+                    if (entryPoints != null && registerBudget != null)
+                    {
+                        var count = GetV2RegisterRunLength(instructions, i, entryPoints);
+                        if (count >= 3)
+                        {
+                            partialRuns ??= new();
+                            context.EmitGetRegisterRunBudget(registerBudget);
+                            var lastArithmeticFlags = -1;
+                            var lastExtend = -1;
+                            var flagWriters = 0;
+                            for (var offset = 0; offset < count; offset++)
+                            {
+                                var flags = WrittenRegisterRunFlags(instructions[i + offset]);
+                                if (flags == 0)
+                                    continue;
+                                flagWriters++;
+                                lastArithmeticFlags = offset;
+                                if ((flags & M68kCpuState.Extend) != 0)
+                                    lastExtend = offset;
+                            }
+
+                            // Every condition flag remains observable on a
+                            // partial exit. Only the fully admitted register
+                            // run can omit intermediate flag writers.
+                            var canElideFlags = flagWriters >= 3;
+                            var fullRun = il.DefineLabel();
+                            var retireRun = il.DefineLabel();
+                            if (canElideFlags)
+                            {
+                                il.Emit(OpCodes.Ldloc, registerBudget);
+                                il.Emit(OpCodes.Ldc_I8, (long)count);
+                                il.Emit(OpCodes.Bge, fullRun);
+                            }
+
+                            context.EmitRegisterRun = true;
+                            for (var offset = 0; offset < count; offset++)
+                            {
+                                if (offset != 0)
+                                {
+                                    il.MarkLabel(labels[i + offset]);
+                                    var partial = il.DefineLabel();
+                                    il.Emit(OpCodes.Ldloc, registerBudget);
+                                    il.Emit(OpCodes.Ldc_I8, (long)offset);
+                                    il.Emit(OpCodes.Ble, partial);
+                                    partialRuns.Add((partial, instructions[i + offset - 1], offset));
+                                }
+
+                                EmitV2Instruction(il, context, instructions[i + offset], labels,
+                                    addressToIndex, exit, root, codeStart, byteLength,
+                                    recordOutOfBlockSideExit: false);
+                            }
+                            if (canElideFlags)
+                            {
+                                il.Emit(OpCodes.Br, retireRun);
+                                il.MarkLabel(fullRun);
+                                for (var offset = 0; offset < count; offset++)
+                                {
+                                    context.OmitRegisterRunArithmeticFlags = offset != lastArithmeticFlags;
+                                    context.OmitRegisterRunExtend = offset != lastExtend;
+                                    EmitV2Instruction(il, context, instructions[i + offset], labels,
+                                        addressToIndex, exit, root, codeStart, byteLength,
+                                        recordOutOfBlockSideExit: false);
+                                }
+                                context.OmitRegisterRunArithmeticFlags = false;
+                                context.OmitRegisterRunExtend = false;
+                                il.MarkLabel(retireRun);
+                            }
+
+                            context.EmitRegisterRun = false;
+                            i += count - 1;
+                            context.EmitRetireRegisterRun(instructions[i], count);
+                            EmitV2SequentialSuccessor(il, instructions[i], i, instructions,
+                                labels, addressToIndex, exit);
+                            continue;
+                        }
+                    }
+
                     if (useM68000MemoryHelpers)
                     {
                         context.EmitM68000AlignmentGuard(instruction, exit);
@@ -6356,6 +6683,17 @@ namespace Copper68k
                             exit);
                     }
                 }
+
+                if (partialRuns != null)
+                {
+                    il.Emit(OpCodes.Br, exit);
+                    foreach (var partial in partialRuns)
+                    {
+                        il.MarkLabel(partial.Label);
+                        context.EmitRetireRegisterRun(partial.Last, partial.Count);
+                        il.Emit(OpCodes.Br, exit);
+                    }
+                }
             }
             else
             {
@@ -6390,6 +6728,87 @@ namespace Copper68k
             il.Emit(OpCodes.Ldc_I4_0);
             il.Emit(OpCodes.Ret);
             return (CompiledTrace)method.CreateDelegate(typeof(CompiledTrace));
+        }
+
+        private static HashSet<uint> CollectV2RegisterRunEntries(
+            M68kDecodedInstruction[] instructions, uint root, uint[]? returnAddresses)
+        {
+            var entries = returnAddresses == null ? new HashSet<uint>() : new HashSet<uint>(returnAddresses);
+            entries.Add(root);
+            for (var index = 0; index < instructions.Length; index++)
+            {
+                var instruction = instructions[index];
+                var fallthrough = GetInstructionFallthrough(instruction);
+                if ((IsV2BranchInstruction(instruction) && instruction.Operation != M68kJitOperation.Jmp) ||
+                    instruction.Operation == M68kJitOperation.Bsr)
+                {
+                    entries.Add(GetBranchTarget(instruction));
+                    entries.Add(fallthrough);
+                }
+                else if (index + 1 == instructions.Length ||
+                         instructions[index + 1].ProgramCounter != fallthrough)
+                {
+                    // A branch into an instruction extension can produce
+                    // overlapping decoded paths. Its successor is a new entry.
+                    entries.Add(fallthrough);
+                }
+            }
+
+            return entries;
+        }
+
+        private static int GetV2RegisterRunLength(
+            M68kDecodedInstruction[] instructions, int start, HashSet<uint> entries)
+        {
+            var count = 0;
+            var nextAddress = instructions[start].ProgramCounter;
+            for (var i = start; i < instructions.Length && count < 8; i++)
+            {
+                var instruction = instructions[i];
+                if (instruction.ProgramCounter != nextAddress ||
+                    (count != 0 && entries.Contains(nextAddress)) ||
+                    !IsV2RegisterRunInstruction(instruction))
+                    break;
+                count++;
+                nextAddress = GetInstructionFallthrough(instruction);
+            }
+
+            return count;
+        }
+
+        private static bool IsV2RegisterRunInstruction(M68kDecodedInstruction instruction)
+        {
+            static bool IsRegisterOrImmediate(M68kDecodedEa ea) =>
+                ea.Kind is M68kJitEaKind.None or M68kJitEaKind.DataRegister or
+                    M68kJitEaKind.AddressRegister or M68kJitEaKind.Immediate;
+
+            return IsRegisterOrImmediate(instruction.Source) && IsRegisterOrImmediate(instruction.Destination) &&
+                instruction.Operation is
+                    M68kJitOperation.Nop or M68kJitOperation.Moveq or M68kJitOperation.Move or
+                    M68kJitOperation.Movea or M68kJitOperation.Add or M68kJitOperation.Sub or
+                    M68kJitOperation.Addi or M68kJitOperation.Subi or M68kJitOperation.Addq or
+                    M68kJitOperation.Subq or M68kJitOperation.Clr or M68kJitOperation.Tst or
+                    M68kJitOperation.Cmp or M68kJitOperation.Cmpa or M68kJitOperation.Cmpi or
+                    M68kJitOperation.Andi or M68kJitOperation.Ori or M68kJitOperation.Eori or
+                    M68kJitOperation.And or M68kJitOperation.Or or M68kJitOperation.Eor or
+                    M68kJitOperation.ExtWord or M68kJitOperation.ExtLong or M68kJitOperation.Swap or
+                    M68kJitOperation.Exg;
+        }
+
+        private static int WrittenRegisterRunFlags(M68kDecodedInstruction instruction)
+        {
+            // This is reached only for register-only instructions that do
+            // not consume condition flags. Address arithmetic preserves CCR.
+            return instruction.Operation switch
+            {
+                M68kJitOperation.Nop or M68kJitOperation.Movea or M68kJitOperation.Exg => 0,
+                M68kJitOperation.Add or M68kJitOperation.Sub when instruction.Variant == 2 => 0,
+                M68kJitOperation.Addq or M68kJitOperation.Subq
+                    when instruction.Destination.Kind == M68kJitEaKind.AddressRegister => 0,
+                M68kJitOperation.Add or M68kJitOperation.Sub or M68kJitOperation.Addi or M68kJitOperation.Subi or
+                    M68kJitOperation.Addq or M68kJitOperation.Subq => 0x1F,
+                _ => 0x0F,
+            };
         }
 
         private static void EmitV2Instruction(
@@ -6570,7 +6989,7 @@ namespace Copper68k
                     EmitV2Bra(il, context, instruction, labels, addressToIndex, exit, root, codeStart, byteLength, recordOutOfBlockSideExit);
                     return;
                 case M68kJitOperation.Bsr:
-                    EmitV2Bsr(il, context, instruction, exit, root, codeStart, byteLength);
+                    EmitV2Bsr(il, context, instruction, labels, addressToIndex, exit, root, codeStart, byteLength);
                     return;
                 case M68kJitOperation.Bcc:
                     EmitV2Bcc(il, context, instruction, labels, addressToIndex, exit, root, codeStart, byteLength, recordOutOfBlockSideExit);
@@ -6579,7 +6998,7 @@ namespace Copper68k
                     EmitV2Dbcc(il, context, instruction, labels, addressToIndex, exit, root, codeStart, byteLength, recordOutOfBlockSideExit);
                     return;
                 case M68kJitOperation.Rts:
-                    EmitV2Rts(il, context, exit, root, codeStart, byteLength);
+                    EmitV2Rts(il, context, labels, addressToIndex, exit, root, codeStart, byteLength);
                     return;
             }
 
@@ -7314,6 +7733,12 @@ namespace Copper68k
             il.Emit(OpCodes.Conv_I4);
             il.Emit(OpCodes.Stloc, context.StatusRegister);
             context.EmitStoreDataRegister(instruction.Register, value, instruction.Size);
+            if (context.MinimalCycleTiming)
+            {
+                context.EmitAddCycles(1);
+                return;
+            }
+
             il.Emit(OpCodes.Ldloc, context.Cycles);
             il.Emit(
                 OpCodes.Ldc_I8,
@@ -7785,6 +8210,9 @@ namespace Copper68k
             il.Emit(OpCodes.Stloc, result);
             context.EmitStoreDataRegister(instruction.Register, result, M68kOperandSize.Long);
             context.EmitSetPendingLogic(result, M68kOperandSize.Long);
+            if (context.EmitRegisterRun)
+                return;
+
             il.Emit(OpCodes.Ldloc, source);
             il.Emit(signed ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
             il.Emit(OpCodes.Call, GetMultiplyCoreCyclesMethod);
@@ -7948,20 +8376,77 @@ namespace Copper68k
             ILGenerator il,
             V2EmitContext context,
             M68kDecodedInstruction instruction,
+            Label[] labels,
+            Dictionary<uint, int> addressToIndex,
             Label exit,
             uint root,
             uint codeStart,
             int byteLength)
         {
             var target = GetBranchTarget(instruction);
+            var stackResolved = il.DefineLabel();
+            if (context.GuardCodeWrites)
+            {
+                var timedStack = il.DefineLabel();
+                il.Emit(OpCodes.Ldarg_0);
+                context.EmitLoadAddressRegister(7);
+                il.Emit(OpCodes.Ldloc, context.ProgramCounter);
+                il.Emit(OpCodes.Call, TryPushZeroWaitReturnMethod);
+                il.Emit(OpCodes.Brfalse, timedStack);
+                EmitV2AdjustCallStack(il, context, pushing: true);
+                il.Emit(OpCodes.Br, stackResolved);
+                il.MarkLabel(timedStack);
+            }
+
             context.EmitStoreState(recordLazyWriteback: false);
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldloc, context.ProgramCounter);
             il.Emit(OpCodes.Call, PushLongMethod);
             context.EmitReloadState();
+            il.MarkLabel(stackResolved);
             context.EmitSetProgramCounter(target);
             context.EmitAddCycles(18);
-            context.EmitRecordOutOfBlockSideExit(root, target, codeStart, byteLength, isFallthrough: false);
+            if (context.CallGraphReturns != null &&
+                addressToIndex.TryGetValue(target, out var targetIndex))
+            {
+                il.Emit(OpCodes.Br, labels[targetIndex]);
+                return;
+            }
+
+            if (context.GuardCodeWrites)
+            {
+                var regularBranch = il.DefineLabel();
+                context.EmitCanContinue(regularBranch);
+                var returnTarget = il.DeclareLocal(typeof(uint));
+                il.Emit(OpCodes.Ldarg_0);
+                EmitLoadUIntConstant(il, target);
+                context.EmitLoadAddressRegister(7);
+                il.Emit(OpCodes.Ldloca_S, returnTarget);
+                il.Emit(OpCodes.Call, TryReadUncachedLeafReturnMethod);
+                il.Emit(OpCodes.Brfalse, regularBranch);
+
+                context.EmitStartInstruction(target, 0x4E75, 2);
+                EmitV2AdjustCallStack(il, context, pushing: false);
+                context.EmitSetProgramCounter(returnTarget);
+                context.EmitAddCycles(16);
+
+                var returnAddress = GetInstructionFallthrough(instruction);
+                if (addressToIndex.TryGetValue(returnAddress, out var returnIndex))
+                {
+                    il.Emit(OpCodes.Ldloc, returnTarget);
+                    EmitLoadUIntConstant(il, returnAddress);
+                    il.Emit(OpCodes.Beq, labels[returnIndex]);
+                }
+
+                context.EmitMarkOutOfBlockBranchExit(root, returnTarget, codeStart, byteLength, isFallthrough: false);
+                il.Emit(OpCodes.Br, exit);
+                il.MarkLabel(regularBranch);
+                context.EmitMarkOutOfBlockBranchExit(root, target, codeStart, byteLength, isFallthrough: false);
+            }
+            else
+            {
+                context.EmitRecordOutOfBlockSideExit(root, target, codeStart, byteLength, isFallthrough: false);
+            }
             il.Emit(OpCodes.Br, exit);
         }
 
@@ -7971,21 +8456,67 @@ namespace Copper68k
         private static void EmitV2Rts(
             ILGenerator il,
             V2EmitContext context,
+            Label[] labels,
+            Dictionary<uint, int> addressToIndex,
             Label exit,
             uint root,
             uint codeStart,
             int byteLength)
         {
             var target = il.DeclareLocal(typeof(uint));
+            var stackResolved = il.DefineLabel();
+            if (context.GuardCodeWrites)
+            {
+                var timedStack = il.DefineLabel();
+                il.Emit(OpCodes.Ldarg_0);
+                context.EmitLoadAddressRegister(7);
+                il.Emit(OpCodes.Ldloca_S, target);
+                il.Emit(OpCodes.Call, TryPullZeroWaitReturnMethod);
+                il.Emit(OpCodes.Brfalse, timedStack);
+                EmitV2AdjustCallStack(il, context, pushing: false);
+                il.Emit(OpCodes.Br, stackResolved);
+                il.MarkLabel(timedStack);
+            }
+
             context.EmitStoreState(recordLazyWriteback: false);
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Call, PullLongMethod);
             il.Emit(OpCodes.Stloc, target);
             context.EmitReloadState();
+            il.MarkLabel(stackResolved);
             context.EmitSetProgramCounter(target);
             context.EmitAddCycles(16);
-            context.EmitRecordOutOfBlockSideExit(root, target, codeStart, byteLength, isFallthrough: false);
+            if (context.CallGraphReturns is { Length: > 0 } returnAddresses)
+            {
+                EmitV2CallGraphReturnTargets(il, returnAddresses, target, labels, addressToIndex);
+            }
+
+            if (context.GuardCodeWrites)
+                context.EmitMarkOutOfBlockBranchExit(root, target, codeStart, byteLength, isFallthrough: false);
+            else
+                context.EmitRecordOutOfBlockSideExit(root, target, codeStart, byteLength, isFallthrough: false);
             il.Emit(OpCodes.Br, exit);
+        }
+
+        private static void EmitV2CallGraphReturnTargets(
+            ILGenerator il, uint[] addresses, LocalBuilder target, Label[] labels, Dictionary<uint, int> addressToIndex)
+        {
+            foreach (var address in addresses)
+            {
+                il.Emit(OpCodes.Ldloc, target);
+                EmitLoadUIntConstant(il, address);
+                il.Emit(OpCodes.Beq, labels[addressToIndex[address]]);
+            }
+        }
+
+        private static void EmitV2AdjustCallStack(ILGenerator il, V2EmitContext context, bool pushing)
+        {
+            var stackPointer = il.DeclareLocal(typeof(uint));
+            context.EmitLoadAddressRegister(7);
+            il.Emit(OpCodes.Ldc_I4_4);
+            il.Emit(pushing ? OpCodes.Sub : OpCodes.Add);
+            il.Emit(OpCodes.Stloc, stackPointer);
+            context.EmitStoreAddressRegister(7, stackPointer);
         }
 
         private static void EmitV2Bcc(
@@ -9048,6 +9579,11 @@ namespace Copper68k
 
         private void RecordV2TraceHandoffBlock(string reason, uint target, bool countFailure = true)
         {
+            if (countFailure)
+                _counters.V2TraceHandoffFailures++;
+            if (!TraceAttributionEnabled)
+                return;
+
             if (string.IsNullOrEmpty(reason))
             {
                 reason = "unknown";
@@ -9087,7 +9623,6 @@ namespace Copper68k
                 return;
             }
 
-            _counters.V2TraceHandoffFailures++;
             IncrementV2Diagnostic(_v2TraceHandoffFailureCauses, diagnostic);
         }
 
@@ -9717,8 +10252,18 @@ namespace Copper68k
 
         private void RecordV2TierCeilingBranchExit(uint root, uint target, int exits)
         {
-            if (exits < V2TierCeilingBranchExitLimitExits ||
-                _v2DisabledRoots.Contains(root) ||
+            if (exits < V2TierCeilingBranchExitLimitExits)
+                return;
+
+            var key = GetV2HandoffCacheKey(root, target);
+            // A linked target is still validated when the handoff executes.
+            // Replacement, invalidation and disablement remove its link.
+            if (_uncachedFastRamTraces && !TraceAttributionEnabled &&
+                _v2HandoffTraceCache.Contains(key) && !_v2HandoffBlockCache.ContainsKey(key) &&
+                _v2BranchPressureLimitedTargets.Contains(key))
+                return;
+
+            if (_v2DisabledRoots.Contains(root) ||
                 !_traces.TryGetValue(root, out var trace) ||
                 trace.V2Compiled == null ||
                 CanV2RootPromoteFurther(trace))
@@ -9726,11 +10271,13 @@ namespace Copper68k
                 return;
             }
 
-            var firstLimitedTarget = _v2BranchPressureLimitedTargets.Add(GetV2HandoffCacheKey(root, target));
-            RecordV2BranchPressureLimitCause(target);
-            RecordV2BranchPressureTargetState(
-                TryQueueV2BranchPressureTarget(root, target, exits, firstLimitedTarget),
-                target);
+            var firstLimitedTarget = _v2BranchPressureLimitedTargets.Add(key);
+            var state = TryQueueV2BranchPressureTarget(root, target, exits, firstLimitedTarget);
+            if (TraceAttributionEnabled)
+            {
+                RecordV2BranchPressureLimitCause(target);
+                RecordV2BranchPressureTargetState(state, target);
+            }
             if (_v2BranchPressureLimitedRoots.Add(root))
             {
                 _counters.V2BranchPressureLimitedRoots++;
@@ -9870,6 +10417,8 @@ namespace Copper68k
             root = Normalize(root);
             _v2DisabledRoots.Add(root);
             _v2DisabledRootReasons[root] = reason;
+            if (_uncachedFastRamTraces)
+                RemoveV2HandoffCacheEntries(root);
         }
 
         private string GetV2DisabledRootBlockReason(uint root)
@@ -9903,8 +10452,7 @@ namespace Copper68k
             uint destination,
             uint source,
             uint result,
-            int sizeValue,
-            bool setExtend)
+            int sizeValue)
         {
             if (kind == (int)V2PendingFlags.None)
             {
@@ -9918,7 +10466,7 @@ namespace Copper68k
             destination &= mask;
             source &= mask;
             result &= mask;
-            status &= unchecked((int)~(setExtend ? ArithmeticFlags : LogicFlags));
+            status &= ~LogicFlags;
             if (result == 0)
             {
                 status |= M68kCpuState.Zero;
@@ -9956,10 +10504,6 @@ namespace Copper68k
             if (carry)
             {
                 status |= M68kCpuState.Carry;
-                if (setExtend)
-                {
-                    status |= M68kCpuState.Extend;
-                }
             }
 
             return status;
@@ -10607,6 +11151,15 @@ namespace Copper68k
             if (byteCount <= 0)
             {
                 return;
+            }
+
+            if (_cacheFlushOnlyInvalidation)
+            {
+                if (InstructionCacheEnabled)
+                    return;
+                _uncachedCodeChanged = true;
+                _guardedBatchMustExit = true;
+                _fallbackFetchSynchronized = false;
             }
 
             // Executable overlays replace bytes outside the emulated CPU bus. Any
@@ -12883,6 +13436,10 @@ namespace Copper68k
 
         private void ExecuteMovemForV2Batch(M68kDecodedEa ea, M68kOperandSize size, ushort registerMask, bool memoryToRegisters)
         {
+            if (_uncachedFastRamTraces && memoryToRegisters && size == M68kOperandSize.Long &&
+                TryLoadZeroWaitMovemLong(ea, registerMask))
+                return;
+
             var mode = ea.Kind;
             if (!memoryToRegisters && mode == M68kJitEaKind.AddressPredecrement)
             {
@@ -12942,6 +13499,47 @@ namespace Copper68k
             }
 
             AddCycles(8 + CountBits(registerMask) * (size == M68kOperandSize.Long ? 8 : 4));
+        }
+
+        private bool TryLoadZeroWaitMovemLong(M68kDecodedEa ea, ushort registerMask)
+        {
+            if (_fastMemoryBus == null || !State.M68040Mmu.DirectIdentityAccessEnabled || registerMask == 0 ||
+                ea.Kind is not (M68kJitEaKind.AddressIndirect or M68kJitEaKind.AddressPostincrement))
+                return false;
+
+            var transferred = System.Numerics.BitOperations.PopCount((uint)registerMask);
+            var bytes = transferred * 4;
+            var address = State.A[ea.Register];
+            if ((address & 1) != 0 || (ulong)address + (uint)bytes > 0x1_0000_0000UL ||
+                !IsM68040PhysicalAddressMapped(address, bytes, M68kBusAccessKind.CpuDataRead) ||
+                !_fastMemoryBus.TryGetJitZeroWaitReadMemory(address, bytes, out var memory, out var offset, out _) ||
+                memory == null || offset < 0 || offset > memory.Length - bytes)
+            {
+                return false;
+            }
+
+            var dataRegisters = State.D;
+            var remaining = (uint)registerMask;
+            while (remaining != 0)
+            {
+                var register = System.Numerics.BitOperations.TrailingZeroCount(remaining);
+                remaining &= remaining - 1;
+                var value = ReadDirectRamLong(memory, offset);
+                if (register < 8)
+                {
+                    dataRegisters[register] = value;
+                }
+                else
+                {
+                    SetAddressRegister(register - 8, value);
+                }
+                offset += 4;
+            }
+
+            if (ea.Kind == M68kJitEaKind.AddressPostincrement)
+                SetAddressRegister(ea.Register, address + (uint)bytes);
+            AddCycles(8 + transferred * 8);
+            return true;
         }
 
         private void ExecuteExt(int register, M68kOperandSize size)
@@ -14077,6 +14675,47 @@ namespace Copper68k
             WriteLongDescending(State.A[7], value);
         }
 
+        private bool TryReadUncachedLeafReturn(uint target, uint stack, out uint returnAddress)
+        {
+            returnAddress = 0;
+            if (InstructionCacheEnabled || _fastMemoryBus == null || _jitBus == null ||
+                (target & 1) != 0 || !State.M68040Mmu.DirectIdentityAccessEnabled ||
+                !_jitBus.IsJitCodeAddress(target, 2, M68kBusAccessKind.CpuInstructionFetch) ||
+                !IsM68040PhysicalAddressMapped(target, 2, M68kBusAccessKind.CpuInstructionFetch) ||
+                !_fastMemoryBus.TryReadJitZeroWaitMemory(target, M68kOperandSize.Word, out var opcode) ||
+                opcode != 0x4E75)
+            {
+                return false;
+            }
+
+            return TryPullZeroWaitReturn(stack, out returnAddress);
+        }
+
+        private bool TryPushZeroWaitReturn(uint stackPointer, uint value)
+        {
+            var address = unchecked(stackPointer - 4);
+            if ((address & 1) != 0 || address > uint.MaxValue - 3 || _fastMemoryBus == null ||
+                !State.M68040Mmu.DirectIdentityAccessEnabled ||
+                !IsM68040PhysicalAddressMapped(address, 4, M68kBusAccessKind.CpuDataWrite) ||
+                !_fastMemoryBus.TryGetJitZeroWaitWriteMemory(address, 4, out var memory, out var offset, out _) ||
+                memory == null || offset < 0 || offset > memory.Length - 4)
+                return false;
+
+            WriteDirectRamWord(memory, offset + 2, (ushort)value);
+            WriteDirectRamWord(memory, offset, (ushort)(value >> 16));
+            _fastMemoryBus.CompleteJitZeroWaitWrite(address, 4);
+            return true;
+        }
+
+        private bool TryPullZeroWaitReturn(uint address, out uint value)
+        {
+            value = 0;
+            return (address & 1) == 0 && address <= uint.MaxValue - 3 && _fastMemoryBus != null &&
+                State.M68040Mmu.DirectIdentityAccessEnabled &&
+                IsM68040PhysicalAddressMapped(address, 4, M68kBusAccessKind.CpuDataRead) &&
+                _fastMemoryBus.TryReadJitZeroWaitMemory(address, M68kOperandSize.Long, out value);
+        }
+
         private void WriteLongDescending(uint address, uint value)
         {
             WriteWord(address + 2, (ushort)value);
@@ -14556,10 +15195,10 @@ namespace Copper68k
 
             root = Normalize(root);
             List<ulong>? keysToRemove = null;
-            foreach (var (key, trace) in _v2HandoffTraceCache)
+            foreach (var key in _v2HandoffTraceCache)
             {
                 DecodeV2HandoffCacheKey(key, out var source, out var target);
-                if (source != root && target != root && trace.Root != root)
+                if (source != root && target != root)
                 {
                     continue;
                 }
@@ -14675,6 +15314,10 @@ namespace Copper68k
 
         private void ClearRuntimeState()
         {
+            _fastRamLoopEntryProbes?.Clear();
+            _fastRamLoopEntries?.Clear();
+            _fastRamLoops?.Clear();
+            _fastRamResume = null;
             ResetExecutionTransientState();
             _traces.Clear();
             _traceRootsByPage.Clear();
@@ -14766,14 +15409,8 @@ namespace Copper68k
                 branchExits: 0,
                 hasInternalLoop: false);
             var key = new M68kJitCompileKey(root, tier, M68kJitCompileKind.Trace);
-            if (_asyncCompiler.TryUpdatePriority(key, priority, out queueResult, out var dedupeQueueDepth))
-            {
-                RecordAsyncQueueResult(queueResult);
-                _counters.AsyncPriorityBumps++;
-                _counters.AsyncSnapshotCapturesAvoided++;
-                _counters.AsyncMaxQueueDepth = Math.Max(_counters.AsyncMaxQueueDepth, dedupeQueueDepth);
+            if (TryResolveAsyncRequest(key, priority, root, out queueResult))
                 return true;
-            }
 
             if (_amigaBus == null ||
                 !_amigaBus.TryCaptureJitCodeSnapshot(root, GetAsyncSnapshotByteCount(tier), out var snapshot))
@@ -14788,7 +15425,6 @@ namespace Copper68k
                 snapshot,
                 CreateTraceCompilationOptions(root, reason));
             var request = M68kJitCompileRequest.ForTrace(
-                Interlocked.Increment(ref _asyncCompileSequence),
                 _asyncCompileEpoch,
                 priority,
                 branchPressurePromotion,
@@ -14811,14 +15447,8 @@ namespace Copper68k
             }
 
             var key = new M68kJitCompileKey(trace.Root, tier, M68kJitCompileKind.Promotion);
-            if (_asyncCompiler.TryUpdatePriority(key, priority, out var queueResult, out var dedupeQueueDepth))
-            {
-                RecordAsyncQueueResult(queueResult);
-                _counters.AsyncPriorityBumps++;
-                _counters.AsyncSnapshotCapturesAvoided++;
-                _counters.AsyncMaxQueueDepth = Math.Max(_counters.AsyncMaxQueueDepth, dedupeQueueDepth);
+            if (TryResolveAsyncRequest(key, priority, trace.CodeStart, out _))
                 return true;
-            }
 
             if (_amigaBus == null ||
                 !_amigaBus.TryCaptureJitCodeSnapshot(trace.CodeStart, GetAsyncSnapshotByteCount(tier), out var snapshot))
@@ -14834,12 +15464,35 @@ namespace Copper68k
                 snapshot,
                 CreateTraceCompilationOptions(trace.Root, M68kJitCompileReason.Promotion));
             var request = M68kJitCompileRequest.ForPromotion(
-                Interlocked.Increment(ref _asyncCompileSequence),
                 _asyncCompileEpoch,
                 priority,
                 branchPressurePromotion,
                 input);
             RecordAsyncQueueResult(_asyncCompiler.Enqueue(request, out var queueDepth));
+            _counters.AsyncMaxQueueDepth = Math.Max(_counters.AsyncMaxQueueDepth, queueDepth);
+            return true;
+        }
+
+        private bool TryResolveAsyncRequest(
+            M68kJitCompileKey key, int priority, uint codeStart, out M68kAsyncJitQueueResult result)
+        {
+            if (!_asyncCompiler!.TryResolveWithoutSnapshot(key, priority, out result, out var queueDepth))
+                return false;
+
+            // A failed capture follows the caller's synchronous fallback policy.
+            // Only skip that capture for a rejected request if it would succeed.
+            if (result == M68kAsyncJitQueueResult.Dropped)
+            {
+                if (_amigaBus?.CanCaptureJitCodeSnapshot(codeStart, GetAsyncSnapshotByteCount(key.Tier)) != true)
+                    return false;
+            }
+            else
+            {
+                _counters.AsyncPriorityBumps++;
+            }
+
+            RecordAsyncQueueResult(result);
+            _counters.AsyncSnapshotCapturesAvoided++;
             _counters.AsyncMaxQueueDepth = Math.Max(_counters.AsyncMaxQueueDepth, queueDepth);
             return true;
         }
@@ -14864,6 +15517,7 @@ namespace Copper68k
                 workerGraphExpansionEnabled,
                 _cpuModel == M68kJitCpuModel.M68040 && State.M68040Mmu.Enabled,
                 _cpuModel == M68kJitCpuModel.M68040 && _directRamBus != null && _directRamMap.IsValid,
+                _uncachedFastRamTraces,
                 _minimalCycleTiming,
                 _cpuModel,
                 GetCurrentM68040MmuGeneration());
@@ -15199,14 +15853,7 @@ namespace Copper68k
         }
 
         private void ClearPendingV2OutOfBlockBranch()
-        {
-            _v2PendingOutOfBlockBranch = false;
-            _v2PendingOutOfBlockBranchRoot = 0;
-            _v2PendingOutOfBlockBranchTarget = 0;
-            _v2PendingOutOfBlockBranchCodeStart = 0;
-            _v2PendingOutOfBlockBranchByteLength = 0;
-            _v2PendingOutOfBlockBranchIsFallthrough = false;
-        }
+            => _v2PendingOutOfBlockBranch = false;
 
         private bool CanUseJitForCurrentCacheState()
             => CanUseJitForCacheState(Normalize(State.ProgramCounter));
@@ -15230,7 +15877,8 @@ namespace Copper68k
                 return false;
             }
 
-            return (State.CacheControlRegister & M68040InstructionCacheEnable) != 0
+            return InstructionCacheEnabled ||
+                (_uncachedFastRamTraces && State.M68040Mmu.DirectIdentityAccessEnabled && IsUncachedFastCode(root))
                 ? _amigaBus.IsJitCodeAddress(
                     physical,
                     byteCount: 2,
@@ -15636,7 +16284,6 @@ namespace Copper68k
                 PendingSource = il.DeclareLocal(typeof(uint));
                 PendingResult = il.DeclareLocal(typeof(uint));
                 PendingSize = il.DeclareLocal(typeof(int));
-                PendingSetExtend = il.DeclareLocal(typeof(bool));
                 Executed = il.DeclareLocal(typeof(int));
                 InstructionStartCycles = il.DeclareLocal(typeof(long));
                 InstructionCycleFloor = il.DeclareLocal(typeof(long));
@@ -15683,8 +16330,6 @@ namespace Copper68k
             public LocalBuilder PendingResult { get; }
 
             public LocalBuilder PendingSize { get; }
-
-            public LocalBuilder PendingSetExtend { get; }
 
             public LocalBuilder Executed { get; }
 
@@ -15733,6 +16378,12 @@ namespace Copper68k
             public bool M68040TranslationChecksEnabled { get; private set; }
 
             public bool M68040DirectRamEnabled { get; private set; }
+
+            public bool GuardCodeWrites { get; set; }
+            public uint[]? CallGraphReturns { get; set; }
+
+            private static readonly FieldInfo GuardedBatchMustExitField = typeof(M68kJitCore)
+                .GetField(nameof(_guardedBatchMustExit), BindingFlags.Instance | BindingFlags.NonPublic)!;
 
             public bool UseM68020BriefIndexedAddressing { get; private set; }
 
@@ -15828,7 +16479,7 @@ namespace Copper68k
                 uint root,
                 Label returnZero,
                 int loadDataRegisters = 0xFF,
-                int loadAddressRegisters = 0xFF)
+                int loadAddressRegisters = 0xFF, bool checkEntry = true)
             {
                 _il.Emit(OpCodes.Ldarg_0);
                 _il.Emit(OpCodes.Ldc_I4_0);
@@ -15836,10 +16487,13 @@ namespace Copper68k
                 _il.Emit(OpCodes.Ldarg_0);
                 _il.Emit(OpCodes.Call, CoreStateProperty.GetMethod!);
                 _il.Emit(OpCodes.Stloc, State);
-                _il.Emit(OpCodes.Ldloc, State);
-                _il.Emit(OpCodes.Call, ProgramCounterProperty.GetMethod!);
-                EmitLoadUIntConstant(_il, root);
-                _il.Emit(OpCodes.Bne_Un, returnZero);
+                if (checkEntry)
+                {
+                    _il.Emit(OpCodes.Ldloc, State);
+                    _il.Emit(OpCodes.Call, ProgramCounterProperty.GetMethod!);
+                    EmitLoadUIntConstant(_il, root);
+                    _il.Emit(OpCodes.Bne_Un, returnZero);
+                }
 
                 _il.Emit(OpCodes.Ldloc, State);
                 _il.Emit(OpCodes.Call, DataRegistersProperty.GetMethod!);
@@ -15889,6 +16543,14 @@ namespace Copper68k
 
             public void EmitCanContinue(Label exit)
             {
+                // Finish the current instruction before a timed transfer changes
+                // the motherboard deadline or DMA alters decoded code.
+                if (GuardCodeWrites)
+                {
+                    _il.Emit(OpCodes.Ldarg_0);
+                    _il.Emit(OpCodes.Ldfld, GuardedBatchMustExitField);
+                    _il.Emit(OpCodes.Brtrue, exit);
+                }
                 _il.Emit(OpCodes.Ldloc, Executed);
                 _il.Emit(OpCodes.Ldarg_1);
                 _il.Emit(OpCodes.Bge, exit);
@@ -15928,17 +16590,20 @@ namespace Copper68k
                     exit);
 
             public void EmitStartInstruction(M68kDecodedInstruction instruction)
+                => EmitStartInstruction(instruction.ProgramCounter, instruction.Opcode, instruction.Length);
+
+            public void EmitStartInstruction(uint programCounter, ushort opcode, int length)
             {
                 if (!DeferredM68000CycleFloor)
                 {
                     _il.Emit(OpCodes.Ldloc, Cycles);
                     _il.Emit(OpCodes.Stloc, InstructionStartCycles);
                 }
-                EmitLoadUIntConstant(_il, instruction.ProgramCounter);
+                EmitLoadUIntConstant(_il, programCounter);
                 _il.Emit(OpCodes.Stloc, LastInstructionProgramCounter);
-                _il.Emit(OpCodes.Ldc_I4, instruction.Opcode);
+                _il.Emit(OpCodes.Ldc_I4, opcode);
                 _il.Emit(OpCodes.Stloc, LastOpcode);
-                EmitLoadUIntConstant(_il, Normalize(instruction.ProgramCounter + (uint)instruction.Length));
+                EmitLoadUIntConstant(_il, Normalize(programCounter + (uint)length));
                 _il.Emit(OpCodes.Stloc, ProgramCounter);
                 _il.Emit(OpCodes.Ldloc, Executed);
                 _il.Emit(OpCodes.Ldc_I4_1);
@@ -16270,13 +16935,15 @@ namespace Copper68k
 
             public void EmitSetPendingLogic(LocalBuilder result, M68kOperandSize size)
             {
+                if (OmitRegisterRunArithmeticFlags)
+                    return;
+
                 EmitStoreInt(PendingKind, (int)V2PendingFlags.Logic);
                 EmitStoreUInt(PendingDestination, 0);
                 EmitStoreUInt(PendingSource, 0);
                 _il.Emit(OpCodes.Ldloc, result);
                 _il.Emit(OpCodes.Stloc, PendingResult);
                 EmitStoreInt(PendingSize, (int)size);
-                EmitStoreBool(PendingSetExtend, false);
             }
 
             public void EmitSetPendingArithmetic(
@@ -16287,6 +16954,26 @@ namespace Copper68k
                 M68kOperandSize size,
                 bool setExtend)
             {
+                if (setExtend && !OmitRegisterRunExtend)
+                {
+                    // MOVE and CMP can replace the pending flags without changing X.
+                    // Keep X in the live status register before another opcode does that.
+                    _il.Emit(OpCodes.Ldloc, StatusRegister);
+                    _il.Emit(OpCodes.Ldc_I4, ~M68kCpuState.Extend);
+                    _il.Emit(OpCodes.And);
+                    var add = kind == V2PendingFlags.Add;
+                    EmitLoadMaskedArithmeticOperand(add ? result : destination, size);
+                    EmitLoadMaskedArithmeticOperand(add ? destination : source, size);
+                    _il.Emit(OpCodes.Clt_Un);
+                    _il.Emit(OpCodes.Ldc_I4, (int)M68kCpuState.Extend);
+                    _il.Emit(OpCodes.Mul);
+                    _il.Emit(OpCodes.Or);
+                    _il.Emit(OpCodes.Stloc, StatusRegister);
+                }
+
+                if (OmitRegisterRunArithmeticFlags)
+                    return;
+
                 EmitStoreInt(PendingKind, (int)kind);
                 _il.Emit(OpCodes.Ldloc, destination);
                 _il.Emit(OpCodes.Stloc, PendingDestination);
@@ -16295,7 +16982,16 @@ namespace Copper68k
                 _il.Emit(OpCodes.Ldloc, result);
                 _il.Emit(OpCodes.Stloc, PendingResult);
                 EmitStoreInt(PendingSize, (int)size);
-                EmitStoreBool(PendingSetExtend, setExtend);
+            }
+
+            private void EmitLoadMaskedArithmeticOperand(LocalBuilder operand, M68kOperandSize size)
+            {
+                _il.Emit(OpCodes.Ldloc, operand);
+                if (size != M68kOperandSize.Long)
+                {
+                    EmitLoadUIntConstant(_il, M68kCpuState.Mask(size));
+                    _il.Emit(OpCodes.And);
+                }
             }
 
             public void EmitMaterializePendingFlags()
@@ -16307,7 +17003,6 @@ namespace Copper68k
                 _il.Emit(OpCodes.Ldloc, PendingSource);
                 _il.Emit(OpCodes.Ldloc, PendingResult);
                 _il.Emit(OpCodes.Ldloc, PendingSize);
-                _il.Emit(OpCodes.Ldloc, PendingSetExtend);
                 _il.Emit(OpCodes.Call, MaterializeFlags);
                 _il.Emit(OpCodes.Stloc, StatusRegister);
                 EmitStoreInt(PendingKind, 0);
@@ -16336,8 +17031,44 @@ namespace Copper68k
                 EmitStoreInt(ZeroWaitWriteSlow, 0);
             }
 
+            public bool EmitRegisterRun { get; set; }
+            public bool OmitRegisterRunArithmeticFlags { get; set; }
+            public bool OmitRegisterRunExtend { get; set; }
+
+            public void EmitGetRegisterRunBudget(LocalBuilder budget)
+            {
+                _il.Emit(OpCodes.Ldarg_1);
+                _il.Emit(OpCodes.Ldloc, Executed);
+                _il.Emit(OpCodes.Sub);
+                _il.Emit(OpCodes.Conv_I8);
+                _il.Emit(OpCodes.Ldarg_2);
+                _il.Emit(OpCodes.Ldloc, Cycles);
+                _il.Emit(OpCodes.Sub);
+                _il.Emit(OpCodes.Call, typeof(Math).GetMethod(nameof(Math.Min), [typeof(long), typeof(long)])!);
+                _il.Emit(OpCodes.Stloc, budget);
+            }
+
+            public void EmitRetireRegisterRun(M68kDecodedInstruction last, int count)
+            {
+                EmitStoreUInt(LastInstructionProgramCounter, last.ProgramCounter);
+                EmitStoreInt(LastOpcode, last.Opcode);
+                EmitSetProgramCounter(GetInstructionFallthrough(last));
+                _il.Emit(OpCodes.Ldloc, Cycles);
+                _il.Emit(OpCodes.Ldc_I8, (long)count);
+                _il.Emit(OpCodes.Add);
+                _il.Emit(OpCodes.Stloc, Cycles);
+                _il.Emit(OpCodes.Ldloc, Executed);
+                _il.Emit(OpCodes.Ldc_I4, count);
+                _il.Emit(OpCodes.Add);
+                _il.Emit(OpCodes.Stloc, Executed);
+            }
+
             public void EmitAddCycles(int cycles)
             {
+                if (EmitRegisterRun)
+                    return;
+
+
                 if (DeferredM68000CycleFloor)
                 {
                     // A pure M68000 V2 batch has no bus phase that can move the local
@@ -16370,6 +17101,10 @@ namespace Copper68k
 
             public void EmitCompleteM68000SlowWriteRetirement()
             {
+                if (EmitRegisterRun)
+                    return;
+
+
                 var done = _il.DefineLabel();
                 _il.Emit(OpCodes.Ldloc, M68000SlowWrite);
                 _il.Emit(OpCodes.Brfalse, done);
@@ -16779,6 +17514,7 @@ namespace Copper68k
                 bool m68000MemoryHelpers,
                 bool m68040TranslationChecksEnabled,
                 bool m68040DirectRamEnabled,
+                bool guardCodeWrites,
                 bool minimalCycleTiming,
                 uint m68040MmuGeneration)
             {
@@ -16799,6 +17535,7 @@ namespace Copper68k
                 M68000MemoryHelpers = m68000MemoryHelpers;
                 M68040TranslationChecksEnabled = m68040TranslationChecksEnabled;
                 M68040DirectRamEnabled = m68040DirectRamEnabled;
+                GuardCodeWrites = guardCodeWrites;
                 MinimalCycleTiming = minimalCycleTiming;
                 M68040MmuGeneration = m68040MmuGeneration;
             }
@@ -16837,6 +17574,8 @@ namespace Copper68k
 
             public bool M68040DirectRamEnabled { get; }
 
+            public bool GuardCodeWrites { get; }
+
             public bool MinimalCycleTiming { get; }
 
             public uint M68040MmuGeneration { get; }
@@ -16854,6 +17593,7 @@ namespace Copper68k
                 bool workerGraphExpansionEnabled,
                 bool m68040TranslationChecksEnabled,
                 bool m68040DirectRamEnabled,
+                bool guardCodeWrites,
                 bool minimalCycleTiming,
                 M68kJitCpuModel cpuModel,
                 uint m68040MmuGeneration)
@@ -16867,6 +17607,7 @@ namespace Copper68k
                 WorkerGraphExpansionEnabled = workerGraphExpansionEnabled;
                 M68040TranslationChecksEnabled = m68040TranslationChecksEnabled;
                 M68040DirectRamEnabled = m68040DirectRamEnabled;
+                GuardCodeWrites = guardCodeWrites;
                 MinimalCycleTiming = minimalCycleTiming;
                 CpuModel = cpuModel;
                 M68040MmuGeneration = m68040MmuGeneration;
@@ -16889,6 +17630,8 @@ namespace Copper68k
             public bool M68040TranslationChecksEnabled { get; }
 
             public bool M68040DirectRamEnabled { get; }
+
+            public bool GuardCodeWrites { get; }
 
             public bool MinimalCycleTiming { get; }
 
@@ -16970,6 +17713,7 @@ namespace Copper68k
                 bool m68000MemoryHelpers,
                 bool m68040TranslationChecksEnabled,
                 bool m68040DirectRamEnabled,
+                bool guardCodeWrites,
                 bool minimalCycleTiming,
                 uint m68040MmuGeneration)
             {
@@ -16985,6 +17729,7 @@ namespace Copper68k
                 M68000MemoryHelpers = m68000MemoryHelpers;
                 M68040TranslationChecksEnabled = m68040TranslationChecksEnabled;
                 M68040DirectRamEnabled = m68040DirectRamEnabled;
+                GuardCodeWrites = guardCodeWrites;
                 MinimalCycleTiming = minimalCycleTiming;
                 M68040MmuGeneration = m68040MmuGeneration;
             }
@@ -17012,6 +17757,8 @@ namespace Copper68k
             public bool M68040TranslationChecksEnabled { get; }
 
             public bool M68040DirectRamEnabled { get; }
+
+            public bool GuardCodeWrites { get; }
 
             public bool MinimalCycleTiming { get; }
 
@@ -17047,7 +17794,6 @@ namespace Copper68k
         private readonly struct M68kJitCompileRequest
         {
             private M68kJitCompileRequest(
-                int sequence,
                 int epoch,
                 int priority,
                 bool branchPressurePromotion,
@@ -17056,7 +17802,6 @@ namespace Copper68k
                 M68kTraceCompilationInput trace,
                 M68kV2PromotionCompilationInput promotion)
             {
-                Sequence = sequence;
                 Epoch = epoch;
                 Priority = priority;
                 BranchPressurePromotion = branchPressurePromotion;
@@ -17067,13 +17812,11 @@ namespace Copper68k
             }
 
             public static M68kJitCompileRequest ForTrace(
-                int sequence,
                 int epoch,
                 int priority,
                 bool branchPressurePromotion,
                 M68kTraceCompilationInput trace)
                 => new M68kJitCompileRequest(
-                    sequence,
                     epoch,
                     priority,
                     branchPressurePromotion,
@@ -17083,13 +17826,11 @@ namespace Copper68k
                     default);
 
             public static M68kJitCompileRequest ForPromotion(
-                int sequence,
                 int epoch,
                 int priority,
                 bool branchPressurePromotion,
                 M68kV2PromotionCompilationInput promotion)
                 => new M68kJitCompileRequest(
-                    sequence,
                     epoch,
                     priority,
                     branchPressurePromotion,
@@ -17098,7 +17839,7 @@ namespace Copper68k
                     default,
                     promotion);
 
-            public int Sequence { get; }
+            public long Sequence { get; init; }
 
             public int Epoch { get; }
 
@@ -17115,15 +17856,7 @@ namespace Copper68k
             public M68kV2PromotionCompilationInput Promotion { get; }
 
             public M68kJitCompileRequest WithPriority(int priority)
-                => new M68kJitCompileRequest(
-                    Sequence,
-                    Epoch,
-                    priority,
-                    BranchPressurePromotion,
-                    Kind,
-                    Key,
-                    Trace,
-                    Promotion);
+                => this with { Priority = priority };
 
             public M68kJitCompileResult Compile()
             {
@@ -17160,6 +17893,7 @@ namespace Copper68k
                         promotionPlan.M68000MemoryHelpers,
                         promotionPlan.M68040TranslationChecksEnabled,
                         promotionPlan.M68040DirectRamEnabled,
+                        promotionPlan.GuardCodeWrites,
                         promotionPlan.MinimalCycleTiming);
                     PrepareCompiledTrace(compiled.Compiled!);
                     return M68kJitCompileResult.ForPromotion(
@@ -17281,11 +18015,13 @@ namespace Copper68k
         {
             private readonly object _gate = new object();
             private readonly int _capacity;
-            private readonly List<M68kJitCompileRequest> _pending = new List<M68kJitCompileRequest>();
+            private readonly Dictionary<M68kJitCompileKey, M68kJitCompileRequest> _pending = new();
+            private readonly SortedList<(int Priority, long Sequence), M68kJitCompileKey> _pendingByPriority = new();
             private readonly HashSet<M68kJitCompileKey> _compiling = new HashSet<M68kJitCompileKey>();
             private readonly ConcurrentQueue<M68kJitCompileResult> _completed = new ConcurrentQueue<M68kJitCompileResult>();
             private readonly Thread[] _workers;
             private bool _stopping;
+            private long _nextSequence;
             private int _maxQueueDepth;
 
             public M68kAsyncJitCompiler(int workerCount, int capacity)
@@ -17319,41 +18055,20 @@ namespace Copper68k
                         return M68kAsyncJitQueueResult.DedupedCompiling;
                     }
 
-                    for (var i = 0; i < _pending.Count; i++)
-                    {
-                        if (_pending[i].Key.Equals(request.Key))
-                        {
-                            if (request.Priority > _pending[i].Priority)
-                            {
-                                _pending[i] = _pending[i].WithPriority(request.Priority);
-                            }
-
-                            return M68kAsyncJitQueueResult.DedupedPending;
-                        }
-                    }
+                    if (TryUpdatePendingPriority(request.Key, request.Priority))
+                        return M68kAsyncJitQueueResult.DedupedPending;
 
                     if (_pending.Count >= _capacity)
                     {
-                        var lowestIndex = 0;
-                        var lowestPriority = _pending[0].Priority;
-                        for (var i = 1; i < _pending.Count; i++)
-                        {
-                            if (_pending[i].Priority < lowestPriority)
-                            {
-                                lowestIndex = i;
-                                lowestPriority = _pending[i].Priority;
-                            }
-                        }
-
-                        if (request.Priority <= lowestPriority)
-                        {
+                        if (request.Priority <= _pendingByPriority.GetKeyAtIndex(0).Priority)
                             return M68kAsyncJitQueueResult.Dropped;
-                        }
 
-                        _pending.RemoveAt(lowestIndex);
+                        RemovePendingAt(0, out _);
                     }
 
-                    _pending.Add(request);
+                    request = request with { Sequence = ++_nextSequence };
+                    _pending.Add(request.Key, request);
+                    _pendingByPriority.Add((request.Priority, request.Sequence), request.Key);
                     queueDepth = _pending.Count;
                     if (queueDepth > _maxQueueDepth)
                     {
@@ -17365,7 +18080,7 @@ namespace Copper68k
                 }
             }
 
-            public bool TryUpdatePriority(
+            public bool TryResolveWithoutSnapshot(
                 M68kJitCompileKey key,
                 int priority,
                 out M68kAsyncJitQueueResult result,
@@ -17386,24 +18101,54 @@ namespace Copper68k
                         return true;
                     }
 
-                    for (var i = 0; i < _pending.Count; i++)
+                    if (TryUpdatePendingPriority(key, priority))
                     {
-                        if (!_pending[i].Key.Equals(key))
-                        {
-                            continue;
-                        }
-
-                        if (priority > _pending[i].Priority)
-                        {
-                            _pending[i] = _pending[i].WithPriority(priority);
-                        }
-
                         result = M68kAsyncJitQueueResult.DedupedPending;
                         return true;
                     }
 
-                    return false;
+                    return queueDepth >= _capacity &&
+                        priority <= _pendingByPriority.GetKeyAtIndex(0).Priority;
                 }
+            }
+
+            private bool TryUpdatePendingPriority(M68kJitCompileKey key, int priority)
+            {
+                ref var pending = ref CollectionsMarshal.GetValueRefOrNullRef(_pending, key);
+                if (Unsafe.IsNullRef(ref pending))
+                    return false;
+                if (priority > pending.Priority)
+                {
+                    _pendingByPriority.Remove((pending.Priority, pending.Sequence));
+                    _pendingByPriority.Add((priority, pending.Sequence), key);
+                    pending = pending.WithPriority(priority);
+                }
+                return true;
+            }
+
+            private void RemovePendingAt(int index, out M68kJitCompileRequest request)
+            {
+                var key = _pendingByPriority.GetValueAtIndex(index);
+                _pendingByPriority.RemoveAt(index);
+                _pending.Remove(key, out request);
+            }
+
+            private int FindOldestHighestPriority()
+            {
+                // The last rank gives the highest priority. Find the first
+                // request with that priority to preserve FIFO ties.
+                var first = 0;
+                var last = _pendingByPriority.Count - 1;
+                var priority = _pendingByPriority.GetKeyAtIndex(last).Priority;
+                while (first < last)
+                {
+                    var middle = first + (last - first) / 2;
+                    if (_pendingByPriority.GetKeyAtIndex(middle).Priority < priority)
+                        first = middle + 1;
+                    else
+                        last = middle;
+                }
+                return first;
             }
 
             public bool TryDequeueCompleted(out M68kJitCompileResult result)
@@ -17414,6 +18159,7 @@ namespace Copper68k
                 lock (_gate)
                 {
                     _pending.Clear();
+                    _pendingByPriority.Clear();
                     Monitor.PulseAll(_gate);
                 }
 
@@ -17441,6 +18187,7 @@ namespace Copper68k
                 {
                     _stopping = true;
                     _pending.Clear();
+                    _pendingByPriority.Clear();
                     Monitor.PulseAll(_gate);
                 }
 
@@ -17475,19 +18222,7 @@ namespace Copper68k
                             return;
                         }
 
-                        var selectedIndex = 0;
-                        var selectedPriority = _pending[0].Priority;
-                        for (var i = 1; i < _pending.Count; i++)
-                        {
-                            if (_pending[i].Priority > selectedPriority)
-                            {
-                                selectedIndex = i;
-                                selectedPriority = _pending[i].Priority;
-                            }
-                        }
-
-                        request = _pending[selectedIndex];
-                        _pending.RemoveAt(selectedIndex);
+                        RemovePendingAt(FindOldestHighestPriority(), out request);
                         _compiling.Add(request.Key);
                     }
 
@@ -17517,8 +18252,11 @@ namespace Copper68k
             public uint TargetGeneration { get; }
         }
 
-        private readonly struct TraceEntry
+        private sealed class TraceEntry
         {
+            public static readonly TraceEntry Empty = new(0, 0, 0, 0, 0, [], [], null, false, null, null,
+                V2TraceTier.None, 0, false, false, false, false, 0);
+
             public TraceEntry(
                 uint root,
                 uint codeStart,
@@ -17717,6 +18455,10 @@ namespace Copper68k
         public long V2BusAccessBatchExecutions { get; set; }
 
         public long V2BusAccessBatchInstructions { get; set; }
+
+        public long V2BoundLapInstructions { get; set; }
+
+        public long V2BoundLapBatches { get; set; }
 
         public long V2BusAccessBatchBoundaryCallsSaved { get; set; }
 

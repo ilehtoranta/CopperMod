@@ -1688,6 +1688,7 @@ namespace Copper68k
         internal IM68kBus PhysicalBus => _physicalBus;
 
         internal bool HasHostCodeReader => _codeReader != null;
+        internal bool HasFastMemoryBus => _fastMemoryBus != null;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool CanUseDirectIdentityAccess(uint address, int byteCount)
@@ -1738,7 +1739,13 @@ namespace Copper68k
         private bool CrossesPage(uint address, uint bytes)
             => !_mmu.DirectIdentityAccessEnabled && (address & 0xFFF) + bytes > 0x1000;
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private uint TranslateTimed(uint address, M68kBusAccessKind kind, bool write, int bytes, ref long cycle, uint? writeValue = null)
+            => CanUseDirectIdentityAccess(address, bytes)
+                ? address
+                : TranslateTimedSlow(address, kind, write, bytes, ref cycle, writeValue);
+
+        private uint TranslateTimedSlow(uint address, M68kBusAccessKind kind, bool write, int bytes, ref long cycle, uint? writeValue)
         {
             _translationCycle = cycle; _timedTranslation = true;
             try { return Translate(address, kind, write, bytes, writeValue); }

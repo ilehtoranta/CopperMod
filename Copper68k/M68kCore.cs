@@ -881,6 +881,10 @@ namespace Copper68k
 
     internal interface IM68kBusAccessTraceBatchBoundary : IM68kInstructionBoundary
     {
+        // The current CPU-visible edge stays fixed when a batch returns before
+        // it. A host that grants a new relative quantum leaves this disabled.
+        bool PreservesBusDeadlineOnEarlyReturn => false;
+
         bool TryBeginBusAccessTraceBatch(M68kCpuState state, long targetCycle, out long batchTargetCycle);
 
         void AfterBusAccessTraceBatch(long previousCycle, long currentCycle, int instructionCount);
@@ -1254,7 +1258,7 @@ namespace Copper68k
                 throw new M68kEmulationException("Copper68k MC68040 JIT execution requires a bus that implements IM68kJitBus.");
             }
 
-            return M68kJitCore.CreateM68040(bus);
+            return M68kJitCore.CreateM68040(bus, options.EnableUncachedFastRamTraces);
         }
 
         internal IM68kCore Create(M68kBackendKind backend, IM68kBus bus)

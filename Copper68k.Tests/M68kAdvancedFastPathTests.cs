@@ -10,28 +10,25 @@ public sealed class M68kAdvancedFastPathTests
 	private const uint CacheableCodeBase = 0x0020_0000;
 
 	[Fact]
-	public void AdvancedInstructionPipeConsumesThreeWordsAndMetadataInOrder()
+	public void AdvancedInstructionPipeConsumesThreeWordsAndSynchronizationInOrder()
 	{
 		var pipe = new M68kAdvancedInstructionPipe();
-		var first = new M68kInstructionFetchMetadata(false, true, 11, 21);
-		var second = new M68kInstructionFetchMetadata(true, false, 12, 22);
-		var third = new M68kInstructionFetchMetadata(false, false, 13, 23);
 		pipe.Reset(CodeBase);
-		pipe.Append(CodeBase, 0x1111, first);
-		pipe.Append(CodeBase + 2, 0x2222, second);
-		pipe.Append(CodeBase + 4, 0x3333, third);
+		pipe.Append(CodeBase, 0x1111, requiresSynchronization: true);
+		pipe.Append(CodeBase + 2, 0x2222, requiresSynchronization: false);
+		pipe.Append(CodeBase + 4, 0x3333, requiresSynchronization: true);
 
 		Assert.Equal(3, pipe.Count);
 		Assert.Equal(CodeBase + 6, pipe.NextAddress);
-		Assert.True(pipe.TryConsumeKnownHead(out var word0, out var metadata0));
-		Assert.True(pipe.TryConsumeKnownHead(out var word1, out var metadata1));
-		Assert.True(pipe.TryConsumeKnownHead(out var word2, out var metadata2));
+		Assert.True(pipe.TryConsumeKnownHead(out var word0, out var synchronize0));
+		Assert.True(pipe.TryConsumeKnownHead(out var word1, out var synchronize1));
+		Assert.True(pipe.TryConsumeKnownHead(out var word2, out var synchronize2));
 		Assert.Equal((ushort)0x1111, word0);
 		Assert.Equal((ushort)0x2222, word1);
 		Assert.Equal((ushort)0x3333, word2);
-		Assert.Equal(first, metadata0);
-		Assert.Equal(second, metadata1);
-		Assert.Equal(third, metadata2);
+		Assert.True(synchronize0);
+		Assert.False(synchronize1);
+		Assert.True(synchronize2);
 		Assert.True(pipe.IsEmpty);
 		Assert.Equal(CodeBase + 6, pipe.NextAddress);
 	}

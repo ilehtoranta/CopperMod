@@ -4107,12 +4107,6 @@ namespace Copper68k
         internal bool HasModelSpecificInstruction;
     }
 
-    internal readonly record struct M68kInstructionFetchMetadata(
-        bool CacheHit,
-        bool RequiresSynchronization,
-        long MachineCycle,
-        long NativeCycle);
-
     internal struct M68kAdvancedInstructionPipe
     {
         internal const int Capacity = 3;
@@ -4123,9 +4117,9 @@ namespace Copper68k
         private uint _address0;
         private uint _address1;
         private uint _address2;
-        private M68kInstructionFetchMetadata _metadata0;
-        private M68kInstructionFetchMetadata _metadata1;
-        private M68kInstructionFetchMetadata _metadata2;
+        private bool _synchronize0;
+        private bool _synchronize1;
+        private bool _synchronize2;
 
         internal int Count { get; private set; }
 
@@ -4159,17 +4153,17 @@ namespace Copper68k
         internal bool TryConsumeHead(
             uint address,
             out ushort word,
-            out M68kInstructionFetchMetadata metadata)
+            out bool requiresSynchronization)
         {
             if (Count != 1 || _address0 != address)
             {
                 word = 0;
-                metadata = default;
+                requiresSynchronization = false;
                 return false;
             }
 
             word = _word0;
-            metadata = _metadata0;
+            requiresSynchronization = _synchronize0;
             Count = 0;
             NextAddress = unchecked(address + 2u);
             return true;
@@ -4178,18 +4172,18 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryConsumeKnownHead(
             out ushort word,
-            out M68kInstructionFetchMetadata metadata)
+            out bool requiresSynchronization)
         {
             if (Count == 0)
             {
                 word = 0;
-                metadata = default;
+                requiresSynchronization = false;
                 return false;
             }
 
             var address = _address0;
             word = _word0;
-            metadata = _metadata0;
+            requiresSynchronization = _synchronize0;
             ConsumeHead(address);
 
             return true;
@@ -4199,17 +4193,17 @@ namespace Copper68k
         internal bool TryConsume(
             uint address,
             out ushort word,
-            out M68kInstructionFetchMetadata metadata)
+            out bool requiresSynchronization)
         {
             if (Count == 0 || _address0 != address)
             {
                 word = 0;
-                metadata = default;
+                requiresSynchronization = false;
                 return false;
             }
 
             word = _word0;
-            metadata = _metadata0;
+            requiresSynchronization = _synchronize0;
             ConsumeHead(address);
 
             return true;
@@ -4219,7 +4213,7 @@ namespace Copper68k
         internal void Append(
             uint address,
             ushort word,
-            M68kInstructionFetchMetadata metadata)
+            bool requiresSynchronization)
         {
             if (Count >= Capacity)
             {
@@ -4231,17 +4225,17 @@ namespace Copper68k
                 case 0:
                     _address0 = address;
                     _word0 = word;
-                    _metadata0 = metadata;
+                    _synchronize0 = requiresSynchronization;
                     break;
                 case 1:
                     _address1 = address;
                     _word1 = word;
-                    _metadata1 = metadata;
+                    _synchronize1 = requiresSynchronization;
                     break;
                 default:
                     _address2 = address;
                     _word2 = word;
-                    _metadata2 = metadata;
+                    _synchronize2 = requiresSynchronization;
                     break;
             }
 
@@ -4256,12 +4250,12 @@ namespace Copper68k
             {
                 _word0 = _word1;
                 _address0 = _address1;
-                _metadata0 = _metadata1;
+                _synchronize0 = _synchronize1;
                 if (Count > 2)
                 {
                     _word1 = _word2;
                     _address1 = _address2;
-                    _metadata1 = _metadata2;
+                    _synchronize1 = _synchronize2;
                 }
             }
 
@@ -4878,9 +4872,8 @@ namespace Copper68k
 
             opcode = _timedBus.ReadInstructionFetchWordHot(
                 hotInstruction.Address,
-                out var cacheHit,
-                out _directHotOpcodeRequiresSynchronization,
-                out var completedMachineCycle);
+                out _,
+                out _directHotOpcodeRequiresSynchronization);
             _directHotOpcodeFetched = opcode == hotInstruction.Opcode;
             if (!_directHotOpcodeFetched)
             {
@@ -4888,11 +4881,7 @@ namespace Copper68k
                 _instructionPipe.Append(
                     hotInstruction.Address,
                     opcode,
-                    new M68kInstructionFetchMetadata(
-                        cacheHit,
-                        _directHotOpcodeRequiresSynchronization,
-                        completedMachineCycle,
-                        State.NativeCycles));
+                    _directHotOpcodeRequiresSynchronization);
             }
 
             return true;
@@ -4956,13 +4945,11 @@ namespace Copper68k
                 ushort opcode;
                 ExecutionBoundaryProgramCounter = State.ProgramCounter;
                 ExecutionBoundaryExceptionSequence = State.ExceptionSequence;
-                bool cacheHit, requiresSynchronization;
-                long completedMachineCycle;
+                bool requiresSynchronization;
                 try
                 {
                     opcode = _timedBus.ReadInstructionFetchWordHot(
-                        hotInstruction.Address, out cacheHit,
-                        out requiresSynchronization, out completedMachineCycle);
+                        hotInstruction.Address, out _, out requiresSynchronization);
                 }
                 catch (M68040MmuFaultException ex)
                 {
@@ -4978,11 +4965,7 @@ namespace Copper68k
                     _instructionPipe.Append(
                         hotInstruction.Address,
                         opcode,
-                        new M68kInstructionFetchMetadata(
-                            cacheHit,
-                            requiresSynchronization,
-                            completedMachineCycle,
-                            State.NativeCycles));
+                        requiresSynchronization);
                     ExecuteInstructionCore();
                     boundary.AfterInstruction(previousCycle, State.Cycles);
                     executedInstructions++;
@@ -5370,9 +5353,9 @@ namespace Copper68k
             }
 
             var address = State.ProgramCounter;
-            if (_instructionPipe.TryConsumeKnownHead(out _, out var metadata))
+            if (_instructionPipe.TryConsumeKnownHead(out _, out var requiresSynchronization))
             {
-                if (metadata.RequiresSynchronization)
+                if (requiresSynchronization)
                 {
                     _timing.SynchronizeNativeToBus();
                 }
@@ -18775,18 +18758,22 @@ namespace Copper68k
         protected ushort FetchWord()
         {
             var address = State.ProgramCounter;
-            if (!_instructionPipe.TryConsumeHead(address, out var value, out var metadata) &&
-                !_instructionPipe.TryConsume(address, out value, out metadata))
+            if (!_instructionPipe.TryConsumeHead(address, out var value, out var requiresSynchronization) &&
+                !_instructionPipe.TryConsume(address, out value, out requiresSynchronization))
             {
                 _instructionPipe.Reset(address);
-                AppendInstructionPipeWord(address);
-                if (!_instructionPipe.TryConsumeHead(address, out value, out metadata))
+                if ((address & 1) != 0)
                 {
                     throw new InvalidOperationException("Unable to consume the MC68020/030 instruction pipe head.");
                 }
+
+                // This demand fetch retires immediately. Keep the empty pipe's
+                // next address without storing and consuming a prefetched word.
+                value = _timedBus.ReadInstructionFetchWordHot(address, out _, out requiresSynchronization);
+                _instructionPipe.Reset(unchecked(address + 2u));
             }
 
-            if (metadata.RequiresSynchronization)
+            if (requiresSynchronization)
             {
                 _timing.SynchronizeNativeToBus();
             }
@@ -18848,14 +18835,8 @@ namespace Copper68k
             var word = _timedBus.ReadInstructionFetchWordHot(
                 address,
                 out var cacheHit,
-                out var requiresSynchronization,
-                out var completedMachineCycle);
-            var metadata = new M68kInstructionFetchMetadata(
-                cacheHit,
-                requiresSynchronization,
-                completedMachineCycle,
-                State.NativeCycles);
-            _instructionPipe.Append(address, word, metadata);
+                out var requiresSynchronization);
+            _instructionPipe.Append(address, word, requiresSynchronization);
             return cacheHit;
         }
 
@@ -18944,6 +18925,15 @@ namespace Copper68k
         internal void CompleteTiming(M68kInstructionTimingKey key)
         {
             var plan = _timing.GetPlan(key);
+            if (ReferenceEquals(_profile, M68020CpuProfile.Ocs68040JitMaxSpeed))
+            {
+                // The fixed plan already includes the profile's complete
+                // instruction cost. Keep its timing record in the flat form.
+                _timing.CompleteFlatInstruction(plan);
+                CompleteInstructionPipeAfterTiming(plan);
+                return;
+            }
+
             if (_indexedOperandExtraCycles != 0)
                 plan = plan with { NativeCycles = _profile.FixedInstructionNativeCycles ?? plan.NativeCycles + _indexedOperandExtraCycles };
             CompleteTimingPlan(plan);
@@ -19412,19 +19402,14 @@ namespace Copper68k
                 return false;
             }
 
-            if (!_instructionPipe.TryPeek(address, out opcode))
+            _instructionPipe.Reset(address);
+            AppendInstructionPipeWord(address);
+            if (CanReadAheadInstructionWords())
             {
-                _instructionPipe.Reset(address);
-                AppendInstructionPipeWord(address);
-                if (CanReadAheadInstructionWords())
-                {
-                    RefillInstructionPipe();
-                }
-
-                return _instructionPipe.TryPeek(address, out opcode);
+                RefillInstructionPipe();
             }
 
-            return true;
+            return _instructionPipe.TryPeek(address, out opcode);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

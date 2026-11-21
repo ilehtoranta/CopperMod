@@ -99,6 +99,13 @@ namespace Copper68k
         /// Gets or sets the requested execution mode.
         /// </summary>
         public M68kExecutionMode ExecutionMode { get; set; } = M68kExecutionMode.Interpreter;
+
+        /// <summary>
+        /// Admit uncached 68040 Fast RAM to guarded JIT traces. Enable only on
+        /// a bus that reports writes to compiled code synchronously, including
+        /// writes by the host and DMA. The interpreter handles other uncached RAM.
+        /// </summary>
+        public bool EnableUncachedFastRamTraces { get; set; }
     }
 
     /// <summary>
@@ -179,6 +186,15 @@ namespace Copper68k
         bool JitCodeRangeGenerationMatches(uint physicalAddress, int byteCount, uint startGeneration, uint endGeneration);
 
         /// <summary>
+        /// Reports whether a snapshot capture would succeed with the current memory mapping.
+        /// The probe must leave memory, cycles and code observations untouched.
+        /// Return false when capture success cannot be established without performing it.
+        /// </summary>
+        /// <param name="physicalRoot">The normalized physical root address to capture from.</param>
+        /// <param name="maxBytes">The maximum number of bytes to capture.</param>
+        bool CanCaptureJitCodeSnapshot(uint physicalRoot, int maxBytes) => false;
+
+        /// <summary>
         /// Captures a stable byte snapshot for asynchronous JIT compilation.
         /// </summary>
         /// <param name="physicalRoot">The normalized physical root address to capture from.</param>
@@ -193,6 +209,20 @@ namespace Copper68k
     /// </summary>
     public interface IM68kJitFastMemoryBus
     {
+        /// <summary>Gets whether the bus can bind private writable Fast RAM to a guarded CPU slice.</summary>
+        bool CanBindUnwatchedFastRam => false;
+
+        /// <summary>
+        /// Gets an unobserved writable range that stays CPU-private until the current slice returns.
+        /// The caller publishes the resulting writes through <see cref="CompleteJitZeroWaitWrite"/>.
+        /// </summary>
+        bool TryGetJitUnwatchedFastRam(uint physicalAddress, int byteCount, out byte[] memory, out int offset)
+        {
+            memory = Array.Empty<byte>();
+            offset = 0;
+            return false;
+        }
+
         /// <summary>
         /// Reads a value from a zero-wait memory region.
         /// </summary>
