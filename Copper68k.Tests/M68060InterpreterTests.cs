@@ -1,4 +1,5 @@
 using Copper68k;
+using Copper68k.Tests.Synthetic;
 using CopperFloat;
 
 namespace Copper68k.Tests;
@@ -55,6 +56,45 @@ public sealed class M68060InterpreterTests
         cpu.ExecuteInstruction(); Assert.Equal(0x4000u, cpu.State.ProgramCounter);
         Assert.Equal(0x202C, bus.ReadWord(0x6FFA)); Assert.Equal(0x1004u + (uint)extraBytes, bus.ReadLong(0x6FF6));
         Assert.Equal(9u, cpu.State.D[0]); Assert.Equal(7u, cpu.State.D[1]);
+    }
+
+    [Theory]
+    [InlineData(0xF218, 0x449D, 0x5000u, 0x1004u)] // FCOS.S (A0)+,FP1
+    [InlineData(0xF220, 0x449D, 0x4FFCu, 0x1004u)] // FCOS.S -(A0),FP1
+    [InlineData(0xF227, 0x589D, 0x4FFEu, 0x1004u)] // FCOS.B -(A7),FP1
+    [InlineData(0xF228, 0x449D, 0x5010u, 0x1006u)] // FCOS.S 16(A0),FP1
+    public void RemovedFpuMemoryOperationTrapsBeforeReadingOrUpdatingSource(
+        int opcode, int extension, uint effectiveAddress, uint nextPc)
+    {
+        var bus = new SparseRecordingBus();
+        bus.Initialize(0x1000, (uint)opcode, 2);
+        bus.Initialize(0x1002, (uint)extension, 2);
+        bus.Initialize(0x1004, 0x0010, 2);
+        bus.Initialize(11 * 4, 0x4000, 4);
+        bus.Initialize(0x4000, 0x4E73, 2); // RTE
+
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
+        cpu.Reset(0x1000, 0x7000);
+        cpu.State.A[0] = 0x5000;
+        cpu.State.SetUserStackPointer(0x5000);
+        cpu.State.StatusRegister = 0x0015;
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+        Assert.Equal(0x5000u, cpu.State.A[0]);
+        Assert.Equal(0x5000u, cpu.State.UserStackPointer);
+        Assert.DoesNotContain(bus.Accesses, access => !access.Write && access.Address == effectiveAddress);
+        Assert.Equal(0x6FF4u, cpu.State.A[7]);
+        Assert.Equal(0x0015u, bus.Peek(0x6FF4, 2));
+        Assert.Equal(nextPc, bus.Peek(0x6FF6, 4));
+        Assert.Equal(0x202Cu, bus.Peek(0x6FFA, 2));
+        Assert.Equal(effectiveAddress, bus.Peek(0x6FFC, 4));
+        Assert.Equal(0x1000u, cpu.State.M68040Fpu.Fpiar);
+
+        cpu.ExecuteInstruction();
+        Assert.Equal(nextPc, cpu.State.ProgramCounter);
+        Assert.Equal(0x5000u, cpu.State.A[7]);
+        Assert.Equal(0x0015, cpu.State.StatusRegister);
     }
 
     // Independent expectations: MC68060UM 3.2.2.2, 3.2.2.5, 11.1.2, C.2, D-22.

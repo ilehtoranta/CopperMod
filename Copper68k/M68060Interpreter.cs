@@ -107,6 +107,18 @@ namespace Copper68k
         protected override bool ExecuteFpuCommand(ushort opcode, ushort extension, bool useFastTiming)
         {
             var mode = (opcode >> 3) & 7; var register = opcode & 7;
+            var memorySource = mode is >= 2 and <= 6 || (mode == 7 && register < 4);
+            if (memorySource && (extension & 0xE000) == 0x4000 && (extension & 0xFC00) != 0x5C00 &&
+                M68040FpuHelpers.IsRecognizedUnimplementedOperation(extension & 0x007F))
+            {
+                // The format-2 frame carries the effective address. The guest
+                // handler reads the operand and applies any address writeback.
+                var ea = DecodeFpuTrapAddress(mode, register, FpuFormatByteSize((extension >> 10) & 7));
+                State.M68040Fpu.Fpiar = State.LastInstructionProgramCounter;
+                RaiseFpuFormatException(2, 11, State.ProgramCounter, ea);
+                return true;
+            }
+
             var immediate = mode == 7 && register == 4;
             var dynamicList = (extension & 0xC000) == 0xC000 && (extension & 0x0800) != 0;
             var unimplementedImmediate = immediate && (
