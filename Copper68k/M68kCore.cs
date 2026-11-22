@@ -1240,7 +1240,9 @@ namespace Copper68k
             ArgumentNullException.ThrowIfNull(options);
             if (options.ExecutionMode == M68kExecutionMode.Interpreter)
             {
-                return Create(model, bus);
+                return model == M68kCpuModel.M68060 && options.DisableM68060FpuOnReset
+                    ? new M68060Interpreter(bus, disableFpuOnReset: true)
+                    : Create(model, bus);
             }
 
             if (options.ExecutionMode != M68kExecutionMode.Jit)

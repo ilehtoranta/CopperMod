@@ -51,6 +51,21 @@ public sealed class SyntheticPcrTests(ITestOutputHelper output)
     }
 
     [Fact, Trait("Suite", "Synthetic")]
+    public void AcceleratorResetOptionSetsDfpAndLetsGuestClearIt()
+    {
+        var m = Machine();
+        using var core = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, m.Bus,
+            new M68kCoreOptions { DisableM68060FpuOnReset = true });
+        SyntheticExecution.Prepare(m, [0x4e7b, 0x0808]);
+        core.Reset(SyntheticMachine.Code, 0x8000);
+        Assert.Equal(Identification | 2u, core.State.M68060ProcessorConfiguration);
+        core.ExecuteInstruction();
+        Assert.Equal(Identification, core.State.M68060ProcessorConfiguration);
+        core.Reset(SyntheticMachine.Code, 0x8000);
+        Assert.Equal(Identification | 2u, core.State.M68060ProcessorConfiguration);
+    }
+
+    [Fact, Trait("Suite", "Synthetic")]
     public void PcrResetClearsDefinedControlsFromBothStacks()
     {
         var m = Machine(); var report = new CoverageBatch("68060", "system-pcr-reset");

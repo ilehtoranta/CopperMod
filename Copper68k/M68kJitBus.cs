@@ -101,6 +101,12 @@ namespace Copper68k
         public M68kExecutionMode ExecutionMode { get; set; } = M68kExecutionMode.Interpreter;
 
         /// <summary>
+        /// Start an MC68060 with its FPU disabled on each reset, as an accelerator
+        /// bootstrap can do. Guest software can enable it by clearing PCR.DFP.
+        /// </summary>
+        public bool DisableM68060FpuOnReset { get; set; }
+
+        /// <summary>
         /// Admit uncached 68040 Fast RAM to guarded JIT traces. Enable only on
         /// a bus that reports writes to compiled code synchronously, including
         /// writes by the host and DMA. The interpreter handles other uncached RAM.

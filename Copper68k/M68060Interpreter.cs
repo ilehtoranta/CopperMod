@@ -11,14 +11,16 @@ namespace Copper68k
     // owns its PCR, stack, exception and three-long FPU state-frame contracts.
     internal sealed class M68060Interpreter : M68040Interpreter
     {
+        private readonly bool _disableFpuOnReset;
         private bool _debugInstructionHalted;
 
         private int _pendingFloatingPointException;
         private ExtF80 _exceptionOperand;
-        public M68060Interpreter(IM68kBus bus)
+        public M68060Interpreter(IM68kBus bus, bool disableFpuOnReset = false)
             : base(bus, M68020CpuProfile.Ocs68060Accelerator8x, new M68kCpuState(),
                 enableAdvancedFastPath: false)
         {
+            _disableFpuOnReset = disableFpuOnReset;
             State.EnableM68060StackMode();
         }
 
@@ -27,7 +29,7 @@ namespace Copper68k
             base.Reset(programCounter, stackPointer);
             _debugInstructionHalted = false;
             State.EnableM68060StackMode();
-            State.M68060ProcessorConfiguration = 0x0430_0000; // First revision, ESS/DFP clear.
+            State.M68060ProcessorConfiguration = _disableFpuOnReset ? 0x0430_0002u : 0x0430_0000u;
             State.M68060BusControl = 0;
             _pendingFloatingPointException = 0; _exceptionOperand = ExtF80.PositiveZero;
         }
