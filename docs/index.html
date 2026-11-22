@@ -21,6 +21,19 @@
     <section id="development" class="section split" aria-labelledby="development-title"><div><h2 id="development-title">Build and development</h2><p class="section-lede">The development build uses .NET 11, Terminal.Gui and NAudio.</p></div><div><pre><code>dotnet build CopperMod/CopperMod.csproj -c Release
 dotnet run --project CopperMod -c Release -- "path/to/tune.sid"</code></pre><p class="note">The current development branch has a known Cust backend constructor mismatch that blocks the player build. See the repository README for its status; the downloads above are separate published artifacts.</p><div class="link-list"><a href="https://github.com/ilehtoranta/CopperMod#build-and-run">Build instructions</a><a href="https://github.com/ilehtoranta/CopperMod/issues">Report an issue</a></div></div></section>
     <section class="section" aria-labelledby="libraries-title"><h2 id="libraries-title">Playback libraries</h2><p class="section-lede">Use the backends independently in other .NET applications. Each renders audio in small slices through shared module-loading and rendering interfaces.</p><div class="libraries"><a href="https://www.nuget.org/packages/CopperMod.Med">CopperMod.Med</a><a href="https://www.nuget.org/packages/CopperMod.ProTracker">CopperMod.ProTracker</a><a href="https://www.nuget.org/packages/CopperMod.Sid">CopperMod.Sid</a><a href="https://www.nuget.org/packages/CopperMod.Cust">CopperMod.Cust</a><a href="https://www.nuget.org/packages/CopperMod.Abstractions">CopperMod.Abstractions</a></div></section>
+    <section id="copper68k" class="section split" aria-labelledby="copper68k-title">
+      <div>
+        <h2 id="copper68k-title">Copper68k CPU emulation</h2>
+        <p class="section-lede">The shared Motorola 68000-family CPU library includes an optional 68040 JIT for x64 and Arm64 hosts, including Apple Silicon.</p>
+      </div>
+      <div>
+        <p>CopperScreen uses Copper68k for Amiga emulation. Its 1.2 release offers native builds for Windows x64, Intel and Apple Silicon Macs, and x64 and Arm64 Linux.</p>
+        <div class="link-list">
+          <a href="https://github.com/ilehtoranta/CopperMod/blob/main/Copper68k/README.md">Copper68k documentation</a>
+          <a href="https://ilehtoranta.github.io/CopperScreen/#downloads">CopperScreen downloads</a>
+        </div>
+      </div>
+    </section>
   </main>
   <footer class="site-footer"><div class="wrap footer-inner"><p>CopperMod · Open source · MIT license</p><div class="link-list"><a href="https://github.com/ilehtoranta/CopperMod">GitHub</a><a href="https://github.com/ilehtoranta/CopperMod/blob/main/LICENSE">License</a></div></div></footer>
 </body>
