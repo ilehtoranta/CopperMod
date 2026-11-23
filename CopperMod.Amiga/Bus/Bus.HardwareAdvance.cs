@@ -388,7 +388,16 @@ namespace CopperMod.Amiga.Bus
                 return long.MaxValue;
             }
 
-            return Display.GetNextLiveCopperWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
+            var wake = Display.GetNextLiveCopperWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
+            if (AgnusSlotKernelSelected)
+            {
+                // The scheduler also asks whether work is due at [cycle, cycle].
+                // Its forward Copper wake query deliberately excludes that interval.
+                var output = Display.NextAcceptedDisplayWordCycle;
+                if (output <= targetCycle)
+                    wake = Math.Min(wake, Math.Max(currentCycle, output));
+            }
+            return wake;
         }
 
         private void AdvanceDmaBeforeCpuChipAccess(

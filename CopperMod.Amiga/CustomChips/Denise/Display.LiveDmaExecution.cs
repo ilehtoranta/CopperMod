@@ -273,6 +273,12 @@ namespace CopperMod.Amiga.CustomChips.Denise
             return copperCycle < frameStopCycle ? copperCycle : long.MaxValue;
         }
 
+        // Acceptance fixes the physical bus cycle even if the display DMA enable
+        // changes before OUT. These words must retire before later bus transfers.
+        internal long NextAcceptedDisplayWordCycle => Math.Min(
+            _liveCopper.PhysicalPipeline.HasIssuedWord ? _liveCopper.PhysicalPipeline.IssuedAccess.GrantedCycle : long.MaxValue,
+            _physicalBitplanePipeline.HasOutput ? _physicalBitplanePipeline.OutputCycle : long.MaxValue);
+
         internal long? GetNextLiveCopperWakeCandidateCycle(long currentCycle, long targetCycle)
         {
             currentCycle = Math.Max(0, currentCycle);

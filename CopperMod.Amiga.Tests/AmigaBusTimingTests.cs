@@ -8574,6 +8574,76 @@ public sealed class AmigaBusTimingTests
 				enableAgnusLivePaula: true,
 				enableAgnusLiveDisk: true);
 
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public void SlotKernelCpuBoundaryExecutesAcceptedCopperWordBeforeLaterBlitterRead(bool profile)
+	{
+		var bus = new AmigaBus(agnusBusArbitration: AgnusBusArbitrationMode.SlotKernel,
+			enableAgnusLiveDisplayLedger: true, enableAgnusLiveCopper: true,
+			enableAgnusLiveBlitter: true, enableAgnusLivePaula: true, enableAgnusLiveDisk: true);
+		bus.SetHardwareSchedulerHostProfilingEnabled(profile);
+		WriteCopperList(bus, 0x1000, (0x0180, 0), (0x0180, 1), (0x0180, 2), (0xffff, 0xfffe));
+
+		long cycle = 32;
+		void WriteRegister(uint register, ushort value)
+		{
+			bus.WriteWord(0xdff000 + register, value, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+			cycle += 4;
+			bus.AdvanceHardwareEventsTo(cycle);
+		}
+
+		WriteRegister(0x080, 0);
+		WriteRegister(0x082, 0x1000);
+		WriteRegister(0x088, 0);
+		WriteRegister(0x040, 0x09f0); // Copy A to D, one word per row
+		WriteRegister(0x042, 0);
+		WriteRegister(0x044, 0xffff);
+		WriteRegister(0x046, 0xffff);
+		WriteRegister(0x050, 0);
+		WriteRegister(0x052, 0x3000);
+		WriteRegister(0x054, 0);
+		WriteRegister(0x056, 0x4000);
+		WriteRegister(0x096, 0x82c0);
+		WriteRegister(0x058, 48 * 64 + 1);
+
+		for (int i = 0; i < 2; i++)
+		{
+			bus.ReadWord(0xdff002, ref cycle, AmigaBusAccessKind.CpuDataRead);
+			cycle += 2;
+			bus.AdvanceHardwareEventsTo(cycle);
+		}
+
+		var transfers = bus.BusAccesses
+			.Where(a => a.GrantedCycle >= 118 && a.GrantedCycle <= 120 &&
+				a.Request.Requester is AmigaBusRequester.Copper or AmigaBusRequester.Blitter)
+			.Select(a => (a.Request.Requester, a.GrantedCycle));
+		Assert.Equal(new[] { (AmigaBusRequester.Copper, 118L), (AmigaBusRequester.Blitter, 120L) }, transfers);
+	}
+
+	[Fact]
+	public void SlotKernelCpuBoundaryWakesForAcceptedBitplaneWordWithCopperDisabled()
+	{
+		var bus = new AmigaBus(agnusBusArbitration: AgnusBusArbitrationMode.SlotKernel,
+			enableAgnusLiveDisplayLedger: true, enableAgnusLiveCopper: true,
+			enableAgnusLiveBlitter: true, enableAgnusLivePaula: true, enableAgnusLiveDisk: true);
+		bus.WriteWord(0xdff092, 0x0038);
+		bus.WriteWord(0xdff094, 0x0038);
+		bus.WriteWord(0xdff0e2, 0x1000);
+		bus.WriteWord(0xdff100, 0x1000);
+		bus.WriteWord(0xdff096, 0x8300);
+		bus.EnableLiveAgnusDma();
+
+		// First visible PAL line, one low-resolution fetch group starting at DDFSTRT.
+		var input = 0x2cL * AmigaConstants.A500PalCpuCyclesPerRasterLine + 2 * (0x38 + HrmLowResPlane1FetchSlot);
+		var output = input + 2;
+		bus.Display.AdvanceLiveDmaTo(input);
+		Assert.Equal(output, bus.GetNextCpuVisibleAgnusEventCycle(output, output));
+		bus.AdvanceHardwareEventsTo(output);
+		Assert.Contains(bus.BusAccesses, a => a.Request.Requester == AmigaBusRequester.Bitplane &&
+			a.Request.Address == 0x1000 && a.GrantedCycle == output);
+	}
+
 	[Fact]
 	public void IntreqReadAfterSameCyclePseudoFastAccessPublishesVblank()
 	{
