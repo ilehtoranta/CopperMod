@@ -193,10 +193,12 @@ public sealed class AgnusLivePaulaRequesterTests
         Assert.Equal(1, candidate.AgnusLivePaulaDiagnostics.DeniedRequests);
     }
 
-    [Fact]
-    public void SlotKernelRenderBetweenCpuReadsMatchesSteppingThroughAudioSlots()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SlotKernelObservationBetweenCpuReadsMatchesSteppingThroughAudioSlots(bool observeRegistersFirst)
     {
-        static (float Sample, long[] Grants, ushort Intreq) Run(bool stepThroughSlots)
+        (float Sample, long[] Grants, ushort Intreq) Run(bool stepThroughSlots)
         {
             var bus = new AmigaBus(agnusBusArbitration: AgnusBusArbitrationMode.SlotKernel,
                 enableAgnusLiveDisplayLedger: true, enableAgnusLiveCopper: true,
@@ -211,7 +213,12 @@ public sealed class AgnusLivePaulaRequesterTests
             }
 
             var samples = new float[2];
-            bus.Paula.RenderSample(sampleCycle, samples, frame: 0, channels: 2);
+            if (observeRegistersFirst)
+            {
+                bus.Paula.AdvanceRegisterObservableTo(sampleCycle);
+            }
+            bus.Paula.RenderSample(sampleCycle, samples, frame: 0, channels: 2,
+                advanceRegisterObservable: !observeRegistersFirst);
             cycle = sampleCycle;
             bus.ReadWord(0x6002, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
             return (samples[0], PaulaAccesses(bus).Select(a => a.GrantedCycle).ToArray(), bus.Paula.Intreq);

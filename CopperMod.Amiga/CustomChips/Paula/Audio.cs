@@ -671,7 +671,15 @@ namespace CopperMod.Amiga.CustomChips.Paula
         }
 
         public void AdvanceRegisterObservableTo(long targetCycle)
-            => AdvanceTimelineTo(_registerTimeline, targetCycle, PaulaTimelineKind.Register);
+        {
+            // A custom read publishes non-bus state at its own slot. Drain
+            // earlier grants first, leaving any grant on that slot to arbitration.
+            if (_bus.AgnusLivePaulaEnabled && GetDmaWakeCandidateCycle() < targetCycle)
+            {
+                AdvanceLivePaulaRequesterThrough(targetCycle - 1);
+            }
+            AdvanceTimelineTo(_registerTimeline, targetCycle, PaulaTimelineKind.Register);
+        }
 
         internal void AdvanceDmaObservableTo(long targetCycle)
         {
