@@ -194,6 +194,39 @@ public sealed class AgnusLivePaulaRequesterTests
     }
 
     [Fact]
+    public void SlotKernelRenderBetweenCpuReadsMatchesSteppingThroughAudioSlots()
+    {
+        static (float Sample, long[] Grants, ushort Intreq) Run(bool stepThroughSlots)
+        {
+            var bus = new AmigaBus(agnusBusArbitration: AgnusBusArbitrationMode.SlotKernel,
+                enableAgnusLiveDisplayLedger: true, enableAgnusLiveCopper: true,
+                enableAgnusLiveBlitter: true, enableAgnusLivePaula: true, enableAgnusLiveDisk: true);
+            ConfigureChannel0(bus, lengthWords: 4, period: 443, enableCycle: 0);
+            long cycle = 0;
+            bus.ReadWord(0x6000, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
+            const long sampleCycle = 2_000;
+            if (stepThroughSlots)
+            {
+                bus.AdvanceDmaTo(sampleCycle);
+            }
+
+            var samples = new float[2];
+            bus.Paula.RenderSample(sampleCycle, samples, frame: 0, channels: 2);
+            cycle = sampleCycle;
+            bus.ReadWord(0x6002, ref cycle, AmigaBusAccessKind.CpuInstructionFetch);
+            return (samples[0], PaulaAccesses(bus).Select(a => a.GrantedCycle).ToArray(), bus.Paula.Intreq);
+        }
+
+        var stepped = Run(stepThroughSlots: true);
+        var rendered = Run(stepThroughSlots: false);
+        Assert.NotEmpty(stepped.Grants);
+        Assert.NotEqual(0f, stepped.Sample);
+        Assert.Equal(stepped.Grants, rendered.Grants);
+        Assert.Equal(stepped.Sample, rendered.Sample);
+        Assert.Equal(stepped.Intreq, rendered.Intreq);
+    }
+
+    [Fact]
     public void RenderedStereoOutputMatchesLegacyAfterLiveDmaCommits()
     {
         var legacy = CreateBus(candidate: false);

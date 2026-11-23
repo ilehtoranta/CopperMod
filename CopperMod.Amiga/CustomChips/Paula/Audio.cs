@@ -595,10 +595,13 @@ namespace CopperMod.Amiga.CustomChips.Paula
             int channels,
             bool advanceRegisterObservable = true)
         {
-            AdvanceAudioTo(targetCycle);
             if (advanceRegisterObservable)
             {
-                AdvanceRegisterObservableTo(targetCycle);
+                AdvanceTo(targetCycle);
+            }
+            else
+            {
+                AdvanceAudioTo(targetCycle);
             }
 
             var left = 0.0f;
@@ -657,6 +660,12 @@ namespace CopperMod.Amiga.CustomChips.Paula
 
         public void AdvanceTo(long targetCycle)
         {
+            // A physical grant publishes the load for the following CCK. Both
+            // timelines must see that grant before sampling past its load cycle.
+            if (_bus.AgnusLivePaulaEnabled)
+            {
+                AdvanceLivePaulaRequesterThrough(targetCycle);
+            }
             AdvanceTimelineTo(_audioTimeline, targetCycle, PaulaTimelineKind.Audio);
             AdvanceTimelineTo(_registerTimeline, targetCycle, PaulaTimelineKind.Register);
         }
