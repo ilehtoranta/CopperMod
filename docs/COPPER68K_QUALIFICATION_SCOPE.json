@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "approvalDate": "2026-10-09",
+  "acceptance": "known-coverage-only",
+  "approvedModels": ["68000", "68010", "68EC020", "68020", "68030", "68040", "68060", "A1200"],
+  "approvedCoverage": [
+    "Required milestone 1-5 integer semantic matrices and defined architectural exceptions",
+    "Pinned passing reference selections with their recorded exclusions and limitations",
+    "Verified mutation witnesses and mapped instruction-test consolidation",
+    "Promoted context-copy ownership fix and its ordinary regression",
+    "Qualified same-CPU-source standard and native consumer checks"
+  ],
+  "deferred": [
+    {
+      "id": "010-invalid-format-rte-ccr",
+      "status": "deferred",
+      "reason": "Software references disagree on CCR after rejected RTE formats; an independent expectation remains unresolved.",
+      "optIn": "COPPER68K_RUN_010_RTE_FORMAT_DISCOVERY=1",
+      "record": "docs/COPPER68K_REFERENCE_QUALIFICATION.md"
+    },
+    {
+      "id": "060-ordinary-stop-new-user-sr",
+      "status": "deferred",
+      "reason": "Ordinary STOP with a new S-clear SR disagrees with an undocumented software-reference rule.",
+      "optIn": "COPPER68K_RUN_060_STOP_DISCOVERY=1",
+      "record": "docs/COPPER68K_REFERENCE_QUALIFICATION.md"
+    },
+    {
+      "id": "030-040-disputed-trace-boundaries",
+      "status": "deferred",
+      "reason": "Original trace provenance across fault, repair and retry has unresolved independent expectations; software agreement is not hardware evidence.",
+      "optIn": "scripts/test-copper68k-030-return-trace-reference.ps1; COPPER68K_RUN_040_MIXED_RETRY_DISCOVERY=1",
+      "record": "docs/COPPER68K_MILESTONE6_COMPLETION_AUDIT.md"
+    },
+    {
+      "id": "broader-architectural-restoration",
+      "status": "deferred",
+      "reason": "The 480-case broader inventory, original-frame construction, partial transfers, repair/refault, foreign frames and wider trace/interrupt protocols remain unqualified. Known bounded fixtures do not complete them.",
+      "optIn": "COPPER68K_RUN_040_ACCESS_FRAME_AUDIT=1; scripts/test-copper68k-040-access-frames.ps1",
+      "record": "docs/COPPER68K_MILESTONE6_COMPLETION_AUDIT.md"
+    },
+    {
+      "id": "other-private-continuation-candidates",
+      "status": "deferred",
+      "reason": "Only the context-copy fix was approved for production. Other private continuation formats and candidates are not production qualification.",
+      "optIn": "scripts/test-copper68k-030-memory-destination-reference.py",
+      "record": "docs/COPPER68K_REFERENCE_QUALIFICATION.md"
+    }
+  ],
+  "rules": [
+    "Deferred coverage is visible and nonblocking for acceptance of known coverage; it is never counted as passing.",
+    "No legal case is removed from the required milestone 1-5 matrices.",
+    "An explicitly requested discovery or reference audit still fails on mismatches, unsupported execution, missing fixtures or empty selections.",
+    "Historical failing evidence and deferred discovery fixtures remain retained.",
+    "Deferral does not authorize importing another private candidate or publishing a package."
+  ],
+  "outsideRoadmap": ["FPU arithmetic", "enabled MMU operation", "physical pipeline/cache qualification", "OS compatibility"]
+}
