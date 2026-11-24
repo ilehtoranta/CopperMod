@@ -9928,6 +9928,7 @@ namespace Copper68k
             _ = FetchWord();
             var value = (byte)FetchWord();
             var address = FetchLong();
+            PrefetchA1200MoveSuccessor();
             WriteByte(address, value);
             State.SetNegativeZero(value, M68kOperandSize.Byte);
             State.SetFlag(M68kCpuState.Overflow, false);
@@ -9941,6 +9942,7 @@ namespace Copper68k
             _ = FetchWord();
             var destination = (opcode >> 9) & 7;
             var value = (byte)FetchWord();
+            PrefetchA1200MoveSuccessor();
             WriteByte(State.A[destination], value);
             SetMoveFlags(value, M68kOperandSize.Byte);
             CompleteTiming(M68kInstructionTimingKey.MoveByteImmediateToAddressIndirect);
@@ -9953,6 +9955,7 @@ namespace Copper68k
             var destination = (opcode >> 9) & 7;
             var value = (byte)FetchWord();
             var address = State.A[destination];
+            PrefetchA1200MoveSuccessor();
             WriteByte(address, value);
             WriteGeneralRegister(true, destination,
                 unchecked(address + M68kIntegerSemantics.AddressIncrement(destination, M68kOperandSize.Byte)));
@@ -9966,6 +9969,7 @@ namespace Copper68k
             _ = FetchWord();
             var value = FetchWord();
             var address = FetchLong();
+            PrefetchA1200MoveSuccessor();
             WriteWord(address, value);
             State.SetNegativeZero(value, M68kOperandSize.Word);
             State.SetFlag(M68kCpuState.Overflow, false);
@@ -9979,6 +9983,7 @@ namespace Copper68k
             _ = FetchWord();
             var value = FetchLong();
             var address = FetchLong();
+            PrefetchA1200MoveSuccessor();
             WriteLong(address, value);
             State.SetNegativeZero(value, M68kOperandSize.Long);
             State.SetFlag(M68kCpuState.Overflow, false);
@@ -9992,6 +9997,7 @@ namespace Copper68k
             _ = FetchWord();
             var value = FetchLong();
             var address = unchecked((uint)(int)(short)FetchWord());
+            PrefetchA1200MoveSuccessor();
             WriteLong(address, value);
             SetMoveFlags(value, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.MoveLongImmediateToAbsoluteLong);
@@ -10003,6 +10009,7 @@ namespace Copper68k
             _ = FetchWord();
             var destination = (opcode >> 9) & 7;
             var value = FetchLong();
+            PrefetchA1200MoveSuccessor();
             WriteLong(State.A[destination], value);
             SetMoveFlags(value, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.MoveLongImmediateToAddressIndirect);
@@ -10015,6 +10022,7 @@ namespace Copper68k
             var destination = (opcode >> 9) & 7;
             var value = FetchLong();
             var displacement = unchecked((int)(short)FetchWord());
+            PrefetchA1200MoveSuccessor();
             WriteLong(unchecked((uint)(State.A[destination] + displacement)), value);
             SetMoveFlags(value, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.MoveLongImmediateToAddressDisplacement);
@@ -10026,7 +10034,9 @@ namespace Copper68k
             _ = FetchWord();
             var value = FetchWord();
             var extension = FetchWord();
-            WriteWord(CalculateIndexedOperandAddress((opcode >> 9) & 7, extension, opcode), value);
+            var address = CalculateIndexedOperandAddress(State.A[(opcode >> 9) & 7], extension, opcode,
+                prefetchMoveSuccessor: true);
+            WriteWord(address, value);
             SetMoveFlags(value, M68kOperandSize.Word);
             CompleteTiming(M68kInstructionTimingKey.MoveWordImmediateToBriefIndexed);
         }
@@ -10038,7 +10048,9 @@ namespace Copper68k
             var destination = (opcode >> 9) & 7;
             var value = FetchLong();
             var extension = FetchWord();
-            WriteLong(CalculateIndexedOperandAddress(destination, extension, opcode), value);
+            var address = CalculateIndexedOperandAddress(State.A[destination], extension, opcode,
+                prefetchMoveSuccessor: true);
+            WriteLong(address, value);
             SetMoveFlags(value, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.Nop);
         }
@@ -10093,6 +10105,7 @@ namespace Copper68k
             var destination = (opcode >> 9) & 7;
             var value = FetchLong();
             var address = State.A[destination];
+            PrefetchA1200MoveSuccessor();
             WriteLong(address, value);
             WriteGeneralRegister(true, destination, address + 4);
             SetMoveFlags(value, M68kOperandSize.Long);
@@ -10107,6 +10120,7 @@ namespace Copper68k
             var value = FetchLong();
             var address = unchecked(State.A[destinationRegister] - 4u);
             WriteGeneralRegister(true, destinationRegister, address);
+            PrefetchA1200MoveSuccessor();
             WriteLong(address, value);
             SetMoveFlags(value, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.MoveLongImmediateToPredecrement);
@@ -10208,6 +10222,7 @@ namespace Copper68k
             var addressRegister = (opcode >> 9) & 7;
             var value = (byte)FetchWord();
             var displacement = unchecked((int)(short)FetchWord());
+            PrefetchA1200MoveSuccessor();
             WriteByte(unchecked((uint)(State.A[addressRegister] + displacement)), value);
             SetMoveFlags(value, M68kOperandSize.Byte);
             CompleteTiming(M68kInstructionTimingKey.MoveByteImmediateToAddressDisplacement);
@@ -10220,7 +10235,9 @@ namespace Copper68k
             var baseRegister = (opcode >> 9) & 7;
             var value = (byte)FetchWord();
             var extension = FetchWord();
-            WriteByte(CalculateIndexedOperandAddress(baseRegister, extension, opcode), value);
+            var address = CalculateIndexedOperandAddress(State.A[baseRegister], extension, opcode,
+                prefetchMoveSuccessor: true);
+            WriteByte(address, value);
             SetMoveFlags(value, M68kOperandSize.Byte);
             CompleteTiming(M68kInstructionTimingKey.MoveByteImmediateToBriefIndexed);
         }
@@ -10232,6 +10249,7 @@ namespace Copper68k
             var addressRegister = (opcode >> 9) & 7;
             var value = FetchWord();
             var displacement = unchecked((int)(short)FetchWord());
+            PrefetchA1200MoveSuccessor();
             WriteWord(unchecked((uint)(State.A[addressRegister] + displacement)), value);
             SetMoveFlags(value, M68kOperandSize.Word);
             CompleteTiming(M68kInstructionTimingKey.MoveWordImmediateToAddressDisplacement);
@@ -10242,6 +10260,7 @@ namespace Copper68k
             BeginInstruction(opcode);
             _ = FetchWord();
             var value = FetchWord();
+            PrefetchA1200MoveSuccessor();
             WriteWord(State.A[(opcode >> 9) & 7], value);
             SetMoveFlags(value, M68kOperandSize.Word);
             CompleteTiming(M68kInstructionTimingKey.MoveWordImmediateToAddressIndirect);
@@ -10476,6 +10495,7 @@ namespace Copper68k
             var destination = (opcode >> 9) & 7;
             var value = FetchWord();
             var address = State.A[destination];
+            PrefetchA1200MoveSuccessor();
             WriteWord(address, value);
             WriteGeneralRegister(true, destination, unchecked(address + 2));
             SetMoveFlags(value, M68kOperandSize.Word);
@@ -10489,7 +10509,9 @@ namespace Copper68k
             var value = (byte)FetchWord();
             var destination = (opcode >> 9) & 7;
             var address = unchecked(State.A[destination] - M68kIntegerSemantics.AddressIncrement(destination, M68kOperandSize.Byte));
-            WriteGeneralRegister(true, destination, address); WriteByte(address, value);
+            WriteGeneralRegister(true, destination, address);
+            PrefetchA1200MoveSuccessor();
+            WriteByte(address, value);
             SetMoveFlags(value, M68kOperandSize.Byte);
             CompleteTiming(M68kInstructionTimingKey.MoveByteImmediateToPredecrement);
         }
@@ -10501,6 +10523,7 @@ namespace Copper68k
             var addressRegister = (opcode >> 9) & 7;
             var value = FetchWord();
             WriteGeneralRegister(true, addressRegister, unchecked(State.A[addressRegister] - 2u));
+            PrefetchA1200MoveSuccessor();
             WriteWord(State.A[addressRegister], value);
             SetMoveFlags(value, M68kOperandSize.Word);
             CompleteTiming(M68kInstructionTimingKey.MoveWordImmediateToPredecrement);
@@ -10721,6 +10744,7 @@ namespace Copper68k
             var size = (opcode & 0x2000) == 0 ? M68kOperandSize.Byte : M68kOperandSize.Word;
             var value = FetchWord();
             var address = unchecked((uint)(int)(short)FetchWord());
+            PrefetchA1200MoveSuccessor();
             WriteSized(address, value, size);
             SetMoveFlags(value, size);
             CompleteTiming(size == M68kOperandSize.Byte ? M68kInstructionTimingKey.MoveByteImmediateToAbsoluteWord :
@@ -18834,6 +18858,21 @@ namespace Copper68k
             }
         }
 
+        private void PrefetchA1200MoveSuccessor()
+        {
+            var address = State.ProgramCounter;
+            if ((address & 1) != 0 || !_profile.UsesA1200InstructionPipeline(address)) return;
+
+            // The final extension has entered the execution stage. Advance the
+            // three-word instruction pipe before posting the operand store.
+            if (!_instructionPipe.Contains(address)) _instructionPipe.Reset(address);
+            while (_instructionPipe.Count < M68kAdvancedInstructionPipe.Capacity &&
+                _profile.UsesA1200InstructionPipeline(_instructionPipe.NextAddress))
+            {
+                AppendInstructionPipeWord(_instructionPipe.NextAddress);
+            }
+        }
+
         private bool AppendInstructionPipeWord(uint address)
         {
             if ((address & 1) != 0)
@@ -19026,6 +19065,7 @@ namespace Copper68k
                  M68kTimingBarrier.CacheControl)) != 0)
             {
                 _instructionPipe.Reset(State.ProgramCounter);
+                _timedBus.ResetA1200InstructionHoldingRegister();
                 return;
             }
 
@@ -19293,10 +19333,15 @@ namespace Copper68k
             CompleteIndexedMoveTiming(M68kInstructionTimingKey.MoveWordBriefIndexedToAddress, extension);
         }
 
-        private uint CalculateIndexedOperandAddress(uint baseAddress, ushort extension, ushort opcode)
+        private uint CalculateIndexedOperandAddress(uint baseAddress, ushort extension, ushort opcode,
+            bool prefetchMoveSuccessor = false)
         {
             if ((extension & 0x0100) == 0)
-                return CalculateBriefIndexedAddress(baseAddress, extension, opcode);
+            {
+                var briefAddress = CalculateBriefIndexedAddress(baseAddress, extension, opcode);
+                if (prefetchMoveSuccessor) PrefetchA1200MoveSuccessor();
+                return briefAddress;
+            }
 
             // M68000PM 2-2/2-4: validate reserved fields before consuming displacement words.
             var baseSize = (extension >> 4) & 3;
@@ -19314,6 +19359,8 @@ namespace Copper68k
             var outerSize = indirect & 3;
             var outerDisplacement = outerSize == 2 ? unchecked((uint)(int)(short)FetchWord()) : outerSize == 3 ? FetchLong() : 0u;
             var address = unchecked(((extension & 0x80) != 0 ? 0u : baseAddress) + baseDisplacement);
+            // The last extension advances the instruction pipe before a memory-indirect read.
+            if (prefetchMoveSuccessor) PrefetchA1200MoveSuccessor();
             if (indirect == 0) return unchecked(address + index);
             // Both levels use ordinary timed data reads on the host's single bus clock.
             var pointer = ReadLong(unchecked(address + (indirect < 4 ? index : 0u)));

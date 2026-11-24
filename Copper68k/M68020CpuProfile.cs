@@ -212,6 +212,11 @@ namespace Copper68k
                 ? M68020MemoryTarget.PlatformIo
                 : ClassifyTarget(address);
 
+        internal bool UsesA1200InstructionPipeline(uint address)
+            => ReferenceEquals(this, A1200Ec02014Mhz) && GetBusTimingTarget(address) is
+                M68020MemoryTarget.ChipRam or M68020MemoryTarget.ExpansionRam or
+                M68020MemoryTarget.RealFastRam or M68020MemoryTarget.Rom;
+
         internal M68020BusTimingRule GetBusTimingRule(uint address)
         {
             var target = GetBusTimingTarget(address);

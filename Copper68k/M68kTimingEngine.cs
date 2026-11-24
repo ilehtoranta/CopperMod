@@ -1098,6 +1098,17 @@ namespace Copper68k
         public void Clear()
             => Array.Clear(_valid);
 
+        internal void CaptureInstructionLongword(uint address, uint value)
+        {
+            if (!Enabled || Frozen) return;
+            System.Diagnostics.Debug.Assert(_lineSize == 4 && (address & 3) == 0);
+            var index = GetIndex(address);
+            _instructionWords[index * 2] = (ushort)(value >> 16);
+            _instructionWords[index * 2 + 1] = (ushort)value;
+            _tags[index] = address;
+            _valid[index] = true;
+        }
+
         public void ClearEntry(uint address)
         {
             var lineAddress = address & ~((uint)_lineSize - 1u);
@@ -1614,6 +1625,8 @@ namespace Copper68k
         private readonly bool _hasInstructionFetchWaitStates;
         private readonly bool _useM68040UncachedHalfLine;
         private readonly IM68kStablePhysicalAddressMap? _physicalAddressMap;
+        private uint _a1200InstructionAddress = uint.MaxValue;
+        private uint _a1200InstructionLongword;
         private uint _fetchHalfLineAddress;
         private uint _fetchFirstLong;
         private uint _fetchSecondLong;
@@ -1662,6 +1675,11 @@ namespace Copper68k
             out bool cacheHit,
             out bool requiresSynchronization)
         {
+            if (_profile.UsesA1200InstructionPipeline(address))
+            {
+                return ReadA1200InstructionWord(address, out cacheHit, out requiresSynchronization);
+            }
+
             if (!_directUncachedInstructionFetch || _timing.InstructionCache.Enabled)
             {
                 if (_useM68040UncachedHalfLine)
@@ -1706,8 +1724,35 @@ namespace Copper68k
 
         internal void ResetInstructionFetchBuffer()
         {
+            ResetA1200InstructionHoldingRegister();
             _fetchValidLongs = 0;
             _exceptionFetchValid = false;
+        }
+
+        internal void ResetA1200InstructionHoldingRegister()
+            => _a1200InstructionAddress = uint.MaxValue;
+
+        private ushort ReadA1200InstructionWord(uint address, out bool cacheHit, out bool requiresSynchronization)
+        {
+            cacheHit = _timing.TryReadInstructionCacheWord(address, out var word);
+            requiresSynchronization = false;
+            if (cacheHit) return word;
+
+            // The EC020 holds an entire aligned fetch even with its cache disabled.
+            var aligned = address & ~3u;
+            if (_a1200InstructionAddress != aligned)
+            {
+                var cycle = GetBusRequestMachineCycle();
+                var value = _bus.ReadLong(aligned, ref cycle, M68kBusAccessKind.CpuInstructionFetch);
+                AddProfileWaitStates(aligned, M68020BusWidth.Long, ref cycle);
+                _timing.RecordPostedBusCompletion(cycle);
+                _a1200InstructionAddress = aligned;
+                _a1200InstructionLongword = value;
+                _timing.InstructionCache.CaptureInstructionLongword(aligned, value);
+                requiresSynchronization = true;
+            }
+
+            return (ushort)(_a1200InstructionLongword >> ((address & 2) == 0 ? 16 : 0));
         }
 
         internal bool PrefetchM68040AccessErrorHandler(uint address)
