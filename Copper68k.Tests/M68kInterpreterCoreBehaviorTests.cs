@@ -4544,14 +4544,18 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		var dataAccesses = bus.Accesses
 			.Where(access => access.Kind is M68kBusAccessKind.CpuDataRead or M68kBusAccessKind.CpuDataWrite)
 			.ToArray();
-		Assert.Equal(2, dataAccesses.Length);
+		Assert.Equal(3, dataAccesses.Length);
 		Assert.Equal((uint)0x2000, dataAccesses[0].Address);
 		Assert.Equal(TestAccessSize.Long, dataAccesses[0].Size);
 		Assert.False(dataAccesses[0].IsWrite);
-		Assert.Equal((uint)0x2000, dataAccesses[1].Address);
-		Assert.Equal(TestAccessSize.Long, dataAccesses[1].Size);
+		Assert.Equal((uint)0x2002, dataAccesses[1].Address);
+		Assert.Equal(TestAccessSize.Word, dataAccesses[1].Size);
 		Assert.True(dataAccesses[1].IsWrite);
 		Assert.True(dataAccesses[1].Cycle >= dataAccesses[0].Cycle);
+		Assert.Equal((uint)0x2000, dataAccesses[2].Address);
+		Assert.Equal(TestAccessSize.Word, dataAccesses[2].Size);
+		Assert.True(dataAccesses[2].IsWrite);
+		Assert.True(dataAccesses[2].Cycle >= dataAccesses[1].Cycle);
 		Assert.Equal(0u, ReadBigEndianUInt32(bus.Memory, 0x2000, "cleared longword"));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.False(cpu.State.GetFlag(M68kCpuState.Negative));
