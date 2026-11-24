@@ -233,6 +233,58 @@ public sealed class AgnusLivePaulaRequesterTests
         Assert.Equal(stepped.Intreq, rendered.Intreq);
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public void PalAudioObservationRetiresEarlierBitplaneBeforeNextLineAudioGrant(
+        bool inputAccepted, bool observeRegisters)
+    {
+        var bus = new AmigaBus(agnusBusArbitration: AgnusBusArbitrationMode.SlotKernel,
+            enableAgnusLiveDisplayLedger: true, enableAgnusLiveCopper: true,
+            enableAgnusLiveBlitter: true, enableAgnusLivePaula: true, enableAgnusLiveDisk: true);
+        const long line = AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        const long input = 0x2c * line + 2 * (0x38 + 7);
+        bus.WriteWord(0xdff092, 0x0038);
+        bus.WriteWord(0xdff094, 0x0038);
+        bus.WriteWord(0xdff0e2, 0x1000);
+        bus.WriteWord(0xdff100, 0x1000);
+        bus.WriteWord(0xdff096, 0x8300);
+        ConfigureChannel0(bus, lengthWords: 2, period: 124, enableCycle: input);
+        bus.EnableLiveAgnusDma();
+        bus.Display.AdvanceLiveDmaTo(inputAccepted ? input : input - 2);
+        Assert.Equal(inputAccepted ? input + 2 : long.MaxValue, bus.Display.NextAcceptedDisplayWordCycle);
+
+        // Cross the line boundary with no intervening CPU access. The audio
+        // observation covers channel zero's fixed slot on the following line.
+        var target = 0x2d * line + 64;
+        if (observeRegisters)
+        {
+            bus.Paula.AdvanceRegisterObservableTo(target);
+        }
+        else
+        {
+            bus.Paula.RenderSample(target, new float[2], frame: 0, channels: 2);
+        }
+        bus.ReadWord(0x6000, ref target, AmigaBusAccessKind.CpuInstructionFetch);
+
+        var transfers = bus.BusAccesses.Where(a =>
+            a.Request.Requester == AmigaBusRequester.Bitplane ||
+            a.Request.Requester == AmigaBusRequester.Paula).ToArray();
+        Assert.Collection(transfers,
+            plane =>
+            {
+                Assert.Equal(0x1000u, plane.Request.Address);
+                Assert.Equal(input + 2, plane.GrantedCycle);
+            },
+            audio =>
+            {
+                Assert.Equal(AudioBase, audio.Request.Address);
+                Assert.Equal(0x2d * line + 32, audio.GrantedCycle);
+            });
+    }
+
     [Fact]
     public void RenderedStereoOutputMatchesLegacyAfterLiveDmaCommits()
     {

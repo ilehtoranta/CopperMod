@@ -783,8 +783,13 @@ namespace CopperMod.Amiga.CustomChips.Denise
             }
 
             var currentCycle = Math.Max(_liveFrameStartCycle, _liveCapturedThroughCycle);
-            var targetCycle = Math.Max(currentCycle, GetLiveFrameStopCycle() - 1);
-            return GetNextLiveDisplayWakeCandidateCycle(currentCycle, targetCycle) ?? long.MaxValue;
+            var frameStop = GetLiveFrameStopCycle();
+            var targetCycle = Math.Max(currentCycle, frameStop - 1);
+            // The wake query covers only this frame. Starting the next PAL
+            // frame can issue a Copper dummy read on its first slot, so a
+            // SlotKernel DMA batch must recheck the display at the boundary.
+            return GetNextLiveDisplayWakeCandidateCycle(currentCycle, targetCycle)
+                ?? (_bus.AgnusSlotKernelSelected ? frameStop : long.MaxValue);
         }
 
         internal ulong RawLiveBusEligibilityVersion

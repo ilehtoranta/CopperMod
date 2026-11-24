@@ -215,6 +215,15 @@ namespace CopperMod.Amiga.CustomChips.Paula
                     return;
                 }
 
+                // Audio and register observations can span several Chip slots
+                // between CPU grants. Interleave earlier display transitions
+                // before stepping Paula. A Copper write can change the audio
+                // deadline, so sample it again after each display transition.
+                if (_bus.TryCommitDisplayBeforePaula(beforeCycle))
+                {
+                    continue;
+                }
+
                 var beforeVersion = _registerWakeVersion;
                 StepLivePaulaRequester(beforeCycle);
                 var afterCycle = GetDmaWakeCandidateCycle();

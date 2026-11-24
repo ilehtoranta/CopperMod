@@ -68,6 +68,37 @@ public sealed class AgnusLiveCopperRequesterTests
     }
 
     [Fact]
+    public void PalPaulaBatchPreservesCopperDummyReadAtFrameRestart()
+    {
+        var bus = new AmigaBus(agnusBusArbitration: AgnusBusArbitrationMode.SlotKernel,
+            enableAgnusLiveDisplayLedger: true, enableAgnusLiveCopper: true,
+            enableAgnusLiveBlitter: true, enableAgnusLivePaula: true, enableAgnusLiveDisk: true);
+        WriteCopperList(bus, CopperList1, (0x0180, 0x0ABC), (0xFFFF, 0xFFFE));
+        StartCopper(bus, CopperList1);
+        var frame = bus.GetNextFrameStartCycle(0);
+        // Channel 0 wakes on the last line and switches off on the first
+        // Copper OUT of the next frame, inside the requested batch.
+        bus.Paula.ScheduleWrite(frame - 148, 0x096, 0x8201);
+        bus.Paula.ScheduleWrite(frame + 2, 0x096, 0x0001);
+        bus.AdvanceDmaTo(frame - 150);
+        // The beam can cross VBlank while display preparation is still on
+        // the last line. At the boundary Copper issues the old PC's dummy read.
+        bus.PrepareLiveSlotKernelDisplaySlots(frame - 2);
+        bus.Agnus.AdvanceTo(frame + 1, advanceLiveDisplay: false);
+        var result = bus.CausalBusExecutor.TryAdvanceSingleDynamicBatch(
+            frame - 150, frame + 3, out var batchEnd);
+        bus.Display.AdvanceLiveDmaTo(frame + 10);
+
+        Assert.Equal(AgnusBusExecutionResult.Paula, result);
+        Assert.InRange(batchEnd, frame - 148, frame - 1);
+        var reads = CopperReads(bus).Where(read => read.GrantedCycle >= frame).ToArray();
+        Assert.Equal(new uint[] { CopperList1 + 8, CopperList1, CopperList1 + 2 },
+            reads.Select(read => read.Request.Address));
+        Assert.Equal(new[] { frame + 2, frame + 6, frame + 10 },
+            reads.Select(read => read.GrantedCycle));
+    }
+
+    [Fact]
     public void OperandMutationBetweenFirstAndSecondGrantIsSampledAtSecondGrant()
     {
         var legacy = CreateBus(candidate: false);
