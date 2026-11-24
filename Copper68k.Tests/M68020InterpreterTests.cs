@@ -10095,8 +10095,8 @@ public sealed class M68020InterpreterTests
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
 		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
-		Assert.Equal(8, cpu.State.NativeCycles);
-		Assert.Equal(4, cpu.State.Cycles);
+		Assert.Equal(4, cpu.State.NativeCycles);
+		Assert.Equal(2, cpu.State.Cycles);
 	}
 
 	[Fact]
@@ -10118,8 +10118,8 @@ public sealed class M68020InterpreterTests
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
 		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
-		Assert.Equal(8, cpu.State.NativeCycles);
-		Assert.Equal(4, cpu.State.Cycles);
+		Assert.Equal(4, cpu.State.NativeCycles);
+		Assert.Equal(2, cpu.State.Cycles);
 	}
 
 	[Fact]
@@ -10144,8 +10144,8 @@ public sealed class M68020InterpreterTests
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
 		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
-		Assert.Equal(8, cpu.State.NativeCycles);
-		Assert.Equal(4, cpu.State.Cycles);
+		Assert.Equal(4, cpu.State.NativeCycles);
+		Assert.Equal(2, cpu.State.Cycles);
 	}
 
 	[Fact]
@@ -10875,8 +10875,8 @@ public sealed class M68020InterpreterTests
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
 		Assert.Equal(CodeBase + 2u, cpu.State.ProgramCounter);
-		Assert.Equal(6, cpu.State.NativeCycles);
-		Assert.Equal(3, cpu.State.Cycles);
+		Assert.Equal(4, cpu.State.NativeCycles);
+		Assert.Equal(2, cpu.State.Cycles);
 	}
 	[Fact]
 	public void JmpPcBriefIndexedLoadsProgramCounterAndPreservesFlags()
