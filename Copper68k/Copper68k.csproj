@@ -9,9 +9,9 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.5.12</Version>
-    <PackageVersion>1.5.12</PackageVersion>
-    <PackageReleaseNotes>Fix masked integer FMOVE operand errors, execute FINT and FINTRZ natively, and deliver correct vector 60 exception frames to 68060 guest FPU handlers.</PackageReleaseNotes>
+    <Version>1.5.13</Version>
+    <PackageVersion>1.5.13</PackageVersion>
+    <PackageReleaseNotes>Correct stock 68EC020 cached instruction timing and operand bus overlap, retaining native half-cycle phases between board accesses.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>
