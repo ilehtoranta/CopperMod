@@ -30,6 +30,47 @@ public sealed class M68kOperandTransferTests
         Assert.Null(bus.AlternateFunctionCode);
     }
 
+    [Theory]
+    [InlineData(M68kCpuModel.M68040)]
+    [InlineData(M68kCpuModel.M68060)]
+    public void MovesLongUsesSelectedRootAcrossPagesAndBypassesItForCpuSpace(M68kCpuModel model)
+    {
+        var bus = new SparseRecordingBus();
+        bus.Initialize(0x1000, 0x0e900000, 4); // MOVES.L (A0),D0
+        bus.Initialize(0x1004, 0x0e900800, 4); // MOVES.L D0,(A0)
+        bus.Initialize(0x1008, 0x0e902000, 4); // MOVES.L (A0),D2
+        bus.Initialize(0x4100, 0x4202, 4);
+        bus.Initialize(0x4200, 0x4402, 4);
+        bus.Initialize(0x4424, 0x5001, 4);
+        bus.Initialize(0x4428, 0x8001, 4);
+        bus.Initialize(0x6100, 0x6202, 4);
+        bus.Initialize(0x6200, 0x6402, 4);
+        bus.Initialize(0x6424, 0xa001, 4);
+        bus.Initialize(0x6428, 0xb001, 4);
+        const uint logical = 0x80009ffe;
+        bus.Initialize(0x5ffe, 0x1234, 2);
+        bus.Initialize(0x8000, 0x5678, 2);
+        bus.Initialize(logical, 0xcafebabe, 4);
+        using var cpu = M68kCoreFactory.Default.Create(model, bus);
+        cpu.Reset(0x1000, 0x7000);
+        var state = cpu.State;
+        state.A[0] = logical;
+        state.M68040Mmu.UserRootPointer = 0x4000;
+        state.M68040Mmu.SupervisorRootPointer = 0x6000;
+        state.M68040Mmu.InstructionTransparentTranslation0 = 0xc000;
+        state.M68040Mmu.TranslationControl = 0x8000;
+        state.SourceFunctionCode = 2;
+        state.DestinationFunctionCode = 6;
+        cpu.ExecuteInstruction();
+        cpu.ExecuteInstruction();
+        state.SourceFunctionCode = 7;
+        cpu.ExecuteInstruction();
+        Assert.Equal(0x12345678u, state.D[0]);
+        Assert.Equal(0x1234u, bus.Peek(0xaffe, 2));
+        Assert.Equal(0x5678u, bus.Peek(0xb000, 2));
+        Assert.Equal(0xcafebabeu, state.D[2]);
+    }
+
     private sealed class FunctionCodeBus : SparseRecordingBus, IM68kBus, IM68kFunctionCodeBus
     {
         public byte? AlternateFunctionCode { get; set; }
