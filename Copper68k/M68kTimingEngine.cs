@@ -1908,6 +1908,19 @@ namespace Copper68k
             return value;
         }
 
+        // MOVES must reach the selected space even when ordinary RAM has a fast path.
+        internal uint TransferMoves(uint address, M68kOperandSize size, byte fc, bool write, uint value)
+        {
+            var cycle = GetBusRequestMachineCycle();
+            var result = _m68040LogicalBus is not null
+                ? _m68040LogicalBus.TransferMoves(address, size, fc, write, value, ref cycle)
+                : M68kFunctionCodeAccess.Transfer(_bus, address, size, fc, write, value, ref cycle);
+            AddProfileWaitStates(address, (M68020BusWidth)size, ref cycle);
+            if (write) _timing.RecordPostedBusCompletion(cycle);
+            else _timing.CompleteBlockingBusAccess(cycle);
+            return result;
+        }
+
         public byte ReadByte(uint address, M68kBusAccessKind accessKind)
         {
             if (_fastMemoryBus is not null &&

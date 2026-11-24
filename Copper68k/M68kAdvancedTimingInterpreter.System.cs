@@ -48,12 +48,23 @@ internal partial class M68kAdvancedTimingInterpreter
         // unrecognized F-line words (MC68040UM 9.6.1 / MC68060UM 8.2.4),
         // unlike a recognized F620..F627 word with an invalid extension.
         else { RaiseFormat0Exception(11, pc, M68kInstructionTimingKey.LineFException); return true; }
-        source &= 0xfffffff0; destination &= 0xfffffff0;
+        var sourceBase = source & ~15u;
+        var destinationBase = destination & ~15u;
         Span<uint> line = stackalloc uint[4];
-        for (var i = 0; i < 4; i++) line[i] = ReadLong(source + (uint)i * 4);
+        // Each burst starts at its own effective longword. PD0..PD3 and the
+        // destination retain the canonical positions within the line.
+        for (int beat = 0; beat < 4; beat++)
+        {
+            int slot = ((int)(source >> 2) + beat) & 3;
+            line[slot] = ReadLong(sourceBase + (uint)slot * 4);
+        }
         try
         {
-            for (var i = 0; i < 4; i++) WriteLong(destination + (uint)i * 4, line[i]);
+            for (int beat = 0; beat < 4; beat++)
+            {
+                int slot = ((int)(destination >> 2) + beat) & 3;
+                WriteLong(destinationBase + (uint)slot * 4, line[slot]);
+            }
         }
         catch (M68040MmuFaultException ex) when (_profile.Model == M68kAcceleratorModel.M68040 &&
             !State.M68040Mmu.Enabled && ex.Fault.Write && ex.Fault.ByteCount == 4 &&
@@ -99,7 +110,8 @@ internal partial class M68kAdvancedTimingInterpreter
             if (m == 3) WriteGeneralRegister(true, r, unchecked(address + M68kIntegerSemantics.AddressIncrement(r, size)));
             if (store)
             {
-                try { WriteSized(address, ReadGeneralRegister(ar, general), size); }
+                try { _timedBus.TransferMoves(address, size, (byte)(State.DestinationFunctionCode & 7),
+                    write: true, ReadGeneralRegister(ar, general)); }
                 catch (M68040MmuFaultException ex) when (!State.M68040Mmu.Enabled &&
                     ex.Fault.Write && ex.Fault.WriteValue.HasValue &&
                     ex.Fault.AccessKind == M68kBusAccessKind.CpuDataWrite)
@@ -113,7 +125,8 @@ internal partial class M68kAdvancedTimingInterpreter
             else
             {
                 uint value;
-                try { value = ReadSized(address, size); }
+                try { value = _timedBus.TransferMoves(address, size, (byte)(State.SourceFunctionCode & 7),
+                    write: false, 0); }
                 catch (M68040MmuFaultException ex) when (!State.M68040Mmu.Enabled &&
                     !ex.Fault.Write && ex.Fault.AccessKind == M68kBusAccessKind.CpuDataRead)
                 {

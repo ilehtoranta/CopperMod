@@ -15222,23 +15222,32 @@ namespace Copper68k
             return (current & ~mask) | (((ulong)field << shift) & mask);
         }
 
-        private ulong ReadBitFieldBytes(uint address, int byteCount)
+        private ulong ReadBitFieldBytes(uint address, int byteCount) => byteCount switch
         {
-            var value = 0ul;
-            for (var index = 0; index < byteCount; index++)
-            {
-                value = (value << 8) | ReadByte(address + (uint)index);
-            }
-
-            return value;
-        }
+            1 => ReadByte(address),
+            2 => ReadWord(address),
+            3 => ((uint)ReadWord(address) << 8) | ReadByte(address + 2),
+            4 => ReadLong(address),
+            5 => ((ulong)ReadLong(address) << 8) | ReadByte(address + 4),
+            _ => throw new ArgumentOutOfRangeException(nameof(byteCount))
+        };
 
         private void WriteBitFieldBytes(uint address, int byteCount, ulong value)
         {
-            for (var index = byteCount - 1; index >= 0; index--)
+            switch (byteCount)
             {
-                WriteByte(address + (uint)index, (byte)value);
-                value >>= 8;
+                case 1: WriteByte(address, (byte)value); break;
+                case 2: WriteWord(address, (ushort)value); break;
+                case 3:
+                    WriteWord(address, (ushort)(value >> 8));
+                    WriteByte(address + 2, (byte)value);
+                    break;
+                case 4: WriteLong(address, (uint)value); break;
+                case 5:
+                    WriteLong(address, (uint)(value >> 8));
+                    WriteByte(address + 4, (byte)value);
+                    break;
+                default: throw new ArgumentOutOfRangeException(nameof(byteCount));
             }
         }
 

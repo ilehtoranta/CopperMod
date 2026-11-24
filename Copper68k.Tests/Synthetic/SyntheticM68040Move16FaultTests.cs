@@ -11,6 +11,8 @@ namespace Copper68k.Tests.Synthetic;
 // execution policy. Physical pipeline/timing remain unqualified.
 public sealed class SyntheticM68040Move16FaultTests(ITestOutputHelper output)
 {
+    // Longword slots on the external bus, indexed by effective address bits 3:2.
+    private static readonly int[][] Burst = [[0, 1, 2, 3], [1, 2, 3, 0], [2, 3, 0, 1], [3, 0, 1, 2]];
     private const uint Handler = 0xa000, TraceHandler = 0xb000;
 
     [Theory, Trait("Suite", "Synthetic")]
@@ -47,6 +49,8 @@ public sealed class SyntheticM68040Move16FaultTests(ITestOutputHelper output)
         var m = new SyntheticMachine(ModelSpec.All.Single(x => x.Id == "68040"), bus);
         m.Reset(ccr);
         var source = 0x5200u + lane; var destination = 0x6200u + 15 - lane;
+        var reads = Burst[(source & 15) / 4];
+        var writes = Burst[(destination & 15) / 4];
         ushort[] words;
         // Fixed manual first words and fixed destination-register extension.
         // Fixture locations are chosen before encoding; no decoder/EA helper.
@@ -93,8 +97,8 @@ public sealed class SyntheticM68040Move16FaultTests(ITestOutputHelper output)
             if (s.ExceptionSequence != sequence || bus.Rejected.Count != 0) throw new InvalidOperationException("Unexpected fault-free exception");
             var accesses = bus.Accesses.Where(a => a.Address >= 0x5200 && a.Address < 0x5210 || a.Address >= 0x6200 && a.Address < 0x6210)
                 .Select(a => (a.Address, a.Width, a.Write));
-            var expected = Enumerable.Range(0, 4).Select(n => (0x5200u + (uint)n * 4, 4, false))
-                .Concat(Enumerable.Range(0, 4).Select(n => (0x6200u + (uint)n * 4, 4, true)));
+            var expected = reads.Select(n => (0x5200u + (uint)n * 4, 4, false))
+                .Concat(writes.Select(n => (0x6200u + (uint)n * 4, 4, true)));
             if (!accesses.SequenceEqual(expected)) throw new InvalidOperationException("Synchronous line transport differs");
             e.Pc += 2; e.D[7] = 0x55; e.Sr &= 0xfff0; Execute();
             if (e.Verify(m) is { } sentinel) throw new InvalidOperationException("sentinel: " + sentinel);
@@ -120,8 +124,8 @@ public sealed class SyntheticM68040Move16FaultTests(ITestOutputHelper output)
             // Reads must not modify D registers or CCR. Fault-time A-register
             // completion/PC policy remains an explicitly separate investigation.
             if (!s.D.SequenceEqual(e.D) || s.StatusRegister != (e.Sr & 0x3fff)) throw new InvalidOperationException("Fault changed data registers/flags");
-            var partials = write ? byteIndex / 4 : 0;
-            for (var n = 0; n < partials; n++) e.Write(0x6200 + (uint)n * 4, line[n], 4, m.Model);
+            var completedSlots = write ? writes.TakeWhile(n => n != byteIndex / 4).ToArray() : [];
+            foreach (var n in completedSlots) e.Write(0x6200 + (uint)n * 4, line[n], 4, m.Model);
             foreach (var at in e.Memory.Keys.Concat(bus.Memory.Keys).Distinct())
                 if ((at < frame || at >= stack) && e.Memory.GetValueOrDefault(at) != bus.Peek(at))
                     throw new InvalidOperationException($"Unexpected operand/canary change at {at:X8}");
@@ -129,7 +133,7 @@ public sealed class SyntheticM68040Move16FaultTests(ITestOutputHelper output)
             if (after.Any(a => a.Address >= 0x5200 && a.Address < 0x5210 || a.Address >= 0x6200 && a.Address < 0x6210))
                 throw new InvalidOperationException("Line operand access repeated during exception delivery");
             if (write)
-                CompleteLine(m, bus, e, batch, frame, bank, form, next, line, partials, sequence);
+                CompleteLine(m, bus, e, batch, frame, bank, form, next, line, reads, completedSlots, byteIndex / 4, sequence);
         }
         if (s.SourceFunctionCode != 2 || s.DestinationFunctionCode != 6) throw new InvalidOperationException("Instruction changed FC registers");
 
@@ -154,7 +158,7 @@ public sealed class SyntheticM68040Move16FaultTests(ITestOutputHelper output)
 
     private static void CompleteLine(SyntheticMachine m,
         SyntheticM68040AccessDoubleFaultTests.FaultBus bus, ArchitecturalExpectation e,
-        bool batch, uint frame, string bank, int form, uint next, uint[] line, int partials, uint sequence)
+        bool batch, uint frame, string bank, int form, uint next, uint[] line, int[] readSlots, int[] completedSlots, int faultSlot, uint sequence)
     {
         var s = m.Core.State;
         if (m.PeekPhysical(frame + 2, 4) != next || s.LastExceptionStackedProgramCounter != next)
@@ -197,7 +201,7 @@ public sealed class SyntheticM68040Move16FaultTests(ITestOutputHelper output)
                 e.Write(frame - 4, originalA[1], 4, m.Model);
             }
             else if (n == 1) e.A[1] = frame;
-            else if (n == 2) { e.D[0] = 0x6200u + (uint)partials * 4; MoveFlags(); }
+            else if (n == 2) { e.D[0] = 0x6200u + (uint)faultSlot * 4; MoveFlags(); }
             else if (n == 3) { e.D[0] &= 0xfffffff0; MoveFlags(); }
             else if (n == 4) e.A[0] = e.D[0];
             else if (n < 13)
@@ -231,11 +235,11 @@ public sealed class SyntheticM68040Move16FaultTests(ITestOutputHelper output)
         }
         var reads = bus.Accesses.Where(a => !a.Write && a.Address >= 0x5200 && a.Address < 0x5210)
             .Select(a => (a.Address, a.Width));
-        if (!reads.SequenceEqual(Enumerable.Range(0, 4).Select(n => (0x5200u + (uint)n * 4, 4))))
+        if (!reads.SequenceEqual(readSlots.Select(n => (0x5200u + (uint)n * 4, 4))))
             throw new InvalidOperationException("MOVE16 source was reread during recovery");
         var writes = bus.Accesses.Where(a => a.Write && a.Address >= 0x6200 && a.Address < 0x6210)
             .Select(a => (a.Address, a.Width, a.Value));
-        var expected = Enumerable.Range(0, partials).Concat(Enumerable.Range(0, 4))
+        var expected = completedSlots.Concat(Enumerable.Range(0, 4))
             .Select(n => (0x6200u + (uint)n * 4, 4, line[n]));
         if (!writes.SequenceEqual(expected))
             throw new InvalidOperationException("Original partial writes or explicit line completion differ");

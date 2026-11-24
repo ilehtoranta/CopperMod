@@ -1736,6 +1736,38 @@ namespace Copper68k
             _physicalBus.WriteLong(TranslateTimed(address, accessKind, true, 4, ref cycle, value), value, ref cycle, accessKind);
         }
 
+        internal uint TransferMoves(uint address, M68kOperandSize size, byte fc, bool write,
+            uint value, ref long cycle)
+        {
+            // 040/060 merge program and data spaces. FC 0,3,4,7 select
+            // physical alternate spaces and bypass translation (MC68040UM 3.1).
+            bool physicalSpace = (fc & 3) is 0 or 3;
+            if (!physicalSpace && CrossesPage(address, (uint)size))
+            {
+                int half = (int)size / 2;
+                int shift = half * 8;
+                uint high = TransferMoves(address, (M68kOperandSize)half, fc, write, value >> shift, ref cycle);
+                uint low = TransferMoves(address + (uint)half, (M68kOperandSize)half, fc, write,
+                    value & ((1u << shift) - 1), ref cycle);
+                return (high << shift) | low;
+            }
+
+            byte transferCode = physicalSpace ? fc : (byte)((fc & 4) | 1);
+            var kind = write ? M68kBusAccessKind.CpuDataWrite : M68kBusAccessKind.CpuDataRead;
+            var previous = AlternateFunctionCode;
+            AlternateFunctionCode = transferCode;
+            try
+            {
+                uint physical = physicalSpace
+                    ? AcceptPhysicalAddress(address, (int)size, kind, write, write ? value : null)
+                    : TranslateTimed(address, kind, write, (int)size, ref cycle, write ? value : null);
+                // Table walks above use the ordinary physical bus. Only the
+                // translated operand sees the externally selected space.
+                return M68kFunctionCodeAccess.Transfer(_physicalBus, physical, size, transferCode, write, value, ref cycle);
+            }
+            finally { AlternateFunctionCode = previous; }
+        }
+
         private bool CrossesPage(uint address, uint bytes)
             => !_mmu.DirectIdentityAccessEnabled && (address & 0xFFF) + bytes > 0x1000;
 
