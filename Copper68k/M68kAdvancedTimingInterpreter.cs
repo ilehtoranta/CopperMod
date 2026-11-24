@@ -5551,9 +5551,10 @@ namespace Copper68k
 
             if (condition == 0x1)
             {
+                var writeStart = Math.Max(State.NativeCycles, _timing.BusControllerAvailableNativeCycle);
                 PushLong(branchBase);
                 State.ProgramCounter = unchecked((uint)(branchBase + displacement));
-                CompleteTiming(M68kInstructionTimingKey.BsrByte);
+                CompleteTiming(M68kInstructionTimingKey.BsrByte, postedWriteStart: writeStart);
                 return;
             }
 
@@ -8750,8 +8751,9 @@ namespace Copper68k
         {
             BeginInstruction(0x4E75);
             _ = FetchWord();
+            var readStart = State.NativeCycles;
             State.ProgramCounter = PullLong();
-            CompleteTiming(M68kInstructionTimingKey.Rts);
+            CompleteTiming(M68kInstructionTimingKey.Rts, readStart);
         }
 
         private void ExecuteJmpAddressIndirect(ushort opcode)
@@ -10948,13 +10950,14 @@ namespace Copper68k
             var source = opcode & 7;
             var destination = (opcode >> 9) & 7;
             var sourceAddress = State.A[source];
+            var readStart = State.NativeCycles;
             var value = ReadLong(sourceAddress);
             WriteGeneralRegister(true, source, sourceAddress + 4u);
             var destinationAddress = State.A[destination];
             WriteLong(destinationAddress, value);
             WriteGeneralRegister(true, destination, destinationAddress + 4u);
             SetMoveFlags(value, M68kOperandSize.Long);
-            CompleteTiming(M68kInstructionTimingKey.MoveLongPostIncrementToPostIncrement);
+            CompleteTiming(M68kInstructionTimingKey.MoveLongPostIncrementToPostIncrement, readStart);
         }
 
         private void ExecuteMoveLongPostIncrementToAddressDisplacement(ushort opcode)
@@ -11478,11 +11481,12 @@ namespace Copper68k
             _ = FetchWord();
             var destination = (opcode >> 9) & 7;
             var source = opcode & 7;
+            var readStart = State.NativeCycles;
             var value = ReadByte(State.A[source]);
             WriteGeneralRegister(true, source, State.A[source] + (source == 7 ? 2u : 1u));
             WriteDataRegisterByte(destination, value);
             SetMoveFlags(value, M68kOperandSize.Byte);
-            CompleteTiming(M68kInstructionTimingKey.MoveBytePostIncrementToData);
+            CompleteTiming(M68kInstructionTimingKey.MoveBytePostIncrementToData, readStart);
         }
 
         private void ExecuteMoveByteAddressDisplacementToData(ushort opcode)
@@ -12221,9 +12225,11 @@ namespace Copper68k
             var source = opcode & 7;
             var extension = FetchWord();
             var value = (byte)State.D[source];
-            WriteByte(CalculateIndexedOperandAddress(State.A[baseRegister], extension, opcode), value);
+            var address = CalculateIndexedOperandAddress(State.A[baseRegister], extension, opcode);
+            var writeStart = Math.Max(State.NativeCycles, _timing.BusControllerAvailableNativeCycle);
+            WriteByte(address, value);
             SetMoveFlags(value, M68kOperandSize.Byte);
-            CompleteIndexedRegisterStoreTiming(M68kInstructionTimingKey.MoveByteDataToBriefIndexed, extension);
+            CompleteIndexedRegisterStoreTiming(M68kInstructionTimingKey.MoveByteDataToBriefIndexed, extension, writeStart);
         }
 
         private void ExecuteMoveByteBriefIndexedToPredecrement(ushort opcode)
@@ -12276,13 +12282,14 @@ namespace Copper68k
             var source = opcode & 7;
             var destination = (opcode >> 9) & 7;
             var sourceAddress = State.A[source];
+            var readStart = State.NativeCycles;
             var value = ReadByte(sourceAddress);
             WriteGeneralRegister(true, source, sourceAddress + (source == 7 ? 2u : 1u));
             var destinationAddress = State.A[destination];
             WriteByte(destinationAddress, value);
             WriteGeneralRegister(true, destination, destinationAddress + (destination == 7 ? 2u : 1u));
             SetMoveFlags(value, M68kOperandSize.Byte);
-            CompleteTiming(M68kInstructionTimingKey.MoveBytePostIncrementToPostIncrement);
+            CompleteTiming(M68kInstructionTimingKey.MoveBytePostIncrementToPostIncrement, readStart);
         }
 
         private void ExecuteMoveByteAddressIndirectToAbsoluteLong(ushort opcode)
@@ -12809,14 +12816,16 @@ namespace Copper68k
             var size = (opcode & 0x40) == 0 ? M68kOperandSize.Byte : M68kOperandSize.Word;
             var register = (opcode >> 9) & 7;
             var extension = FetchWord();
-            var source = ReadSized(CalculateBriefIndexedAddress(opcode & 7, extension, opcode), size);
+            var address = CalculateBriefIndexedAddress(opcode & 7, extension, opcode);
+            var readStart = State.NativeCycles;
+            var source = ReadSized(address, size);
             var destination = size == M68kOperandSize.Byte ? (byte)State.D[register] : (ushort)State.D[register];
             var result = destination + source;
             WriteDataRegisterSized(register, result, size);
             SetAddFlags(destination, source, result, size);
             CompleteTiming(size == M68kOperandSize.Byte
                 ? M68kInstructionTimingKey.AddByteBriefIndexedToData
-                : M68kInstructionTimingKey.AddWordBriefIndexedToData);
+                : M68kInstructionTimingKey.AddWordBriefIndexedToData, readStart);
         }
 
         private void ExecuteAddLongBriefIndexedToData(ushort opcode)
@@ -12827,11 +12836,13 @@ namespace Copper68k
             var addressRegister = opcode & 7;
             var extension = FetchWord();
             var destination = State.D[destinationRegister];
-            var source = ReadLong(CalculateBriefIndexedAddress(addressRegister, extension, opcode));
+            var address = CalculateBriefIndexedAddress(addressRegister, extension, opcode);
+            var readStart = State.NativeCycles;
+            var source = ReadLong(address);
             var result = unchecked(destination + source);
             State.D[destinationRegister] = result;
             SetAddFlags(destination, source, result, M68kOperandSize.Long);
-            CompleteTiming(M68kInstructionTimingKey.AddLongBriefIndexedToData);
+            CompleteTiming(M68kInstructionTimingKey.AddLongBriefIndexedToData, readStart);
         }
 
         private void ExecuteAddLongPcDisplacementToData(ushort opcode)
@@ -15127,7 +15138,9 @@ namespace Copper68k
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, carry);
             State.SetFlag(M68kCpuState.Extend, carry);
-            CompleteTiming(M68kInstructionTimingKey.Nop);
+            CompleteTiming(ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz)
+                ? M68kInstructionTimingKey.LsrWordImmediateData
+                : M68kInstructionTimingKey.Nop);
         }
 
         private void ExecuteLsrByteImmediateData(ushort opcode)
@@ -17907,9 +17920,10 @@ namespace Copper68k
 
             if (condition == 0x1)
             {
+                var writeStart = Math.Max(State.NativeCycles, _timing.BusControllerAvailableNativeCycle);
                 PushLong(branchBase);
                 State.ProgramCounter = unchecked((uint)(branchBase + displacement));
-                CompleteTiming(M68kInstructionTimingKey.BsrByte);
+                CompleteTiming(M68kInstructionTimingKey.BsrByte, postedWriteStart: writeStart);
                 return;
             }
 
@@ -18970,7 +18984,14 @@ namespace Copper68k
             return value;
         }
 
-        internal void CompleteTiming(M68kInstructionTimingKey key)
+        // MC68020UM 8.2.12 gives separate isolated and overlapped shift timings.
+        // Keep a two-clock issue floor on the 2:1 board interface.
+        private bool CanOverlapEc020Shift()
+            => !_timing.Pipeline.SuppressNextOverlap &&
+                _timing.TryReadInstructionCacheWord(State.ProgramCounter, out _);
+
+        internal void CompleteTiming(
+            M68kInstructionTimingKey key, long readStart = -1, long postedWriteStart = -1)
         {
             var plan = _timing.GetPlan(key);
             if (key is M68kInstructionTimingKey.DbccBranchTaken or M68kInstructionTimingKey.DbccExpired &&
@@ -18979,6 +19000,38 @@ namespace Copper68k
                 // MC68020UM §8.2.15 gives cache-case timings of six clocks
                 // for the loop and ten for expiry. External fetches are timed separately.
                 plan = plan with { NativeCycles = key == M68kInstructionTimingKey.DbccBranchTaken ? 6 : 10 };
+            }
+            if (ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz))
+            {
+                plan = key switch
+                {
+                    M68kInstructionTimingKey.Nop when State.LastOpcode == 0x4E71 =>
+                        plan with { NativeCycles = 2 },
+                    M68kInstructionTimingKey.LslByteImmediateData or
+                    M68kInstructionTimingKey.LslWordImmediateData or
+                    M68kInstructionTimingKey.LslLongImmediateData or
+                    M68kInstructionTimingKey.LsrByteImmediateData or
+                    M68kInstructionTimingKey.LsrWordImmediateData or
+                    M68kInstructionTimingKey.LsrLongImmediateData =>
+                        plan with { NativeCycles = CanOverlapEc020Shift() ? 2 : 4 },
+                    M68kInstructionTimingKey.AsrWordImmediateData =>
+                        plan with { NativeCycles = CanOverlapEc020Shift() ? 3 : 6 },
+                    M68kInstructionTimingKey.BranchByteTaken => _timing.GetTakenByteBranchPlan(),
+                    _ => plan
+                };
+                if (readStart >= 0)
+                {
+                    // The cache-case total includes the operand read. The bus has
+                    // already advanced the CPU through the blocking part of it.
+                    var readCycles = State.NativeCycles - readStart;
+                    plan = plan with { NativeCycles = (int)Math.Max(0, plan.NativeCycles - readCycles) };
+                }
+                if (postedWriteStart >= 0 && _timing.BusControllerAvailableNativeCycle - postedWriteStart >= 3)
+                {
+                    // The bus controller still owns the write. Remove the nominal
+                    // three-clock transfer included in the cache-case plan.
+                    plan = plan with { NativeCycles = plan.NativeCycles - 3 };
+                }
             }
             if (ReferenceEquals(_profile, M68020CpuProfile.Ocs68040JitMaxSpeed))
             {
@@ -19413,9 +19466,14 @@ namespace Copper68k
             CompleteTimingPlan(plan);
         }
 
-        private void CompleteIndexedRegisterStoreTiming(M68kInstructionTimingKey briefKey, ushort extension)
+        private void CompleteIndexedRegisterStoreTiming(
+            M68kInstructionTimingKey briefKey, ushort extension, long postedWriteStart = -1)
         {
-            if ((extension & 0x100) == 0) { CompleteTiming(briefKey); return; }
+            if ((extension & 0x100) == 0)
+            {
+                CompleteTiming(briefKey, postedWriteStart: postedWriteStart);
+                return;
+            }
             // MC68020UM 8.2.6 cache-case Rn -> full indexed destination, printed 8-24/8-25.
             var baseSize = (extension >> 4) & 3;
             var indirect = extension & 7;

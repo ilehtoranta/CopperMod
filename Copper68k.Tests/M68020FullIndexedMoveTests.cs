@@ -300,7 +300,9 @@ public sealed class M68020FullIndexedMoveTests
             (indirect == 0 ? 0 : 5 + ((indirect & 3) >= 2 ? 2 : 0)), cpu.State.NativeCycles);
         // A following ordinary instruction must not inherit a full-EA cost.
         var before = cpu.State.NativeCycles;
-        cpu.ExecuteInstruction(); Assert.InRange(cpu.State.NativeCycles - before, 4, 5);
+        // NOP takes two clocks. An uncached fetch can align to the next board clock.
+        cpu.ExecuteInstruction();
+        Assert.InRange(cpu.State.NativeCycles - before, 2, 3);
     }
 
     [Theory]

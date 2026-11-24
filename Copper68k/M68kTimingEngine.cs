@@ -900,7 +900,8 @@ namespace Copper68k
         AsrWordAddressDisplacement,
         EoriByteImmediateToPostIncrement,
         EoriWordImmediateToPostIncrement,
-        EoriLongImmediateToPostIncrement
+        EoriLongImmediateToPostIncrement,
+        LsrWordImmediateData
     }
 
     internal readonly record struct M68kInstructionPlan(
@@ -1265,7 +1266,7 @@ namespace Copper68k
 
         public void SynchronizeNativeToMachine()
         {
-            var nativeCycles = _profile.MachineToNativeCycles(_state.Cycles);
+            var nativeCycles = GetInstructionStartNativeCycle();
             if (_state.NativeCycles < nativeCycles)
             {
                 _state.NativeCycles = nativeCycles;
@@ -1289,7 +1290,7 @@ namespace Copper68k
                 throw new ArgumentOutOfRangeException(nameof(plan), plan.NativeCycles, "Instruction cycles must be non-negative.");
             }
 
-            var start = Math.Max(_state.NativeCycles, _profile.MachineToNativeCycles(_state.Cycles));
+            var start = GetInstructionStartNativeCycle();
             _state.NativeCycles = start;
 
             if ((plan.Barriers & M68kTimingBarrier.SynchronizeBus) != 0)
@@ -1345,10 +1346,7 @@ namespace Copper68k
                 return;
             }
 
-            var machineNativeCycles = _state.Cycles * _nativeCyclesPerMachineCycle;
-            var start = _state.NativeCycles >= machineNativeCycles
-                ? _state.NativeCycles
-                : machineNativeCycles;
+            var start = GetInstructionStartNativeCycle();
             var pipeline = Pipeline;
             var overlap = 0;
             if (plan.UsesHeadTail && !pipeline.SuppressNextOverlap)
@@ -1399,14 +1397,23 @@ namespace Copper68k
                 pipeline.BusControllerAvailableNativeCycle);
         }
 
+        internal M68kInstructionPlan GetTakenByteBranchPlan()
+            // MC68020UM 8.2.15 best case when the target can be supplied on chip.
+            => ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz) &&
+                TryReadInstructionCacheWord(_state.ProgramCounter, out _)
+                ? _branchByteTakenPlan with { NativeCycles = 3 }
+                : _branchByteTakenPlan;
+
         [MethodImpl(MethodImplOptions.NoInlining)]
         internal void CompleteHotBranchByteTaken()
         {
-            var plan = _branchByteTakenPlan;
-            var machineNativeCycles = _state.Cycles * _nativeCyclesPerMachineCycle;
-            var start = _state.NativeCycles >= machineNativeCycles
-                ? _state.NativeCycles
-                : machineNativeCycles;
+            var plan = GetTakenByteBranchPlan();
+            if (plan.NativeCycles != _branchByteTakenPlan.NativeCycles)
+            {
+                CompleteInstruction(plan);
+                return;
+            }
+            var start = GetInstructionStartNativeCycle();
             var end = start + plan.NativeCycles;
             _state.NativeCycles = end;
             long machineCycles;
@@ -1464,6 +1471,15 @@ namespace Copper68k
                 _state.Cycles = machineCycles;
             }
         }
+
+        // An odd EC020 clock rounds up for the board-facing clock. Keep that
+        // half-cycle phase unless the board advanced beyond the rounded value.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private long GetInstructionStartNativeCycle()
+            => ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz) &&
+               _state.Cycles == _profile.NativeToMachineCycles(_state.NativeCycles)
+                ? _state.NativeCycles
+                : Math.Max(_state.NativeCycles, _profile.MachineToNativeCycles(_state.Cycles));
     }
 
     internal static class M68kTimingDescriptorCache

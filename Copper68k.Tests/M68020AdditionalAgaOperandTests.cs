@@ -32,6 +32,67 @@ public sealed class M68020AdditionalAgaOperandTests
         Assert.Equal(0xFFFFu, cpu.State.D[1]);
     }
 
+    [Fact]
+    public void A1200CachedByteBranchRetainsHalfCycleAcrossSuccessiveInstructions()
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, Code, 0x7009, 0x4E7B, 0x0002, 0x4E71, 0x60FE);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        for (var instruction = 0; instruction < 4; instruction++) cpu.ExecuteInstruction();
+
+        var start = cpu.State.NativeCycles;
+        var machineStart = cpu.State.Cycles;
+        var fetches = bus.InstructionFetchWords;
+        cpu.ExecuteInstruction();
+        Assert.Equal(3, cpu.State.NativeCycles - start);
+        cpu.ExecuteInstruction();
+        Assert.Equal(6, cpu.State.NativeCycles - start);
+        Assert.Equal(3, cpu.State.Cycles - machineStart);
+        Assert.Equal(Code + 8, cpu.State.ProgramCounter);
+        Assert.Equal(fetches, bus.InstructionFetchWords);
+    }
+
+    [Fact]
+    public void A1200IndexedAddCountsBlockingReadOnce()
+    {
+        var bus = new ZeroWaitCodeBus { ReadMachineDelay = 7 };
+        WriteWords(bus, Code, 0x7009, 0x4E7B, 0x0002, 0x4E71, 0xD671, 0x4800, 0x60FA);
+        bus.WriteWord(0x2000, 3);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        cpu.State.A[1] = 0x2000;
+        for (var instruction = 0; instruction < 5; instruction++) cpu.ExecuteInstruction();
+
+        cpu.ExecuteInstruction(); // ADD.W (A1,D4.L),D3 after its instruction words are cached.
+        Assert.Equal(6u, cpu.State.D[3]);
+        Assert.Equal(bus.LastDataReadStartCycle + bus.ReadMachineDelay, cpu.State.Cycles);
+        Assert.Equal(Code + 12, cpu.State.ProgramCounter);
+    }
+
+    [Fact]
+    public void A1200IndexedByteWriteCanOverlapExecutionButBlocksNextBusRequest()
+    {
+        var bus = new ZeroWaitCodeBus { ReadMachineDelay = 4, WriteMachineDelay = 7 };
+        WriteWords(bus, Code, 0x7009, 0x4E7B, 0x0002, 0x4E71, 0x1586, 0x4800, 0x121B, 0x60F8);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        cpu.State.A[2] = 0x2000;
+        cpu.State.A[3] = 0x2000;
+        cpu.State.D[6] = 0x5A;
+        for (var instruction = 0; instruction < 6; instruction++) cpu.ExecuteInstruction();
+
+        cpu.State.A[3] = 0x2000;
+        cpu.ExecuteInstruction(); // MOVE.B D6,(A2,D4.L)
+        var writeEnd = bus.LastDataWriteEndCycle;
+        Assert.True(cpu.State.Cycles < writeEnd);
+        cpu.ExecuteInstruction(); // MOVE.B (A3)+,D1
+        Assert.Equal(writeEnd, bus.LastDataReadStartCycle);
+        Assert.Equal(writeEnd + bus.ReadMachineDelay, cpu.State.Cycles);
+        Assert.Equal(0x5Au, cpu.State.D[1]);
+        Assert.Equal(0x2001u, cpu.State.A[3]);
+    }
+
     [Theory]
     [InlineData(M68kCpuModel.M68EC020, 0xE702, 0x0C, 0x60, 0x00)]
     [InlineData(M68kCpuModel.M68EC020, 0xE302, 0x40, 0x80, 0x0A)]

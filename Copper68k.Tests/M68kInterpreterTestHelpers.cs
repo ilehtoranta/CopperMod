@@ -27,12 +27,21 @@ internal sealed class ZeroWaitCodeBus : IM68kBus, IM68kCodeReader
 	public int ExternalResetCount { get; private set; }
 	public long LastExternalResetCycle { get; private set; } = -1;
 
+	public int ReadMachineDelay { get; init; }
 	public int WriteMachineDelay { get; init; }
+	public long LastDataReadStartCycle { get; private set; }
+	public long LastDataWriteEndCycle { get; private set; }
+
+	private void AccountForRead(ref long cycle, M68kBusAccessKind accessKind)
+	{
+		if (accessKind != M68kBusAccessKind.CpuDataRead) return;
+		LastDataReadStartCycle = cycle;
+		cycle += ReadMachineDelay;
+	}
 
 	public byte ReadByte(uint address, ref long cycle, M68kBusAccessKind accessKind)
 	{
-		_ = cycle;
-		_ = accessKind;
+		AccountForRead(ref cycle, accessKind);
 		return _memory[Normalize(address)];
 	}
 
@@ -43,13 +52,14 @@ internal sealed class ZeroWaitCodeBus : IM68kBus, IM68kCodeReader
 			InstructionFetchWords++;
 		}
 
+		AccountForRead(ref cycle, accessKind);
 		return ReadWord(address);
 	}
 
 	public uint ReadLong(uint address, ref long cycle, M68kBusAccessKind accessKind)
 	{
-		_ = cycle;
 		if (accessKind == M68kBusAccessKind.CpuInstructionFetch) InstructionFetchWords += 2;
+		AccountForRead(ref cycle, accessKind);
 		return ReadLong(address);
 	}
 
@@ -58,6 +68,7 @@ internal sealed class ZeroWaitCodeBus : IM68kBus, IM68kCodeReader
 		_ = accessKind;
 		_memory[Normalize(address)] = value;
 		cycle += WriteMachineDelay;
+		LastDataWriteEndCycle = cycle;
 	}
 
 	public void WriteWord(uint address, ushort value, ref long cycle, M68kBusAccessKind accessKind)
