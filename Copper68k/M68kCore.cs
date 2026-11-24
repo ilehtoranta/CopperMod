@@ -7728,25 +7728,25 @@ namespace Copper68k
             {
                 case 0x0000:
                     destination |= immediate;
-                    WritePlannedEaValue(in destinationEa, destination);
+                    WritePlannedEaValue(in destinationEa, destination, readModifyWrite: true);
                     SetLogicFlags(destination, size);
                     break;
                 case 0x0200:
                     destination &= immediate;
-                    WritePlannedEaValue(in destinationEa, destination);
+                    WritePlannedEaValue(in destinationEa, destination, readModifyWrite: true);
                     SetLogicFlags(destination, size);
                     break;
                 case 0x0400:
                     destination = Subtract(destination, immediate, size, setExtend: true);
-                    WritePlannedEaValue(in destinationEa, destination);
+                    WritePlannedEaValue(in destinationEa, destination, readModifyWrite: true);
                     break;
                 case 0x0600:
                     destination = Add(destination, immediate, size, setExtend: true);
-                    WritePlannedEaValue(in destinationEa, destination);
+                    WritePlannedEaValue(in destinationEa, destination, readModifyWrite: true);
                     break;
                 case 0x0A00:
                     destination ^= immediate;
-                    WritePlannedEaValue(in destinationEa, destination);
+                    WritePlannedEaValue(in destinationEa, destination, readModifyWrite: true);
                     SetLogicFlags(destination, size);
                     break;
                 default:
@@ -8579,25 +8579,25 @@ namespace Copper68k
             {
                 case 0:
                     destination |= immediate;
-                    WritePlannedEaValue(in destinationEa, destination);
+                    WritePlannedEaValue(in destinationEa, destination, readModifyWrite: true);
                     SetLogicFlags(destination, plan.Size);
                     break;
                 case 1:
                     destination &= immediate;
-                    WritePlannedEaValue(in destinationEa, destination);
+                    WritePlannedEaValue(in destinationEa, destination, readModifyWrite: true);
                     SetLogicFlags(destination, plan.Size);
                     break;
                 case 2:
                     destination = Subtract(destination, immediate, plan.Size, setExtend: true);
-                    WritePlannedEaValue(in destinationEa, destination);
+                    WritePlannedEaValue(in destinationEa, destination, readModifyWrite: true);
                     break;
                 case 3:
                     destination = Add(destination, immediate, plan.Size, setExtend: true);
-                    WritePlannedEaValue(in destinationEa, destination);
+                    WritePlannedEaValue(in destinationEa, destination, readModifyWrite: true);
                     break;
                 case 4:
                     destination ^= immediate;
-                    WritePlannedEaValue(in destinationEa, destination);
+                    WritePlannedEaValue(in destinationEa, destination, readModifyWrite: true);
                     SetLogicFlags(destination, plan.Size);
                     break;
                 default:
@@ -8913,7 +8913,7 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void WritePlannedEaValue(in PlannedEaOperand operand, uint value)
+        private void WritePlannedEaValue(in PlannedEaOperand operand, uint value, bool readModifyWrite = false)
         {
             value &= M68kCpuState.Mask(operand.Size);
             switch (operand.Kind)
@@ -8945,7 +8945,7 @@ namespace Copper68k
                     }
                     else
                     {
-                        if (operand.DescendingLongWrite)
+                        if (readModifyWrite ? !_useM68020BriefIndexedAddressing : operand.DescendingLongWrite)
                         {
                             WriteLongDescending(operand.Address, value);
                         }
@@ -10315,25 +10315,25 @@ namespace Copper68k
             {
                 case 0x0000:
                     destination |= immediate;
-                    ea.Write(destination);
+                    ea.Write(destination, readModifyWrite: true);
                     SetLogicFlags(destination, size);
                     break;
                 case 0x0200:
                     destination &= immediate;
-                    ea.Write(destination);
+                    ea.Write(destination, readModifyWrite: true);
                     SetLogicFlags(destination, size);
                     break;
                 case 0x0400:
                     destination = Subtract(destination, immediate, size, setExtend: true);
-                    ea.Write(destination);
+                    ea.Write(destination, readModifyWrite: true);
                     break;
                 case 0x0600:
                     destination = Add(destination, immediate, size, setExtend: true);
-                    ea.Write(destination);
+                    ea.Write(destination, readModifyWrite: true);
                     break;
                 case 0x0A00:
                     destination ^= immediate;
-                    ea.Write(destination);
+                    ea.Write(destination, readModifyWrite: true);
                     SetLogicFlags(destination, size);
                     break;
                 case 0x0C00:
@@ -11127,7 +11127,7 @@ namespace Copper68k
             var result = subtract
                 ? Subtract(old, (uint)count, size, setExtend: true)
                 : Add(old, (uint)count, size, setExtend: true);
-            ea.Write(result);
+            ea.Write(result, readModifyWrite: true);
             AddInstructionCycles(GetAddqSubqCycles(mode, opcode & 7, size));
             return true;
         }
@@ -11453,6 +11453,8 @@ namespace Copper68k
                 return true;
             }
 
+            var clearWithoutRead = unary == 0x4200 &&
+                (typeof(TBus) == typeof(M68010AddressMaskedBus) || _useM68020BriefIndexedAddressing);
             var writesEffectiveAddress = unary != 0x4A00;
             var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
                 size == M68kOperandSize.Long &&
@@ -11464,8 +11466,17 @@ namespace Copper68k
                 reg,
                 size,
                 write: writesEffectiveAddress,
-                completeWordPostIncrementBeforeRead: size == M68kOperandSize.Word,
+                completeWordPostIncrementBeforeRead: !clearWithoutRead && size == M68kOperandSize.Word,
                 addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
+            // 68010 CLR faults on the write. Its alignment check precedes An writeback.
+            if (typeof(TBus) == typeof(M68010AddressMaskedBus) && clearWithoutRead &&
+                size != M68kOperandSize.Byte && (ea.Address & 1) != 0)
+            {
+                if (mode == 4 && size == M68kOperandSize.Word)
+                    SetAddressRegister(reg, ea.Address + 2);
+                var faultAddress = size == M68kOperandSize.Long && mode >= 4 ? ea.Address + 2 : ea.Address;
+                ThrowOddAddressAccess(faultAddress, isWrite: true, M68kBusAccessKind.CpuDataWrite);
+            }
             if (writesEffectiveAddress && size == M68kOperandSize.Long && mode == 4)
             {
                 SetAddressRegister(reg, ea.Address);
@@ -11480,25 +11491,25 @@ namespace Copper68k
                 unary == 0x4A00 && size == M68kOperandSize.Long;
             var value = isMemoryTstLong
                 ? ea.ReadTstLongWithIplSampleBetweenWords()
-                : ea.Read();
+                : clearWithoutRead ? 0u : ea.Read();
             switch (unary)
             {
                 case 0x4000:
                     value = SubtractWithExtend(0, value, size);
-                    ea.Write(value);
+                    ea.Write(value, readModifyWrite: true);
                     break;
                 case 0x4200:
                     value = 0;
-                    ea.Write(value);
+                    ea.Write(value, readModifyWrite: true);
                     State.SetSizedLogicFlags(0, size);
                     break;
                 case 0x4400:
                     value = Subtract(0, value, size, setExtend: true);
-                    ea.Write(value);
+                    ea.Write(value, readModifyWrite: true);
                     break;
                 case 0x4600:
                     value = (~value) & M68kCpuState.Mask(size);
-                    ea.Write(value);
+                    ea.Write(value, readModifyWrite: true);
                     SetLogicFlags(value, size);
                     break;
                 case 0x4A00:
@@ -11993,7 +12004,7 @@ namespace Copper68k
                     if (registerToEa)
                     {
                         CompletePredecrementLongDestinationBeforeWrite();
-                        eaOperand.Write(result);
+                        eaOperand.Write(result, readModifyWrite: true);
                     }
                     else
                     {
@@ -12007,7 +12018,7 @@ namespace Copper68k
                     {
                         result = Subtract(eaValue, regValue, operandSize, setExtend: true);
                         CompletePredecrementLongDestinationBeforeWrite();
-                        eaOperand.Write(result);
+                        eaOperand.Write(result, readModifyWrite: true);
                     }
                     else
                     {
@@ -12021,7 +12032,7 @@ namespace Copper68k
                     {
                         result = eaValue ^ regValue;
                         CompletePredecrementLongDestinationBeforeWrite();
-                        eaOperand.Write(result);
+                        eaOperand.Write(result, readModifyWrite: true);
                         SetLogicFlags(result, operandSize);
                     }
                     else
@@ -12035,7 +12046,7 @@ namespace Copper68k
                     if (registerToEa)
                     {
                         CompletePredecrementLongDestinationBeforeWrite();
-                        eaOperand.Write(result);
+                        eaOperand.Write(result, readModifyWrite: true);
                     }
                     else
                     {
@@ -12049,7 +12060,7 @@ namespace Copper68k
                     {
                         result = Add(eaValue, regValue, operandSize, setExtend: true);
                         CompletePredecrementLongDestinationBeforeWrite();
-                        eaOperand.Write(result);
+                        eaOperand.Write(result, readModifyWrite: true);
                     }
                     else
                     {
@@ -12269,6 +12280,7 @@ namespace Copper68k
                 {
                     M68kOperandSize.Byte => ReadByte(sourceAddress),
                     M68kOperandSize.Word => ReadWord(sourceAddress),
+                    _ when _useM68020BriefIndexedAddressing => ReadLong(sourceAddress),
                     _ => ReadLongDescending(sourceAddress)
                 };
                 if (size == M68kOperandSize.Long)
@@ -12287,6 +12299,7 @@ namespace Copper68k
                 {
                     M68kOperandSize.Byte => ReadByte(destinationAddress),
                     M68kOperandSize.Word => ReadWord(destinationAddress),
+                    _ when _useM68020BriefIndexedAddressing => ReadLong(destinationAddress),
                     _ => ReadLongDescending(destinationAddress)
                 };
                 if (size == M68kOperandSize.Long)
@@ -12309,6 +12322,10 @@ namespace Copper68k
             else if (size == M68kOperandSize.Word)
             {
                 WriteWord(destinationAddress, (ushort)result);
+            }
+            else if (_useM68020BriefIndexedAddressing)
+            {
+                WriteLong(destinationAddress, result);
             }
             else
             {
@@ -15548,7 +15565,7 @@ namespace Copper68k
                 }
             }
 
-            public void Write(uint value)
+            public void Write(uint value, bool readModifyWrite = false)
             {
                 value &= M68kCpuState.Mask(Size);
                 switch (_kind)
@@ -15578,16 +15595,13 @@ namespace Copper68k
                         {
                             _cpu.WriteWord(Address, (ushort)value);
                         }
-                        else
-                        {
-                        if (_descendingLongWrite)
+                        else if (readModifyWrite ? !_cpu._useM68020BriefIndexedAddressing : _descendingLongWrite)
                         {
                             _cpu.WriteLongDescending(Address, value);
                         }
                         else
                         {
                             _cpu.WriteLong(Address, value);
-                        }
                         }
 
                         if (!_completePostIncrementBeforeRead)

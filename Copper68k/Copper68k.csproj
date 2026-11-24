@@ -9,9 +9,9 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.5.9</Version>
-    <PackageVersion>1.5.9</PackageVersion>
-    <PackageReleaseNotes>Reuse the physical instruction address eligibility check within optional MC68040 JIT trace dispatch.</PackageReleaseNotes>
+    <Version>1.5.10</Version>
+    <PackageVersion>1.5.10</PackageVersion>
+    <PackageReleaseNotes>Correct memory arithmetic transfer order on 68000/68010 and 68040/68060, and suppress the 68010 CLR destination read.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

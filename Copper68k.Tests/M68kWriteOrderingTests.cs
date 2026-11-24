@@ -1,4 +1,5 @@
 using Copper68k;
+using Copper68k.Tests.Synthetic;
 
 namespace Copper68k.Tests;
 
@@ -12,6 +13,85 @@ public sealed class M68kWriteOrderingTests
 {
 	private const uint CodeBase = 0x1000;
 	private const uint StackBase = 0x4000;
+
+	[Theory]
+	[InlineData(M68kCpuModel.M68000)]
+	[InlineData(M68kCpuModel.M68010)]
+	public void MemoryArithmeticStoresLowWordFirst(M68kCpuModel model)
+	{
+		foreach (ushort opcode in new ushort[] { 0xD190, 0x9190, 0xC190, 0x8190, 0xB190,
+			0x4090, 0x4290, 0x4490, 0x4690, 0x5290, 0x5390, 0x0A90 })
+		{
+			var bus = new SparseRecordingBus();
+			bus.Initialize(CodeBase, opcode, 2);
+			bus.Initialize(CodeBase + 2, 0x00120034, 4);
+			bus.Initialize(0x3000, 0x11223344, 4);
+			using var cpu = M68kCoreFactory.Default.Create(model, bus);
+			cpu.Reset(CodeBase, StackBase);
+			cpu.State.A[0] = 0x3000;
+			cpu.ExecuteInstruction();
+			var writes = bus.Accesses.Where(a => a.Write).Select(a => (a.Address, a.Width));
+			Assert.Equal([(0x3002u, 2), (0x3000u, 2)], writes);
+		}
+	}
+
+	[Theory]
+	[InlineData(M68kCpuModel.M68000, true)]
+	[InlineData(M68kCpuModel.M68010, false)]
+	public void ClearLongPostincrementReadsDestinationOnlyOn68000(M68kCpuModel model, bool reads)
+	{
+		var bus = new SparseRecordingBus();
+		bus.Initialize(CodeBase, 0x4298, 2); // CLR.L (A0)+
+		bus.Initialize(0x3000, 0x11223344, 4);
+		using var cpu = M68kCoreFactory.Default.Create(model, bus);
+		cpu.Reset(CodeBase, StackBase);
+		cpu.State.A[0] = 0x3000;
+		cpu.ExecuteInstruction();
+		Assert.Equal(reads, bus.Accesses.Any(a => !a.Write && a.Address == 0x3000));
+		Assert.Equal(0u, bus.Peek(0x3000, 4));
+		Assert.Equal(0x3004u, cpu.State.A[0]);
+	}
+
+	[Theory]
+	[InlineData(0x4290, 0x3001u, 0x3001u)] // (A0)
+	[InlineData(0x4298, 0x3001u, 0x3001u)] // (A0)+
+	[InlineData(0x42A0, 0x3005u, 0x3003u)] // -(A0)
+	public void Odd68010ClearLongFaultsBeforeWriting(ushort opcode, uint initialA0, uint faultAddress)
+	{
+		var bus = new SparseRecordingBus();
+		bus.Initialize(CodeBase, opcode, 2);
+		bus.Initialize(12, 0x2000, 4);
+		using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68010, bus);
+		cpu.Reset(CodeBase, StackBase);
+		cpu.State.A[0] = initialA0;
+		cpu.ExecuteInstruction();
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(initialA0, cpu.State.A[0]);
+		Assert.Equal(faultAddress, bus.Peek(cpu.State.A[7] + 10, 4));
+		Assert.DoesNotContain(bus.Accesses, a => a.Address is >= 0x3000 and < 0x3010);
+	}
+
+	[Theory]
+	[InlineData(M68kCpuModel.M68040, 0xD388, 5u)]
+	[InlineData(M68kCpuModel.M68040, 0x9388, 3u)]
+	[InlineData(M68kCpuModel.M68060, 0xD388, 5u)]
+	[InlineData(M68kCpuModel.M68060, 0x9388, 3u)]
+	public void ExtendedArithmeticUsesModelLongTransfers(M68kCpuModel model, ushort opcode, uint result)
+	{
+		var bus = new SparseRecordingBus();
+		bus.Initialize(CodeBase, opcode, 2);
+		bus.Initialize(0x3000, 1, 4);
+		bus.Initialize(0x3004, 4, 4);
+		using var cpu = M68kCoreFactory.Default.Create(model, bus);
+		cpu.Reset(CodeBase, StackBase);
+		cpu.State.A[0] = 0x3004;
+		cpu.State.A[1] = 0x3008;
+		cpu.ExecuteInstruction();
+		var transfers = bus.Accesses.Where(a => a.Address is >= 0x3000 and < 0x3008)
+			.Select(a => (a.Address, a.Width, a.Write));
+		Assert.Equal([(0x3000u, 4, false), (0x3004u, 4, false), (0x3004u, 4, true)], transfers);
+		Assert.Equal(result, bus.Peek(0x3004, 4));
+	}
 
 	[Fact]
 	public void PushLongWritesLowWordFirst()
