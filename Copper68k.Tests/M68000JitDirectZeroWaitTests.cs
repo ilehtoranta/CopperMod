@@ -391,6 +391,196 @@ public sealed class M68000JitDirectZeroWaitTests
         Assert.Equal(new ushort[] { 0x1006, 0x0000 }, pushWrites.Select(write => write.Value));
     }
 
+    [Fact]
+    public void V2BsrRtsGraphPreservesStackAtBudgetExitsAndRejectsCodeOverlap()
+    {
+        const uint code = 0x1000;
+        const uint stack = 0xF0000;
+        var referenceBus = new DirectZeroWaitBus();
+        var jitBus = new DirectZeroWaitBus();
+        foreach (var bus in new[] { referenceBus, jitBus })
+            bus.WriteWords(code, [0x6102, 0x60FC, 0x5280, 0x4E75]); // BSR; BRA; ADDQ; RTS
+
+        using var reference = new M68kInterpreter(referenceBus);
+        using var jit = new M68kJitCore(jitBus, enableV2: true);
+        reference.Reset(code, stack);
+        jit.Reset(code, stack);
+        var boundary = new BatchBoundary();
+
+        Assert.Equal(400, reference.ExecuteInstructions(400, null, boundary));
+        Assert.Equal(400, jit.ExecuteInstructions(400, 500_000, boundary));
+        var batches = jit.Counters.V2BusAccessBatchExecutions;
+        var exits = jit.Counters.V2SideExitOutOfBlockBranch;
+        Assert.Equal(401, reference.ExecuteInstructions(401, null, boundary));
+        Assert.Equal(401, jit.ExecuteInstructions(401, 500_000, boundary));
+        Assert.Equal(batches + 1, jit.Counters.V2BusAccessBatchExecutions);
+        Assert.Equal(exits, jit.Counters.V2SideExitOutOfBlockBranch);
+        Assert.Equal(stack - 4, jit.State.A[7]);
+        Assert.Equal(stack - 4, jit.State.SupervisorStackPointer);
+        Assert.Equal(code + 4, jit.State.ProgramCounter);
+        Assert.Equal(reference.State.Cycles, jit.State.Cycles);
+        Assert.Equal(reference.State.D, jit.State.D);
+        Assert.Equal(referenceBus.ReadLongValue(0xEFFFC), jitBus.ReadLongValue(0xEFFFC));
+
+        Assert.Equal(3, reference.ExecuteInstructions(3, null, boundary));
+        Assert.Equal(3, jit.ExecuteInstructions(3, 500_000, boundary));
+        Assert.Equal(stack, jit.State.A[7]);
+        Assert.Equal(code, jit.State.ProgramCounter);
+        reference.State.SetActiveStackPointer(code + 8);
+        jit.State.SetActiveStackPointer(code + 8);
+        jitBus.WordWrites.Clear();
+
+        Assert.Equal(1, reference.ExecuteInstructions(2, reference.State.Cycles + 18, boundary));
+        Assert.Equal(1, jit.ExecuteInstructions(2, jit.State.Cycles + 18, boundary));
+        Assert.Equal(new[] { (code + 4, (ushort)0), (code + 6, (ushort)(code + 2)) }, jitBus.WordWrites);
+        Assert.Equal(referenceBus.ReadLongValue(code + 4), jitBus.ReadLongValue(code + 4));
+        Assert.Equal(reference.State.A, jit.State.A);
+        Assert.Equal(reference.State.ProgramCounter, jit.State.ProgramCounter);
+        Assert.Equal(reference.State.Cycles, jit.State.Cycles);
+    }
+
+    [Fact]
+    public void ClassicDivideTimingRemainsExactWhenOperandsAndSignednessChange()
+    {
+        const uint code = 0x1000;
+        var referenceBus = new DirectZeroWaitBus();
+        var jitBus = new DirectZeroWaitBus();
+        foreach (var bus in new[] { referenceBus, jitBus })
+            bus.WriteWords(code, [0x80C1, 0x85C1, 0x60FA]); // DIVU.W D1,D0; DIVS.W D1,D2; BRA
+
+        using var reference = new M68kInterpreter(referenceBus);
+        using var jit = new M68kJitCore(jitBus, enableV2: false);
+        reference.Reset(code, 0xF0000);
+        jit.Reset(code, 0xF0000);
+        var boundary = new BatchBoundary();
+        (uint Dividend, uint Divisor)[] operands = [(100, 3), (0xFFFF_FF9C, 0xFFFD), (100, 7), (0x8000_0000, 0xFFFF)];
+
+        for (var i = 0; i < 200; i++)
+        {
+            var (dividend, divisor) = operands[i % operands.Length];
+            foreach (var state in new[] { reference.State, jit.State })
+            {
+                state.D[0] = state.D[2] = dividend;
+                state.D[1] = divisor;
+            }
+
+            Assert.Equal(3, reference.ExecuteInstructions(3, null, boundary));
+            Assert.Equal(3, jit.ExecuteInstructions(3, 500_000, boundary));
+            Assert.Equal(reference.State.Cycles, jit.State.Cycles);
+            Assert.Equal(reference.State.D, jit.State.D);
+            Assert.Equal(reference.State.StatusRegister, jit.State.StatusRegister);
+            Assert.Equal(code, jit.State.ProgramCounter);
+        }
+
+        Assert.True(jit.Counters.PureTraceBatchInstructions > 0);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    public void V2WordDivideMatchesCyclesAndPrefetchAcrossBatchExits(int fetchWait)
+    {
+        const uint code = 0x1000;
+        var referenceBus = new DirectZeroWaitBus(instructionFetchWaitCycles: fetchWait);
+        var jitBus = new DirectZeroWaitBus(instructionFetchWaitCycles: fetchWait);
+        var classicBus = new DirectZeroWaitBus(instructionFetchWaitCycles: fetchWait);
+        ushort[] program = [0x7264, 0x82C0, 0x769C, 0x87C2, 0x7864, 0x88FC, 7, 0x7A9C, 0x8BFC, 0xFFF9, 0x60EA];
+        foreach (var bus in new[] { referenceBus, jitBus, classicBus })
+            bus.WriteWords(code, program);
+
+        using var reference = new M68kInterpreter(referenceBus);
+        using var jit = new M68kJitCore(jitBus, enableV2: true);
+        using var classic = new M68kJitCore(classicBus, enableV2: false);
+        reference.Reset(code, 0xF0000);
+        jit.Reset(code, 0xF0000);
+        classic.Reset(code, 0xF0000);
+        reference.State.D[0] = jit.State.D[0] = classic.State.D[0] = 3;
+        reference.State.D[2] = jit.State.D[2] = classic.State.D[2] = 0xFFFD;
+        var boundary = new BatchBoundary();
+
+        foreach (var (budget, cycleBudget) in new[] { (360, 500_000), (5, 500_000), (4, 1), (10, 260), (25, 500_000) })
+        {
+            var target = reference.State.Cycles + cycleBudget;
+            var executed = reference.ExecuteInstructions(budget, target, boundary);
+            Assert.Equal(executed, jit.ExecuteInstructions(budget, target, boundary));
+            Assert.Equal(executed, classic.ExecuteInstructions(budget, target, boundary));
+            Assert.Equal(reference.State.D, jit.State.D);
+            Assert.Equal(reference.State.StatusRegister, jit.State.StatusRegister);
+            AssertDividePrefetchMatches(classic, jit);
+            Assert.Equal(reference.State.ProgramCounter, jit.State.ProgramCounter);
+            Assert.Equal(reference.State.Cycles, jit.State.Cycles);
+        }
+
+        Assert.True(jit.Counters.V2TraceHits > 0);
+    }
+
+    [Theory]
+    [InlineData(0x82C0)] // DIVU.W D0,D1
+    [InlineData(0x83C0)] // DIVS.W D0,D1
+    public void V2WordDivideByZeroExitsWithTheLivePrefetchQueue(ushort opcode)
+    {
+        const uint code = 0x1000;
+        const uint handler = 0x3000;
+        const uint stack = 0xF0000;
+        var referenceBus = new DirectZeroWaitBus();
+        var jitBus = new DirectZeroWaitBus();
+        foreach (var bus in new[] { referenceBus, jitBus })
+        {
+            bus.WriteWords(code, [0x7264, opcode, 0x60FA]);
+            bus.WriteWords(handler, [0x4E71, 0x4E71]);
+            bus.WriteLongValue(5 * 4, handler);
+        }
+
+        using var reference = new M68kInterpreter(referenceBus);
+        using var jit = new M68kJitCore(jitBus, enableV2: true);
+        reference.Reset(code, stack);
+        jit.Reset(code, stack);
+        reference.State.D[0] = jit.State.D[0] = 3;
+        var boundary = new BatchBoundary();
+        Assert.Equal(300, reference.ExecuteInstructions(300, 500_000, boundary));
+        Assert.Equal(300, jit.ExecuteInstructions(300, 500_000, boundary));
+        Assert.True(jit.Counters.V2TraceHits > 0);
+
+        reference.State.D[0] = jit.State.D[0] = 0;
+        var fallback = jit.Counters.FallbackInstructions;
+        Assert.Equal(2, reference.ExecuteInstructions(2, 500_000, boundary));
+        Assert.Equal(2, jit.ExecuteInstructions(2, 500_000, boundary));
+        Assert.Equal(fallback + 1, jit.Counters.FallbackInstructions);
+        Assert.Equal(handler, jit.State.ProgramCounter);
+        Assert.Equal(5, jit.State.LastExceptionVector);
+        Assert.Equal(reference.State.A, jit.State.A);
+        Assert.Equal(reference.State.StatusRegister, jit.State.StatusRegister);
+        Assert.True(referenceBus.SnapshotMemory().AsSpan().SequenceEqual(jitBus.SnapshotMemory()));
+        AssertDividePrefetchMatches(reference, jit);
+    }
+
+    private static void AssertDividePrefetchMatches(IM68000PrefetchDiagnostics reference, M68kJitCore jit)
+    {
+        var expected = reference.CapturePrefetchDiagnosticState();
+        var actual = jit.CapturePrefetchDiagnosticState();
+        Assert.Equal(expected.ProgramCounter, actual.ProgramCounter);
+        Assert.Equal(expected.Cycles, actual.Cycles);
+        Assert.Equal(expected.PrefetchAddress, actual.PrefetchAddress);
+        Assert.Equal(expected.PrefetchCount, actual.PrefetchCount);
+        if (expected.PrefetchCount > 0)
+        {
+            Assert.Equal(expected.Word0, actual.Word0);
+            Assert.Equal(expected.ReadyCycle0, actual.ReadyCycle0);
+        }
+        if (expected.PrefetchCount > 1)
+        {
+            Assert.Equal(expected.Word1, actual.Word1);
+            Assert.Equal(expected.ReadyCycle1, actual.ReadyCycle1);
+        }
+        Assert.Equal(expected.BusCycle, actual.BusCycle);
+        Assert.Equal(expected.HasPendingPrefetch, actual.HasPendingPrefetch);
+        if (expected.HasPendingPrefetch)
+        {
+            Assert.Equal(expected.PendingPrefetchAddress, actual.PendingPrefetchAddress);
+            Assert.Equal(expected.PendingPrefetchEarliestCycle, actual.PendingPrefetchEarliestCycle);
+        }
+    }
+
     public static IEnumerable<object[]> ImmediateShiftCases()
     {
         for (var type = 0; type < 4; type++)
@@ -429,7 +619,16 @@ public sealed class M68000JitDirectZeroWaitTests
         yield return [true, true, (ushort)0xFFFF, 0x5555_7FFFu];
     }
 
-    public static IEnumerable<object[]> ClassicDivideCases()
+    public static IEnumerable<object[]> DivideBatchCases()
+    {
+        foreach (var operands in DivideOperands())
+        {
+            yield return [false, .. operands];
+            yield return [true, .. operands];
+        }
+    }
+
+    private static IEnumerable<object[]> DivideOperands()
     {
         yield return [false, false, (ushort)0x0003, 100u];
         yield return [false, false, (ushort)0x0001, 0x1234_5678u];
@@ -493,6 +692,45 @@ public sealed class M68000JitDirectZeroWaitTests
 
         Assert.Equal(probes, jitBus.ZeroWaitReadBufferProbes);
         Assert.Equal(busReads, jitBus.DataReads);
+    }
+
+    [Theory]
+    [InlineData(false, 0x5290, 20)] // ADDQ.L #1,(A0)
+    [InlineData(true, 0x5290, 20)]
+    [InlineData(false, 0x5390, 20)] // SUBQ.L #1,(A0)
+    [InlineData(true, 0x5390, 20)]
+    [InlineData(true, 0x5210, 12)] // ADDQ.B #1,(A0)
+    [InlineData(true, 0x5250, 12)] // ADDQ.W #1,(A0)
+    public void CompiledMemoryQuickArithmeticChargesReadModifyWriteCycles(
+        bool enableV2, ushort opcode, int quickCycles)
+    {
+        const uint code = 0x1000;
+        const uint data = 0x2000;
+        const int iterations = 200;
+        var interpreterBus = new DirectZeroWaitBus();
+        var jitBus = new DirectZeroWaitBus();
+        foreach (var bus in new[] { interpreterBus, jitBus })
+        {
+            bus.WriteWords(code, [opcode, 0x60FC]); // quick arithmetic; BRA.S start
+            bus.WriteLongValue(data, 0x1234_5678);
+        }
+
+        using var interpreter = new M68kInterpreter(interpreterBus);
+        using var jit = new M68kJitCore(jitBus, enableV2: enableV2);
+        interpreter.Reset(code, 0xF0000);
+        jit.Reset(code, 0xF0000);
+        interpreter.State.A[0] = jit.State.A[0] = data;
+        var boundary = new BatchBoundary();
+
+        Assert.Equal(iterations * 2, interpreter.ExecuteInstructions(iterations * 2, null, boundary));
+        Assert.Equal(iterations * 2, jit.ExecuteInstructions(iterations * 2, 500_000, boundary));
+        Assert.True(enableV2 ? jit.Counters.V2TraceHits > 0 : jit.Counters.TraceHits > 0);
+        Assert.Equal(iterations * (quickCycles + 10L), interpreter.State.Cycles);
+        Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
+        Assert.Equal(code, jit.State.ProgramCounter);
+        Assert.Equal(data, jit.State.A[0]);
+        Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
+        Assert.Equal(interpreterBus.ReadLongValue(data), jitBus.ReadLongValue(data));
     }
 
     [Fact]
@@ -919,8 +1157,9 @@ public sealed class M68000JitDirectZeroWaitTests
     }
 
     [Theory]
-    [MemberData(nameof(ClassicDivideCases))]
-    public void ClassicPureBatchDivideMatchesInterpreter(
+    [MemberData(nameof(DivideBatchCases))]
+    public void CompiledWordDivideMatchesInterpreterAcrossCycleBudgets(
+        bool enableV2,
         bool signed,
         bool immediate,
         ushort divisor,
@@ -935,7 +1174,7 @@ public sealed class M68000JitDirectZeroWaitTests
         var interpreterBus = new DirectZeroWaitBus();
         jitBus.WriteWords(code, program);
         interpreterBus.WriteWords(code, program);
-        using var jit = new M68kJitCore(jitBus, enableV2: false);
+        using var jit = new M68kJitCore(jitBus, enableV2: enableV2);
         using var interpreter = new M68kInterpreter(interpreterBus);
         jit.Reset(code, 0xE0000);
         interpreter.Reset(code, 0xE0000);
@@ -973,6 +1212,8 @@ public sealed class M68000JitDirectZeroWaitTests
 
         Assert.NotEqual(0, jit.State.StatusRegister & M68kCpuState.Extend);
         Assert.True(jit.Counters.PureTraceBatchInstructions > 0);
+        if (enableV2)
+            Assert.True(jit.Counters.V2TraceHits > 0);
     }
 
     [Theory]
@@ -1159,10 +1400,12 @@ public sealed class M68000JitDirectZeroWaitTests
         private readonly byte[] _bankKinds = [(byte)M68kJitDirectRamBankKind.RealFast];
         private readonly int[] _bankOffsets = [0];
         private readonly bool _realFastIsZeroWait;
+        private readonly int _instructionFetchWaitCycles;
 
-        public DirectZeroWaitBus(bool realFastIsZeroWait = true)
+        public DirectZeroWaitBus(bool realFastIsZeroWait = true, int instructionFetchWaitCycles = 0)
         {
             _realFastIsZeroWait = realFastIsZeroWait;
+            _instructionFetchWaitCycles = instructionFetchWaitCycles;
         }
 
         public event Action<uint, int>? JitCodeRangeWritten;
@@ -1191,6 +1434,8 @@ public sealed class M68000JitDirectZeroWaitTests
 
         public ushort ReadWord(uint address, ref long cycle, M68kBusAccessKind accessKind)
         {
+            if (accessKind == M68kBusAccessKind.CpuInstructionFetch)
+                cycle += _instructionFetchWaitCycles;
             if (accessKind == M68kBusAccessKind.CpuDataRead)
             {
                 DataReads++;

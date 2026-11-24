@@ -162,7 +162,7 @@ namespace Copper68k
             "SetAddressRegister",
             typeof(int),
             typeof(uint));
-        private static readonly MethodInfo PushLong = RequiredMethod(typeof(M68kJitCore), "PushLong", typeof(uint));
+        private static readonly MethodInfo PushBsrReturnAddress = RequiredMethod(typeof(M68kJitCore), "PushBsrReturnAddress", typeof(uint));
         private static readonly MethodInfo PullLong = RequiredMethod(typeof(M68kJitCore), "PullLong");
         private static readonly MethodInfo ResolveIndex = RequiredMethod(typeof(M68kJitCore), "ResolveIndex", typeof(ushort));
         private static readonly MethodInfo CompleteCompiledInstructionCycles = RequiredMethod(
@@ -208,9 +208,9 @@ namespace Copper68k
             typeof(uint),
             typeof(int),
             typeof(bool));
-        private static readonly MethodInfo GetDivideCoreCycles = RequiredStaticMethod(
-            typeof(M68kIntegerSemantics),
-            nameof(M68kIntegerSemantics.GetDivideCoreCycles),
+        private static readonly MethodInfo GetCachedDivideCoreCycles = RequiredMethod(
+            typeof(M68kJitCore),
+            "GetCachedDivideCoreCycles",
             typeof(uint),
             typeof(ushort),
             typeof(bool));
@@ -1559,10 +1559,11 @@ namespace Copper68k
             il.Emit(OpCodes.Conv_I4);
             il.Emit(OpCodes.Stloc, status);
             EmitStoreStatus(il, context, status);
+            il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Ldloc, dividend);
             il.Emit(OpCodes.Ldloc, divisor);
             il.Emit(signed ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0);
-            il.Emit(OpCodes.Call, GetDivideCoreCycles);
+            il.Emit(OpCodes.Call, GetCachedDivideCoreCycles);
             il.Emit(
                 OpCodes.Ldc_I4,
                 M68kJitCore.GetEaOperandCyclesForTiming(instruction.Source, M68kOperandSize.Word));
@@ -1599,7 +1600,7 @@ namespace Copper68k
         {
             il.Emit(OpCodes.Ldarg_0);
             EmitLoadProgramCounter(il, context);
-            il.Emit(OpCodes.Call, PushLong);
+            il.Emit(OpCodes.Call, PushBsrReturnAddress);
             EmitSetProgramCounter(il, context, GetBranchTarget(instruction));
             EmitAddCycles(il, context, 18);
         }

@@ -3758,9 +3758,7 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsFastMemoryRunKind(ushort opcode, M68kOpcodePlanKind kind)
-            => kind is
-                M68kOpcodePlanKind.MoveLongPostincrementToData or
-                M68kOpcodePlanKind.MoveLongDataToAbsoluteLong ||
+            => IsFastMemoryDataKind(opcode, kind) ||
                 (kind == M68kOpcodePlanKind.Dbcc && (opcode & 0xFFF8) == 0x51C8);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -3887,7 +3885,7 @@ namespace Copper68k
                 takenProgramCounters[currentIndex] = takenProgramCounter;
                 hasFallthrough[currentIndex] = instructionHasFallthrough;
                 hasTaken[currentIndex] = instructionHasTaken;
-                containsFastMemory |= IsFastMemoryDataKind(instruction.Kind);
+                containsFastMemory |= IsFastMemoryDataKind(instruction.Opcode, instruction.Kind);
                 hasConditionalFlow |= instruction.Kind is
                     M68kOpcodePlanKind.Branch or M68kOpcodePlanKind.Dbcc;
 
@@ -4094,10 +4092,11 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsFastMemoryDataKind(M68kOpcodePlanKind kind)
+        private static bool IsFastMemoryDataKind(ushort opcode, M68kOpcodePlanKind kind)
             => kind is
                 M68kOpcodePlanKind.MoveLongPostincrementToData or
-                M68kOpcodePlanKind.MoveLongDataToAbsoluteLong;
+                M68kOpcodePlanKind.MoveLongDataToAbsoluteLong ||
+                (kind == M68kOpcodePlanKind.Move && (opcode & 0xF1F8) == 0x2010); // MOVE.L (An),Dn
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsFixedPlanRunSuccessorFetchCovered(
@@ -4372,7 +4371,7 @@ namespace Copper68k
                     out nextInstructionIndex);
             }
 
-            if (IsFastMemoryDataKind(instruction.Kind))
+            if (IsFastMemoryDataKind(instruction.Opcode, instruction.Kind))
             {
                 var executed = TryExecuteCachedFastMemoryRunInstruction(
                     ref context,
@@ -4611,7 +4610,7 @@ namespace Copper68k
         {
             validateWindow = false;
             var plan = instruction.PackedPlan;
-            if (instruction.Kind == M68kOpcodePlanKind.MoveLongPostincrementToData)
+            if (instruction.Kind is M68kOpcodePlanKind.Move or M68kOpcodePlanKind.MoveLongPostincrementToData)
             {
                 var sourceAddress = GetFixedPlanRunAddressRegister(
                     in registers,
@@ -4641,10 +4640,13 @@ namespace Copper68k
                     isWrite: false,
                     requestedCycle);
 
-                SetFixedPlanRunAddressRegister(
-                    ref registers,
-                    plan.SourceRegister,
-                    unchecked(sourceAddress + 4));
+                if (instruction.Kind == M68kOpcodePlanKind.MoveLongPostincrementToData)
+                {
+                    SetFixedPlanRunAddressRegister(
+                        ref registers,
+                        plan.SourceRegister,
+                        unchecked(sourceAddress + 4));
+                }
                 SetFixedPlanRunDataRegister(
                     ref registers,
                     plan.DestinationRegister,

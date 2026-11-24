@@ -3095,6 +3095,35 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	}
 	[Theory]
 	[MemberData(nameof(OpcodePlanDispatchVariants))]
+	public void CachedFastMemoryRunReadsAddressIndirectWithoutUpdatingAddressRegister(int dispatchValue)
+	{
+		var scalarBus = new CycleCountingBus { ZeroWaitInstructionFetch = true };
+		var cachedBus = CreateFastMemoryRunBus();
+		var program = Words(0x2010, 0xD280, 0x60FA); // MOVE.L (A0),D0; ADD.L D0,D1; BRA.S loop
+		Write(scalarBus.Memory, 0x1000, program);
+		Write(cachedBus.Memory, 0x1000, program);
+		WriteLongRaw(scalarBus.Memory, 0x2000, 0x1234_5678);
+		WriteLongRaw(cachedBus.Memory, 0x2000, 0x1234_5678);
+		var scalar = CreateCycleParityCpu(scalarBus, false, enableCpuBusPhaseTrace: false);
+		var cached = CreateCycleParityCpu(
+			cachedBus,
+			true,
+			(M68kOpcodePlanDispatch)dispatchValue,
+			enableCpuBusPhaseTrace: false);
+		scalar.State.A[0] = cached.State.A[0] = 0x2000;
+		var boundary = new BusAccessBatchBoundary();
+
+		Assert.Equal(12, ((IM68kBatchCore)scalar).ExecuteInstructions(12, long.MaxValue, new BusAccessBatchBoundary()));
+		Assert.Equal(12, ((IM68kBatchCore)cached).ExecuteInstructions(12, long.MaxValue, boundary));
+
+		AssertCachedRunParity(scalar, cached);
+		Assert.Equal(0x2000u, cached.State.A[0]);
+		Assert.True(boundary.BusAccessBatchCalls > 0);
+		Assert.NotEmpty(cachedBus.FastLongAccesses);
+		Assert.All(cachedBus.FastLongAccesses, access => Assert.Equal((0x2000u, false), access));
+	}
+	[Theory]
+	[MemberData(nameof(OpcodePlanDispatchVariants))]
 	public void CachedFastMemoryRunMatchesScalarThroughDbraExpiry(int dispatchValue)
 	{
 		var scalarBus = new CycleCountingBus { ZeroWaitInstructionFetch = true };

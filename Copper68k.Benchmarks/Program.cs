@@ -275,6 +275,42 @@ static BenchmarkWorkload[] CreateWorkloads()
     =>
     [
         new BenchmarkWorkload(
+            "hst-register-loop",
+            [
+                0x7001, // MOVEQ #1,D0
+                0xD280, // ADD.L D0,D1
+                0xB182, // EOR.L D0,D2
+                0x60F8  // BRA.S loop
+            ],
+            SetupNone,
+            _ => { },
+            1 << 20,
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "hst-ram-read-loop",
+            [
+                0x2010, // MOVE.L (A0),D0
+                0xD280, // ADD.L D0,D1
+                0x60FA  // BRA.S loop
+            ],
+            bus => bus.WriteLongValue(0x2000, 0x1234_5678),
+            state => state.A[0] = 0x2000,
+            1 << 20,
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
+            "call-return-loop",
+            [
+                0x6102, // BSR.S subroutine
+                0x60FC, // BRA.S loop
+                0x5280, // ADDQ.L #1,D0
+                0x4E75  // RTS
+            ],
+            SetupNone,
+            state => state.SetActiveStackPointer(0x000F_0000),
+            1 << 20,
+            SupportsBackend: backend => backend.Name.Contains("M68000", StringComparison.Ordinal),
+            IncludeByDefault: false),
+        new BenchmarkWorkload(
             "branch-self-loop",
             [
                 0x60FE // BRA.S self
