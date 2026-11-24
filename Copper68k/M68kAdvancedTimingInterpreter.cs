@@ -18973,6 +18973,13 @@ namespace Copper68k
         internal void CompleteTiming(M68kInstructionTimingKey key)
         {
             var plan = _timing.GetPlan(key);
+            if (key is M68kInstructionTimingKey.DbccBranchTaken or M68kInstructionTimingKey.DbccExpired &&
+                ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz) && _timing.InstructionCache.Enabled)
+            {
+                // MC68020UM §8.2.15 gives cache-case timings of six clocks
+                // for the loop and ten for expiry. External fetches are timed separately.
+                plan = plan with { NativeCycles = key == M68kInstructionTimingKey.DbccBranchTaken ? 6 : 10 };
+            }
             if (ReferenceEquals(_profile, M68020CpuProfile.Ocs68040JitMaxSpeed))
             {
                 // The fixed plan already includes the profile's complete

@@ -7,6 +7,31 @@ public sealed class M68020AdditionalAgaOperandTests
 {
     private const uint Code = 0xF80000;
 
+    [Fact]
+    public void A1200CachedDecrementBranchUsesCacheCaseTiming()
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, Code, 0x7009, 0x4E7B, 0x0002, 0x51C9, 0xFFFE, 0x4E71);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        cpu.State.D[1] = 2;
+        cpu.ExecuteInstruction(); // MOVEQ #9,D0
+        cpu.ExecuteInstruction(); // MOVEC D0,CACR enables and clears the instruction cache.
+        cpu.ExecuteInstruction(); // Cache the branch and its extension.
+
+        var start = cpu.State.NativeCycles;
+        cpu.ExecuteInstruction();
+        Assert.Equal(6, cpu.State.NativeCycles - start);
+        Assert.Equal(Code + 6, cpu.State.ProgramCounter);
+        Assert.Equal(0u, cpu.State.D[1]);
+
+        start = cpu.State.NativeCycles;
+        cpu.ExecuteInstruction();
+        Assert.Equal(10, cpu.State.NativeCycles - start);
+        Assert.Equal(Code + 10, cpu.State.ProgramCounter);
+        Assert.Equal(0xFFFFu, cpu.State.D[1]);
+    }
+
     [Theory]
     [InlineData(M68kCpuModel.M68EC020, 0xE702, 0x0C, 0x60, 0x00)]
     [InlineData(M68kCpuModel.M68EC020, 0xE302, 0x40, 0x80, 0x0A)]
