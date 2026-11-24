@@ -1176,7 +1176,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         bus.WriteWord(0x00DFF100, 0x1000);
         var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
         var expectedFetchCycle = OutputRowStartCycle(StandardY) +
-            ((0x38 + HrmLowResFetchSlotByPlane[0]) * AmigaConstants.A500PalCpuCyclesPerColorClock);
+            OcsFetchDataOffset(0x38, HrmLowResFetchSlotByPlane[0]);
 
         bus.Display.RenderFrame(frame, 0, FrameCycles());
 
@@ -1259,7 +1259,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
                 access.Request.Address == 0x1000 &&
                 access.GrantedCycle < OutputRowStartCycle(StandardY + 1));
         var expectedCycle = OutputRowStartCycle(StandardY) +
-            ((0x40 + HrmLowResFetchSlotByPlane[0]) * AmigaConstants.A500PalCpuCyclesPerColorClock);
+            OcsFetchDataOffset(0x40, HrmLowResFetchSlotByPlane[0]);
         Assert.Equal(expectedCycle, firstFetch.GrantedCycle);
         Assert.Contains(
             bus.BusAccesses,
@@ -1336,7 +1336,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
             {
                 var address = (uint)(0x1000 + (plane * 0x100));
                 var expected = rowStart +
-                    ((0x38 + HrmLowResFetchSlotByPlane[plane]) * AmigaConstants.A500PalCpuCyclesPerColorClock);
+                    OcsFetchDataOffset(0x38, HrmLowResFetchSlotByPlane[plane]);
                 Assert.Contains(
                     bus.BusAccesses,
                     access => access.Request.Requester == AmigaBusRequester.Bitplane &&
@@ -1370,7 +1370,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
         {
             var address = (uint)(0x1800 + (plane * 0x100));
             var expected = rowStart +
-                ((0x3C + HrmHighResFetchSlotByPlane[plane]) * AmigaConstants.A500PalCpuCyclesPerColorClock);
+                OcsFetchDataOffset(0x3C, HrmHighResFetchSlotByPlane[plane]);
             Assert.Contains(
                 bus.BusAccesses,
                 access => access.Request.Requester == AmigaBusRequester.Bitplane &&
@@ -1670,11 +1670,10 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
     private static void BpldatDisabledPlanesDoNotContribute()
     {
-        var bus = CreateDisplayBus();
+        var bus = CreateBpldatManualBus();
         var writeCycle = OutputCycle(StandardY, 0x70);
         var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
         var x = OutputXForHorizontal(0x70);
-        SetColor(bus, 3, 0x0FF0);
         bus.WriteWord(0x00DFF100, 0x1000, 0);
 
         RenderCausalFrame(bus, frame, current =>
@@ -1688,7 +1687,7 @@ public sealed class AmigaBitplaneConformanceMatrixTests
 
     private static void BpldatShiftGroupHonorsBplcon1Delay()
     {
-        var bus = CreateDisplayBus();
+        var bus = CreateBpldatManualBus();
         var writeCycle = OutputCycle(StandardY, 0x70);
         var frame = new uint[AmigaConstants.PalLowResWidth * AmigaConstants.PalLowResHeight];
         var x = OutputXForHorizontal(0x70);
@@ -1921,6 +1920,11 @@ public sealed class AmigaBitplaneConformanceMatrixTests
     {
         return (long)Math.Round(AmigaConstants.A500PalCpuClockHz / AmigaConstants.A500PalVBlankHz);
     }
+
+    // The HRM plane sequence selects the input address. OCS PAL drives
+    // the corresponding word on the data bus one colour clock later.
+    private static int OcsFetchDataOffset(int ddfStart, int planeSlot)
+        => (ddfStart + planeSlot + 1) * AmigaConstants.A500PalCpuCyclesPerColorClock;
 
     private static long OutputRowStartCycle(int row)
     {

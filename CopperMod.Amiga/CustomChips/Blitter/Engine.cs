@@ -1674,6 +1674,15 @@ namespace CopperMod.Amiga.CustomChips.Blitter
             }
 
             var remainingWords = Math.Max(0, ((_height - _rowY - 1) * _widthWords) + (_widthWords - _wordX));
+            if (_dOnlyStartup.Pending)
+            {
+                // The last startup input primes word zero. Each subsequent
+                // word adds one normal D period before the busy signal clears.
+                return _dOnlyStartup.NextInputCycle +
+                    ((_dOnlyStartup.RemainingStages - 1L) * ChipSlotCycles) +
+                    ((remainingWords - 1L) * GetAreaWordCycles());
+            }
+
             var finalPipelineDrain = IsBOnlyAreaBlit()
                 ? (long)BOnlyFinalPipelineDrainSlots * ChipSlotCycles
                 : 0;

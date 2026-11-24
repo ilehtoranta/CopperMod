@@ -556,14 +556,22 @@ public sealed class AgnusLiveBlitterRequesterTests
         var diagnostics = candidate.AgnusLiveBlitterDiagnostics;
         Assert.True(diagnostics.GrantedRequests > 0);
         Assert.Equal(diagnostics.GrantedRequests, diagnostics.NastyGrants);
-        if ((channelMask & 0x1) == 0)
+        if (channelMask == 0x4)
         {
-            AssertCompletionMatchesNominalAndDeniedSlots(
-                candidate,
-                nominalCandidateCompletion,
-                channelMask == 0x4
-                    ? GetBOnlyInternalPauseDelay(candidate)
-                    : 0);
+            // Refresh can stall a B-only control input before any bus request
+            // exists. A nasty blitter must retain the same B slots and retire
+            // at the same cycle with or without a waiting CPU.
+            var noCpu = CreateBus(candidate: true);
+            ConfigureChannelFixture(noCpu, channelMask, widthWords: 16, height: 2, nasty: true);
+            RunUntilIdle(noCpu);
+            Assert.Equal(BlitterSignature(noCpu), BlitterSignature(candidate));
+            Assert.Equal(noCpu.Blitter.LastCompletionCycle, candidate.Blitter.LastCompletionCycle);
+            var lastRead = BlitterAccesses(candidate)[^1];
+            Assert.Equal(lastRead.GrantedCycle, candidate.Blitter.CaptureBOnlyCompletionSignals().FinalReadOutputCycle);
+        }
+        else if ((channelMask & 0x1) == 0)
+        {
+            AssertCompletionMatchesNominalAndDeniedSlots(candidate, nominalCandidateCompletion);
         }
         Assert.Equal(0, diagnostics.ContractViolations);
         Assert.Equal(0, diagnostics.ForbiddenCalls);
@@ -670,13 +678,13 @@ public sealed class AgnusLiveBlitterRequesterTests
         ConfigureChannelFixture(
             bus,
             channelMask: 0x1,
-            widthWords: 1,
+            widthWords: 2,
             height: 1,
             nasty: true,
             startCycle: 596);
         var initialDestination = BigEndian.ReadUInt16(
             bus.ChipRam,
-            (int)DestinationD,
+            (int)DestinationD + 2,
             "G3L initial final D destination");
         var nominalCompletion =
             bus.Blitter.GetPredictedCompletionCycle();
@@ -713,7 +721,7 @@ public sealed class AgnusLiveBlitterRequesterTests
             initialDestination,
             BigEndian.ReadUInt16(
                 bus.ChipRam,
-                (int)DestinationD,
+                (int)DestinationD + 2,
                 "G3L pending final D write"));
 
         var delayedGrant =
@@ -725,7 +733,7 @@ public sealed class AgnusLiveBlitterRequesterTests
             AmigaBusAccessKind.CpuInstructionFetch);
         Assert.True(cpuCycle > delayedGrant);
 
-        var finalWrite = Assert.Single(BlitterAccesses(bus));
+        var finalWrite = Assert.Single(BlitterAccesses(bus), access => access.Request.Address == DestinationD + 2);
         Assert.True(finalWrite.Request.IsWrite);
         Assert.Equal(writeRequestCycle, finalWrite.RequestedCycle);
         Assert.Equal(delayedGrant, finalWrite.GrantedCycle);
@@ -750,15 +758,15 @@ public sealed class AgnusLiveBlitterRequesterTests
             (ushort)0,
             BigEndian.ReadUInt16(
                 bus.ChipRam,
-                (int)DestinationD,
+                (int)DestinationD + 2,
                 "G3L delayed final D write"));
         Assert.Equal(
-            DestinationD + 2,
+            DestinationD + 4,
             bus.Blitter.CaptureSnapshot().DestinationD);
         AssertNoUnexplainedEligibleIdleSlots(bus);
         var diagnostics = bus.AgnusLiveBlitterDiagnostics;
-        Assert.Equal(1, diagnostics.GrantedRequests);
-        Assert.Equal(1, diagnostics.NastyGrants);
+        Assert.Equal(2, diagnostics.GrantedRequests);
+        Assert.Equal(2, diagnostics.NastyGrants);
         Assert.Equal(2, diagnostics.DeniedRequests);
         Assert.Equal(1, diagnostics.Completions);
         Assert.Equal(1, diagnostics.Interrupts);
@@ -836,7 +844,7 @@ public sealed class AgnusLiveBlitterRequesterTests
         SeedSources(bus, wordCount: 300);
         ConfigureAreaRegisters(bus, 0x0FCA);
         EnableBlitterDma(bus, nasty: true);
-        ConfigureCopperHaltList(bus);
+        ConfigureCopperWaitThenMove(bus);
         StartBlit(bus, widthWords: 32, height: 8);
 
         const long secondLineStart =
@@ -1051,17 +1059,18 @@ public sealed class AgnusLiveBlitterRequesterTests
                 access.Request.Requester == AmigaBusRequester.Copper &&
                 access.Request.Address == CopperList + 4);
         Assert.Equal(waitRestartSlot, firstMoveWord.RequestedCycle);
-        Assert.Equal(waitRestartSlot, firstMoveWord.GrantedCycle);
+        var dataSlot = waitRestartSlot + AgnusChipSlotScheduler.SlotCycles;
+        Assert.Equal(dataSlot, firstMoveWord.GrantedCycle);
         Assert.True(
             candidate.TryGetCommittedAgnusSlotOwner(
-                waitRestartSlot,
+                dataSlot,
                 out var waitRestartOwner));
         Assert.Equal(AgnusChipSlotOwner.Copper, waitRestartOwner);
         Assert.Contains(
             accesses,
             access =>
-                access.RequestedCycle == waitRestartSlot &&
-                access.GrantedCycle > waitRestartSlot);
+                access.RequestedCycle <= dataSlot &&
+                access.GrantedCycle > dataSlot);
         Assert.InRange(
             diagnostics.NastyGrants,
             1,
@@ -1203,6 +1212,8 @@ public sealed class AgnusLiveBlitterRequesterTests
                 access.GrantedCycle > finalBlitterDrain.GrantedCycle);
         Assert.Equal(
             expectedFetchCycle,
+            firstPostWaitFetch.RequestedCycle);
+        Assert.Equal(expectedFetchCycle + AgnusChipSlotScheduler.SlotCycles,
             firstPostWaitFetch.GrantedCycle);
         AssertNoCollidingPhysicalSlots(bus);
     }
@@ -1250,12 +1261,10 @@ public sealed class AgnusLiveBlitterRequesterTests
                 access.GrantedCycle < target.GrantedCycle)
             .Last();
 
-        // A taken short branch completes the queued fall-through fetch, spends
-        // one internal slot, and then publishes the target fetch. Measure from
-        // completion so the assertion does not count the fall-through bus slot
-        // itself as an additional internal slot.
+        // The 68000 fall-through fetch uses a four-clock CPU bus cycle.
+        // After the two internal branch clocks it publishes the target.
         Assert.Equal(
-            fallthrough.CompletedCycle + AgnusChipSlotScheduler.SlotCycles,
+            fallthrough.GrantedCycle + 4 + AgnusChipSlotScheduler.SlotCycles,
             target.Request.RequestedCycle);
         Assert.Equal(
             3 * AgnusChipSlotScheduler.SlotCycles,
@@ -1272,8 +1281,8 @@ public sealed class AgnusLiveBlitterRequesterTests
             initiallyNasty: true,
             toggleValue: 0x0400);
 
-        var requestedCycle = bus.Blitter.GetRawBusEligibilityCycle();
-        bus.WriteWord(0x00DFF180, 0x0123, requestedCycle);
+        var requestedCycle = 0x40L * AgnusChipSlotScheduler.SlotCycles;
+        bus.WriteWord(0x00DFF180, 0x0123, ref requestedCycle, AmigaBusAccessKind.CpuDataWrite);
 
         var toggleCycle = GetCustomWriteCycle(
             bus,
@@ -1661,16 +1670,15 @@ public sealed class AgnusLiveBlitterRequesterTests
         bus.WriteWord(0x00DFF096, 0x8280);
     }
 
-    private static void ConfigureCopperHaltList(AmigaBus bus)
+    private static void ConfigureCopperWaitThenMove(AmigaBus bus)
     {
-        BigEndian.WriteUInt16(
-            bus.ChipRam,
-            (int)CopperList,
-            0xFFFF);
-        BigEndian.WriteUInt16(
-            bus.ChipRam,
-            (int)CopperList + 2,
-            0xFFFE);
+        // Keep the Copper active after blitter startup.
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList, 0x0161);
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList + 2, 0xFFFE);
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList + 4, 0x0180);
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList + 6, 0x0FFF);
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList + 8, 0xFFFF);
+        BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList + 10, 0xFFFE);
         WritePointer(bus, 0x00DFF080, CopperList);
         bus.WriteWord(0x00DFF088, 0);
         bus.WriteWord(0x00DFF096, 0x8280);
@@ -1960,59 +1968,19 @@ public sealed class AgnusLiveBlitterRequesterTests
         return owners;
     }
 
-    private static long GetBOnlyInternalPauseDelay(AmigaBus bus)
-    {
-        var delay = 0L;
-        foreach (var access in BlitterAccesses(bus))
-        {
-            // The HRM/vAmiga B-only sequence is B,--,--. The two internal
-            // sequencer slots following each B read pause behind fixed DMA
-            // even though no memory transfer is pending in those slots.
-            var slotCycle = AgnusChipSlotScheduler.AlignToSlot(
-                access.CompletedCycle);
-            var phaseEnd =
-                access.CompletedCycle +
-                (2 * AgnusChipSlotScheduler.SlotCycles);
-            while (slotCycle < phaseEnd)
-            {
-                var paused =
-                    bus.IsMandatoryRefreshSlot(slotCycle) ||
-                    (bus.TryGetCommittedAgnusSlotOwner(
-                         slotCycle,
-                         out var owner) &&
-                     owner is AgnusChipSlotOwner.Copper or
-                         AgnusChipSlotOwner.Paula or
-                         AgnusChipSlotOwner.Disk or
-                         AgnusChipSlotOwner.Sprite or
-                         AgnusChipSlotOwner.Bitplane);
-                if (paused)
-                {
-                    phaseEnd += AgnusChipSlotScheduler.SlotCycles;
-                    delay += AgnusChipSlotScheduler.SlotCycles;
-                }
-
-                slotCycle += AgnusChipSlotScheduler.SlotCycles;
-            }
-        }
-
-        return delay;
-    }
-
     private static void AssertCompletionMatchesNominalAndDeniedSlots(
         AmigaBus bus,
-        long nominalCompletion,
-        long explainedInternalPause = 0)
+        long nominalCompletion)
     {
         var diagnostics = bus.AgnusLiveBlitterDiagnostics;
         var expected =
             nominalCompletion +
             (diagnostics.DeniedRequests *
-             AgnusChipSlotScheduler.SlotCycles) +
-            explainedInternalPause;
+             AgnusChipSlotScheduler.SlotCycles);
         Assert.True(
             expected == bus.Blitter.LastCompletionCycle,
             $"nominal={nominalCompletion}, denied={diagnostics.DeniedRequests}, " +
-            $"internalPause={explainedInternalPause}, expected={expected}, " +
+            $"expected={expected}, " +
             $"actual={bus.Blitter.LastCompletionCycle}, " +
             $"accesses=[{string.Join(",", BlitterSignature(bus))}]");
     }

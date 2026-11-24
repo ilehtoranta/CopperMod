@@ -111,7 +111,9 @@ public sealed class AgnusLiveCopperRequesterTests
                 (0x0180, 0x0111),
                 (0xFFFF, 0xFFFE));
             StartCopper(bus, CopperList1);
-            bus.AdvanceDmaTo(18);
+            bus.AdvanceDmaTo(4);
+            var fetched = Assert.Single(CopperReads(bus));
+            Assert.Equal(CopperList1, fetched.Request.Address);
             BigEndian.WriteUInt16(bus.ChipRam, (int)CopperList1 + 2, 0x0ABC);
             bus.AdvanceDmaTo(128);
         }
@@ -179,6 +181,11 @@ public sealed class AgnusLiveCopperRequesterTests
         StartCopper(bus, CopperList1);
         var predictedReadyCycle = bus.Blitter.GetPredictedCompletionCycle();
 
+        // The Copper may sleep until the predicted blitter edge, so a poll
+        // counter cannot establish whether BFD held back the interrupt.
+        bus.AdvanceDmaTo(predictedReadyCycle - 1);
+        Assert.DoesNotContain(bus.CustomRegisterWrites, write =>
+            write.Address == 0x09C && (write.Value & AmigaConstants.IntreqCopper) != 0);
         legacy.AdvanceDmaTo(
             predictedReadyCycle + AmigaConstants.A500PalCpuCyclesPerRasterLine);
         bus.AdvanceDmaTo(
@@ -193,16 +200,15 @@ public sealed class AgnusLiveCopperRequesterTests
         Assert.Equal(
             CopperReads(legacy).Select(access => access.Request.Address),
             CopperReads(bus).Select(access => access.Request.Address));
-        Assert.True(intreqWrite.Cycle < legacyIntreqWrite.Cycle);
+        Assert.Equal(legacyIntreqWrite.Cycle, intreqWrite.Cycle);
         Assert.Equal(legacy.Blitter.LastCompletionCycle, bus.Blitter.LastCompletionCycle);
         Assert.Equal(
             bus.Blitter.LastTerminationCycle + AgnusChipSlotScheduler.SlotCycles,
             bus.Blitter.LastCompletionCycle);
         Assert.Equal(
             bus.Blitter.LastTerminationCycle +
-                (4 * AgnusChipSlotScheduler.SlotCycles),
+                (6 * AgnusChipSlotScheduler.SlotCycles),
             intreqWrite.Cycle);
-        Assert.True(bus.AgnusLiveCopperDiagnostics.BfdBusyObservations > 0);
         Assert.Equal(0, bus.AgnusLiveCopperDiagnostics.BlitterSynchronizationCalls);
     }
 
@@ -211,10 +217,13 @@ public sealed class AgnusLiveCopperRequesterTests
     {
         var legacy = CreateBus(candidate: false);
         var candidate = CreateBus(candidate: true);
+        var uncontended = CreateBus(candidate: true);
+        ConfigureDisplayContentionFixture(uncontended, planeCount: 0);
         ConfigureDisplayContentionFixture(legacy);
         ConfigureDisplayContentionFixture(candidate);
         var target = 48L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
 
+        uncontended.AdvanceDmaTo(target);
         legacy.AdvanceDmaTo(target);
         candidate.AdvanceDmaTo(target);
 
@@ -223,7 +232,10 @@ public sealed class AgnusLiveCopperRequesterTests
         Assert.Equal(
             legacy.Display.CaptureSnapshot().BitplanePointers,
             candidate.Display.CaptureSnapshot().BitplanePointers);
-        Assert.True(candidate.AgnusLiveCopperDiagnostics.DeniedRequests > 0);
+        var lastOperand = CopperList1 + 8 * 4 + 2;
+        var fast = Assert.Single(CopperReads(uncontended), read => read.Request.Address == lastOperand);
+        var stalled = Assert.Single(CopperReads(candidate), read => read.Request.Address == lastOperand);
+        Assert.True(stalled.GrantedCycle > fast.GrantedCycle);
     }
 
     [Fact]
@@ -293,9 +305,10 @@ public sealed class AgnusLiveCopperRequesterTests
             .OrderBy(access => access.GrantedCycle)
             .ToArray();
         Assert.Equal(2, postWaitFetches.Length);
-        Assert.Equal(targetCycle, postWaitFetches[0].GrantedCycle);
+        Assert.Equal(targetCycle, postWaitFetches[0].RequestedCycle);
+        Assert.Equal(targetCycle + AmigaConstants.A500PalCpuCyclesPerColorClock, postWaitFetches[0].GrantedCycle);
         Assert.Equal(
-            targetCycle + (2L * AmigaConstants.A500PalCpuCyclesPerColorClock),
+            targetCycle + (3L * AmigaConstants.A500PalCpuCyclesPerColorClock),
             postWaitFetches[1].GrantedCycle);
         var paletteTransition = Assert.Single(
             bus.Display.CopperPresentationTransitions,
@@ -460,7 +473,7 @@ public sealed class AgnusLiveCopperRequesterTests
             (ushort)(0x8000 | 0x4000 | AmigaConstants.IntreqCopper));
     }
 
-    private static void ConfigureDisplayContentionFixture(AmigaBus bus)
+    private static void ConfigureDisplayContentionFixture(AmigaBus bus, int planeCount = 6)
     {
         for (var offset = 0; offset < 2048; offset += 2)
         {
@@ -473,7 +486,7 @@ public sealed class AgnusLiveCopperRequesterTests
         WriteCopperList(
             bus,
             CopperList1,
-            (0x2C01, 0xFFFE),
+            (0x2C39, 0xFFFE),
             (0x0180, 0x0001),
             (0x0180, 0x0002),
             (0x0180, 0x0003),
@@ -490,7 +503,7 @@ public sealed class AgnusLiveCopperRequesterTests
         bus.WriteWord(0x00DFF094, 0x00D0);
         bus.WriteWord(0x00DFF0E0, 0x0000);
         bus.WriteWord(0x00DFF0E2, 0x4000);
-        bus.WriteWord(0x00DFF100, 0x1000);
+        bus.WriteWord(0x00DFF100, (ushort)(planeCount << 12));
         bus.WriteWord(0x00DFF096, 0x8380);
         bus.WriteWord(0x00DFF088, 0x0000);
         bus.EnableLiveAgnusDma();
