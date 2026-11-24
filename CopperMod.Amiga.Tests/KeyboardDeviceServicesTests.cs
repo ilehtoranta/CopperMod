@@ -287,15 +287,7 @@ public sealed class KeyboardDeviceServicesTests
     }
 
     private static ExecMemoryContext CreateMemory(AmigaBus bus, Func<uint>? getCurrentTask = null)
-        => new(bus, (bytes, flags) =>
-        {
-            const uint allocation = 0x4000;
-            if ((flags & (uint)global::Amiga.Exec.MemoryFlags.Clear) != 0)
-                bus.ClearMemory(allocation, bytes);
-            return allocation;
-        }, (_, _) => 0, (_, _) => { }, _ => 0, (_, _, _) => 0,
-            (_, _, _) => { }, _ => 0, (_, _, _) => { }, (_, _, _) => { }, (_, _) => { },
-            getExecBase: () => ExecBase, getCurrentTask: getCurrentTask ?? (() => 0));
+        => HostDeviceTestMemory.Create(bus, ExecBase, getCurrentTask);
 
     private static AmigaBus CreateBus() => new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithLiveAgnusDma(false)).Bus;
 

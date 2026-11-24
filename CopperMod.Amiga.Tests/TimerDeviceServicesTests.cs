@@ -23,7 +23,7 @@ public sealed class TimerDeviceServicesTests
         InitializeLiveTimerDevice(bus);
         var ciaA = bus.ReadByte(0x00BFE001);
         var ciaB = bus.ReadByte(0x00BFD000);
-        using var service = new TimerDeviceServices(bus, replies.Add, _ => { });
+        using var service = new TimerDeviceServices(bus, HostDeviceTestMemory.Create(bus, ExecBase), replies.Add, _ => { });
         Assert.True(service.TryInstall(ExecBase));
         Assert.True(bus.HasHostGateway(Device - 30));
 
@@ -65,7 +65,7 @@ public sealed class TimerDeviceServicesTests
         var bus = machine.Bus;
         var replies = new List<uint>();
         InitializeLiveTimerDevice(bus);
-        using var service = new TimerDeviceServices(bus, replies.Add, _ => { });
+        using var service = new TimerDeviceServices(bus, HostDeviceTestMemory.Create(bus, ExecBase), replies.Add, _ => { });
         Assert.True(service.TryInstall(ExecBase));
         Open(bus, service, unit: 0);
         bus.WriteWord(Request + 0x1C, 9);
@@ -90,7 +90,7 @@ public sealed class TimerDeviceServicesTests
         var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500PlusEcsPal).WithLiveAgnusDma(false));
         var bus = machine.Bus;
         InitializeLiveTimerDevice(bus);
-        using var service = new TimerDeviceServices(bus, _ => { }, _ => { });
+        using var service = new TimerDeviceServices(bus, HostDeviceTestMemory.Create(bus, ExecBase), _ => { }, _ => { });
         Assert.True(service.TryInstall(ExecBase));
         Open(bus, service, unit: 1);
         var cycle = 0L;
@@ -112,7 +112,7 @@ public sealed class TimerDeviceServicesTests
         var machine = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithLiveAgnusDma(false));
         var bus = machine.Bus;
         InitializeLiveTimerDevice(bus);
-        using var service = new TimerDeviceServices(bus, _ => { }, _ => { });
+        using var service = new TimerDeviceServices(bus, HostDeviceTestMemory.Create(bus, ExecBase), _ => { }, _ => { });
         Assert.True(service.TryInstall(ExecBase));
         Open(bus, service, unit: 3);
         var state = new M68kCpuState { Cycles = bus.RasterTiming.CpuClockHz };
@@ -151,7 +151,7 @@ public sealed class TimerDeviceServicesTests
         var machine = new Machine(options.WithLiveAgnusDma(false));
         var bus = machine.Bus;
         InitializeLiveTimerDevice(bus);
-        using var service = new TimerDeviceServices(bus, _ => { }, _ => { });
+        using var service = new TimerDeviceServices(bus, HostDeviceTestMemory.Create(bus, ExecBase), _ => { }, _ => { });
         Assert.True(service.TryInstall(ExecBase));
         Open(bus, service, unit: 1);
         bus.WriteWord(Request + 0x1C, 9);
@@ -166,7 +166,7 @@ public sealed class TimerDeviceServicesTests
 
         state.A[0] = EClock;
         state.Cycles = bus.RasterTiming.CpuClockHz;
-        Assert.True(Invoke(bus, Device - 42, state));
+        Assert.True(Invoke(bus, (uint)((int)Device + global::Amiga.TimerDevice.ReadEClockLvo), state));
         Assert.Equal((uint)(bus.RasterTiming.CpuClockHz / 10), state.D[0]);
         Assert.Equal((uint)(bus.RasterTiming.CpuClockHz / 10), bus.ReadLong(EClock + 4));
     }

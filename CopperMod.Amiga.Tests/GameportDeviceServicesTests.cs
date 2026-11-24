@@ -15,7 +15,7 @@ public sealed class GameportDeviceServicesTests
         var bus = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithLiveAgnusDma(false)).Bus;
         InitializeDevice(bus);
         var replies = new List<uint>();
-        using var service = new GameportDeviceServices(bus, replies.Add);
+        using var service = new GameportDeviceServices(bus, HostDeviceTestMemory.Create(bus, ExecBase), replies.Add);
         Assert.True(service.TryInstall(ExecBase));
         Assert.True(bus.HasHostGateway(Device - 30));
 
@@ -82,7 +82,7 @@ public sealed class GameportDeviceServicesTests
         var bus = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithLiveAgnusDma(false)).Bus;
         InitializeDevice(bus);
         var replies = new List<uint>();
-        using var service = new GameportDeviceServices(bus, replies.Add);
+        using var service = new GameportDeviceServices(bus, HostDeviceTestMemory.Create(bus, ExecBase), replies.Add);
         Assert.True(service.TryInstall(ExecBase));
 
         var state = new M68kCpuState { Cycles = 10 };
