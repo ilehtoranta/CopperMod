@@ -199,7 +199,7 @@ namespace CopperMod.Amiga.Bus
                 $"The live Paula requester did not settle slot {slotCycle} within 16 transitions.");
         }
 
-        internal bool TryCommitDisplayBeforePaula(long paulaCycle)
+        internal bool TryCommitDisplayThrough(long lastCycle)
         {
             // Display preparation can itself poll fixed requesters. Its caller
             // owns that display transition until it returns.
@@ -209,8 +209,7 @@ namespace CopperMod.Amiga.Bus
             }
 
             var displayCycle = Display.GetNextLiveAgnusSlotKernelCycle();
-            // Paula retains priority at her own fixed slot.
-            if (displayCycle >= paulaCycle ||
+            if (displayCycle == long.MaxValue || displayCycle > lastCycle ||
                 !Display.TryCommitNextLiveSlotKernelTransition(displayCycle))
             {
                 return false;

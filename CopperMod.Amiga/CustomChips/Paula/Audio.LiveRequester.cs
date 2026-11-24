@@ -219,7 +219,8 @@ namespace CopperMod.Amiga.CustomChips.Paula
                 // between CPU grants. Interleave earlier display transitions
                 // before stepping Paula. A Copper write can change the audio
                 // deadline, so sample it again after each display transition.
-                if (_bus.TryCommitDisplayBeforePaula(beforeCycle))
+                // Paula retains priority on her own fixed slot.
+                if (_bus.TryCommitDisplayThrough(beforeCycle - 1))
                 {
                     continue;
                 }

@@ -199,7 +199,7 @@ namespace CopperMod.Amiga.CustomChips.Blitter
         {
             var requester = RequireLiveBlitterRequester();
             EnsureLiveBlitterRequesterPublication(requester);
-            if (requester.TryPeekPendingRequest(out var request))
+            while (requester.TryPeekPendingRequest(out var request))
             {
                 var completionCycle =
                     GetPendingLiveAreaFinalDCompletionCycle(request);
@@ -235,6 +235,20 @@ namespace CopperMod.Amiga.CustomChips.Blitter
                         PublishLiveBlitterWakeChange();
                         return;
                     }
+                }
+
+                // An instruction can advance the blitter between CPU Chip accesses.
+                // Publish display inputs and retire their outputs before selecting
+                // this word. A Copper MOVE may change the blit or disable DMA.
+                if (_bus.TryCommitDisplayThrough(causalEligibleCycle))
+                {
+                    if (!_busy || !IsBlitterDmaEnabled())
+                    {
+                        return;
+                    }
+
+                    EnsureLiveBlitterRequesterPublication(requester);
+                    continue;
                 }
 
                 if (!_bus.TryCommitLiveBlitterRequest(

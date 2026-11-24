@@ -18,6 +18,39 @@ public sealed class AgnusLiveBlitterRequesterTests
     private const uint DestinationD = 0x3800;
     private const uint CopperList = 0x2400;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PalBlitterCannotPassDisplayFetchBetweenCpuAccesses(bool inputAlreadyAccepted)
+    {
+        var bus = new AmigaBus(agnusBusArbitration: AgnusBusArbitrationMode.SlotKernel,
+            enableAgnusLiveDisplayLedger: true, enableAgnusLiveCopper: true,
+            enableAgnusLiveBlitter: true, enableAgnusLivePaula: true, enableAgnusLiveDisk: true);
+        const long input = 0x2c * AmigaConstants.A500PalCpuCyclesPerRasterLine + 2 * (0x38 + 7);
+        bus.WriteWord(0xdff092, 0x0038);
+        bus.WriteWord(0xdff094, 0x0038);
+        bus.WriteWord(0xdff0e2, 0x1000);
+        bus.WriteWord(0xdff100, 0x1000);
+        bus.WriteWord(0xdff096, 0x8300);
+        ConfigureChannelFixture(bus, channelMask: 9, startCycle: input);
+        bus.EnableLiveAgnusDma();
+        bus.Display.AdvanceLiveDmaTo(inputAlreadyAccepted ? input : input - 2);
+
+        // Run one CPU instruction boundary without an intervening Chip access.
+        // Its blitter words span both the address and data phases of the fetch.
+        bus.AdvanceHardwareEventsTo(input + 24);
+        var fetch = input + 26;
+        bus.ReadWord(0x6000, ref fetch, AmigaBusAccessKind.CpuInstructionFetch);
+
+        var transfers = bus.BusAccesses.Where(a => a.Request.Requester is
+            AmigaBusRequester.Bitplane or AmigaBusRequester.Blitter).ToArray();
+        Assert.Equal(AmigaBusRequester.Bitplane, transfers[0].Request.Requester);
+        Assert.Equal(0x1000u, transfers[0].Request.Address);
+        Assert.Equal(input + 2, transfers[0].GrantedCycle);
+        Assert.Contains(transfers, a => a.Request.Requester == AmigaBusRequester.Blitter &&
+            a.GrantedCycle > input + 2);
+    }
+
     [Fact]
     public void CandidateIsExplicitlyOptInAndRequiresAcceptedEarlierLiveStages()
     {
