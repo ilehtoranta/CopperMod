@@ -109,7 +109,7 @@ namespace Copper68k
             var mode = (opcode >> 3) & 7; var register = opcode & 7;
             var memorySource = mode is >= 2 and <= 6 || (mode == 7 && register < 4);
             if (memorySource && (extension & 0xE000) == 0x4000 && (extension & 0xFC00) != 0x5C00 &&
-                M68040FpuHelpers.IsRecognizedUnimplementedOperation(extension & 0x007F))
+                M68040FpuHelpers.IsRecognizedUnimplementedOperation(extension & 0x007F, supportsIntegerRounding: true))
             {
                 // The format-2 frame carries the effective address. The guest
                 // handler reads the operand and applies any address writeback.
@@ -126,17 +126,10 @@ namespace Copper68k
                 (extension & 0xE000) == 0x8000 && System.Numerics.BitOperations.PopCount((uint)(extension & 0x1C00)) > 1);
             if (dynamicList || unimplementedImmediate)
             {
-                uint ea = 0;
-                if (immediate)
-                {
-                    var bytes = (extension & 0x8000) != 0
-                        ? 4 * System.Numerics.BitOperations.PopCount((uint)(extension & 0x1C00))
-                        : (int)FpuFormatByteSize((extension >> 10) & 7);
-                    for (var offset = 0; offset < bytes; offset += 2) _ = FetchWord();
-                }
-                else if (mode >= 2) ea = DecodeFpuTrapAddress(mode, register, 12);
-                State.M68040Fpu.Fpiar = State.LastInstructionProgramCounter;
-                RaiseFpuFormatException(2, 11, State.ProgramCounter, ea); return true;
+                // MC68060UM 6.5.3: the software package decodes the
+                // instruction and its operands from the faulting PC.
+                RaiseFormat0Exception(60, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
+                return true;
             }
             return base.ExecuteFpuCommand(opcode, extension, useFastTiming);
         }

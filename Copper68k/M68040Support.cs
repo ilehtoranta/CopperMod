@@ -511,9 +511,9 @@ namespace Copper68k
         public static bool IsRegisterOperationCommand(ushort extension)
             => (extension & 0xE000) == 0 && IsSupportedOperation(extension & 0x007F);
 
-        public static bool IsRecognizedUnimplementedOperation(int opmode)
-            => opmode is
-                0x01 or 0x02 or 0x03 or 0x06 or 0x08 or 0x09 or 0x0A or 0x0C or 0x0D or 0x0E or 0x0F or
+        public static bool IsRecognizedUnimplementedOperation(int opmode, bool supportsIntegerRounding = false)
+            => (!supportsIntegerRounding && opmode is (0x01 or 0x03)) || opmode is
+                0x02 or 0x06 or 0x08 or 0x09 or 0x0A or 0x0C or 0x0D or 0x0E or 0x0F or
                 0x10 or 0x11 or 0x12 or 0x14 or 0x15 or 0x16 or 0x19 or 0x1C or 0x1D or 0x1E or 0x1F or
                 0x21 or 0x25 or 0x26 or
                 >= 0x30 and <= 0x37;
@@ -526,7 +526,7 @@ namespace Copper68k
         {
             return opmode switch
             {
-                0x00 or 0x40 or 0x44 => M68kInstructionTimingKey.FpuMove,
+                0x00 or 0x01 or 0x03 or 0x40 or 0x44 => M68kInstructionTimingKey.FpuMove,
                 0x04 or 0x41 or 0x45 => M68kInstructionTimingKey.FpuSquareRoot,
                 0x18 or 0x58 or 0x5C => M68kInstructionTimingKey.FpuAbsolute,
                 0x1A or 0x5A or 0x5E => M68kInstructionTimingKey.FpuNegate,
@@ -815,9 +815,10 @@ namespace Copper68k
             int opmode,
             ExtF80 source,
             FloatingPointExceptionFlags sourceFlags = FloatingPointExceptionFlags.None,
-            bool unsupportedSource = false)
+            bool unsupportedSource = false,
+            bool supportsIntegerRounding = false)
         {
-            if (!IsSupportedOperation(opmode))
+            if (!IsSupportedOperation(opmode) && !(supportsIntegerRounding && opmode is (0x01 or 0x03)))
             {
                 return M68040FpuExecutionResult.Unsupported;
             }
@@ -1229,6 +1230,7 @@ namespace Copper68k
             var operation = opmode switch
             {
                 0x00 or 0x40 or 0x44 => ExtF80Math.Round(source, context),
+                0x01 or 0x03 => ExtF80Math.RoundToInteger(source, context),
                 0x04 or 0x41 or 0x45 => ExtF80Math.SquareRoot(source, context),
                 0x18 or 0x58 or 0x5C => RoundUnary(ExtF80Math.Absolute(source), context),
                 0x1A or 0x5A or 0x5E => RoundUnary(ExtF80Math.Negate(source), context),
@@ -1298,6 +1300,7 @@ namespace Copper68k
             var operation = opmode switch
             {
                 0x00 or 0x40 or 0x44 => ExtF80Math.Round(source, context),
+                0x01 or 0x03 => ExtF80Math.RoundToInteger(source, context),
                 0x04 or 0x41 or 0x45 => ExtF80Math.SquareRoot(source, context),
                 0x18 or 0x58 or 0x5C => RoundUnary(ExtF80Math.Absolute(source), context),
                 0x1A or 0x5A or 0x5E => RoundUnary(ExtF80Math.Negate(source), context),
@@ -1352,11 +1355,12 @@ namespace Copper68k
             M68040FpuState fpu,
             ExtF80 value,
             FloatingPointExceptionFlags flags,
-            int format)
+            int format,
+            bool forceIntegerOperandError = true)
         {
             var integerDestination = format is 0 or 4 or 6;
             var signalingNan = value.Classification == ExtF80Class.SignalingNaN;
-            var forcedOperandError = integerDestination &&
+            var forcedOperandError = forceIntegerOperandError && integerDestination &&
                 (((flags & FloatingPointExceptionFlags.Invalid) != 0) || IsErroneousMinimumInteger(value, format));
             var vector = fpu.ApplyExceptions(
                 forcedOperandError ? flags | FloatingPointExceptionFlags.Invalid : flags,
@@ -1438,6 +1442,11 @@ namespace Copper68k
 
         private static ExtF80Context OperationContext(ExtF80Context context, int opmode)
         {
+            if (opmode == 0x01)
+                return context with { Precision = ExtF80Precision.Extended };
+            if (opmode == 0x03)
+                return context with { Precision = ExtF80Precision.Extended, RoundingMode = ExtF80RoundingMode.TowardZero };
+
             if (opmode is 0x40 or 0x41 or 0x58 or 0x5A or 0x60 or 0x62 or 0x63 or 0x68 or 0x24 or 0x27)
             {
                 return context with { Precision = ExtF80Precision.Single };
@@ -1465,7 +1474,7 @@ namespace Copper68k
             FloatingPointResult<ExtF80> result)
         {
             if (source.BiasedExponent != 0x7fff ||
-                opmode is not (0x00 or 0x40 or 0x44 or 0x18 or 0x58 or 0x5C or 0x1A or 0x5A or 0x5E))
+                opmode is not (0x00 or 0x01 or 0x03 or 0x40 or 0x44 or 0x18 or 0x58 or 0x5C or 0x1A or 0x5A or 0x5E))
             {
                 return result;
             }
@@ -2874,7 +2883,9 @@ namespace Copper68k
                         FloatingPointExceptionFlags.None)
                     : ReadFpuEa(opcode, (extension >> 10) & 7);
             var previousDestination = State.M68040Fpu.FP[destination];
-            if ((extension & 0xFC00) == 0x5C00 || M68040FpuHelpers.IsRecognizedUnimplementedOperation(opmode))
+            var supportsIntegerRounding = _profile.Model == M68kAcceleratorModel.M68060;
+            if ((extension & 0xFC00) == 0x5C00 ||
+                M68040FpuHelpers.IsRecognizedUnimplementedOperation(opmode, supportsIntegerRounding))
             {
                 State.M68040Fpu.Fpiar = State.LastInstructionProgramCounter;
                 State.M68040Fpu.PrepareUnimplementedInstruction(
@@ -2892,7 +2903,8 @@ namespace Copper68k
                 opmode,
                 source.Value,
                 source.Flags,
-                source.Unsupported);
+                source.Unsupported,
+                supportsIntegerRounding);
             if (!execution.Supported)
             {
                 RaiseFormat0Exception(VectorLineF, State.LastInstructionProgramCounter, M68kInstructionTimingKey.LineFException);
@@ -3812,7 +3824,11 @@ namespace Copper68k
         }
 
         private int ApplyFpuDestinationExceptions(ExtF80 value, FloatingPointExceptionFlags flags, int format)
-            => M68040FpuHelpers.ApplyDestinationExceptions(State.M68040Fpu, value, flags, format);
+            // MC68060UM 6.6.3: integer FMOVE OUT accepts the signed minimum
+            // and takes an operand-error trap only when FPCR.OPERR is set.
+            => M68040FpuHelpers.ApplyDestinationExceptions(
+                State.M68040Fpu, value, flags, format,
+                forceIntegerOperandError: _profile.Model != M68kAcceleratorModel.M68060);
 
         private static M68040FpuOperand ExactFpuOperand(ExtF80 value, uint effectiveAddress = 0)
             => new(

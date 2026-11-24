@@ -6,6 +6,100 @@ namespace Copper68k.Tests;
 
 public sealed class M68060InterpreterTests
 {
+    [Theory]
+    [InlineData(-128, 0x80, true, false)]
+    [InlineData(-129, 0x80, false, true)]
+    [InlineData(128, 0x7F, false, true)]
+    [InlineData(128, 0x7F, true, true)]
+    public void FmoveBytePostincrementRespectsOperandErrorEnable(
+        int source, byte expected, bool enableTrap, bool operandError)
+    {
+        const int code = 0x1000;
+        const int handler = 0x4000;
+        const int destination = 0x5000;
+        const int stack = 0x7000;
+        var bus = new Copper68kTestBus(0x10000);
+        bus.WriteWords(code, 0xF218, 0x7880); // FMOVE.B FP1,(A0)+
+        bus.WriteLong(52 * 4, handler);
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
+        cpu.Reset(code, stack);
+        cpu.State.A[0] = destination;
+        var fpu = cpu.State.M68040Fpu;
+        fpu.FP[1] = ExtF80Math.FromInt32(source);
+        fpu.Fpcr = enableTrap ? M68040FpuState.ExceptionOperandError : 0;
+
+        cpu.ExecuteInstruction();
+
+        var traps = enableTrap && operandError;
+        Assert.Equal(expected, bus.Memory[destination]);
+        Assert.Equal(destination + 1u, cpu.State.A[0]);
+        Assert.Equal(operandError, (fpu.Fpsr & M68040FpuState.ExceptionOperandError) != 0);
+        Assert.Equal(operandError, (fpu.Fpsr & M68040FpuState.AccruedInvalid) != 0);
+        Assert.Equal(traps ? 52 : -1, cpu.State.LastExceptionVector);
+        Assert.Equal(traps ? (uint)handler : code + 4u, cpu.State.ProgramCounter);
+        Assert.Equal(traps ? stack - 12u : (uint)stack, cpu.State.A[7]);
+        if (traps)
+        {
+            Assert.Equal(code + 4u, bus.ReadLong(stack - 10u));
+            Assert.Equal(0x30D0, bus.ReadWord(stack - 6u));
+            Assert.Equal((uint)destination, bus.ReadLong(stack - 4u));
+        }
+    }
+
+    [Theory]
+    [InlineData(0xF200, 0x0081, 1, -3)] // FINT.X FP0,FP1
+    [InlineData(0xF200, 0x0083, 1, -2)] // FINTRZ.X FP0,FP1
+    [InlineData(0xF210, 0x4803, 0, -2)] // FINTRZ.X (A0),FP0
+    public void IntegerRoundingExecutesNatively(int opcode, int extension, int destination, int expected)
+    {
+        var bus = new Copper68kTestBus(0x10000);
+        bus.WriteWords(0x1000, (ushort)opcode, (ushort)extension);
+        bus.WriteLong(11 * 4, 0x4000);
+        bus.WriteLong(0x5000, 0xC000_0000);
+        bus.WriteLong(0x5004, 0xB000_0000); // -2.75 in extended precision
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
+        cpu.Reset(0x1000, 0x7000);
+        cpu.State.A[0] = 0x5000;
+        var fpu = cpu.State.M68040Fpu;
+        fpu.FP[0] = ExtF80.FromBits(0xC000, 0xB000_0000_0000_0000);
+        fpu.Fpcr = 0x60; // Single precision, round toward negative infinity.
+
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(-1, cpu.State.LastExceptionVector);
+        Assert.Equal(0x1004u, cpu.State.ProgramCounter);
+        Assert.Equal(0x7000u, cpu.State.A[7]);
+        Assert.Equal(0x1000u, fpu.Fpiar);
+        Assert.Equal(ExtF80Math.FromInt32(expected), fpu.FP[destination]);
+        Assert.Equal(M68040FpuState.ExceptionInexact2, fpu.Fpsr & 0xFF00);
+    }
+
+    [Theory]
+    [InlineData(0xF23C, 0x4823)] // FMUL.X #immediate,FP0
+    [InlineData(0xF23C, 0x4C23)] // FMUL.P #immediate,FP0
+    [InlineData(0xF23C, 0x9800)] // FMOVEM.L #immediate,FPCR/FPSR
+    [InlineData(0xF218, 0xD800)] // FMOVEM.X (A0)+,D0 (dynamic list)
+    public void UnimplementedFpuEffectiveAddressStacksFaultingPc(int opcode, int extension)
+    {
+        var bus = new SparseRecordingBus();
+        bus.Initialize(0x1000, (uint)opcode, 2);
+        bus.Initialize(0x1002, (uint)extension, 2);
+        bus.Initialize(60 * 4, 0x4000, 4);
+        using var cpu = M68kCoreFactory.Default.Create(M68kCpuModel.M68060, bus);
+        cpu.Reset(0x1000, 0x7000);
+        cpu.State.A[0] = 0x5000;
+
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(60, cpu.State.LastExceptionVector);
+        Assert.Equal(0x4000u, cpu.State.ProgramCounter);
+        Assert.Equal(0x6FF8u, cpu.State.A[7]);
+        Assert.Equal(0x1000u, bus.Peek(0x6FFA, 4));
+        Assert.Equal(60u * 4, bus.Peek(0x6FFE, 2));
+        Assert.Equal(0x5000u, cpu.State.A[0]);
+        Assert.DoesNotContain(bus.Accesses, access => !access.Write && access.Address == 0x5000);
+    }
+
     [Fact]
     public void ArithmeticExceptionIsDeferredUntilNextFpuInstructionAndFsaveClearsIt()
     {
