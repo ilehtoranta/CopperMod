@@ -1221,14 +1221,14 @@ namespace Copper68k
                 return 0;
             }
 
-            if (!CanUseJitForCurrentCacheState())
+            var pc = Normalize(State.ProgramCounter);
+            if (!CanUseJitForCacheState(pc, out var addressEligibilityChecked))
             {
                 _pendingFallbackReason = M68kJitFallbackReason.CacheState;
                 return 0;
             }
 
-            var pc = Normalize(State.ProgramCounter);
-            if (_amigaBus != null && !IsJitEligibleInstructionAddress(pc))
+            if (!addressEligibilityChecked && _amigaBus != null && !IsJitEligibleInstructionAddress(pc))
             {
                 RemoveTrace(pc);
                 _pendingFallbackReason = M68kJitFallbackReason.IneligibleAddress;
@@ -16067,7 +16067,11 @@ namespace Copper68k
             => CanUseJitForCacheState(Normalize(State.ProgramCounter));
 
         private bool CanUseJitForCacheState(uint root)
+            => CanUseJitForCacheState(root, out _);
+
+        private bool CanUseJitForCacheState(uint root, out bool addressEligibilityChecked)
         {
+            addressEligibilityChecked = false;
             if (_cpuModel != M68kJitCpuModel.M68040)
             {
                 return true;
@@ -16085,16 +16089,21 @@ namespace Copper68k
                 return false;
             }
 
-            return InstructionCacheEnabled ||
-                (_uncachedFastRamTraces && State.M68040Mmu.DirectIdentityAccessEnabled && IsUncachedFastCode(root))
-                ? _amigaBus.IsJitCodeAddress(
-                    physical,
-                    byteCount: 2,
-                    M68kBusAccessKind.CpuInstructionFetch)
-                : _amigaBus.IsJitReadOnlyCodeAddress(
+            if (InstructionCacheEnabled ||
+                (_uncachedFastRamTraces && State.M68040Mmu.DirectIdentityAccessEnabled && IsUncachedFastCode(root)))
+            {
+                // The dispatch eligibility check would query this same physical word.
+                addressEligibilityChecked = true;
+                return _amigaBus.IsJitCodeAddress(
                     physical,
                     byteCount: 2,
                     M68kBusAccessKind.CpuInstructionFetch);
+            }
+
+            return _amigaBus.IsJitReadOnlyCodeAddress(
+                physical,
+                byteCount: 2,
+                M68kBusAccessKind.CpuInstructionFetch);
         }
 
         private static uint Normalize(uint address)
