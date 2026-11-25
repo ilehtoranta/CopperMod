@@ -291,26 +291,13 @@ public sealed class CpuEventJournalTests
 	[Fact]
 	public void OverlappingSecondWriteFlushesFirstBeforeWritingScalar()
 	{
-		const uint romBase = 0x00FC0000;
-		var rom = new byte[256];
-		for (var offset = 0; offset < rom.Length; offset += 2)
-		{
-			rom[offset] = 0x4E;
-			rom[offset + 1] = 0x71;
-		}
-
-		new byte[] { 0x33, 0xFC, 0x11, 0x11, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 4);
-		new byte[] { 0x33, 0xFC, 0x22, 0x22, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 12);
-		var bus = new AmigaBus(
-			captureBusAccesses: false,
-			enableDeferredCpuBusBatch: true,
-			enableDeferredCpuChipWriteJournal: true);
-		bus.MapReadOnlyMemory(romBase, rom);
-		var cpu = M68kCoreFactory.CreateM68000Core(
-			bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
-		cpu.Reset(romBase, 0x4000);
-
-		cpu.ExecuteInstructions(8, null, JournalTestBoundary.Instance);
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true, enableDeferredCpuChipWriteJournal: true);
+		var state = new M68kCpuState { ProgramCounter = 0x00FC0000 };
+		var cycle = 0L;
+		BeginChipWriteBatch(bus, state, cycle);
+		bus.WriteWord(0x1000, 0x1111, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+		Assert.Equal(1, bus.CausalBusExecutor.CpuEventJournal.Count);
+		bus.WriteWord(0x1000, 0x2222, ref cycle, AmigaBusAccessKind.CpuDataWrite);
 
 		Assert.Equal((ushort)0x2222, bus.ReadWord(0x1000));
 		Assert.Equal(1, bus.CausalBusExecutor.CpuEventJournal.EnqueuedEvents);
@@ -405,32 +392,24 @@ public sealed class CpuEventJournalTests
 	[Fact]
 	public void IntegratedRingFullBarrierFlushesThenFallsBackWithoutAllocation()
 	{
-		const uint romBase = 0x00FC0000;
-		var rom = CreateNopRom(256);
-		new byte[] { 0x33, 0xFC, 0x11, 0x11, 0x00, 0x00, 0x10, 0x00 }.CopyTo(rom, 4);
-		new byte[] { 0x33, 0xFC, 0x22, 0x22, 0x00, 0x00, 0x10, 0x02 }.CopyTo(rom, 12);
-		new byte[] { 0x33, 0xFC, 0x33, 0x33, 0x00, 0x00, 0x10, 0x04 }.CopyTo(rom, 20);
-		var bus = new AmigaBus(
-			captureBusAccesses: false,
-			enableDeferredCpuBusBatch: true,
-			cpuEventJournalCapacity: 2,
-			enableDeferredCpuChipWriteJournal: true);
-		bus.MapReadOnlyMemory(romBase, rom);
-		var cpu = M68kCoreFactory.CreateM68000Core(
-			bus, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
-		cpu.Reset(romBase, 0x4000);
-		cpu.ExecuteInstructions(8, null, JournalTestBoundary.Instance);
-		cpu.Reset(romBase, 0x4000);
-
-		var before = GC.GetAllocatedBytesForCurrentThread();
-		cpu.ExecuteInstructions(8, null, JournalTestBoundary.Instance);
-		var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-		Assert.Equal(0, allocated);
+		var bus = new AmigaBus(captureBusAccesses: false, enableDeferredCpuBusBatch: true,
+			cpuEventJournalCapacity: 2, enableDeferredCpuChipWriteJournal: true);
+		var state = new M68kCpuState { ProgramCounter = 0x00FC0000 };
+		var cycle = 0L;
+		for (var pass = 0; pass < 2; pass++)
+		{
+			BeginChipWriteBatch(bus, state, cycle);
+			var before = GC.GetAllocatedBytesForCurrentThread();
+			bus.WriteWord(0x1000, 0x1111, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+			bus.WriteWord(0x1002, 0x2222, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+			bus.WriteWord(0x1004, 0x3333, ref cycle, AmigaBusAccessKind.CpuDataWrite);
+			var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+			if (pass == 1) Assert.Equal(0, allocated);
+		}
 		Assert.Equal((ushort)0x1111, bus.ReadWord(0x1000));
 		Assert.Equal((ushort)0x2222, bus.ReadWord(0x1002));
 		Assert.Equal((ushort)0x3333, bus.ReadWord(0x1004));
-		Assert.True(bus.CausalBusExecutor.CpuEventJournal.FullBarriers >= 2);
+		Assert.Equal(2, bus.CausalBusExecutor.CpuEventJournal.FullBarriers);
 		Assert.Equal(0, bus.CausalBusExecutor.CpuEventJournal.Count);
 	}
 
@@ -647,6 +626,14 @@ public sealed class CpuEventJournalTests
 		Assert.Equal(scalarWrite.Value, journaledWrite.Value);
 		Assert.Equal(1, journaled.CausalBusExecutor.CpuEventJournal.CommittedEvents);
 		Assert.Equal(0, journaled.CausalBusExecutor.CpuEventJournal.Count);
+	}
+
+	private static void BeginChipWriteBatch(AmigaBus bus, M68kCpuState state, long cycle)
+	{
+		var timing = (IM68kDeferredCpuInstructionTiming)bus;
+		Assert.True(timing.TryBeginDeferredCpuBusBatch(state, cycle, cycle + 128,
+			false, state.ProgramCounter, cycle, out _, out _));
+		timing.BeginDeferredCpuBusBatchExecution();
 	}
 
 	private static byte[] CreateNopRom(int byteCount)

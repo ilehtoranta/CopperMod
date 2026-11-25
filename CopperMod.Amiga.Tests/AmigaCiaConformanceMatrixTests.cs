@@ -229,20 +229,14 @@ public sealed class AmigaCiaConformanceMatrixTests
         bus.WriteByte(0x00BFDE00, 0x11, 0);
 
         var cycle = 20L;
-        Assert.Equal(0x03, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
+        Assert.Equal(0x01, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
         Assert.Equal(30, cycle);
-
-        bus.AdvanceCiaTimersTo(20);
-        cycle = 20L;
-        Assert.Equal(0x02, bus.ReadByte(0x00BFD400, ref cycle, AmigaBusAccessKind.CpuDataRead));
-
-        cycle = 30L;
         Assert.Equal(0x00, bus.ReadByte(0x00BFDD00, ref cycle, AmigaBusAccessKind.CpuDataRead));
         Assert.Equal(40, cycle);
-
-        bus.AdvanceCiaTimersTo(40);
-        cycle = 30L;
+        bus.AdvanceCiaTimersTo(cycle);
         Assert.Equal(0x81, bus.ReadByte(0x00BFDD00, ref cycle, AmigaBusAccessKind.CpuDataRead));
+        Assert.Equal(50, cycle);
+        Assert.Equal(0x00, bus.ReadByte(0x00BFDD00, ref cycle, AmigaBusAccessKind.CpuDataRead));
     }
 
     private static void TimerAOneShotStops()

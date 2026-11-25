@@ -148,9 +148,12 @@ public sealed class M68040AmigaBusIntegrationTests
 		cpu.ExecuteInstruction();
 
 		Assert.Equal(0x2400u, cpu.State.ProgramCounter);
-		Assert.Equal(StackBase - 8u, cpu.State.A[7]);
-		Assert.Equal(0x0010_0004u, bus.ReadLong(StackBase - 6u));
-		Assert.Equal(2 * 4, bus.ReadWord(StackBase - 2u));
+		var frame = cpu.State.A[7];
+		Assert.Equal(StackBase - 60u, frame);
+		Assert.Equal(0x7008, bus.ReadWord(frame + 6));
+		Assert.Equal(0x0010_0004u, bus.ReadLong(frame + 2));
+		// The instruction begins at +4; its first unmapped line fetch starts at +0.
+		Assert.Equal(0x0010_0000u, bus.ReadLong(frame + 20));
 		Assert.NotEqual(0u, cpu.State.M68040Mmu.Status);
 	}
 
@@ -226,7 +229,11 @@ public sealed class M68040AmigaBusIntegrationTests
 		cpu.ExecuteInstruction();
 
 		Assert.Equal(0x2400u, cpu.State.ProgramCounter);
-		Assert.Equal(StackBase - 8u, cpu.State.A[7]);
+		var frame = cpu.State.A[7];
+		Assert.Equal(StackBase - 60u, frame);
+		Assert.Equal(0x7008, bus.ReadWord(frame + 6));
+		Assert.Equal(CodeBase + 6u, bus.ReadLong(frame + 2));
+		Assert.Equal(0x00F0_0000u, bus.ReadLong(frame + 20));
 		Assert.NotEqual(0u, cpu.State.M68040Mmu.Status);
 	}
 
