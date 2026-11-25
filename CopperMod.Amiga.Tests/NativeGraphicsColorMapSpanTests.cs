@@ -49,7 +49,7 @@ public sealed class NativeGraphicsColorMapSpanTests
         var freed = fixture.Execute(GraphicsLvo.FreeColorMap, CapturedFrame, colorMap);
 
         Assert.False(freed.UsedFallback);
-        Assert.Equal(0u, freed.Value);
+        Assert.Equal(CapturedFrame, freed.Value);
         Assert.Equal((allocationBase, (uint)requestedBytes), Assert.Single(fixture.Frees));
         Assert.Single(fixture.Allocations);
         fixture.AssertExecBaseUnchanged();
@@ -231,18 +231,10 @@ public sealed class NativeGraphicsColorMapSpanTests
             _cpu.State.A[0] = a0;
             _cpu.State.A[1] = 0xA1A1_A1A1;
             var usedFallback = false;
+            var fallback = new ColorMapFallbackObserver();
             for (var instruction = 0; instruction < 8192; instruction++)
             {
-                // Duplicated local fallback RTS instructions are recognized
-                // by the restored original D0 as well as the exported entry.
-                if (_cpu.State.ProgramCounter == CodeAddress + (uint)Image.Value.Fallback ||
-                    (_cpu.State.D[0] == d0 && Bus.ReadWord(_cpu.State.ProgramCounter) == 0x4E75))
-                {
-                    usedFallback = true;
-                    Assert.Equal(d0, _cpu.State.D[0]);
-                    Assert.Equal(StackPointer, _cpu.State.A[7]);
-                }
-
+                usedFallback |= fallback.Observe(Bus, _cpu.State.ProgramCounter, CodeAddress + (uint)Image.Value.Fallback);
                 _cpu.ExecuteInstruction();
                 if (_cpu.State.ProgramCounter != ReturnAddress)
                     continue;

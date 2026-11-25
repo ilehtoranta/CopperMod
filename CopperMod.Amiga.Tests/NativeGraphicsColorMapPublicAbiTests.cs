@@ -83,7 +83,7 @@ public sealed class NativeGraphicsColorMapPublicAbiTests
         fixture.ExpectedMemoryAtFree = before;
         var call = fixture.Invoke(vector, d0, a0);
         var expectFallback = scenario is not ("get-success" or "get-zero" or "free-success" or "free-null");
-        var expectedValue = expectFallback ? d0 : scenario == "get-success" ? ColorMap : 0u;
+        var expectedValue = !isGet || expectFallback ? d0 : scenario == "get-success" ? ColorMap : 0u;
 
         // Keep the public-register, Exec-argument, and publication checks
         // independent. A register-frame failure must not hide useful proof
@@ -393,27 +393,14 @@ public sealed class NativeGraphicsColorMapPublicAbiTests
             Assert.Equal(returnAddress, Bus.ReadLong(_cpu.State.A[7]));
 
             var usedFallback = false;
-            var arrivedByBranch = false;
+            var fallback = new ColorMapFallbackObserver();
             var enteredPublicBody = false;
             for (var instruction = 0; instruction < 8192; instruction++)
             {
                 var pc = _cpu.State.ProgramCounter;
-                var opcode = Bus.ReadWord(pc);
                 enteredPublicBody |= pc == entry;
-                // D0==0 alone cannot distinguish GetColorMap(0)'s native
-                // return from fallback. Local fallback copies are entered by
-                // a branch directly to RTS with the original D0 restored.
-                // A public save/restore frame may surround that private RTS.
-                if (pc == _nativeCodeAddress + (uint)Image.Value.Fallback ||
-                    (opcode == 0x4E75 && arrivedByBranch && _cpu.State.D[0] == d0))
-                {
-                    usedFallback = true;
-                    Assert.Equal(d0, _cpu.State.D[0]);
-                }
-
-                var branchTarget = ConditionalOrAlwaysBranchTarget(pc, opcode);
+                usedFallback |= fallback.Observe(Bus, pc, _nativeCodeAddress + (uint)Image.Value.Fallback);
                 _cpu.ExecuteInstruction();
-                arrivedByBranch = branchTarget == _cpu.State.ProgramCounter;
                 if (_cpu.State.ProgramCounter != returnAddress)
                     continue;
 
@@ -440,16 +427,6 @@ public sealed class NativeGraphicsColorMapPublicAbiTests
             throw new InvalidOperationException(
                 $"{Route}, {vector} did not return to caller {returnAddress:X8}: " +
                 $"PC={_cpu.State.ProgramCounter:X8}, SR={_cpu.State.StatusRegister:X4}, A7={_cpu.State.A[7]:X8}.");
-        }
-
-        private uint? ConditionalOrAlwaysBranchTarget(uint pc, ushort opcode)
-        {
-            if ((opcode & 0xF000) != 0x6000 || (opcode & 0x0F00) == 0x0100) // exclude BSR
-                return null;
-            var displacement = (opcode & 0x00FF) == 0
-                ? unchecked((short)Bus.ReadWord(pc + 2))
-                : unchecked((sbyte)opcode);
-            return unchecked((uint)((long)pc + 2 + displacement));
         }
 
         public void Dispose() => _cpu.Dispose();

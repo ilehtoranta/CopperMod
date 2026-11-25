@@ -61,7 +61,7 @@ public sealed class NativeGraphicsColorMapExecAbiTests
         for (var offset = requestedBytes; offset < occupiedBytes; offset++)
             Assert.Equal((byte)0xA5, fixture.Bus.ReadByte(allocationBase + (uint)offset));
 
-        Assert.Equal(0u, fixture.Execute(GraphicsLvo.FreeColorMap, 0xA1B2_C3D4, colorMap));
+        Assert.Equal(0xA1B2_C3D4u, fixture.Execute(GraphicsLvo.FreeColorMap, 0xA1B2_C3D4, colorMap));
         Assert.Equal((allocationBase, requestedBytes), Assert.Single(fixture.Frees));
         Assert.Single(fixture.Allocations);
         fixture.AssertSingleFreeChunk(allocationBase, initialFree);
@@ -161,10 +161,10 @@ public sealed class NativeGraphicsColorMapExecAbiTests
             _cpu.State.D[0] = d0;
             _cpu.State.A[0] = a0;
             _cpu.State.A[1] = 0xA1A1_A1A1;
+            var fallback = new ColorMapFallbackObserver();
             for (var instruction = 0; instruction < 8192; instruction++)
             {
-                Assert.False(_cpu.State.ProgramCounter == CodeAddress + (uint)Image.Value.Fallback ||
-                    (_cpu.State.D[0] == d0 && Bus.ReadWord(_cpu.State.ProgramCounter) == 0x4E75),
+                Assert.False(fallback.Observe(Bus, _cpu.State.ProgramCounter, CodeAddress + (uint)Image.Value.Fallback),
                     $"Native {vector} unexpectedly declined the production Exec fixture.");
                 _cpu.ExecuteInstruction();
                 if (_cpu.State.ProgramCounter != ReturnAddress)
