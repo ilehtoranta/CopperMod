@@ -330,6 +330,11 @@ namespace CopperMod.Amiga.Bus
             {
                 Agnus.AdvanceTo(targetCycle, Display.HasLiveDisplayWork());
             }
+            else if (Display.NextAcceptedDisplayWordCycle <= targetCycle)
+            {
+                // Display DMA can run during CPU arbitration with the general Agnus clock disabled.
+                Display.AdvanceLiveDmaTo(targetCycle);
+            }
         }
 
         internal long GetNextRasterEventCycle(long currentCycle, long targetCycle)
@@ -375,7 +380,8 @@ namespace CopperMod.Amiga.Bus
         {
             if (!LiveAgnusDmaEnabled)
             {
-                return long.MaxValue;
+                var accepted = Display.NextAcceptedDisplayWordCycle;
+                return accepted <= targetCycle ? Math.Max(currentCycle, accepted) : long.MaxValue;
             }
 
             return Agnus.GetNextWakeCandidateCycle(currentCycle, targetCycle, Display.HasLiveDisplayWork());
