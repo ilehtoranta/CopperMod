@@ -1457,6 +1457,8 @@ namespace CopperMod.Amiga.Bus
 
         public long BlitterCompletionDelay => _blitterCompletionDelay;
 
+        public int BlitterMicroOpsBeforeCompletion { get; private set; }
+
         public bool BlitterCompletionConfigured => _blitterCompletionConfigured;
 
         public void SetInitialFixedSlot(
@@ -1853,12 +1855,15 @@ namespace CopperMod.Amiga.Bus
                 completionCycle,
                 nameof(completionCycle),
                 allowBeyondWindow: false);
-            var causalBase = _blitterStartCycle;
-            if (_blitterMicroOpCount > 0)
-            {
-                causalBase =
-                    _expectedBlitterMicroOps[_blitterMicroOpCount - 1].CompletedCycle;
-            }
+            var completedOps = _blitterMicroOpCount;
+            // Agnus can clear BBUSY with the final destination word still in its
+            // write pipeline. Earlier reads and writes must already have retired.
+            if (completedOps > 0 && _expectedBlitterMicroOps[completedOps - 1].IsWrite &&
+                completionCycle < _expectedBlitterMicroOps[completedOps - 1].CompletedCycle)
+                completedOps--;
+            var causalBase = completedOps == 0
+                ? _blitterStartCycle
+                : _expectedBlitterMicroOps[completedOps - 1].CompletedCycle;
 
             if (completionCycle < causalBase)
             {
@@ -1866,6 +1871,7 @@ namespace CopperMod.Amiga.Bus
                     "Blitter completion cannot precede its final causal transition.");
             }
 
+            BlitterMicroOpsBeforeCompletion = completedOps;
             _blitterCompletionDelay = completionCycle - causalBase;
             _expectedBlitterCompletion =
                 new AgnusOfflineBlitterCompletionRecord(
@@ -2783,7 +2789,7 @@ namespace CopperMod.Amiga.Bus
                 ? trace.GetBlitterMicroOp(0).RequestedCycle
                 : long.MaxValue;
             _blitterCompletionCycle =
-                trace.BlitterConfigured && trace.BlitterMicroOpCount == 0
+                trace.BlitterConfigured && trace.BlitterMicroOpsBeforeCompletion == 0
                     ? trace.BlitterStartCycle + trace.BlitterCompletionDelay
                     : long.MaxValue;
             _blitterCompletionCount = 0;
@@ -3394,7 +3400,6 @@ namespace CopperMod.Amiga.Bus
         private void ApplyBlitterCompletionThrough(long cycle)
         {
             if (!_blitterBusy ||
-                _nextBlitterMicroOp != RequireTrace().BlitterMicroOpCount ||
                 _blitterCompletionCycle > cycle)
             {
                 return;
@@ -3528,7 +3533,7 @@ namespace CopperMod.Amiga.Bus
         private bool IsBlitterEligible(long slotCycle)
         {
             var trace = RequireTrace();
-            return _blitterBusy &&
+            return _blitterStarted &&
                 _nextBlitterMicroOp < trace.BlitterMicroOpCount &&
                 _blitterRequestedCycle <= slotCycle;
         }
@@ -3722,9 +3727,9 @@ namespace CopperMod.Amiga.Bus
             else
             {
                 _blitterRequestedCycle = long.MaxValue;
-                _blitterCompletionCycle =
-                    completedCycle + trace.BlitterCompletionDelay;
             }
+            if (_nextBlitterMicroOp == trace.BlitterMicroOpsBeforeCompletion)
+                _blitterCompletionCycle = completedCycle + trace.BlitterCompletionDelay;
 
             return new AgnusCommittedSlotRecord(
                 slotCycle,

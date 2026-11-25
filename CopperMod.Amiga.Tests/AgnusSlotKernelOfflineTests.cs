@@ -2421,9 +2421,11 @@ public sealed class AgnusSlotKernelOfflineTests
                 delay);
         }
 
-        var completionBase = accesses.Length == 0
-            ? startWriteCycle
-            : accesses[^1].CompletedCycle;
+        var pendingFinalWrite = accesses.Length != 0 &&
+            bus.Blitter.LastCompletionCycle < accesses[^1].CompletedCycle;
+        if (pendingFinalWrite) Assert.True(microOps[^1].IsWrite);
+        var completedOps = accesses.Length - (pendingFinalWrite ? 1 : 0);
+        var completionBase = completedOps == 0 ? startWriteCycle : accesses[completedOps - 1].CompletedCycle;
         var operation = new CapturedBlitterOperation(
             startWriteCycle,
             nasty,
@@ -2433,7 +2435,7 @@ public sealed class AgnusSlotKernelOfflineTests
             finalSnapshot.SourceB,
             finalSnapshot.SourceC,
             finalSnapshot.DestinationD,
-            microOps);
+            microOps, pendingFinalWrite);
         return new CapturedBlitterRun(
             operation,
             initialMemory,
@@ -2511,7 +2513,8 @@ public sealed class AgnusSlotKernelOfflineTests
         uint SourceB,
         uint SourceC,
         uint DestinationD,
-        CapturedBlitterMicroOp[] MicroOps);
+        CapturedBlitterMicroOp[] MicroOps,
+        bool PendingFinalWrite = false);
 
     private readonly record struct CapturedBlitterMicroOp(
         AgnusOfflineBlitterMicroOpKind Kind,
@@ -2940,9 +2943,10 @@ public sealed class AgnusSlotKernelOfflineTests
                     blitterGrants[index] = new OracleBlitterGrant(microOp, access);
                 }
 
-                var completionBase = operation.MicroOps.Length == 0
+                var completedOps = operation.MicroOps.Length - (operation.PendingFinalWrite ? 1 : 0);
+                var completionBase = completedOps == 0
                     ? operation.StartCycle
-                    : blitterGrants[^1].Access.CompletedCycle;
+                    : blitterGrants[completedOps - 1].Access.CompletedCycle;
                 _trace.CompleteBlitterReplay(
                     completionBase + operation.CompletionDelay,
                     operation.Zero,
