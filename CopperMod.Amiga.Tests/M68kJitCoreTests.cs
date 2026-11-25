@@ -8,7 +8,7 @@ public sealed class M68kJitCoreTests
 	private const uint FastCodeBase = AmigaConstants.A500BootPseudoFastRamBase;
 	private const uint RealFastCodeBase = AmigaConstants.A500RealFastRamBase;
 	private const int FastCodeSize = 64 * 1024;
-	private const uint M68040InstructionCacheEnable = 0x0000_0001;
+	private const uint M68040InstructionCacheEnable = 0x0000_8000;
 
 	[Fact]
 	public void AmigaFactoryCreatesM68000JitThroughTheDedicatedAdapter()
@@ -221,7 +221,7 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void M68040JitFallbackMovecPcrProbeRaisesLineFWithoutClobberingDestination()
+	public void M68040JitFallbackMovecPcrProbeRaisesIllegalInstructionWithoutClobberingDestination()
 	{
 		var bus = CreateRealFastCodeBus();
 		WriteWords(bus, RealFastCodeBase, 0x4E7A, 0x1808); // MOVEC PCR,D1
@@ -233,11 +233,11 @@ public sealed class M68kJitCoreTests
 
 		cpu.ExecuteInstruction();
 
-		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x3000u, cpu.State.ProgramCounter);
 		Assert.Equal(4u, cpu.State.D[1]);
 		Assert.Equal(0x4000u - 8u, cpu.State.A[7]);
 		Assert.Equal(RealFastCodeBase, bus.ReadLong(0x4000u - 6u));
-		Assert.Equal(11 * 4, bus.ReadWord(0x4000u - 2u));
+		Assert.Equal(4 * 4, bus.ReadWord(0x4000u - 2u));
 	}
 
 	[Fact]
@@ -504,8 +504,10 @@ public sealed class M68kJitCoreTests
 		interpreterBus.ResetExternalDevices(0);
 		directBus.ConfigureAutoconfigFastRamForHost();
 		interpreterBus.ConfigureAutoconfigFastRamForHost();
-		PrepareM68040Move16State(direct.State);
-		PrepareM68040Move16State(interpreter.State);
+		direct.ResetForBenchmark(RealFastCodeBase, 0x4000);
+		interpreter.Reset(RealFastCodeBase, 0x4000);
+		EnableM68040InstructionCache(direct);
+		interpreter.State.CacheControlRegister = M68040InstructionCacheEnable;
 
 		var directExecuted = direct.ExecuteInstructions(800, 1_000_000, new PureBatchBoundary());
 		var interpreterExecuted = interpreter.ExecuteInstructions(800, null, new CountingBoundary());
@@ -788,7 +790,7 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void M68040JitTransparentDataMappingUsesZeroWaitAccesses()
+	public void M68040JitTransparentDataMappingUsesTimedReadsAndWrites()
 	{
 		const uint data = RealFastCodeBase + 0x1000;
 		var bus = CreateRealFastCodeBus();
@@ -804,22 +806,20 @@ public sealed class M68kJitCoreTests
 		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(RealFastCodeBase, 0x4000);
 		EnableM68040InstructionCache(cpu);
-		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_8000;
-		cpu.State.M68040Mmu.DataTransparentTranslation0 = 0x0000_8000;
-		cpu.State.M68040Mmu.TranslationControl = 0x8000_0000;
+		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_A000;
+		cpu.State.M68040Mmu.DataTransparentTranslation0 = 0x0000_A000;
+		cpu.State.M68040Mmu.TranslationControl = 0x8000;
 		var boundary = new PureBatchBoundary();
 
-		ExecuteUntilTraceHits(cpu, boundary, 1);
-		cpu.ExecuteInstructions(10_000, cpu.State.Cycles + 1_000_000, boundary);
-
-		Assert.True(cpu.Counters.V2ZeroWaitReadRealFast > 0);
-		Assert.True(cpu.Counters.V2ZeroWaitWriteRealFast > 0);
-		Assert.Equal(0, cpu.Counters.V2ZeroWaitReadSlow);
-		Assert.Equal(0, cpu.Counters.V2ZeroWaitWriteSlow);
+		Assert.Equal(9, cpu.ExecuteInstructions(9, null, boundary));
+		Assert.Equal(3u, bus.ReadLong(data));
+		Assert.Equal(RealFastCodeBase + 6, cpu.State.ProgramCounter);
+		Assert.Equal(9, cpu.Counters.FallbackInstructions);
+		Assert.Equal(0, cpu.Counters.TraceHits);
 	}
 
 	[Fact]
-	public void M68040JitWriteProtectedTransparentMappingKeepsWritesOnTranslatedPath()
+	public void M68040JitWriteProtectedTransparentMappingRaisesAccessErrorBeforeStore()
 	{
 		const uint data = RealFastCodeBase + 0x1000;
 		const uint root = 0x4000;
@@ -833,22 +833,24 @@ public sealed class M68kJitCoreTests
 			0x2080,
 			0x60F8);
 		bus.WriteLong(data, 1);
-		bus.WriteLong(root + (((data >> 12) & 0x000F_FFFFu) * 4u), data | 1u);
+		// Keep exception-frame writes outside the write-protected transparent range.
+		MapM68040TestPage(bus, root, 0x0100_7000, 0x7000);
+		bus.WriteLong(8, RealFastCodeBase + 0x100);
 		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
-		cpu.Reset(RealFastCodeBase, 0x8000);
+		cpu.Reset(RealFastCodeBase, 0x0100_8000);
 		EnableM68040InstructionCache(cpu);
-		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_8000;
-		cpu.State.M68040Mmu.DataTransparentTranslation0 = 0x0000_8004;
+		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_A000;
+		cpu.State.M68040Mmu.DataTransparentTranslation0 = 0x0000_A004;
 		cpu.State.M68040Mmu.SupervisorRootPointer = root;
-		cpu.State.M68040Mmu.TranslationControl = 0x8000_0000;
+		cpu.State.M68040Mmu.TranslationControl = 0x8000;
 		var boundary = new PureBatchBoundary();
 
-		ExecuteUntilTraceHits(cpu, boundary, 1);
-		cpu.ExecuteInstructions(10_000, cpu.State.Cycles + 1_000_000, boundary);
-
-		Assert.True(cpu.Counters.V2ZeroWaitReadRealFast > 0);
-		Assert.Equal(0, cpu.Counters.V2ZeroWaitWriteRealFast);
-		Assert.True(cpu.Counters.V2ZeroWaitWriteSlow > 0);
+		Assert.Equal(4, cpu.ExecuteInstructions(4, null, boundary));
+		Assert.False(cpu.State.Halted);
+		Assert.Equal(2, cpu.State.LastExceptionVector);
+		Assert.Equal(RealFastCodeBase + 0x100, cpu.State.ProgramCounter);
+		Assert.Equal(1u, bus.ReadLong(data));
+		Assert.Equal(0, cpu.Counters.TraceHits);
 	}
 
 	[Fact]
@@ -865,7 +867,7 @@ public sealed class M68kJitCoreTests
 			0x60F8); // BRA.S MOVE.L
 		bus.WriteLong(logicalData, 0x1111_1111);
 		bus.WriteLong(physicalData, 0x2222_2222);
-		bus.WriteLong(root + 12, physicalData | 1u);
+		MapM68040TestPage(bus, root, logicalData, physicalData);
 		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(RealFastCodeBase, 0x8000);
 		EnableM68040InstructionCache(cpu);
@@ -873,24 +875,23 @@ public sealed class M68kJitCoreTests
 		ExecuteUntilTraceHits(cpu, boundary, 1);
 		Assert.Equal(0x1111_1111u, cpu.State.D[0]);
 
-		var guardExits = cpu.Counters.M68040MmuGenerationGuardExits;
-		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_8000;
+		var hits = cpu.Counters.TraceHits;
+		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_A000;
 		cpu.State.M68040Mmu.SupervisorRootPointer = root;
-		cpu.State.M68040Mmu.TranslationControl = 0x8000_0000;
+		cpu.State.M68040Mmu.TranslationControl = 0x8000;
 		cpu.State.ProgramCounter = RealFastCodeBase;
 		cpu.ExecuteInstructions(1, cpu.State.Cycles + 100_000, boundary);
 
 		Assert.Equal(0x2222_2222u, cpu.State.D[0]);
-		Assert.True(cpu.Counters.M68040MmuGenerationGuardExits > guardExits);
+		Assert.Equal(hits, cpu.Counters.TraceHits);
 
-		ExecuteUntilTraceHits(cpu, boundary, cpu.Counters.TraceHits + 1);
-		guardExits = cpu.Counters.M68040MmuGenerationGuardExits;
+		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0;
 		cpu.State.M68040Mmu.TranslationControl = 0;
 		cpu.State.ProgramCounter = RealFastCodeBase;
 		cpu.ExecuteInstructions(1, cpu.State.Cycles + 100_000, boundary);
 
 		Assert.Equal(0x1111_1111u, cpu.State.D[0]);
-		Assert.True(cpu.Counters.M68040MmuGenerationGuardExits > guardExits);
+		ExecuteUntilTraceHits(cpu, boundary, hits + 1);
 	}
 
 	[Fact]
@@ -1122,23 +1123,21 @@ public sealed class M68kJitCoreTests
 			0x2039, 0x0000, 0x3000, // MOVE.L $3000.L,D0
 			0x60F8); // BRA.S logicalCode
 		bus.WriteLong(physicalData, 0xCAFE_BABEu);
-		bus.WriteLong(root + 4, physicalCode | 1u);
-		bus.WriteLong(root + 12, physicalData | 1u);
+		MapM68040TestPage(bus, root, logicalCode, physicalCode);
+		MapM68040TestPage(bus, root, 0x3000, physicalData);
 		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(logicalCode, 0x8000);
 		EnableM68040InstructionCache(cpu);
 		cpu.State.M68040Mmu.SupervisorRootPointer = root;
-		cpu.State.M68040Mmu.TranslationControl = 0x8000_0000;
+		cpu.State.M68040Mmu.TranslationControl = 0x8000;
 
 		var boundary = new PureBatchBoundary();
-		ExecuteUntilTraceHits(cpu, boundary, 1);
+		Assert.Equal(4, cpu.ExecuteInstructions(4, null, boundary));
 
 		Assert.Equal(0xCAFE_BABEu, cpu.State.D[0]);
 		Assert.Equal(logicalCode, cpu.State.ProgramCounter);
-		Assert.True(cpu.Counters.CompiledTraces > 0);
-		Assert.True(cpu.Counters.TraceHits > 0);
-		Assert.True(cpu.Counters.V2ZeroWaitReadSlow > 0);
-		Assert.Equal(0, cpu.Counters.V2ZeroWaitReadRealFast);
+		Assert.Equal(4, cpu.Counters.FallbackInstructions);
+		Assert.Equal(0, cpu.Counters.TraceHits);
 	}
 
 	[Fact]
@@ -1154,12 +1153,12 @@ public sealed class M68kJitCoreTests
 			hostHits++;
 			state.ProgramCounter = logicalTrap + 8;
 		});
-		bus.WriteLong(root + 4, physicalTrap | 1u);
+		MapM68040TestPage(bus, root, logicalTrap, physicalTrap);
 		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(logicalTrap, 0x8000);
 		EnableM68040InstructionCache(cpu);
 		cpu.State.M68040Mmu.SupervisorRootPointer = root;
-		cpu.State.M68040Mmu.TranslationControl = 0x8000_0000;
+		cpu.State.M68040Mmu.TranslationControl = 0x8000;
 
 		var executed = cpu.ExecuteInstructions(1, cpu.State.Cycles + 100_000, new PureBatchBoundary());
 
@@ -1172,7 +1171,7 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void M68040JitCompiledDataMmuFaultUsesFallbackExceptionState()
+	public void M68040JitDataMmuFaultStacksTheFaultingAccess()
 	{
 		const uint handler = RealFastCodeBase + 0x100;
 		var bus = CreateRealFastCodeBus();
@@ -1184,27 +1183,26 @@ public sealed class M68kJitCoreTests
 		WriteWords(bus, handler, 0x4E71); // NOP
 		bus.WriteLong(0x0000_3000, 0x1234_5678u);
 		bus.WriteLong(2 * 4, handler);
+		MapM68040TestPage(bus, 0x4000, 0, 0);
+		MapM68040TestPage(bus, 0x4000, 0x7000, 0x7000);
 		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(RealFastCodeBase, 0x8000);
 		EnableM68040InstructionCache(cpu);
-		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_8000;
-		cpu.State.M68040Mmu.DataTransparentTranslation0 = 0x0000_8000;
+		cpu.State.M68040Mmu.InstructionTransparentTranslation0 = 0x0000_A000;
+		cpu.State.M68040Mmu.DataTransparentTranslation0 = 0x0000_A000;
 		cpu.State.M68040Mmu.SupervisorRootPointer = 0x4000;
-		cpu.State.M68040Mmu.TranslationControl = 0x8000_0000;
+		cpu.State.M68040Mmu.TranslationControl = 0x8000;
 		var boundary = new PureBatchBoundary();
-		ExecuteUntilTraceHits(cpu, boundary, 1);
+		Assert.Equal(2, cpu.ExecuteInstructions(2, null, boundary));
 		Assert.Equal(0x1234_5678u, cpu.State.D[0]);
-
-		var sideExitsBeforeFault = cpu.Counters.SideExits;
-		var traceHitsBeforeFault = cpu.Counters.TraceHits;
 		cpu.State.M68040Mmu.DataTransparentTranslation0 = 0;
-		cpu.State.M68040Mmu.SupervisorRootPointer = 0;
 		cpu.State.ProgramCounter = RealFastCodeBase;
 		cpu.ExecuteInstructions(1, cpu.State.Cycles + 100_000, boundary);
 
-		Assert.True(cpu.Counters.TraceHits > traceHitsBeforeFault);
-		Assert.True(cpu.Counters.SideExits > sideExitsBeforeFault);
-		Assert.NotEqual(0u, cpu.State.M68040Mmu.Status);
+		Assert.False(cpu.State.Halted);
+		Assert.Equal(2, cpu.State.LastExceptionVector);
+		Assert.Equal(0x3000u, bus.ReadLong(cpu.State.A[7] + 20));
+		Assert.Equal(0, cpu.Counters.TraceHits);
 		Assert.Equal(handler, cpu.State.ProgramCounter);
 	}
 
@@ -1222,7 +1220,11 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(0x2400u, cpu.State.ProgramCounter);
 		Assert.Equal(0u, cpu.Counters.CompiledTraces);
 		Assert.Equal(1, cpu.Counters.FallbackInstructions);
-		Assert.Equal(0x0010_0004u, bus.ReadLong(0x8000u - 6u));
+		var frame = cpu.State.A[7];
+		Assert.Equal(0x8000u - 60, frame);
+		Assert.Equal(0x7008, bus.ReadWord(frame + 6));
+		Assert.Equal(0x0010_0004u, bus.ReadLong(frame + 2));
+		Assert.Equal(0x0010_0004u, bus.ReadLong(frame + 20));
 	}
 
 	[Fact]
@@ -1863,7 +1865,7 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void M68040JitNativeFpuUsesTranslatedMemoryHelpers()
+	public void M68040JitFpuPreservesTranslatedMemoryAccesses()
 	{
 		const uint logicalCode = 0x0000_1000;
 		const uint physicalCode = RealFastCodeBase;
@@ -1877,26 +1879,22 @@ public sealed class M68kJitCoreTests
 			0xF239, 0x6480, 0x0000, 0x3004, // FMOVE.S FP1,$3004.L
 			0x60EE);                        // BRA.S logicalCode
 		bus.WriteLong(physicalData, unchecked((uint)BitConverter.SingleToInt32Bits(6.25f)));
-		bus.WriteLong(root + 4, physicalCode | 1u);
-		bus.WriteLong(root + 12, physicalData | 1u);
+		MapM68040TestPage(bus, root, logicalCode, physicalCode);
+		MapM68040TestPage(bus, root, 0x3000, physicalData);
 		var cpu = (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, bus);
 		cpu.Reset(logicalCode, 0x8000);
 		EnableM68040InstructionCache(cpu);
 		cpu.State.M68040Mmu.SupervisorRootPointer = root;
-		cpu.State.M68040Mmu.TranslationControl = 0x8000_0000;
+		cpu.State.M68040Mmu.TranslationControl = 0x8000;
 
 		var boundary = new PureBatchBoundary();
-		ExecuteUntilTraceHits(cpu, boundary, 1);
-
-		var fpuFallbackAfterTraceInstall = cpu.Counters.M68040FpuFallbackInstructions;
-		var nativeFpuBeforeCompiledRun = cpu.Counters.NativeM68040FpuIlInstructions;
-		cpu.State.ProgramCounter = logicalCode;
+		// Paging uses the timed interpreter for the complete FPU instruction.
 		cpu.ExecuteInstructions(15, cpu.State.Cycles + 100_000, boundary);
 
 		Assert.Equal(unchecked((uint)BitConverter.SingleToInt32Bits(6.25f)), bus.ReadLong(physicalData + 4));
 		Assert.Equal(logicalCode, cpu.State.ProgramCounter);
-		Assert.True(cpu.Counters.NativeM68040FpuIlInstructions > nativeFpuBeforeCompiledRun);
-		Assert.Equal(fpuFallbackAfterTraceInstall, cpu.Counters.M68040FpuFallbackInstructions);
+		Assert.Equal(15, cpu.Counters.FallbackInstructions);
+		Assert.Equal(0, cpu.Counters.TraceHits);
 	}
 
 	[Fact]
@@ -7647,6 +7645,27 @@ public sealed class M68kJitCoreTests
 		}
 	}
 
+	// Each fixture maps pages within one root and pointer-table branch.
+	private static void MapM68040TestPage(AmigaBus bus, uint root, uint logical, uint physical)
+	{
+		uint pointers = root + 0x200, pages = root + 0x400;
+		bus.WriteLong(root + (logical >> 25) * 4, pointers | 2);
+		bus.WriteLong(pointers + ((logical >> 18) & 127) * 4, pages | 2);
+		bus.WriteLong(pages + ((logical >> 12) & 63) * 4, physical | 1);
+	}
+
+	[Theory]
+	[InlineData(0x1000, false)]
+	[InlineData(0x9001, false)]
+	[InlineData(0x9000, true)]
+	public void DecodeMove16RequiresTheRegisterPairExtension(int extension, bool admitted)
+	{
+		var bus = CreateRealFastCodeBus();
+		WriteWords(bus, RealFastCodeBase, 0xF620, (ushort)extension);
+		Assert.True(M68kDecoder.TryDecode(bus, RealFastCodeBase, out var instruction, out _, M68kJitCpuModel.M68040));
+		Assert.Equal(admitted ? M68kJitOperation.M68040Move16 : M68kJitOperation.M68040Fallback, instruction.Operation);
+	}
+
 	private static ushort[] CreateM68040Move16Loop(
 		uint source,
 		uint destination,
@@ -7659,24 +7678,9 @@ public sealed class M68kJitCoreTests
 		[
 			sourceLea, (ushort)(source >> 16), (ushort)source,
 			destinationLea, (ushort)(destination >> 16), (ushort)destination,
-			(ushort)(0xF620 | sourceRegister), (ushort)(destinationRegister << 12),
+			(ushort)(0xF620 | sourceRegister), (ushort)(0x8000 | destinationRegister << 12),
 			0x60EE
 		];
-	}
-
-	private static void PrepareM68040Move16State(M68kCpuState state)
-	{
-		Array.Clear(state.D);
-		Array.Clear(state.A);
-		state.A[7] = 0x4000;
-		state.ProgramCounter = RealFastCodeBase;
-		state.LastInstructionProgramCounter = 0;
-		state.LastOpcode = 0;
-		state.StatusRegister = M68kCpuState.ResetStatusRegister;
-		state.Cycles = 0;
-		state.NativeCycles = 0;
-		state.Halted = false;
-		state.Stopped = false;
 	}
 
 	private static void WriteWords(PlainRamBus bus, uint address, params ushort[] words)

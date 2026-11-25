@@ -443,6 +443,12 @@ namespace Copper68k
             {
                 var move16Cursor = cursor;
                 var move16Extension = move16Cursor.FetchWord();
+                if ((move16Extension & 0x8FFF) != 0x8000)
+                {
+                    instruction = CreateM68040Fallback(pc, opcode, cursor);
+                    return true;
+                }
+
                 var sourceRegister = opcode & 7;
                 var destinationRegister = (move16Extension >> 12) & 7;
                 instruction = Create(
