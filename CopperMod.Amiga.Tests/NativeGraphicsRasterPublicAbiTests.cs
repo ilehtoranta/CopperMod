@@ -289,7 +289,8 @@ public sealed class NativeGraphicsRasterPublicAbiTests
         internal List<(uint Address, uint Size)> Frees { get; } = new();
         internal MemorySnapshot? ExpectedMemoryAtFree { get; set; }
 
-        internal void SetExecAvailable(bool available) => Bus.WriteLong(4, available ? ExecBase : 0);
+        internal void SetExecAvailable(bool available) =>
+            Bus.WriteLong(_graphicsBase + GraphicsLayouts.GfxBaseExecBase, available ? ExecBase : 0);
         internal void WriteWord(uint address, ushort value) => Bus.WriteWord(address, value);
         private byte[] ReadBytes(uint address, int length)
             => Enumerable.Range(0, length).Select(index => Bus.ReadByte(address + (uint)index)).ToArray();

@@ -203,6 +203,7 @@ public sealed class NativeGraphicsRasterExecBoundaryTests
 
     private sealed class Fixture : IDisposable
     {
+        private const uint GraphicsBase = 0x0070_0000;
         private const uint ExecBase = 0x0077_0000;
         private const uint CodeAddress = 0x0087_0000;
         private const uint HeapAddress = 0x00D0_0000;
@@ -221,6 +222,7 @@ public sealed class NativeGraphicsRasterExecBoundaryTests
             Array.Fill(low, (byte)0xA5);
             Bus.MapWritableMemory(HeapAddress, heap);
             Bus.MapWritableMemory(0, low);
+            Bus.MapWritableMemory(GraphicsBase, new byte[NativeGraphicsLibraryImageBuilder.PositiveImageSize]);
             SetExecAvailable(true);
             Bus.MapWritableMemory(CodeAddress, Image.Value.Code);
             Bus.MapWritableMemory(Stack, new byte[0x400]);
@@ -261,7 +263,8 @@ public sealed class NativeGraphicsRasterExecBoundaryTests
         internal List<(uint Address, uint Size)> Frees { get; } = new();
         internal MemorySnapshot? ExpectedMemoryAtFree { get; set; }
 
-        internal void SetExecAvailable(bool available) => Bus.WriteLong(4, available ? ExecBase : 0);
+        internal void SetExecAvailable(bool available) =>
+            Bus.WriteLong(GraphicsBase + GraphicsLayouts.GfxBaseExecBase, available ? ExecBase : 0);
         internal ushort ReadWord(uint address) => Bus.ReadWord(address);
         internal uint ReadLong(uint address) => Bus.ReadLong(address);
         internal byte[] ReadBytes(uint address, int length)
@@ -309,6 +312,7 @@ public sealed class NativeGraphicsRasterExecBoundaryTests
         {
             Bus.WriteLong(StackPointer, ReturnAddress);
             _cpu.Reset(CodeAddress + (uint)Image.Value.Entries[vector], StackPointer);
+            _cpu.State.A[6] = GraphicsBase;
             _cpu.State.D[0] = d0;
             _cpu.State.D[1] = d1;
             _cpu.State.A[0] = a0;

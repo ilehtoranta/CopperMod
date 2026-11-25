@@ -246,6 +246,7 @@ public sealed class NativeGraphicsRasterSpanTests
             for (var offset = 0; offset < LowMemorySize; offset++)
                 Bus.WriteByte((uint)offset, 0xA5, 0);
             Bus.WriteLong(4, ExecBase);
+            Bus.WriteLong(GraphicsBase + GraphicsLayouts.GfxBaseExecBase, ExecBase);
             Bus.MapWritableMemory(CallerAddress, new byte[8]);
             Bus.MapWritableMemory(StackAddress, new byte[0x600]);
             Bus.RegisterHostGateway(ExecBase - 198, state =>

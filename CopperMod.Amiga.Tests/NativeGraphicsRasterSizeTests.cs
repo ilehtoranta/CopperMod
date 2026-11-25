@@ -205,6 +205,7 @@ public sealed class NativeGraphicsRasterSizeTests
             Bus.MapWritableMemory(HeapAddress, heap);
             Bus.MapWritableMemory(0, low);
             Bus.WriteLong(4, ExecBase);
+            Bus.WriteLong(GraphicsBase + GraphicsLayouts.GfxBaseExecBase, ExecBase);
             Bus.MapWritableMemory(CallerAddress, new byte[8]);
             Bus.MapWritableMemory(StackAddress, new byte[0x600]);
             Bus.RegisterHostGateway(ExecBase - 198, state =>
