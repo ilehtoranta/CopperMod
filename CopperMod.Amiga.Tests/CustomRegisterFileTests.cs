@@ -99,27 +99,26 @@ public sealed class CustomRegisterFileTests
     }
 
     [Fact]
-    public void AgaOnlyRegistersRemainExplicitlyUnspecifiedInTheFirstProfileSlice()
+    public void AgaDisplayProfileDeclaresItsDisplayAndFetchRegisters()
     {
         var snapshot = new CustomRegisterFile(AmigaChipset.AgaPal).CaptureSnapshot();
 
-        Assert.Equal(CustomRegisterImplementationStatus.Unspecified, snapshot.Get(0x10C).ImplementationStatus);
-        Assert.Equal(CustomRegisterImplementationStatus.Unspecified, snapshot.Get(0x10E).ImplementationStatus);
-        Assert.Equal(CustomRegisterImplementationStatus.Unspecified, snapshot.Get(0x11C).ImplementationStatus);
-        Assert.Equal(CustomRegisterImplementationStatus.Unspecified, snapshot.Get(0x11E).ImplementationStatus);
-        Assert.Equal(CustomRegisterImplementationStatus.Unspecified, snapshot.Get(0x1FC).ImplementationStatus);
+        Assert.Equal(CustomRegisterImplementationStatus.Implemented, snapshot.Get(0x10C).ImplementationStatus);
+        Assert.Equal(CustomRegisterImplementationStatus.Implemented, snapshot.Get(0x10E).ImplementationStatus);
+        Assert.Equal(CustomRegisterImplementationStatus.Implemented, snapshot.Get(0x11C).ImplementationStatus);
+        Assert.Equal(CustomRegisterImplementationStatus.Implemented, snapshot.Get(0x11E).ImplementationStatus);
+        Assert.Equal(CustomRegisterImplementationStatus.Implemented, snapshot.Get(0x1FC).ImplementationStatus);
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void AgaExecutionFailsFastAtBusConstruction(bool ntsc)
+    public void AgaBusPublishesLisaIdentificationAtReset(bool ntsc)
     {
         var chipset = ntsc ? AmigaChipset.AgaNtsc : AmigaChipset.AgaPal;
 
-        var error = Assert.Throws<NotSupportedException>(() => new AmigaBus(chipset: chipset));
-
-        Assert.Contains("AGA Alice/Lisa execution is not implemented", error.Message);
+        var bus = new AmigaBus(chipset: chipset);
+        Assert.Equal((ushort)DisplayChipIdentification.AgaLisa, bus.ReadWord(CustomBase + 0x07C));
     }
 
     [Theory]

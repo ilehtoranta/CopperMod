@@ -2417,7 +2417,7 @@ public sealed class M68kJitCoreTests
 			0x4880,               // EXT.W D0
 			0xE589,               // LSL.L #2,D1
 			0xC141,               // EXG D0,D1
-			0x60F0                // BRA.S loop
+			0x60EC                // BRA.S loop
 		};
 		WriteWords(jitBus, RealFastCodeBase, words);
 		WriteWords(interpreterBus, RealFastCodeBase, words);
@@ -2434,7 +2434,7 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
-		Assert.True(jit.Counters.HelperIlInstructions > 0);
+		Assert.True(jit.Counters.TraceHits > 0);
 	}
 
 	[Fact]
@@ -5813,13 +5813,13 @@ public sealed class M68kJitCoreTests
 	{
 		var words = new ushort[]
 		{
-			0x203C, 0x0000, 0x0006, // MOVE.L #6,D0
-			0x323C, 0x0003,         // MOVE.W #3,D1
-			0x80C1,                 // DIVU.W D1,D0
-			0x203C, 0xFFFF, 0xFFFA, // MOVE.L #-6,D0
-			0x323C, 0xFFFD,         // MOVE.W #-3,D1
-			0x81C1,                 // DIVS.W D1,D0
-			0x60EA                  // BRA.S start
+			0x7006, // MOVEQ #6,D0
+			0x7203, // MOVEQ #3,D1
+			0x80C1, // DIVU.W D1,D0
+			0x70FA, // MOVEQ #-6,D0
+			0x72FD, // MOVEQ #-3,D1
+			0x81C1, // DIVS.W D1,D0
+			0x60F2  // BRA.S start
 		};
 		var jitBus = CreateCodeBus();
 		var interpreterBus = CreateCodeBus();
