@@ -189,6 +189,39 @@ namespace Copper68k
             StateFrameWritebackExponentBit = vector is 51 or 54;
         }
 
+        public void PrepareMoveOutException(
+            int vector,
+            ushort command,
+            uint effectiveAddress,
+            ExtF80 source,
+            bool use68040IntegerFrame = true)
+        {
+            PrepareArithmeticException(vector, command, effectiveAddress, source, source);
+
+            var format = (command >> 10) & 7;
+            if (!use68040IntegerFrame || vector != 52 || format is not (0 or 4 or 6))
+            {
+                return;
+            }
+
+            // MC68040UM Table 9-16: the FPSP uses T to recognize integer
+            // FMOVE OUT and reads the rounded integer from the temporaries.
+            StateFrameKind = M68040FpuFrameKind.Busy;
+            StateFrameE1 = true;
+            StateFrameE3 = false;
+            StateFrameT = true;
+            if (source.Classification == ExtF80Class.Normal)
+            {
+                var integerExponent = format == 6 ? 7 : format == 4 ? 15 : 31;
+                var exponent = (source.SignExponent & 0x7FFF) - integerExponent + 1;
+                var signExponent = (ushort)((source.SignExponent & 0x8000) | exponent);
+                var rounded = ExtF80Math.ToInt64(source, Context.RoundingMode).Value;
+                var temporary = ExtF80.FromBits(signExponent, unchecked((ulong)rounded));
+                StateFrameDestination = temporary;
+                StateFrameWriteback = temporary;
+            }
+        }
+
         public void PrepareUnsupportedData(
             ushort command,
             uint effectiveAddress,
@@ -3579,12 +3612,12 @@ namespace Copper68k
                 }
                 else
                 {
-                    State.M68040Fpu.PrepareArithmeticException(
+                    State.M68040Fpu.PrepareMoveOutException(
                         exceptionVector,
                         extension,
                         effectiveAddress,
                         sourceValue,
-                        sourceValue);
+                        use68040IntegerFrame: _profile.Model == M68kAcceleratorModel.M68040);
                 }
 
                 RaiseFpuFormat3Exception(exceptionVector, State.ProgramCounter, effectiveAddress);

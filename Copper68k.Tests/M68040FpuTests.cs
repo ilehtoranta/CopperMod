@@ -622,6 +622,42 @@ public sealed class M68040FpuTests
 				(vector == 54 ? M68040FpuState.ExceptionSignalingNan : M68040FpuState.ExceptionOperandError));
 	}
 
+	[Theory]
+	[InlineData(128, 0x7880, 0x4000, 0x0000000000000080UL)]
+	[InlineData(-128, 0x7880, 0xC000, 0xFFFFFFFFFFFFFF80UL)]
+	[InlineData(-32768, 0x7080, 0xC000, 0xFFFFFFFFFFFF8000UL)]
+	[InlineData(int.MinValue, 0x6080, 0xC000, 0xFFFFFFFF80000000UL)]
+	public void FsaveIntegerMoveOutOperandErrorExposesPostInstructionRoundedOperand(
+		int source, ushort command, ushort temporaryExponent, ulong temporaryMantissa)
+	{
+		const uint handler = 0x2800;
+		var bus = new Copper68kTestBus();
+		WriteWords(bus, CodeBase, 0xF218, command); // FMOVE FP1,(A0)+
+		WriteWords(bus, handler, 0xF327); // FSAVE -(A7)
+		bus.WriteLong(52u * 4, handler);
+		var cpu = new M68040Interpreter(bus, M68020CpuProfile.Ocs68040Accelerator25Mhz);
+		cpu.Reset(CodeBase, StackBase);
+		cpu.State.A[0] = 0x2200;
+		cpu.State.M68040Fpu.FP[1] = ExtF80Math.FromInt32(source);
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(52, cpu.State.LastExceptionVector);
+		Assert.Equal(CodeBase + 4, cpu.State.LastExceptionStackedProgramCounter);
+		Assert.Equal(0x2200u, bus.ReadLong(StackBase - 4));
+		Assert.Equal(0x2200u + (command == 0x6080 ? 4u : command == 0x7080 ? 2u : 1u), cpu.State.A[0]);
+		cpu.ExecuteInstruction();
+
+		var frame = cpu.State.A[7];
+		Assert.Equal(0x41600000u, bus.ReadLong(frame));
+		Assert.Equal((uint)command << 16, bus.ReadLong(frame + 0x40));
+		Assert.Equal(0x04100000u, bus.ReadLong(frame + 0x48) & 0x06100000u); // E1 and T
+		Assert.Equal((uint)temporaryExponent << 16, bus.ReadLong(frame + 0x4C)); // FPTEMP
+		Assert.Equal((uint)(temporaryMantissa >> 32), bus.ReadLong(frame + 0x50));
+		Assert.Equal((uint)temporaryMantissa, bus.ReadLong(frame + 0x54));
+		Assert.Equal((uint)ExtF80Math.FromInt32(source).SignExponent << 16, bus.ReadLong(frame + 0x58)); // ETEMP
+	}
+
 	[Fact]
 	public void FmoveUnsupportedExtendedSourceRaisesPostInstructionException()
 	{

@@ -3,6 +3,7 @@ name: Publish Copper68k approved tags
 on:
   push:
     tags:
+      - copper68k-v1.5.14
       - copper68k-v1.5.13
       - copper68k-v1.5.12
       - copper68k-v1.5.11
@@ -73,6 +74,7 @@ jobs:
         shell: pwsh
         run: |
           $version = switch -Regex ($env:GITHUB_REF_NAME) {
+            '^copper68k-v1\.5\.14$' { '1.5.14'; break }
             '^copper68k-v1\.5\.13$' { '1.5.13'; break }
             '^copper68k-v1\.5\.12$' { '1.5.12'; break }
             '^copper68k-v1\.5\.11$' { '1.5.11'; break }

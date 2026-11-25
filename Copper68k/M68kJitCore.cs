@@ -12087,11 +12087,10 @@ namespace Copper68k
                         }
                         else
                         {
-                            State.M68040Fpu.PrepareArithmeticException(
+                            State.M68040Fpu.PrepareMoveOutException(
                                 moveException,
                                 registerMask,
                                 effectiveAddress,
-                                sourceValue,
                                 sourceValue);
                         }
 
