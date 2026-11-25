@@ -61,6 +61,7 @@ public sealed class NativeGraphicsRasterExecAbiTests
 
     private sealed class Fixture : IDisposable
     {
+        private const uint GraphicsBase = 0x0070_0000;
         private const uint ExecBase = 0x0077_0000;
         private const uint CodeAddress = 0x0087_0000;
         private const uint HeapAddress = 0x00D0_0000;
@@ -75,6 +76,8 @@ public sealed class NativeGraphicsRasterExecAbiTests
         {
             Bus.MapWritableMemory(4, new byte[4]);
             Bus.WriteLong(4, ExecBase);
+            Bus.MapWritableMemory(GraphicsBase, new byte[NativeGraphicsLibraryImageBuilder.PositiveImageSize]);
+            Bus.WriteHostLong(GraphicsBase + GraphicsLayouts.GfxBaseExecBase, ExecBase);
             Bus.MapWritableMemory(ExecBase, new byte[0x1000]);
             var heap = new byte[checked((int)HeapSize)];
             Array.Fill(heap, (byte)0xA5);
@@ -150,6 +153,7 @@ public sealed class NativeGraphicsRasterExecAbiTests
             _cpu.Reset(CodeAddress + (uint)Image.Value.Entries[vector], StackPointer);
             _cpu.State.D[0] = width;
             _cpu.State.D[1] = height;
+            _cpu.State.A[6] = GraphicsBase;
             _cpu.State.A[0] = raster;
             _cpu.State.A[1] = 0xA1A1_A1A1;
             for (var instruction = 0; instruction < 8192; instruction++)

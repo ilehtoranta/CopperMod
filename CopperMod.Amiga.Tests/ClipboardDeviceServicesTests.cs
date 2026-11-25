@@ -142,8 +142,8 @@ public sealed class ClipboardDeviceServicesTests
         replies.Clear(); PrepareIo(bus, 2, ReadData, 4, 0);
         Assert.True(Invoke(bus, service.DeviceBase - 30, state));
         Assert.Empty(replies); Assert.Single(posted);
-        Assert.Equal((ushort)0, bus.ReadWord(posted[0].Message + 0x14));
-        Assert.Equal(id, bus.ReadLong(posted[0].Message + 0x18));
+        Assert.Equal((ushort)0, bus.ReadWord(posted[0].Message + global::Amiga.SatisfyMessageLayout.Unit));
+        Assert.Equal(id, bus.ReadLong(posted[0].Message + global::Amiga.SatisfyMessageLayout.ClipId));
 
         bus.WriteLong(WriteRequest + 0x14, service.DeviceBase); bus.WriteLong(WriteRequest + 0x18, bus.ReadLong(Request + 0x18));
         bus.WriteByte(Data, 0xA5, 8); PrepareIo(bus, WriteRequest, 3, Data, 1, 0); bus.WriteLong(WriteRequest + 0x30, id); state.A[1] = WriteRequest;

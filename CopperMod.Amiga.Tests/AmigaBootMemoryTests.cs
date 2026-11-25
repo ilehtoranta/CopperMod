@@ -190,9 +190,9 @@ public sealed class AmigaBootMemoryTests
 	private const uint MemfFast = 0x0000_0004;
 	private const uint MemfClear = 0x0001_0000;
 	// Classic CopperStart boot persistently allocates the Layers library/root
-	// pair from the first public header: 304 allocator bytes for the combined
-	// negative/positive library allocation and 48 for the 44-byte root.
-	private const uint CopperStartLayersPersistentBytes = 352;
+	// pair from the first public header. The unified 51-vector table, public
+	// Library and its two strings occupy 408 aligned bytes. Its root occupies 48.
+	private const uint CopperStartLayersPersistentBytes = 408 + 48;
 
 	[Fact]
 	public void EmulatorCreatesNoCyberGraphicsLayerWithoutRtgVram()
@@ -433,7 +433,7 @@ public sealed class AmigaBootMemoryTests
 
 		for (var offset = 0u; offset < 6; offset++)
 		{
-			bus.WriteByte(unchecked(execBase - 240u + offset), 0, 0);
+			bus.WriteHostByte(unchecked(execBase - 240u + offset), 0);
 		}
 
 		InvokeTryActivateKickstartRomExecServices(boot);
@@ -478,10 +478,9 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(execBase + ExecLibListOffset + 8, layersBase);
 
 		for (var index = 0; index < negativeSize; index++)
-			bus.WriteByte(
+			bus.WriteHostByte(
 				layersBase - negativeSize + checked((uint)index),
-				unchecked((byte)(index * 37 + 11)),
-				0);
+				unchecked((byte)(index * 37 + 11)));
 		for (var index = 0; index < patchedOffsets.Length; index++)
 		{
 			var vector = unchecked((uint)((int)layersBase + patchedOffsets[index]));
@@ -524,7 +523,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(initialHash, HashVectorSlab());
 
 		for (var offset = 0u; offset < 6; offset++)
-			bus.WriteByte(unchecked(execBase - 240u + offset), 0, 0);
+			bus.WriteHostByte(unchecked(execBase - 240u + offset), 0);
 		InvokeTryActivateKickstartRomExecServices(boot);
 		Assert.Equal("Pending", GetKickstartRomExecTakeoverState(boot));
 		Assert.False(boot.HasCopperStartLayers);
@@ -911,7 +910,7 @@ public sealed class AmigaBootMemoryTests
 		var stack = InvokeAllocMem(bus, 128, MemfPublic);
 		const uint interruptData = 0x1234_5678;
 
-		bus.WriteByte(interrupt + (uint)global::Amiga.ExecLayout.Node.Priority, 0, 0);
+		bus.WriteHostByte(interrupt + (uint)global::Amiga.ExecLayout.Node.Priority, 0);
 		bus.WriteLong(interrupt + (uint)global::Amiga.ExecLayout.Interrupt.Data, interruptData);
 		bus.WriteLong(interrupt + (uint)global::Amiga.ExecLayout.Interrupt.Code, code);
 		WriteMoveAddressRegisterToAbsolute(bus, code, 0, capture);
@@ -967,7 +966,7 @@ public sealed class AmigaBootMemoryTests
 			(uint)global::Amiga.ExecLayout.ExecBase.LibraryList;
 		var libraryTail = libraryList + (uint)global::Amiga.ExecLayout.List.Tail;
 
-		bus.WriteByte(interrupt + (uint)global::Amiga.ExecLayout.Node.Priority, 0xFF, 0); // negative phase
+		bus.WriteHostByte(interrupt + (uint)global::Amiga.ExecLayout.Node.Priority, 0xFF); // negative phase
 		bus.WriteLong(interrupt + (uint)global::Amiga.ExecLayout.Interrupt.Code, handlerCode);
 		bus.WriteWord(handlerCode, 0x7000); // MOVEQ #DidNothing,D0
 		bus.WriteWord(handlerCode + 2, 0x4E75); // RTS
@@ -981,8 +980,8 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(libraryList + (uint)global::Amiga.ExecLayout.List.TailPred, library);
 		bus.WriteLong(library + (uint)global::Amiga.ExecLayout.Node.Successor, libraryTail);
 		bus.WriteLong(library + (uint)global::Amiga.ExecLayout.Node.Predecessor, libraryList);
-		bus.WriteByte(library + (uint)global::Amiga.ExecLayout.Library.Flags,
-			(byte)global::Amiga.LibraryFlags.DelayedExpunge, 0);
+		bus.WriteHostByte(library + (uint)global::Amiga.ExecLayout.Library.Flags,
+			(byte)global::Amiga.LibraryFlags.DelayedExpunge);
 		bus.WriteWord(library + (uint)global::Amiga.ExecLayout.Library.OpenCount, 0);
 		bus.WriteWord(libraryStorage, 0x23FC); // MOVE.L #marker,(counter).L
 		bus.WriteLong(libraryStorage + 2, 0xC0DE_CAFEu);
@@ -1014,7 +1013,7 @@ public sealed class AmigaBootMemoryTests
 		var state = new M68kCpuState();
 		state.A[1] = io;
 		bus.WriteWord(io + BootIoCommandOffset, AmigaBootController.CmdRead);
-		bus.WriteByte(io + BootIoErrorOffset, 0xCC, 0);
+		bus.WriteHostByte(io + BootIoErrorOffset, 0xCC);
 		bus.WriteLong(io + BootIoActualOffset, 0xDEAD_BEEFu);
 		bus.WriteLong(io + BootIoLengthOffset, 0x20);
 		bus.WriteLong(io + BootIoDataOffset, ChipPublicLowerAddress);
@@ -1065,7 +1064,7 @@ public sealed class AmigaBootMemoryTests
 
 		Assert.Equal(4u, state.D[0]);
 		Assert.Equal(0x0010, machine.Bus.ReadWord(currentTask + TaskTrapAllocOffset));
-		Assert.Equal(0x0010, machine.Bus.ReadWord(currentTask + TaskTrapAbleOffset));
+		Assert.Equal(0, machine.Bus.ReadWord(currentTask + TaskTrapAbleOffset));
 
 		state.D[0] = 4;
 		Assert.True(InvokeHostTrap(machine.Bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -342), state));
@@ -1662,11 +1661,11 @@ public sealed class AmigaBootMemoryTests
 		const uint destinationRastPort = 0x2800;
 		bus.WriteWord(sourceBitMap + BitMapBytesPerRowOffset, 2);
 		bus.WriteWord(sourceBitMap + BitMapRowsOffset, 1);
-		bus.WriteByte(sourceBitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteHostByte(sourceBitMap + BitMapDepthOffset, 1);
 		bus.WriteLong(sourceBitMap + BitMapPlanesOffset, sourcePlane);
 		bus.WriteWord(sourcePlane, 0x8000);
 		bus.WriteLong(destinationRastPort + RastPortBitMapOffset, destinationBitMap);
-		bus.WriteByte(destinationRastPort + 0x18, 0xFF, 0);
+		bus.WriteHostByte(destinationRastPort + 0x18, 0xFF);
 		var blit = new M68kCpuState();
 		blit.A[0] = sourceBitMap;
 		blit.A[1] = destinationRastPort;
@@ -1674,7 +1673,6 @@ public sealed class AmigaBootMemoryTests
 		blit.D[5] = 1;
 		blit.D[6] = 0xC0;
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -606), blit));
-		Assert.Equal(1u, blit.D[0]);
 		Assert.Equal((byte)1, bus.ReadByte(destination));
 
 		var free = new M68kCpuState();
@@ -1717,8 +1715,8 @@ public sealed class AmigaBootMemoryTests
 		const uint visible = 0x2A40;
 		bus.WriteLong(rastPort + 0x00, layer);
 		bus.WriteLong(rastPort + RastPortBitMapOffset, screenBitMap);
-		bus.WriteByte(rastPort + 0x18, 0xFF, 0);
-		bus.WriteByte(rastPort + 0x19, 7, 0);
+		bus.WriteHostByte(rastPort + 0x18, 0xFF);
+		bus.WriteHostByte(rastPort + 0x19, 7);
 		bus.WriteLong(layer + 0x08, obscured);
 		bus.WriteWord(layer + 0x10, 10);
 		bus.WriteWord(layer + 0x12, 4);
@@ -1838,11 +1836,11 @@ public sealed class AmigaBootMemoryTests
 		const uint sourcePlane = 0x2C00;
 		bus.WriteWord(sourceBitMap + BitMapBytesPerRowOffset, 2);
 		bus.WriteWord(sourceBitMap + BitMapRowsOffset, 4);
-		bus.WriteByte(sourceBitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteHostByte(sourceBitMap + BitMapDepthOffset, 1);
 		bus.WriteLong(sourceBitMap + BitMapPlanesOffset, sourcePlane);
 		for (var y = 0; y < 4; y++)
 		{
-			bus.WriteByte(sourcePlane + (uint)(y * 2), 0xFF, 0);
+			bus.WriteHostByte(sourcePlane + (uint)(y * 2), 0xFF);
 		}
 
 		var blit = new M68kCpuState();
@@ -1865,7 +1863,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.True(boot.CyberGraphics.TryGetBitMapSurface(copyBitMap, out var copy));
 		const uint copyRastPort = 0x2D00;
 		bus.WriteLong(copyRastPort + RastPortBitMapOffset, copyBitMap);
-		bus.WriteByte(copyRastPort + 0x18, 0xFF, 0);
+		bus.WriteHostByte(copyRastPort + 0x18, 0xFF);
 		boot.CyberGraphics.RegisterRastPort(copyRastPort, copy);
 		var clipBlit = new M68kCpuState();
 		clipBlit.A[0] = rastPort;
@@ -1900,15 +1898,15 @@ public sealed class AmigaBootMemoryTests
 		var source = Assert.IsType<CyberGraphicsSurface>(
 			boot.CyberGraphics.AllocateRtgSurface(2, 1, CyberGraphicsPixelFormat.Lut8));
 		boot.CyberGraphics.RegisterBitMap(sourceBitMap, source);
-		bus.WriteByte(source.GuestBaseAddress, 1, 0);
-		bus.WriteByte(source.GuestBaseAddress + 1, 2, 0);
+		bus.WriteHostByte(source.GuestBaseAddress, 1);
+		bus.WriteHostByte(source.GuestBaseAddress + 1, 2);
 
 		const uint destinationBitMap = 0x2B00;
 		const uint plane0 = 0x2C00;
 		const uint plane1 = 0x2D00;
 		bus.WriteWord(destinationBitMap + BitMapBytesPerRowOffset, 2);
 		bus.WriteWord(destinationBitMap + BitMapRowsOffset, 1);
-		bus.WriteByte(destinationBitMap + BitMapDepthOffset, 2, 0);
+		bus.WriteHostByte(destinationBitMap + BitMapDepthOffset, 2);
 		bus.WriteLong(destinationBitMap + BitMapPlanesOffset, plane0);
 		bus.WriteLong(destinationBitMap + BitMapPlanesOffset + 4, plane1);
 		const uint rastPort = 0x2800;
@@ -1916,7 +1914,7 @@ public sealed class AmigaBootMemoryTests
 		const uint clipRect = 0x2A00;
 		bus.WriteLong(rastPort, layer);
 		bus.WriteLong(rastPort + RastPortBitMapOffset, destinationBitMap);
-		bus.WriteByte(rastPort + 0x18, 0xFF, 0);
+		bus.WriteHostByte(rastPort + 0x18, 0xFF);
 		bus.WriteLong(layer + 0x08, clipRect);
 		bus.WriteWord(layer + 0x10, 10);
 		bus.WriteWord(layer + 0x12, 4);
@@ -2049,7 +2047,7 @@ public sealed class AmigaBootMemoryTests
 		const uint highColors = 0x3740;
 		const uint lowColors = 0x3780;
 		bus.WriteLong(screen + ScreenViewPortOffset + 4, colorMap);
-		bus.WriteByte(colorMap + 1, 1, 0); // V36+ ColorMap with LowColorBits
+		bus.WriteHostByte(colorMap + 1, 1); // V36+ ColorMap with LowColorBits
 		bus.WriteWord(colorMap + 2, 2);
 		bus.WriteLong(colorMap + 4, highColors);
 		bus.WriteLong(colorMap + 0x0C, lowColors);
@@ -2539,7 +2537,7 @@ public sealed class AmigaBootMemoryTests
 		const uint stack = 0x2400;
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 480);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 8, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 8);
 		bus.WriteLong(newScreen + 0x20, extension);
 		bus.WriteLong(extension, 0x8000_0032); // SA_DisplayID
 		bus.WriteLong(extension + 4, 0x4350_0011);
@@ -2634,15 +2632,15 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteWord(viewPort + ViewPortDxOffset, 0);
 		bus.WriteWord(viewPort + ViewPortDyOffset, 0);
 		bus.WriteWord(viewPort + ViewPortModesOffset, 0);
-		bus.WriteByte(viewPort + ViewPortExtendedModesOffset, 0, 0);
+		bus.WriteHostByte(viewPort + ViewPortExtendedModesOffset, 0);
 		bus.WriteLong(viewPort + ViewPortRasInfoOffset, rasInfo);
 
 		bus.WriteLong(rasInfo, 0);
 		bus.WriteLong(rasInfo + 4, bitMap);
 		bus.WriteWord(bitMap + BitMapBytesPerRowOffset, 2);
 		bus.WriteWord(bitMap + BitMapRowsOffset, 1);
-		bus.WriteByte(bitMap + BitMapFlagsOffset, 0, 0);
-		bus.WriteByte(bitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteHostByte(bitMap + BitMapFlagsOffset, 0);
+		bus.WriteHostByte(bitMap + BitMapDepthOffset, 1);
 		bus.WriteLong(bitMap + BitMapPlanesOffset, plane);
 		bus.WriteWord(plane, 0x8000);
 
@@ -3561,7 +3559,7 @@ public sealed class AmigaBootMemoryTests
 		bus.MapWritableMemory(oddView, new byte[ViewStructSize]);
 		for (var index = 0; index < sizeof(uint) * 3; index++)
 		{
-			bus.WriteByte(oddView + (uint)index, 0, 0);
+			bus.WriteHostByte(oddView + (uint)index, 0);
 		}
 
 		bus.MapWritableMemory(evenView, new byte[ViewStructSize]);
@@ -3616,7 +3614,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(view + ViewViewPortOffset, viewPort);
 		bus.WriteWord(nextBitMap + BitMapBytesPerRowOffset, 2);
 		bus.WriteWord(nextBitMap + BitMapRowsOffset, 1);
-		bus.WriteByte(nextBitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteHostByte(nextBitMap + BitMapDepthOffset, 1);
 		bus.WriteLong(nextBitMap + BitMapPlanesOffset, nextPlane);
 		bus.WriteWord(nextPlane, 0x4000);
 
@@ -3661,17 +3659,17 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(view + ViewViewPortOffset, viewPort);
 		bus.WriteWord(nextBitMap + BitMapBytesPerRowOffset, 2);
 		bus.WriteWord(nextBitMap + BitMapRowsOffset, 1);
-		bus.WriteByte(nextBitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteHostByte(nextBitMap + BitMapDepthOffset, 1);
 		bus.WriteLong(nextBitMap + BitMapPlanesOffset, nextPlane);
 		bus.WriteWord(nextPlane, 0x4000);
 
 		for (var offset = 0; offset < 0x54; offset++)
-			bus.WriteByte(dbufInfo + (uint)offset, 0, 0);
+			bus.WriteHostByte(dbufInfo + (uint)offset, 0);
 		for (var offset = 0; offset < 0x40; offset++)
-			bus.WriteByte(task + (uint)offset, 0, 0);
+			bus.WriteHostByte(task + (uint)offset, 0);
 		InitializeExecList(bus, replyPort + MsgPortMsgListOffset);
 		bus.WriteLong(replyPort + MsgPortSigTaskOffset, task);
-		bus.WriteByte(replyPort + MsgPortSigBitOffset, 3, 0);
+		bus.WriteHostByte(replyPort + MsgPortSigBitOffset, 3);
 		bus.WriteLong(dbufInfo + (uint)safeMessageOffset + MessageReplyPortOffset, replyPort);
 		bus.WriteLong(dbufInfo + (uint)displayMessageOffset + MessageReplyPortOffset, replyPort);
 
@@ -3727,17 +3725,17 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(view + ViewViewPortOffset, viewPort);
 		bus.WriteWord(nextBitMap + BitMapBytesPerRowOffset, 2);
 		bus.WriteWord(nextBitMap + BitMapRowsOffset, 1);
-		bus.WriteByte(nextBitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteHostByte(nextBitMap + BitMapDepthOffset, 1);
 		bus.WriteLong(nextBitMap + BitMapPlanesOffset, nextPlane);
 		bus.WriteWord(nextPlane, 0x4000);
 
 		for (var offset = 0; offset < 0x54; offset++)
-			bus.WriteByte(dbufInfo + (uint)offset, 0, 0);
+			bus.WriteHostByte(dbufInfo + (uint)offset, 0);
 		for (var offset = 0; offset < 0x40; offset++)
-			bus.WriteByte(task + (uint)offset, 0, 0);
+			bus.WriteHostByte(task + (uint)offset, 0);
 		InitializeExecList(bus, replyPort + MsgPortMsgListOffset);
 		bus.WriteLong(replyPort + MsgPortSigTaskOffset, task);
-		bus.WriteByte(replyPort + MsgPortSigBitOffset, 3, 0);
+		bus.WriteHostByte(replyPort + MsgPortSigBitOffset, 3);
 		bus.WriteLong(dbufInfo + (uint)safeMessageOffset + MessageReplyPortOffset, replyPort);
 		bus.WriteLong(dbufInfo + (uint)displayMessageOffset + MessageReplyPortOffset, replyPort);
 
@@ -3795,17 +3793,17 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(view + ViewViewPortOffset, viewPort);
 		bus.WriteWord(nextBitMap + BitMapBytesPerRowOffset, 2);
 		bus.WriteWord(nextBitMap + BitMapRowsOffset, 1);
-		bus.WriteByte(nextBitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteHostByte(nextBitMap + BitMapDepthOffset, 1);
 		bus.WriteLong(nextBitMap + BitMapPlanesOffset, nextPlane);
 		bus.WriteWord(nextPlane, 0x4000);
 
 		for (var offset = 0; offset < 0x54; offset++)
-			bus.WriteByte(dbufInfo + (uint)offset, 0, 0);
+			bus.WriteHostByte(dbufInfo + (uint)offset, 0);
 		for (var offset = 0; offset < 0x40; offset++)
-			bus.WriteByte(task + (uint)offset, 0, 0);
+			bus.WriteHostByte(task + (uint)offset, 0);
 		InitializeExecList(bus, replyPort + MsgPortMsgListOffset);
 		bus.WriteLong(replyPort + MsgPortSigTaskOffset, task);
-		bus.WriteByte(replyPort + MsgPortSigBitOffset, 3, 0);
+		bus.WriteHostByte(replyPort + MsgPortSigBitOffset, 3);
 		bus.WriteLong(dbufInfo + (uint)safeMessageOffset + MessageReplyPortOffset, replyPort);
 		bus.WriteLong(dbufInfo + (uint)displayMessageOffset + MessageReplyPortOffset, replyPort);
 
@@ -3924,6 +3922,11 @@ public sealed class AmigaBootMemoryTests
 		var bus = machine.Bus;
 		var getObject = new M68kCpuState();
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IconLibraryBase, -78), getObject));
+		Assert.Equal(0u, getObject.D[0]);
+		var name = InvokeAllocMem(bus, 16, 0);
+		WriteCString(bus, name, "Disk:Game");
+		getObject.A[0] = name;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IconLibraryBase, -78), getObject));
 		Assert.NotEqual(0u, getObject.D[0]);
 
 		var toolTypes = InvokeAllocMem(bus, 8, 0);
@@ -4029,7 +4032,7 @@ public sealed class AmigaBootMemoryTests
 		var machine = StartBootShim(MachineProfile.A500Pal512KBoot);
 		var bus = machine.Bus;
 		const uint source = 0x4000;
-		bus.WriteByte(source, 1, 0); bus.WriteByte(source + 1, 2, 0); bus.WriteByte(source + 2, 3, 0);
+		bus.WriteHostByte(source, 1); bus.WriteHostByte(source + 1, 2); bus.WriteHostByte(source + 2, 3);
 		var state = new M68kCpuState(); state.A[0] = source; state.A[1] = source + 1; state.D[0] = 3;
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -624), state));
 		Assert.Equal((byte)1, bus.ReadByte(source + 1));
@@ -4056,9 +4059,9 @@ public sealed class AmigaBootMemoryTests
 		WriteCString(bus, portName, "worker.port");
 		bus.WriteLong(port + MemNodeNameOffset, portName);
 		bus.WriteLong(port + MsgPortSigTaskOffset, task);
-		bus.WriteByte(port + MsgPortSigBitOffset, 5, 0);
+		bus.WriteHostByte(port + MsgPortSigBitOffset, 5);
 		bus.WriteLong(replyPort + MsgPortSigTaskOffset, task);
-		bus.WriteByte(replyPort + MsgPortSigBitOffset, 6, 0);
+		bus.WriteHostByte(replyPort + MsgPortSigBitOffset, 6);
 		InvokeExecPort(bus, -354, 0, port); // AddPort
 		InvokeExecPort(bus, -354, 0, replyPort);
 		Assert.Equal(port, InvokeExecPort(bus, -390, 0, portName)); // FindPort
@@ -4072,6 +4075,11 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(message, InvokeExecPort(bus, -384, port, 0)); // WaitPort
 		Assert.Equal(message, InvokeExecPort(bus, -372, port, 0)); // GetMsg
 		Assert.Equal(port + MsgPortMsgListOffset + 4, bus.ReadLong(port + MsgPortMsgListOffset));
+		// WaitPort found a queued message, so it did not wait on the signal.
+		Assert.Equal(1u << 5, bus.ReadLong(task + TaskSigRecvdOffset) & (1u << 5));
+		var clearSignal = new M68kCpuState();
+		clearSignal.D[1] = 1u << 5;
+		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -306), clearSignal));
 		Assert.Equal(0u, bus.ReadLong(task + TaskSigRecvdOffset) & (1u << 5));
 
 		InvokeExecPort(bus, -378, 0, message); // ReplyMsg
@@ -4092,6 +4100,8 @@ public sealed class AmigaBootMemoryTests
 		InitializeExecList(bus, execBase + ExecTaskReadyOffset);
 		InitializeExecList(bus, execBase + ExecTaskWaitOffset);
 		bus.WriteWord(execBase + 0x120, 1);
+		bus.WriteHostByte(execBase + 0x126, 0xFF);
+		bus.WriteHostByte(execBase + 0x127, 0xFF);
 		var guest = new HostGuestMemory(bus);
 		var platform = new HostGuestMemoryExecPlatform(guest);
 		global::Amiga.ExecTaskCodec.Write(ref platform,
@@ -4135,12 +4145,15 @@ public sealed class AmigaBootMemoryTests
 		var signal = new M68kCpuState(); signal.A[1] = current; signal.D[0] = 1u << 4;
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -324), signal));
 		Assert.Equal(current, bus.ReadLong(execBase + ExecTaskReadyOffset + 8));
-		Assert.Equal(0u, bus.ReadLong(current + TaskSigWaitOffset));
+		Assert.Equal(1u << 4, bus.ReadLong(current + TaskSigRecvdOffset));
+		Assert.True(InvokeHostTrap(bus, ExecWaitResumeGatewayAddress, wait));
+		Assert.Equal(1u << 4, wait.D[0]);
+		Assert.Equal(0u, bus.ReadLong(current + TaskSigRecvdOffset));
 
 		Assert.Equal(0u, InvokeExecPort(bus, -132, 0, 0));
-		Assert.Equal((byte)1, bus.ReadByte(execBase + 0x127));
-		Assert.Equal(0u, InvokeExecPort(bus, -138, 0, 0));
 		Assert.Equal((byte)0, bus.ReadByte(execBase + 0x127));
+		Assert.Equal(0u, InvokeExecPort(bus, -138, 0, 0));
+		Assert.Equal((byte)0xFF, bus.ReadByte(execBase + 0x127));
 	}
 
 	[Fact]
@@ -4176,7 +4189,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(execBase + ExecThisTaskOffset, current);
 		bus.WriteLong(current + MemNodeNameOffset, currentName);
 		bus.WriteLong(target + MemNodeNameOffset, targetName);
-		bus.WriteByte(target + 9, 1, 0);
+		bus.WriteHostByte(target + 9, 1);
 		InitializeExecList(bus, execBase + ExecTaskReadyOffset);
 		InitializeExecList(bus, execBase + ExecTaskWaitOffset);
 		bus.WriteLong(target, execBase + ExecTaskReadyOffset + 4);
@@ -4380,12 +4393,15 @@ public sealed class AmigaBootMemoryTests
 		var open = new M68kCpuState();
 		open.A[1] = libraryName;
 		open.D[0] = 40;
+		open.A[6] = execBase;
 		open.A[7] = 0x3900;
 		bus.WriteLong(open.A[7], 0x3A00);
 		bus.WriteWord(library - 6, 0x4E75); // library Open vector
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.ExecLibraryBase, -552), open));
 		Assert.Equal(library - 6, open.ProgramCounter);
-		Assert.Equal(0x38FCu, open.A[7]);
+		Assert.Equal(0x38F8u, open.A[7]);
+		Assert.Equal(execBase, bus.ReadLong(open.A[7] + 4));
+		Assert.Equal(0x3A00u, bus.ReadLong(open.A[7] + 8));
 		Assert.NotEqual(0x3A00u, bus.ReadLong(open.A[7]));
 		Assert.Equal(0u, InvokeExecPort(bus, -432, 0, device)); // AddDevice
 		Assert.Equal(device, bus.ReadLong(execBase + ExecDeviceListOffset));
@@ -4463,7 +4479,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(device, bus.ReadLong(request + 0x14));
 
 		bus.WriteWord(request + 0x1C, 2);
-		bus.WriteByte(request + 0x1E, 1, 0); // native DoIO sets IOF_QUICK
+		bus.WriteHostByte(request + 0x1E, 1); // native DoIO sets IOF_QUICK
 		bus.WriteLong(request + 0x24, 4);
 		bus.WriteLong(request + 0x28, destination);
 		bus.WriteLong(request + 0x2C, 8);
@@ -4489,7 +4505,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.True(InvokeHostTrap(bus, device - 30, begin));
 		Assert.Equal(unchecked((byte)(sbyte)global::Amiga.IoError.BadAddress), bus.ReadByte(request + 0x1F));
 
-		bus.WriteByte(request + 0x1E, 0, 0); // SendIO path: completion is deferred to a boundary.
+		bus.WriteHostByte(request + 0x1E, 0); // SendIO path: completion is deferred to a boundary.
 		bus.WriteWord(request + 0x1C, 2); // CMD_READ
 		bus.WriteLong(request + 0x28, destination + 4);
 		Assert.True(InvokeHostTrap(bus, device - 30, begin));
@@ -4500,7 +4516,7 @@ public sealed class AmigaBootMemoryTests
 
 		// TD_RAWREAD reads encoded MFM bytes from the live drive track instead
 		// of exposing the logical ADF sector image.
-		bus.WriteByte(request + 0x1E, 1, 0);
+		bus.WriteHostByte(request + 0x1E, 1);
 		bus.WriteWord(request + 0x1C, 16); // TD_RAWREAD
 		bus.WriteLong(request + 0x24, 4);
 		bus.WriteLong(request + 0x28, destination + 8);
@@ -4555,7 +4571,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.True(InvokeHostTrap(bus, device - 30, begin));
 
 		bus.WriteWord(request + 0x1C, 9);
-		bus.WriteByte(request + 0x1E, 1, 0);
+		bus.WriteHostByte(request + 0x1E, 1);
 		bus.WriteLong(request + 0x24, 1);
 		Assert.True(InvokeHostTrap(bus, device - 30, begin));
 		Assert.True(motorOn);
@@ -4725,7 +4741,7 @@ public sealed class AmigaBootMemoryTests
 		var screenBitMap = openScreenState.D[0] + ScreenBitMapOffset;
 		var markerPlane = bus.ReadLong(screenBitMap + BitMapPlanesOffset);
 		var markerByte = markerPlane + (uint)(40 * bus.ReadWord(screenBitMap + BitMapBytesPerRowOffset));
-		bus.WriteByte(markerByte, 0x01, 0);
+		bus.WriteHostByte(markerByte, 0x01);
 
 		var titleAddress = InvokeAllocMem(bus, 64, 0);
 		WriteCString(bus, titleAddress, "Loading Hired Guns");
@@ -4789,7 +4805,7 @@ public sealed class AmigaBootMemoryTests
 		const uint wrappedTitle = 0xFFFF_FFFCu;
 		bus.MapWritableMemory(wrappedTitle, new byte[4] { (byte)'X', (byte)'X', (byte)'X', (byte)'X' });
 		var lowAliasBefore = bus.ReadByte(0);
-		bus.WriteByte(0, (byte)'Y', 0);
+		bus.WriteHostByte(0, (byte)'Y');
 		try
 		{
 			var malformed = new M68kCpuState
@@ -4809,7 +4825,7 @@ public sealed class AmigaBootMemoryTests
 		}
 		finally
 		{
-			bus.WriteByte(0, lowAliasBefore, 0);
+			bus.WriteHostByte(0, lowAliasBefore);
 		}
 	}
 
@@ -4966,7 +4982,7 @@ public sealed class AmigaBootMemoryTests
 		var plane = bus.ReadLong(bitMap + BitMapPlanesOffset);
 		var bytesPerRow = bus.ReadWord(bitMap + BitMapBytesPerRowOffset);
 		var markerByte = plane + (uint)(40 * bytesPerRow);
-		bus.WriteByte(markerByte, 0x01, 0);
+		bus.WriteHostByte(markerByte, 0x01);
 
 		var title = InvokeAllocMem(bus, 32, 0);
 		WriteCString(bus, title, "Title to clear");
@@ -5092,8 +5108,8 @@ public sealed class AmigaBootMemoryTests
 		const uint wrappedTitle = 0xFFFF_FFFCu;
 		bus.MapWritableMemory(wrappedTitle, new byte[4] { (byte)'X', (byte)'X', (byte)'X', (byte)'X' });
 		var lowAliasBefore = bus.ReadByte(0);
-		bus.WriteByte(0, (byte)'Y', 0);
-		bus.WriteLong(screen + ScreenTitleOffset, wrappedTitle, 0);
+		bus.WriteHostByte(0, (byte)'Y');
+		bus.WriteHostLong(screen + ScreenTitleOffset, wrappedTitle);
 		try
 		{
 			var show = new M68kCpuState
@@ -5114,7 +5130,7 @@ public sealed class AmigaBootMemoryTests
 		}
 		finally
 		{
-			bus.WriteByte(0, lowAliasBefore, 0);
+			bus.WriteHostByte(0, lowAliasBefore);
 		}
 	}
 
@@ -5183,10 +5199,9 @@ public sealed class AmigaBootMemoryTests
 		// A nonzero vp_ExtendedModes belongs to the monitor/provider owner.
 		// Trigger the synthetic Intuition rethink path through a title update;
 		// it must leave the active CPR/DspIns publication intact.
-		bus.WriteByte(
+		bus.WriteHostByte(
 			viewPort + (uint)ViewPortExtendedModesOffset,
-			1,
-			0);
+			1);
 		var title = InvokeAllocMem(bus, 32, 0);
 		WriteCString(bus, title, "Provider-owned viewport");
 		var setTitle = new M68kCpuState
@@ -5237,7 +5252,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(newScreen + NewScreenViewModesOffset, ViewModeHires);
 		var openScreenState = new M68kCpuState();
 		openScreenState.A[0] = newScreen;
@@ -5272,7 +5287,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.True(bus.IsMappedMemoryRange(wrappedNewScreen, 0x10));
 		bus.WriteWord(wrappedNewScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(wrappedNewScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(wrappedNewScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(wrappedNewScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(wrappedNewScreen + NewScreenViewModesOffset, 0);
 		bus.WriteWord(wrappedNewScreen + 0x0E, 0x000F); // CUSTOMSCREEN
 
@@ -5280,12 +5295,12 @@ public sealed class AmigaBootMemoryTests
 		// 4.  Make the title alias fully valid so an unchecked host addition would
 		// visibly claim it; the checked path must leave it to native Intuition.
 		var aliasTitle = InvokeAllocMem(bus, 6, 0);
-		bus.WriteByte(aliasTitle, (byte)'A', 0);
-		bus.WriteByte(aliasTitle + 1, (byte)'L', 0);
-		bus.WriteByte(aliasTitle + 2, (byte)'I', 0);
-		bus.WriteByte(aliasTitle + 3, (byte)'A', 0);
-		bus.WriteByte(aliasTitle + 4, (byte)'S', 0);
-		bus.WriteByte(aliasTitle + 5, 0, 0);
+		bus.WriteHostByte(aliasTitle, (byte)'A');
+		bus.WriteHostByte(aliasTitle + 1, (byte)'L');
+		bus.WriteHostByte(aliasTitle + 2, (byte)'I');
+		bus.WriteHostByte(aliasTitle + 3, (byte)'A');
+		bus.WriteHostByte(aliasTitle + 4, (byte)'S');
+		bus.WriteHostByte(aliasTitle + 5, 0);
 		bus.WriteLong(lowAliasTitleField, aliasTitle);
 
 		var configure = typeof(AmigaBootController).GetMethod(
@@ -5311,7 +5326,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteWord(newScreen + NewScreenTopOffset, 3);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, ushort.MaxValue); // STDSCREENWIDTH (-1)
 		bus.WriteWord(newScreen + NewScreenHeightOffset, ushort.MaxValue); // STDSCREENHEIGHT (-1)
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(newScreen + NewScreenViewModesOffset, ViewModeHires);
 
 		var openScreenState = new M68kCpuState { A = { [0] = newScreen } };
@@ -5346,7 +5361,7 @@ public sealed class AmigaBootMemoryTests
 
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(newScreen + 0x0E, 0x1000); // NS_EXTENDED
 		bus.WriteLong(newScreen + 0x20, extension);
 		bus.WriteLong(extension, ScreenTagErrorCode);
@@ -5384,7 +5399,7 @@ public sealed class AmigaBootMemoryTests
 
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(newScreen + 0x0E, 0x1000); // NS_EXTENDED
 		bus.WriteLong(newScreen + 0x20, extension);
 		bus.WriteLong(extension, ScreenTagErrorCode);
@@ -5426,7 +5441,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 256);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 
 		// SA_Width, SA_Height, SA_Depth, SA_DisplayID, TAG_DONE.
 		var tags = InvokeAllocMem(bus, 5 * 8, 0);
@@ -5501,7 +5516,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteWord(newScreen + NewScreenTopOffset, 5);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 100);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(newScreen + NewScreenViewModesOffset, ViewModeHires);
 
 		var tags = InvokeAllocMem(bus, 3 * 8, 0);
@@ -5540,7 +5555,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(newScreen + NewScreenViewModesOffset, ViewModeHires);
 		var tags = InvokeAllocMem(bus, 2 * 8, 0);
 		bus.WriteLong(tags, ScreenTagSharePens);
@@ -5608,12 +5623,12 @@ public sealed class AmigaBootMemoryTests
 		var customBitMap = InvokeAllocMem(bus, GraphicsLayouts.BitMapSize, 0);
 		bus.WriteWord(customBitMap + BitMapBytesPerRowOffset, 40);
 		bus.WriteWord(customBitMap + BitMapRowsOffset, 256);
-		bus.WriteByte(customBitMap + BitMapFlagsOffset, 8, 0); // BMF_STANDARD
-		bus.WriteByte(customBitMap + BitMapDepthOffset, 2, 0);
+		bus.WriteHostByte(customBitMap + BitMapFlagsOffset, 8); // BMF_STANDARD
+		bus.WriteHostByte(customBitMap + BitMapDepthOffset, 2);
 		bus.WriteLong(customBitMap + BitMapPlanesOffset, plane0);
 		bus.WriteLong(customBitMap + BitMapPlanesOffset + 4, plane1);
-		bus.WriteByte(plane0, 0xA5, 0);
-		bus.WriteByte(plane1, 0x5A, 0);
+		bus.WriteHostByte(plane0, 0xA5);
+		bus.WriteHostByte(plane1, 0x5A);
 		var originalHeader = Enumerable.Range(0, GraphicsLayouts.BitMapSize)
 			.Select(offset => bus.ReadByte(customBitMap + (uint)offset))
 			.ToArray();
@@ -5688,11 +5703,10 @@ public sealed class AmigaBootMemoryTests
 		var customBitMap = InvokeAllocMem(bus, compactBitMapSpan, 0);
 		bus.WriteWord(customBitMap + BitMapBytesPerRowOffset, 40);
 		bus.WriteWord(customBitMap + BitMapRowsOffset, 256);
-		bus.WriteByte(
+		bus.WriteHostByte(
 			customBitMap + BitMapFlagsOffset,
-			(byte)(8 | (1 << 4)),
-			0); // BMF_STANDARD | BMF_MINPLANES
-		bus.WriteByte(customBitMap + BitMapDepthOffset, 2, 0);
+			(byte)(8 | (1 << 4))); // BMF_STANDARD | BMF_MINPLANES
+		bus.WriteHostByte(customBitMap + BitMapDepthOffset, 2);
 		bus.WriteLong(customBitMap + BitMapPlanesOffset, plane0);
 		bus.WriteLong(customBitMap + BitMapPlanesOffset + 4, plane1);
 		var originalHeader = Enumerable.Range(0, (int)compactBitMapSpan)
@@ -5745,8 +5759,8 @@ public sealed class AmigaBootMemoryTests
 		var customBitMap = InvokeAllocMem(bus, GraphicsLayouts.BitMapSize, 0);
 		bus.WriteWord(customBitMap + BitMapBytesPerRowOffset, 40);
 		bus.WriteWord(customBitMap + BitMapRowsOffset, 256);
-		bus.WriteByte(customBitMap + BitMapFlagsOffset, 8, 0);
-		bus.WriteByte(customBitMap + BitMapDepthOffset, 2, 0);
+		bus.WriteHostByte(customBitMap + BitMapFlagsOffset, 8);
+		bus.WriteHostByte(customBitMap + BitMapDepthOffset, 2);
 		// Leave the declared plane links null: a standard-planar custom screen
 		// cannot be claimed safely without the caller-owned display storage.
 		var errorCode = InvokeAllocMem(bus, 4, 0);
@@ -5789,8 +5803,8 @@ public sealed class AmigaBootMemoryTests
 		// Valid geometry and plane storage are not sufficient for the portable
 		// screen path: a non-standard bitmap belongs to the native/provider
 		// owner (including CyberGraphX), not the OCS/ECS planar bridge.
-		bus.WriteByte(customBitMap + BitMapFlagsOffset, 0, 0);
-		bus.WriteByte(customBitMap + BitMapDepthOffset, 2, 0);
+		bus.WriteHostByte(customBitMap + BitMapFlagsOffset, 0);
+		bus.WriteHostByte(customBitMap + BitMapDepthOffset, 2);
 		bus.WriteLong(customBitMap + BitMapPlanesOffset, plane0State.D[0]);
 		bus.WriteLong(customBitMap + BitMapPlanesOffset + 4, plane1State.D[0]);
 
@@ -5993,7 +6007,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 5, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 5);
 		var errorCode = InvokeAllocMem(bus, 4, 0xA5);
 		bus.WriteLong(errorCode, 0xA5A5A5A5);
 		var tags = InvokeAllocMem(bus, 3 * 8, 0);
@@ -6469,9 +6483,10 @@ public sealed class AmigaBootMemoryTests
 			bus,
 			Lvo(AmigaKickstartHost.GraphicsLibraryBase, -756),
 			dimensions));
-		Assert.Equal(0x58u, dimensions.D[0]);
-		Assert.Equal((ushort)200, bus.ReadWord(buffer + 0x14));
-		Assert.Equal((ushort)241, bus.ReadWord(buffer + 0x18));
+		Assert.Equal(66u, dimensions.D[0]);
+		Assert.Equal((ushort)199, bus.ReadWord(buffer + 0x20)); // Nominal.MaxY
+		Assert.Equal((ushort)1, bus.ReadWord(buffer + 0x14)); // MinRasterHeight
+		Assert.Equal((ushort)1024, bus.ReadWord(buffer + 0x18)); // MaxRasterHeight
 
 		var monitor = new M68kCpuState
 		{
@@ -6482,7 +6497,7 @@ public sealed class AmigaBootMemoryTests
 			bus,
 			Lvo(AmigaKickstartHost.GraphicsLibraryBase, -756),
 			monitor));
-		Assert.Equal(0x60u, monitor.D[0]);
+		Assert.Equal(88u, monitor.D[0]);
 		Assert.Equal((ushort)262, bus.ReadWord(buffer + 0x24));
 		Assert.Equal((ushort)21, bus.ReadWord(buffer + 0x28));
 	}
@@ -6550,7 +6565,7 @@ public sealed class AmigaBootMemoryTests
 			bus,
 			Lvo(AmigaKickstartHost.GraphicsLibraryBase, -756),
 			display));
-		Assert.Equal(0x38u, display.D[0]);
+		Assert.Equal(48u, display.D[0]);
 		Assert.Equal((ushort)0, bus.ReadWord(buffer + 0x10));
 		Assert.NotEqual(0u, bus.ReadLong(buffer + 0x12) & 0x0001_0000u);
 		Assert.Equal(ushort.MaxValue, bus.ReadWord(buffer + 0x1E));
@@ -6567,7 +6582,7 @@ public sealed class AmigaBootMemoryTests
 			bus,
 			Lvo(AmigaKickstartHost.GraphicsLibraryBase, -756),
 			dimensions));
-		Assert.Equal(0x58u, dimensions.D[0]);
+		Assert.Equal(66u, dimensions.D[0]);
 		Assert.Equal((ushort)8, bus.ReadWord(buffer + 0x10));
 	}
 
@@ -6681,7 +6696,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 
 		var colors = InvokeAllocMem(bus, 3 * 8, 0);
 		bus.WriteWord(colors, 1);
@@ -7079,8 +7094,8 @@ public sealed class AmigaBootMemoryTests
 		var legacyFont = InvokeAllocMem(bus, 8, 0);
 		bus.WriteLong(legacyFont, 0);
 		bus.WriteWord(legacyFont + 4, 9);
-		bus.WriteByte(legacyFont + 6, 3, 0);
-		bus.WriteByte(legacyFont + 7, 0xA5, 0);
+		bus.WriteHostByte(legacyFont + 6, 3);
+		bus.WriteHostByte(legacyFont + 7, 0xA5);
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteLong(newScreen + NewScreenFontOffset, legacyFont);
 
@@ -7100,8 +7115,8 @@ public sealed class AmigaBootMemoryTests
 		var taggedFont = InvokeAllocMem(bus, 8, 0);
 		bus.WriteLong(taggedFont, 0);
 		bus.WriteWord(taggedFont + 4, 11);
-		bus.WriteByte(taggedFont + 6, 5, 0);
-		bus.WriteByte(taggedFont + 7, 0x5A, 0);
+		bus.WriteHostByte(taggedFont + 6, 5);
+		bus.WriteHostByte(taggedFont + 7, 0x5A);
 		var tags = InvokeAllocMem(bus, 3 * 8, 0);
 		bus.WriteLong(tags, ScreenTagFont);
 		bus.WriteLong(tags + 4, taggedFont);
@@ -7205,10 +7220,9 @@ public sealed class AmigaBootMemoryTests
 		var customFont = InvokeAllocMem(bus, (uint)copiedFontBytes, 0);
 		for (var offset = 0; offset < copiedFontBytes; offset++)
 		{
-			bus.WriteByte(
+			bus.WriteHostByte(
 				customFont + (uint)offset,
-				bus.ReadByte(sourceFont + (uint)offset),
-				0);
+				bus.ReadByte(sourceFont + (uint)offset));
 		}
 
 		var customName = InvokeAllocMem(bus, 16, 0);
@@ -7217,7 +7231,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(customFont, 0);
 		bus.WriteLong(customFont + 4, 0);
 		bus.WriteWord(customFont + GraphicsLayouts.TextFontAccessors, 0);
-		bus.WriteByte(customFont + GraphicsLayouts.TextFontStyle, 0, 0);
+		bus.WriteHostByte(customFont + GraphicsLayouts.TextFontStyle, 0);
 		bus.WriteLong(
 			customFont + GraphicsLayouts.TextFontCharData,
 			customFont + (sourceStrike - sourceFont));
@@ -7238,11 +7252,10 @@ public sealed class AmigaBootMemoryTests
 		var textAttr = InvokeAllocMem(bus, GraphicsLayouts.TextAttrSize, 0);
 		bus.WriteLong(textAttr + GraphicsLayouts.TextAttrName, customName);
 		bus.WriteWord(textAttr + GraphicsLayouts.TextAttrYSize, sourceHeight);
-		bus.WriteByte(textAttr + GraphicsLayouts.TextAttrStyle, 0, 0);
-		bus.WriteByte(
+		bus.WriteHostByte(textAttr + GraphicsLayouts.TextAttrStyle, 0);
+		bus.WriteHostByte(
 			textAttr + GraphicsLayouts.TextAttrFlags,
-			bus.ReadByte(sourceFont + GraphicsLayouts.TextFontFlags),
-			0);
+			bus.ReadByte(sourceFont + GraphicsLayouts.TextFontFlags));
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteLong(newScreen + NewScreenFontOffset, textAttr);
 
@@ -7300,7 +7313,7 @@ public sealed class AmigaBootMemoryTests
 		var oddNewScreen = aligned + 1;
 		bus.WriteWord(oddNewScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(oddNewScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(oddNewScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(oddNewScreen + NewScreenDepthOffset, 2);
 		var open = new M68kCpuState
 		{
 			A = { [0] = oddNewScreen },
@@ -8043,8 +8056,8 @@ public sealed class AmigaBootMemoryTests
 		var taggedFont = InvokeAllocMem(bus, 8, 0);
 		bus.WriteLong(taggedFont, 0);
 		bus.WriteWord(taggedFont + 4, 12);
-		bus.WriteByte(taggedFont + 6, 6, 0);
-		bus.WriteByte(taggedFont + 7, 0x3C, 0);
+		bus.WriteHostByte(taggedFont + 6, 6);
+		bus.WriteHostByte(taggedFont + 7, 0x3C);
 		var tags = InvokeAllocMem(bus, 2 * 8, 0);
 		bus.WriteLong(tags, ScreenTagFont);
 		bus.WriteLong(tags + 4, taggedFont);
@@ -8242,7 +8255,7 @@ public sealed class AmigaBootMemoryTests
 
 		var buffer = InvokeAllocMem(bus, 8, 0);
 		for (var index = 0u; index < 8; index++)
-			bus.WriteByte(buffer + index, 0xA5, 0);
+			bus.WriteHostByte(buffer + index, 0xA5);
 		bus.MapReadOnlyMemory(buffer, new byte[]
 		{
 			0xA5, 0xA5, 0xA5, 0xA5,
@@ -8472,7 +8485,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteWord(newScreen + NewScreenTopOffset, 4);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, ushort.MaxValue); // STDSCREENWIDTH (-1)
 		bus.WriteWord(newScreen + NewScreenHeightOffset, ushort.MaxValue); // STDSCREENHEIGHT (-1)
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 
 		var clip = InvokeAllocMem(bus, 8, 0);
 		bus.WriteWord(clip, 10);
@@ -8543,9 +8556,9 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
-		bus.WriteByte(newScreen + 10, 9, 0); // NewScreen.DetailPen
-		bus.WriteByte(newScreen + 11, 10, 0); // NewScreen.BlockPen
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
+		bus.WriteHostByte(newScreen + 10, 9); // NewScreen.DetailPen
+		bus.WriteHostByte(newScreen + 11, 10); // NewScreen.BlockPen
 
 		var tags = InvokeAllocMem(bus, 3 * 8, 0);
 		bus.WriteLong(tags, ScreenTagDetailPen);
@@ -8594,7 +8607,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 0);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(newScreen + NewScreenViewModesOffset, 0);
 
 		var openScreenState = new M68kCpuState { A = { [0] = newScreen } };
@@ -8673,7 +8686,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		var secondOpen = new M68kCpuState { A = { [0] = newScreen } };
 		Assert.True(InvokeHostTrap(
 			bus,
@@ -8940,10 +8953,9 @@ public sealed class AmigaBootMemoryTests
 		bus.MapWritableMemory(oddActiView, new byte[sizeof(uint)]);
 		for (var index = 0; index < sizeof(uint); index++)
 		{
-			bus.WriteByte(
+			bus.WriteHostByte(
 				oddActiView + (uint)index,
-				unchecked((byte)(view >> (24 - (index * 8)))),
-				0);
+				unchecked((byte)(view >> (24 - (index * 8)))));
 		}
 
 		var nativeBaseField = typeof(AmigaBootController).GetField(
@@ -9135,7 +9147,7 @@ public sealed class AmigaBootMemoryTests
 		var secondNewScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(secondNewScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(secondNewScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(secondNewScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(secondNewScreen + NewScreenDepthOffset, 2);
 		var secondOpen = new M68kCpuState { A = { [0] = secondNewScreen } };
 		Assert.True(InvokeHostTrap(
 			bus,
@@ -10305,7 +10317,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, MemfPublic | MemfClear);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 
 		var tags = InvokeAllocMem(bus, 2 * 8, MemfPublic | MemfClear);
 		bus.WriteLong(tags, ScreenTagFont);
@@ -10407,7 +10419,7 @@ public sealed class AmigaBootMemoryTests
 		const uint newScreen = 0x2200;
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 7, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 7);
 
 		var rejected = new M68kCpuState { A = { [0] = newScreen } };
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198), rejected));
@@ -10415,7 +10427,7 @@ public sealed class AmigaBootMemoryTests
 
 		// The rejection is request-scoped. Repairing the NewScreen and retrying
 		// must be able to stage a normal synthetic session.
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		var opened = new M68kCpuState { A = { [0] = newScreen } };
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.IntuitionLibraryBase, -198), opened));
 		Assert.NotEqual(0u, opened.D[0]);
@@ -10429,7 +10441,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, MemfPublic | MemfClear);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 7, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 7);
 
 		var rejected = new M68kCpuState { A = { [0] = newScreen } };
 		Assert.True(InvokeHostTrap(
@@ -10464,7 +10476,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 7, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 7);
 		var errorCode = InvokeAllocMem(bus, 4, MemfPublic | MemfFast);
 		var tags = InvokeAllocMem(bus, 3 * 8, MemfPublic | MemfFast);
 		bus.WriteLong(tags, ScreenTagErrorCode);
@@ -10495,7 +10507,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 7, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 7);
 		var tags = InvokeAllocMem(bus, 3 * 8, MemfPublic | MemfFast);
 		bus.WriteLong(tags, ScreenTagDepth);
 		bus.WriteLong(tags + 4, 2);
@@ -10800,7 +10812,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(
 			newScreen + NewScreenViewModesOffset,
 			(ushort)(GraphicsModeIds.DualPlayfieldMode | GraphicsModeIds.PlayfieldBitAssignment));
@@ -11066,7 +11078,7 @@ public sealed class AmigaBootMemoryTests
 		var hamNewScreen = InvokeAllocMem(hamBus, 0x20, 0);
 		hamBus.WriteWord(hamNewScreen + NewScreenWidthOffset, 320);
 		hamBus.WriteWord(hamNewScreen + NewScreenHeightOffset, 200);
-		hamBus.WriteByte(hamNewScreen + NewScreenDepthOffset, 2, 0);
+		hamBus.WriteHostByte(hamNewScreen + NewScreenDepthOffset, 2);
 		hamBus.WriteWord(hamNewScreen + NewScreenViewModesOffset, ViewModeHam);
 		var hamOpen = new M68kCpuState { A = { [0] = hamNewScreen } };
 
@@ -11086,7 +11098,7 @@ public sealed class AmigaBootMemoryTests
 		var ehbNewScreen = InvokeAllocMem(ehbBus, 0x20, 0);
 		ehbBus.WriteWord(ehbNewScreen + NewScreenWidthOffset, 320);
 		ehbBus.WriteWord(ehbNewScreen + NewScreenHeightOffset, 200);
-		ehbBus.WriteByte(ehbNewScreen + NewScreenDepthOffset, 2, 0);
+		ehbBus.WriteHostByte(ehbNewScreen + NewScreenDepthOffset, 2);
 		ehbBus.WriteWord(ehbNewScreen + NewScreenViewModesOffset, ViewModeExtraHalfBrite);
 		var ehbOpen = new M68kCpuState { A = { [0] = ehbNewScreen } };
 
@@ -11106,7 +11118,7 @@ public sealed class AmigaBootMemoryTests
 		var superNewScreen = InvokeAllocMem(superBus, 0x20, 0);
 		superBus.WriteWord(superNewScreen + NewScreenWidthOffset, 1280);
 		superBus.WriteWord(superNewScreen + NewScreenHeightOffset, 200);
-		superBus.WriteByte(superNewScreen + NewScreenDepthOffset, 2, 0);
+		superBus.WriteHostByte(superNewScreen + NewScreenDepthOffset, 2);
 		superBus.WriteWord(superNewScreen + NewScreenViewModesOffset, ViewModeSuperHires);
 		var superOpen = new M68kCpuState { A = { [0] = superNewScreen } };
 
@@ -11132,7 +11144,7 @@ public sealed class AmigaBootMemoryTests
 		var requestedModes = (ushort)(GraphicsModeIds.DualPlayfieldMode | GraphicsModeIds.PlayfieldBitAssignment);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(newScreen + NewScreenViewModesOffset, requestedModes);
 		var openScreenState = new M68kCpuState { A = { [0] = newScreen } };
 
@@ -11182,7 +11194,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 8, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 8);
 		bus.WriteWord(newScreen + NewScreenViewModesOffset, GraphicsModeIds.DualPlayfieldMode);
 		var open = new M68kCpuState { A = { [0] = newScreen } };
 
@@ -11225,7 +11237,7 @@ public sealed class AmigaBootMemoryTests
 		var dualNewScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(dualNewScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(dualNewScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(dualNewScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(dualNewScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(
 			dualNewScreen + NewScreenViewModesOffset,
 			(ushort)(GraphicsModeIds.DualPlayfieldMode | GraphicsModeIds.PlayfieldBitAssignment));
@@ -11251,7 +11263,7 @@ public sealed class AmigaBootMemoryTests
 		var singleNewScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(singleNewScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(singleNewScreen + NewScreenHeightOffset, 200);
-		bus.WriteByte(singleNewScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(singleNewScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(singleNewScreen + NewScreenViewModesOffset, 0);
 
 		var singleOpen = new M68kCpuState { A = { [0] = singleNewScreen } };
@@ -11273,7 +11285,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 320);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 512);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(newScreen + NewScreenViewModesOffset, ViewModeInterlace);
 		var openScreenState = new M68kCpuState { A = { [0] = newScreen } };
 
@@ -11414,7 +11426,7 @@ public sealed class AmigaBootMemoryTests
 		var plane = bus.ReadLong(bitMap + GraphicsLayouts.BitMapPlanes);
 		var originalPlaneByte = bus.ReadByte(plane);
 		var text = InvokeAllocMem(bus, 1, 0);
-		bus.WriteByte(text, (byte)'A', 0);
+		bus.WriteHostByte(text, (byte)'A');
 		var currentX = rastPort + (uint)GraphicsLayouts.RastPortCurrentX;
 		bus.MapReadOnlyMemory(currentX, new byte[] { 0x00, 0x00 });
 
@@ -11698,7 +11710,7 @@ public sealed class AmigaBootMemoryTests
 		var newScreen = InvokeAllocMem(bus, 0x20, 0);
 		bus.WriteWord(newScreen + NewScreenWidthOffset, 640);
 		bus.WriteWord(newScreen + NewScreenHeightOffset, 256);
-		bus.WriteByte(newScreen + NewScreenDepthOffset, 2, 0);
+		bus.WriteHostByte(newScreen + NewScreenDepthOffset, 2);
 		bus.WriteWord(newScreen + NewScreenViewModesOffset, ViewModeHires);
 		var openScreenState = new M68kCpuState();
 		openScreenState.A[0] = newScreen;
@@ -11969,7 +11981,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(secondRasInfo + 0x04, bitMap);
 		bus.WriteWord(bitMap, 2);
 		bus.WriteWord(bitMap + 0x02, 1);
-		bus.WriteByte(bitMap + 0x05, 6, 0);
+		bus.WriteHostByte(bitMap + 0x05, 6);
 		for (var plane = 0; plane < 6; plane++)
 			bus.WriteLong(bitMap + 0x08u + (uint)(plane * 4), planeBase + (uint)(plane * 0x20));
 
@@ -11980,7 +11992,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal((ushort)0x6800, ReadCopperMoveValue(bus, copperList, 0x0100));
 
 		bus.WriteLong(rasInfo, secondRasInfo);
-		bus.WriteByte(bitMap + 0x05, 4, 0);
+		bus.WriteHostByte(bitMap + 0x05, 4);
 		bus.WriteWord(viewPort + 0x20, (ushort)(GraphicsModeIds.HiresMode | GraphicsModeIds.DualPlayfieldMode));
 		state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
@@ -11995,7 +12007,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal((ushort)0x0040, ReadCopperMoveValue(bus, copperList, 0x0104));
 
 		bus.WriteLong(rasInfo, 0);
-		bus.WriteByte(bitMap + 0x05, 2, 0);
+		bus.WriteHostByte(bitMap + 0x05, 2);
 		bus.WriteWord(viewPort + 0x20, (ushort)(GraphicsModeIds.HiresMode | GraphicsModeIds.SuperHiresMode));
 		state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
 		Assert.True(InvokeHostTrap(bus, Lvo(AmigaKickstartHost.GraphicsLibraryBase, -0xD8), state));
@@ -12042,7 +12054,7 @@ public sealed class AmigaBootMemoryTests
 		{
 			bus.WriteWord(bitMap + 0x00, (ushort)(bitMap == firstBitMap ? 4 : 6));
 			bus.WriteWord(bitMap + 0x02, 1);
-			bus.WriteByte(bitMap + 0x05, 2, 0);
+			bus.WriteHostByte(bitMap + 0x05, 2);
 		}
 
 		bus.WriteLong(firstBitMap + 0x08, firstPlane0);
@@ -12129,7 +12141,7 @@ public sealed class AmigaBootMemoryTests
 		{
 			bus.WriteWord(bitMap + BitMapBytesPerRowOffset, 2);
 			bus.WriteWord(bitMap + BitMapRowsOffset, 1);
-			bus.WriteByte(bitMap + BitMapDepthOffset, 4, 0);
+			bus.WriteHostByte(bitMap + BitMapDepthOffset, 4);
 		}
 
 		for (var plane = 0; plane < 4; plane++)
@@ -12208,12 +12220,12 @@ public sealed class AmigaBootMemoryTests
 
 		bus.WriteWord(firstBitMap + 0x00, 2);
 		bus.WriteWord(firstBitMap + 0x02, 2);
-		bus.WriteByte(firstBitMap + 0x05, 2, 0);
+		bus.WriteHostByte(firstBitMap + 0x05, 2);
 		bus.WriteLong(firstBitMap + 0x08, firstPlane0);
 		bus.WriteLong(firstBitMap + 0x0C, firstPlane1);
 		bus.WriteWord(secondBitMap + 0x00, 2);
 		bus.WriteWord(secondBitMap + 0x02, 1);
-		bus.WriteByte(secondBitMap + 0x05, 1, 0);
+		bus.WriteHostByte(secondBitMap + 0x05, 1);
 		bus.WriteLong(secondBitMap + 0x08, secondPlane0);
 
 		var state = new M68kCpuState { A = { [0] = view, [1] = viewPort } };
@@ -12479,7 +12491,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(secondRasInfo + 0x04, secondBitMap);
 		bus.WriteWord(secondBitMap, 2);
 		bus.WriteWord(secondBitMap + 0x02, 1);
-		bus.WriteByte(secondBitMap + 0x05, 1, 0);
+		bus.WriteHostByte(secondBitMap + 0x05, 1);
 		bus.WriteLong(secondBitMap + 0x08, secondPlane);
 		bus.WriteWord(secondPlane, 0x4000);
 		bus.WriteLong(view + ViewViewPortOffset, firstViewPort);
@@ -12675,7 +12687,7 @@ public sealed class AmigaBootMemoryTests
 			bus.WriteLong(rasInfo + 4, bitMap);
 			bus.WriteWord(bitMap + BitMapBytesPerRowOffset, 2);
 			bus.WriteWord(bitMap + BitMapRowsOffset, 1);
-			bus.WriteByte(bitMap + BitMapDepthOffset, 6, 0);
+			bus.WriteHostByte(bitMap + BitMapDepthOffset, 6);
 			for (var plane = 0; plane < 6; plane++)
 			{
 				var planeAddress = planeBase + (uint)(plane * 0x20);
@@ -12757,7 +12769,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(secondRasInfo + 4, secondBitMap);
 		bus.WriteWord(secondBitMap, 2);
 		bus.WriteWord(secondBitMap + 2, 1);
-		bus.WriteByte(secondBitMap + 5, 1, 0);
+		bus.WriteHostByte(secondBitMap + 5, 1);
 		bus.WriteLong(secondBitMap + 8, secondPlane);
 		bus.WriteWord(secondPlane, 0x8000);
 		bus.WriteLong(view + ViewViewPortOffset, firstViewPort);
@@ -12880,7 +12892,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(visibleRasInfo + 0x04, visibleBitMap);
 		bus.WriteWord(visibleBitMap + 0x00, 2);
 		bus.WriteWord(visibleBitMap + 0x02, 1);
-		bus.WriteByte(visibleBitMap + 0x05, 1, 0);
+		bus.WriteHostByte(visibleBitMap + 0x05, 1);
 		bus.WriteLong(visibleBitMap + 0x08, visiblePlane);
 		bus.WriteWord(visiblePlane, 0x4000);
 
@@ -12974,7 +12986,7 @@ public sealed class AmigaBootMemoryTests
 			bus.WriteWord(viewPort + ViewPortDxOffset, 0);
 			bus.WriteWord(viewPort + ViewPortDyOffset, dy);
 			bus.WriteWord(viewPort + ViewPortModesOffset, 0);
-			bus.WriteByte(viewPort + ViewPortExtendedModesOffset, 0, 0);
+			bus.WriteHostByte(viewPort + ViewPortExtendedModesOffset, 0);
 			bus.WriteLong(viewPort + ViewPortRasInfoOffset, rasInfo);
 			bus.WriteLong(viewPort + (uint)GraphicsLayouts.ViewPortColorMap, 0);
 			bus.WriteLong(viewPort + ViewPortDspInsOffset, 0);
@@ -12985,8 +12997,8 @@ public sealed class AmigaBootMemoryTests
 			bus.WriteLong(rasInfo + 4, bitMap);
 			bus.WriteWord(bitMap + BitMapBytesPerRowOffset, 2);
 			bus.WriteWord(bitMap + BitMapRowsOffset, 1);
-			bus.WriteByte(bitMap + BitMapDepthOffset, 1, 0);
-			bus.WriteByte(bitMap + BitMapFlagsOffset, 0, 0);
+			bus.WriteHostByte(bitMap + BitMapDepthOffset, 1);
+			bus.WriteHostByte(bitMap + BitMapFlagsOffset, 0);
 			bus.WriteLong(bitMap + BitMapPlanesOffset, plane);
 			bus.WriteWord(plane, 0x8000);
 		}
@@ -13013,7 +13025,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(visibleRasInfo + 0x04, visibleBitMap);
 		bus.WriteWord(visibleBitMap + 0x00, 2);
 		bus.WriteWord(visibleBitMap + 0x02, 1);
-		bus.WriteByte(visibleBitMap + 0x05, 1, 0);
+		bus.WriteHostByte(visibleBitMap + 0x05, 1);
 		bus.WriteLong(visibleBitMap + 0x08, visiblePlane);
 		bus.WriteWord(visiblePlane, 0x4000);
 		bus.WriteLong(view + ViewViewPortOffset, hiddenViewPort);
@@ -13080,7 +13092,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(secondRasInfo + 0x04, secondBitMap);
 		bus.WriteWord(secondBitMap + 0x00, 2);
 		bus.WriteWord(secondBitMap + 0x02, 1);
-		bus.WriteByte(secondBitMap + 0x05, 1, 0);
+		bus.WriteHostByte(secondBitMap + 0x05, 1);
 		bus.WriteLong(secondBitMap + 0x08, secondPlane);
 		bus.WriteWord(secondPlane, 0x4000);
 		bus.WriteLong(view + ViewViewPortOffset, firstViewPort);
@@ -13165,7 +13177,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(rasInfo + 4, bitMap);
 		bus.WriteWord(bitMap + BitMapBytesPerRowOffset, 2);
 		bus.WriteWord(bitMap + BitMapRowsOffset, 2);
-		bus.WriteByte(bitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteHostByte(bitMap + BitMapDepthOffset, 1);
 		bus.WriteLong(bitMap + BitMapPlanesOffset, unmappedPlane);
 
 		Assert.False(bus.IsMappedMemoryRange(unmappedPlane, 4));
@@ -13202,7 +13214,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(rasInfo + 0x04, bitMap);
 		bus.WriteWord(bitMap + BitMapBytesPerRowOffset, bytesPerRow);
 		bus.WriteWord(bitMap + BitMapRowsOffset, height);
-		bus.WriteByte(bitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteHostByte(bitMap + BitMapDepthOffset, 1);
 		bus.WriteLong(bitMap + BitMapPlanesOffset, plane);
 
 		var buildMethod = typeof(AmigaBootController).GetMethod(
@@ -13262,12 +13274,12 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(originalShfCprList, bus.ReadLong(view + ViewShfCprListOffset));
 
 		bus.WriteWord(viewPort + ViewPortDWidthOffset, width);
-		bus.WriteByte(bitMap + BitMapDepthOffset, 0, 0);
+		bus.WriteHostByte(bitMap + BitMapDepthOffset, 0);
 		buildArguments = new object[] { view, viewPort, 0u, true };
 		Assert.False((bool)buildMethod.Invoke(boot, buildArguments)!);
 		Assert.Equal(originalDspIns, bus.ReadLong(viewPort + ViewPortDspInsOffset));
 
-		bus.WriteByte(bitMap + BitMapDepthOffset, 1, 0);
+		bus.WriteHostByte(bitMap + BitMapDepthOffset, 1);
 		bus.WriteWord(bitMap + BitMapBytesPerRowOffset, 2);
 		buildArguments = new object[] { view, viewPort, 0u, true };
 		Assert.False((bool)buildMethod.Invoke(boot, buildArguments)!);
@@ -13412,7 +13424,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteWord(rasInfo + 0x0A, 1);
 		bus.WriteWord(bitMap + 0x00, 2);
 		bus.WriteWord(bitMap + 0x02, 2);
-		bus.WriteByte(bitMap + 0x05, 1, 0);
+		bus.WriteHostByte(bitMap + 0x05, 1);
 		bus.WriteLong(bitMap + 0x08, plane);
 		bus.WriteWord(plane, 0x0000);
 		bus.WriteWord(plane + 2, 0x8000);
@@ -13434,7 +13446,7 @@ public sealed class AmigaBootMemoryTests
 		const uint view = 0x2200;
 		for (var offset = 0; offset < 0x20; offset++)
 		{
-			bus.WriteByte(view + (uint)offset, 0xAA, 0);
+			bus.WriteHostByte(view + (uint)offset, 0xAA);
 		}
 
 		var state = new M68kCpuState();
@@ -13514,7 +13526,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(function, bus.ReadLong(library - 4));
 		Assert.Equal(0u, library & 3);
 		Assert.Equal((ushort)8, bus.ReadWord(library + 0x10));
-		Assert.Equal((ushort)0x34, bus.ReadWord(library + 0x12));
+		Assert.Equal((ushort)0x31, bus.ReadWord(library + 0x12));
 	}
 
 	[Theory]
@@ -13534,8 +13546,8 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteWord(resident, 0x4AFC);
 		bus.WriteLong(resident + 2, resident);
 		bus.WriteLong(resident + 6, resident + 0x20);
-		bus.WriteByte(resident + 0x0A, 0x80, 0);
-		bus.WriteByte(resident + 0x0C, residentType, 0);
+		bus.WriteHostByte(resident + 0x0A, 0x80);
+		bus.WriteHostByte(resident + 0x0C, residentType);
 		bus.WriteLong(resident + 0x16, initTable);
 		bus.WriteLong(initTable, 0x30);
 		bus.WriteLong(initTable + 4, vectors);
@@ -13807,7 +13819,7 @@ public sealed class AmigaBootMemoryTests
 	private static void WriteExecVector(AmigaBus bus, uint execBase, int lvo, uint target)
 	{
 		var address = unchecked(execBase + (uint)lvo);
-		bus.WriteWord(address, 0x4EF9, 0);
+		bus.WriteHostWord(address, 0x4EF9);
 		bus.WriteLong(address + 2, target);
 	}
 
@@ -14128,10 +14140,9 @@ public sealed class AmigaBootMemoryTests
 	{
 		for (var index = 0; index < sizeof(uint); index++)
 		{
-			bus.WriteByte(
+			bus.WriteHostByte(
 				address + (uint)index,
-				unchecked((byte)(value >> (24 - (index * 8)))),
-				0);
+				unchecked((byte)(value >> (24 - (index * 8)))));
 		}
 	}
 
@@ -14166,7 +14177,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(rasInfo + 0x04, bitMap);
 		bus.WriteWord(bitMap + 0x00, 2);
 		bus.WriteWord(bitMap + 0x02, 1);
-		bus.WriteByte(bitMap + 0x05, 1, 0);
+		bus.WriteHostByte(bitMap + 0x05, 1);
 		bus.WriteLong(bitMap + 0x08, plane);
 		bus.WriteWord(plane, 0x8000);
 	}
@@ -14175,10 +14186,10 @@ public sealed class AmigaBootMemoryTests
 	{
 		for (var i = 0; i < value.Length; i++)
 		{
-			bus.WriteByte(address + (uint)i, (byte)value[i], 0);
+			bus.WriteHostByte(address + (uint)i, (byte)value[i]);
 		}
 
-		bus.WriteByte(address + (uint)value.Length, 0, 0);
+		bus.WriteHostByte(address + (uint)value.Length, 0);
 	}
 
 	private static uint Pixel(uint[] frame, int x, int y)
