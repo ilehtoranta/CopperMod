@@ -68,7 +68,6 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
         if (scenario == "target-tags-nonnull")
         {
             targetTags = TargetTagsAddress;
-            success = false;
         }
         else
         {
@@ -107,7 +106,8 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
             Assert.Equal(before.GraphicsImage, after.GraphicsImage);
             Assert.Equal(before.Resident, after.Resident);
             Assert.Equal(before.Caller, after.Caller);
-            Assert.Equal(before.StackGuards, after.StackGuards);
+            Assert.Equal(before.StackGuards[..after.UntouchedStackBytes], after.StackGuards[..after.UntouchedStackBytes]);
+            Assert.Equal(before.StackGuards[0x300..], after.StackGuards[0x300..]);
         });
         Check(failures, "caller PC/SP and library base return intact", () =>
         {
@@ -144,14 +144,15 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
             "requested-tagged",
             "target-tagged",
             "style-mismatch",
-            "flags-mismatch"
+            "flags-mismatch",
+            "malformed-request-tags"
         })
             yield return new object[] { relocated, autoInitEntry, scenario };
     }
 
     [Theory]
     [MemberData(nameof(LateFrameCases))]
-    public void WeighTAMatchPublicFramePreservesCalleeSavedRegistersOnLateDecline(
+    public void WeighTAMatchPublicFramePreservesCalleeSavedRegistersDuringRanking(
         bool relocated,
         bool autoInitEntry,
         string scenario)
@@ -159,22 +160,31 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
         using var fixture = new Fixture(relocated, autoInitEntry);
         fixture.SeedTextAttr(RequestedAddress);
         fixture.SeedTextAttr(TargetAddress);
+        uint expectedWeight = 0x7FFF;
         switch (scenario)
         {
             case "ysize-mismatch":
                 fixture.SeedYSize(TargetAddress, checked((ushort)(YSize + 1)));
+                expectedWeight -= 128;
                 break;
             case "requested-tagged":
                 fixture.SeedStyle(RequestedAddress, (byte)(Style | 0x80));
+                fixture.SeedRequestTags(0);
                 break;
             case "target-tagged":
                 fixture.SeedStyle(TargetAddress, (byte)(Style | 0x80));
                 break;
             case "style-mismatch":
                 fixture.SeedStyle(TargetAddress, checked((byte)(Style + 1)));
+                expectedWeight -= 512 + 4; // Excess bold and missing underline.
                 break;
             case "flags-mismatch":
                 fixture.SeedFlags(TargetAddress, checked((byte)(Flags + 1)));
+                break;
+            case "malformed-request-tags":
+                fixture.SeedStyle(RequestedAddress, (byte)(Style | 0x80));
+                fixture.SeedRequestTags(TargetTagsAddress + 1);
+                expectedWeight = CapturedD0;
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario));
@@ -184,13 +194,13 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
         var result = fixture.Invoke(RequestedAddress, TargetAddress, 0);
         var after = fixture.CaptureMemory();
         var failures = new List<string>();
-        Check(failures, "late decline result and fallback provenance", () =>
+        Check(failures, "ranking result and fallback provenance", () =>
         {
-            Assert.Equal(CapturedD0, result.Data0);
-            Assert.True(result.UsedFallback);
+            Assert.Equal(expectedWeight, result.Data0);
+            Assert.Equal(scenario == "malformed-request-tags", result.UsedFallback);
             Assert.Equal(1, result.NativeReturnCount);
         });
-        Check(failures, "late ranking decline is read-only", () =>
+        Check(failures, "ranking is read-only", () =>
         {
             Assert.Equal(before.Requested, after.Requested);
             Assert.Equal(before.Target, after.Target);
@@ -200,7 +210,8 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
             Assert.Equal(before.GraphicsImage, after.GraphicsImage);
             Assert.Equal(before.Resident, after.Resident);
             Assert.Equal(before.Caller, after.Caller);
-            Assert.Equal(before.StackGuards, after.StackGuards);
+            Assert.Equal(before.StackGuards[..after.UntouchedStackBytes], after.StackGuards[..after.UntouchedStackBytes]);
+            Assert.Equal(before.StackGuards[0x300..], after.StackGuards[0x300..]);
         });
         Check(failures, "caller PC/SP, library base, and inputs return intact", () =>
         {
@@ -211,7 +222,7 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
             Assert.Equal(TargetAddress, result.Address1);
             Assert.Equal(0u, result.Address2);
         });
-        Check(failures, "late decline preserves D2-D7/A2-A6", () =>
+        Check(failures, "ranking preserves D2-D7/A2-A6", () =>
             Assert.True(result.RegisterDifferences.Length == 0,
                 string.Join("; ", result.RegisterDifferences)));
 
@@ -283,7 +294,8 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
         byte[] GraphicsImage,
         byte[] Resident,
         byte[] Caller,
-        byte[] StackGuards);
+        byte[] StackGuards,
+        int UntouchedStackBytes);
 
     private sealed record CallResult(
         uint Data0,
@@ -307,6 +319,7 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
         private const uint CallerAddress = 0x00B8_0000;
         private const uint StackAddress = 0x00C7_0000;
         internal const uint StackPointer = StackAddress + 0x300;
+        private uint _lowestStackPointer = StackPointer;
         private static readonly uint[] DataCanaries =
         {
             0xD2D2_0202, 0xD3D3_0303, 0xD4D4_0404,
@@ -390,6 +403,7 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
             _bus.MapWritableMemory(RequestedAddress, Enumerable.Repeat((byte)0xCC, 0x100).ToArray());
             _bus.MapWritableMemory(TargetAddress, Enumerable.Repeat((byte)0x83, 0x100).ToArray());
             _bus.MapWritableMemory(TargetTagsAddress, Enumerable.Repeat((byte)0x6D, 0x100).ToArray());
+            _bus.WriteHostLong(TargetTagsAddress, 0); // TAG_DONE
             _bus.MapWritableMemory(HighPhysicalAddress, Enumerable.Repeat((byte)0xB7, 0x100).ToArray());
             for (var offset = 0; offset < 0x100; offset++)
                 _bus.WriteByte((uint)offset, 0xC3, 0);
@@ -421,6 +435,9 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
 
         internal void SeedYSize(uint pointer, ushort value)
             => SeedWord(pointer, GraphicsLayouts.TextAttrYSize, value);
+
+        internal void SeedRequestTags(uint tags)
+            => SeedLong(RequestedAddress, GraphicsLayouts.TextAttrSize, tags);
 
         internal void SeedStyle(uint pointer, byte value)
             => SeedByte(pointer, GraphicsLayouts.TextAttrStyle, value);
@@ -464,7 +481,8 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
                     NativeGraphicsLibraryImageBuilder.PositiveImageSize),
                 ReadBytes(_residentAddress, _residentByteCount),
                 ReadBytes(CallerAddress, 8),
-                ReadBytes(StackAddress, 0x2C0).Concat(ReadBytes(StackPointer, 0x300)).ToArray());
+                ReadBytes(StackAddress, 0x600),
+                (int)(_lowestStackPointer - StackAddress));
 
         internal CallResult Invoke(uint requested, uint target, uint targetTags)
         {
@@ -496,12 +514,15 @@ public sealed class NativeGraphicsWeighTAMatchAdmissionTests
             for (var instruction = 0; instruction < 1_000; instruction++)
             {
                 var pc = _cpu.State.ProgramCounter;
+                Assert.InRange(_cpu.State.A[7], StackAddress, StackPointer);
+                _lowestStackPointer = Math.Min(_lowestStackPointer, _cpu.State.A[7]);
                 Assert.True(
                     pc >= _nativeCodeAddress &&
                     (ulong)pc < (ulong)_nativeCodeAddress + (uint)Image.Value.Code.Length,
                     $"Unexpected execution address 0x{pc:X8}; no host graphics/Exec gateway is installed.");
                 usedFallback |= pc == _nativeCodeAddress + (uint)Image.Value.Fallback;
-                if (_bus.ReadWord(pc) == 0x4E75)
+                if (_bus.ReadWord(pc) == 0x4E75 && _cpu.State.A[7] == StackPointer - 4 &&
+                    _bus.ReadLong(_cpu.State.A[7]) == ReturnAddress)
                 {
                     nativeReturnCount++;
                     usedFallback |= _cpu.State.D[0] == CapturedD0;

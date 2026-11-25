@@ -358,7 +358,8 @@ public sealed class NativeGraphicsDisplayModeQueryPublicAbiTests
         Assert.Equal(expected.GraphicsImage, actual.GraphicsImage);
         Assert.Equal(expected.Resident, actual.Resident);
         Assert.Equal(expected.Caller, actual.Caller);
-        Assert.Equal(expected.StackGuards, actual.StackGuards);
+        Assert.Equal(expected.StackGuards[..actual.UntouchedStackBytes], actual.StackGuards[..actual.UntouchedStackBytes]);
+        Assert.Equal(expected.StackGuards[0x300..], actual.StackGuards[0x300..]);
         Assert.Equal(expected.Low, actual.Low);
         Assert.Equal(expected.High, actual.High);
     }
@@ -385,6 +386,7 @@ public sealed class NativeGraphicsDisplayModeQueryPublicAbiTests
         byte[] Resident,
         byte[] Caller,
         byte[] StackGuards,
+        int UntouchedStackBytes,
         byte[] Low,
         byte[] High);
 
@@ -410,6 +412,7 @@ public sealed class NativeGraphicsDisplayModeQueryPublicAbiTests
         private const uint StackAddress = 0x00C7_0000;
         private const uint HighPhysicalAddress = 0x00FF_FF00;
         internal const uint StackPointer = StackAddress + 0x300;
+        private uint _lowestStackPointer = StackPointer;
         private static readonly uint[] DataCanaries =
         {
             0xD2D2_0202, 0xD3D3_0303, 0xD4D4_0404,
@@ -562,9 +565,8 @@ public sealed class NativeGraphicsDisplayModeQueryPublicAbiTests
                     NativeGraphicsLibraryImageBuilder.PositiveImageSize),
                 ReadBytes(_residentAddress, _residentByteCount),
                 ReadBytes(CallerAddress, 8),
-                ReadBytes(StackAddress, 0x2C0)
-                    .Concat(ReadBytes(StackPointer, 0x300))
-                    .ToArray(),
+                ReadBytes(StackAddress, 0x600),
+                (int)(_lowestStackPointer - StackAddress),
                 ReadBytes(0, 0x400),
                 ReadBytes(HighPhysicalAddress, 0x100));
 
@@ -621,12 +623,15 @@ public sealed class NativeGraphicsDisplayModeQueryPublicAbiTests
             for (var instruction = 0; instruction < 1_500; instruction++)
             {
                 var pc = _cpu.State.ProgramCounter;
+                Assert.InRange(_cpu.State.A[7], StackAddress, StackPointer);
+                _lowestStackPointer = Math.Min(_lowestStackPointer, _cpu.State.A[7]);
                 Assert.True(
                     pc >= _nativeCodeAddress &&
                     (ulong)pc < (ulong)_nativeCodeAddress + (uint)Image.Value.Code.Length,
                     $"Unexpected execution address 0x{pc:X8}.");
                 usedFallback |= pc == _nativeCodeAddress + (uint)Image.Value.Fallback;
-                if (_bus.ReadWord(pc) == 0x4E75)
+                if (_bus.ReadWord(pc) == 0x4E75 && _cpu.State.A[7] == StackPointer - 4 &&
+                    _bus.ReadLong(_cpu.State.A[7]) == ReturnAddress)
                 {
                     nativeReturnCount++;
                     usedFallback |= expectedFallback && _cpu.State.D[0] == modeId;
