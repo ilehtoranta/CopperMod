@@ -3182,7 +3182,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 reachedSentinel,
                 $"Vector {lvo} at 0x{libraryBase:X8} did not reach the explicit return sentinel; " +
                 $"pc=0x{state.ProgramCounter:X8}, d4=0x{state.D[4]:X8}, " +
-                $"a2=0x{state.A[2]:X8}.");
+                $"a2=0x{state.A[2]:X8}, callback fault={Boot.CopperStartLayersLastCallbackReturnFaultForTest}.");
             return state;
         }
 
