@@ -1,266 +1,41 @@
 using Amiga;
-using CopperMod.Amiga.CopperStart.Intuition;
 using CopperMod.Amiga.CopperStart.Layers;
 using Xunit.Abstractions;
-using Fixture = CopperMod.Amiga.Tests.CopperStartIntuitionCallbackBootTests;
+using Fixture = CopperMod.Amiga.Tests.LayersGuestFixture;
+using GuestProgram = CopperMod.Amiga.Tests.CopperStartLayersBootTests.InstructionWriter;
 using GraphicsLvo = CopperMod.Amiga.CopperStart.Graphics.Portable.GraphicsLvo;
-using PortableIntuition = global::CopperStart.Intuition;
 using PortableLayers = global::CopperStart.Layers;
 
 namespace CopperMod.Amiga.Tests;
 
 /// <summary>
-/// Ordinary guest Layers Hook instructions, their real RTS, and the outer task
-/// scheduler exercise the unpublished Intuition admission boundary. No test
-/// callback, actor substitution, lock grant, or completion drives the run.
-/// This does not qualify native Exec frames, interrupts, or public profiles.
+/// Guest Layers hooks call the native Intuition resident. The host scheduler
+/// and callback gateway validate the returning task, stack and continuation.
 /// </summary>
 public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper output)
 {
-    [Theory]
-    [InlineData(1)]
-    [InlineData(-1)]
-    public void RealLayersHookRefusesBlockingIntuitionBeforeReservationAndResumesItsOriginalActor(int workerPriority)
+    [Fact]
+    public void RealLayersReturnFromAnotherScheduledActorFaultsWithoutConsumingTheOriginalEnvelope()
+        => RunTerminalReturnFault(wrongActor: true);
+
+    [Fact]
+    public void PrematureRealLayersReturnFaultsWithoutApplyingOrRetiringTheOriginalEnvelope()
+        => RunTerminalReturnFault(wrongActor: false);
+
+    [Fact]
+    public void ARealLayersHookReturningToTheBlockedGatewayFaultsWithoutPoppingItsPacketOrConsumingTheEnvelope()
     {
-        using var machine = Fixture.CreateMachine();
-        var boot = new AmigaBootController(machine);
-        boot.StartBootFromDisk(Fixture.CreateBootableDisk());
-        var bus = machine.Bus;
-        var actor = Fixture.CurrentTask(bus);
-        var library = APTR.FromPointer(boot.CopperStartLayersLibraryBase);
-        var layersRoot = APTR.FromPointer(boot.CopperStartLayersRootAddress);
-        Assert.True(boot.HasCopperStartLayers);
-        Assert.True(library.IsNotNull && layersRoot.IsNotNull && actor.IsNotNull);
-        var memory = new LayersTestGuestMemory(bus);
-        var layerRead = new ActorObservationMemory(bus);
-        var authority = new PortableLayers.LayersActorAuthority
-        {
-            Root = layersRoot, LibraryBase = library,
-            ExecBase = APTR.FromPointer(AmigaKickstartHost.ExecLibraryBase),
-        };
-        var initialOpenCount = ExecLibraryCodec.Read(ref memory, library).OpenCount;
-        var initialLayerInfos = PortableLayers.LayersPrivateRootCore.FirstLayerInfo(ref layerRead, layersRoot);
-        AssertRestrictions(ref layerRead, authority, actor, PortableLayers.LayersActorRestrictions.None);
-
-        var borrowed = new Fixture.BorrowAuthority();
-        var callerCode = borrowed.Allocate(bus, 0x1000);
-        var layerHookCode = borrowed.Allocate(bus, 0x1000);
-        var deniedHookCode = borrowed.Allocate(bus, 0x1000);
-        var layerHook = borrowed.Hook(bus, layerHookCode.Raw);
-        var deniedHook = borrowed.Hook(bus, deniedHookCode.Raw);
-        var target = borrowed.Allocate(bus, 8);
-        var message = borrowed.Allocate(bus, 8);
-        var user = Fixture.GuestStack.Allocate(bus);
-        var supervisor = Fixture.GuestStack.Allocate(bus);
-        Fixture.SetTaskStack(bus, actor, user);
-        Fixture.StartRequester(machine, callerCode.Raw, user, supervisor);
-        var initialSignals = Signals.Read(bus, actor);
-        var availableBeforeOwnedResources = AvailableSetupMemory(bus);
-        var surface = CreateSetupLayer(bus, library);
-
-        var configuration = Fixture.CreateConfiguration();
-        Assert.True(PortableIntuition.IntuitionExecutionRootCore.TryMeasure(configuration, out var rootBytes));
-        Assert.Equal(PortableIntuition.IntuitionStateResult.Success,
-            boot.TryCreateUnpublishedIntuitionExecution(configuration, (sbyte)workerPriority,
-                borrowed.AllowsSpan, borrowed.AllowsEntry, out var created));
-        Assert.NotNull(created);
-        var host = created!;
-        var worker = host.Worker;
-        var request = host.GetGateway(IntuitionExecutionGateway.Request);
-        var stop = host.GetGateway(IntuitionExecutionGateway.Stop);
-        var close = Lvo(library, -12); // Standard library management vector.
-
-        var caller = new Fixture.GuestProgram(bus, callerCode.Raw);
-        var afterStart = caller.Call(host.GetGateway(IntuitionExecutionGateway.StartWait));
-        caller.MoveAddress(6, library.Raw);
-        var afterOpen = caller.Call(Lvo(library, -6));
-        caller.MoveAddress(0, layerHook.Raw);
-        caller.MoveAddress(1, surface.RastPort.Raw);
-        caller.MoveAddress(2, 0);
-        var layerCall = caller.Address;
-        var afterLayer = caller.Call(Lvo(library, LayersLvo.DoHookClipRects));
-        var allowed = EmitRequest(caller, request,
-            PortableIntuition.IntuitionCommandOperation.SnapshotPublicState,
-            deniedHook, target, message);
-        caller.MoveAddress(6, library.Raw);
-        caller.MoveAddress(1, surface.Layer.Raw);
-        var afterDelete = caller.Call(Lvo(library, LayersLvo.DeleteLayer));
-        caller.MoveAddress(0, surface.LayerInfo.Raw);
-        caller.Call(Lvo(library, LayersLvo.DisposeLayerInfo));
-        caller.MoveAddress(6, AmigaKickstartHost.GraphicsLibraryBase);
-        caller.MoveAddress(0, surface.BitMap.Raw);
-        caller.Call(Lvo(APTR.FromPointer(AmigaKickstartHost.GraphicsLibraryBase), (short)GraphicsLvo.FreeBitMap));
-        caller.MoveAddress(6, library.Raw);
-        var afterClose = caller.Call(close);
-        caller.Call(stop);
-        caller.CallUntilNotBusy(host.GetGateway(IntuitionExecutionGateway.Reap));
-        var park = caller.Park();
-
-        var hook = new Fixture.GuestProgram(bus, layerHookCode.Raw);
-        var refusedSnapshot = EmitRequest(hook, request,
-            PortableIntuition.IntuitionCommandOperation.SnapshotPublicState,
-            deniedHook, target, message);
-        var refusedHook = EmitRequest(hook, request,
-            PortableIntuition.IntuitionCommandOperation.InvokeGuestHook,
-            deniedHook, target, message);
-        hook.MoveData(0, 0xE123_4567);
-        var realRts = hook.Return();
-        var unentered = new Fixture.GuestProgram(bus, deniedHookCode.Raw);
-        unentered.StoreLong(target.Raw, 0xBAD0_0001);
-        unentered.MoveData(0, uint.MaxValue);
-        unentered.Return();
-        Assert.False(bus.HasHostGateway(layerHookCode.Raw));
-        Assert.False(bus.HasHostGateway(deniedHookCode.Raw));
-
-        var trace = new OuterTrace(machine, boot, host, output);
-        trace.Until(actor, afterStart);
-        Assert.Equal(PortableIntuition.IntuitionTaskPhase.Running, host.Snapshot().Phase);
-        Assert.Equal((uint)PortableIntuition.IntuitionStateResult.Success, machine.Cpu.State.D[0]);
-        trace.Until(actor, afterOpen);
-        Assert.Equal(library.Raw, machine.Cpu.State.D[0]);
-        Assert.Equal((ushort)(initialOpenCount + 1), ExecLibraryCodec.Read(ref memory, library).OpenCount);
-        var beforeLayer = trace.Until(actor, layerCall);
-        var entered = trace.Until(actor, layerHookCode.Raw);
-        Assert.Equal((ushort)0xFF00, entered.Opcode);
-        Assert.Equal(Lvo(library, LayersLvo.DoHookClipRects), entered.PreviousPc);
-        Assert.Equal(layerHook.Raw, entered.Address[0]);
-        Assert.Equal(surface.RastPort.Raw, entered.Address[2]);
-        Assert.Equal(beforeLayer.Sp - 8 - LayersHostCallbackToken.Size, entered.Sp);
-        Assert.Equal(LayersHostServices.HookContinuationAddress, bus.ReadLong(entered.Sp));
-        Assert.True(LayersHookMessageCodec.TryRead(ref memory, APTR.FromPointer(entered.Address[1]),
-            out LayerBackfillMessage hookMessage));
-        Assert.Equal(surface.Layer, hookMessage.Layer);
-        Assert.Equal(LayersRectangleCodec.Create(0, 0, 15, 15), hookMessage.Bounds);
-        var retained = PortableLayers.LayersPrivateRootCore.ActiveContinuation(ref layerRead, layersRoot);
-        Assert.True(retained.IsNotNull);
-        var retainedRestrictions = PortableLayers.LayersActorRestrictions.MemberLayerLock |
-            PortableLayers.LayersActorRestrictions.CallbackContinuation;
-        AssertRestrictions(ref layerRead, authority, actor, retainedRestrictions);
-
-        AssertRejected(refusedSnapshot);
-        AssertRejected(refusedHook);
-        var returning = trace.Until(actor, realRts);
-        Assert.Equal(0xE123_4567u, returning.Data[0]);
-        AssertRestrictions(ref layerRead, authority, actor, retainedRestrictions);
-        var returned = trace.Until(actor, LayersHostServices.HookContinuationAddress);
-        Assert.Equal((ushort)0x4E75, returned.Opcode);
-        Assert.Equal(realRts, returned.PreviousPc);
-        Assert.Equal(returning.Sp + 4, returned.Sp);
-        Assert.Equal(0xE123_4567u, returned.Data[0]);
-        Assert.Equal(retained, PortableLayers.LayersPrivateRootCore.ActiveContinuation(ref layerRead, layersRoot));
-        AssertRestrictions(ref layerRead, authority, actor, retainedRestrictions);
-        var resumed = trace.Until(actor, afterLayer);
-        Assert.Equal((ushort)0xFF00, resumed.Opcode);
-        Assert.Equal(LayersHostServices.HookContinuationAddress, resumed.PreviousPc);
-        Assert.Equal(beforeLayer.Sp, resumed.Sp);
-        Assert.True(PortableLayers.LayersPrivateRootCore.ActiveContinuation(ref layerRead, layersRoot).IsNull);
-        AssertRestrictions(ref layerRead, authority, actor, PortableLayers.LayersActorRestrictions.None);
-
-        var allowedBefore = trace.Until(actor, allowed.Call);
-        var allowedAfter = trace.Until(actor, allowed.Return);
-        AssertRequestRestored(allowedBefore, allowedAfter, PortableIntuition.IntuitionStateResult.Success);
-        Assert.Equal(3u, host.CompletedCount);
-        Assert.Equal(PortableIntuition.IntuitionStateResult.Success, host.LastCompletedResult.Status);
-        Assert.Equal(PortableIntuition.IntuitionCallbackCompletionKind.None, host.LastCompletedResult.Callback.Kind);
-        Assert.Contains(trace.Samples, sample => sample.Task == worker);
-        if (workerPriority < 0)
-            Assert.Contains(trace.Samples, sample => sample.Task == actor && sample.TaskState == TaskState.Waiting && sample.Signals.Wait != 0);
-        trace.Until(actor, afterDelete);
-        Assert.NotEqual(0u, machine.Cpu.State.D[0]);
-        trace.Until(actor, afterClose);
-        Assert.Equal(initialOpenCount, ExecLibraryCodec.Read(ref memory, library).OpenCount);
-        Assert.Equal(initialLayerInfos, PortableLayers.LayersPrivateRootCore.FirstLayerInfo(ref layerRead, layersRoot));
-        var finished = trace.Until(actor, park);
-        Assert.Equal((uint)PortableIntuition.IntuitionStateResult.Success, finished.Data[0]);
-        Assert.Equal(PortableIntuition.IntuitionTaskPhase.Idle, host.Snapshot().Phase);
-        Assert.Equal((ushort)0, host.Snapshot().CommandsInUse);
-        Assert.Equal((ushort)0, host.Snapshot().CallbacksInUse);
-        Assert.Equal(user.Upper, finished.Sp);
-        Assert.Equal(user.Upper, finished.Usp);
-        Assert.Equal(supervisor.Upper, finished.Ssp);
-        Assert.Equal(initialSignals, Signals.Read(bus, actor));
-        Assert.Equal(PortableIntuition.IntuitionStateResult.Success, host.LastFault);
-        Assert.DoesNotContain(trace.Samples, sample => sample.Pc == deniedHookCode.Raw);
-        Assert.Equal(0u, bus.ReadLong(target.Raw));
-        Assert.Equal(1, trace.Samples.Count(sample => sample.Task == actor && sample.Pc == layerHookCode.Raw));
-        Assert.Equal(1, trace.Samples.Count(sample => sample.Task == actor && sample.Pc == LayersHostServices.HookContinuationAddress));
-        Assert.Equal(1, trace.Samples.Count(sample => sample.Task == actor && sample.Pc == close));
-        Assert.Equal(1, trace.Samples.Count(sample => sample.Task == actor && sample.Pc == stop));
-        Assert.All(trace.Samples.Where(sample => sample.Task == actor), sample =>
-        {
-            Assert.Equal(0, sample.Sr & M68kCpuState.Supervisor);
-            Assert.Equal(sample.Sp, sample.Usp);
-            Assert.Equal(supervisor.Upper, sample.Ssp);
-            Assert.InRange(sample.Sp, user.Lower, user.Upper);
-        });
-        user.AssertIntact(bus);
-        supervisor.AssertIntact(bus);
-        Assert.Equal(PortableIntuition.IntuitionStateResult.Success, host.DestroyUnpublished());
-        Assert.False(host.Snapshot().Live);
-        Assert.Equal(availableBeforeOwnedResources, AvailableSetupMemory(bus));
-        trace.Dump();
-
-        void AssertRejected(RequestSite site)
-        {
-            var before = trace.Until(actor, site.Call);
-            var firstSample = trace.Samples.Count - 1;
-            var arenaBefore = ReadBytes(bus, host.Root.Address, rootBytes);
-            var actorBefore = Signals.Read(bus, actor);
-            var workerBefore = Signals.Read(bus, worker);
-            var workerState = Fixture.ReadTask(bus, worker).State;
-            AssertRestrictions(ref layerRead, authority, actor, retainedRestrictions);
-            var after = trace.Until(actor, site.Return);
-            AssertRequestRestored(before, after, PortableIntuition.IntuitionStateResult.Busy);
-            // This is an opaque equality check, not a second private codec.
-            // Even acquire-then-release would advance a slot generation here.
-            Assert.Equal(arenaBefore, ReadBytes(bus, host.Root.Address, rootBytes));
-            Assert.Equal(actorBefore, Signals.Read(bus, actor));
-            Assert.Equal(workerBefore, Signals.Read(bus, worker));
-            Assert.Equal(workerState, Fixture.ReadTask(bus, worker).State);
-            Assert.Equal((ushort)0, host.Snapshot().CommandsInUse);
-            Assert.Equal((ushort)0, host.Snapshot().CallbacksInUse);
-            Assert.Equal(PortableIntuition.IntuitionStateResult.Busy, host.LastCompletedResult.Status);
-            Assert.Equal(PortableIntuition.IntuitionCallbackCompletionKind.None, host.LastCompletedResult.Callback.Kind);
-            Assert.Equal(retained, PortableLayers.LayersPrivateRootCore.ActiveContinuation(ref layerRead, layersRoot));
-            AssertRestrictions(ref layerRead, authority, actor, retainedRestrictions);
-            Assert.All(trace.Samples.Skip(firstSample), sample =>
-            {
-                Assert.Equal(actor, sample.Task);
-                Assert.Equal(TaskState.Running, sample.TaskState);
-                Assert.NotEqual(host.GetGateway(IntuitionExecutionGateway.Collect), sample.Pc);
-                Assert.NotEqual(host.GetGateway(IntuitionExecutionGateway.HookReturn), sample.Pc);
-            });
-        }
-    }
-
-    [Theory]
-    [InlineData(1)]
-    [InlineData(-1)]
-    public void RealLayersReturnFromAnotherScheduledActorFaultsWithoutConsumingTheOriginalEnvelope(int workerPriority)
-        => RunTerminalReturnFault(workerPriority, wrongActor: true);
-
-    [Theory]
-    [InlineData(1)]
-    [InlineData(-1)]
-    public void PrematureRealLayersReturnFaultsWithoutApplyingOrRetiringTheOriginalEnvelope(int workerPriority)
-        => RunTerminalReturnFault(workerPriority, wrongActor: false);
-
-    [Theory]
-    [InlineData(1)]
-    [InlineData(-1)]
-    public void ARealLayersHookReturningToTheBlockedGatewayFaultsWithoutPoppingItsPacketOrConsumingTheEnvelope(int workerPriority)
-    {
-        using var run = new CallbackReturnRun(workerPriority, twoRectangles: false, output);
+        using var run = new CallbackReturnRun(twoRectangles: false, output);
         var caller = run.Caller();
         var sites = run.EmitStartAndLayer(caller);
         caller.StoreLong(run.Marker.Raw, 0xBAD0_0001);
-        caller.Park();
+        caller.BranchToSelf();
         // MOVE.L #BlockContinuationAddress,(A7) changes only the real Hook's
         // return LONG. Its typed packet and the private host envelope remain
         // untouched; the following RTS genuinely enters the wrong gateway.
         run.Bus.WriteWord(run.HookCode.Raw, 0x2EBC, 0);
         run.Bus.WriteLong(run.HookCode.Raw + 2, LayersHostServices.BlockContinuationAddress, 0);
-        var hook = new Fixture.GuestProgram(run.Bus, run.HookCode.Raw + 6, 0x1000 - 6);
+        var hook = new GuestProgram(run.Bus, run.HookCode.Raw + 6, 0x1000 - 6);
         hook.StoreLong(run.Marker.Raw, 1);
         EmitReturnSentinels(hook);
         var realRts = hook.Return();
@@ -308,10 +83,7 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         Assert.Equal(1u, run.Bus.ReadLong(run.Marker.Raw));
         Assert.DoesNotContain(run.Trace.Samples, sample => sample.Task == run.Actor && sample.Pc == sites.Return);
         Assert.DoesNotContain(run.Trace.Samples, sample => sample.Task == run.Actor && sample.Pc == LayersHostServices.HookContinuationAddress);
-        Assert.Equal(PortableIntuition.IntuitionTaskPhase.Running, run.Host.Snapshot().Phase);
-        Assert.True(run.Host.Snapshot().Live);
-        Assert.Equal((ushort)0, run.Host.Snapshot().CommandsInUse);
-        Assert.Equal((ushort)0, run.Host.Snapshot().CallbacksInUse);
+        Assert.Equal((ushort)1, run.Resident.OpenCount);
         run.User.AssertIntact(run.Bus);
         run.Supervisor.AssertIntact(run.Bus);
         // Fault evidence retains the callback; there is no test-driven CPU
@@ -319,31 +91,29 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         run.Trace.Dump();
     }
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(-1)]
-    public void AGuestReplayedIssuedPacketFaultsWhileTheSecondLayersHookEnvelopeRemainsOwned(int workerPriority)
+    [Fact]
+    public void AGuestReplayedIssuedPacketFaultsWhileTheSecondLayersHookEnvelopeRemainsOwned()
     {
-        using var run = new CallbackReturnRun(workerPriority, twoRectangles: true, output);
-        var replay = run.Borrowed.Allocate(run.Bus, LayersHostCallbackToken.Size);
+        using var run = new CallbackReturnRun(twoRectangles: true, output);
+        var replay = Fixture.Allocate(run.Bus, LayersHostCallbackToken.Size);
         var caller = run.Caller();
         var sites = run.EmitStartAndLayer(caller);
         caller.StoreLong(run.Marker.Raw, 0xBAD0_0001);
-        caller.Park();
+        caller.BranchToSelf();
 
         // The real Hook chooses its branch from guest RAM. The first invocation
         // copies its issued packet out; the second supplies those old bytes at
         // the current return SP. No host callback or private-state setter drives
         // the two invocations or changes their owned continuations.
         var firstCode = EmitPacketCopy(run, run.HookCode.Raw + 10, replay, toGuestStorage: true);
-        var firstHook = new Fixture.GuestProgram(run.Bus, firstCode,
+        var firstHook = new GuestProgram(run.Bus, firstCode,
             run.HookCode.Raw + 0x1000 - firstCode);
         firstHook.StoreLong(run.Marker.Raw, 1);
         EmitReturnSentinels(firstHook);
         var firstRts = firstHook.Return();
         var secondCode = firstHook.Address;
         var secondCopyEnd = EmitPacketCopy(run, secondCode, replay, toGuestStorage: false);
-        var secondHook = new Fixture.GuestProgram(run.Bus, secondCopyEnd,
+        var secondHook = new GuestProgram(run.Bus, secondCopyEnd,
             run.HookCode.Raw + 0x1000 - secondCopyEnd);
         secondHook.StoreLong(run.Marker.Raw, 2);
         EmitReturnSentinels(secondHook);
@@ -401,10 +171,7 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         Assert.Equal(1, run.Trace.Samples.Count(sample => sample.Task == run.Actor && sample.Pc == firstRts));
         Assert.Equal(1, run.Trace.Samples.Count(sample => sample.Task == run.Actor && sample.Pc == secondRts));
         Assert.DoesNotContain(run.Trace.Samples, sample => sample.Task == run.Actor && sample.Pc == sites.Return);
-        Assert.Equal(PortableIntuition.IntuitionTaskPhase.Running, run.Host.Snapshot().Phase);
-        Assert.True(run.Host.Snapshot().Live);
-        Assert.Equal((ushort)0, run.Host.Snapshot().CommandsInUse);
-        Assert.Equal((ushort)0, run.Host.Snapshot().CallbacksInUse);
+        Assert.Equal((ushort)1, run.Resident.OpenCount);
         run.User.AssertIntact(run.Bus);
         run.Supervisor.AssertIntact(run.Bus);
         // This proves rejection of a supplied stale packet, not an old jump
@@ -412,19 +179,17 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         run.Trace.Dump();
     }
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(-1)]
-    public void ARealLayersReturnGatewayReplayAfterCompletionFaultsWithoutChangingTheRetiredOwner(int workerPriority)
+    [Fact]
+    public void ARealLayersReturnGatewayReplayAfterCompletionFaultsWithoutChangingTheRetiredOwner()
     {
-        using var run = new CallbackReturnRun(workerPriority, twoRectangles: false, output);
+        using var run = new CallbackReturnRun(twoRectangles: false, output);
         var caller = run.Caller();
         var sites = run.EmitStartAndLayer(caller);
         EmitReturnSentinels(caller);
         var replayCall = caller.Address;
-        var replayReturn = caller.Call(LayersHostServices.HookContinuationAddress);
+        var replayReturn = caller.JumpSubroutine(LayersHostServices.HookContinuationAddress);
         caller.StoreLong(run.Marker.Raw, 0xBAD0_0001);
-        caller.Park();
+        caller.BranchToSelf();
         var hook = run.Callback();
         hook.StoreLong(run.Marker.Raw, 1);
         EmitReturnSentinels(hook);
@@ -466,40 +231,35 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         Assert.Equal(1, run.Trace.Samples.Count(sample => sample.Task == run.Actor && sample.Pc == run.HookCode.Raw));
         Assert.Equal(1, run.Trace.Samples.Count(sample => sample.Task == run.Actor && sample.Pc == sites.Return));
         Assert.DoesNotContain(run.Trace.Samples, sample => sample.Task == run.Actor && sample.Pc == replayReturn);
-        Assert.Equal(PortableIntuition.IntuitionTaskPhase.Running, run.Host.Snapshot().Phase);
-        Assert.True(run.Host.Snapshot().Live);
-        Assert.Equal((ushort)0, run.Host.Snapshot().CommandsInUse);
-        Assert.Equal((ushort)0, run.Host.Snapshot().CallbacksInUse);
+        Assert.Equal((ushort)1, run.Resident.OpenCount);
         run.User.AssertIntact(run.Bus);
         run.Supervisor.AssertIntact(run.Bus);
         run.Trace.Dump();
     }
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(-1)]
-    public void TwoRealLayersHooksUseDistinctReturnIssuesAndResumeTheirCallerExactlyOnce(int workerPriority)
+    [Fact]
+    public void TwoRealLayersHooksUseDistinctReturnIssuesAndResumeTheirCallerExactlyOnce()
     {
-        using var run = new CallbackReturnRun(workerPriority, twoRectangles: true, output);
+        using var run = new CallbackReturnRun(twoRectangles: true, output);
         var caller = run.Caller();
         var sites = run.EmitStartAndLayer(caller);
-        caller.MoveAddress(6, run.Library.Raw);
-        caller.MoveAddress(1, run.Occluder.Raw);
-        var afterDeleteOccluder = caller.Call(Lvo(run.Library, LayersLvo.DeleteLayer));
-        caller.MoveAddress(1, run.Surface.Layer.Raw);
-        var afterDeleteLayer = caller.Call(Lvo(run.Library, LayersLvo.DeleteLayer));
-        caller.MoveAddress(0, run.Surface.LayerInfo.Raw);
-        caller.Call(Lvo(run.Library, LayersLvo.DisposeLayerInfo));
-        caller.MoveAddress(6, AmigaKickstartHost.GraphicsLibraryBase);
-        caller.MoveAddress(0, run.Surface.BitMap.Raw);
-        caller.Call(Lvo(APTR.FromPointer(AmigaKickstartHost.GraphicsLibraryBase), (short)GraphicsLvo.FreeBitMap));
-        caller.MoveAddress(6, run.Library.Raw);
+        caller.MoveAddressImmediate(6, run.Library.Raw);
+        caller.MoveAddressImmediate(1, run.Occluder.Raw);
+        var afterDeleteOccluder = caller.JumpSubroutine(Lvo(run.Library, LayersLvo.DeleteLayer));
+        caller.MoveAddressImmediate(1, run.Surface.Layer.Raw);
+        var afterDeleteLayer = caller.JumpSubroutine(Lvo(run.Library, LayersLvo.DeleteLayer));
+        caller.MoveAddressImmediate(0, run.Surface.LayerInfo.Raw);
+        caller.JumpSubroutine(Lvo(run.Library, LayersLvo.DisposeLayerInfo));
+        caller.MoveAddressImmediate(6, AmigaKickstartHost.GraphicsLibraryBase);
+        caller.MoveAddressImmediate(0, run.Surface.BitMap.Raw);
+        caller.JumpSubroutine(Lvo(APTR.FromPointer(AmigaKickstartHost.GraphicsLibraryBase), (short)GraphicsLvo.FreeBitMap));
+        caller.MoveAddressImmediate(6, run.Library.Raw);
         var close = Lvo(run.Library, -12);
-        var afterClose = caller.Call(close);
-        var stop = run.Host.GetGateway(IntuitionExecutionGateway.Stop);
-        caller.Call(stop);
-        caller.CallUntilNotBusy(run.Host.GetGateway(IntuitionExecutionGateway.Reap));
-        var park = caller.Park();
+        var afterClose = caller.JumpSubroutine(close);
+        caller.MoveAddressImmediate(6, run.Resident.Library);
+        var stop = run.Resident.Close;
+        caller.JumpSubroutine(stop);
+        var park = caller.BranchToSelf();
 
         var hook = run.Callback();
         hook.StoreLong(run.Marker.Raw, 1);
@@ -562,10 +322,8 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         Assert.Equal(run.InitialOpenCount, ExecLibraryCodec.Read(ref sdk, run.Library).OpenCount);
         Assert.Equal(run.InitialLayerInfos, PortableLayers.LayersPrivateRootCore.FirstLayerInfo(ref observation, run.Root));
         var finished = run.Trace.Until(run.Actor, park);
-        Assert.Equal((uint)PortableIntuition.IntuitionStateResult.Success, finished.Data[0]);
-        Assert.Equal(PortableIntuition.IntuitionTaskPhase.Idle, run.Host.Snapshot().Phase);
-        Assert.Equal((ushort)0, run.Host.Snapshot().CommandsInUse);
-        Assert.Equal((ushort)0, run.Host.Snapshot().CallbacksInUse);
+        Assert.Equal(0u, finished.Data[0]);
+        Assert.Equal((ushort)0, run.Resident.OpenCount);
         Assert.Equal(run.InitialSignals, Signals.Read(run.Bus, run.Actor));
         Assert.Equal(run.User.Upper, finished.Sp);
         Assert.Equal(run.User.Upper, finished.Usp);
@@ -585,29 +343,28 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         });
         run.User.AssertIntact(run.Bus);
         run.Supervisor.AssertIntact(run.Bus);
-        Assert.Equal(PortableIntuition.IntuitionStateResult.Success, run.Host.DestroyUnpublished());
-        Assert.False(run.Host.Snapshot().Live);
+        run.Resident.Dispose();
         Assert.Equal(run.AvailableBeforeOwnedResources, AvailableSetupMemory(run.Bus));
         run.Trace.Dump();
     }
 
-    private void RunTerminalReturnFault(int workerPriority, bool wrongActor)
+    private void RunTerminalReturnFault(bool wrongActor)
     {
-        using var run = new CallbackReturnRun(workerPriority, twoRectangles: false, output);
+        using var run = new CallbackReturnRun(twoRectangles: false, output);
         var caller = run.Caller();
         var sites = run.EmitStartAndLayer(caller);
         caller.StoreLong(run.Marker.Raw, 0xBAD0_0001);
-        caller.Park();
+        caller.BranchToSelf();
         var hook = run.Callback();
         hook.StoreLong(run.Marker.Raw, 1);
         var invalidActor = run.Actor;
         Fixture.GuestStack? otherStack = null;
-        Fixture.GuestProgram invalidProgram = hook;
+        GuestProgram invalidProgram = hook;
         if (wrongActor)
         {
             otherStack = Fixture.GuestStack.Allocate(run.Bus);
-            var otherCode = run.Borrowed.Allocate(run.Bus, 0x1000);
-            invalidActor = run.Borrowed.Allocate(run.Bus, global::Amiga.Task.Size);
+            var otherCode = Fixture.Allocate(run.Bus, 0x1000);
+            invalidActor = Fixture.Allocate(run.Bus, global::Amiga.Task.Size);
             var sdk = new LayersTestGuestMemory(run.Bus);
             var record = new global::Amiga.Task
             {
@@ -618,17 +375,17 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
                 StackPointer = APTR.FromPointer(otherStack.Value.Upper),
             };
             ExecTaskCodec.Write(ref sdk, invalidActor, record);
-            hook.MoveAddress(1, invalidActor.Raw);
-            hook.MoveAddress(2, otherCode.Raw);
-            hook.MoveAddress(3, 0);
-            hook.Call(Lvo(APTR.FromPointer(AmigaKickstartHost.ExecLibraryBase), ExecLvo.AddTask));
-            invalidProgram = new Fixture.GuestProgram(run.Bus, otherCode.Raw);
+            hook.MoveAddressImmediate(1, invalidActor.Raw);
+            hook.MoveAddressImmediate(2, otherCode.Raw);
+            hook.MoveAddressImmediate(3, 0);
+            hook.JumpSubroutine(Lvo(APTR.FromPointer(AmigaKickstartHost.ExecLibraryBase), ExecLvo.AddTask));
+            invalidProgram = new GuestProgram(run.Bus, otherCode.Raw);
         }
         EmitReturnSentinels(invalidProgram);
         var invalidCall = invalidProgram.Address;
-        var invalidReturn = invalidProgram.Call(LayersHostServices.HookContinuationAddress);
+        var invalidReturn = invalidProgram.JumpSubroutine(LayersHostServices.HookContinuationAddress);
         invalidProgram.StoreLong(run.Marker.Raw, 0xBAD0_0002);
-        invalidProgram.Park();
+        invalidProgram.BranchToSelf();
         var genuineRts = hook.Return();
         Assert.False(run.Bus.HasHostGateway(run.HookCode.Raw));
 
@@ -685,10 +442,7 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         // execution of the RTS: require the actual previous instruction here.
         Assert.DoesNotContain(run.Trace.Samples,
             sample => sample.PreviousPc == genuineRts && sample.Opcode == 0x4E75);
-        Assert.Equal(PortableIntuition.IntuitionTaskPhase.Running, run.Host.Snapshot().Phase);
-        Assert.True(run.Host.Snapshot().Live);
-        Assert.Equal((ushort)0, run.Host.Snapshot().CommandsInUse);
-        Assert.Equal((ushort)0, run.Host.Snapshot().CallbacksInUse);
+        Assert.Equal((ushort)1, run.Resident.OpenCount);
         run.User.AssertIntact(run.Bus);
         run.Supervisor.AssertIntact(run.Bus);
         otherStack?.AssertIntact(run.Bus);
@@ -727,10 +481,10 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         return token;
     }
 
-    private static void EmitReturnSentinels(Fixture.GuestProgram program)
+    private static void EmitReturnSentinels(GuestProgram program)
     {
-        for (var register = 0; register < 8; register++) program.MoveData(register, 0xC700_0000u + (uint)register);
-        for (var register = 0; register < 7; register++) program.MoveAddress(register, 0xA700_0000u + (uint)register);
+        for (var register = 0; register < 8; register++) program.MoveDataImmediate(register, 0xC700_0000u + (uint)register);
+        for (var register = 0; register < 7; register++) program.MoveAddressImmediate(register, 0xA700_0000u + (uint)register);
         program.SetConditionCodes(M68kCpuState.Extend | M68kCpuState.Negative | M68kCpuState.Overflow);
     }
 
@@ -787,7 +541,6 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         var observation = new ActorObservationMemory(run.Bus);
         Assert.True(PortableLayers.LayersLayerCore.TryGetDescriptor(ref observation, run.Root, run.Surface.Layer, out var layerDescriptor));
         Assert.True(PortableLayers.LayersLayerInfoCore.TryGetDescriptor(ref observation, run.Root, run.Surface.LayerInfo, out var infoDescriptor));
-        Assert.True(PortableIntuition.IntuitionExecutionRootCore.TryMeasure(Fixture.CreateConfiguration(), out var rootBytes));
         var result = new List<WatchedBytes>
         {
             Watch(run.Root, PortableLayers.LayersPrivateRootCore.Size),
@@ -795,9 +548,8 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
             Watch(layerDescriptor, PortableLayers.LayersLayerCore.DescriptorSize),
             Watch(run.Surface.LayerInfo, LayerInfo.Size),
             Watch(infoDescriptor, PortableLayers.LayersLayerInfoCore.DescriptorSize),
-            Watch(run.Host.Root.Address, rootBytes),
+            Watch(APTR.FromPointer(run.Resident.Library), global::CopperStart.Intuition.Native.NativeIntuitionRomImage.LibraryBytes),
             Watch(run.Actor, global::Amiga.Task.Size),
-            Watch(run.Host.Worker, global::Amiga.Task.Size),
             Watch(APTR.FromPointer(run.User.Storage), run.User.Bytes),
             Watch(APTR.FromPointer(run.Supervisor.Storage), run.Supervisor.Bytes),
         };
@@ -826,7 +578,6 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         internal APTR Library { get; }
         internal APTR Root { get; }
         internal PortableLayers.LayersActorAuthority Authority { get; }
-        internal Fixture.BorrowAuthority Borrowed { get; } = new();
         internal APTR CallerCode { get; }
         internal APTR HookCode { get; }
         internal APTR Hook { get; }
@@ -835,18 +586,18 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
         internal Fixture.GuestStack Supervisor { get; }
         internal Surface Surface { get; }
         internal APTR Occluder { get; }
-        internal IntuitionExecutionHost Host { get; }
+        internal NativeIntuitionTestResident Resident { get; }
         internal OuterTrace Trace { get; }
         internal ushort InitialOpenCount { get; }
         internal APTR InitialLayerInfos { get; }
         internal Signals InitialSignals { get; }
         internal uint AvailableBeforeOwnedResources { get; }
 
-        internal CallbackReturnRun(int workerPriority, bool twoRectangles, ITestOutputHelper output)
+        internal CallbackReturnRun(bool twoRectangles, ITestOutputHelper output)
         {
-            Machine = Fixture.CreateMachine();
+            Machine = CopperStartLayersBootTests.CreateMachine();
             Boot = new AmigaBootController(Machine);
-            Boot.StartBootFromDisk(Fixture.CreateBootableDisk());
+            Boot.StartBootFromDisk(CopperStartLayersBootTests.CreateBootableDisk());
             Actor = Fixture.CurrentTask(Bus);
             Library = APTR.FromPointer(Boot.CopperStartLayersLibraryBase);
             Root = APTR.FromPointer(Boot.CopperStartLayersRootAddress);
@@ -856,10 +607,10 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
             var observation = new ActorObservationMemory(Bus);
             InitialOpenCount = ExecLibraryCodec.Read(ref sdk, Library).OpenCount;
             InitialLayerInfos = PortableLayers.LayersPrivateRootCore.FirstLayerInfo(ref observation, Root);
-            CallerCode = Borrowed.Allocate(Bus, 0x1000);
-            HookCode = Borrowed.Allocate(Bus, 0x1000);
-            Hook = Borrowed.Hook(Bus, HookCode.Raw);
-            Marker = Borrowed.Allocate(Bus, 8);
+            CallerCode = Fixture.Allocate(Bus, 0x1000);
+            HookCode = Fixture.Allocate(Bus, 0x1000);
+            Hook = Fixture.Hook(Bus, HookCode.Raw);
+            Marker = Fixture.Allocate(Bus, 8);
             User = Fixture.GuestStack.Allocate(Bus);
             Supervisor = Fixture.GuestStack.Allocate(Bus);
             Fixture.SetTaskStack(Bus, Actor, User);
@@ -878,56 +629,28 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
                 Occluder = APTR.FromPointer(create.D[0]);
                 Assert.True(Occluder.IsNotNull);
             }
-            Assert.Equal(PortableIntuition.IntuitionStateResult.Success,
-                Boot.TryCreateUnpublishedIntuitionExecution(Fixture.CreateConfiguration(), (sbyte)workerPriority,
-                    Borrowed.AllowsSpan, Borrowed.AllowsEntry, out var created));
-            Assert.NotNull(created);
-            Host = created!;
-            Trace = new OuterTrace(Machine, Boot, Host, output);
+            Resident = new NativeIntuitionTestResident(Bus);
+            Trace = new OuterTrace(Machine, Boot, output);
         }
 
-        internal Fixture.GuestProgram Caller() => new(Bus, CallerCode.Raw);
-        internal Fixture.GuestProgram Callback() => new(Bus, HookCode.Raw);
-        internal (uint StartReturn, uint Call, uint Return) EmitStartAndLayer(Fixture.GuestProgram caller)
+        internal GuestProgram Caller() => new(Bus, CallerCode.Raw);
+        internal GuestProgram Callback() => new(Bus, HookCode.Raw);
+        internal (uint StartReturn, uint Call, uint Return) EmitStartAndLayer(GuestProgram caller)
         {
-            var started = caller.Call(Host.GetGateway(IntuitionExecutionGateway.StartWait));
-            caller.MoveAddress(6, Library.Raw);
-            caller.Call(Lvo(Library, -6));
-            for (var register = 0; register < 8; register++) caller.MoveData(register, 0xC100_0000u + (uint)register);
-            for (var register = 3; register < 6; register++) caller.MoveAddress(register, 0xA100_0000u + (uint)register);
-            caller.MoveAddress(0, Hook.Raw);
-            caller.MoveAddress(1, Surface.RastPort.Raw);
-            caller.MoveAddress(2, 0);
+            caller.MoveAddressImmediate(6, Resident.Library);
+            var started = caller.JumpSubroutine(Resident.Open);
+            caller.MoveAddressImmediate(6, Library.Raw);
+            caller.JumpSubroutine(Lvo(Library, -6));
+            for (var register = 0; register < 8; register++) caller.MoveDataImmediate(register, 0xC100_0000u + (uint)register);
+            for (var register = 3; register < 6; register++) caller.MoveAddressImmediate(register, 0xA100_0000u + (uint)register);
+            caller.MoveAddressImmediate(0, Hook.Raw);
+            caller.MoveAddressImmediate(1, Surface.RastPort.Raw);
+            caller.MoveAddressImmediate(2, 0);
             caller.SetConditionCodes(M68kCpuState.Extend | M68kCpuState.Zero | M68kCpuState.Carry);
             var call = caller.Address;
-            return (started, call, caller.Call(Lvo(Library, LayersLvo.DoHookClipRects)));
+            return (started, call, caller.JumpSubroutine(Lvo(Library, LayersLvo.DoHookClipRects)));
         }
         public void Dispose() => Machine.Dispose();
-    }
-
-    private static RequestSite EmitRequest(Fixture.GuestProgram code, uint gateway,
-        PortableIntuition.IntuitionCommandOperation operation, APTR hook, APTR target, APTR message)
-    {
-        code.MoveData(0, (uint)operation);
-        code.MoveData(1, 8); code.MoveData(2, 8);
-        for (var register = 3; register < 8; register++) code.MoveData(register, 0xC100_0000u + (uint)register);
-        code.MoveAddress(0, hook.Raw); code.MoveAddress(1, message.Raw); code.MoveAddress(2, target.Raw);
-        for (var register = 3; register < 7; register++) code.MoveAddress(register, 0xA100_0000u + (uint)register);
-        code.SetConditionCodes(M68kCpuState.Extend | M68kCpuState.Zero | M68kCpuState.Carry);
-        var call = code.Address;
-        return new(call, code.Call(gateway));
-    }
-
-    private static void AssertRequestRestored(CpuSample before, CpuSample after, PortableIntuition.IntuitionStateResult status)
-    {
-        Assert.Equal(before.Task, after.Task);
-        Assert.Equal((uint)status, after.Data[0]);
-        Assert.Equal(before.Data.Skip(1), after.Data.Skip(1));
-        Assert.Equal(before.Address, after.Address);
-        Assert.Equal(before.Sr, after.Sr);
-        Assert.Equal(before.Sp, after.Sp);
-        Assert.Equal(before.Usp, after.Usp);
-        Assert.Equal(before.Ssp, after.Ssp);
     }
 
     private static void AssertRestrictions(ref ActorObservationMemory memory,
@@ -979,7 +702,6 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
     private static uint Lvo(APTR library, int lvo) => unchecked(library.Raw + (uint)lvo);
     private static byte[] ReadBytes(AmigaBus bus, APTR address, uint bytes)
         => Enumerable.Range(0, checked((int)bytes)).Select(offset => bus.ReadByte(address.Raw + (uint)offset)).ToArray();
-    private readonly record struct RequestSite(uint Call, uint Return);
     private readonly record struct Surface(APTR LayerInfo, APTR BitMap, APTR Layer, APTR RastPort);
     private readonly record struct Signals(uint Allocated, uint Received, uint Wait)
     {
@@ -1007,7 +729,7 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
             $"op={Opcode:X4} sr={Sr:X4} sp={Sp:X8} usp={Usp:X8} ssp={Ssp:X8} D0={Data[0]:X8} wait={Signals.Wait:X8} cycles={Cycles}";
     }
 
-    private sealed class OuterTrace(Machine machine, AmigaBootController boot, IntuitionExecutionHost host, ITestOutputHelper output)
+    private sealed class OuterTrace(Machine machine, AmigaBootController boot, ITestOutputHelper output)
     {
         private const int InstructionBudget = 40_000;
         private const long CycleBudget = 4_000_000;
@@ -1032,7 +754,6 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
                     Assert.False(machine.Cpu.State.Halted);
                     Assert.Equal(1, result.InstructionsExecuted);
                 }
-                Assert.Equal(PortableIntuition.IntuitionStateResult.Success, host.LastFault);
                 Assert.True(next.Cycles > previous.Cycles, next.ToString());
                 Assert.True(next.NativeCycles >= previous.NativeCycles, next.ToString());
             }
@@ -1054,7 +775,6 @@ public sealed class CopperStartIntuitionLayersActorBootTests(ITestOutputHelper o
             Assert.False(machine.Cpu.State.Stopped);
             Assert.True(next.Cycles > previous.Cycles);
             Assert.True(next.NativeCycles >= previous.NativeCycles);
-            Assert.Equal(PortableIntuition.IntuitionStateResult.Success, host.LastFault);
             return next;
         }
         internal void Dump()

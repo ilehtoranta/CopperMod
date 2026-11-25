@@ -64,7 +64,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             var taskOutputs = context.Allocate(4 * 96);
             for (uint offset = 0; offset < 4 * 96; offset++)
                 context.Bus.WriteByte(taskOutputs + offset, 0xA5, 0);
-            var writer = new NativeTaskInstructionWriter(context.Bus, code);
+            var writer = new CopperStartLayersBootTests.InstructionWriter(context.Bus, code);
             var screenResult = context.Allocate(4);
             if (openScreen)
             {

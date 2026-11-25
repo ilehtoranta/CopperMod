@@ -1,7 +1,8 @@
 using Amiga;
 using Copper68k;
 using CopperMod.Amiga.CopperStart.Graphics.Portable;
-using Fixture = CopperMod.Amiga.Tests.CopperStartIntuitionCallbackBootTests;
+using Fixture = CopperMod.Amiga.Tests.LayersGuestFixture;
+using GuestProgram = CopperMod.Amiga.Tests.CopperStartLayersBootTests.InstructionWriter;
 using GraphicsLvo = CopperMod.Amiga.CopperStart.Graphics.Portable.GraphicsLvo;
 
 namespace CopperMod.Amiga.Tests;
@@ -153,13 +154,12 @@ public sealed partial class CopperStartLayersBootTests
             bus, Lvo(libraryBase, LayersLvo.InstallClipRegion), installClip));
         Assert.Equal(0u, installClip.D[0]);
 
-        var hookAuthority = new Fixture.BorrowAuthority();
-        var hookCode = hookAuthority.Allocate(bus, 0x1000);
-        var hookMarker = hookAuthority.Allocate(bus, sizeof(uint));
+        var hookCode = Fixture.Allocate(bus, 0x1000);
+        var hookMarker = Fixture.Allocate(bus, sizeof(uint));
         bus.WriteLong(hookMarker.Raw, 0);
-        var hook = hookAuthority.Hook(bus, hookCode.Raw);
+        var hook = Fixture.Hook(bus, hookCode.Raw);
         const uint hookMarkerValue = 0xBACCF111;
-        var hookProgram = new Fixture.GuestProgram(bus, hookCode.Raw);
+        var hookProgram = new GuestProgram(bus, hookCode.Raw);
         hookProgram.StoreLong(hookMarker.Raw, hookMarkerValue);
         hookProgram.Return();
         Assert.False(bus.HasHostGateway(hookCode.Raw));
@@ -170,59 +170,59 @@ public sealed partial class CopperStartLayersBootTests
         Assert.True(InvokeHostTrap(
             bus, Lvo(libraryBase, LayersLvo.InstallLayerHook), installHook));
 
-        var callerCode = hookAuthority.Allocate(bus, 0x2000);
+        var callerCode = Fixture.Allocate(bus, 0x2000);
         var userStack = Fixture.GuestStack.Allocate(bus);
         var supervisorStack = Fixture.GuestStack.Allocate(bus);
         var actor = Fixture.CurrentTask(bus);
         Fixture.SetTaskStack(bus, actor, userStack);
-        var caller = new Fixture.GuestProgram(bus, callerCode.Raw, 0x2000);
+        var caller = new GuestProgram(bus, callerCode.Raw, 0x2000);
 
-        caller.MoveAddress(6, libraryBase);
-        caller.MoveAddress(1, bottom.Layer);
-        caller.MoveData(0, 4);
-        caller.MoveData(1, 4);
-        var afterResize = caller.Call(Lvo(libraryBase, LayersLvo.SizeLayer));
+        caller.MoveAddressImmediate(6, libraryBase);
+        caller.MoveAddressImmediate(1, bottom.Layer);
+        caller.MoveDataImmediate(0, 4);
+        caller.MoveDataImmediate(1, 4);
+        var afterResize = caller.JumpSubroutine(Lvo(libraryBase, LayersLvo.SizeLayer));
 
-        caller.MoveAddress(0, bottom.Layer);
-        var afterBeginResizeUpdate = caller.Call(
+        caller.MoveAddressImmediate(0, bottom.Layer);
+        var afterBeginResizeUpdate = caller.JumpSubroutine(
             Lvo(libraryBase, LayersLvo.BeginUpdate));
-        caller.MoveAddress(6, AmigaKickstartHost.GraphicsLibraryBase);
-        caller.MoveAddress(1, bottom.RastPort);
-        caller.MoveData(0, 1);
-        caller.Call(Lvo(
+        caller.MoveAddressImmediate(6, AmigaKickstartHost.GraphicsLibraryBase);
+        caller.MoveAddressImmediate(1, bottom.RastPort);
+        caller.MoveDataImmediate(0, 1);
+        caller.JumpSubroutine(Lvo(
             AmigaKickstartHost.GraphicsLibraryBase,
             (int)GraphicsLvo.SetRast));
-        caller.MoveAddress(6, libraryBase);
-        caller.MoveAddress(0, bottom.Layer);
-        caller.MoveData(0, 0);
-        var afterResizePartialEnd = caller.Call(
+        caller.MoveAddressImmediate(6, libraryBase);
+        caller.MoveAddressImmediate(0, bottom.Layer);
+        caller.MoveDataImmediate(0, 0);
+        var afterResizePartialEnd = caller.JumpSubroutine(
             Lvo(libraryBase, LayersLvo.EndUpdate));
 
-        caller.MoveAddress(1, bottom.Layer);
-        caller.MoveData(0, unchecked((uint)-2));
-        caller.MoveData(1, unchecked((uint)-2));
-        var afterShrink = caller.Call(Lvo(libraryBase, LayersLvo.SizeLayer));
+        caller.MoveAddressImmediate(1, bottom.Layer);
+        caller.MoveDataImmediate(0, unchecked((uint)-2));
+        caller.MoveDataImmediate(1, unchecked((uint)-2));
+        var afterShrink = caller.JumpSubroutine(Lvo(libraryBase, LayersLvo.SizeLayer));
 
-        caller.MoveAddress(1, top.Layer);
-        caller.MoveData(0, 1);
-        caller.MoveData(1, 0);
-        var afterReveal = caller.Call(Lvo(libraryBase, LayersLvo.MoveLayer));
+        caller.MoveAddressImmediate(1, top.Layer);
+        caller.MoveDataImmediate(0, 1);
+        caller.MoveDataImmediate(1, 0);
+        var afterReveal = caller.JumpSubroutine(Lvo(libraryBase, LayersLvo.MoveLayer));
 
-        caller.MoveAddress(0, bottom.Layer);
-        var afterBeginRevealUpdate = caller.Call(
+        caller.MoveAddressImmediate(0, bottom.Layer);
+        var afterBeginRevealUpdate = caller.JumpSubroutine(
             Lvo(libraryBase, LayersLvo.BeginUpdate));
-        caller.MoveAddress(6, AmigaKickstartHost.GraphicsLibraryBase);
-        caller.MoveAddress(1, bottom.RastPort);
-        caller.MoveData(0, 1);
-        caller.Call(Lvo(
+        caller.MoveAddressImmediate(6, AmigaKickstartHost.GraphicsLibraryBase);
+        caller.MoveAddressImmediate(1, bottom.RastPort);
+        caller.MoveDataImmediate(0, 1);
+        caller.JumpSubroutine(Lvo(
             AmigaKickstartHost.GraphicsLibraryBase,
             (int)GraphicsLvo.SetRast));
-        caller.MoveAddress(6, libraryBase);
-        caller.MoveAddress(0, bottom.Layer);
-        caller.MoveData(0, 0);
-        var afterRevealPartialEnd = caller.Call(
+        caller.MoveAddressImmediate(6, libraryBase);
+        caller.MoveAddressImmediate(0, bottom.Layer);
+        caller.MoveDataImmediate(0, 0);
+        var afterRevealPartialEnd = caller.JumpSubroutine(
             Lvo(libraryBase, LayersLvo.EndUpdate));
-        caller.Park();
+        caller.BranchToSelf();
 
         Fixture.StartRequester(
             machine, callerCode.Raw, userStack, supervisorStack);
@@ -852,13 +852,12 @@ public sealed partial class CopperStartLayersBootTests
             bus, Lvo(libraryBase, LayersLvo.InstallClipRegion), installClip));
         Assert.Equal(0u, installClip.D[0]);
 
-        var hookAuthority = new Fixture.BorrowAuthority();
-        var hookCode = hookAuthority.Allocate(bus, 0x1000);
-        var hookMarker = hookAuthority.Allocate(bus, sizeof(uint));
+        var hookCode = Fixture.Allocate(bus, 0x1000);
+        var hookMarker = Fixture.Allocate(bus, sizeof(uint));
         bus.WriteLong(hookMarker.Raw, 0);
-        var hook = hookAuthority.Hook(bus, hookCode.Raw);
+        var hook = Fixture.Hook(bus, hookCode.Raw);
         const uint hookMarkerValue = 0xD311E7E0;
-        var hookProgram = new Fixture.GuestProgram(bus, hookCode.Raw);
+        var hookProgram = new GuestProgram(bus, hookCode.Raw);
         hookProgram.StoreLong(hookMarker.Raw, hookMarkerValue);
         hookProgram.Return();
         var installHook = new M68kCpuState
@@ -868,16 +867,16 @@ public sealed partial class CopperStartLayersBootTests
         Assert.True(InvokeHostTrap(
             bus, Lvo(libraryBase, LayersLvo.InstallLayerHook), installHook));
 
-        var callerCode = hookAuthority.Allocate(bus, 0x2000);
+        var callerCode = Fixture.Allocate(bus, 0x2000);
         var userStack = Fixture.GuestStack.Allocate(bus);
         var supervisorStack = Fixture.GuestStack.Allocate(bus);
         var actor = Fixture.CurrentTask(bus);
         Fixture.SetTaskStack(bus, actor, userStack);
-        var caller = new Fixture.GuestProgram(bus, callerCode.Raw, 0x2000);
-        caller.MoveAddress(6, libraryBase);
-        caller.MoveAddress(0, deletedOccluder.Layer);
-        var afterDelete = caller.Call(Lvo(libraryBase, LayersLvo.DeleteLayer));
-        caller.Park();
+        var caller = new GuestProgram(bus, callerCode.Raw, 0x2000);
+        caller.MoveAddressImmediate(6, libraryBase);
+        caller.MoveAddressImmediate(0, deletedOccluder.Layer);
+        var afterDelete = caller.JumpSubroutine(Lvo(libraryBase, LayersLvo.DeleteLayer));
+        caller.BranchToSelf();
 
         Fixture.StartRequester(
             machine, callerCode.Raw, userStack, supervisorStack);
@@ -1085,16 +1084,16 @@ public sealed partial class CopperStartLayersBootTests
         if (moveCoverAfterPartialRefresh)
         {
             var movedCover = survivingFrontCover!.Value;
-            var moveCallerCode = hookAuthority.Allocate(bus, 0x1000);
-            var moveCaller = new Fixture.GuestProgram(
+            var moveCallerCode = Fixture.Allocate(bus, 0x1000);
+            var moveCaller = new GuestProgram(
                 bus, moveCallerCode.Raw, 0x1000);
-            moveCaller.MoveAddress(6, libraryBase);
-            moveCaller.MoveAddress(1, movedCover.Layer);
-            moveCaller.MoveData(0, 1);
-            moveCaller.MoveData(1, 0);
-            var afterMove = moveCaller.Call(
+            moveCaller.MoveAddressImmediate(6, libraryBase);
+            moveCaller.MoveAddressImmediate(1, movedCover.Layer);
+            moveCaller.MoveDataImmediate(0, 1);
+            moveCaller.MoveDataImmediate(1, 0);
+            var afterMove = moveCaller.JumpSubroutine(
                 Lvo(libraryBase, LayersLvo.MoveLayer));
-            moveCaller.Park();
+            moveCaller.BranchToSelf();
 
             var bitmapBeforeMove = SnapshotPlanarBitMap(bus, displayBitMap);
             var callbacksBeforeMove = callbackMessages.Count;
@@ -1185,14 +1184,14 @@ public sealed partial class CopperStartLayersBootTests
 
             if (deleteCoverAfterPartialRefresh)
             {
-                var deleteCallerCode = hookAuthority.Allocate(bus, 0x1000);
-                var deleteCaller = new Fixture.GuestProgram(
+                var deleteCallerCode = Fixture.Allocate(bus, 0x1000);
+                var deleteCaller = new GuestProgram(
                     bus, deleteCallerCode.Raw, 0x1000);
-                deleteCaller.MoveAddress(6, libraryBase);
-                deleteCaller.MoveAddress(0, movedCover.Layer);
-                var afterDeleteCover = deleteCaller.Call(
+                deleteCaller.MoveAddressImmediate(6, libraryBase);
+                deleteCaller.MoveAddressImmediate(0, movedCover.Layer);
+                var afterDeleteCover = deleteCaller.JumpSubroutine(
                     Lvo(libraryBase, LayersLvo.DeleteLayer));
-                deleteCaller.Park();
+                deleteCaller.BranchToSelf();
 
                 var callbacksBeforeDelete = callbackMessages.Count;
                 var hooksBeforeDelete = guestHookEntries;
@@ -1226,16 +1225,16 @@ public sealed partial class CopperStartLayersBootTests
 
             if (shrinkLayerAfterCoverMutation)
             {
-                var shrinkCallerCode = hookAuthority.Allocate(bus, 0x1000);
-                var shrinkCaller = new Fixture.GuestProgram(
+                var shrinkCallerCode = Fixture.Allocate(bus, 0x1000);
+                var shrinkCaller = new GuestProgram(
                     bus, shrinkCallerCode.Raw, 0x1000);
-                shrinkCaller.MoveAddress(6, libraryBase);
-                shrinkCaller.MoveAddress(1, bottom.Layer);
-                shrinkCaller.MoveData(0, unchecked((uint)-1));
-                shrinkCaller.MoveData(1, 0);
-                var afterShrink = shrinkCaller.Call(
+                shrinkCaller.MoveAddressImmediate(6, libraryBase);
+                shrinkCaller.MoveAddressImmediate(1, bottom.Layer);
+                shrinkCaller.MoveDataImmediate(0, unchecked((uint)-1));
+                shrinkCaller.MoveDataImmediate(1, 0);
+                var afterShrink = shrinkCaller.JumpSubroutine(
                     Lvo(libraryBase, LayersLvo.SizeLayer));
-                shrinkCaller.Park();
+                shrinkCaller.BranchToSelf();
 
                 Fixture.StartRequester(
                     machine, shrinkCallerCode.Raw, userStack, supervisorStack);
@@ -1294,16 +1293,16 @@ public sealed partial class CopperStartLayersBootTests
                     Assert.Equal(damageAfterShrinkBytes,
                         SnapshotGraphicsRegion(bus, damageAfterShrink.Raw));
 
-                    var growCallerCode = hookAuthority.Allocate(bus, 0x1000);
-                    var growCaller = new Fixture.GuestProgram(
+                    var growCallerCode = Fixture.Allocate(bus, 0x1000);
+                    var growCaller = new GuestProgram(
                         bus, growCallerCode.Raw, 0x1000);
-                    growCaller.MoveAddress(6, libraryBase);
-                    growCaller.MoveAddress(1, bottom.Layer);
-                    growCaller.MoveData(0, 1);
-                    growCaller.MoveData(1, 0);
-                    var afterRegrow = growCaller.Call(
+                    growCaller.MoveAddressImmediate(6, libraryBase);
+                    growCaller.MoveAddressImmediate(1, bottom.Layer);
+                    growCaller.MoveDataImmediate(0, 1);
+                    growCaller.MoveDataImmediate(1, 0);
+                    var afterRegrow = growCaller.JumpSubroutine(
                         Lvo(libraryBase, LayersLvo.SizeLayer));
-                    growCaller.Park();
+                    growCaller.BranchToSelf();
 
                     Fixture.StartRequester(
                         machine, growCallerCode.Raw, userStack, supervisorStack);
@@ -1489,15 +1488,15 @@ public sealed partial class CopperStartLayersBootTests
 
         if (replaceCallerClipAfterMutations)
         {
-            var replaceClipCallerCode = hookAuthority.Allocate(bus, 0x1000);
-            var replaceClipCaller = new Fixture.GuestProgram(
+            var replaceClipCallerCode = Fixture.Allocate(bus, 0x1000);
+            var replaceClipCaller = new GuestProgram(
                 bus, replaceClipCallerCode.Raw, 0x1000);
-            replaceClipCaller.MoveAddress(6, libraryBase);
-            replaceClipCaller.MoveAddress(0, bottom.Layer);
-            replaceClipCaller.MoveAddress(1, replacementClipRegion);
-            var afterReplaceClip = replaceClipCaller.Call(
+            replaceClipCaller.MoveAddressImmediate(6, libraryBase);
+            replaceClipCaller.MoveAddressImmediate(0, bottom.Layer);
+            replaceClipCaller.MoveAddressImmediate(1, replacementClipRegion);
+            var afterReplaceClip = replaceClipCaller.JumpSubroutine(
                 Lvo(libraryBase, LayersLvo.InstallClipRegion));
-            replaceClipCaller.Park();
+            replaceClipCaller.BranchToSelf();
 
             Fixture.StartRequester(
                 machine, replaceClipCallerCode.Raw, userStack, supervisorStack);
@@ -1599,16 +1598,16 @@ public sealed partial class CopperStartLayersBootTests
         }
         if (shrinkAndRegrowBottomEdge)
         {
-            var shrinkYCallerCode = hookAuthority.Allocate(bus, 0x1000);
-            var shrinkYCaller = new Fixture.GuestProgram(
+            var shrinkYCallerCode = Fixture.Allocate(bus, 0x1000);
+            var shrinkYCaller = new GuestProgram(
                 bus, shrinkYCallerCode.Raw, 0x1000);
-            shrinkYCaller.MoveAddress(6, libraryBase);
-            shrinkYCaller.MoveAddress(1, bottom.Layer);
-            shrinkYCaller.MoveData(0, 0);
-            shrinkYCaller.MoveData(1, unchecked((uint)-1));
-            var afterShrinkY = shrinkYCaller.Call(
+            shrinkYCaller.MoveAddressImmediate(6, libraryBase);
+            shrinkYCaller.MoveAddressImmediate(1, bottom.Layer);
+            shrinkYCaller.MoveDataImmediate(0, 0);
+            shrinkYCaller.MoveDataImmediate(1, unchecked((uint)-1));
+            var afterShrinkY = shrinkYCaller.JumpSubroutine(
                 Lvo(libraryBase, LayersLvo.SizeLayer));
-            shrinkYCaller.Park();
+            shrinkYCaller.BranchToSelf();
             Fixture.StartRequester(
                 machine, shrinkYCallerCode.Raw, userStack, supervisorStack);
             StepUntil(afterShrinkY);
@@ -1648,16 +1647,16 @@ public sealed partial class CopperStartLayersBootTests
             Assert.Equal(damageBeforeYPartialBytes,
                 SnapshotGraphicsRegion(bus, damageBeforeYShrink.Raw));
 
-            var growYCallerCode = hookAuthority.Allocate(bus, 0x1000);
-            var growYCaller = new Fixture.GuestProgram(
+            var growYCallerCode = Fixture.Allocate(bus, 0x1000);
+            var growYCaller = new GuestProgram(
                 bus, growYCallerCode.Raw, 0x1000);
-            growYCaller.MoveAddress(6, libraryBase);
-            growYCaller.MoveAddress(1, bottom.Layer);
-            growYCaller.MoveData(0, 0);
-            growYCaller.MoveData(1, 1);
-            var afterRegrowY = growYCaller.Call(
+            growYCaller.MoveAddressImmediate(6, libraryBase);
+            growYCaller.MoveAddressImmediate(1, bottom.Layer);
+            growYCaller.MoveDataImmediate(0, 0);
+            growYCaller.MoveDataImmediate(1, 1);
+            var afterRegrowY = growYCaller.JumpSubroutine(
                 Lvo(libraryBase, LayersLvo.SizeLayer));
-            growYCaller.Park();
+            growYCaller.BranchToSelf();
             Fixture.StartRequester(
                 machine, growYCallerCode.Raw, userStack, supervisorStack);
             StepUntil(afterRegrowY);
@@ -1683,15 +1682,15 @@ public sealed partial class CopperStartLayersBootTests
                 reinstallCallerClip));
             Assert.Equal(0u, reinstallCallerClip.D[0]);
 
-            var replaceAfterBottomCode = hookAuthority.Allocate(bus, 0x1000);
-            var replaceAfterBottom = new Fixture.GuestProgram(
+            var replaceAfterBottomCode = Fixture.Allocate(bus, 0x1000);
+            var replaceAfterBottom = new GuestProgram(
                 bus, replaceAfterBottomCode.Raw, 0x1000);
-            replaceAfterBottom.MoveAddress(6, libraryBase);
-            replaceAfterBottom.MoveAddress(0, bottom.Layer);
-            replaceAfterBottom.MoveAddress(1, replacementClipRegion);
-            var afterReplaceBottomClip = replaceAfterBottom.Call(
+            replaceAfterBottom.MoveAddressImmediate(6, libraryBase);
+            replaceAfterBottom.MoveAddressImmediate(0, bottom.Layer);
+            replaceAfterBottom.MoveAddressImmediate(1, replacementClipRegion);
+            var afterReplaceBottomClip = replaceAfterBottom.JumpSubroutine(
                 Lvo(libraryBase, LayersLvo.InstallClipRegion));
-            replaceAfterBottom.Park();
+            replaceAfterBottom.BranchToSelf();
             Fixture.StartRequester(
                 machine, replaceAfterBottomCode.Raw,
                 userStack, supervisorStack);
@@ -2327,13 +2326,12 @@ public sealed partial class CopperStartLayersBootTests
             bus, Lvo(libraryBase, LayersLvo.InstallClipRegion), installClip));
         Assert.Equal(0u, installClip.D[0]);
 
-        var hookAuthority = new Fixture.BorrowAuthority();
-        var hookCode = hookAuthority.Allocate(bus, 0x1000);
-        var hookMarker = hookAuthority.Allocate(bus, sizeof(uint));
+        var hookCode = Fixture.Allocate(bus, 0x1000);
+        var hookMarker = Fixture.Allocate(bus, sizeof(uint));
         bus.WriteLong(hookMarker.Raw, 0);
-        var hook = hookAuthority.Hook(bus, hookCode.Raw);
+        var hook = Fixture.Hook(bus, hookCode.Raw);
         const uint hookMarkerValue = 0xF20A71E2;
-        var hookProgram = new Fixture.GuestProgram(bus, hookCode.Raw);
+        var hookProgram = new GuestProgram(bus, hookCode.Raw);
         hookProgram.StoreLong(hookMarker.Raw, hookMarkerValue);
         hookProgram.Return();
         var installHook = new M68kCpuState
@@ -2343,27 +2341,27 @@ public sealed partial class CopperStartLayersBootTests
         Assert.True(InvokeHostTrap(
             bus, Lvo(libraryBase, LayersLvo.InstallLayerHook), installHook));
 
-        var callerCode = hookAuthority.Allocate(bus, 0x2000);
+        var callerCode = Fixture.Allocate(bus, 0x2000);
         var userStack = Fixture.GuestStack.Allocate(bus);
         var supervisorStack = Fixture.GuestStack.Allocate(bus);
         var actor = Fixture.CurrentTask(bus);
         Fixture.SetTaskStack(bus, actor, userStack);
-        var caller = new Fixture.GuestProgram(bus, callerCode.Raw, 0x2000);
-        caller.MoveAddress(6, libraryBase);
+        var caller = new GuestProgram(bus, callerCode.Raw, 0x2000);
+        caller.MoveAddressImmediate(6, libraryBase);
         uint afterReorder;
         if (moveBottomInFrontOfCover)
         {
-            caller.MoveAddress(0, bottom.Layer);
-            caller.MoveAddress(1, top.Layer);
-            afterReorder = caller.Call(
+            caller.MoveAddressImmediate(0, bottom.Layer);
+            caller.MoveAddressImmediate(1, top.Layer);
+            afterReorder = caller.JumpSubroutine(
                 Lvo(libraryBase, LayersLvo.MoveLayerInFrontOf));
         }
         else
         {
-            caller.MoveAddress(1, top.Layer);
-            afterReorder = caller.Call(Lvo(libraryBase, LayersLvo.BehindLayer));
+            caller.MoveAddressImmediate(1, top.Layer);
+            afterReorder = caller.JumpSubroutine(Lvo(libraryBase, LayersLvo.BehindLayer));
         }
-        caller.Park();
+        caller.BranchToSelf();
 
         Fixture.StartRequester(
             machine, callerCode.Raw, userStack, supervisorStack);
@@ -2664,13 +2662,12 @@ public sealed partial class CopperStartLayersBootTests
         Assert.Equal(0u, installClip.D[0]);
 
         var layerMemory = new LayersTestGuestMemory(bus);
-        var hookAuthority = new Fixture.BorrowAuthority();
-        var hookCode = hookAuthority.Allocate(bus, 0x1000);
-        var hookMarker = hookAuthority.Allocate(bus, sizeof(uint));
+        var hookCode = Fixture.Allocate(bus, 0x1000);
+        var hookMarker = Fixture.Allocate(bus, sizeof(uint));
         bus.WriteLong(hookMarker.Raw, 0);
-        var hook = hookAuthority.Hook(bus, hookCode.Raw);
+        var hook = Fixture.Hook(bus, hookCode.Raw);
         const uint hookMarkerValue = 0xF20A71E3;
-        var hookProgram = new Fixture.GuestProgram(bus, hookCode.Raw);
+        var hookProgram = new GuestProgram(bus, hookCode.Raw);
         hookProgram.StoreLong(hookMarker.Raw, hookMarkerValue);
         hookProgram.Return();
         foreach (var layer in new[] { target.Layer, bottom.Layer })
@@ -2683,16 +2680,16 @@ public sealed partial class CopperStartLayersBootTests
                 bus, Lvo(libraryBase, LayersLvo.InstallLayerHook), installHook));
         }
 
-        var callerCode = hookAuthority.Allocate(bus, 0x2000);
+        var callerCode = Fixture.Allocate(bus, 0x2000);
         var userStack = Fixture.GuestStack.Allocate(bus);
         var supervisorStack = Fixture.GuestStack.Allocate(bus);
         var actor = Fixture.CurrentTask(bus);
         Fixture.SetTaskStack(bus, actor, userStack);
-        var caller = new Fixture.GuestProgram(bus, callerCode.Raw, 0x2000);
-        caller.MoveAddress(6, libraryBase);
-        caller.MoveAddress(1, cover.Layer);
-        var afterReorder = caller.Call(Lvo(libraryBase, LayersLvo.BehindLayer));
-        caller.Park();
+        var caller = new GuestProgram(bus, callerCode.Raw, 0x2000);
+        caller.MoveAddressImmediate(6, libraryBase);
+        caller.MoveAddressImmediate(1, cover.Layer);
+        var afterReorder = caller.JumpSubroutine(Lvo(libraryBase, LayersLvo.BehindLayer));
+        caller.BranchToSelf();
         Fixture.StartRequester(
             machine, callerCode.Raw, userStack, supervisorStack);
 
@@ -2852,18 +2849,18 @@ public sealed partial class CopperStartLayersBootTests
         var replacementClipBytes = SnapshotGraphicsRegion(
             bus, replacementClipRegion);
 
-        var replacementCallerCode = hookAuthority.Allocate(bus, 0x2000);
+        var replacementCallerCode = Fixture.Allocate(bus, 0x2000);
         var replacementUserStack = Fixture.GuestStack.Allocate(bus);
         var replacementSupervisorStack = Fixture.GuestStack.Allocate(bus);
         Fixture.SetTaskStack(bus, actor, replacementUserStack);
-        var replacementCaller = new Fixture.GuestProgram(
+        var replacementCaller = new GuestProgram(
             bus, replacementCallerCode.Raw, 0x2000);
-        replacementCaller.MoveAddress(6, libraryBase);
-        replacementCaller.MoveAddress(0, target.Layer);
-        replacementCaller.MoveAddress(1, replacementClipRegion);
-        var afterReplacement = replacementCaller.Call(
+        replacementCaller.MoveAddressImmediate(6, libraryBase);
+        replacementCaller.MoveAddressImmediate(0, target.Layer);
+        replacementCaller.MoveAddressImmediate(1, replacementClipRegion);
+        var afterReplacement = replacementCaller.JumpSubroutine(
             Lvo(libraryBase, LayersLvo.InstallClipRegion));
-        replacementCaller.Park();
+        replacementCaller.BranchToSelf();
         var callbacksBeforeReplacement = callbackMessages.Count;
         Fixture.StartRequester(
             machine, replacementCallerCode.Raw,
@@ -2902,18 +2899,18 @@ public sealed partial class CopperStartLayersBootTests
         Assert.Equal(replacementDamageBytes,
             SnapshotGraphicsRegion(bus, damageAfterClipReplacement.Raw));
 
-        var moveCallerCode = hookAuthority.Allocate(bus, 0x2000);
+        var moveCallerCode = Fixture.Allocate(bus, 0x2000);
         var moveUserStack = Fixture.GuestStack.Allocate(bus);
         var moveSupervisorStack = Fixture.GuestStack.Allocate(bus);
         Fixture.SetTaskStack(bus, actor, moveUserStack);
-        var moveCaller = new Fixture.GuestProgram(
+        var moveCaller = new GuestProgram(
             bus, moveCallerCode.Raw, 0x2000);
-        moveCaller.MoveAddress(6, libraryBase);
-        moveCaller.MoveAddress(1, target.Layer);
-        moveCaller.MoveData(0, 2);
-        moveCaller.MoveData(1, 1);
-        var afterMove = moveCaller.Call(Lvo(libraryBase, LayersLvo.MoveLayer));
-        moveCaller.Park();
+        moveCaller.MoveAddressImmediate(6, libraryBase);
+        moveCaller.MoveAddressImmediate(1, target.Layer);
+        moveCaller.MoveDataImmediate(0, 2);
+        moveCaller.MoveDataImmediate(1, 1);
+        var afterMove = moveCaller.JumpSubroutine(Lvo(libraryBase, LayersLvo.MoveLayer));
+        moveCaller.BranchToSelf();
         var callbacksBeforeMove = callbackMessages.Count;
         Fixture.StartRequester(
             machine, moveCallerCode.Raw, moveUserStack, moveSupervisorStack);

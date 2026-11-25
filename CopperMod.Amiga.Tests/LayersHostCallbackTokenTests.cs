@@ -3,7 +3,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Amiga;
 using CopperMod.Amiga.CopperStart.Layers;
-using Fixture = CopperMod.Amiga.Tests.CopperStartIntuitionCallbackBootTests;
 
 namespace CopperMod.Amiga.Tests;
 
@@ -46,7 +45,7 @@ public sealed class LayersHostCallbackTokenTests
     [InlineData(0x0002_0002u)]
     public void BigEndianCodecRoundTripsEveryFieldAndPreservesBothAdjacentGuards(uint guestAddress)
     {
-        using var machine = Fixture.CreateMachine();
+        using var machine = CopperStartLayersBootTests.CreateMachine();
         var memory = new LayersTestGuestMemory(machine.Bus);
         var address = APTR.FromPointer(guestAddress);
         var guarded = APTR.FromPointer(guestAddress - 8);

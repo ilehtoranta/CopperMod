@@ -25533,7 +25533,7 @@ public sealed partial class CopperStartLayersBootTests
         }
     }
 
-    private static Machine CreateMachine()
+    internal static Machine CreateMachine()
         => new(MachineOptions
             .ForProfile(MachineProfile.A500Pal512KBoot)
             .WithLiveAgnusDma(false));
@@ -25608,7 +25608,7 @@ public sealed partial class CopperStartLayersBootTests
         Assert.Equal((short)0, bounds.MaxY);
     }
 
-    private static uint AllocateGuestMemory(AmigaBus bus, uint byteCount)
+    internal static uint AllocateGuestMemory(AmigaBus bus, uint byteCount)
     {
         var state = new M68kCpuState();
         state.D[0] = byteCount;
@@ -25620,7 +25620,7 @@ public sealed partial class CopperStartLayersBootTests
         return state.D[0];
     }
 
-    private static void FreeGuestMemory(
+    internal static void FreeGuestMemory(
         AmigaBus bus,
         uint address,
         uint byteCount)
@@ -26073,15 +26073,18 @@ public sealed partial class CopperStartLayersBootTests
         uint RastPort,
         uint FirstClipRect);
 
-    private sealed class InstructionWriter
+    internal sealed class InstructionWriter
     {
         private readonly AmigaBus _bus;
         private uint _address;
 
-        public InstructionWriter(AmigaBus bus, uint address)
+        private readonly ulong _end;
+
+        public InstructionWriter(AmigaBus bus, uint address, uint? capacity = null)
         {
             _bus = bus;
             _address = address;
+            _end = capacity.HasValue ? (ulong)address + capacity.Value : 1UL << 32;
         }
 
         public uint Address => _address;
@@ -26104,28 +26107,52 @@ public sealed partial class CopperStartLayersBootTests
             WriteWord(value);
         }
 
-        public void JumpSubroutine(uint address)
+        public uint JumpSubroutine(uint address)
         {
             WriteWord(0x4EB9);
             WriteLong(address);
+            return _address;
         }
 
-        public void BranchToSelf() => WriteWord(0x60FE);
+        public void MoveDataRegisterToAbsoluteLong(int register, uint address)
+        {
+            WriteWord(checked((ushort)(0x23C0 + register)));
+            WriteLong(address);
+        }
+
+        public uint Return() { var at = Address; WriteWord(0x4E75); return at; }
+
+        public void SetConditionCodes(ushort value)
+        {
+            WriteWord(0x023C); WriteWord(0);
+            OrImmediateConditionCodes(value);
+        }
+
+        public void StoreLong(uint address, uint value)
+        {
+            WriteWord(0x23FC);
+            WriteLong(value);
+            WriteLong(address);
+        }
+
+        public uint BranchToSelf() { var at = Address; WriteWord(0x60FE); return at; }
 
         private void WriteWord(ushort value)
         {
+            Assert.True((ulong)_address + 2 <= _end);
             _bus.WriteWord(_address, value, 0);
             _address += 2;
         }
 
         private void WriteLong(uint value)
         {
+            Assert.True((ulong)_address + 4 <= _end);
             _bus.WriteLong(_address, value, 0);
             _address += 4;
         }
     }
 
-    private static AmigaDiskImage CreateBootableDisk()
+    internal static AmigaDiskImage CreateBootableDisk()
     {
         var data = new byte[AmigaDiskImage.StandardAdfSize];
         data[0] = (byte)'D';

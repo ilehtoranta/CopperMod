@@ -36,6 +36,7 @@
 
   <ItemGroup>
     <PackageReference Include="CopperDisk" Version="[2.1.1-boundary.1]" />
+    <ProjectReference Include="$(CopperStartRoot)/native/CopperStart.Intuition/CopperStart.Intuition.Native.csproj" />
     <ProjectReference Include="..\CopperMod.Amiga.Emulator\CopperMod.Amiga.Emulator.csproj" />
     <ProjectReference Include="..\CopperMod.Amiga.CyberGraphics\CopperMod.Amiga.CyberGraphics.csproj" />
     <ProjectReference Include="..\CopperMod.Cust\CopperMod.Cust.csproj" />

@@ -368,13 +368,16 @@ public sealed class AmigaBootMemoryTests
 
 		bus.WriteLong(execBase + ExecChkBaseOffset, ~execBase);
 		bus.WriteLong(execBase + ExecThisTaskOffset, task);
-		bus.WriteLong(execBase + ExecMemListOffset, 0);
+		InitializeEmptyMemList(bus, execBase);
 		WriteExecVector(bus, execBase, ExecFirstLvo, 0x0000_4000);
 
 		Assert.False(InvokeIsValidKickstartRomExecBase(boot, execBase));
 
 		WriteExecVector(bus, execBase, ExecAddHeadLvo, 0x0000_4100);
-		Assert.True(InvokeIsValidKickstartRomExecBase(boot, execBase));
+		Assert.True(InvokeIsValidKickstartRomExecBase(boot, execBase), $"MemList head={bus.ReadLong(execBase + ExecMemListOffset):X8}, tail={bus.ReadLong(execBase + ExecMemListOffset + 4):X8}");
+
+		bus.WriteLong(execBase + ExecMemListOffset, 0);
+		Assert.False(InvokeIsValidKickstartRomExecBase(boot, execBase));
 	}
 
 	[Fact]
@@ -391,7 +394,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(4, execBase);
 		bus.WriteLong(execBase + ExecChkBaseOffset, ~execBase);
 		bus.WriteLong(execBase + ExecThisTaskOffset, task);
-		bus.WriteLong(execBase + ExecMemListOffset, 0);
+		InitializeEmptyMemList(bus, execBase);
 		WriteExecVector(bus, execBase, ExecFirstLvo, 0x0000_4000);
 		WriteExecVector(bus, execBase, ExecAddHeadLvo, 0x0000_4100);
 		SetKickstartRomExecTakeoverState(boot, "Pending");
@@ -462,7 +465,7 @@ public sealed class AmigaBootMemoryTests
 		bus.WriteLong(4, execBase);
 		bus.WriteLong(execBase + ExecChkBaseOffset, ~execBase);
 		bus.WriteLong(execBase + ExecThisTaskOffset, task);
-		bus.WriteLong(execBase + ExecMemListOffset, 0);
+		InitializeEmptyMemList(bus, execBase);
 		WriteExecVector(bus, execBase, ExecFirstLvo, 0x0000_4000);
 		WriteExecVector(bus, execBase, ExecAddHeadLvo, 0x0000_4100);
 		InitializeExecList(bus, execBase + ExecLibListOffset);
@@ -13791,6 +13794,14 @@ public sealed class AmigaBootMemoryTests
 		var field = typeof(AmigaBootController)
 			.GetField("_kickstartRomExecTakeoverState", BindingFlags.Instance | BindingFlags.NonPublic)!;
 		field.SetValue(boot, Enum.Parse(field.FieldType, state));
+	}
+
+	private static void InitializeEmptyMemList(AmigaBus bus, uint execBase)
+	{
+		var list = execBase + ExecMemListOffset;
+		bus.WriteLong(list, list + 4);
+		bus.WriteLong(list + 4, 0);
+		bus.WriteLong(list + 8, list);
 	}
 
 	private static void WriteExecVector(AmigaBus bus, uint execBase, int lvo, uint target)

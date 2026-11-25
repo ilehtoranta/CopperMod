@@ -1,10 +1,9 @@
 using Amiga;
-using CopperMod.Amiga.CopperStart.Intuition;
 using CopperMod.Amiga.CopperStart.Layers;
 using Xunit.Abstractions;
-using Fixture = CopperMod.Amiga.Tests.CopperStartIntuitionCallbackBootTests;
+using Fixture = CopperMod.Amiga.Tests.LayersGuestFixture;
+using GuestProgram = CopperMod.Amiga.Tests.CopperStartLayersBootTests.InstructionWriter;
 using GraphicsLvo = CopperMod.Amiga.CopperStart.Graphics.Portable.GraphicsLvo;
-using PortableIntuition = global::CopperStart.Intuition;
 using PortableLayers = global::CopperStart.Layers;
 
 namespace CopperMod.Amiga.Tests;
@@ -17,14 +16,12 @@ namespace CopperMod.Amiga.Tests;
 /// </summary>
 public sealed class CopperStartIntuitionLayersTopologyReturnBootTests(ITestOutputHelper output)
 {
-    [Theory]
-    [InlineData(1)]
-    [InlineData(-1)]
-    public void RealTopologyHookReturnWaitsForAnotherTaskThenResumesItsRetainedIssueExactlyOnce(int workerPriority)
+    [Fact]
+    public void RealTopologyHookReturnWaitsForAnotherTaskThenResumesItsRetainedIssueExactlyOnce()
     {
-        using var machine = Fixture.CreateMachine();
+        using var machine = CopperStartLayersBootTests.CreateMachine();
         var boot = new AmigaBootController(machine);
-        boot.StartBootFromDisk(Fixture.CreateBootableDisk());
+        boot.StartBootFromDisk(CopperStartLayersBootTests.CreateBootableDisk());
         var bus = machine.Bus;
         var actor = Fixture.CurrentTask(bus);
         var library = APTR.FromPointer(boot.CopperStartLayersLibraryBase);
@@ -41,16 +38,15 @@ public sealed class CopperStartIntuitionLayersTopologyReturnBootTests(ITestOutpu
         var initialOpenCount = ExecLibraryCodec.Read(ref sdk, library).OpenCount;
         var initialLayerInfos = PortableLayers.LayersPrivateRootCore.FirstLayerInfo(ref observation, root);
         var initialOpaqueCount = boot.CopperStartLayersOpaqueAllocationCountForTest;
-        var borrowed = new Fixture.BorrowAuthority();
-        var callerCode = borrowed.Allocate(bus, 0x1000);
-        var hookCode = borrowed.Allocate(bus, 0x1000);
-        var otherCode = borrowed.Allocate(bus, 0x1000);
-        var hook = borrowed.Hook(bus, hookCode.Raw);
-        var markers = borrowed.Allocate(bus, 8);
+        var callerCode = Fixture.Allocate(bus, 0x1000);
+        var hookCode = Fixture.Allocate(bus, 0x1000);
+        var otherCode = Fixture.Allocate(bus, 0x1000);
+        var hook = Fixture.Hook(bus, hookCode.Raw);
+        var markers = Fixture.Allocate(bus, 8);
         var user = Fixture.GuestStack.Allocate(bus);
         var supervisor = Fixture.GuestStack.Allocate(bus);
         var otherStack = Fixture.GuestStack.Allocate(bus);
-        var other = borrowed.Allocate(bus, global::Amiga.Task.Size);
+        var other = Fixture.Allocate(bus, global::Amiga.Task.Size);
         ExecTaskCodec.Write(ref sdk, other, new global::Amiga.Task
         {
             Node = new Node { Type = (byte)NodeType.Task, Priority = -1 },
@@ -64,97 +60,92 @@ public sealed class CopperStartIntuitionLayersTopologyReturnBootTests(ITestOutpu
         var initialSignals = Signals.Read(bus, actor);
         var availableBeforeOwners = AvailableSetupMemory(bus);
         var surface = CreateEmptySetupSurface(bus, library);
-        Assert.Equal(PortableIntuition.IntuitionStateResult.Success,
-            boot.TryCreateUnpublishedIntuitionExecution(Fixture.CreateConfiguration(), (sbyte)workerPriority,
-                borrowed.AllowsSpan, borrowed.AllowsEntry, out var created));
-        Assert.NotNull(created);
-        var host = created!;
-        var worker = host.Worker;
-        var workerStack = Fixture.ReadTask(bus, worker);
+        var resident = new NativeIntuitionTestResident(bus);
 
-        var caller = new Fixture.GuestProgram(bus, callerCode.Raw);
-        var afterStarted = caller.Call(host.GetGateway(IntuitionExecutionGateway.StartWait));
-        caller.MoveAddress(6, library.Raw);
-        caller.Call(Lvo(library, -6));
+        var caller = new GuestProgram(bus, callerCode.Raw);
+        caller.MoveAddressImmediate(6, resident.Library);
+        var afterStarted = caller.JumpSubroutine(resident.Open);
+        caller.MoveAddressImmediate(6, library.Raw);
+        caller.JumpSubroutine(Lvo(library, -6));
         for (var register = 5; register < 8; register++)
-            caller.MoveData(register, 0xC100_0000u + (uint)register);
-        caller.MoveAddress(4, 0xA100_0004);
-        caller.MoveAddress(5, 0xA100_0005);
-        caller.MoveAddress(0, surface.LayerInfo.Raw);
-        caller.MoveAddress(1, surface.BitMap.Raw);
-        caller.MoveAddress(2, 0);
-        caller.MoveAddress(3, hook.Raw);
-        caller.MoveData(0, 0); caller.MoveData(1, 0);
-        caller.MoveData(2, 15); caller.MoveData(3, 15);
-        caller.MoveData(4, (uint)LayerCreationFlags.Simple);
+            caller.MoveDataImmediate(register, 0xC100_0000u + (uint)register);
+        caller.MoveAddressImmediate(4, 0xA100_0004);
+        caller.MoveAddressImmediate(5, 0xA100_0005);
+        caller.MoveAddressImmediate(0, surface.LayerInfo.Raw);
+        caller.MoveAddressImmediate(1, surface.BitMap.Raw);
+        caller.MoveAddressImmediate(2, 0);
+        caller.MoveAddressImmediate(3, hook.Raw);
+        caller.MoveDataImmediate(0, 0); caller.MoveDataImmediate(1, 0);
+        caller.MoveDataImmediate(2, 15); caller.MoveDataImmediate(3, 15);
+        caller.MoveDataImmediate(4, (uint)LayerCreationFlags.Simple);
         caller.SetConditionCodes(M68kCpuState.Extend | M68kCpuState.Zero | M68kCpuState.Carry);
         var createCall = caller.Address;
         var createGateway = Lvo(library, LayersLvo.CreateUpfrontHookLayer);
-        var afterCreate = caller.Call(createGateway);
+        var afterCreate = caller.JumpSubroutine(createGateway);
         // Keep the actual guest-returned Layer in A4 while giving the lower
         // priority helper a turn to finish its real Unlock LVO and RemTask.
         caller = AppendWord(bus, caller, callerCode, 0x2840); // MOVEA.L D0,A4
         EmitPriority(caller, actor, -4);
-        caller.MoveData(7, 0xC1EA_0001);
+        caller.MoveDataImmediate(7, 0xC1EA_0001);
         var afterCleanupResumed = caller.Address;
         EmitPriority(caller, actor, 0);
         caller = AppendWord(bus, caller, callerCode, 0x224C); // MOVEA.L A4,A1
-        caller.MoveAddress(6, library.Raw);
-        var afterDelete = caller.Call(Lvo(library, LayersLvo.DeleteLayer));
-        caller.MoveAddress(0, surface.LayerInfo.Raw);
-        var afterDispose = caller.Call(Lvo(library, LayersLvo.DisposeLayerInfo));
-        caller.MoveAddress(6, AmigaKickstartHost.GraphicsLibraryBase);
-        caller.MoveAddress(0, surface.BitMap.Raw);
-        caller.Call(Lvo(APTR.FromPointer(AmigaKickstartHost.GraphicsLibraryBase), (short)GraphicsLvo.FreeBitMap));
-        caller.MoveAddress(6, library.Raw);
+        caller.MoveAddressImmediate(6, library.Raw);
+        var afterDelete = caller.JumpSubroutine(Lvo(library, LayersLvo.DeleteLayer));
+        caller.MoveAddressImmediate(0, surface.LayerInfo.Raw);
+        var afterDispose = caller.JumpSubroutine(Lvo(library, LayersLvo.DisposeLayerInfo));
+        caller.MoveAddressImmediate(6, AmigaKickstartHost.GraphicsLibraryBase);
+        caller.MoveAddressImmediate(0, surface.BitMap.Raw);
+        caller.JumpSubroutine(Lvo(APTR.FromPointer(AmigaKickstartHost.GraphicsLibraryBase), (short)GraphicsLvo.FreeBitMap));
+        caller.MoveAddressImmediate(6, library.Raw);
         var closeGateway = Lvo(library, -12);
-        var afterClose = caller.Call(closeGateway);
-        var stopGateway = host.GetGateway(IntuitionExecutionGateway.Stop);
-        caller.Call(stopGateway);
-        caller.CallUntilNotBusy(host.GetGateway(IntuitionExecutionGateway.Reap));
-        var park = caller.Park();
+        var afterClose = caller.JumpSubroutine(closeGateway);
+        caller.MoveAddressImmediate(6, resident.Library);
+        var stopGateway = resident.Close;
+        caller.JumpSubroutine(stopGateway);
+        var park = caller.BranchToSelf();
 
-        var callback = new Fixture.GuestProgram(bus, hookCode.Raw);
+        var callback = new GuestProgram(bus, hookCode.Raw);
         callback.StoreLong(markers.Raw, 1);
-        callback.MoveAddress(6, authority.ExecBase.Raw);
-        callback.MoveAddress(1, other.Raw);
-        callback.MoveAddress(2, otherCode.Raw);
-        callback.MoveAddress(3, 0);
+        callback.MoveAddressImmediate(6, authority.ExecBase.Raw);
+        callback.MoveAddressImmediate(1, other.Raw);
+        callback.MoveAddressImmediate(2, otherCode.Raw);
+        callback.MoveAddressImmediate(3, 0);
         var addTaskGateway = Lvo(authority.ExecBase, ExecLvo.AddTask);
-        var afterAddTask = callback.Call(addTaskGateway);
+        var afterAddTask = callback.JumpSubroutine(addTaskGateway);
         EmitPriority(callback, actor, -2);
-        callback.MoveData(7, 0xC411_0001);
+        callback.MoveDataImmediate(7, 0xC411_0001);
         var afterCallerResumed = callback.Address;
         EmitPriority(callback, actor, 0);
-        callback.MoveData(0, 0xA11C_0001); // An opaque Hook result, not a status.
+        callback.MoveDataImmediate(0, 0xA11C_0001); // An opaque Hook result, not a status.
         var hookRts = callback.Return();
 
-        var helper = new Fixture.GuestProgram(bus, otherCode.Raw);
-        helper.MoveAddress(6, library.Raw);
-        helper.MoveAddress(0, surface.LayerInfo.Raw);
+        var helper = new GuestProgram(bus, otherCode.Raw);
+        helper.MoveAddressImmediate(6, library.Raw);
+        helper.MoveAddressImmediate(0, surface.LayerInfo.Raw);
         var lockGateway = Lvo(library, LayersLvo.LockLayerInfo);
-        var afterLock = helper.Call(lockGateway);
+        var afterLock = helper.JumpSubroutine(lockGateway);
         helper.StoreLong(markers.Raw + 4, 1);
         var afterHelperYield = EmitPriority(helper, other, -3);
-        helper.MoveAddress(6, library.Raw);
-        helper.MoveAddress(0, surface.LayerInfo.Raw);
+        helper.MoveAddressImmediate(6, library.Raw);
+        helper.MoveAddressImmediate(0, surface.LayerInfo.Raw);
         var unlockCall = helper.Address;
         var unlockGateway = Lvo(library, LayersLvo.UnlockLayerInfo);
-        var afterUnlock = helper.Call(unlockGateway);
+        var afterUnlock = helper.JumpSubroutine(unlockGateway);
         helper.StoreLong(markers.Raw + 4, 2);
-        helper.MoveAddress(6, authority.ExecBase.Raw);
-        helper.MoveAddress(1, 0);
+        helper.MoveAddressImmediate(6, authority.ExecBase.Raw);
+        helper.MoveAddressImmediate(1, 0);
         var removeCall = helper.Address;
         var removeGateway = Lvo(authority.ExecBase, ExecLvo.RemTask);
-        var afterRemove = helper.Call(removeGateway);
-        helper.Park(); // A retired task must never execute this instruction.
+        var afterRemove = helper.JumpSubroutine(removeGateway);
+        helper.BranchToSelf(); // A retired task must never execute this instruction.
         Assert.False(bus.HasHostGateway(hookCode.Raw));
         Assert.False(bus.HasHostGateway(otherCode.Raw));
 
-        var trace = new Trace(machine, boot, host, output);
+        var trace = new Trace(machine, boot, output);
         var started = trace.Until(actor, afterStarted);
-        Assert.Equal((uint)PortableIntuition.IntuitionStateResult.Success, started.Data[0]);
-        Assert.Equal(PortableIntuition.IntuitionTaskPhase.Running, host.Snapshot().Phase);
+        Assert.Equal(resident.Library, started.Data[0]);
+        Assert.Equal((ushort)1, resident.OpenCount);
         var beforeCreate = trace.Until(actor, createCall);
         var entered = trace.Until(actor, hookCode.Raw);
         Assert.Equal(beforeCreate.Sp - 8u - LayersHostCallbackToken.Size, entered.Sp);
@@ -185,7 +176,7 @@ public sealed class CopperStartIntuitionLayersTopologyReturnBootTests(ITestOutpu
         Assert.Equal(issued.Continuation, identity.Continuation);
         Assert.Equal(issued.RecordGeneration, identity.RecordGeneration);
         Assert.Equal(issued.ContinuationToken, identity.Token);
-        output.WriteLine($"Topology Hook: workerPriority={workerPriority}; actor={actor.Raw:X8}; helper={other.Raw:X8}; " +
+        output.WriteLine($"Topology Hook: actor={actor.Raw:X8}; helper={other.Raw:X8}; " +
             $"continuation={issued.Continuation.Raw:X8}; generation={issued.RecordGeneration:X8}; " +
             $"token={issued.ContinuationToken:X8}; nonce={issued.Nonce:X8}; packet={tokenAddress.Raw:X8}.");
         AssertRestrictions(ref observation, authority, actor,
@@ -296,10 +287,8 @@ public sealed class CopperStartIntuitionLayersTopologyReturnBootTests(ITestOutpu
         trace.Until(actor, afterClose);
         Assert.Equal(initialOpenCount, ExecLibraryCodec.Read(ref sdk, library).OpenCount);
         var finished = trace.Until(actor, park);
-        Assert.Equal((uint)PortableIntuition.IntuitionStateResult.Success, finished.Data[0]);
-        Assert.Equal(PortableIntuition.IntuitionTaskPhase.Idle, host.Snapshot().Phase);
-        Assert.Equal((ushort)0, host.Snapshot().CommandsInUse);
-        Assert.Equal((ushort)0, host.Snapshot().CallbacksInUse);
+        Assert.Equal(0u, finished.Data[0]);
+        Assert.Equal((ushort)0, resident.OpenCount);
         Assert.Equal((sbyte)0, Fixture.ReadTask(bus, actor).Node.Priority);
         Assert.Equal(initialSignals, Signals.Read(bus, actor));
         Assert.Equal(user.Upper, finished.Sp);
@@ -319,9 +308,9 @@ public sealed class CopperStartIntuitionLayersTopologyReturnBootTests(ITestOutpu
         AssertRetiredOnce(trace, other, unlockGateway, 0xFF00);
         AssertRetiredOnce(trace, other, removeGateway, 0xFF00);
         AssertRetiredOnce(trace, actor, closeGateway, 0xFF00);
-        AssertRetiredOnce(trace, actor, stopGateway, 0xFF00);
+        AssertRetiredOnce(trace, actor, stopGateway, bus.ReadWord(stopGateway));
         Assert.DoesNotContain(trace.Samples, sample => sample.Task == other && sample.PreviousPc == afterRemove && sample.Opcode == 0x60FE);
-        Assert.Equal(3, trace.Samples.Select(sample => sample.Task).Distinct().Count());
+        Assert.Equal(2, trace.Samples.Select(sample => sample.Task).Distinct().Count());
         Assert.Contains(trace.Samples, sample => sample.Task == other && sample.Pc == afterHelperYield);
         Assert.All(trace.Samples.Where(sample => sample.Task == actor), sample =>
         {
@@ -336,30 +325,23 @@ public sealed class CopperStartIntuitionLayersTopologyReturnBootTests(ITestOutpu
             Assert.Equal(sample.Sp, sample.Usp);
             Assert.InRange(sample.Sp, otherStack.Lower, otherStack.Upper);
         });
-        Assert.All(trace.Samples.Where(sample => sample.Task == worker), sample =>
-        {
-            Assert.Equal(0, sample.Sr & M68kCpuState.Supervisor);
-            Assert.Equal(sample.Sp, sample.Usp);
-            Assert.InRange(sample.Sp, workerStack.StackLower.Raw, workerStack.StackUpper.Raw);
-        });
         user.AssertIntact(bus);
         supervisor.AssertIntact(bus);
         otherStack.AssertIntact(bus);
-        Assert.Equal(PortableIntuition.IntuitionStateResult.Success, host.DestroyUnpublished());
-        Assert.False(host.Snapshot().Live);
+        resident.Dispose();
         Assert.Equal(availableBeforeOwners, AvailableSetupMemory(bus));
         trace.Dump();
     }
 
-    private static uint EmitPriority(Fixture.GuestProgram code, APTR actor, sbyte priority)
+    private static uint EmitPriority(GuestProgram code, APTR actor, sbyte priority)
     {
-        code.MoveAddress(6, AmigaKickstartHost.ExecLibraryBase);
-        code.MoveAddress(1, actor.Raw);
-        code.MoveData(0, unchecked((uint)(int)priority));
-        return code.Call(Lvo(APTR.FromPointer(AmigaKickstartHost.ExecLibraryBase), ExecLvo.SetTaskPri));
+        code.MoveAddressImmediate(6, AmigaKickstartHost.ExecLibraryBase);
+        code.MoveAddressImmediate(1, actor.Raw);
+        code.MoveDataImmediate(0, unchecked((uint)(int)priority));
+        return code.JumpSubroutine(Lvo(APTR.FromPointer(AmigaKickstartHost.ExecLibraryBase), ExecLvo.SetTaskPri));
     }
 
-    private static Fixture.GuestProgram AppendWord(AmigaBus bus, Fixture.GuestProgram code, APTR allocation, ushort word)
+    private static GuestProgram AppendWord(AmigaBus bus, GuestProgram code, APTR allocation, ushort word)
     {
         Assert.InRange(code.Address, allocation.Raw, allocation.Raw + 0x1000u - 2u);
         bus.WriteWord(code.Address, word, 0);
@@ -452,7 +434,7 @@ public sealed class CopperStartIntuitionLayersTopologyReturnBootTests(ITestOutpu
             $"op={Opcode:X4} sr={Sr:X4} sp={Sp:X8} usp={Usp:X8} ssp={Ssp:X8} D0={Data[0]:X8} cycles={Cycles}";
     }
 
-    private sealed class Trace(Machine machine, AmigaBootController boot, IntuitionExecutionHost host, ITestOutputHelper output)
+    private sealed class Trace(Machine machine, AmigaBootController boot, ITestOutputHelper output)
     {
         private const int InstructionBudget = 40_000;
         private const long CycleBudget = 4_000_000;
@@ -477,7 +459,6 @@ public sealed class CopperStartIntuitionLayersTopologyReturnBootTests(ITestOutpu
                     Assert.False(machine.Cpu.State.Halted);
                     Assert.Equal(1, result.InstructionsExecuted);
                 }
-                Assert.Equal(PortableIntuition.IntuitionStateResult.Success, host.LastFault);
                 Assert.Equal(LayersCallbackReturnFault.None, boot.CopperStartLayersLastCallbackReturnFaultForTest);
                 Assert.True(next.Cycles > previous.Cycles, next.ToString());
                 Assert.True(next.NativeCycles >= previous.NativeCycles, next.ToString());
