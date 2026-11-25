@@ -233,7 +233,7 @@ public sealed class EcsDeniseRegisterTests
             (AmigaConstants.PalLowResOverscanBorderX * 4);
         Assert.Equal(new uint[] { 0xFFFF00AAu, 0xFF55AAFFu, 0xFFFF00AAu, 0xFF55AAFFu },
             alignedFrame.AsSpan(offset, 4).ToArray());
-        Assert.Equal(new uint[] { 0x00000000u, 0x00000000u, 0xFFFF00AAu, 0xFF55AAFFu },
+        Assert.Equal(new uint[] { 0xFF000000u, 0xFF000000u, 0xFFFF00AAu, 0xFF55AAFFu },
             incrementedFrame.AsSpan(offset, 4).ToArray());
         Assert.Equal(0xFFFF00AAu, incrementedFrame[offset + 4]);
         Assert.Equal(0xFF55AAFFu, incrementedFrame[offset + 5]);
@@ -247,8 +247,7 @@ public sealed class EcsDeniseRegisterTests
         uint expected)
     {
         var bus = CreateSuperHiresManualSpriteBus(positionIncrement: false, 0xC000, 0x0000);
-        bus.WriteWord(CustomBase + 0x092, 0x003C);
-        bus.WriteWord(CustomBase + 0x094, 0x003C);
+        ConfigureSuperHiresFetchWindow(bus);
         bus.WriteWord(CustomBase + 0x180 + (5 * 2), 0x000F);  // Playfield pair 1,1: blue.
         bus.WriteWord(CustomBase + 0x180 + (16 * 2), 0x00F0); // XOR pair 0,0: green.
         bus.WriteWord(CustomBase + 0x180 + (21 * 2), 0x0F00); // Sprite pair 1,1: red.
@@ -279,8 +278,7 @@ public sealed class EcsDeniseRegisterTests
         int xorColorRegister)
     {
         var bus = CreateSuperHiresManualSpriteBus(positionIncrement: false, 0xC000, 0x0000);
-        bus.WriteWord(CustomBase + 0x092, 0x003C);
-        bus.WriteWord(CustomBase + 0x094, 0x003C);
+        ConfigureSuperHiresFetchWindow(bus);
         bus.WriteWord(CustomBase + 0x180u + (uint)(xorColorRegister * 2), 0x00F0);
         SetBitplanePointer(bus, 0, 0x1000);
         SetBitplanePointer(bus, 1, 0x1100);
@@ -303,8 +301,7 @@ public sealed class EcsDeniseRegisterTests
     public void TransparentSuperHiresSpriteSamplesLeavePlayfieldSamplesUntouched()
     {
         var bus = CreateSuperHiresManualSpriteBus(positionIncrement: false, 0x0000, 0x0000);
-        bus.WriteWord(CustomBase + 0x092, 0x003C);
-        bus.WriteWord(CustomBase + 0x094, 0x003C);
+        ConfigureSuperHiresFetchWindow(bus);
         bus.WriteWord(CustomBase + 0x180 + (5 * 2), 0x000F);
         SetBitplanePointer(bus, 0, 0x1000);
         BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0xC000);
@@ -332,8 +329,7 @@ public sealed class EcsDeniseRegisterTests
         int delay)
     {
         var bus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
-        bus.WriteWord(CustomBase + 0x092, 0x003C);
-        bus.WriteWord(CustomBase + 0x094, 0x003C);
+        ConfigureSuperHiresFetchWindow(bus);
         bus.WriteWord(CustomBase + 0x182, 0x0C00);
         bus.WriteWord(CustomBase + 0x184, 0x0C00);
         bus.WriteWord(CustomBase + 0x188, 0x0300);
@@ -363,8 +359,7 @@ public sealed class EcsDeniseRegisterTests
     public void SuperHiresShifterContinuesAcrossSixteenSampleWordBoundary()
     {
         var bus = CreateBus(DmaChipModel.EcsAgnus, DisplayChipModel.EcsDenise);
-        bus.WriteWord(CustomBase + 0x092, 0x003C);
-        bus.WriteWord(CustomBase + 0x094, 0x003C);
+        ConfigureSuperHiresFetchWindow(bus);
         bus.WriteWord(CustomBase + 0x182, 0x0C00);
         bus.WriteWord(CustomBase + 0x188, 0x0300);
         SetBitplanePointer(bus, 0, 0x1000);
@@ -459,6 +454,14 @@ public sealed class EcsDeniseRegisterTests
         var frame = new uint[bus.Display.Width * bus.Display.Height];
         bus.Display.RenderFrame(frame);
         return frame[0];
+    }
+
+    private static void ConfigureSuperHiresFetchWindow(AmigaBus bus)
+    {
+        // $82 aligns the window with the tested sprite position. $81 starts four SHRES samples earlier.
+        bus.WriteWord(CustomBase + 0x08E, 0x2C82);
+        bus.WriteWord(CustomBase + 0x092, 0x003C);
+        bus.WriteWord(CustomBase + 0x094, 0x003C);
     }
 
     private static AmigaBus CreateSuperHiresManualSpriteBus(
