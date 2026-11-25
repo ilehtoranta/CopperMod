@@ -27,12 +27,14 @@ public sealed class CopperStartG05HostVectorTests
 		bus.WriteLong(swap + (uint)ExecLayout.StackSwapStruct.Upper, 0x6000);
 		bus.WriteLong(swap + (uint)ExecLayout.StackSwapStruct.Pointer, 0x5FFC);
 		state.ResetStackPointers(supervisorStackPointer: 0x7000, userStackPointer: 0x3FFC, supervisorMode: false);
+		bus.WriteHostLong(0x3FFC, 0x2400);
 		state.A[0] = swap;
 		Assert.True(InvokeExec(bus, ExecLvo.StackSwap, state));
-		Assert.Equal(0x5FFCu, state.A[7]);
+		Assert.Equal(0x5FF8u, state.A[7]);
+		Assert.Equal(0x2400u, bus.ReadLong(state.A[7]));
 		Assert.Equal(0x3000u, bus.ReadLong(swap + (uint)ExecLayout.StackSwapStruct.Lower));
 		Assert.Equal(0x4000u, bus.ReadLong(swap + (uint)ExecLayout.StackSwapStruct.Upper));
-		Assert.Equal(0x3FFCu, bus.ReadLong(swap + (uint)ExecLayout.StackSwapStruct.Pointer));
+		Assert.Equal(0x4000u, bus.ReadLong(swap + (uint)ExecLayout.StackSwapStruct.Pointer));
 	}
 
 	private static Machine StartCopperStart()

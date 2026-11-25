@@ -1233,7 +1233,7 @@ public sealed class ConsoleDeviceServicesTests
         const uint clipboardRequest = 0x7000, clipboardBuffer = 0x7100;
         var bus = new Machine(MachineOptions.ForProfile(MachineProfile.A500Pal512KBoot).WithLiveAgnusDma(false)).Bus;
         InitializeDevice(bus); bus.WriteLong(Window + 0x32, RastPort);
-        uint next = 0x5000; var memory = new ExecMemoryOperations((bytes, _) => { var result = next; next += (uint)((bytes + 7) & ~7); return result; }, (_, _) => { }, (address, bytes) => bus.ClearMemory(address, bytes));
+        uint next = 0x10000; var memory = new ExecMemoryOperations((bytes, _) => { var result = next; next += (uint)((bytes + 7) & ~7); return result; }, (_, _) => { }, (address, bytes) => bus.ClearMemory(address, bytes));
         using var input = new InputDeviceServices(bus, _ => { }, (_, _, _) => { }, (_, _, _) => { });
         using var clipboard = new ClipboardDeviceServices(bus, memory, _ => { }, (_, _, _) => { }, (_, _, _) => { }, 0xF08930);
         using var console = new ConsoleDeviceServices(bus, memory, input, _ => { }, (_, _, _, _) => { });

@@ -24,6 +24,7 @@ namespace CopperMod.Amiga
         private readonly ValidatedLayerDrawBoundsBackend
             _validatedLayerDrawBoundsBackend;
         private readonly Func<int, int, bool> _validatedRasterVisibility;
+        private Func<short, short, short, short, bool>? _segmentInsideClipRect;
         private PooledValueBuffer<RasterClipFragment> _validatedVisibilityFragments;
         // Portable planar raster primitives require an atomic undo journal.
         // The validated Layers boundary is explicitly non-reentrant, so one
@@ -583,13 +584,33 @@ namespace CopperMod.Amiga
             return result != GraphicsRasterOperations.Failure;
         }
 
+        private bool SegmentInsideClipRect(short x0, short y0, short x1, short y1)
+        {
+            // Kickstart consumes FRST_DOT only when one ClipRect contains both endpoints.
+            var originX = _validatedLayerRasterMemory.LogicalOriginX;
+            var originY = _validatedLayerRasterMemory.LogicalOriginY;
+            var left = Math.Min(x0, x1) + originX;
+            var right = Math.Max(x0, x1) + originX;
+            var top = Math.Min(y0, y1) + originY;
+            var bottom = Math.Max(y0, y1) + originY;
+            foreach (var clip in _validatedVisibilityFragments)
+            {
+                if (clip.RequestLeft <= left && right <= clip.RequestRight &&
+                    clip.RequestTop <= top && bottom <= clip.RequestBottom)
+                    return true;
+            }
+            return false;
+        }
+
         private bool TryDrawLayer(M68kCpuState state)
         {
             if (!TryProjectLayerPoint(
                     state.D[0],
                     state.D[1],
                     out var destinationX,
-                    out var destinationY))
+                    out var destinationY) ||
+                !_validatedLayerRasterMemory.TryReadWord(state.A[1] + GraphicsLayouts.RastPortCurrentX, out var startX) ||
+                !_validatedLayerRasterMemory.TryReadWord(state.A[1] + GraphicsLayouts.RastPortCurrentY, out var startY))
             {
                 return false;
             }
@@ -601,7 +622,8 @@ namespace CopperMod.Amiga
                 pixelVisible: _validatedRasterVisibility,
                 _validatedRasterSnapshotAddresses,
                 _validatedRasterSnapshotValues,
-                _validatedRasterVisibilityScratch);
+                _validatedRasterVisibilityScratch,
+                SegmentInsideClipRect(unchecked((short)startX), unchecked((short)startY), destinationX, destinationY));
             if (result == GraphicsRasterOperations.Failure)
                 return false;
 
@@ -907,7 +929,8 @@ namespace CopperMod.Amiga
                 _validatedRasterSnapshotValues,
                 _validatedRasterNestedSnapshotAddresses,
                 _validatedRasterNestedSnapshotValues,
-                _validatedRasterVisibilityScratch);
+                _validatedRasterVisibilityScratch,
+                _segmentInsideClipRect ??= SegmentInsideClipRect);
             if (result == GraphicsRasterOperations.Failure)
                 return false;
 

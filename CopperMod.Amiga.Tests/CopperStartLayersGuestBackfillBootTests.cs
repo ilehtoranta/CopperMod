@@ -294,8 +294,8 @@ public sealed partial class CopperStartLayersBootTests
         {
             for (var y = 0; y < 20; y++)
                 for (var x = 0; x < 32; x++)
-                    Assert.Equal(expected.Contains((x, y)),
-                        ReadPlanarBitMapPixel(bus, displayBitMap, x, y));
+                    Assert.True(expected.Contains((x, y)) == ReadPlanarBitMapPixel(bus, displayBitMap, x, y),
+                        $"Display pixel ({x},{y}) should be {expected.Contains((x, y))}.");
         }
 
         var messagesBeforeResize = callbackMessages.Count;
@@ -377,11 +377,8 @@ public sealed partial class CopperStartLayersBootTests
         StepUntil(afterRevealPartialEnd);
         Assert.Equal(damageAfterRevealBytes,
             SnapshotGraphicsRegion(bus, damageAfterReveal.Raw));
-        var bitmapPixelsAfterReveal =
-            new HashSet<(int X, int Y)>(screenClipAtResize)
-            {
-                (6, 5)
-            };
+        // Shrinking removes the painted lower-right corner from the layer.
+        var bitmapPixelsAfterReveal = new HashSet<(int X, int Y)> { (6, 5) };
         AssertDisplayPixels(bitmapPixelsAfterReveal);
         Assert.Equal(callerClipBytes,
             SnapshotGraphicsRegion(bus, callerClipRegion));
@@ -2866,8 +2863,9 @@ public sealed partial class CopperStartLayersBootTests
             machine, replacementCallerCode.Raw,
             replacementUserStack, replacementSupervisorStack);
         StepUntil(afterReplacement);
-        Assert.True(callbackMessages.Count > callbacksBeforeReplacement);
         Assert.Equal(callerClipRegion, machine.Cpu.State.D[0]);
+        // Replacing the drawing clip alone does not expose new layer contents.
+        Assert.Equal(callbacksBeforeReplacement, callbackMessages.Count);
         Assert.False(boot.CopperStartLayersHasPendingCallbackForTest);
         Assert.Equal(replacementClipRegion, LayersLayerCodec.ReadClipRegion(
             ref layerMemory, APTR.FromPointer(target.Layer)).Raw);

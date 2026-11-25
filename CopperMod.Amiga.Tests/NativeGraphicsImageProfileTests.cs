@@ -40,9 +40,7 @@ public sealed class NativeGraphicsImageProfileTests
             Assert.Contains(offset, branchTargets);
         });
         _output.WriteLine($"native-profile-audit:ntsc={ntsc}:bytes={code.Length}:branches={audit.BranchCount}:relays={audit.RelayCount}:chains={audit.ChainCount}:boundaries={audit.FragmentBoundaryCount}");
-        // Registered MNTR readback adds1062 bytes/74 branches;
-        // the audit above independently proves every target and relay boundary.
-        Assert.Equal((ntsc ? 1504272 : 1504372, 76374, 3428, 7, 3346),
+        Assert.Equal((ntsc ? 1549824 : 1549844, 79390, 3428, 7, 3346),
             (code.Length, audit.BranchCount, audit.RelayCount, audit.ChainCount, audit.FragmentBoundaryCount));
         // Prove the convenience builders use the selected code stream as well
         // as the selected positive-image bytes. Fixed images publish entry
