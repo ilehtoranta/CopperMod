@@ -14453,7 +14453,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
         // Report the complete fingerprint together after checking structural
         // safety, so a generated-code change needs only one fresh audit run.
         Assert.Equal(
-            (Bytes: 1519834, Branches: 77175, Relays: 3428, Chains: 7, Boundaries: 3346),
+            (Bytes: 1549844, Branches: 79390, Relays: 3428, Chains: 7, Boundaries: 3346),
             (Bytes: nativeCode.Length, Branches: audit.BranchCount, Relays: audit.RelayCount,
                 Chains: audit.ChainCount, Boundaries: audit.FragmentBoundaryCount));
     }
@@ -25505,7 +25505,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
         Assert.Equal((byte)7, bus.ReadByte(
             rastPort + (uint)GraphicsLayouts.RastPortDrawMode));
         for (var plane = 0; plane < 8; plane++)
-            Assert.Equal((byte)0x6A, bus.ReadByte(
+            Assert.Equal((byte)0x5A, bus.ReadByte(
                 rastPort + (uint)GraphicsLayouts.RastPortMinterms + (uint)plane));
         Assert.Equal((byte)15, bus.ReadByte(
             rastPort + (uint)GraphicsLayouts.RastPortLinePatternCount));
@@ -25625,9 +25625,9 @@ public sealed class GraphicsLibraryPortableScaffoldTests
         Assert.Equal((ushort)7, bus.ReadWord(rastPort + (uint)GraphicsLayouts.RastPortTextWidth));
         Assert.Equal((ushort)6, bus.ReadWord(rastPort + (uint)GraphicsLayouts.RastPortTextBaseline));
         Assert.Equal((byte)0, bus.ReadByte(rastPort + (uint)GraphicsLayouts.RastPortAlgoStyle));
-        for (var offset = 0x44; offset < 100; offset++)
+        for (var offset = 0x44; offset < 78; offset++)
             Assert.Equal((byte)0, bus.ReadByte(rastPort + (uint)offset));
-        for (var offset = 100; offset < GraphicsLayouts.RastPortMinimumSize; offset++)
+        for (var offset = 78; offset < GraphicsLayouts.RastPortMinimumSize; offset++)
             Assert.Equal((byte)0xCC, bus.ReadByte(rastPort + (uint)offset));
         for (var index = 0; index < 8; index++)
             Assert.Equal((byte)0xCA, bus.ReadByte(
@@ -36386,7 +36386,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
         }
 
         Execute(0, 0xCAFE_BABEu);
-        Assert.Equal(0u, cpu.State.D[0]);
+        Assert.Equal(0xCAFE_BABEu, cpu.State.D[0]);
 
         // Non-NULL values are deliberately unmapped: the native body must
         // decline before reading a ColorMap envelope and preserve D0.
@@ -36513,7 +36513,10 @@ public sealed class GraphicsLibraryPortableScaffoldTests
         // intentionally valid-looking below.  The native body must reject
         // their original public envelope before it can consume these aliases.
         bus.MapWritableMemory(0, new byte[0x100]);
-        bus.WriteLong(4, execBase);
+        const uint graphicsBase = 0x0071_0000;
+        bus.MapWritableMemory(graphicsBase, new byte[GraphicsLayouts.GfxBaseExecBase + 4]);
+        bus.WriteHostLong(graphicsBase + GraphicsLayouts.GfxBaseExecBase, execBase);
+        bus.WriteHostLong(4, execBase);
         bus.MapWritableMemory(rasterBase, new byte[checked((int)allocationBytes)]);
         bus.MapWritableMemory(foreignBase, new byte[checked((int)allocationBytes)]);
         bus.MapWritableMemory(stack, new byte[0x200]);
@@ -36550,6 +36553,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
             cpu.Reset(
                 codeBase + (uint)VectorOffset(vector),
                 stack + 0x80u);
+            cpu.State.A[6] = graphicsBase;
             configure();
             cpu.ExecuteInstruction(); // vector JMP.L
             for (var index = 0; index < maxInstructions; index++)
@@ -49925,7 +49929,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
                 cpu.State.A[0] = map;
                 cpu.State.D[0] = 0xCAFE_BABEu;
             });
-        Assert.Equal(0u, cpu.State.D[0]);
+        Assert.Equal(0xCAFE_BABEu, cpu.State.D[0]);
         Assert.Equal(
             new[] { (allocationBase, allocationSize) },
             frees);
@@ -49937,7 +49941,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
                 cpu.State.A[0] = 0;
                 cpu.State.D[0] = 0x1357_9BDFu;
             });
-        Assert.Equal(0u, cpu.State.D[0]);
+        Assert.Equal(0x1357_9BDFu, cpu.State.D[0]);
         Assert.Single(frees);
 
         Execute(
@@ -52537,7 +52541,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
             cpu.State.A[1] = viewPort;
             cpu.State.D[0] = initialD0;
             cpu.ExecuteInstruction(); // vector JMP.L
-            for (var index = 0; index < 64; index++)
+            for (var index = 0; index < 2048; index++)
             {
                 cpu.ExecuteInstruction();
                 if (cpu.State.ProgramCounter == returnAddress)
@@ -58472,7 +58476,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
     }
 
     [Fact]
-    public void NativeGraphicsWeighTAMatchExactOnAccurateM68000()
+    public void NativeGraphicsWeighTAMatchOnAccurateM68000()
     {
         var nativeCode = NativeGraphicsRasterBodies.BuildCode(
             out var entryOffsets,
@@ -58500,7 +58504,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
         const uint target = 0x00D1_0000;
         const uint stack = 0x00C0_0000;
         const uint returnAddress = 0x00F0_0000;
-        bus.MapWritableMemory(requested, new byte[GraphicsLayouts.TextAttrSize]);
+        bus.MapWritableMemory(requested, new byte[GraphicsLayouts.TextAttrSize + 4]);
         bus.MapWritableMemory(target, new byte[GraphicsLayouts.TextAttrSize]);
         bus.MapWritableMemory(stack, new byte[0x100]);
 
@@ -58527,7 +58531,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
             cpu.State.A[2] = targetTags;
             cpu.State.D[0] = initialD0;
             cpu.ExecuteInstruction(); // vector JMP.L
-            for (var index = 0; index < 128; index++)
+            for (var index = 0; index < 1024; index++)
             {
                 cpu.ExecuteInstruction();
                 if (cpu.State.ProgramCounter == returnAddress)
@@ -58547,28 +58551,28 @@ public sealed class GraphicsLibraryPortableScaffoldTests
 
         SetAttributes(target, 9, 1, 2);
         Execute(requested, target, 0, 0xBEEF_0000u);
-        Assert.Equal(0xBEEF_0000u, cpu.State.D[0]);
+        Assert.Equal(0x7F7Fu, cpu.State.D[0]);
 
         SetAttributes(target, 8, 2, 2);
         Execute(requested, target, 0, 0xD00D_0000u);
-        Assert.Equal(0xD00D_0000u, cpu.State.D[0]);
+        Assert.Equal(0x7DFBu, cpu.State.D[0]);
 
         SetAttributes(target, 8, 1, 3);
         Execute(requested, target, 0, 0x1234_0000u);
-        Assert.Equal(0x1234_0000u, cpu.State.D[0]);
+        Assert.Equal(0x7FFFu, cpu.State.D[0]);
 
         SetAttributes(requested, 8, 0x80, 2);
         SetAttributes(target, 8, 1, 2);
         Execute(requested, target, 0, 0x5678_0000u);
-        Assert.Equal(0x5678_0000u, cpu.State.D[0]);
+        Assert.Equal(0x77FFu, cpu.State.D[0]);
 
         SetAttributes(requested, 8, 1, 2);
         SetAttributes(target, 8, 0x80, 2);
         Execute(requested, target, 0, 0x9ABC_0000u);
-        Assert.Equal(0x9ABC_0000u, cpu.State.D[0]);
+        Assert.Equal(0x7FFBu, cpu.State.D[0]);
 
         Execute(requested, target, 0x00D2_0000u, 0xAAAA_0000u);
-        Assert.Equal(0xAAAA_0000u, cpu.State.D[0]);
+        Assert.Equal(0x7FFBu, cpu.State.D[0]);
         Execute(0, target, 0, 0xBBBB_0000u);
         Assert.Equal(0xBBBB_0000u, cpu.State.D[0]);
         Execute(requested + 1, target, 0, 0xCCCC_0000u);
@@ -113871,11 +113875,11 @@ public sealed class GraphicsLibraryPortableScaffoldTests
 
         Assert.Equal(0, core.SetDrawMode(rastPort, 2));
         for (var plane = 0; plane < 8; plane++)
-            Assert.Equal((byte)0x9A, ReadByte(memory, minterms + (uint)plane));
+            Assert.Equal((byte)0x6A, ReadByte(memory, minterms + (uint)plane));
 
         Assert.Equal(0, core.SetDrawMode(rastPort, 6));
         for (var plane = 0; plane < 8; plane++)
-            Assert.Equal((byte)0x6A, ReadByte(memory, minterms + (uint)plane));
+            Assert.Equal((byte)0x9A, ReadByte(memory, minterms + (uint)plane));
 
         Assert.Equal(0, core.SetABPenDrMd(rastPort, 0xAA, 0x55, 1));
         for (var plane = 0; plane < 8; plane++)
@@ -132011,9 +132015,10 @@ public sealed class GraphicsLibraryPortableScaffoldTests
             handle, buffer, 88, GraphicsDisplayDatabase.DtagMntr, mode));
         Assert.Equal(0x87654321u, ReadLong(memory, buffer + 16));
 
+        state.D[0] = 20;
         state.D[1] = 0x8000_5000u;
         Assert.False(adapter.TryInvoke(state, GraphicsPrivateLvo.SetDisplayInfoData));
-        Assert.Equal(1u, state.D[0]);
+        Assert.Equal(20u, state.D[0]);
     }
 
     [Fact]

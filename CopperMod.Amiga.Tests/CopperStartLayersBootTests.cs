@@ -18913,15 +18913,17 @@ public sealed partial class CopperStartLayersBootTests
                 var backingWidth = ReadBitMapBytesPerRow(bus, bitMap) * 8;
                 var backingHeight = ReadBitMapRows(bus, bitMap);
                 var hiddenWidth = 24 - coverMinX;
+                var backingOffset = (activeBackingOwners[bitMap] == cover.Layer ? coverMinX : 20) & 15;
                 for (var y = 0; y < backingHeight; y++)
                     for (var x = 0; x < backingWidth; x++)
                     {
-                        var expected = disjointDamage
-                            ? x < 4 && y is >= 4 and <= 7 ||
+                        var localX = x - backingOffset;
+                        var expected = localX >= 0 && (disjointDamage
+                            ? localX < 4 && y is >= 4 and <= 7 ||
                                 multiCover &&
                                     activeBackingOwners[bitMap] == cover.Layer &&
-                                    x == 0 && y is >= 12 and <= 15
-                            : x < hiddenWidth && y < 16;
+                                    localX == 0 && y is >= 12 and <= 15
+                            : localX < hiddenWidth && y < 16);
                         Assert.Equal(expected,
                             ReadPlanarBitMapPixel(bus, bitMap, x, y));
                     }
@@ -19279,7 +19281,7 @@ public sealed partial class CopperStartLayersBootTests
             var backingHeight = ReadBitMapRows(bus, backingBitMap);
             for (var y = 0; y < backingHeight; y++)
                 for (var x = 0; x < backingWidth; x++)
-                    Assert.Equal(x < 4 && y < 5,
+                    Assert.Equal(x is >= 4 and < 8 && y < 5,
                         ReadPlanarBitMapPixel(bus, backingBitMap, x, y));
             Assert.Equal(damageRegion,
                 LayersLayerCodec.ReadDamageList(ref layerMemory,
@@ -19674,7 +19676,7 @@ public sealed partial class CopperStartLayersBootTests
             var backingHeight = ReadBitMapRows(bus, backingBitMap);
             for (var y = 0; y < backingHeight; y++)
                 for (var x = 0; x < backingWidth; x++)
-                    Assert.Equal(x < 3 && y < 3,
+                    Assert.Equal(x is >= 13 and < 16 && y < 3,
                         ReadPlanarBitMapPixel(bus, backingBitMap, x, y));
             Assert.Equal(damageRegion,
                 LayersLayerCodec.ReadDamageList(ref layerMemory,
@@ -19951,7 +19953,7 @@ public sealed partial class CopperStartLayersBootTests
             var backingHeight = ReadBitMapRows(bus, backingBitMap);
             for (var y = 0; y < backingHeight; y++)
                 for (var x = 0; x < backingWidth; x++)
-                    Assert.Equal(x < 3 && y < 3,
+                    Assert.Equal(x is >= 11 and < 14 && y < 3,
                         ReadPlanarBitMapPixel(bus, backingBitMap, x, y));
             Assert.Equal(damageRegion,
                 LayersLayerCodec.ReadDamageList(ref layerMemory,
@@ -22211,7 +22213,7 @@ public sealed partial class CopperStartLayersBootTests
             var backingHeight = ReadBitMapRows(bus, backingBitMap);
             for (var y = 0; y < backingHeight; y++)
                 for (var x = 0; x < backingWidth; x++)
-                    Assert.Equal(x < 3 && y < 3,
+                    Assert.Equal(x is >= 4 and < 7 && y < 3,
                         ReadPlanarBitMapPixel(bus, backingBitMap, x, y));
             Assert.Equal(damageRegion,
                 LayersLayerCodec.ReadDamageList(ref layerMemory,
@@ -22861,7 +22863,7 @@ public sealed partial class CopperStartLayersBootTests
             var backingHeight = ReadBitMapRows(bus, backingBitMap);
             for (var y = 0; y < backingHeight; y++)
                 for (var x = 0; x < backingWidth; x++)
-                    Assert.Equal(x < 2 && y < 2,
+                    Assert.Equal(x is >= 14 and < 16 && y < 2,
                         ReadPlanarBitMapPixel(bus, backingBitMap, x, y));
             Assert.Equal(damageRegion,
                 LayersLayerCodec.ReadDamageList(ref layerMemory,
@@ -23159,7 +23161,7 @@ public sealed partial class CopperStartLayersBootTests
             backingHeight = ReadBitMapRows(bus, backingBitMap);
             for (var y = 0; y < backingHeight; y++)
                 for (var x = 0; x < backingWidth; x++)
-                    Assert.Equal(x < 2 && y < 2,
+                    Assert.Equal(x is >= 14 and < 16 && y < 2,
                         ReadPlanarBitMapPixel(bus, backingBitMap, x, y));
             Assert.Equal(damageRegion,
                 LayersLayerCodec.ReadDamageList(ref layerMemory,
@@ -23527,7 +23529,7 @@ public sealed partial class CopperStartLayersBootTests
             var backingHeight = ReadBitMapRows(bus, backingBitMap);
             for (var y = 0; y < backingHeight; y++)
                 for (var x = 0; x < backingWidth; x++)
-                    Assert.Equal(x < 2 && y < 2,
+                    Assert.Equal(x is >= 14 and < 16 && y < 2,
                         ReadPlanarBitMapPixel(bus, backingBitMap, x, y));
             Assert.Equal(damageRegion,
                 LayersLayerCodec.ReadDamageList(ref layerMemory,
@@ -24475,7 +24477,7 @@ public sealed partial class CopperStartLayersBootTests
                         actualBackingPixels.Add((x, y));
             Assert.Equal(new[]
             {
-                (0, 0), (1, 0), (0, 1), (1, 1)
+                (5, 0), (6, 0), (5, 1), (6, 1)
             }, actualBackingPixels);
             Assert.Equal(damageRegion, LayersLayerCodec.ReadDamageList(
                 ref layerMemory,

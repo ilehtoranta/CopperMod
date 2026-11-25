@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using Amiga;
 using CopperMod.Amiga.CopperStart.Graphics;
 using CopperMod.Amiga.CopperStart.Graphics.Portable;
+using PortableLayers = CopperStart.Layers;
 
 namespace CopperMod.Amiga
 {
@@ -447,6 +448,13 @@ namespace CopperMod.Amiga
             // The CopperStart path is scoped by LayersRasterCore and must
             // consume the exact validated head.  Only foreign/native layer
             // ownership is allowed to discover Layer.ClipRect here.
+            var updating = (LayersLayerCodec.ReadFlags(ref memory, layerAddress) &
+                LayerFlags.Updating) != 0;
+            var savedHead = updating && _validatedRasterScopeActive
+                ? LayersLayerCodec.ReadSaveClipRects(ref memory, layerAddress)
+                : APTR.Null;
+            var hasDisplayExtent = TryGetValidatedBitMapExtent(
+                rastPortBitMap, out var displayWidth, out var displayHeight, out _);
             var clipRect = firstClipRect;
             var visited = new PooledValueBuffer<uint>();
             var validatedChain = _validatedRasterScopeActive;
@@ -494,12 +502,36 @@ namespace CopperMod.Amiga
                         }
 
                         var targetBitMap = clipBitMap != 0 ? clipBitMap : rastPortBitMap;
-                        var bitMapLeft = clipBitMap != 0
-                            ? intersection.Left - clipBounds.MinX
-                            : intersection.Left;
-                        var bitMapTop = clipBitMap != 0
-                            ? intersection.Top - clipBounds.MinY
-                            : intersection.Top;
+                        if (clipBitMap == 0 && hasDisplayExtent &&
+                            !TryIntersect(intersection.Left, intersection.Top,
+                                intersection.Right, intersection.Bottom,
+                                0, 0, displayWidth - 1, displayHeight - 1, out intersection))
+                        {
+                            clipRect = next;
+                            continue;
+                        }
+
+                        var bitMapLeft = intersection.Left;
+                        var bitMapTop = intersection.Top;
+                        if (clipBitMap != 0)
+                        {
+                            // Damage rectangles borrow the original backing store.
+                            // Its origin and word alignment belong to the saved clip.
+                            var backingBounds = clipBounds;
+                            var saved = savedHead;
+                            for (var i = 0; saved.IsNotNull && i < MaximumClipRects; i++)
+                            {
+                                if (LayersClipRectCodec.ReadBitMap(ref memory, saved).Raw == clipBitMap)
+                                {
+                                    backingBounds = LayersClipRectCodec.ReadBounds(ref memory, saved);
+                                    break;
+                                }
+                                saved = LayersClipRectCodec.ReadNext(ref memory, saved);
+                            }
+                            bitMapLeft += PortableLayers.LayersBitmapCore.BackingX(backingBounds.MinX)
+                                - backingBounds.MinX;
+                            bitMapTop -= backingBounds.MinY;
+                        }
                         fragments.Add(new RasterClipFragment(
                             targetBitMap,
                             intersection.Left - layerBounds.MinX + scrollX,
@@ -518,7 +550,8 @@ namespace CopperMod.Amiga
                 visited.Dispose();
             }
 
-            if (firstSuperClipRect == 0)
+            // BeginUpdate selects damage through the public ClipRect chain alone.
+            if (firstSuperClipRect == 0 || updating)
                 return fragments;
 
             var superBitMap = LayersLayerCodec.ReadSuperBitMap(

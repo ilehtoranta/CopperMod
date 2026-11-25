@@ -29,6 +29,8 @@ namespace CopperMod.Amiga
             private int _logicalWidth;
             private int _logicalOriginX;
             private int _logicalOriginY;
+            private int _displayWidth;
+            private int _displayHeight;
             private int _screenOffsetX;
             private int _screenOffsetY;
             private uint _polyPointArray;
@@ -63,6 +65,8 @@ namespace CopperMod.Amiga
                 var layer = APTR.FromPointer(
                     _owner._validatedPrimaryEndpoint.Layer);
                 if (!_owner.TryGetRastPortBitMap(rastPort, out var displayBitMap) ||
+                    !_owner.TryGetValidatedBitMapExtent(displayBitMap,
+                        out _displayWidth, out _displayHeight, out _) ||
                     !LayersLayerCodec.TryReadBounds(
                         ref memory,
                         layer,
@@ -559,15 +563,19 @@ namespace CopperMod.Amiga
                     // published sink fragments, read the layer display
                     // bitmap at the native logical-to-screen transform while
                     // keeping writes suppressed. Padding remains zero.
-                    if (logicalX < 0 || logicalX >= _logicalWidth ||
+                    var screenX = logicalX + _screenOffsetX;
+                    var screenY = logicalY + _screenOffsetY;
+                    if ((uint)screenX >= (uint)_displayWidth ||
+                        (uint)screenY >= (uint)_displayHeight ||
+                        logicalX < 0 || logicalX >= _logicalWidth ||
                         logicalY < 0 || logicalY >= _rows)
                     {
                         return true;
                     }
                     return TryReadTargetPlaneBit(
                         _displayBitMap,
-                        logicalX + _screenOffsetX,
-                        logicalY + _screenOffsetY,
+                        screenX,
+                        screenY,
                         plane,
                         out set);
                 }
