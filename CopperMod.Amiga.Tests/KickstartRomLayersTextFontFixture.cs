@@ -66,20 +66,20 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 var message = Field<TextFont>(Font, nameof(TextFont.Message));
                 var node = Field<Message>(message, nameof(Message.Node));
                 var name = Font + TextFont.Size;
-                bus.WriteByte(Field<Node>(node, nameof(Node.Type)), (byte)NodeType.Font, 0);
+                bus.WriteHostByte(Field<Node>(node, nameof(Node.Type)), (byte)NodeType.Font);
                 bus.WriteLong(Field<Node>(node, nameof(Node.Name)), name);
                 for (var index = 0; index < Name.Length; index++)
-                    bus.WriteByte(name + checked((uint)index), Name[index], 0);
+                    bus.WriteHostByte(name + checked((uint)index), Name[index]);
 
                 bus.WriteWord(Field<TextFont>(Font, nameof(TextFont.YSize)), Height);
-                bus.WriteByte(Field<TextFont>(Font, nameof(TextFont.Style)), 0, 0);
+                bus.WriteHostByte(Field<TextFont>(Font, nameof(TextFont.Style)), 0);
                 bus.WriteByte(Field<TextFont>(Font, nameof(TextFont.Flags)),
                     (byte)FontFlags.Designed, 0);
                 bus.WriteWord(Field<TextFont>(Font, nameof(TextFont.XSize)), Width);
                 bus.WriteWord(Field<TextFont>(Font, nameof(TextFont.Baseline)), Baseline);
                 bus.WriteWord(Field<TextFont>(Font, nameof(TextFont.BoldSmear)), 1);
-                bus.WriteByte(Field<TextFont>(Font, nameof(TextFont.LoChar)), (byte)'A', 0);
-                bus.WriteByte(Field<TextFont>(Font, nameof(TextFont.HiChar)), (byte)'B', 0);
+                bus.WriteHostByte(Field<TextFont>(Font, nameof(TextFont.LoChar)), (byte)'A');
+                bus.WriteHostByte(Field<TextFont>(Font, nameof(TextFont.HiChar)), (byte)'B');
                 bus.WriteLong(Field<TextFont>(Font, nameof(TextFont.CharData)), _strike);
                 bus.WriteWord(Field<TextFont>(Font, nameof(TextFont.Modulo)), (ushort)Modulo);
                 bus.WriteLong(Field<TextFont>(Font, nameof(TextFont.CharLoc)), _tables);

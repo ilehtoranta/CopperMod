@@ -119,7 +119,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             checked((uint)maskBytes) + maskGuardBytes,
             Exec.MemoryFlags.Chip);
         for (var offset = 0; offset < maskBytes + maskGuardBytes; offset++)
-            context.Bus.WriteByte(mask + checked((uint)offset), maskGuard, 0);
+            context.Bus.WriteHostByte(mask + checked((uint)offset), maskGuard);
         var maskData = new byte[maskBytes];
         for (var row = 0; row < source.Height; row++)
         {
@@ -128,7 +128,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
                     unchecked((byte)(0xD3 ^ (row * 0x25) ^ (column * 0x5B)));
         }
         for (var offset = 0; offset < maskData.Length; offset++)
-            context.Bus.WriteByte(mask + checked((uint)offset), maskData[offset], 0);
+            context.Bus.WriteHostByte(mask + checked((uint)offset), maskData[offset]);
         var maskBytesBefore = Bytes(mask, maskBytes + maskGuardBytes);
 
         var expectedPlane0 = Enumerable.Repeat(initialPlane0,
@@ -137,8 +137,8 @@ public sealed partial class KickstartRomLayersDifferentialTests
             display.BytesPerRow * height).ToArray();
         for (var offset = 0; offset < expectedPlane0.Length; offset++)
         {
-            context.Bus.WriteByte(display.Planes[0] + checked((uint)offset), initialPlane0, 0);
-            context.Bus.WriteByte(display.Planes[1] + checked((uint)offset), initialPlane1, 0);
+            context.Bus.WriteHostByte(display.Planes[0] + checked((uint)offset), initialPlane0);
+            context.Bus.WriteHostByte(display.Planes[1] + checked((uint)offset), initialPlane1);
         }
 
         // The mask is indexed in source bitmap coordinates and has that

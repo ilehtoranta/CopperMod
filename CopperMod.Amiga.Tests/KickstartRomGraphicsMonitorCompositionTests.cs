@@ -139,8 +139,8 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 foreach (var name in new[] { "default.monitor", "DEFAULT.MONITOR", "DeFaUlT.MoNiToR", ntsc ? "ntsc.monitor" : "pal.monitor" })
                 foreach (var id in new[] { GraphicsModeIds.Invalid, 0xDEADBEEFu })
                 {
-                    for (var i = 0; i < name.Length; i++) context.Bus.WriteByte(nameBuffer + (uint)i, (byte)name[i], 0);
-                    context.Bus.WriteByte(nameBuffer + (uint)name.Length, 0, 0);
+                    for (var i = 0; i < name.Length; i++) context.Bus.WriteHostByte(nameBuffer + (uint)i, (byte)name[i]);
+                    context.Bus.WriteHostByte(nameBuffer + (uint)name.Length, 0);
                     Assert.Equal(monitor, context.Invoke(graphics, (int)GraphicsLvo.OpenMonitor, state =>
                     {
                         state.A[1] = nameBuffer;

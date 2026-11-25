@@ -71,7 +71,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 Assert.Equal(beforeFree, FreeBytes());
 
                 WriteRecord(baseline);
-                context.Bus.WriteByte(source + 20, 0xA5, 0);
+                context.Bus.WriteHostByte(source + 20, 0xA5);
                 var partialExpected = baseline.ToArray();
                 partialExpected[20] = 0xA5;
                 var partialBefore = ReadBytes(context.Bus, source, 88);
@@ -98,7 +98,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             void WriteRecord(byte[] bytes)
             {
                 for (var index = 0; index < bytes.Length; index++)
-                    context.Bus.WriteByte(source + (uint)index, bytes[index], 0);
+                    context.Bus.WriteHostByte(source + (uint)index, bytes[index]);
             }
 
             byte[] Query(uint count)
@@ -209,7 +209,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             void Write(uint address, byte[] bytes)
             {
                 for (var index = 0; index < bytes.Length; index++)
-                    context.Bus.WriteByte(address + (uint)index, bytes[index], 0);
+                    context.Bus.WriteHostByte(address + (uint)index, bytes[index]);
             }
         }
         finally
@@ -237,10 +237,10 @@ public sealed partial class KickstartRomLayersDifferentialTests
             var candidate = context.Allocate(224);
             var candidateImage = GraphicsMonitorSpecImage.Create(candidate, candidate + 160, !ntsc, 0, graphics);
             for (var index = 0; index < candidateImage.Length; index++)
-                context.Bus.WriteByte(candidate + (uint)index, candidateImage[index], 0);
+                context.Bus.WriteHostByte(candidate + (uint)index, candidateImage[index]);
             var candidateName = System.Text.Encoding.ASCII.GetBytes("mutation.monitor\0");
             for (var index = 0; index < candidateName.Length; index++)
-                context.Bus.WriteByte(candidate + 160u + (uint)index, candidateName[index], 0);
+                context.Bus.WriteHostByte(candidate + 160u + (uint)index, candidateName[index]);
             Assert.NotEqual(0u, source);
             try
             {
@@ -307,7 +307,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             void Write(uint address, byte[] bytes)
             {
                 for (var index = 0; index < bytes.Length; index++)
-                    context.Bus.WriteByte(address + (uint)index, bytes[index], 0);
+                    context.Bus.WriteHostByte(address + (uint)index, bytes[index]);
             }
 
             uint Available() => context.Invoke(context.ExecBase, (int)ExecLvo.AvailMem,
@@ -419,7 +419,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             void Write(uint address, byte[] bytes)
             {
                 for (var index = 0; index < bytes.Length; index++)
-                    context.Bus.WriteByte(address + (uint)index, bytes[index], 0);
+                    context.Bus.WriteHostByte(address + (uint)index, bytes[index]);
             }
         }
         finally

@@ -108,7 +108,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         var expectedPixels = Enumerable.Repeat(initialPixels,
             display.BytesPerRow * height).ToArray();
         for (var offset = 0; offset < expectedPixels.Length; offset++)
-            context.Bus.WriteByte(display.Planes[0] + checked((uint)offset), initialPixels, 0);
+            context.Bus.WriteHostByte(display.Planes[0] + checked((uint)offset), initialPixels);
         context.InvokeGraphics((int)GraphicsLvo.Move, state =>
         {
             state.A[1] = rastPort;

@@ -18,7 +18,7 @@ internal sealed class NativeIntuitionTestResident : IDisposable
         size = codeSize + NativeIntuitionRomImage.LibraryBytes;
         storage = CopperStartLayersBootTests.AllocateGuestMemory(bus, size);
         image = NativeIntuitionRomImage.Build(storage);
-        for (int i = 0; i < image.Bytes.Length; i++) bus.WriteByte(storage + (uint)i, image.Bytes[i], 0);
+        for (int i = 0; i < image.Bytes.Length; i++) bus.WriteHostByte(storage + (uint)i, image.Bytes[i]);
         Library = storage + codeSize;
         for (uint i = 0; i < NativeIntuitionRomImage.LibraryBytes; i += 4) bus.WriteLong(Library + i, 0);
         bus.WriteLong(Library + 80, bus.ReadLong(4));

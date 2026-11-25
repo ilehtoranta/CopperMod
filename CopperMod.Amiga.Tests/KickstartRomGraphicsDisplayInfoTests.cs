@@ -53,8 +53,8 @@ public sealed partial class KickstartRomLayersDifferentialTests
             // SDK Preferences and guest codec agree on signed bytes118/119.
             // Copy all other current preferences unchanged; affect only this
             // disposable guest, and do not broadcast IDCMP_NEWPREFS messages.
-            context.Bus.WriteByte(preferences + 118, unchecked((byte)(sbyte)xOffset), 0);
-            context.Bus.WriteByte(preferences + 119, unchecked((byte)(sbyte)yOffset), 0);
+            context.Bus.WriteHostByte(preferences + 118, unchecked((byte)(sbyte)xOffset));
+            context.Bus.WriteHostByte(preferences + 119, unchecked((byte)(sbyte)yOffset));
             // SetPrefs can schedule/wait: the direct sentinel fixture is not
             // a valid completion oracle. Use the existing synchronous Exec
             // task fixture, retaining its native return value in guest RAM.
@@ -63,7 +63,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             var returnedPreferences = context.Allocate(Preferences.Size);
             var taskOutputs = context.Allocate(4 * 96);
             for (uint offset = 0; offset < 4 * 96; offset++)
-                context.Bus.WriteByte(taskOutputs + offset, 0xA5, 0);
+                context.Bus.WriteHostByte(taskOutputs + offset, 0xA5);
             var writer = new CopperStartLayersBootTests.InstructionWriter(context.Bus, code);
             var screenResult = context.Allocate(4);
             if (openScreen)
@@ -157,7 +157,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 var buffer = taskOutput == 0 ? output : taskOutput;
                 if (taskOutput == 0)
                     for (uint offset = 0; offset < 92; offset++)
-                        context.Bus.WriteByte(buffer + offset, 0xA5, 0);
+                        context.Bus.WriteHostByte(buffer + offset, 0xA5);
                 var copied = taskOutput != 0 ? context.Bus.ReadLong(taskOutput + 92) :
                     context.Invoke(graphics, (int)GraphicsLvo.GetDisplayInfoData, state =>
                 {
@@ -214,7 +214,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 var rasInfo = allocation + 128;
                 var bitmap = allocation + 160;
                 for (uint offset = 0; offset < 256; offset++)
-                    context.Bus.WriteByte(allocation + offset, 0, 0);
+                    context.Bus.WriteHostByte(allocation + offset, 0);
                 var monitor = ntsc ? GraphicsModeIds.NtscMonitor : GraphicsModeIds.PalMonitor;
                 foreach (var depth in new uint[] { 4, 5, 6 })
                 {
@@ -230,17 +230,17 @@ public sealed partial class KickstartRomLayersDifferentialTests
                     Assert.Equal(depth == 6 ? uint.MaxValue :
                         monitor | (depth == 4 ? 0x8000u : 0u), result);
                 }
-                context.Bus.WriteWord(viewport + (uint)GraphicsLayouts.ViewPortDWidth, 320, 0);
-                context.Bus.WriteLong(viewport + (uint)GraphicsLayouts.ViewPortRasInfo, rasInfo, 0);
-                context.Bus.WriteLong(rasInfo + (uint)GraphicsLayouts.RasInfoBitMap, bitmap, 0);
-                context.Bus.WriteWord(bitmap + (uint)GraphicsLayouts.BitMapBytesPerRow, 40, 0);
-                context.Bus.WriteWord(bitmap + (uint)GraphicsLayouts.BitMapRows, 512, 0);
+                context.Bus.WriteHostWord(viewport + (uint)GraphicsLayouts.ViewPortDWidth, 320);
+                context.Bus.WriteHostLong(viewport + (uint)GraphicsLayouts.ViewPortRasInfo, rasInfo);
+                context.Bus.WriteHostLong(rasInfo + (uint)GraphicsLayouts.RasInfoBitMap, bitmap);
+                context.Bus.WriteHostWord(bitmap + (uint)GraphicsLayouts.BitMapBytesPerRow, 40);
+                context.Bus.WriteHostWord(bitmap + (uint)GraphicsLayouts.BitMapRows, 512);
                 foreach (var height in new ushort[] { 256, 512 })
                 foreach (var depth in new byte[] { 5, 6 })
                 foreach (var flags in new uint[] { 0, GraphicsDisplayDatabase.CoercePreserveColors })
                 {
-                    context.Bus.WriteWord(viewport + (uint)GraphicsLayouts.ViewPortDHeight, height, 0);
-                    context.Bus.WriteByte(bitmap + (uint)GraphicsLayouts.BitMapDepth, depth, 0);
+                    context.Bus.WriteHostWord(viewport + (uint)GraphicsLayouts.ViewPortDHeight, height);
+                    context.Bus.WriteHostByte(bitmap + (uint)GraphicsLayouts.BitMapDepth, depth);
                     var result = context.Invoke(graphicsBase, (int)GraphicsLvo.CoerceMode, state =>
                     {
                         state.A[0] = viewport;
@@ -266,9 +266,9 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 foreach (var depth in new byte[] { 4, 5, 6, 7 })
                 foreach (var flags in new uint[] { 0, 1 })
                 {
-                    context.Bus.WriteWord(viewport + (uint)GraphicsLayouts.ViewPortDWidth, width, 0);
-                    context.Bus.WriteWord(viewport + (uint)GraphicsLayouts.ViewPortDHeight, ntsc ? (ushort)200 : (ushort)256, 0);
-                    context.Bus.WriteWord(viewport + (uint)GraphicsLayouts.ViewPortModes, viewportMode, 0);
+                    context.Bus.WriteHostWord(viewport + (uint)GraphicsLayouts.ViewPortDWidth, width);
+                    context.Bus.WriteHostWord(viewport + (uint)GraphicsLayouts.ViewPortDHeight, ntsc ? (ushort)200 : (ushort)256);
+                    context.Bus.WriteHostWord(viewport + (uint)GraphicsLayouts.ViewPortModes, viewportMode);
                     context.Bus.WriteLong(viewport + (uint)GraphicsLayouts.ViewPortColorMap,
                         colorMapState != 0 ? colorMap : 0, 0);
                     if (colorMapState == 2)
@@ -284,8 +284,8 @@ public sealed partial class KickstartRomLayersDifferentialTests
                             state.A[1] = tags;
                         }).D[0]);
                     }
-                    context.Bus.WriteWord(bitmap + (uint)GraphicsLayouts.BitMapBytesPerRow, (ushort)(width / 8), 0);
-                    context.Bus.WriteByte(bitmap + (uint)GraphicsLayouts.BitMapDepth, depth, 0);
+                    context.Bus.WriteHostWord(bitmap + (uint)GraphicsLayouts.BitMapBytesPerRow, (ushort)(width / 8));
+                    context.Bus.WriteHostByte(bitmap + (uint)GraphicsLayouts.BitMapDepth, depth);
                     var result = context.Invoke(graphicsBase, (int)GraphicsLvo.CoerceMode, state =>
                     {
                         state.A[0] = viewport;
@@ -303,14 +303,14 @@ public sealed partial class KickstartRomLayersDifferentialTests
                         monitor | (specialSource ? mode : selectionWidth == 640 && depth == 4 ? 0x8000u : 0u);
                     Assert.Equal(expected, result);
                 }
-                context.Bus.WriteLong(viewport + (uint)GraphicsLayouts.ViewPortColorMap, 0, 0);
+                context.Bus.WriteHostLong(viewport + (uint)GraphicsLayouts.ViewPortColorMap, 0);
                 context.Invoke(graphicsBase, (int)GraphicsLvo.FreeColorMap, state => state.A[0] = colorMap);
                 CheckEntries();
 
                 void Tag(uint offset, uint tag, uint value)
                 {
-                    context.Bus.WriteLong(tags + offset, tag, 0);
-                    context.Bus.WriteLong(tags + offset + 4, value, 0);
+                    context.Bus.WriteHostLong(tags + offset, tag);
+                    context.Bus.WriteHostLong(tags + offset + 4, value);
                 }
             }
             finally { context.Free(allocation, 256); }
@@ -529,7 +529,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             var destinationOffset = odd ? 3u : 2u;
             var destination = allocation + destinationOffset;
             for (uint offset = 0; offset < 92; offset++)
-                context.Bus.WriteByte(allocation + offset, 0xA5, 0);
+                context.Bus.WriteHostByte(allocation + offset, 0xA5);
             var handler = context.Bus.ReadLong(12);
             var before = context.Machine.Cpu.State;
             var priorException = (before.LastExceptionVector,
@@ -672,7 +672,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             {
                 const uint destinationOffset = 2;
                 for (uint offset = 0; offset < 92; offset++)
-                    context.Bus.WriteByte(allocation + offset, 0xA5, 0);
+                    context.Bus.WriteHostByte(allocation + offset, 0xA5);
                 var copied = context.Invoke(graphicsBase, (int)GraphicsLvo.GetDisplayInfoData, state =>
                 {
                     state.A[0] = 0;
@@ -800,7 +800,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 byte[] Query(uint tag, uint length)
                 {
                     for (uint offset = 0; offset < 132; offset++)
-                        context.Bus.WriteByte(allocation + offset, 0xA5, 0);
+                        context.Bus.WriteHostByte(allocation + offset, 0xA5);
                     var copied = context.Invoke(graphicsBase, (int)GraphicsLvo.GetDisplayInfoData, state =>
                     {
                         state.A[0] = 0;
@@ -862,7 +862,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
                     foreach (var length in new uint[] { 0, 1, 15, 16, 17, 18, 19, 20, 43, 44, 55, 56, 65, 66, 67, 87, 88, 95, 96, 128 })
                     {
                         for (uint offset = 0; offset < 132; offset++)
-                            context.Bus.WriteByte(allocation + offset, 0xA5, 0);
+                            context.Bus.WriteHostByte(allocation + offset, 0xA5);
                         var copied = context.Invoke(graphicsBase, (int)GraphicsLvo.GetDisplayInfoData, state =>
                         {
                             state.A[0] = 0;
@@ -923,15 +923,15 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 Observe("boot");
                 // Observe, do not assume, whether this writable power-on field
                 // remaps already constructed ROM display-database aliases.
-                context.Bus.WriteWord(flagsAddress, (ushort)((bootFlags & ~5) | (ntsc ? 4 : 1)), 0);
+                context.Bus.WriteHostWord(flagsAddress, (ushort)((bootFlags & ~5) | (ntsc ? 4 : 1)));
                 Observe("opposite-display-flags");
-                context.Bus.WriteWord(flagsAddress, bootFlags, 0);
+                context.Bus.WriteHostWord(flagsAddress, bootFlags);
                 Observe("restored-display-flags");
                 AssertOriginalGraphicsRomEntries(context, graphicsBase, rom);
             }
             finally
             {
-                context.Bus.WriteWord(flagsAddress, bootFlags, 0);
+                context.Bus.WriteHostWord(flagsAddress, bootFlags);
                 context.Free(allocation, 20);
             }
 
@@ -942,7 +942,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 foreach (var length in new uint[] { 5, 6, 16 })
                 {
                     for (uint offset = 0; offset < 20; offset++)
-                        context.Bus.WriteByte(allocation + offset, 0xA5, 0);
+                        context.Bus.WriteHostByte(allocation + offset, 0xA5);
                     var copied = context.Invoke(graphicsBase, (int)GraphicsLvo.GetDisplayInfoData, state =>
                     {
                         state.A[0] = 0;

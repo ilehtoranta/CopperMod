@@ -115,13 +115,13 @@ public sealed partial class KickstartRomLayersDifferentialTests
             void Initialize(uint node, string name)
             {
                 var bytes = GraphicsMonitorSpecImage.Create(node, node + GraphicsLayouts.MonitorSpecSize, !ntsc, 0, graphics);
-                for (var i = 0; i < bytes.Length; i++) context.Bus.WriteByte(node + (uint)i, bytes[i], 0);
+                for (var i = 0; i < bytes.Length; i++) context.Bus.WriteHostByte(node + (uint)i, bytes[i]);
                 Name(node + GraphicsLayouts.MonitorSpecSize, name);
             }
             void Name(uint address, string name)
             {
-                for (var i = 0; i < name.Length; i++) context.Bus.WriteByte(address + (uint)i, (byte)name[i], 0);
-                context.Bus.WriteByte(address + (uint)name.Length, 0, 0);
+                for (var i = 0; i < name.Length; i++) context.Bus.WriteHostByte(address + (uint)i, (byte)name[i]);
+                context.Bus.WriteHostByte(address + (uint)name.Length, 0);
             }
             void Add(uint node, bool head) => EditList(() => context.Invoke(context.ExecBase,
                 (int)(head ? ExecLvo.AddHead : ExecLvo.AddTail), state => { state.A[0] = list; state.A[1] = node; }));

@@ -106,12 +106,12 @@ public sealed partial class KickstartRomLayersDifferentialTests
             templateBytes + guardBytes,
             Exec.MemoryFlags.Chip);
         for (var offset = 0; offset < templateBytes + guardBytes; offset++)
-            context.Bus.WriteByte(template + checked((uint)offset), templateGuard, 0);
+            context.Bus.WriteHostByte(template + checked((uint)offset), templateGuard);
         for (var row = 0; row < templateRows.Length; row++)
             context.Bus.WriteWord(template + checked((uint)(row * sourceModulo)), templateRows[row]);
 
         context.Bus.WriteLong(rastPort + (uint)GraphicsLayouts.RastPortAreaPtrn, 0);
-        context.Bus.WriteByte(rastPort + (uint)GraphicsLayouts.RastPortAreaPtSz, 0, 0);
+        context.Bus.WriteHostByte(rastPort + (uint)GraphicsLayouts.RastPortAreaPtSz, 0);
         SetPenOrMode(GraphicsLvo.SetAPen, 1);
         SetPenOrMode(GraphicsLvo.SetDrMd, 0); // JAM1: set APen where template bits are one.
         SetPenOrMode(GraphicsLvo.SetWriteMask, 1);
@@ -119,7 +119,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         var expectedPixels = Enumerable.Repeat(initialPixels,
             display.BytesPerRow * height).ToArray();
         for (var offset = 0; offset < expectedPixels.Length; offset++)
-            context.Bus.WriteByte(display.Planes[0] + checked((uint)offset), initialPixels, 0);
+            context.Bus.WriteHostByte(display.Planes[0] + checked((uint)offset), initialPixels);
 
         // The source row phase begins three bits into each word. Only set
         // source bits within the naturally damaged and caller-clipped region

@@ -110,7 +110,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         var expectedPixels = Enumerable.Repeat(initialPattern,
             display.BytesPerRow * display.Height).ToArray();
         for (var offset = 0; offset < expectedPixels.Length; offset++)
-            context.Bus.WriteByte(display.Planes[0] + checked((uint)offset), initialPattern, 0);
+            context.Bus.WriteHostByte(display.Planes[0] + checked((uint)offset), initialPattern);
         MoveCursor();
         Capture("before-update");
 
@@ -182,7 +182,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             var activeFlags = ReadOracleLayerFlags(context.Bus, layer);
             var activeDamage = ReadOracleLayerPointer(context.Bus, layer, OracleLayerPointer.DamageList);
             for (var index = 0; index < characters.Length; index++)
-                context.Bus.WriteByte(text + checked((uint)index), (byte)characters[index], 0);
+                context.Bus.WriteHostByte(text + checked((uint)index), (byte)characters[index]);
             var setChanges = 0;
             var clearChanges = 0;
             // Independent pixel oracle: do not derive expected pixels from

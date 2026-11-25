@@ -70,8 +70,8 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 var requestFreeBefore = FreeBytes();
                 if (request.Name is not null)
                 {
-                    for (var i = 0; i < request.Name.Length; i++) context.Bus.WriteByte(nameBuffer + (uint)i, (byte)request.Name[i], 0);
-                    context.Bus.WriteByte(nameBuffer + (uint)request.Name.Length, 0, 0);
+                    for (var i = 0; i < request.Name.Length; i++) context.Bus.WriteHostByte(nameBuffer + (uint)i, (byte)request.Name[i]);
+                    context.Bus.WriteHostByte(nameBuffer + (uint)request.Name.Length, 0);
                 }
                 var opened = context.Invoke(graphics, (int)GraphicsLvo.OpenMonitor, state =>
                 {
@@ -111,8 +111,8 @@ public sealed partial class KickstartRomLayersDifferentialTests
             // moving on; use original ROM entries throughout.
             var originalName = context.Bus.ReadLong(defaultMonitor + (uint)GraphicsLayouts.MonitorSpecNodeName);
             var originalFlags = context.Bus.ReadWord(defaultMonitor + (uint)GraphicsLayouts.MonitorSpecFlags);
-            for (var i = 0; i < "renamed.monitor".Length; i++) context.Bus.WriteByte(nameBuffer + (uint)i, (byte)"renamed.monitor"[i], 0);
-            context.Bus.WriteByte(nameBuffer + 15, 0, 0);
+            for (var i = 0; i < "renamed.monitor".Length; i++) context.Bus.WriteHostByte(nameBuffer + (uint)i, (byte)"renamed.monitor"[i]);
+            context.Bus.WriteHostByte(nameBuffer + 15, 0);
             foreach (var mutation in new[] { "name", "flags" })
             {
                 if (mutation == "name") context.Bus.WriteLong(defaultMonitor + (uint)GraphicsLayouts.MonitorSpecNodeName, nameBuffer);

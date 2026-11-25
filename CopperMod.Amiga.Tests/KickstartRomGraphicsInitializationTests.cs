@@ -260,7 +260,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
 
         byte[] Query(uint requested, bool odd)
         {
-            for (uint i = 0; i < 104; i++) context.Bus.WriteByte(output + i, 0xA5, 0);
+            for (uint i = 0; i < 104; i++) context.Bus.WriteHostByte(output + i, 0xA5);
             var destination = output + (odd ? 3u : 2u);
             var result = context.Invoke(graphics, (int)GraphicsLvo.GetDisplayInfoData, registers =>
             {
@@ -291,7 +291,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         const uint compatibilitySize = 0x264;
         var compatibility = context.Allocate(compatibilitySize);
         for (uint offset = 0; offset < compatibilitySize; offset++)
-            context.Bus.WriteByte(compatibility + offset, 0, 0);
+            context.Bus.WriteHostByte(compatibility + offset, 0);
         context.Bus.WriteWord(compatibility + 0x12, 0x250);
         var compatibilityList = compatibility + (uint)GraphicsLayouts.GfxBaseMonitorList;
         context.Bus.WriteLong(compatibilityList, compatibilityList + 4);
@@ -349,7 +349,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
 
         byte[] Query(uint library, uint requested, bool odd)
         {
-            for (uint i = 0; i < 104; i++) context.Bus.WriteByte(output + i, 0xA5, 0);
+            for (uint i = 0; i < 104; i++) context.Bus.WriteHostByte(output + i, 0xA5);
             var destination = output + (odd ? 3u : 2u);
             var returned = context.Invoke(library, (int)GraphicsLvo.GetDisplayInfoData, registers =>
             {

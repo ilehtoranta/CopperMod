@@ -188,7 +188,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             ushort Count(uint monitor) => context.Bus.ReadWord(monitor + GraphicsLayouts.MonitorSpecOpenCount);
             uint FreeBytes() => context.Invoke(context.ExecBase, (int)ExecLvo.AvailMem, state => state.D[1] = 0).D[0];
             void Write(uint address, byte[] bytes)
-            { for (var index = 0; index < bytes.Length; index++) context.Bus.WriteByte(address + (uint)index, bytes[index], 0); }
+            { for (var index = 0; index < bytes.Length; index++) context.Bus.WriteHostByte(address + (uint)index, bytes[index]); }
             void EditList(Action edit)
             {
                 var semaphore = context.Bus.ReadLong(graphics + GraphicsLayouts.GfxBaseMonitorListSemaphore);

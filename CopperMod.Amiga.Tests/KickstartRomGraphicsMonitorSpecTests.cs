@@ -125,7 +125,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 AssertCount((ushort)count);
             }
             var output = context.Allocate(96);
-            for (uint offset = 0; offset < 96; offset++) context.Bus.WriteByte(output + offset, 0xA5, 0);
+            for (uint offset = 0; offset < 96; offset++) context.Bus.WriteHostByte(output + offset, 0xA5);
             Assert.Equal(88u, context.Invoke(graphics, (int)GraphicsLvo.GetDisplayInfoData, state =>
             {
                 state.A[1] = output + 2;
@@ -154,7 +154,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             try
             {
                 var publicNode = ReadBytes(context.Bus, monitor, GraphicsLayouts.MonitorSpecSize);
-                for (var i = 0; i < publicNode.Length; i++) context.Bus.WriteByte(borrowed + (uint)i, publicNode[i], 0);
+                for (var i = 0; i < publicNode.Length; i++) context.Bus.WriteHostByte(borrowed + (uint)i, publicNode[i]);
                 context.Bus.WriteLong(borrowed, 0xDEADBEEF);
                 context.Bus.WriteLong(borrowed + 4, 0xDEADBEEF);
                 context.Bus.WriteLong(borrowed + (uint)GraphicsLayouts.MonitorSpecNodeName, 0xFFFFFFFF);
@@ -199,7 +199,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
                     foreach (var (key, _) in GraphicsDisplayInfoTransferBoundaryTests.CapturedOcsEcsDepths)
                     foreach (var id in new[] { key, key | 0x1000u, key | (ntsc ? 0x11000u : 0x21000u) })
                     {
-                        for (uint offset = 0; offset < 96; offset++) context.Bus.WriteByte(readback + offset, 0xA5, 0);
+                        for (uint offset = 0; offset < 96; offset++) context.Bus.WriteHostByte(readback + offset, 0xA5);
                         Assert.Equal(88u, context.Invoke(graphics, (int)GraphicsLvo.GetDisplayInfoData, state =>
                         {
                             state.A[1] = readback + 1;

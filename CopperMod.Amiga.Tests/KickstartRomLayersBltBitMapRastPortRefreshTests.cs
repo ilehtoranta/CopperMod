@@ -118,8 +118,8 @@ public sealed partial class KickstartRomLayersDifferentialTests
             display.BytesPerRow * height).ToArray();
         for (var offset = 0; offset < expectedPlane0.Length; offset++)
         {
-            context.Bus.WriteByte(display.Planes[0] + checked((uint)offset), initialPlane0, 0);
-            context.Bus.WriteByte(display.Planes[1] + checked((uint)offset), initialPlane1, 0);
+            context.Bus.WriteHostByte(display.Planes[0] + checked((uint)offset), initialPlane0);
+            context.Bus.WriteHostByte(display.Planes[1] + checked((uint)offset), initialPlane1);
         }
 
         // Source and destination coordinates intentionally have different

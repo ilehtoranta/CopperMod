@@ -148,7 +148,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         });
         foreach (var plane in display.Planes)
             for (var offset = 0; offset < display.BytesPerRow * display.Height; offset++)
-                context.Bus.WriteByte(plane + checked((uint)offset), initialPattern, 0);
+                context.Bus.WriteHostByte(plane + checked((uint)offset), initialPattern);
         Assert.Equal(0, hook.CallbackCount);
         return new MutationFailureFixture(layerInfo, display, bottom, cover, hook);
     }

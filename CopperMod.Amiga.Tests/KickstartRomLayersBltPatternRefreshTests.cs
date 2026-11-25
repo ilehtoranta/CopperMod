@@ -107,16 +107,16 @@ public sealed partial class KickstartRomLayersDifferentialTests
             Exec.MemoryFlags.Chip);
         var areaPattern = context.Allocate(areaPatternBytes + guardBytes);
         for (var offset = 0; offset < stencilBytes + guardBytes; offset++)
-            context.Bus.WriteByte(stencil + checked((uint)offset), stencilGuard, 0);
+            context.Bus.WriteHostByte(stencil + checked((uint)offset), stencilGuard);
         for (var offset = 0; offset < areaPatternBytes + guardBytes; offset++)
-            context.Bus.WriteByte(areaPattern + checked((uint)offset), areaPatternGuard, 0);
+            context.Bus.WriteHostByte(areaPattern + checked((uint)offset), areaPatternGuard);
         for (var row = 0; row < stencilRows.Length; row++)
-            context.Bus.WriteByte(stencil + checked((uint)(row * 2)), stencilRows[row], 0);
+            context.Bus.WriteHostByte(stencil + checked((uint)(row * 2)), stencilRows[row]);
         for (var row = 0; row < areaPatternWords.Length; row++)
             context.Bus.WriteWord(areaPattern + checked((uint)(row * 2)), areaPatternWords[row]);
 
         context.Bus.WriteLong(rastPort + (uint)GraphicsLayouts.RastPortAreaPtrn, areaPattern);
-        context.Bus.WriteByte(rastPort + (uint)GraphicsLayouts.RastPortAreaPtSz, 2, 0);
+        context.Bus.WriteHostByte(rastPort + (uint)GraphicsLayouts.RastPortAreaPtSz, 2);
         SetPenOrMode(GraphicsLvo.SetAPen, 1);
         SetPenOrMode(GraphicsLvo.SetBPen, 0);
         SetPenOrMode(GraphicsLvo.SetDrMd, 1); // JAM2: choose APen/BPen from AreaPtrn.
@@ -125,7 +125,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         var expectedPixels = Enumerable.Repeat(initialPixels,
             display.BytesPerRow * height).ToArray();
         for (var offset = 0; offset < expectedPixels.Length; offset++)
-            context.Bus.WriteByte(display.Planes[0] + checked((uint)offset), initialPixels, 0);
+            context.Bus.WriteHostByte(display.Planes[0] + checked((uint)offset), initialPixels);
 
         // The caller rectangle starts at a non-origin phase. The area pattern
         // is anchored to screen coordinates; the external stencil is anchored

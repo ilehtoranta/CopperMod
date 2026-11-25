@@ -531,7 +531,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             state.D[0] = 1;
         });
         for (var offset = 0u; offset < display.BytesPerRow * display.Height; offset++)
-            context.Bus.WriteByte(display.Planes[0] + offset, 0, 0);
+            context.Bus.WriteHostByte(display.Planes[0] + offset, 0);
         Capture("before-update");
 
         BeginAndCapture("first-begin");
@@ -3714,7 +3714,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
                 if (!bus.IsMappedMemoryRange(address, byteCount))
                     continue;
                 for (var offset = 0; offset < byteCount; offset++)
-                    bus.WriteByte(address + checked((uint)offset), value, 0);
+                    bus.WriteHostByte(address + checked((uint)offset), value);
             }
         }
 
@@ -4022,7 +4022,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         {
             if (!_bus.IsMappedMemoryRange(address, 1))
                 return false;
-            _bus.WriteByte(address, value, 0);
+            _bus.WriteHostByte(address, value);
             return true;
         }
 

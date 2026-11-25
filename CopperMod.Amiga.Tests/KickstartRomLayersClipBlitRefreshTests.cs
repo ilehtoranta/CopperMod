@@ -18626,7 +18626,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         void WriteBytes(uint address, byte[] bytes)
         {
             for (var index = 0; index < bytes.Length; index++)
-                context.Bus.WriteByte(address + checked((uint)index), bytes[index], 0);
+                context.Bus.WriteHostByte(address + checked((uint)index), bytes[index]);
         }
     }
 }

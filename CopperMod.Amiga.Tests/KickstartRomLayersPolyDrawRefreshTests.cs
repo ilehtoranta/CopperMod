@@ -97,7 +97,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         LayersRastPortCodec.WriteLinePatternCount(ref memory, rp, 15);
         var expectedPixels = Enumerable.Repeat(seed, image.BytesPerRow * height).ToArray();
         for (var offset = 0; offset < expectedPixels.Length; offset++)
-            context.Bus.WriteByte(image.Planes[0] + checked((uint)offset), seed, 0);
+            context.Bus.WriteHostByte(image.Planes[0] + checked((uint)offset), seed);
         context.InvokeGraphics((int)GraphicsLvo.Move, state =>
         {
             state.A[1] = rastPort;

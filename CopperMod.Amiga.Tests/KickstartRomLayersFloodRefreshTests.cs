@@ -167,7 +167,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             temporaryRasterBytes + temporaryRasterGuardBytes,
             Exec.MemoryFlags.Chip);
         for (var offset = 0; offset < temporaryRasterBytes + temporaryRasterGuardBytes; offset++)
-            context.Bus.WriteByte(tmpRasBuffer + checked((uint)offset), temporaryRasterGuard, 0);
+            context.Bus.WriteHostByte(tmpRasBuffer + checked((uint)offset), temporaryRasterGuard);
         context.InvokeGraphics((int)GraphicsLvo.InitTmpRas, state =>
         {
             state.A[0] = tmpRas;
@@ -176,7 +176,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         });
         context.Bus.WriteLong(rastPort + (uint)GraphicsLayouts.RastPortTmpRas, tmpRas);
         context.Bus.WriteLong(rastPort + (uint)GraphicsLayouts.RastPortAreaPtrn, 0);
-        context.Bus.WriteByte(rastPort + (uint)GraphicsLayouts.RastPortAreaPtSz, 0, 0);
+        context.Bus.WriteHostByte(rastPort + (uint)GraphicsLayouts.RastPortAreaPtSz, 0);
 
         SetPenOrMode(GraphicsLvo.SetAPen, 1);
         SetPenOrMode(GraphicsLvo.SetBPen, 0);
@@ -250,7 +250,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
 
         // Keep the native no-write BOOL result covered as a separate case:
         // a zero plane mask is a valid no-op, not a declined vector.
-        context.Bus.WriteByte(rastPort + (uint)GraphicsLayouts.RastPortMask, 0, 0);
+        context.Bus.WriteHostByte(rastPort + (uint)GraphicsLayouts.RastPortMask, 0);
         var noWriteFlood = context.InvokeGraphics((int)GraphicsLvo.Flood, state =>
         {
             state.A[1] = rastPort;
@@ -258,7 +258,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
             state.D[1] = unchecked((ushort)seedY);
             state.D[2] = mode;
         });
-        context.Bus.WriteByte(rastPort + (uint)GraphicsLayouts.RastPortMask, 1, 0);
+        context.Bus.WriteHostByte(rastPort + (uint)GraphicsLayouts.RastPortMask, 1);
         Assert.Equal(expectedPixels, Bytes(display.Planes[0], expectedPixels.Length));
         AssertRastPortState();
         Capture("zero-mask-flood", noWriteFlood.D[0]);

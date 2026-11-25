@@ -70,8 +70,8 @@ public sealed partial class KickstartRomLayersDifferentialTests
         const uint stackSize = 16384;
         var stack = context.Allocate(stackSize);
         var bus = context.Bus;
-        bus.WriteByte(task + ExecLayout.Node.Type, (byte)NodeType.Task, 0);
-        bus.WriteByte(task + ExecLayout.Node.Priority, 1, 0);
+        bus.WriteHostByte(task + ExecLayout.Node.Type, (byte)NodeType.Task);
+        bus.WriteHostByte(task + ExecLayout.Node.Priority, 1);
         bus.WriteLong(task + ExecLayout.Task.StackLower, stack);
         bus.WriteLong(task + ExecLayout.Task.StackUpper, stack + stackSize);
         bus.WriteLong(task + ExecLayout.Task.StackPointer, stack + stackSize);

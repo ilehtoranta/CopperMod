@@ -26140,14 +26140,14 @@ public sealed partial class CopperStartLayersBootTests
         private void WriteWord(ushort value)
         {
             Assert.True((ulong)_address + 2 <= _end);
-            _bus.WriteWord(_address, value, 0);
+            _bus.WriteHostWord(_address, value);
             _address += 2;
         }
 
         private void WriteLong(uint value)
         {
             Assert.True((ulong)_address + 4 <= _end);
-            _bus.WriteLong(_address, value, 0);
+            _bus.WriteHostLong(_address, value);
             _address += 4;
         }
     }

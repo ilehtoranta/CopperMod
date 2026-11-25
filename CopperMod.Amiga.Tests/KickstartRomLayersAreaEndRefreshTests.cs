@@ -137,16 +137,16 @@ public sealed partial class KickstartRomLayersDifferentialTests
 
         var guard = Enumerable.Repeat(temporaryRasterGuard, temporaryRasterGuardBytes).ToArray();
         for (var offset = 0; offset < temporaryRasterBytes + temporaryRasterGuardBytes; offset++)
-            context.Bus.WriteByte(tmpRasBuffer + checked((uint)offset), temporaryRasterGuard, 0);
+            context.Bus.WriteHostByte(tmpRasBuffer + checked((uint)offset), temporaryRasterGuard);
         context.InvokeGraphics((int)GraphicsLvo.InitTmpRas, state =>
         {
             state.A[0] = tmpRas;
             state.A[1] = tmpRasBuffer;
             state.D[0] = (uint)temporaryRasterBytes;
         });
-        context.Bus.WriteWord(areaPattern, areaPatternWord, 0);
+        context.Bus.WriteHostWord(areaPattern, areaPatternWord);
         context.Bus.WriteLong(rastPort + (uint)GraphicsLayouts.RastPortAreaPtrn, areaPattern);
-        context.Bus.WriteByte(rastPort + (uint)GraphicsLayouts.RastPortAreaPtSz, 0, 0);
+        context.Bus.WriteHostByte(rastPort + (uint)GraphicsLayouts.RastPortAreaPtSz, 0);
 
         SetPenOrMode(GraphicsLvo.SetAPen, 1);
         SetPenOrMode(GraphicsLvo.SetBPen, 0);
@@ -157,7 +157,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         var expectedPixels = Enumerable.Repeat(initialPixels,
             display.BytesPerRow * height).ToArray();
         for (var offset = 0; offset < expectedPixels.Length; offset++)
-            context.Bus.WriteByte(display.Planes[0] + checked((uint)offset), initialPixels, 0);
+            context.Bus.WriteHostByte(display.Planes[0] + checked((uint)offset), initialPixels);
 
         context.InvokeGraphics((int)GraphicsLvo.Move, state =>
         {

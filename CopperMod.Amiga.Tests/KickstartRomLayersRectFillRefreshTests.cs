@@ -105,7 +105,7 @@ public sealed partial class KickstartRomLayersDifferentialTests
         var expectedPixels = Enumerable.Repeat(initialPixels,
             display.BytesPerRow * height).ToArray();
         for (var offset = 0; offset < expectedPixels.Length; offset++)
-            context.Bus.WriteByte(display.Planes[0] + checked((uint)offset), initialPixels, 0);
+            context.Bus.WriteHostByte(display.Planes[0] + checked((uint)offset), initialPixels);
         for (var y = 3; y <= 7; y++)
         for (var x = 7; x <= 11; x++)
             expectedPixels[y * display.BytesPerRow + x / 8] |= (byte)(0x80 >> (x & 7));
