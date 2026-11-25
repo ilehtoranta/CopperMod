@@ -124,7 +124,8 @@ public sealed class NativeGraphicsRastPortScalarPublicAbiTests
                 throw new ArgumentOutOfRangeException(nameof(vector));
         }
         if (inverseComplement)
-            minterms = new byte[] { 0x6A, 0x6A, 0x6A, 0x6A, 0x6A, 0x6A, 0x6A, 0x6A };
+            // With INVERSVID, JAM1 toggles the destination for a zero source bit.
+            minterms = new byte[] { 0x9A, 0x9A, 0x9A, 0x9A, 0x9A, 0x9A, 0x9A, 0x9A };
         minterms.CopyTo(rastPort[0x28..]);
         rastPort[0x1E] = 15;
         BinaryPrimitives.WriteUInt16BigEndian(rastPort[0x20..], 0xA6D5);

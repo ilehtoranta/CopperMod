@@ -192,13 +192,14 @@ public sealed class NativeGraphicsRastPortExtentTests
             if (scenario == "exact-end")
             {
                 var high = before.High.ToArray();
-                ExpectedRastPort().CopyTo(high, 0x9C);
+                // InitRastPort leaves the 22 reserved bytes of the 100-byte record untouched.
+                ExpectedRastPort().AsSpan(0, 78).CopyTo(high.AsSpan(0x9C));
                 expected = before with { High = high };
             }
             else
             {
                 var arena = before.Arena.ToArray();
-                ExpectedRastPort().CopyTo(arena, (int)(RastPort - ArenaAddress));
+                ExpectedRastPort().AsSpan(0, 78).CopyTo(arena.AsSpan((int)(RastPort - ArenaAddress)));
                 expected = before with { Arena = arena };
             }
         }

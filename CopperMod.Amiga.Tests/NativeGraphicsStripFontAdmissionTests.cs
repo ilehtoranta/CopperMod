@@ -70,7 +70,8 @@ public sealed class NativeGraphicsStripFontAdmissionTests
             Assert.Equal(before.GraphicsImage, after.GraphicsImage);
             Assert.Equal(before.Resident, after.Resident);
             Assert.Equal(before.Caller, after.Caller);
-            Assert.Equal(before.StackGuards, after.StackGuards);
+            Assert.Equal(before.StackGuards[..after.UntouchedStackBytes], after.StackGuards[..after.UntouchedStackBytes]);
+            Assert.Equal(before.StackGuards[0x300..], after.StackGuards[0x300..]);
         });
         Check(failures, "caller PC/SP, library base, and complete A0 return intact", () =>
         {
@@ -108,7 +109,8 @@ public sealed class NativeGraphicsStripFontAdmissionTests
         byte[] GraphicsImage,
         byte[] Resident,
         byte[] Caller,
-        byte[] StackGuards);
+        byte[] StackGuards,
+        int UntouchedStackBytes);
 
     private sealed record CallResult(
         uint Data0,
@@ -139,6 +141,7 @@ public sealed class NativeGraphicsStripFontAdmissionTests
         {
             0xA2A2_0202, 0xA3A3_0303, 0xA4A4_0404, 0xA5A5_0505
         };
+        private uint _lowestStackPointer = StackPointer;
         private readonly AmigaBus _bus = new();
         private readonly IM68kCore _cpu;
         private readonly bool _autoInitEntry;
@@ -246,7 +249,7 @@ public sealed class NativeGraphicsStripFontAdmissionTests
                     NativeGraphicsLibraryImageBuilder.PositiveImageSize),
                 ReadBytes(_residentAddress, _residentByteCount),
                 ReadBytes(CallerAddress, 8),
-                ReadBytes(StackAddress, 0x2C0).Concat(ReadBytes(StackPointer, 0x300)).ToArray());
+                ReadBytes(StackAddress, 0x600), (int)(_lowestStackPointer - StackAddress));
 
         internal CallResult Invoke(uint font)
         {
@@ -277,12 +280,15 @@ public sealed class NativeGraphicsStripFontAdmissionTests
             for (var instruction = 0; instruction < 1_000; instruction++)
             {
                 var pc = _cpu.State.ProgramCounter;
+                Assert.InRange(_cpu.State.A[7], StackAddress, StackPointer);
+                _lowestStackPointer = Math.Min(_lowestStackPointer, _cpu.State.A[7]);
                 Assert.True(
                     pc >= _nativeCodeAddress &&
                     (ulong)pc < (ulong)_nativeCodeAddress + (uint)Image.Value.Code.Length,
                     $"Unexpected execution address 0x{pc:X8}; no host graphics/Exec gateway is installed.");
                 usedFallback |= pc == _nativeCodeAddress + (uint)Image.Value.Fallback;
-                if (_bus.ReadWord(pc) == 0x4E75)
+                if (_bus.ReadWord(pc) == 0x4E75 && _cpu.State.A[7] == StackPointer - 4 &&
+                    _bus.ReadLong(_cpu.State.A[7]) == ReturnAddress)
                 {
                     nativeReturnCount++;
                     usedFallback |= _cpu.State.D[0] == CapturedD0;
