@@ -6,7 +6,8 @@ namespace CopperMod.Amiga.Tests;
 /// </summary>
 public sealed class PhysicalBusLedgerTests
 {
-	private const int LowResPlane1FetchSlot = 7;
+	// The data transfer occupies OUT, one chip slot after Agnus selects the address.
+	private const int LowResPlane1TransferSlot = 7 + 1;
 
 	[Fact]
 	public void OcsRefreshLedgerOwnsFourMandatorySlotsPerRasterline()
@@ -58,7 +59,7 @@ public sealed class PhysicalBusLedgerTests
 		var row = AmigaConstants.PalLowResOverscanBorderY;
 		var lineStart = OutputRowStartCycle(row);
 		var fetchCycle = lineStart +
-			((0x38 + LowResPlane1FetchSlot) * AgnusChipSlotScheduler.SlotCycles);
+			((0x38 + LowResPlane1TransferSlot) * AgnusChipSlotScheduler.SlotCycles);
 		ConfigureOneBitplane(bus);
 		bus.AdvanceDmaTo(lineStart);
 
@@ -87,7 +88,7 @@ public sealed class PhysicalBusLedgerTests
 		const int enableLine = 0x40;
 		var lineStart = (long)enableLine * AmigaConstants.A500PalCpuCyclesPerRasterLine;
 		var fetchCycle = lineStart +
-			((0x38 + LowResPlane1FetchSlot) * AgnusChipSlotScheduler.SlotCycles);
+			((0x38 + LowResPlane1TransferSlot) * AgnusChipSlotScheduler.SlotCycles);
 
 		bus.WriteWord(0x00DFF096, 0x8300);
 		bus.WriteWord(0x00DFF092, 0x0038);
@@ -166,7 +167,7 @@ public sealed class PhysicalBusLedgerTests
 		var bus = new AmigaBus(captureBusAccesses: true, enableLiveAgnusDma: true);
 		var row = AmigaConstants.PalLowResOverscanBorderY;
 		var lineStart = OutputRowStartCycle(row);
-		const int thirdGroupPlane2Slot = 0x38 + 3 + (5 * 4);
+		const int thirdGroupPlane2Slot = 0x38 + 3 + (5 * 4) + 1;
 		var fetchCycle = lineStart +
 			(thirdGroupPlane2Slot * AgnusChipSlotScheduler.SlotCycles);
 

@@ -4,7 +4,7 @@ namespace CopperMod.Amiga.Tests;
 
 public sealed class AmigaCustomChipPointerTests
 {
-    private const int StandardX = AmigaConstants.PalLowResOverscanBorderX;
+    private const int StandardX = AmigaConstants.PalLowResOverscanBorderX - 1;
     private const int StandardY = AmigaConstants.PalLowResOverscanBorderY;
 
     [Theory]

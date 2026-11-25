@@ -1706,7 +1706,8 @@ public sealed class AmigaBootMemoryTests
 		}
 
 		var screenBitMap = AllocateBitMap(bus, 32, 16);
-		var backingBitMap = AllocateBitMap(bus, 3, 4);
+		// The concealed clip starts at screen x=10 within the first bitmap word.
+		var backingBitMap = AllocateBitMap(bus, 16, 4);
 		Assert.True(boot.CyberGraphics.TryGetBitMapSurface(screenBitMap, out var screen));
 		Assert.True(boot.CyberGraphics.TryGetBitMapSurface(backingBitMap, out var backing));
 		const uint rastPort = 0x2800;
@@ -1736,7 +1737,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.True(patches.TryGetRastPortClipFragments(rastPort, 0, 0, 8, 4, out var processFragments));
 		Assert.Equal(2, processFragments.Count);
 		Assert.Equal(backingBitMap, processFragments[0].BitMapAddress);
-		Assert.Equal((0, 0, 0, 0, 3, 4), (
+		Assert.Equal((0, 0, 10, 0, 3, 4), (
 			processFragments[0].RequestX,
 			processFragments[0].RequestY,
 			processFragments[0].BitMapX,
@@ -1764,7 +1765,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(24u, process.D[0]);
 		for (var y = 0; y < 4; y++)
 		{
-			Assert.Equal(new byte[] { 16, 16, 16 }, Enumerable.Range(0, 3)
+			Assert.Equal(new byte[] { 16, 16, 16 }, Enumerable.Range(10, 3)
 				.Select(x => bus.ReadByte(backing.GuestBaseAddress + (uint)(y * backing.BytesPerRow + x))));
 			var screenValues = Enumerable.Range(0, 32)
 				.Select(x => bus.ReadByte(screen.GuestBaseAddress + (uint)((y + 4) * screen.BytesPerRow + x)))
@@ -1794,7 +1795,7 @@ public sealed class AmigaBootMemoryTests
 
 		for (var y = 0; y < 4; y++)
 		{
-			Assert.Equal(new byte[] { 7, 7, 7 }, Enumerable.Range(0, 3)
+			Assert.Equal(new byte[] { 7, 7, 7 }, Enumerable.Range(10, 3)
 				.Select(x => bus.ReadByte(backing.GuestBaseAddress + (uint)(y * backing.BytesPerRow + x))));
 		}
 		for (var y = 4; y <= 7; y++)
@@ -1826,7 +1827,7 @@ public sealed class AmigaBootMemoryTests
 		draw.A[1] = rastPort;
 		draw.D[0] = 7;
 		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-246, draw));
-		Assert.Equal(new byte[] { 7, 7, 7 }, Enumerable.Range(0, 3)
+		Assert.Equal(new byte[] { 7, 7, 7 }, Enumerable.Range(10, 3)
 			.Select(x => bus.ReadByte(backing.GuestBaseAddress + (uint)x)));
 		Assert.Equal(new byte[] { 7, 7, 7 }, Enumerable.Range(15, 3)
 			.Select(x => bus.ReadByte(screen.GuestBaseAddress + (uint)(4 * screen.BytesPerRow + x))));
@@ -1853,7 +1854,7 @@ public sealed class AmigaBootMemoryTests
 		Assert.Equal(1u, blit.D[0]);
 		for (var y = 0; y < 4; y++)
 		{
-			Assert.Equal(new byte[] { 1, 1, 1 }, Enumerable.Range(0, 3)
+			Assert.Equal(new byte[] { 1, 1, 1 }, Enumerable.Range(10, 3)
 				.Select(x => bus.ReadByte(backing.GuestBaseAddress + (uint)(y * backing.BytesPerRow + x))));
 			Assert.Equal(new byte[] { 1, 1, 1 }, Enumerable.Range(15, 3)
 				.Select(x => bus.ReadByte(screen.GuestBaseAddress + (uint)((y + 4) * screen.BytesPerRow + x))));
@@ -1934,8 +1935,8 @@ public sealed class AmigaBootMemoryTests
 		blit.D[6] = 0xC0;
 		Assert.True(patches.TryInvokeGraphicsLibraryPatch(-606, blit));
 		Assert.Equal(1u, blit.D[0]);
-		Assert.Equal(0x80, bus.ReadByte(plane0));
-		Assert.Equal(0x40, bus.ReadByte(plane1));
+		Assert.Equal(0x0020, bus.ReadWord(plane0));
+		Assert.Equal(0x0010, bus.ReadWord(plane1));
 	}
 
 	[Fact]

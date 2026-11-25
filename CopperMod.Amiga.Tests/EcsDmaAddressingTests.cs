@@ -6,7 +6,7 @@ public sealed class EcsDmaAddressingTests
 {
     private const uint BoundaryWord = 0x000F_FFFE;
     private const uint UpperMegabyte = 0x0010_0000;
-    private const int StandardX = AmigaConstants.PalLowResOverscanBorderX;
+    private const int StandardX = AmigaConstants.PalLowResOverscanBorderX - 1;
     private const int StandardY = AmigaConstants.PalLowResOverscanBorderY;
 
     [Fact]

@@ -5073,7 +5073,7 @@ public sealed class AmigaBusTimingTests
 	{
 		var bus = new AmigaBus(enableLiveAgnusDma: true);
 		var lineStart = OutputRowStartCycle(AmigaConstants.PalLowResOverscanBorderY);
-		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var fetchCycle = LowResPlane1AddressCycle(AmigaConstants.PalLowResOverscanBorderY);
 		ConfigureLiveOneBitplaneDma(bus);
 
 		bus.AdvanceDmaTo(fetchCycle + AgnusChipSlotScheduler.SlotCycles);
@@ -5354,7 +5354,7 @@ public sealed class AmigaBusTimingTests
 		var bus = new AmigaBus(
 			captureBusAccesses: true,
 			enableLiveAgnusDma: true);
-		var fetchCycle = LowResPlane1FetchCycle(AmigaConstants.PalLowResOverscanBorderY);
+		var fetchCycle = LowResPlane1AddressCycle(AmigaConstants.PalLowResOverscanBorderY);
 		BigEndian.WriteUInt16(bus.ChipRam, 0x1000, 0xFFFF);
 		bus.WriteWord(0x00DFF096, 0x8300);
 		bus.WriteWord(0x00DFF092, 0x0038);
@@ -15044,9 +15044,13 @@ public sealed class AmigaBusTimingTests
 	private static int RowCycleOffset(long cycle)
 		=> checked((int)(cycle % AmigaConstants.A500PalCpuCyclesPerRasterLine));
 
-	private static long LowResPlane1FetchCycle(int row)
+	private static long LowResPlane1AddressCycle(int row)
 		=> OutputRowStartCycle(row) +
 			((0x38 + HrmLowResPlane1FetchSlot) * AgnusChipSlotScheduler.SlotCycles);
+
+	// The data transfer follows the HRM address slot by one CCK.
+	private static long LowResPlane1FetchCycle(int row)
+		=> LowResPlane1AddressCycle(row) + AgnusChipSlotScheduler.SlotCycles;
 
 	private static ushort ReadLiveBitplaneWord(AmigaBus bus, int row, int plane, int word)
 	{
