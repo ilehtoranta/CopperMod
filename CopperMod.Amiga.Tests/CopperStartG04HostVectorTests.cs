@@ -64,16 +64,16 @@ public sealed class CopperStartG04HostVectorTests
 		Assert.Equal(oldFunction, set.D[0]);
 		Assert.Equal((ushort)0x4EF9, bus.ReadWord(library - 6));
 		Assert.Equal(newFunction, bus.ReadLong(library - 4));
-		Assert.Equal(unchecked(0x4EF9u + newFunction),
-			bus.ReadLong(library + (uint)ExecLayout.Library.Checksum));
+		Assert.Equal(unchecked((ushort)(0x4EF9u + newFunction)),
+			bus.ReadWord(library + (uint)ExecLayout.Library.Checksum));
 		Assert.Equal((byte)LibraryFlags.SumUsed,
 			bus.ReadByte(library + (uint)ExecLayout.Library.Flags));
 
 		var sum = new M68kCpuState();
 		sum.A[1] = library;
 		Assert.True(InvokeExec(bus, ExecLvo.SumLibrary, sum));
-		Assert.Equal(unchecked(0x4EF9u + newFunction),
-			bus.ReadLong(library + (uint)ExecLayout.Library.Checksum));
+		Assert.Equal(unchecked((ushort)(0x4EF9u + newFunction)),
+			bus.ReadWord(library + (uint)ExecLayout.Library.Checksum));
 	}
 
 	[Fact]

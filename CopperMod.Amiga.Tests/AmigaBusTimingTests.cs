@@ -6658,7 +6658,7 @@ public sealed class AmigaBusTimingTests
 			access.Request.Address == 0x1006 &&
 			access.RequestedCycle >= busTail);
 		Assert.Equal(visibleCycle + 5, recognition.LastInterruptSampleCycle);
-		Assert.True(recognition.HasRecognizedInterrupt(visibleCycle));
+		Assert.True(recognition.HasRecognizedInterrupt(1, visibleCycle, 0));
 
 		cpu.RequestInterrupt(1, 0x0064);
 		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
