@@ -26,13 +26,12 @@ public sealed class M68kInterpreterTests
 		Assert.Contains(
 			M68kInstructionFetchPublicationPhase.Required,
 			bus.PublicationPhases[..bus.WindowCommits]);
-		var retirementIndex = Array.IndexOf(
-			bus.PublicationPhases,
-			M68kInstructionFetchPublicationPhase.CancellableSuccessor,
-			0,
-			bus.WindowCommits);
+		// The next instruction can require the pending word before it reaches the bus.
+		// Its original retirement floor and group still accompany that transfer.
+		var retirementIndex = Array.FindIndex(bus.RetirementFloors, 0, bus.WindowCommits,
+			floor => floor != long.MinValue);
 		Assert.True(retirementIndex >= 0);
-		Assert.NotEqual(long.MinValue, bus.RetirementFloors[retirementIndex]);
+		Assert.True(bus.RetirementFloors[retirementIndex] > 0);
 		Assert.True(bus.PublicationContexts[retirementIndex].Group > 0);
 	}
 
@@ -1146,7 +1145,8 @@ public sealed class M68kInterpreterTests
 		Assert.Equal(68, handlerStartCycle);
 		Assert.Equal(0x2002u, cpu.State.ProgramCounter);
 		Assert.Equal(interruptStartCycle + 26, phases[5].CompletedCycle);
-		Assert.Equal(interruptStartCycle + 26, phases[6].RequestedCycle);
+		// The first handler prefetch is followed by two internal clocks (Hatari m68000.h, A500 trace).
+		Assert.Equal(phases[5].CompletedCycle + 2, phases[6].RequestedCycle);
 		Assert.Equal(interruptStartCycle + 44, phases[7].RequestedCycle);
 		AssertCpuPhaseSequence(
 			phases,
@@ -1156,7 +1156,7 @@ public sealed class M68kInterpreterTests
 			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 42L, 44L),
 			(M68kBusAccessKind.CpuDataRead, 0x0064u, M68kOperandSize.Long, false, 44L, 48L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x2000u, M68kOperandSize.Word, false, 48L, 50L),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x2002u, M68kOperandSize.Word, false, 50L, 52L),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x2002u, M68kOperandSize.Word, false, 52L, 54L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x2004u, M68kOperandSize.Word, false, 68L, 70L));
 	}
 
@@ -1204,7 +1204,7 @@ public sealed class M68kInterpreterTests
 			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, interruptStartCycle + 18, interruptStartCycle + 20),
 			(M68kBusAccessKind.CpuDataRead, 0x0064u, M68kOperandSize.Long, false, interruptStartCycle + 20, interruptStartCycle + 24),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x2000u, M68kOperandSize.Word, false, interruptStartCycle + 24, interruptStartCycle + 26),
-			(M68kBusAccessKind.CpuInstructionFetch, 0x2002u, M68kOperandSize.Word, false, interruptStartCycle + 26, interruptStartCycle + 28),
+			(M68kBusAccessKind.CpuInstructionFetch, 0x2002u, M68kOperandSize.Word, false, interruptStartCycle + 28, interruptStartCycle + 30),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x2004u, M68kOperandSize.Word, false, handlerStartCycle, handlerStartCycle + 2));
 	}
 	[Fact]
@@ -3173,7 +3173,9 @@ public sealed class M68kInterpreterTests
 		var cpu = new M68kInterpreter(bus);
 		cpu.Reset(0x00FC0000, 0x3000);
 		cpu.ExecuteInstruction();
-		Assert.Equal(30, cpu.State.Cycles);
+		var operand = Assert.Single(bus.BusAccesses, access => access.Request.Address == 0x00BFE001u);
+		Assert.Equal((22L, 30L, 30L), (operand.RequestedCycle, operand.GrantedCycle, operand.CompletedCycle));
+		Assert.Equal(34, cpu.State.Cycles);
 		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
 		Assert.Equal(0x00FC0008u, cpu.State.ProgramCounter);
 	}
@@ -3182,12 +3184,12 @@ public sealed class M68kInterpreterTests
 	{
 		var program = new byte[] { 0x08, 0x39, 0x00, 0x06, 0x00, 0xDF, 0xF0, 0x02 }; // BTST #6,$DFF002.L
 		var bus = CreateRomProgramBus(program);
-		var expectedDataCycle = 0L;
-		_ = new AmigaBus().ReadByte(0x00DFF002, ref expectedDataCycle, AmigaBusAccessKind.CpuDataRead);
 		var cpu = new M68kInterpreter(bus);
 		cpu.Reset(0x00FC0000, 0x3000);
 		cpu.ExecuteInstruction();
-		Assert.Equal(24, cpu.State.Cycles);
+		var operand = Assert.Single(bus.BusAccesses, access => access.Request.Address == 0x00DFF002u);
+		Assert.Equal((22L, 22L, 24L), (operand.RequestedCycle, operand.GrantedCycle, operand.CompletedCycle));
+		Assert.Equal(26, cpu.State.Cycles);
 		Assert.Equal(0x00FC0008u, cpu.State.ProgramCounter);
 	}
 	[Fact]

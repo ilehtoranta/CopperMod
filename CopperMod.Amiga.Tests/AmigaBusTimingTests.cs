@@ -633,6 +633,9 @@ public sealed class AmigaBusTimingTests
 			segmented, default(AmigaCpuDataAccess), enableCpuBusPhaseTrace: false);
 		scalarCpu.Reset(romBase, 0x4000);
 		segmentedCpu.Reset(romBase, 0x4000);
+		// The timed host register writes have already occupied chip bus slots.
+		scalarCpu.State.Cycles = scalar.CausalBusExecutor.LastCpuGrantedCycle + AgnusChipSlotScheduler.SlotCycles;
+		segmentedCpu.State.Cycles = segmented.CausalBusExecutor.LastCpuGrantedCycle + AgnusChipSlotScheduler.SlotCycles;
 		scalarCpu.State.A[0] = 0x2000;
 		segmentedCpu.State.A[0] = 0x2000;
 
@@ -5565,11 +5568,11 @@ public sealed class AmigaBusTimingTests
 			$"v{beam.BeamLine:X3}h{beam.BeamHorizontal:X2}, " +
 			$"accesses=[{accessText}]";
 
-		Assert.Equal(line256Start - 190, intreqWrite.Cycle);
+		Assert.Equal(line256Start - 192, intreqWrite.Cycle);
 		Assert.Equal(0x0FF, beam.BeamLine);
-		Assert.Equal(0x84, beam.BeamHorizontal);
+		Assert.Equal(0x83, beam.BeamHorizontal);
 		Assert.Equal(4, copperAccesses.Length);
-		Assert.Equal(new long[] { -194, -190, -186, -182 }, copperAccesses
+		Assert.Equal(new long[] { -196, -192, -188, -184 }, copperAccesses
 			.Select(access => access.GrantedCycle - line256Start)
 			.ToArray());
 		Assert.Contains("0x002416", diagnostic);
@@ -5605,18 +5608,18 @@ public sealed class AmigaBusTimingTests
 			.OrderBy(access => access.Request.Address)
 			.ToArray();
 		var diagnostic =
-			$"write={bus.GetBeamPosition(intreqWrite.Cycle)}, " +
+			$"write={intreqWrite.Cycle-lineStart}, " +
 			$"fetches=[{string.Join(", ", moveFetches.Select(access =>
-				$"0x{access.Request.Address:X6}:req={bus.GetBeamPosition(access.Request.RequestedCycle)}," +
-				$"grant={bus.GetBeamPosition(access.GrantedCycle)}"))}], " +
+				$"0x{access.Request.Address:X6}:req={access.Request.RequestedCycle-lineStart}," +
+				$"grant={access.GrantedCycle-lineStart}"))}], " +
 			$"waits=[{string.Join(", ", bus.Display.CopperWaitTransitions)}]";
 
 		Assert.Equal(2, moveFetches.Length);
 		Assert.True(
 			moveFetches.Select(access => access.GrantedCycle)
-				.SequenceEqual(new long[] { lineStart + 16, lineStart + 20 }),
+				.SequenceEqual(new long[] { lineStart + 6, lineStart + 10 }),
 			diagnostic);
-		Assert.True(intreqWrite.Cycle == lineStart + 20, diagnostic);
+		Assert.Equal(moveFetches[1].GrantedCycle, intreqWrite.Cycle);
 		Assert.DoesNotContain(
 			bus.BusAccesses,
 			access =>
@@ -5667,17 +5670,17 @@ public sealed class AmigaBusTimingTests
 
 		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & intreqLevel1);
 		Assert.Equal(1, bus.Paula.GetHighestPendingInterruptLevel());
-		Assert.Equal(line256Start - 190, intreqWrite.Cycle);
-		Assert.Equal(line256Start - 188, cpuVisibleCycle);
+		Assert.Equal(line256Start - 192, intreqWrite.Cycle);
+		Assert.Equal(line256Start - 190, cpuVisibleCycle);
 		Assert.Equal(
 			AmigaConstants.A500SoftwareInterruptRegisterToIplDelayCpuCycles,
 			cpuVisibleCycle - intreqWrite.Cycle);
 		Assert.Equal(0, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle - 1));
 		Assert.Equal(1, bus.Paula.GetHighestCpuVisibleInterruptLevel(cpuVisibleCycle));
 		Assert.Equal(0x0FF, intreqBeam.BeamLine);
-		Assert.Equal(0x84, intreqBeam.BeamHorizontal);
+		Assert.Equal(0x83, intreqBeam.BeamHorizontal);
 		Assert.Equal(0x0FF, visibleBeam.BeamLine);
-		Assert.Equal(0x85, visibleBeam.BeamHorizontal);
+		Assert.Equal(0x84, visibleBeam.BeamHorizontal);
 		Assert.Contains("delay=2", diagnostic);
 	}
 
@@ -5763,11 +5766,11 @@ public sealed class AmigaBusTimingTests
 			});
 		var expected =
 			"pc=0x1000,CpuDataWrite,0x002FFE,r+6..+10,g+8 | " +
-			"pc=0x1000,CpuInterruptAcknowledge,0xFFFFF7,r+10..+16 | " +
-			"pc=0x1000,CpuDataWrite,0x002FFA,r+20..+24,g+22 | " +
-			"pc=0x1000,CpuDataWrite,0x002FFC,r+24..+28,g+26 | " +
-			"pc=0x1000,CpuDataRead,0x00006C,r+28..+36,g+34 | " +
-			"pc=0x1000,CpuInstructionFetch,0x002000,r+36..+40,g+38 | " +
+			"pc=0x1000,CpuInterruptAcknowledge,0xFFFFF7,r+10..+14 | " +
+			"pc=0x1000,CpuDataWrite,0x002FFA,r+18..+22,g+20 | " +
+			"pc=0x1000,CpuDataWrite,0x002FFC,r+22..+26,g+24 | " +
+			"pc=0x1000,CpuDataRead,0x00006C,r+26..+34,g+32 | " +
+			"pc=0x1000,CpuInstructionFetch,0x002000,r+34..+38,g+36 | " +
 			"pc=0x1000,CpuInstructionFetch,0x002002,r+40..+44,g+42";
 		Assert.True(expected == timeline, $"{arbitrationMode}: {timeline}");
 	}
@@ -6870,7 +6873,8 @@ public sealed class AmigaBusTimingTests
 			$"bounds=({probe.Bounds.MinX},{probe.Bounds.FirstLowResRow})-({probe.Bounds.MaxX},{probe.Bounds.LastLowResRow})";
 
 		Assert.Equal(0x40, probe.FirstFetchLine);
-		Assert.Equal(0x3F, probe.FirstFetchHorizontal);
+		// Plane 1 selects its address at h=0x3F and transfers the word on the next CCK.
+		Assert.Equal(0x40, probe.FirstFetchHorizontal);
 		Assert.Equal(38, probe.Bounds.FirstLowResRow);
 		Assert.Equal(0x4000u, probe.FirstFetchAddress);
 		Assert.DoesNotContain("-1", diagnostic);
@@ -6894,7 +6898,8 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(0x2C, probe.DiwStartLine);
 		Assert.Equal(0x40, probe.BplconLine);
 		Assert.Equal(0x40, probe.FirstFetchLine);
-		Assert.Equal(0x3F, probe.FirstFetchHorizontal);
+		// Plane 1 selects its address at h=0x3F and transfers the word on the next CCK.
+		Assert.Equal(0x40, probe.FirstFetchHorizontal);
 		Assert.Equal(0x4000u, probe.FirstFetchAddress);
 		Assert.Equal(38, probe.Bounds.FirstLowResRow);
 		Assert.True(probe.PointerLowCycle < probe.BplconCycle, diagnostic);

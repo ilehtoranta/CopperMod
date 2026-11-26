@@ -1656,8 +1656,8 @@ public sealed class AmigaDiskDisplayTests
         Assert.Equal(0xFFFF0000u, Pixel(frame, 31, 0));
         Assert.Equal(0xFFFF0000u, Pixel(frame, 33, 0));
         Assert.Equal(0xFF00FF00u, Pixel(frame, 34, 0));
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 61, 0));
-        Assert.Equal(0xFF000000u, Pixel(frame, 62, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 57, 0));
+        Assert.Equal(0xFF000000u, Pixel(frame, 58, 0));
     }
 
     [Fact]
@@ -1927,8 +1927,8 @@ public sealed class AmigaDiskDisplayTests
         Assert.Equal(0xFFFF0000u, Pixel(frame, 31, 0));
         Assert.Equal(0xFFFF0000u, Pixel(frame, 33, 0));
         Assert.Equal(0xFF00FF00u, Pixel(frame, 34, 0));
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 61, 0));
-        Assert.Equal(0xFF000000u, Pixel(frame, 62, 0));
+        Assert.Equal(0xFF00FF00u, Pixel(frame, 57, 0));
+        Assert.Equal(0xFF000000u, Pixel(frame, 58, 0));
         Assert.Equal(0xFF0000FFu, Pixel(frame, 0, 1));
         Assert.Equal(0xFF0000FFu, Pixel(frame, 1, 1));
         Assert.Equal(0xFF0000FFu, Pixel(frame, 31, 1));
@@ -1936,15 +1936,16 @@ public sealed class AmigaDiskDisplayTests
         Assert.Equal(0xFFFF0000u, Pixel(frame, 34, 1));
     }
 
-    [Fact]
-    public void CopperMoveReadsDataWordAtSecondInstructionBusCycle()
+    [Theory]
+    [InlineData(0x40, true)]
+    [InlineData(0x43, false)]
+    public void CopperMoveReadsDataWordAtSecondInstructionBusCycle(int rewriteHorizontal, bool writesBeforeFetch)
     {
         var bus = new AmigaBus();
         var lineCycles = AmigaConstants.A500PalCpuCyclesPerRasterLine;
         var frameCycles = AmigaConstants.A500PalCpuCyclesPerFrame;
         var waitV = 0x2C - StandardY;
-        var moveIr1Cycle = CycleForOutputRowHorizontal(0, 0x42, lineCycles);
-        var rewriteCycle = moveIr1Cycle + CopperHpToCpuCyclesForTest(1);
+        var rewriteCycle = CycleForOutputRowHorizontal(0, rewriteHorizontal, lineCycles);
         BigEndian.WriteUInt16(bus.ChipRam, 0x2400, (ushort)((waitV << 8) | 0x0041));
         BigEndian.WriteUInt16(bus.ChipRam, 0x2402, 0xFFFE);
         BigEndian.WriteUInt16(bus.ChipRam, 0x2404, 0x0180);
@@ -1970,7 +1971,10 @@ public sealed class AmigaDiskDisplayTests
 
         Assert.Equal(0xFF000000u, Pixel(frame, 31, 0));
         Assert.Equal(0xFF000000u, Pixel(frame, 33, 0));
-        Assert.Equal(0xFF00FF00u, Pixel(frame, 34, 0));
+        var dataFetch = Assert.Single(bus.BusAccesses, access => access.Request.Kind == AmigaBusAccessKind.Copper && access.Request.Address == 0x2406);
+        var rewrite = Assert.Single(bus.BusAccesses, access => access.Request.Kind == AmigaBusAccessKind.CpuDataWrite && access.Request.Address == 0x2406);
+        Assert.Equal(writesBeforeFetch, rewrite.GrantedCycle < dataFetch.GrantedCycle);
+        Assert.Equal(writesBeforeFetch ? 0xFF00FF00u : 0xFFFF0000u, Pixel(frame, 34, 0));
     }
 
     [Fact]
