@@ -4257,9 +4257,12 @@ public sealed class AmigaDiskDisplayTests
 
         bus.AdvanceRasterTo(firstFrameCycle);
         bus.Paula.AdvanceTo(firstFrameCycle);
+        Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqVerticalBlank);
+        var firstLatchCycle = firstFrameCycle + AmigaConstants.A500PalCpuCyclesPerColorClock;
+        bus.Paula.AdvanceTo(firstLatchCycle);
         Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqVerticalBlank);
 
-        var clearCycle = (long)firstFrameCycle;
+        var clearCycle = (long)firstLatchCycle;
         bus.WriteWord(
             0x00DFF09C,
             AmigaConstants.IntreqVerticalBlank,
@@ -4269,7 +4272,7 @@ public sealed class AmigaDiskDisplayTests
         Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqVerticalBlank);
 
         bus.AdvanceRasterTo(firstFrameCycle * 2);
-        bus.Paula.AdvanceTo(firstFrameCycle * 2);
+        bus.Paula.AdvanceTo(firstFrameCycle * 2 + AmigaConstants.A500PalCpuCyclesPerColorClock);
         Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqVerticalBlank);
     }
 

@@ -5018,7 +5018,16 @@ namespace CopperMod.Amiga.Bus
                 if (LiveAgnusDmaEnabled &&
                     Display.HasLiveDisplayWork())
                 {
-					Display.CaptureLiveDisplayDmaBeforeHrmGrant(requestedCycle);
+                    // A previous grant may occupy the requested slot. Retire display
+                    // reads through each new candidate before the blitter mutates RAM.
+                    var candidate = FindHrmDmaCandidate(requestedCycle);
+                    while (true)
+                    {
+                        Display.CaptureLiveDisplayDmaBeforeHrmGrant(candidate);
+                        var next = FindHrmDmaCandidate(candidate);
+                        if (next == candidate) break;
+                        candidate = next;
+                    }
                 }
 
                 access = _agnusBusExecutor.ReserveBlitterDmaWordSlot(address, requestedCycle, isWrite);

@@ -1918,7 +1918,7 @@ public sealed class AmigaBusTimingTests
 		}
 
 		[Fact]
-		public void SlotKernelDeferredBatchAdmissionUsesCommittedCpuHorizon()
+		public void SlotKernelDeferredBatchAdmissionPreservesCpuRetirementAndCommittedHorizon()
 		{
 			var bus = new AmigaBus(
 				captureBusAccesses: false,
@@ -1952,7 +1952,8 @@ public sealed class AmigaBusTimingTests
 				out _,
 				out _);
 
-			Assert.Equal(committedCpuThrough, state.Cycles);
+			Assert.Equal(committedCpuThrough - 2, state.Cycles);
+			Assert.Equal(committedCpuThrough, bus.LiveSlotKernelCommittedCpuThroughCycle);
 		}
 
 		[Fact]
@@ -2397,6 +2398,8 @@ public sealed class AmigaBusTimingTests
 
 		bus.AdvanceRasterTo(shortFrameCycles);
 		bus.Paula.AdvanceTo(shortFrameCycles);
+		Assert.Equal(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqVerticalBlank);
+		bus.Paula.AdvanceTo(shortFrameCycles + AmigaConstants.A500PalCpuCyclesPerColorClock);
 		Assert.NotEqual(0, bus.ReadWord(0x00DFF01E) & AmigaConstants.IntreqVerticalBlank);
 	}
 
@@ -3562,10 +3565,8 @@ public sealed class AmigaBusTimingTests
 		Assert.False(bus.IsMandatoryRefreshSlot(firstDueCycle));
 		var cycle = firstDueCycle;
 
-		// The first two CPU fetches occupy the startup/initial D-pipeline
-		// idle opportunities. Continue far enough to observe four real D
-		// transfers after those hardware-defined non-DMA phases.
-		for (var word = 0; word < 6; word++)
+		// Keep the CPU requesting slots through the complete eight-word blit.
+		for (var word = 0; word < 64 && bus.Blitter.BusPipelineActive; word++)
 		{
 			_ = bus.ReadWord(
 				(uint)(0x00001000 + (word * 2)),
@@ -3578,11 +3579,8 @@ public sealed class AmigaBusTimingTests
 			.Select(access => access.GrantedCycle)
 			.Take(4)
 			.ToArray();
-		Assert.InRange(
-			blitterCycles[0],
-			firstDueCycle,
-			firstDueCycle + (2 * AgnusChipSlotScheduler.SlotCycles));
-		var firstBlitterCycle = blitterCycles[0];
+		// The six D-only startup clocks do not reserve the data bus.
+		var firstBlitterCycle = firstDueCycle + 6 * AgnusChipSlotScheduler.SlotCycles;
 		Assert.Equal(
 			new[]
 			{
@@ -3955,7 +3953,7 @@ public sealed class AmigaBusTimingTests
 			bus.BusAccesses,
 			access => access.Request.Requester == AmigaBusRequester.Bitplane &&
 				access.Request.Kind == AmigaBusAccessKind.Bitplane &&
-				access.Request.RequestedCycle == fetchCycle);
+				access.Request.RequestedCycle == LowResPlane1AddressCycle(AmigaConstants.PalLowResOverscanBorderY));
 		Assert.Equal(fetchCycle, bitplane.GrantedCycle);
 		var cpu = bus.BusAccesses.Last(access =>
 			access.Request.Requester == AmigaBusRequester.Cpu &&
@@ -5338,7 +5336,7 @@ public sealed class AmigaBusTimingTests
 			bus.BusAccesses,
 			access => access.Request.Requester == AmigaBusRequester.Bitplane &&
 				access.Request.Kind == AmigaBusAccessKind.Bitplane &&
-				access.Request.RequestedCycle == fetchCycle);
+				access.Request.RequestedCycle == LowResPlane1AddressCycle(AmigaConstants.PalLowResOverscanBorderY));
 		Assert.Equal(fetchCycle, bitplane.GrantedCycle);
 		Assert.True(bus.Display.TryGetCapturedBitplaneWord(
 			AmigaConstants.PalLowResOverscanBorderY,
