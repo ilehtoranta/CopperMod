@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using CopperMod.Amiga;
 
 namespace CopperMod.Amiga.Tests;
@@ -350,7 +352,16 @@ public sealed class CopperHdfControllerTests
 		var path = CreateTempPath();
 		try
 		{
-			AmigaHardfile.CreateBlank(path, 4L * 1024L * 1024L * 1024L + AmigaHardfile.SectorSize);
+			using (var image = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
+			{
+				// Only the sector beyond the 32-bit boundary needs host disk storage.
+				if (OperatingSystem.IsWindows())
+				{
+					const uint FsctlSetSparse = 0x900C4;
+					_ = DeviceIoControl(image.SafeFileHandle, FsctlSetSparse, 0, 0, 0, 0, out _, 0);
+				}
+				image.SetLength((1L << 32) + AmigaHardfile.SectorSize);
+			}
 			using var machine = new Machine(MachineOptions
 				.ForProfile(MachineProfile.A500Pal512KBoot)
 				.WithHardfiles([new AmigaHardfileConfiguration(0, path)]));
@@ -611,6 +622,10 @@ public sealed class CopperHdfControllerTests
 		data[offset + 2] = (byte)(value >> 8);
 		data[offset + 3] = (byte)value;
 	}
+
+	[DllImport("kernel32.dll", ExactSpelling = true)]
+	private static extern bool DeviceIoControl(SafeFileHandle file, uint code,
+		nint input, uint inputBytes, nint output, uint outputBytes, out uint returned, nint overlapped);
 
 	private static string CreateTempPath()
 		=> Path.Combine(Path.GetTempPath(), "copperhdf-" + Guid.NewGuid().ToString("N") + ".hdf");

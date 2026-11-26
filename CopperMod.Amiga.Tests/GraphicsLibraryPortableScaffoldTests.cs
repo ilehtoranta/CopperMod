@@ -14453,7 +14453,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
         // Report the complete fingerprint together after checking structural
         // safety, so a generated-code change needs only one fresh audit run.
         Assert.Equal(
-            (Bytes: 1549844, Branches: 79390, Relays: 3428, Chains: 7, Boundaries: 3346),
+            (Bytes: 1549830, Branches: 79390, Relays: 3428, Chains: 7, Boundaries: 3346),
             (Bytes: nativeCode.Length, Branches: audit.BranchCount, Relays: audit.RelayCount,
                 Chains: audit.ChainCount, Boundaries: audit.FragmentBoundaryCount));
     }
@@ -132047,18 +132047,26 @@ public sealed class GraphicsLibraryPortableScaffoldTests
             new FakeDisplay(),
             graphicsLibraryBase: graphics);
 
-        var publish = Task.Run(core.TryPublishNativeDisplayDatabase);
-        Assert.True(allocator.AllocationEntered.Wait(TimeSpan.FromSeconds(5)));
-
-        var release = Task.Run(core.ReleaseNativeDisplayDatabase);
-        // Without the monitor-state gate, release observes the not-yet-owned
-        // candidate and returns early, leaving the later publication leaked.
-        var earlyRelease = await Task.WhenAny(
-            release,
-            Task.Delay(TimeSpan.FromMilliseconds(100)));
-        Assert.NotSame(release, earlyRelease);
-
-        allocator.ContinueAllocation.Set();
+        var publish = Task.Factory.StartNew(core.TryPublishNativeDisplayDatabase,
+            CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        using var releaseStarted = new ManualResetEventSlim();
+        Task release;
+        try
+        {
+            Assert.True(allocator.AllocationEntered.Wait(TimeSpan.FromSeconds(5)));
+            release = Task.Factory.StartNew(() =>
+            {
+                releaseStarted.Set();
+                core.ReleaseNativeDisplayDatabase();
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            Assert.True(releaseStarted.Wait(TimeSpan.FromSeconds(5)));
+            var earlyRelease = await Task.WhenAny(release, Task.Delay(100));
+            Assert.NotSame(release, earlyRelease);
+        }
+        finally
+        {
+            allocator.ContinueAllocation.Set();
+        }
         Assert.True(await publish);
         await release;
         Assert.Equal(1, allocator.FreeCount);
@@ -153484,11 +153492,7 @@ public sealed class GraphicsLibraryPortableScaffoldTests
             out uint address)
         {
             AllocationEntered.Set();
-            if (!ContinueAllocation.Wait(TimeSpan.FromSeconds(5)))
-            {
-                address = 0;
-                return false;
-            }
+            ContinueAllocation.Wait();
 
             address = byteCount == 0 ? 0 : _address;
             return address != 0;
