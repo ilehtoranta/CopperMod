@@ -9,9 +9,9 @@
     <Title>Copper68k</Title>
     <Authors>Ilkka Lehtoranta</Authors>
     <Description>Reusable Motorola 68000-family CPU emulation core with cycle-aware interpreter backends and an opt-in MC68040 JIT.</Description>
-    <Version>1.5.14</Version>
-    <PackageVersion>1.5.14</PackageVersion>
-    <PackageReleaseNotes>Correct the MC68040 FSAVE frame for integer FMOVE operand errors so FPSP can complete the conversion and resume execution.</PackageReleaseNotes>
+    <Version>1.5.15</Version>
+    <PackageVersion>1.5.15</PackageVersion>
+    <PackageReleaseNotes>Account for stock 68EC020 execution overlap on cached short branches, byte calls and brief indexed jumps.</PackageReleaseNotes>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ilehtoranta/CopperMod</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ilehtoranta/CopperMod.git</RepositoryUrl>

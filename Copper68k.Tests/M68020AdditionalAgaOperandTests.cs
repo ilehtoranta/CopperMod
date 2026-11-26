@@ -53,6 +53,88 @@ public sealed class M68020AdditionalAgaOperandTests
         Assert.Equal(fetches, bus.InstructionFetchWords);
     }
 
+    [Theory]
+    [InlineData(false, 2)]
+    [InlineData(true, 3)]
+    public void A1200UntakenCachedBranchOverlapsFallthrough(bool word, int nativeCycles)
+    {
+        var bus = new ZeroWaitCodeBus();
+        ushort[] instructions = word
+            ? [0x7009, 0x4E7B, 0x0002, 0x7200, 0x6600, 0x0002, 0x4E71, 0x60F6]
+            : [0x7009, 0x4E7B, 0x0002, 0x7200, 0x6602, 0x4E71, 0x60F8];
+        WriteWords(bus, Code, instructions);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        for (var instruction = 0; instruction < 7; instruction++)
+            cpu.ExecuteInstruction();
+
+        Assert.Equal(Code + 8, cpu.State.ProgramCounter);
+        var start = cpu.State.NativeCycles;
+        var fetches = bus.InstructionFetchWords;
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(Code + (word ? 12u : 10u), cpu.State.ProgramCounter);
+        Assert.Equal(nativeCycles, cpu.State.NativeCycles - start);
+        Assert.Equal(fetches, bus.InstructionFetchWords);
+    }
+
+    [Fact]
+    public void A1200CachedWordBranchUsesOverlappedTakenTiming()
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, Code, 0x7009, 0x4E7B, 0x0002, 0x7200, 0x6000, 0x0004, 0x4E71, 0x60F6);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        for (var instruction = 0; instruction < 6; instruction++)
+            cpu.ExecuteInstruction();
+
+        Assert.Equal(Code + 8, cpu.State.ProgramCounter);
+        var start = cpu.State.NativeCycles;
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(Code + 14, cpu.State.ProgramCounter);
+        Assert.Equal(3, cpu.State.NativeCycles - start);
+    }
+
+    [Fact]
+    public void A1200CachedBriefIndexedJumpUsesOverlappedTiming()
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, Code, 0x7009, 0x4E7B, 0x0002, 0x7200, 0x4EF0, 0x1000, 0x4E71, 0x4E71, 0x60F4);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        cpu.State.A[0] = Code + 14;
+        for (var instruction = 0; instruction < 7; instruction++)
+            cpu.ExecuteInstruction();
+
+        Assert.Equal(Code + 8, cpu.State.ProgramCounter);
+        var start = cpu.State.NativeCycles;
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(Code + 14, cpu.State.ProgramCounter);
+        Assert.Equal(4, cpu.State.NativeCycles - start);
+    }
+
+    [Fact]
+    public void A1200CachedByteCallUsesOverlappedTimingAndPushesReturnAddress()
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, Code, 0x7009, 0x4E7B, 0x0002, 0x7200, 0x6104, 0x60FA, 0x4E71, 0x4E75);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        for (var instruction = 0; instruction < 7; instruction++)
+            cpu.ExecuteInstruction();
+
+        Assert.Equal(Code + 8, cpu.State.ProgramCounter);
+        var start = cpu.State.NativeCycles;
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(Code + 14, cpu.State.ProgramCounter);
+        Assert.Equal(0x3FFCu, cpu.State.A[7]);
+        Assert.Equal(Code + 10, bus.ReadLong(0x3FFC));
+        Assert.Equal(5, cpu.State.NativeCycles - start);
+    }
+
     [Fact]
     public void A1200IndexedAddCountsBlockingReadOnce()
     {
