@@ -1956,14 +1956,16 @@ internal sealed class BenchmarkBus :
         _ = longAccessBits;
     }
 
-    public void ReplayJitMove16PseudoFastAccesses(
+    public long ReplayJitMove16PseudoFastAccesses(
+        long requestCycle,
         ref long retireCycle,
-        bool sourcePseudoFast,
-        bool destinationPseudoFast)
+        uint? sourceAddress,
+        uint? destinationAddress)
     {
         _ = retireCycle;
-        _ = sourcePseudoFast;
-        _ = destinationPseudoFast;
+        _ = sourceAddress;
+        _ = destinationAddress;
+        return requestCycle;
     }
 
     public void CompleteJitDirectRamWrite(uint physicalAddress, int byteCount)

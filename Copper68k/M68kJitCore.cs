@@ -5932,7 +5932,7 @@ namespace Copper68k
         private static M68000V2PipelineMode GetM68000V2PipelineMode(
             M68kDecodedInstruction[]? instructions, bool pure, bool hasInternalLoop)
         {
-            if (pure && instructions != null && CanPreserveM68000DividePipeline(instructions))
+            if (pure && instructions != null && CanPreserveM68000RegisterPipeline(instructions))
                 return M68000V2PipelineMode.Preserve;
 
             return hasInternalLoop && RequiresPipelineAwareM68000Delegate(instructions, pure)
@@ -5940,17 +5940,19 @@ namespace Copper68k
                 : M68000V2PipelineMode.Discard;
         }
 
-        private static bool CanPreserveM68000DividePipeline(M68kDecodedInstruction[] instructions)
+        private static bool CanPreserveM68000RegisterPipeline(M68kDecodedInstruction[] instructions)
         {
-            var hasDivide = false;
+            var requiresPipeline = false;
             foreach (var instruction in instructions)
             {
                 if (instruction.Source.IsMemory || instruction.Destination.IsMemory)
                     return false;
 
-                if (instruction.Operation is M68kJitOperation.Divu or M68kJitOperation.Divs)
-                    hasDivide = true;
-                else if (instruction.Operation is not (M68kJitOperation.Nop or M68kJitOperation.Moveq or M68kJitOperation.Bra))
+                if (instruction.Operation is M68kJitOperation.Divu or M68kJitOperation.Divs or
+                    M68kJitOperation.BitImmediate or M68kJitOperation.BitDynamic)
+                    requiresPipeline = true;
+                else if (instruction.Operation is not (M68kJitOperation.Nop or M68kJitOperation.Moveq or
+                    M68kJitOperation.Clr or M68kJitOperation.Bra))
                     return false;
 
                 var kind = GetClassicM68000MicrosequenceCore(in instruction).Kind;
@@ -5962,7 +5964,7 @@ namespace Copper68k
                 }
             }
 
-            return hasDivide;
+            return requiresPipeline;
         }
 
         private static void MarkV2DirtyRegisterMasks(
@@ -6334,7 +6336,7 @@ namespace Copper68k
                 }
             }
             var preserveM68000Pipeline = useM68000MemoryHelpers && pureCpuBatchEligible &&
-                CanPreserveM68000DividePipeline(instructions);
+                CanPreserveM68000RegisterPipeline(instructions);
             if (!preserveM68000Pipeline && V2TraceNeedsFullEntryRegisterLoad(instructions))
             {
                 loadDataRegisters = 0xFF;
@@ -12873,18 +12875,27 @@ namespace Copper68k
             var cycles = State.Cycles;
             var sourcePseudoFast = sourceKind == M68kJitDirectRamBankKind.PseudoFast;
             var destinationPseudoFast = destinationKind == M68kJitDirectRamBankKind.PseudoFast;
+            var timing = (_fallback as M68kAdvancedTimingInterpreter)?.Timing;
             if (sourcePseudoFast || destinationPseudoFast)
             {
+                if (timing == null)
+                {
+                    _counters.M68040Move16Fallbacks++;
+                    ExecuteCompiledM68040Fallback(instructionPc);
+                    return false;
+                }
                 FlushM68040DirectRamWork(ref cycles);
             }
 
             CopyM68040Move16(sourceMemory, sourceOffset, destinationMemory, destinationOffset);
             if (sourcePseudoFast || destinationPseudoFast)
             {
-                _directRamBus!.ReplayJitMove16PseudoFastAccesses(
+                var completedCycle = _directRamBus!.ReplayJitMove16PseudoFastAccesses(
+                    Math.Max(cycles, timing!.NextBusRequestMachineCycle),
                     ref cycles,
-                    sourcePseudoFast,
-                    destinationPseudoFast);
+                    sourcePseudoFast ? sourcePhysical | (State.A[sourceRegister] & 15u) : null,
+                    destinationPseudoFast ? destinationPhysical | (State.A[destinationRegister] & 15u) : null);
+                timing.RecordPostedBusCompletion(completedCycle);
                 cycles++;
                 _counters.M68040DirectPseudoFastTimingFlushes++;
             }

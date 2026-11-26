@@ -5879,18 +5879,19 @@ namespace CopperMod.Amiga.Bus
             }
         }
 
-        void IM68kJitDirectRamBus.ReplayJitMove16PseudoFastAccesses(
+        long IM68kJitDirectRamBus.ReplayJitMove16PseudoFastAccesses(
+            long requestCycle,
             ref long retireCycle,
-            bool sourcePseudoFast,
-            bool destinationPseudoFast)
+            uint? sourceAddress,
+            uint? destinationAddress)
         {
-            var pendingCycle = retireCycle;
-            for (var index = 0; index < 4; index++)
+            var pendingCycle = requestCycle;
+            if (sourceAddress is uint source)
             {
-                if (sourcePseudoFast)
+                for (var index = 0; index < 4; index++)
                 {
                     CommitExactCpuExpansionDataTiming(
-                        ExpansionRamBase,
+                        (source & ~15u) | ((source + (uint)index * 4) & 12u),
                         AmigaBusAccessSize.Long,
                         ref pendingCycle,
                         isWrite: false,
@@ -5898,13 +5899,16 @@ namespace CopperMod.Amiga.Bus
                         OcsLiveDmaScratchCpuWrite.None,
                         out _,
                         out _);
-                    retireCycle = pendingCycle;
                 }
+                retireCycle = pendingCycle;
+            }
 
-                if (destinationPseudoFast)
+            if (destinationAddress is uint destination)
+            {
+                for (var index = 0; index < 4; index++)
                 {
                     CommitExactCpuExpansionDataTiming(
-                        ExpansionRamBase,
+                        (destination & ~15u) | ((destination + (uint)index * 4) & 12u),
                         AmigaBusAccessSize.Long,
                         ref pendingCycle,
                         isWrite: true,
@@ -5914,6 +5918,7 @@ namespace CopperMod.Amiga.Bus
                         out _);
                 }
             }
+            return pendingCycle;
         }
 
         void IM68kJitDirectRamBus.CompleteJitDirectRamWrite(uint physicalAddress, int byteCount)

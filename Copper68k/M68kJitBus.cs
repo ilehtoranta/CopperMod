@@ -61,10 +61,11 @@ namespace Copper68k
 
         void ReplayJitPseudoFastAccesses(ref long cycle, int accessCount, ulong longAccessBits);
 
-        void ReplayJitMove16PseudoFastAccesses(
+        long ReplayJitMove16PseudoFastAccesses(
+            long requestCycle,
             ref long retireCycle,
-            bool sourcePseudoFast,
-            bool destinationPseudoFast);
+            uint? sourceAddress,
+            uint? destinationAddress);
 
         void CompleteJitDirectRamWrite(uint physicalAddress, int byteCount);
     }

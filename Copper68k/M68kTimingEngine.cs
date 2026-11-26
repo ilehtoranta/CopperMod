@@ -1174,6 +1174,9 @@ namespace Copper68k
 
         public long BusControllerAvailableNativeCycle => Pipeline.BusControllerAvailableNativeCycle;
 
+        internal long NextBusRequestMachineCycle => Math.Max(_state.Cycles,
+            _profile.NativeToMachineCycles(Math.Max(_state.NativeCycles, BusControllerAvailableNativeCycle)));
+
         public void Reset()
         {
             Pipeline.Reset();
@@ -2100,8 +2103,7 @@ namespace Copper68k
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long GetBusRequestMachineCycle()
         {
-            var nativeReady = Math.Max(_state.NativeCycles, _timing.BusControllerAvailableNativeCycle);
-            return Math.Max(_state.Cycles, _profile.NativeToMachineCycles(nativeReady));
+            return _timing.NextBusRequestMachineCycle;
         }
 
         private bool CanUseFastInstructionFetch(uint address, M68kBusAccessKind accessKind)

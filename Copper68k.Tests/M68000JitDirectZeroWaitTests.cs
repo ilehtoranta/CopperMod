@@ -1618,12 +1618,11 @@ public sealed class M68000JitDirectZeroWaitTests
         {
         }
 
-        public void ReplayJitMove16PseudoFastAccesses(
+        public long ReplayJitMove16PseudoFastAccesses(
+            long requestCycle,
             ref long retireCycle,
-            bool sourcePseudoFast,
-            bool destinationPseudoFast)
-        {
-        }
+            uint? sourceAddress,
+            uint? destinationAddress) => requestCycle;
 
         public void CompleteJitDirectRamWrite(uint physicalAddress, int byteCount)
         {
