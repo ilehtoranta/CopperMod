@@ -5466,7 +5466,7 @@ public sealed class AmigaBusTimingTests
 		Assert.Equal(new ushort[] { 0x0F00, 0x0FF0, 0x00FF, 0x0000 }, writes
 			.Select(write => write.Value)
 			.ToArray());
-		Assert.Equal(44640, writes[0].Cycle);
+		Assert.Equal(44630, writes[0].Cycle);
 		var intervals = writes
 			.Zip(writes.Skip(1), (first, second) => second.Cycle - first.Cycle)
 			.ToArray();
@@ -6259,9 +6259,12 @@ public sealed class AmigaBusTimingTests
 		Assert.True(
 			pendingFetch.Request.RequestedCycle <= first.GrantedCycle,
 			diagnostic);
-		Assert.True(
-			pendingFetch.GrantedCycle >= copperWords[^1].CompletedCycle,
-			diagnostic);
+		// A CPU fetch can use the free slot between Copper words. No grant may overlap.
+		foreach (var word in copperWords)
+		{
+			Assert.True(pendingFetch.CompletedCycle <= word.GrantedCycle ||
+				pendingFetch.GrantedCycle >= word.CompletedCycle, diagnostic);
+		}
 	}
 
 	[Theory(Skip = "Synthetic late-start IRQ harness dispatches outside the source CPU/Copper phase; retained only as a diagnostic fixture.")]
@@ -7813,33 +7816,41 @@ public sealed class AmigaBusTimingTests
 		Assert.True(observedLease);
 	}
 
-	[Fact]
-	public void CpuBatchCopperLookaheadClassifiesColorMoveWithoutMutation()
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public void CpuBatchCopperLookaheadClassifiesColorMoveWithoutMutation(bool physicalCopper)
 	{
-		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var bus = new AmigaBus(enableLiveAgnusDma: true,
+			chipset: physicalCopper ? AmigaChipset.OcsPal : AmigaChipset.EcsPal);
 		StartCopperListAtFrameStart(
 			bus,
 			(0x0180, 0x0F00),
 			(0xFFFF, 0xFFFE));
 		var writesBefore = bus.CustomRegisterWrites.Count;
 
-		Assert.True(bus.Display.TryGetCpuBatchSafeCopperLookahead(
-			0,
-			128,
-			out var proof));
+		var predicted = bus.Display.TryGetCpuBatchSafeCopperLookahead(0, 128, out var proof);
+		Assert.Equal(writesBefore, bus.CustomRegisterWrites.Count);
+		Assert.Equal(0, bus.CausalBusExecutor.CopperMoveEventsCommitted);
+		if (physicalCopper)
+		{
+			Assert.False(predicted);
+			bus.AdvanceDmaTo(128);
+			Assert.Contains(bus.Display.CopperDisplayWrites, write => write.Address == 0x180 && write.Value == 0x0F00);
+			return;
+		}
+		Assert.True(predicted);
 		Assert.Equal((ushort)0x0180, proof.First);
 		Assert.Equal((ushort)0x0F00, proof.Second);
 		Assert.True(proof.FirstGrantCycle >= proof.FirstRequestCycle);
 		Assert.True(proof.SecondGrantCycle >= proof.SecondRequestCycle);
 		Assert.True(proof.DataCycle < proof.StopCycle);
-		Assert.Equal(writesBefore, bus.CustomRegisterWrites.Count);
-		Assert.Equal(0, bus.CausalBusExecutor.CopperMoveEventsCommitted);
 	}
 
 	[Fact]
 	public void CpuChipFetchLeaseConsumesProvenColorMoveChronologically()
 	{
-		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var bus = new AmigaBus(enableLiveAgnusDma: true, chipset: AmigaChipset.EcsPal);
 		StartCopperListAtFrameStart(
 			bus,
 			(0x0180, 0x0F00),
@@ -7869,7 +7880,7 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void CpuChipFetchCopperLookaheadRejectsChangedInstructionWords()
 	{
-		var bus = new AmigaBus(enableLiveAgnusDma: true);
+		var bus = new AmigaBus(enableLiveAgnusDma: true, chipset: AmigaChipset.EcsPal);
 		StartCopperListAtFrameStart(
 			bus,
 			(0x0180, 0x0F00),
@@ -11432,7 +11443,9 @@ public sealed class AmigaBusTimingTests
 
 		Assert.True(bus.Display.TryGetCopperQuiescentWindow(cycle, out var start, out var end));
 		Assert.Equal(cycle, start);
-		Assert.Equal(AmigaConstants.A500PalCpuCyclesPerFrame, end);
+		// The OCS Copper reload strobe at nominal h=1 precedes physical line wrap by two CCKs.
+		Assert.Equal(AmigaConstants.A500PalCpuCyclesPerFrame - 4, end);
+		Assert.False(bus.Display.TryGetCopperQuiescentWindow(end, out _, out _));
 		var snapshot = bus.Display.CaptureSnapshot();
 		Assert.Equal(1, snapshot.CopperQuiescentWindowCount);
 		Assert.True(snapshot.CopperQuiescentTotalCycles > 0);

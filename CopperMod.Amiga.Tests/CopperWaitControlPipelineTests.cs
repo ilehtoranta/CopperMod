@@ -2,6 +2,9 @@ using CopperMod.Amiga;
 
 namespace CopperMod.Amiga.Tests;
 
+// OCS reference rows come from dirkwhoffmann/vAmigaTS, Agnus/Copper/Wait,
+// revision 119af0adc097a93ce5b6d3bfd30f72efd44f0fa8 (copwait1, 3, 4 and 6).
+// In the 716-pixel crop, a COLOR00 write on physical CCK h appears at x = 4*h - 200.
 public sealed class CopperWaitControlPipelineTests
 {
     [Theory]
@@ -29,8 +32,8 @@ public sealed class CopperWaitControlPipelineTests
         Assert.Equal(
             new[]
             {
-                (246, 72), (246, 76), (246, 104), (246, 120),
-                (246, 136), (246, 162), (246, 184), (247, 8)
+                (246, 69), (246, 73), (246, 101), (246, 115),
+                (246, 133), (246, 157), (246, 181), (246, 215)
             },
             bus.Display.CopperDisplayWrites
                 .Where(write => write.Address == 0x180)
@@ -58,11 +61,19 @@ public sealed class CopperWaitControlPipelineTests
             (0x62B1, 0xFFFE), (0x62B1, 0xFFFE), (0x62B1, 0xFFFE), (0x0180, 0x0000),
             (0xFFFF, 0xFFFE));
         SetCopperPointer(bus, copperList);
+        var frame = new uint[716 * 285];
+        var stop = 0x64 * AmigaConstants.A500PalCpuCyclesPerRasterLine;
+        bus.Display.BeginPresentationFrame(new PresentationFrameTarget(frame), 0, stop);
         StartCopper(bus);
-        bus.AdvanceDmaTo(0x64 * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+        bus.AdvanceDmaTo(stop);
 
+        bus.Display.CompletePresentationFrame(stop);
+        // vAmigaTS copwait3_ocs.tiff, raster 98 in the 716-pixel reference crop.
+        var row = 72 * 716;
+        Assert.Equal(new[] { 76, 100, 204, 268, 332, 444, 524, 676 },
+            Enumerable.Range(1, 715).Where(x => frame[row + x] != frame[row + x - 1]));
         Assert.Equal(
-            new long[] { 44640, 44652, 44704, 44736, 44768, 44824, 44864, 44940 },
+            new long[] { 44630, 44642, 44694, 44726, 44758, 44814, 44854, 44930 },
             bus.Display.CopperDisplayWrites
                 .Where(write => write.Address == 0x180)
                 .Select(write => write.Cycle));
@@ -100,7 +111,7 @@ public sealed class CopperWaitControlPipelineTests
         bus.AdvanceDmaTo(0x66 * AmigaConstants.A500PalCpuCyclesPerRasterLine);
 
         Assert.Equal(
-            new long[] { 44636, 44644, 44700, 44724, 44764, 44804, 44860, 44916 },
+            new long[] { 44626, 44634, 44690, 44714, 44754, 44794, 44850, 44906 },
             bus.Display.CopperDisplayWrites
                 .Where(write => write.Address == 0x180)
                 .Take(8)
@@ -109,10 +120,10 @@ public sealed class CopperWaitControlPipelineTests
         Assert.Equal(
             new[]
             {
-                (0x2404u, 70), (0x2406u, 72), (0x2408u, 74), (0x240Au, 76),
-                (0x2410u, 102), (0x2412u, 104), (0x2418u, 114), (0x241Au, 116),
-                (0x2420u, 134), (0x2422u, 136), (0x242Cu, 154), (0x242Eu, 156),
-                (0x2434u, 182), (0x2436u, 184), (0x2444u, 210), (0x2446u, 212)
+                (0x2404u, 65), (0x2406u, 67), (0x2408u, 69), (0x240Au, 71),
+                (0x2410u, 97), (0x2412u, 99), (0x2418u, 109), (0x241Au, 111),
+                (0x2420u, 129), (0x2422u, 131), (0x242Cu, 149), (0x242Eu, 151),
+                (0x2434u, 177), (0x2436u, 179), (0x2444u, 205), (0x2446u, 207)
             },
             bus.BusAccesses
                 .Where(access =>
@@ -127,7 +138,7 @@ public sealed class CopperWaitControlPipelineTests
                      bus.GetBeamPosition(access.GrantedCycle).BeamHorizontal)));
 
         Assert.Equal(
-            new[] { 72, 76, 104, 118, 136, 158, 184, 214 },
+            new[] { 69, 73, 101, 113, 133, 153, 181, 209 },
             bus.Display.CopperDisplayWrites
                 .Where(write =>
                     write.Address == 0x180 &&
@@ -137,8 +148,8 @@ public sealed class CopperWaitControlPipelineTests
     }
 
     [Theory]
-    [InlineData(0x6241, 44640)]
-    [InlineData(0x6443, 45548)]
+    [InlineData(0x6241, 44630)]
+    [InlineData(0x6443, 45538)]
     public void IsolatedIncomingRgaUsesCopperControlPhasePolarity(
         ushort wait,
         long expectedWriteCycle)
@@ -246,7 +257,7 @@ public sealed class CopperWaitControlPipelineTests
         var finalWrite = bus.Display.CopperDisplayWrites
             .Last(write => write.Address == 0x180);
         var lineStart = 246L * AmigaConstants.A500PalCpuCyclesPerRasterLine;
-        Assert.Equal(lineStart + (226L * AmigaConstants.A500PalCpuCyclesPerColorClock), finalWrite.Cycle);
+        Assert.Equal(lineStart + (221L * AmigaConstants.A500PalCpuCyclesPerColorClock), finalWrite.Cycle);
 
         var finalMoveOpcode = copperList + (17u * 4u);
         var finalMoveTransfers = bus.BusAccesses
@@ -257,7 +268,7 @@ public sealed class CopperWaitControlPipelineTests
             .ToArray();
         Assert.Equal(2, finalMoveTransfers.Length);
         Assert.Equal(
-            new[] { 224L, 226L },
+            new[] { 219L, 221L },
             finalMoveTransfers.Select(access =>
                 (access.GrantedCycle - lineStart) /
                 AmigaConstants.A500PalCpuCyclesPerColorClock));
@@ -295,20 +306,20 @@ public sealed class CopperWaitControlPipelineTests
 
         var row = 246 - 26;
         var finalWrite = bus.Display.CopperDisplayWrites.Last(write => write.Address == 0x180);
-        var line247 = frameStart + (247L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
+        var line246 = frameStart + (246L * AmigaConstants.A500PalCpuCyclesPerRasterLine);
         Assert.Equal(
-            line247 + (10L * AmigaConstants.A500PalCpuCyclesPerColorClock),
+            line246 + (226L * AmigaConstants.A500PalCpuCyclesPerColorClock),
             finalWrite.Cycle);
         var finalMoveOpcode = copperList + (17u * 4u);
         Assert.Equal(
-            new[] { 8L, 10L },
+            new[] { 223L, 226L },
             bus.BusAccesses
                 .Where(access =>
                     access.Request.Kind == AmigaBusAccessKind.Copper &&
                     (access.Request.Address == finalMoveOpcode ||
                      access.Request.Address == finalMoveOpcode + 2))
                 .Select(access =>
-                    (access.GrantedCycle - line247) /
+                    (access.GrantedCycle - line246) /
                     AmigaConstants.A500PalCpuCyclesPerColorClock));
         var nonBlack = Enumerable.Range(0, 716)
             .Where(x => frame[(row * 716) + x] != 0xFF000000u)
@@ -494,7 +505,7 @@ public sealed class CopperWaitControlPipelineTests
             })
             .ToArray();
         Assert.Equal(
-            new[] { (98, 224), (98, 226), (99, 8), (99, 10) },
+            new[] { (98, 219), (98, 221), (98, 223), (98, 226) },
             boundaryGrants);
 
         var nextRow = frame.AsSpan((99 - 26) * 716, 92).ToArray();
@@ -554,10 +565,10 @@ public sealed class CopperWaitControlPipelineTests
         Assert.Equal(
             new[]
             {
-                line98 + 156, line98 + 164, line98 + 220, line98 + 252,
-                line98 + 284, line98 + 336, line98 + 380, line98 + 452,
-                line100 + 160, line100 + 172, line100 + 224, line100 + 256,
-                line100 + 288, line100 + 340, line100 + 384, line100 + 456
+                line98 + 146, line98 + 154, line98 + 210, line98 + 242,
+                line98 + 274, line98 + 326, line98 + 370, line98 + 442,
+                line100 + 150, line100 + 162, line100 + 214, line100 + 246,
+                line100 + 278, line100 + 330, line100 + 374, line100 + 446
             },
             writes);
         Assert.Contains(
