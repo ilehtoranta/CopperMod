@@ -1872,6 +1872,121 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	}
 
 	[Theory]
+	[InlineData(false, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan)]
+	public void WordConditionalBranchCompletesBothFallthroughFetchesAfterDmaWait(
+		bool enableOpcodePlan, int dispatch)
+	{
+		const int wait = 6;
+		var bus = new M68000CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x1008,
+			DelayedInstructionFetchCycles = wait
+		};
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, 0x6700, 0x0006, 0x4E71, 0x4E71));
+		using var cpu = CreateCycleParityCpu(bus, enableOpcodePlan, (M68kOpcodePlanDispatch)dispatch);
+		cpu.State.StatusRegister &= unchecked((ushort)~M68kCpuState.Zero);
+		cpu.ExecuteInstruction(); // BRA primes the queue with the BEQ.W and its extension.
+		var start = cpu.State.Cycles;
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		var fetches = bus.InstructionFetchCycles.Where(fetch => fetch.Address is 0x1008 or 0x100A);
+		Assert.Equal(new[] { (0x1008u, start + 6 + wait), (0x100Au, start + 10 + wait) }, fetches);
+		Assert.Equal(12 + wait, elapsed);
+		var after = ((IM68000PipelineStateTransfer)cpu).ExportM68000PipelineState();
+		Assert.Equal(0x1008u, after.PrefetchAddress);
+		Assert.Equal(2, after.PrefetchCount);
+		Assert.False(after.HasPendingPrefetch);
+	}
+
+	[Theory]
+	[InlineData(false, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan)]
+	public void IndexedWordMoveToAbsoluteLongWritesBeforeSuccessorFetches(
+		bool enableOpcodePlan, int dispatch)
+	{
+		const int wait = 6;
+		var bus = new M68000CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x1008,
+			DelayedInstructionFetchCycles = wait
+		};
+		// BRA.S primes the opcode and index extension. MOVE.W uses (A0,D0.W).
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, 0x33F0, 0, 0, 0x2100, 0x4E71, 0x4E71));
+		Write(bus.Memory, 0x2002, Words(0x8142));
+		using var cpu = CreateCycleParityCpu(bus, enableOpcodePlan, (M68kOpcodePlanDispatch)dispatch);
+		cpu.State.A[0] = 0x2000;
+		cpu.State.D[0] = 2;
+		cpu.ExecuteInstruction();
+		var extensionRequest = bus.CpuBusPhases[^1].RequestedCycle;
+		bus.CpuBusPhases.Clear();
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(new[] { 0x1008u, 0x2002u, 0x100Au, 0x2100u, 0x100Cu, 0x100Eu },
+			bus.CpuBusPhases.Select(phase => phase.Address));
+		Assert.Equal(extensionRequest + 6, bus.CpuBusPhases[0].RequestedCycle);
+		Assert.True(bus.CpuBusPhases[3].IsWrite);
+		Assert.Equal(26 + wait, elapsed);
+		Assert.Equal(0x8142, ReadWord(bus.Memory, 0x2100));
+	}
+
+	[Theory]
+	[InlineData(0x0840, 3, 10, false)]
+	[InlineData(0x0840, 25, 12, true)]
+	[InlineData(0x0880, 3, 12, true)]
+	[InlineData(0x0880, 25, 14, false)]
+	[InlineData(0x08C0, 3, 10, true)]
+	[InlineData(0x08C0, 25, 12, false)]
+	public void ImmediateRegisterBitChangePreservesInternalClocksAfterDmaWait(
+		ushort opcode, ushort bit, int nominalCycles, bool enableOpcodePlan)
+	{
+		const int wait = 6;
+		var bus = new M68000CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x100A,
+			DelayedInstructionFetchCycles = wait
+		};
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, opcode, bit, 0x4E71, 0x4E71));
+		using var cpu = CreateCycleParityCpu(bus, enableOpcodePlan, M68kOpcodePlanDispatch.PackedPlan);
+		cpu.ExecuteInstruction(); // BRA primes the queue with the bit instruction and its extension.
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(nominalCycles + wait, elapsed);
+		Assert.Equal(0x1008u, cpu.State.ProgramCounter);
+	}
+
+	[Theory]
+	[InlineData(0xC141, 6, 0x1008u, false)]
+	[InlineData(0xC149, 6, 0x1008u, true)]
+	[InlineData(0xC189, 6, 0x1008u, false)]
+	[InlineData(0xD0B9, 22, 0x100Cu, false)]
+	[InlineData(0x90B9, 22, 0x100Cu, true)]
+	public void M68000InternalTailFollowsTheFinalPrefetchAfterDmaWait(
+		ushort opcode, int nominalCycles, uint delayedFetchAddress, bool enableOpcodePlan)
+	{
+		const int wait = 6;
+		var bus = new M68000CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = delayedFetchAddress,
+			DelayedInstructionFetchCycles = wait,
+			LongwordReadCycles = 6
+		};
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, opcode, 0, 0x2000, 0x4E71, 0x4E71));
+		Write(bus.Memory, 0x2000, Words(0, 1));
+		using var cpu = CreateCycleParityCpu(bus, enableOpcodePlan, M68kOpcodePlanDispatch.PackedPlan);
+		cpu.ExecuteInstruction();
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(nominalCycles + wait, elapsed);
+	}
+
+	[Theory]
 	[MemberData(nameof(OpcodePlanDispatchVariants))]
 	public void PlannedShortSelfBranchBatchMatchesScalarQueueAndBusOrder(int dispatchValue)
 	{
@@ -5548,6 +5663,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		public int DelayedInstructionFetchOccurrence { get; init; } = 1;
 		public int DelayedInstructionFetchCycles { get; init; }
 		public int DataByteReadDelayCycles { get; init; }
+		public int LongwordReadCycles { get; init; } = AccessCycles * 2;
 		public uint? ThrowingInstructionFetchAddress { get; init; }
 		public bool ZeroWaitInstructionFetch { get; init; }
 		public bool FixedPlanRunEnabled { get; init; }
@@ -5609,7 +5725,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 				((uint)Memory[address + 1] << 16) |
 				((uint)Memory[address + 2] << 8) |
 				Memory[address + 3];
-			cycle += AccessCycles * 2;
+			cycle += LongwordReadCycles;
 			return value;
 		}
 		public void WriteByte(uint address, byte value, ref long cycle, M68kBusAccessKind accessKind)

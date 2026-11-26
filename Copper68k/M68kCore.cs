@@ -6945,10 +6945,7 @@ namespace Copper68k
             }
 
             AddInstructionCycles(extensionDisplacement ? 12 : 8);
-            if (!extensionDisplacement)
-            {
-                CommitShortConditionalBranchFallthroughPrefetch();
-            }
+            CompleteConditionalBranchFallthrough(extensionDisplacement);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -7113,6 +7110,13 @@ namespace Copper68k
                 AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
+            var indexedWordToAbsoluteLong = IsM68000IndexedWordMoveToAbsoluteLong(
+                sourceMode, destinationMode, destinationRegister, size);
+            if (indexedWordToAbsoluteLong)
+            {
+                AddPendingInternalCycles(2);
+            }
+
             PrefetchMoveSourceExtensionsBeforeRead(
                 GetMoveSourceExtensionWordCount(sourceMode, sourceRegister, size));
 
@@ -7255,13 +7259,18 @@ namespace Copper68k
 
             if (moveWritesMemory &&
                 !destination.IsRegister &&
-                MoveDestinationHasExtensionWord(destinationMode, destinationRegister))
+                MoveDestinationHasExtensionWord(destinationMode, destinationRegister) &&
+                !indexedWordToAbsoluteLong)
             {
                 PrefetchNextOpcodeBeforeMoveMemoryWriteback();
             }
 
             WritePlannedEaValue(in destination, value);
-            if (moveWritesMemory && destinationMode != 4 && !destination.IsRegister)
+            if (indexedWordToAbsoluteLong)
+            {
+                CompleteM68000IndexedWordMovePrefetch();
+            }
+            else if (moveWritesMemory && destinationMode != 4 && !destination.IsRegister)
             {
                 PrefetchFallthroughAfterMemoryWriteback();
             }
@@ -8110,9 +8119,18 @@ namespace Copper68k
                 CommitRequiredSequentialFinalPrefetch();
             }
 
-            AddInstructionCycles(line == 0xB && opmode < 4
+            var cycles = line == 0xB && opmode < 4
                 ? GetCompareCycles(sourceMode, sourceRegister, size)
-                : GetAluEaToDataCycles(sourceMode, sourceRegister, size));
+                : GetAluEaToDataCycles(sourceMode, sourceRegister, size);
+            if ((line is 0x9 or 0xD) && opmode == 2 &&
+                sourceMode >= 2 && (sourceMode != 7 || sourceRegister != 4))
+            {
+                CompleteM68000PrefetchWithInternalTail(cycles, 2);
+            }
+            else
+            {
+                AddInstructionCycles(cycles);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -8217,10 +8235,7 @@ namespace Copper68k
             }
 
             AddInstructionCycles(plan.ExtensionDisplacement ? 12 : 8);
-            if (!plan.ExtensionDisplacement)
-            {
-                CommitShortConditionalBranchFallthroughPrefetch();
-            }
+            CompleteConditionalBranchFallthrough(plan.ExtensionDisplacement);
         }
 
         private void ExecutePackedDbcc(ushort opcode, in M68kPackedOpcodePlan plan)
@@ -8303,6 +8318,13 @@ namespace Copper68k
             if (plan.Size == M68kOperandSize.Word && !source.IsRegister)
             {
                 AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
+            }
+
+            var indexedWordToAbsoluteLong = IsM68000IndexedWordMoveToAbsoluteLong(
+                plan.SourceMode, plan.DestinationMode, plan.DestinationRegister, plan.Size);
+            if (indexedWordToAbsoluteLong)
+            {
+                AddPendingInternalCycles(2);
             }
 
             PrefetchMoveSourceExtensionsBeforeRead(
@@ -8465,13 +8487,18 @@ namespace Copper68k
 
             if (moveWritesMemory &&
                 !destination.IsRegister &&
-                MoveDestinationHasExtensionWord(plan.DestinationMode, plan.DestinationRegister))
+                MoveDestinationHasExtensionWord(plan.DestinationMode, plan.DestinationRegister) &&
+                !indexedWordToAbsoluteLong)
             {
                 PrefetchNextOpcodeBeforeMoveMemoryWriteback();
             }
 
             WritePlannedEaValue(in destination, value);
-            if (moveWritesMemory && !destination.IsRegister)
+            if (indexedWordToAbsoluteLong)
+            {
+                CompleteM68000IndexedWordMovePrefetch();
+            }
+            else if (moveWritesMemory && !destination.IsRegister)
             {
                 PrefetchFallthroughAfterMemoryWriteback();
             }
@@ -9705,6 +9732,13 @@ namespace Copper68k
                 AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
+            var indexedWordToAbsoluteLong = IsM68000IndexedWordMoveToAbsoluteLong(
+                srcMode, destMode, destReg, size);
+            if (indexedWordToAbsoluteLong)
+            {
+                AddPendingInternalCycles(2);
+            }
+
             PrefetchMoveSourceExtensionsBeforeRead(
                 GetMoveSourceExtensionWordCount(srcMode, srcReg, size));
 
@@ -9847,13 +9881,18 @@ namespace Copper68k
 
             if (moveWritesMemory &&
                 !dest.IsRegister &&
-                MoveDestinationHasExtensionWord(destMode, destReg))
+                MoveDestinationHasExtensionWord(destMode, destReg) &&
+                !indexedWordToAbsoluteLong)
             {
                 PrefetchNextOpcodeBeforeMoveMemoryWriteback();
             }
 
             dest.Write(value);
-            if (moveWritesMemory && !dest.IsRegister)
+            if (indexedWordToAbsoluteLong)
+            {
+                CompleteM68000IndexedWordMovePrefetch();
+            }
+            else if (moveWritesMemory && !dest.IsRegister)
             {
                 PrefetchFallthroughAfterMemoryWriteback();
             }
@@ -9989,10 +10028,7 @@ namespace Copper68k
                 {
                     _ = instructionPc;
                     AddInstructionCycles(displacement == 0 ? 12 : 8);
-                    if (displacement != 0)
-                    {
-                        CommitShortConditionalBranchFallthroughPrefetch();
-                    }
+                    CompleteConditionalBranchFallthrough(displacement == 0);
                 }
 
                 return true;
@@ -10019,10 +10055,7 @@ namespace Copper68k
                 {
                     _ = instructionPc;
                     AddInstructionCycles(displacement == 0 ? 12 : 8);
-                    if (displacement != 0)
-                    {
-                        CommitShortConditionalBranchFallthroughPrefetch();
-                    }
+                    CompleteConditionalBranchFallthrough(displacement == 0);
                 }
 
                 return true;
@@ -10049,10 +10082,7 @@ namespace Copper68k
                 {
                     _ = instructionPc;
                     AddInstructionCycles(displacement == 0 ? 12 : 8);
-                    if (displacement != 0)
-                    {
-                        CommitShortConditionalBranchFallthroughPrefetch();
-                    }
+                    CompleteConditionalBranchFallthrough(displacement == 0);
                 }
 
                 return true;
@@ -10079,10 +10109,7 @@ namespace Copper68k
             {
                 _ = instructionPc;
                 AddInstructionCycles(displacement == 0 ? 12 : 8);
-                if (displacement != 0)
-                {
-                    CommitShortConditionalBranchFallthroughPrefetch();
-                }
+                CompleteConditionalBranchFallthrough(displacement == 0);
             }
 
             return true;
@@ -10149,9 +10176,17 @@ namespace Copper68k
                     // Data-register direct: no effective-address operand, no bus
                     // access, and the bit number is already masked to 31.
                     ExecuteDataRegisterBitOperation(operation, bitReg, (int)bit);
-                    AddInstructionCycles(operation == 0
+                    var cycles = operation == 0
                         ? GetImmediateBtstCycles(bitMode, bitReg)
-                        : GetImmediateBitChangeCycles(operation, bitMode, bitReg, bit));
+                        : GetImmediateBitChangeCycles(operation, bitMode, bitReg, bit);
+                    if (operation == 0)
+                    {
+                        AddInstructionCycles(cycles);
+                    }
+                    else
+                    {
+                        CompleteM68000PrefetchWithInternalTail(cycles, cycles - 8, sampleIplBeforeFetch: true);
+                    }
                     return true;
                 }
 
@@ -12079,11 +12114,20 @@ namespace Copper68k
                 CommitRequiredSequentialFinalPrefetch();
             }
 
-            AddInstructionCycles(line == 0xB && opmode < 4
+            var cycles = line == 0xB && opmode < 4
                 ? GetCompareCycles(mode, eaReg, operandSize)
                 : registerToEa
                     ? GetAluDataToEaCycles(mode, eaReg, operandSize)
-                    : GetAluEaToDataCycles(mode, eaReg, operandSize));
+                    : GetAluEaToDataCycles(mode, eaReg, operandSize);
+            if ((line is 0x9 or 0xD) && opmode == 2 &&
+                mode >= 2 && (mode != 7 || eaReg != 4))
+            {
+                CompleteM68000PrefetchWithInternalTail(cycles, 2);
+            }
+            else
+            {
+                AddInstructionCycles(cycles);
+            }
             return true;
         }
 
@@ -12215,6 +12259,18 @@ namespace Copper68k
             return true;
         }
 
+        private void CompleteM68000PrefetchWithInternalTail(
+            int cycles, int internalCycles, bool sampleIplBeforeFetch = false)
+        {
+            AddInstructionCycles(cycles);
+            if (!_useM68020BriefIndexedAddressing && _m68000BusCycleTiming is not null)
+            {
+                // Preserve internal execution after a contended final refill.
+                CommitRequiredSequentialFinalPrefetch(sampleIplBeforeFetch: sampleIplBeforeFetch);
+                AddInstructionCyclesFromBase(_cpuRetireBusCycle, internalCycles);
+            }
+        }
+
         private bool DecodeExchange(ushort opcode)
         {
             var left = (opcode >> 9) & 7;
@@ -12222,7 +12278,7 @@ namespace Copper68k
             if ((opcode & 0xF1F8) == 0xC140)
             {
                 (State.D[left], State.D[right]) = (State.D[right], State.D[left]);
-                AddInstructionCycles(6);
+                CompleteM68000PrefetchWithInternalTail(6, 2, sampleIplBeforeFetch: true);
                 return true;
             }
 
@@ -12231,7 +12287,7 @@ namespace Copper68k
                 var value = State.A[left];
                 SetAddressRegister(left, State.A[right]);
                 SetAddressRegister(right, value);
-                AddInstructionCycles(6);
+                CompleteM68000PrefetchWithInternalTail(6, 2, sampleIplBeforeFetch: true);
                 return true;
             }
 
@@ -12240,7 +12296,7 @@ namespace Copper68k
                 var value = State.D[left];
                 State.D[left] = State.A[right];
                 SetAddressRegister(right, value);
-                AddInstructionCycles(6);
+                CompleteM68000PrefetchWithInternalTail(6, 2, sampleIplBeforeFetch: true);
                 return true;
             }
 
@@ -13821,6 +13877,23 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void CompleteConditionalBranchFallthrough(bool wordDisplacement)
+        {
+            if (!wordDisplacement)
+            {
+                CommitShortConditionalBranchFallthroughPrefetch();
+            }
+            else if (!_useM68020BriefIndexedAddressing)
+            {
+                // A wait on the first fall-through fetch can push the second
+                // past the nominal retirement cycle of a non-taken Bcc.W.
+                CommitRequiredSequentialFinalPrefetch(
+                    sampleIplBeforeFetch: true,
+                    requireTransferRetirementEdge: true);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void CommitShortConditionalBranchFallthroughPrefetch()
         {
             if (_prefetchCount == 0)
@@ -13886,6 +13959,22 @@ namespace Copper68k
                 State.Cycles,
                 timingToken);
             RegisterDeferredInterruptSamples();
+        }
+
+        // This sequence includes two internal clocks before the first source refill.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsM68000IndexedWordMoveToAbsoluteLong(
+            int sourceMode, int destinationMode, int destinationRegister, M68kOperandSize size)
+            => sourceMode == 6 && destinationMode == 7 && destinationRegister == 1 &&
+                size == M68kOperandSize.Word && _m68000BusCycleTiming is not null &&
+                !UsesFormatWordExceptionFrames;
+
+        private void CompleteM68000IndexedWordMovePrefetch()
+        {
+            // The 68000 samples IPL after writeback, then refills both queue words.
+            SampleM68000IplAtCurrentBusPhase();
+            PrefetchFallthroughAfterMemoryWriteback();
+            CommitRequiredSequentialFinalPrefetch(requireTransferRetirementEdge: true);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
