@@ -10839,6 +10839,17 @@ namespace Copper68k
                     return false;
                 }
 
+                // The opcode and its immediate each consume and refill one queue slot.
+                // Both fetches belong to this instruction before register-ALU retirement.
+                if (microsequence.Kind == M68000CompiledMicrosequenceKind.SequentialOneExtension)
+                {
+                    for (var word = 0; word < 2; word++)
+                    {
+                        _m68000PipelineState = TopUpCompiledM68000PrefetchOne(
+                            _m68000PipelineState, _compiledInstructionPreviousCycle);
+                    }
+                }
+
                 _compiledM68000PipelineActive = true;
                 _compiledM68000Microsequence = microsequence;
                 // Beginning the successor instruction consumes any DBcc-owned
@@ -10928,6 +10939,7 @@ namespace Copper68k
                     PrefetchAddress = target,
                     PrefetchCount = 0,
                     HasPendingPrefetch = false,
+                    PendingPrefetchAddressPhaseIssued = false,
                     PendingPrefetchAddress = 0,
                     PendingPrefetchEarliestCycle = 0,
                     PendingPublicationPhase = M68kInstructionFetchPublicationPhase.Required,
@@ -11210,6 +11222,7 @@ namespace Copper68k
                 LastBusReadyCycle = timing.ReadyCycle,
                 RetireBusCycle = Math.Max(pipeline.RetireBusCycle, timing.ReadyCycle),
                 HasPendingPrefetch = false,
+                PendingPrefetchAddressPhaseIssued = false,
                 PendingPrefetchAddress = 0,
                 PendingPrefetchEarliestCycle = 0,
                 PendingPublicationPhase = M68kInstructionFetchPublicationPhase.Required,
@@ -11265,12 +11278,9 @@ namespace Copper68k
                     : Math.Max(
                         instructionStartCycle + busCycleStartDelay,
                         pipeline.NextBusTransferCycle);
-				var physicalRequestCycle = earliestCycle -
-					(_deferredCpuInstructionTiming?.HasPhysicalCpuBusCursor != false
-						? busCycleStartDelay
-						: 0);
-                if (earliestCycle + 2 > instructionFloor &&
-					physicalRequestCycle >= instructionFloor)
+                // As in scalar retirement, only an issued address phase can commit
+                // a successor fetch whose completion crosses the instruction floor.
+                if (!pipeline.PendingPrefetchAddressPhaseIssued && earliestCycle + 2 > instructionFloor)
                 {
                     if (!pipeline.HasPendingPrefetch)
                     {

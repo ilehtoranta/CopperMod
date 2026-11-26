@@ -3,6 +3,11 @@ using CopperMod.Amiga;
 
 namespace CopperMod.Amiga.Tests;
 
+// Several tests change the process-wide async JIT settings while a core is running.
+[CollectionDefinition(nameof(M68kJitCoreTests), DisableParallelization = true)]
+public sealed class JitEnvironmentCollection { }
+
+[Collection(nameof(M68kJitCoreTests))]
 public sealed class M68kJitCoreTests
 {
 	private const uint FastCodeBase = AmigaConstants.A500BootPseudoFastRamBase;
@@ -2144,7 +2149,8 @@ public sealed class M68kJitCoreTests
 		cpu.State.ProgramCounter = FastCodeBase;
 		cpu.State.A[0] = 0x2101;
 		cpu.State.A[7] = 0x5000;
-		cpu.State.StatusRegister = M68kCpuState.Trace | M68kCpuState.Supervisor |
+		// Single-step tracing routes execution to the interpreter before the compiled access.
+		cpu.State.StatusRegister = M68kCpuState.Supervisor |
 			M68kCpuState.Extend | M68kCpuState.Negative | M68kCpuState.Carry;
 
 		Assert.Equal(1, cpu.ExecuteInstructions(1, null, new CountingBoundary()));
@@ -2675,7 +2681,7 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void JitM68000PureGraphCompilesV2OnlyForSupportedLoop()
+	public void JitM68000PureGraphCompilesClassicAndV2ForSupportedLoop()
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x5280, 0x60FA); // MOVEQ #1,D0; ADDQ.L #1,D0; BRA.S loop
@@ -2688,13 +2694,13 @@ public sealed class M68kJitCoreTests
 		Assert.True(cpu.Counters.CompiledTraces > 0);
 		Assert.True(cpu.Counters.V2TraceHits > 0);
 		Assert.True(cpu.Counters.V2TraceMethodsCompiled > 0);
-		Assert.Equal(0, cpu.Counters.ClassicTraceMethodsCompiled);
-		Assert.Equal(0, cpu.Counters.PureClassicTraceMethodsCompiled);
+		Assert.True(cpu.Counters.ClassicTraceMethodsCompiled > 0);
+		Assert.True(cpu.Counters.PureClassicTraceMethodsCompiled > 0);
 		Assert.True(cpu.Counters.PureTraceBatchExecutions > 0);
 	}
 
 	[Fact]
-	public void JitGraphEnabledPureCpuTraceUsesV2OnlyDelegate()
+	public void JitM68000GraphEnabledPureCpuTraceRetainsClassicDelegate()
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x5280, 0x60FA); // MOVEQ #1,D0; ADDQ.L #1,D0; BRA.S loop
@@ -2706,24 +2712,25 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(220, executed);
 		Assert.True(cpu.Counters.CompiledTraces > 0);
 		Assert.True(cpu.Counters.V2TraceMethodsCompiled > 0);
-		Assert.Equal(0, cpu.Counters.ClassicTraceMethodsCompiled);
-		Assert.Equal(0, cpu.Counters.PureClassicTraceMethodsCompiled);
+		Assert.True(cpu.Counters.ClassicTraceMethodsCompiled > 0);
+		Assert.True(cpu.Counters.PureClassicTraceMethodsCompiled > 0);
 	}
 
 	[Fact]
-	public void JitM68000PureGraphV2OnlyTraceFallsBackWithoutBatchTarget()
+	public void JitM68000PureGraphRunsOneInstructionWithoutBatchTarget()
 	{
 		var bus = CreateCodeBus();
 		WriteWords(bus, FastCodeBase, 0x7001, 0x5280, 0x60FA); // MOVEQ #1,D0; ADDQ.L #1,D0; BRA.S loop
 		var cpu = new M68kJitCore(bus, enableV2: true, enableV2BusAccess: false, enableV2BusGraph: false);
 		cpu.Reset(FastCodeBase, 0x4000);
 		cpu.ExecuteInstructions(220, 100_000, new PureBatchBoundary());
-		Assert.Equal(0, cpu.Counters.ClassicTraceMethodsCompiled);
-		Assert.Equal(0, cpu.Counters.PureClassicTraceMethodsCompiled);
+		Assert.True(cpu.Counters.ClassicTraceMethodsCompiled > 0);
+		Assert.True(cpu.Counters.PureClassicTraceMethodsCompiled > 0);
 
 		cpu.State.ProgramCounter = FastCodeBase;
 		cpu.State.D[0] = 0;
 		var fallbackBefore = cpu.Counters.FallbackInstructions;
+		var classicHitsBefore = cpu.Counters.TraceHits;
 		var v2HitsBefore = cpu.Counters.V2TraceHits;
 
 		var executed = cpu.ExecuteInstructions(1, null, new CountingBoundary());
@@ -2731,7 +2738,8 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(1, executed);
 		Assert.Equal(FastCodeBase + 2, cpu.State.ProgramCounter);
 		Assert.Equal(1u, cpu.State.D[0]);
-		Assert.Equal(fallbackBefore + 1, cpu.Counters.FallbackInstructions);
+		Assert.Equal(fallbackBefore, cpu.Counters.FallbackInstructions);
+		Assert.True(cpu.Counters.TraceHits > classicHitsBefore);
 		Assert.Equal(v2HitsBefore, cpu.Counters.V2TraceHits);
 	}
 
@@ -3012,7 +3020,7 @@ public sealed class M68kJitCoreTests
 	}
 
 	[Fact]
-	public void JitV2AsyncHandoffTargetInstallsV2OnlyTraceAndStillHandoffs()
+	public void JitM68000AsyncHandoffTargetInstallsClassicAndV2Traces()
 	{
 		var previousAsync = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_ASYNC");
 		var previousWorkers = Environment.GetEnvironmentVariable("COPPER_M68K_JIT_ASYNC_WORKERS");
@@ -3041,24 +3049,26 @@ public sealed class M68kJitCoreTests
 			}
 
 			Assert.True(cpu.Counters.AsyncCompletedInstalled >= 2);
-			Assert.Null(GetInstalledTraceDelegate(cpu, rootA, "Compiled"));
+			Assert.NotNull(GetInstalledTraceDelegate(cpu, rootA, "Compiled"));
 			Assert.NotNull(GetInstalledTraceDelegate(cpu, rootA, "V2Compiled"));
-			Assert.Null(GetInstalledTraceDelegate(cpu, rootB, "Compiled"));
+			Assert.NotNull(GetInstalledTraceDelegate(cpu, rootB, "Compiled"));
 			Assert.NotNull(GetInstalledTraceDelegate(cpu, rootB, "V2Compiled"));
 
+			cpu.ResetForBenchmark(rootB, 0x4000);
 			var fallback = cpu.Counters.FallbackInstructions;
 			var batchAfterCount = boundary.BatchAfterCount;
-			cpu.State.ProgramCounter = rootB;
 
-			var singleExecuted = cpu.ExecuteInstructions(1, cpu.State.Cycles + 100_000, boundary);
+			var loopExecuted = cpu.ExecuteInstructions(2, cpu.State.Cycles + 100_000, boundary);
 
-			Assert.Equal(1, singleExecuted);
+			Assert.Equal(2, loopExecuted);
+			Assert.Equal(rootB, cpu.State.ProgramCounter);
 			Assert.Equal(fallback, cpu.Counters.FallbackInstructions);
 			Assert.True(boundary.BatchAfterCount > batchAfterCount);
 
+			cpu.ResetForBenchmark(rootA, 0x4000);
+			fallback = cpu.Counters.FallbackInstructions;
 			var handoffExecutions = cpu.Counters.V2TraceHandoffExecutions;
 			var handoffInstructions = cpu.Counters.V2TraceHandoffInstructions;
-			cpu.State.ProgramCounter = rootA;
 
 			var executed = cpu.ExecuteInstructions(20, cpu.State.Cycles + 100_000, boundary);
 
@@ -4875,7 +4885,10 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(220, executed);
 		Assert.True(jit.Counters.CompiledTraces > 0);
 		Assert.True(jit.Counters.DirectMemoryIlInstructions > 0);
-		Assert.Equal(0, jit.Counters.V2TraceHits);
+		// The backward branch may run as a pure trace. Every MOVE must write through the bus.
+		Assert.Equal(0x2000u + 110 * 4u, jit.State.A[0]);
+		for (var address = 0x2000u; address < jit.State.A[0]; address += 4)
+			Assert.Equal(0x12345678u, bus.ReadLong(address));
 		Assert.Equal(0, jit.Counters.V2BusAccessBatchExecutions);
 		Assert.Equal(0, jit.Counters.V2BusAccessBatchInstructions);
 		Assert.True(jit.Counters.V2RejectedUnsupportedEa > 0);

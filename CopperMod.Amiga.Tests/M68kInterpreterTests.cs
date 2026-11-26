@@ -1683,8 +1683,9 @@ public sealed class M68kInterpreterTests
 			bus.CpuBusPhases,
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1000u, M68kOperandSize.Word, false, 20L, 22L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1002u, M68kOperandSize.Word, false, 22L, 24L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 24L, 26L),
-			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 26L, 28L),
+			// BSR writes the high return-address word first (SingleStepTests/m68000, BSR).
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFCu, M68kOperandSize.Word, true, 24L, 26L),
+			(M68kBusAccessKind.CpuDataWrite, 0x2FFEu, M68kOperandSize.Word, true, 26L, 28L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1004u, M68kOperandSize.Word, false, 28L, 30L),
 			(M68kBusAccessKind.CpuInstructionFetch, 0x1006u, M68kOperandSize.Word, false, 30L, 32L));
 	}
