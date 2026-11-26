@@ -7415,6 +7415,14 @@ namespace Copper68k
             var value = ReadPostincrement(sourceRegister, size);
             WriteDataRegisterSized(destinationRegister, value, size);
             SetLogicFlags(value, size);
+            if (size == M68kOperandSize.Word && _m68000BusCycleTiming is not null &&
+                !UsesFormatWordExceptionFrames)
+            {
+                // The next instruction can reuse the queued opcode, but its
+                // operand must follow this MOVE's final refill on the bus.
+                CommitRequiredSequentialFinalPrefetch(requireTransferRetirementEdge: true);
+            }
+
             AddInstructionCycles(EstimateMoveCycles(GetEaOperandCycles(3, sourceRegister, size), 0, destinationRegister, size));
         }
 

@@ -1935,6 +1935,35 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	}
 
 	[Theory]
+	[InlineData(false, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan)]
+	public void WordPostincrementMoveRefillsBeforeTheNextPopAfterDmaWait(
+		bool enableOpcodePlan, int dispatch)
+	{
+		var bus = new M68000CycleCountingBus
+		{
+			DelayedWordReadAddress = 0x3000,
+			DelayedWordReadCycles = 6
+		};
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, 0x341F, 0x321F, 0x4E71, 0x4E71));
+		Write(bus.Memory, 0x3000, Words(0x8142, 0x2468));
+		using var cpu = CreateCycleParityCpu(bus, enableOpcodePlan, (M68kOpcodePlanDispatch)dispatch);
+		cpu.State.A[7] = 0x3000;
+		cpu.ExecuteInstruction(); // Prime the queue with the two MOVE.W opcodes.
+		bus.CpuBusPhases.Clear();
+
+		cpu.ExecuteInstruction();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(new[] { 0x3000u, 0x1008u, 0x3002u, 0x100Au },
+			bus.CpuBusPhases.Select(phase => phase.Address));
+		Assert.Equal(0x3004u, cpu.State.A[7]);
+		Assert.Equal(0x8142u, cpu.State.D[2]);
+		Assert.Equal(0x2468u, cpu.State.D[1]);
+	}
+
+	[Theory]
 	[InlineData(0x0840, 3, 10, false)]
 	[InlineData(0x0840, 25, 12, true)]
 	[InlineData(0x0880, 3, 12, true)]
@@ -5662,6 +5691,8 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		public uint? DelayedInstructionFetchAddress { get; init; }
 		public int DelayedInstructionFetchOccurrence { get; init; } = 1;
 		public int DelayedInstructionFetchCycles { get; init; }
+		public uint? DelayedWordReadAddress { get; init; }
+		public int DelayedWordReadCycles { get; init; }
 		public int DataByteReadDelayCycles { get; init; }
 		public int LongwordReadCycles { get; init; } = AccessCycles * 2;
 		public uint? ThrowingInstructionFetchAddress { get; init; }
@@ -5712,6 +5743,10 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			}
 			else if (accessKind == M68kBusAccessKind.CpuDataRead)
 			{
+				if (DelayedWordReadAddress == address)
+				{
+					cycle += DelayedWordReadCycles;
+				}
 				DataReadCycles.Add((address, cycle));
 			}
 			cycle += accessKind == M68kBusAccessKind.CpuInstructionFetch && ZeroWaitInstructionFetch
