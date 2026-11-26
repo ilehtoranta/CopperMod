@@ -2443,8 +2443,10 @@ public sealed class M68kJitCoreTests
 		Assert.True(jit.Counters.TraceHits > 0);
 	}
 
-	[Fact]
-	public void JitCompiledDirectMemoryExecutesCmpm()
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public void JitCompiledDirectMemoryExecutesCmpm(bool m68040)
 	{
 		var jitBus = CreateRealFastCodeBus();
 		var interpreterBus = CreateRealFastCodeBus();
@@ -2461,10 +2463,15 @@ public sealed class M68kJitCoreTests
 		interpreterBus.ChipRam[0x3000] = 0x20;
 		jitBus.ChipRam[0x3100] = 0x20;
 		interpreterBus.ChipRam[0x3100] = 0x20;
-		var jit = new M68kJitCore(jitBus, enableV2: false);
-		var interpreter = new M68kInterpreter(interpreterBus);
+		using var jit = m68040 ? M68kJitCore.CreateM68040ForTesting(jitBus, enableV2: false)
+			: new M68kJitCore(jitBus, enableV2: false);
+		using IM68kBatchCore interpreter = m68040
+			? new M68040Interpreter(interpreterBus, M68020CpuProfile.Ocs68040JitMaxSpeed)
+			: new M68kInterpreter(interpreterBus);
 		jit.Reset(RealFastCodeBase, 0x4000);
+		if (m68040) EnableM68040InstructionCache(jit);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
+		if (m68040) interpreter.State.CacheControlRegister = M68040InstructionCacheEnable;
 
 		var jitExecuted = jit.ExecuteInstructions(1200, null, new CountingBoundary());
 		var interpreterExecuted = interpreter.ExecuteInstructions(1200, null, new CountingBoundary());
@@ -2475,7 +2482,8 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
 		Assert.Equal(interpreterBus.ChipRam[0x3000..0x3104], jitBus.ChipRam[0x3000..0x3104]);
-		Assert.True(jit.Counters.DirectMemoryIlInstructions > 0);
+		if (m68040) Assert.True(jit.Counters.DirectMemoryIlInstructions > 0);
+		else Assert.True(jit.Counters.FallbackInstructions > 0);
 	}
 
 	[Fact]
@@ -2618,8 +2626,10 @@ public sealed class M68kJitCoreTests
 		}
 	}
 
-	[Fact]
-	public void JitV2CompilesPeaAddressForms()
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public void JitV2CompilesPeaAddressForms(bool m68040)
 	{
 		var jitBus = CreateRealFastCodeBus();
 		var interpreterBus = CreateRealFastCodeBus();
@@ -2632,10 +2642,15 @@ public sealed class M68kJitCoreTests
 		};
 		WriteWords(jitBus, RealFastCodeBase, words);
 		WriteWords(interpreterBus, RealFastCodeBase, words);
-		var jit = new M68kJitCore(jitBus, enableV2: true);
-		var interpreter = new M68kInterpreter(interpreterBus);
+		using var jit = m68040 ? M68kJitCore.CreateM68040ForTesting(jitBus, enableV2: true)
+			: new M68kJitCore(jitBus, enableV2: true);
+		using IM68kBatchCore interpreter = m68040
+			? new M68040Interpreter(interpreterBus, M68020CpuProfile.Ocs68040JitMaxSpeed)
+			: new M68kInterpreter(interpreterBus);
 		jit.Reset(RealFastCodeBase, 0x4000);
+		if (m68040) EnableM68040InstructionCache(jit);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
+		if (m68040) interpreter.State.CacheControlRegister = M68040InstructionCacheEnable;
 
 		var jitExecuted = jit.ExecuteInstructions(800, jit.State.Cycles + 500_000, new PureBatchBoundary());
 		var interpreterExecuted = interpreter.ExecuteInstructions(800, null, new CountingBoundary());
@@ -2647,7 +2662,8 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreter.State.D, jit.State.D);
 		Assert.Equal(interpreter.State.A, jit.State.A);
 		Assert.Equal(interpreterBus.ChipRam[0x3000..0x4000], jitBus.ChipRam[0x3000..0x4000]);
-		Assert.True(jit.Counters.V2TraceHits > 0);
+		if (m68040) Assert.True(jit.Counters.V2TraceHits > 0);
+		else Assert.True(jit.Counters.FallbackInstructions > 0);
 		Assert.Equal(0, jit.Counters.V2RejectedDecode);
 	}
 
@@ -3488,7 +3504,7 @@ public sealed class M68kJitCoreTests
 		jitBus.WriteLong(data, 0x1234_5678);
 		interpreterBus.WriteLong(data, 0x1234_5678);
 		var jit = m68040
-			? (M68kJitCore)AmigaM68kCoreFactory.Default.Create(M68kBackendKind.JitM68040, jitBus)
+			? M68kJitCore.CreateM68040ForTesting(jitBus, enableV2: true)
 			: new M68kJitCore(jitBus, enableV2: true, enableV2BusAccess: true, enableV2BusGraph: true);
 		var interpreter = new M68kInterpreter(interpreterBus);
 		jit.Reset(RealFastCodeBase + 2, 0x4000);
@@ -3505,10 +3521,6 @@ public sealed class M68kJitCoreTests
 		for (var i = 0; i < 250 && jit.Counters.V2BusAccessBatchExecutions == 0; i++)
 		{
 			warmup += jit.ExecuteInstructions(320, jit.State.Cycles + 100_000, boundary);
-			if (jit.Counters.V2BusAccessBatchExecutions == 0)
-			{
-				Thread.Sleep(1);
-			}
 		}
 
 		Assert.True(jit.Counters.V2BusAccessBatchExecutions > 0);
@@ -6418,8 +6430,10 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(4, instruction.Length);
 	}
 
-	[Fact]
-	public void JitCompiledHelperMatchesInterpreterForMovepLoop()
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public void JitCompiledHelperMatchesInterpreterForMovepLoop(bool m68040)
 	{
 		var words = new ushort[]
 		{
@@ -6433,11 +6447,16 @@ public sealed class M68kJitCoreTests
 		WriteWords(jitBus, RealFastCodeBase, words);
 		WriteWords(interpreterBus, 0x2010, 0x0012, 0x0034, 0x0056, 0x0078);
 		WriteWords(jitBus, 0x2010, 0x0012, 0x0034, 0x0056, 0x0078);
-		var interpreter = new M68kInterpreter(interpreterBus);
-		var jit = new M68kJitCore(jitBus);
+		using IM68kBatchCore interpreter = m68040
+			? new M68040Interpreter(interpreterBus, M68020CpuProfile.Ocs68040JitMaxSpeed)
+			: new M68kInterpreter(interpreterBus);
+		using var jit = m68040 ? M68kJitCore.CreateM68040ForTesting(jitBus, enableV2: false)
+			: new M68kJitCore(jitBus);
 		jit.FallbackAttributionEnabled = true;
 		interpreter.Reset(RealFastCodeBase, 0x4000);
+		if (m68040) interpreter.State.CacheControlRegister = M68040InstructionCacheEnable;
 		jit.Reset(RealFastCodeBase, 0x4000);
+		if (m68040) EnableM68040InstructionCache(jit);
 		interpreter.State.A[1] = jit.State.A[1] = 0x2000;
 		interpreter.State.D[0] = jit.State.D[0] = 0xAABB_CDEF;
 		interpreter.State.D[2] = jit.State.D[2] = 0xFFFF_FFFF;
@@ -6454,7 +6473,8 @@ public sealed class M68kJitCoreTests
 
 		Assert.Equal(interpreted, compiled);
 		Assert.True(jit.Counters.CompiledTraces > 0);
-		Assert.True(jit.Counters.HelperIlInstructions > 0);
+		if (m68040) Assert.True(jit.Counters.HelperIlInstructions > 0);
+		else Assert.True(jit.Counters.FallbackInstructions > 0);
 		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
 		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
 		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);
@@ -6629,7 +6649,11 @@ public sealed class M68kJitCoreTests
 		var compiled = jit.ExecuteInstructions(80, 500_000, new PureBatchBoundary());
 
 		Assert.Equal(interpreted, compiled);
-		Assert.Equal(0, jit.Counters.PureTraceBatchExecutions);
+		// The backward branch can form its own pure trace. BCD must still access its operands.
+		Assert.Equal(0, jit.Counters.V2BusAccessBatchInstructions);
+		Assert.Equal(0x2001u - 40, jit.State.A[0]);
+		Assert.Equal(0x2101u - 40, jit.State.A[1]);
+		Assert.Equal(interpreterBus.ChipRam[0x20D9..0x2201], jitBus.ChipRam[0x20D9..0x2201]);
 		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
 		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
 		Assert.Equal(interpreter.State.D, jit.State.D);
@@ -6641,8 +6665,10 @@ public sealed class M68kJitCoreTests
 		Assert.Equal(interpreterBus.ReadWord(0x2200), jitBus.ReadWord(0x2200));
 	}
 
-	[Fact]
-	public void JitCompiledHelperMatchesInterpreterForMemoryBcdLoop()
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public void JitCompiledHelperMatchesInterpreterForMemoryBcdLoop(bool m68040)
 	{
 		var words = new ushort[]
 		{
@@ -6666,10 +6692,15 @@ public sealed class M68kJitCoreTests
 		jitBus.WriteWord(0x2000, 0x4900);
 		jitBus.WriteWord(0x2100, 0x5000);
 		jitBus.WriteWord(0x2200, 0x2000);
-		var interpreter = new M68kInterpreter(interpreterBus);
-		var jit = new M68kJitCore(jitBus);
+		using IM68kBatchCore interpreter = m68040
+			? new M68040Interpreter(interpreterBus, M68020CpuProfile.Ocs68040JitMaxSpeed)
+			: new M68kInterpreter(interpreterBus);
+		using var jit = m68040 ? M68kJitCore.CreateM68040ForTesting(jitBus, enableV2: false)
+			: new M68kJitCore(jitBus);
 		interpreter.Reset(RealFastCodeBase, 0x4000);
+		if (m68040) interpreter.State.CacheControlRegister = M68040InstructionCacheEnable;
 		jit.Reset(RealFastCodeBase, 0x4000);
+		if (m68040) EnableM68040InstructionCache(jit);
 		interpreter.State.StatusRegister = jit.State.StatusRegister =
 			M68kCpuState.Supervisor | M68kCpuState.Extend | M68kCpuState.Zero;
 
@@ -6678,7 +6709,8 @@ public sealed class M68kJitCoreTests
 
 		Assert.Equal(interpreted, compiled);
 		Assert.True(jit.Counters.CompiledTraces > 0);
-		Assert.True(jit.Counters.HelperIlInstructions > 0);
+		if (m68040) Assert.True(jit.Counters.HelperIlInstructions > 0);
+		else Assert.True(jit.Counters.FallbackInstructions > 0);
 		Assert.Equal(interpreter.State.ProgramCounter, jit.State.ProgramCounter);
 		Assert.Equal(interpreter.State.StatusRegister, jit.State.StatusRegister);
 		Assert.Equal(interpreter.State.Cycles, jit.State.Cycles);

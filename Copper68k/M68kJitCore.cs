@@ -14686,6 +14686,15 @@ namespace Copper68k
 
         private byte ReadByte(uint address, M68kBusAccessKind accessKind = M68kBusAccessKind.CpuDataRead)
         {
+            if (_fallback is M68040Interpreter accelerator && accessKind == M68kBusAccessKind.CpuDataRead)
+            {
+                var value = accelerator._timedBus.ReadByte(address, accessKind);
+                // The fixed-cycle accelerator retires one cycle after its blocking read.
+                if (_compiledInstructionCycleFloorActive && _minimalCycleTiming)
+                    _compiledInstructionPreviousCycle = Math.Max(_compiledInstructionPreviousCycle, State.Cycles);
+                return value;
+            }
+
             address = TranslateM68040MemoryAddress(address, accessKind, write: false, byteCount: 1);
             return ReadPhysicalByte(address, accessKind);
         }
@@ -14766,6 +14775,12 @@ namespace Copper68k
 
         private void WriteByte(uint address, byte value)
         {
+            if (_fallback is M68040Interpreter accelerator)
+            {
+                accelerator._timedBus.WriteByte(address, value, M68kBusAccessKind.CpuDataWrite);
+                return;
+            }
+
             address = TranslateM68040MemoryAddress(
                 address,
                 M68kBusAccessKind.CpuDataWrite,
@@ -14859,7 +14874,10 @@ namespace Copper68k
         private void PushLong(uint value)
         {
             State.SetActiveStackPointer(State.A[7] - 4);
-            WriteLongDescending(State.A[7], value);
+            if (_fallback is M68040Interpreter accelerator)
+                accelerator._timedBus.WriteLong(State.A[7], value, M68kBusAccessKind.CpuDataWrite);
+            else
+                WriteLongDescending(State.A[7], value);
         }
 
         private void PushBsrReturnAddress(uint value)
@@ -15022,7 +15040,7 @@ namespace Copper68k
             }
 
             State.SetFlag(M68kCpuState.Negative, (result & 0x80) != 0);
-            State.SetFlag(M68kCpuState.Overflow, overflow);
+            State.SetFlag(M68kCpuState.Overflow, _cpuModel == M68kJitCpuModel.M68000 && overflow);
             State.SetFlag(M68kCpuState.Carry, carry);
             State.SetFlag(M68kCpuState.Extend, carry);
         }
