@@ -6080,7 +6080,7 @@ public sealed class AmigaBusTimingTests
 			int SampleLine,
 			int SampleHorizontal,
 			int PreInterruptBitplaneGrants,
-			int BitplaneGrants,
+			(long Request, long Grant)[] GrantsAfterDisable,
 			string Boundaries,
 			string Phases) Run(bool enableBitplaneDma)
 		{
@@ -6173,10 +6173,11 @@ public sealed class AmigaBusTimingTests
 					access.Request.Requester == AmigaBusRequester.Bitplane &&
 					access.GrantedCycle >= intreqWrite.Cycle - 256 &&
 					access.GrantedCycle < intreqWrite.Cycle),
-				bus.BusAccesses.Count(access =>
+				bus.BusAccesses.Where(access =>
 					access.Request.Requester == AmigaBusRequester.Bitplane &&
-					access.GrantedCycle >= visibleCycle &&
-					access.GrantedCycle <= firstRead.CompletedCycle),
+					access.GrantedCycle > bplcon0Disable.Cycle &&
+					access.GrantedCycle <= firstRead.CompletedCycle)
+					.Select(access => (access.RequestedCycle - bplcon0Disable.Cycle, access.GrantedCycle - bplcon0Disable.Cycle)).ToArray(),
 				string.Join(",", boundaries.Select(boundary =>
 					$"0x{boundary.Pc:X4}:{boundary.Start - visibleCycle}-{boundary.Stop - visibleCycle}")),
 				BuildCpuBusPhaseTimeline(phases, visibleCycle));
@@ -6188,20 +6189,20 @@ public sealed class AmigaBusTimingTests
 			$"noBpl intreq={noBitplanes.IntreqCycle}, visible={noBitplanes.VisibleCycle}, " +
 			$"entry={noBitplanes.EntryCycles}, sample=+{noBitplanes.SampleAfterVisible}/" +
 			$"bploff={noBitplanes.Bplcon0DisableCycle}," +
-			$"0x{noBitplanes.Value:X4}@v{noBitplanes.SampleLine}h{noBitplanes.SampleHorizontal}, preBpl={noBitplanes.PreInterruptBitplaneGrants}, bplgrants={noBitplanes.BitplaneGrants}, " +
+			$"0x{noBitplanes.Value:X4}@v{noBitplanes.SampleLine}h{noBitplanes.SampleHorizontal}, preBpl={noBitplanes.PreInterruptBitplaneGrants}, bplgrants={string.Join(',', noBitplanes.GrantsAfterDisable)}, " +
 			$"boundaries=[{noBitplanes.Boundaries}], phases=[{noBitplanes.Phases}] | " +
 			$"bpl intreq={bitplanes.IntreqCycle}, visible={bitplanes.VisibleCycle}, " +
 			$"entry={bitplanes.EntryCycles}, sample=+{bitplanes.SampleAfterVisible}/" +
 			$"bploff={bitplanes.Bplcon0DisableCycle}," +
-			$"0x{bitplanes.Value:X4}@v{bitplanes.SampleLine}h{bitplanes.SampleHorizontal}, preBpl={bitplanes.PreInterruptBitplaneGrants}, bplgrants={bitplanes.BitplaneGrants}, " +
+			$"0x{bitplanes.Value:X4}@v{bitplanes.SampleLine}h{bitplanes.SampleHorizontal}, preBpl={bitplanes.PreInterruptBitplaneGrants}, bplgrants={string.Join(',', bitplanes.GrantsAfterDisable)}, " +
 			$"boundaries=[{bitplanes.Boundaries}], phases=[{bitplanes.Phases}]";
 
 		Assert.Equal(noBitplanes.IntreqCycle, bitplanes.IntreqCycle);
 		Assert.Equal(noBitplanes.VisibleCycle, bitplanes.VisibleCycle);
 		Assert.Equal(0, noBitplanes.PreInterruptBitplaneGrants);
 		Assert.True(bitplanes.PreInterruptBitplaneGrants > 0, diagnostic);
-		Assert.Equal(0, noBitplanes.BitplaneGrants);
-		Assert.Equal(0, bitplanes.BitplaneGrants);
+		Assert.Empty(noBitplanes.GrantsAfterDisable);
+		Assert.True(bitplanes.GrantsAfterDisable.All(access => access.Request <= 0 && access.Grant == AgnusChipSlotScheduler.SlotCycles), diagnostic);
 		Assert.Equal(noBitplanes.VisibleCycle, noBitplanes.Bplcon0DisableCycle);
 		Assert.Equal(bitplanes.VisibleCycle, bitplanes.Bplcon0DisableCycle);
 	}
@@ -6599,7 +6600,7 @@ public sealed class AmigaBusTimingTests
 	[Theory]
 	[InlineData((ushort)0x6004)] // BRA.S
 	[InlineData((ushort)0x6604)] // BNE.S
-	public void TakenBranchYieldsUngrantedTargetFetchAtRecognizedInterruptBoundary(
+	public void TakenBranchSamplesInterruptAfterContendedTargetFetch(
 		ushort opcode)
 	{
 		const ushort intreqLevel1 = 0x0004;
@@ -6654,14 +6655,13 @@ public sealed class AmigaBusTimingTests
 		var afterBranch = pipeline.ExportM68000PipelineState();
 		var recognition = Assert.IsAssignableFrom<IM68000InterruptRecognition>(cpu);
 		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
-		Assert.Equal(0, afterBranch.PrefetchCount);
+		Assert.Equal(2, afterBranch.PrefetchCount);
 		Assert.Equal(0x1006u, afterBranch.PrefetchAddress);
-		Assert.DoesNotContain(bus.BusAccesses, access =>
-			access.Request.Requester == AmigaBusRequester.Cpu &&
+		var targetFetch = Assert.Single(bus.BusAccesses, access =>
 			access.Request.Kind == AmigaBusAccessKind.CpuInstructionFetch &&
-			access.Request.Address == 0x1006 &&
-			access.RequestedCycle >= busTail);
-		Assert.Equal(visibleCycle + 5, recognition.LastInterruptSampleCycle);
+			access.Request.Address == 0x1006 && access.RequestedCycle >= busTail);
+		Assert.True(targetFetch.GrantedCycle >= busTail + 4 * AgnusChipSlotScheduler.SlotCycles);
+		Assert.InRange(recognition.LastInterruptSampleCycle, targetFetch.CompletedCycle, cpu.State.Cycles);
 		Assert.True(recognition.HasRecognizedInterrupt(1, visibleCycle, 0));
 
 		cpu.RequestInterrupt(1, 0x0064);
@@ -8490,18 +8490,22 @@ public sealed class AmigaBusTimingTests
 	[Fact]
 	public void CpuInterruptWriteLeavesUnrelatedAgnusAgendaLeavesUntouched()
 	{
-		var bus = new AmigaBus();
-		var cycle = 20L;
-		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
-		cycle += 4;
-		_ = bus.ReadWord(0x00001000, ref cycle, AmigaBusAccessKind.CpuDataRead);
-		var before = bus.CaptureHardwareSchedulerSnapshot();
+		static (long Cycle, long Updates) Run(uint address)
+		{
+			var bus = new AmigaBus();
+			var cycle = 20L;
+			_ = bus.ReadWord(0x1000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+			cycle += 4;
+			_ = bus.ReadWord(0x1000, ref cycle, AmigaBusAccessKind.CpuDataRead);
+			var before = bus.CaptureHardwareSchedulerSnapshot();
+			cycle += 4;
+			bus.WriteWord(address, (ushort)(0x8000 | AmigaConstants.IntreqCopper), ref cycle, AmigaBusAccessKind.CpuDataWrite);
+			var after = bus.CaptureHardwareSchedulerSnapshot();
+			return (cycle, after.AgnusExecutorAgendaUpdates - before.AgnusExecutorAgendaUpdates);
+		}
 
-		cycle += 4;
-		bus.WriteWord(0x00DFF09C, (ushort)(0x8000 | AmigaConstants.IntreqCopper), ref cycle, AmigaBusAccessKind.CpuDataWrite);
-
-		var after = bus.CaptureHardwareSchedulerSnapshot();
-		Assert.Equal(before.AgnusExecutorAgendaUpdates, after.AgnusExecutorAgendaUpdates);
+		// Both transfers advance the scheduler to their granted Chip bus slot.
+		Assert.Equal(Run(0x00DFF180), Run(0x00DFF09C));
 	}
 
 	[Fact]
@@ -9728,9 +9732,8 @@ public sealed class AmigaBusTimingTests
 		Assert.True(committedTailIndex >= 0, diagnostic);
 		var committedTail = phases[committedTailIndex];
 		var firstStackWrite = phases[committedTailIndex + 1];
-		// The committed DBRA tail plus exception setup produces this
-		// observable request gap in the synthetic physical-bus sequence.
-		Assert.Equal(12, firstStackWrite.Request - committedTail.Complete);
+		// The 68000 idles for six clocks before stacking PC low on interrupt entry.
+		Assert.Equal(6, firstStackWrite.Request - committedTail.Complete);
 
 		// The beam phase depends on preceding refresh/Copper ownership, but these
 		// transfers are one indivisible physical sequence. In particular, the
