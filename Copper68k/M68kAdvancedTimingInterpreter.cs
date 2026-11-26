@@ -18984,9 +18984,9 @@ namespace Copper68k
             return value;
         }
 
-        // MC68020UM 8.2.12 gives separate isolated and overlapped shift timings.
+        // MC68020UM 8.2.12, 8.2.15 and 8.2.16 distinguish isolated and overlapped timings.
         // Keep a two-clock issue floor on the 2:1 board interface.
-        private bool CanOverlapEc020Shift()
+        private bool CanOverlapEc020Instruction()
             => !_timing.Pipeline.SuppressNextOverlap &&
                 _timing.TryReadInstructionCacheWord(State.ProgramCounter, out _);
 
@@ -19013,10 +19013,19 @@ namespace Copper68k
                     M68kInstructionTimingKey.LsrByteImmediateData or
                     M68kInstructionTimingKey.LsrWordImmediateData or
                     M68kInstructionTimingKey.LsrLongImmediateData =>
-                        plan with { NativeCycles = CanOverlapEc020Shift() ? 2 : 4 },
+                        plan with { NativeCycles = CanOverlapEc020Instruction() ? 2 : 4 },
                     M68kInstructionTimingKey.AsrWordImmediateData =>
-                        plan with { NativeCycles = CanOverlapEc020Shift() ? 3 : 6 },
+                        plan with { NativeCycles = CanOverlapEc020Instruction() ? 3 : 6 },
                     M68kInstructionTimingKey.BranchByteTaken => _timing.GetTakenByteBranchPlan(),
+                    M68kInstructionTimingKey.BranchWordTaken or
+                    M68kInstructionTimingKey.BranchWordNotTaken when CanOverlapEc020Instruction() =>
+                        plan with { NativeCycles = 3 },
+                    M68kInstructionTimingKey.JmpBriefIndexed when CanOverlapEc020Instruction() =>
+                        plan with { NativeCycles = 4 },
+                    M68kInstructionTimingKey.BranchByteNotTaken when CanOverlapEc020Instruction() =>
+                        plan with { NativeCycles = 2 },
+                    M68kInstructionTimingKey.BsrByte when CanOverlapEc020Instruction() =>
+                        plan with { NativeCycles = 5 },
                     _ => plan
                 };
                 if (readStart >= 0)
