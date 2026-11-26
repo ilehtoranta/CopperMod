@@ -742,8 +742,11 @@ public sealed class M68kInterpreterTests
 			diagnostic);
 	}
 
-	[Fact]
-	public void VAmigaTsWritecharChipRamExecutionAddsOnlyPhysicalRefreshContention()
+	[Theory]
+	[InlineData(20, null)]
+	[InlineData(10, 12L)]
+	[InlineData(452, 454L)]
+	public void VAmigaTsWritecharChipRamExecutionAddsOnlyPhysicalRefreshContention(long entryCycle, long? refreshCycle)
 	{
 		const uint codeAddress = 0x1000;
 		const uint destinationAddress = 0x2000;
@@ -763,7 +766,21 @@ public sealed class M68kInterpreterTests
 
 		var cpu = AmigaM68kCoreFactory.Default.Create(M68kBackendKind.AccurateM68000, bus);
 		cpu.Reset(codeAddress, stackAddress);
-		cpu.State.Cycles = 20;
+		cpu.State.Cycles = entryCycle;
+		// Arrival from a taken call supplies the MOVEM opcode and register mask.
+		var pipeline = (IM68000PipelineStateTransfer)cpu;
+		pipeline.ImportM68000PipelineState(pipeline.ExportM68000PipelineState() with
+		{
+			PrefetchAddress = codeAddress,
+			Word0 = 0x48E7,
+			Word1 = 0x40C0,
+			PrefetchCount = 2,
+			ReadyCycle0 = entryCycle - 4,
+			ReadyCycle1 = entryCycle,
+			NextBusTransferCycle = entryCycle,
+			LastBusReadyCycle = entryCycle,
+			RetireBusCycle = entryCycle
+		});
 		cpu.State.D[0] = 'A';
 		cpu.State.A[0] = destinationAddress;
 		cpu.State.A[4] = fontAddress;
@@ -774,9 +791,20 @@ public sealed class M68kInterpreterTests
 			cpu.ExecuteInstruction();
 		}
 
-		// The flat CPU contract is 432 cycles. Two Agnus refresh grants deny
-		// one two-cycle CPU slot each while this routine executes from Chip RAM.
-		Assert.Equal(436, cpu.State.Cycles - startCycle);
+		var delayed = bus.BusAccesses.Where(access => access.Request.Requester == AmigaBusRequester.Cpu &&
+			access.GrantedCycle > access.RequestedCycle);
+		if (refreshCycle is long refresh)
+		{
+			var grant = Assert.Single(delayed);
+			Assert.True(AgnusHrmOcsSlotTable.IsMandatoryRefreshSlot(refresh));
+			Assert.Equal(refresh, grant.RequestedCycle);
+			Assert.Equal(refresh + AgnusChipSlotScheduler.SlotCycles, grant.GrantedCycle);
+		}
+		else
+		{
+			Assert.Empty(delayed);
+		}
+		Assert.Equal(432 + (refreshCycle.HasValue ? AgnusChipSlotScheduler.SlotCycles : 0), cpu.State.Cycles - startCycle);
 	}
 
 	[Fact]

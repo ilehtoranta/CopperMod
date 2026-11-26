@@ -9846,7 +9846,8 @@ public sealed class AmigaBusTimingTests
 		var postRte = result.Boundaries.Single(boundary => boundary.Name == "irqRteComplete");
 		var postRteBeam = result.Bus.GetBeamPosition(postRte.Cycle);
 
-		Assert.Equal((2, 70), (postRteBeam.BeamLine, postRteBeam.BeamHorizontal));
+		// Compare the emulator-visible VHPOSR at retirement, in register coordinates.
+		Assert.Equal((ushort)0x0246, EncodeVhposr(postRteBeam));
 	}
 
 	[Fact]
