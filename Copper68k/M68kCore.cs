@@ -10229,7 +10229,7 @@ namespace Copper68k
                     var cycles = operation == 0
                         ? GetImmediateBtstCycles(bitMode, bitReg)
                         : GetImmediateBitChangeCycles(operation, bitMode, bitReg, bit);
-                    if (operation != 1)
+                    if (operation is not (1 or 3))
                     {
                         AddInstructionCycles(cycles);
                     }

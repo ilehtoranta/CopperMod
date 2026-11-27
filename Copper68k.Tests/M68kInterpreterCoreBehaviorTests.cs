@@ -2077,6 +2077,28 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	}
 
 	[Theory]
+	[InlineData(4, 10, false)]
+	[InlineData(20, 12, true)]
+	public void M68000ImmediateBsetRetainsItsInternalClocksAfterDmaWait(
+		ushort bit, int nominalCycles, bool enableOpcodePlan)
+	{
+		const int wait = 6;
+		var bus = new M68000CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x100Au,
+			DelayedInstructionFetchCycles = wait
+		};
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, 0x08C7, bit, 0x4E71, 0x4E71));
+		using var cpu = CreateCycleParityCpu(bus, enableOpcodePlan, M68kOpcodePlanDispatch.PackedPlan);
+		cpu.ExecuteInstruction();
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(nominalCycles + wait, elapsed);
+		Assert.Equal(1u << bit, cpu.State.D[7]);
+	}
+
+	[Theory]
 	[MemberData(nameof(OpcodePlanDispatchVariants))]
 	public void PlannedShortSelfBranchBatchMatchesScalarQueueAndBusOrder(int dispatchValue)
 	{
