@@ -210,7 +210,7 @@ namespace Copper68k
         internal M68020MemoryTarget GetBusTimingTarget(uint address)
             => ReferenceEquals(this, A1200Ec02014Mhz) && IsA1200PlatformIoAddress(address)
                 ? M68020MemoryTarget.PlatformIo
-                : ClassifyTarget(address);
+                : ClassifyProfileMemory(address);
 
         internal bool UsesA1200InstructionPipeline(uint address)
             => ReferenceEquals(this, A1200Ec02014Mhz) && GetBusTimingTarget(address) is
@@ -241,11 +241,19 @@ namespace Copper68k
 
         internal bool IsInstructionCacheableAddress(uint address)
         {
-            var target = ClassifyTarget(address);
+            var target = ClassifyProfileMemory(address);
             // Amiga Chip RAM permits instruction caching, unlike device registers.
             return target == M68020MemoryTarget.ChipRam ||
                 IsInstructionCacheableTarget(target);
         }
+
+        // Stock AGA maps a ROM bank here, including the CD32 extension.
+        // The motherboard still chooses the physical transfer width.
+        private M68020MemoryTarget ClassifyProfileMemory(uint address)
+            => ReferenceEquals(this, A1200Ec02014Mhz) &&
+                (address & 0x00FF_FFFF) is >= 0x00E0_0000 and < 0x00E8_0000
+                ? M68020MemoryTarget.Rom
+                : ClassifyTarget(address);
 
         internal static bool IsInstructionCacheableTarget(M68020MemoryTarget target)
             => target is

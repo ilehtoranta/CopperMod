@@ -4291,6 +4291,8 @@ namespace Copper68k
         private readonly bool _hasModelSpecificInstructions;
         private readonly bool _enableAdvancedFastPath;
         private readonly bool _enableM68020StackMode;
+        private int _ec020DecodeOverlap;
+        private uint _ec020DecodeOverlapPc;
 
         private static readonly byte[] M68020FastKinds =
             CreateFastKinds(M68020OpcodeDispatchTable.M68020Kinds);
@@ -4989,6 +4991,7 @@ namespace Copper68k
                 }
 
                 State.ProgramCounter = target;
+                _ec020DecodeOverlap = 0;
                 _timing.CompleteHotBranchByteTaken();
                 _instructionPipe.Reset(State.ProgramCounter);
                 boundary.AfterInstruction(previousCycle, State.Cycles);
@@ -5537,6 +5540,7 @@ namespace Copper68k
             }
 
             State.ProgramCounter = target;
+            _ec020DecodeOverlap = 0;
             _timing.CompleteHotBranchByteTaken();
             _instructionPipe.Reset(State.ProgramCounter);
         }
@@ -5617,6 +5621,7 @@ namespace Copper68k
         public virtual void Reset(uint programCounter, uint stackPointer)
         {
             _m68040MovemContinuation = null;
+            _ec020DecodeOverlap = 0;
             Array.Clear(State.D);
             Array.Clear(State.A);
             State.ProgramCounter = programCounter;
@@ -5657,6 +5662,7 @@ namespace Copper68k
 
         public virtual void BeginSubroutine(uint address, uint stackPointer, uint returnAddress)
         {
+            _ec020DecodeOverlap = 0;
             State.SetActiveStackPointer(stackPointer);
             PushLong(returnAddress);
             State.ProgramCounter = address;
@@ -5665,7 +5671,11 @@ namespace Copper68k
             _instructionPipe.Reset(address);
         }
 
-        protected void DiscardInstructionPrefetch() => _instructionPipe.Reset(State.ProgramCounter);
+        protected void DiscardInstructionPrefetch()
+        {
+            _ec020DecodeOverlap = 0;
+            _instructionPipe.Reset(State.ProgramCounter);
+        }
 
         public virtual void RequestInterrupt(int level, uint vectorAddress)
         {
@@ -5681,6 +5691,7 @@ namespace Copper68k
             }
 
             State.Stopped = false;
+            _ec020DecodeOverlap = 0;
             _instructionPipe.Reset(State.ProgramCounter);
             var savedStatusRegister = State.StatusRegister;
             var vectorTarget = ReadLong(State.VectorBaseRegister + vectorAddress);
@@ -8751,9 +8762,12 @@ namespace Copper68k
         {
             BeginInstruction(0x4E75);
             _ = FetchWord();
+            var stackAddress = State.A[7];
             var readStart = State.NativeCycles;
             State.ProgramCounter = PullLong();
+            var readEnd = State.NativeCycles;
             CompleteTiming(M68kInstructionTimingKey.Rts, readStart);
+            RecordEc020ChipReadOverlap(stackAddress, readEnd - readStart);
         }
 
         private void ExecuteJmpAddressIndirect(ushort opcode)
@@ -9448,6 +9462,7 @@ namespace Copper68k
             var addressRegister = opcode & 7;
             var address = State.A[addressRegister];
             var calculatedAddress = address;
+            var readStart = State.NativeCycles;
             for (var register = 0; register < 8; register++)
             {
                 if ((mask & (1 << register)) == 0)
@@ -9475,7 +9490,8 @@ namespace Copper68k
                 M68kInstructionTimingKey.MovemLongPostIncrementToRegisters,
                 "MOVEM.L (An)+,<list>",
                 CountSetBits(mask),
-                registerToMemory: false);
+                registerToMemory: false,
+                readStart: readStart);
         }
 
         private void ExecuteMovemLongAddressIndirectToRegisters(ushort opcode)
@@ -10952,12 +10968,14 @@ namespace Copper68k
             var sourceAddress = State.A[source];
             var readStart = State.NativeCycles;
             var value = ReadLong(sourceAddress);
+            var readEnd = State.NativeCycles;
             WriteGeneralRegister(true, source, sourceAddress + 4u);
             var destinationAddress = State.A[destination];
             WriteLong(destinationAddress, value);
             WriteGeneralRegister(true, destination, destinationAddress + 4u);
             SetMoveFlags(value, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.MoveLongPostIncrementToPostIncrement, readStart);
+            RecordEc020ChipReadOverlap(sourceAddress, readEnd - readStart);
         }
 
         private void ExecuteMoveLongPostIncrementToAddressDisplacement(ushort opcode)
@@ -11482,11 +11500,14 @@ namespace Copper68k
             var destination = (opcode >> 9) & 7;
             var source = opcode & 7;
             var readStart = State.NativeCycles;
-            var value = ReadByte(State.A[source]);
+            var address = State.A[source];
+            var value = ReadByte(address);
+            var readEnd = State.NativeCycles;
             WriteGeneralRegister(true, source, State.A[source] + (source == 7 ? 2u : 1u));
             WriteDataRegisterByte(destination, value);
             SetMoveFlags(value, M68kOperandSize.Byte);
             CompleteTiming(M68kInstructionTimingKey.MoveBytePostIncrementToData, readStart);
+            RecordEc020ChipReadOverlap(address, readEnd - readStart);
         }
 
         private void ExecuteMoveByteAddressDisplacementToData(ushort opcode)
@@ -12255,10 +12276,11 @@ namespace Copper68k
             var source = opcode & 7;
             var address = State.A[destination];
             var value = (byte)State.D[source];
+            var writeStart = Math.Max(State.NativeCycles, _timing.BusControllerAvailableNativeCycle);
             WriteByte(address, value);
             WriteGeneralRegister(true, destination, address + (destination == 7 ? 2u : 1u));
             SetMoveFlags(value, M68kOperandSize.Byte);
-            CompleteTiming(M68kInstructionTimingKey.MoveByteDataToPostIncrement);
+            CompleteTiming(M68kInstructionTimingKey.MoveByteDataToPostIncrement, postedWriteStart: writeStart);
         }
 
         private void ExecuteMoveByteDataToPredecrement(ushort opcode)
@@ -12284,12 +12306,14 @@ namespace Copper68k
             var sourceAddress = State.A[source];
             var readStart = State.NativeCycles;
             var value = ReadByte(sourceAddress);
+            var readEnd = State.NativeCycles;
             WriteGeneralRegister(true, source, sourceAddress + (source == 7 ? 2u : 1u));
             var destinationAddress = State.A[destination];
             WriteByte(destinationAddress, value);
             WriteGeneralRegister(true, destination, destinationAddress + (destination == 7 ? 2u : 1u));
             SetMoveFlags(value, M68kOperandSize.Byte);
             CompleteTiming(M68kInstructionTimingKey.MoveBytePostIncrementToPostIncrement, readStart);
+            RecordEc020ChipReadOverlap(sourceAddress, readEnd - readStart);
         }
 
         private void ExecuteMoveByteAddressIndirectToAbsoluteLong(ushort opcode)
@@ -12819,6 +12843,7 @@ namespace Copper68k
             var address = CalculateBriefIndexedAddress(opcode & 7, extension, opcode);
             var readStart = State.NativeCycles;
             var source = ReadSized(address, size);
+            var readEnd = State.NativeCycles;
             var destination = size == M68kOperandSize.Byte ? (byte)State.D[register] : (ushort)State.D[register];
             var result = destination + source;
             WriteDataRegisterSized(register, result, size);
@@ -12826,6 +12851,7 @@ namespace Copper68k
             CompleteTiming(size == M68kOperandSize.Byte
                 ? M68kInstructionTimingKey.AddByteBriefIndexedToData
                 : M68kInstructionTimingKey.AddWordBriefIndexedToData, readStart);
+            RecordEc020ChipReadOverlap(address, readEnd - readStart);
         }
 
         private void ExecuteAddLongBriefIndexedToData(ushort opcode)
@@ -12839,10 +12865,12 @@ namespace Copper68k
             var address = CalculateBriefIndexedAddress(addressRegister, extension, opcode);
             var readStart = State.NativeCycles;
             var source = ReadLong(address);
+            var readEnd = State.NativeCycles;
             var result = unchecked(destination + source);
             State.D[destinationRegister] = result;
             SetAddFlags(destination, source, result, M68kOperandSize.Long);
             CompleteTiming(M68kInstructionTimingKey.AddLongBriefIndexedToData, readStart);
+            RecordEc020ChipReadOverlap(address, readEnd - readStart);
         }
 
         private void ExecuteAddLongPcDisplacementToData(ushort opcode)
@@ -18984,8 +19012,51 @@ namespace Copper68k
             return value;
         }
 
+        private void RecordEc020ChipReadOverlap(uint address, long readCycles)
+        {
+            if (!ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz) ||
+                !_timing.InstructionCache.Enabled || _profile.GetBusTimingRule(address).Target != M68020MemoryTarget.ChipRam)
+                return;
+
+            // A chip transfer can overlap instruction decode. Cap the credit at
+            // one ordinary bus slot and debit the issuing instruction's own word.
+            // A delayed bus grant does not increase the overlap budget.
+            _ec020DecodeOverlap = (int)Math.Max(0, Math.Min(8, readCycles) - 2);
+            _ec020DecodeOverlapPc = State.ProgramCounter;
+        }
+
+        private M68kInstructionPlan ApplyEc020DecodeOverlap(M68kInstructionPlan plan)
+        {
+            if (_ec020DecodeOverlap == 0) return plan;
+            if (State.LastInstructionProgramCounter != _ec020DecodeOverlapPc ||
+                State.NativeCycles != _timing.Pipeline.InstructionBoundaryNativeCycle ||
+                State.Cycles != _profile.NativeToMachineCycles(State.NativeCycles) ||
+                plan.Key is not (M68kInstructionTimingKey.Moveq or
+                    M68kInstructionTimingKey.MoveByteDataToData or M68kInstructionTimingKey.MoveWordDataToData or
+                    M68kInstructionTimingKey.AndByteDataToData or M68kInstructionTimingKey.AndWordDataToData or
+                    M68kInstructionTimingKey.LsrByteImmediateData or M68kInstructionTimingKey.AndWordImmediateToData or
+                    M68kInstructionTimingKey.CmpByteImmediateToData or M68kInstructionTimingKey.CmpWordImmediateToData or
+                    M68kInstructionTimingKey.CmpLongImmediateToData or M68kInstructionTimingKey.CmpiByteImmediateToData or
+                    M68kInstructionTimingKey.CmpiWordImmediateToData or M68kInstructionTimingKey.CmpiLongImmediateToData or
+                    M68kInstructionTimingKey.BranchByteTaken or M68kInstructionTimingKey.BranchByteNotTaken or
+                    M68kInstructionTimingKey.BranchWordTaken or M68kInstructionTimingKey.DbccExpired or
+                    M68kInstructionTimingKey.DbccBranchTaken) ||
+                State.ProgramCounter == State.LastInstructionProgramCounter ||
+                ((plan.Barriers & M68kTimingBarrier.Branch) != 0 &&
+                 !_timing.TryReadInstructionCacheWord(State.ProgramCounter, out _)) ||
+                !_timing.TryReadInstructionCacheWord(State.LastInstructionProgramCounter, out _))
+            {
+                _ec020DecodeOverlap = 0;
+                return plan;
+            }
+            var overlap = Math.Min(plan.Key == M68kInstructionTimingKey.DbccExpired ? 2 : plan.NativeCycles,
+                _ec020DecodeOverlap);
+            _ec020DecodeOverlap -= overlap;
+            _ec020DecodeOverlapPc = State.ProgramCounter;
+            return plan with { NativeCycles = plan.NativeCycles - overlap };
+        }
+
         // MC68020UM 8.2.12, 8.2.15 and 8.2.16 distinguish isolated and overlapped timings.
-        // Keep a two-clock issue floor on the 2:1 board interface.
         private bool CanOverlapEc020Instruction()
             => !_timing.Pipeline.SuppressNextOverlap &&
                 _timing.TryReadInstructionCacheWord(State.ProgramCounter, out _);
@@ -19022,8 +19093,10 @@ namespace Copper68k
                         plan with { NativeCycles = 3 },
                     M68kInstructionTimingKey.JmpBriefIndexed when CanOverlapEc020Instruction() =>
                         plan with { NativeCycles = 4 },
+                    M68kInstructionTimingKey.LeaBriefIndexed =>
+                        plan with { NativeCycles = CanOverlapEc020Instruction() ? 3 : 6 },
                     M68kInstructionTimingKey.BranchByteNotTaken when CanOverlapEc020Instruction() =>
-                        plan with { NativeCycles = 2 },
+                        plan with { NativeCycles = 1 },
                     M68kInstructionTimingKey.BsrByte when CanOverlapEc020Instruction() =>
                         plan with { NativeCycles = 5 },
                     _ => plan
@@ -19060,7 +19133,7 @@ namespace Copper68k
         protected void CompleteFastTiming(M68kInstructionTimingKey key)
         {
             var plan = _timing.GetPlan(key);
-            _timing.CompleteFlatInstruction(plan);
+            _timing.CompleteFlatInstruction(ApplyEc020DecodeOverlap(plan));
             if (_instructionPipe.IsEmpty && !_timing.InstructionCache.Enabled)
             {
                 return;
@@ -19085,7 +19158,8 @@ namespace Copper68k
             M68kInstructionTimingKey key,
             string name,
             int registerCount,
-            bool registerToMemory)
+            bool registerToMemory,
+            long readStart = -1)
         {
             var plan = M68kTimingFormula.CreateMovemLongPlan(
                 key,
@@ -19094,6 +19168,13 @@ namespace Copper68k
                 registerToMemory,
                 _profile.Model,
                 _profile.FixedInstructionNativeCycles);
+            if (readStart >= 0 && ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz))
+            {
+                // MC68020UM §8.2.7 includes one three-clock bus transfer per
+                // register. The blocking reads already advanced the bus clock.
+                var accounted = Math.Min(3 * registerCount, State.NativeCycles - readStart);
+                plan = plan with { NativeCycles = plan.NativeCycles - (int)accounted };
+            }
             if (_indexedOperandExtraCycles != 0)
                 plan = plan with { NativeCycles = _profile.FixedInstructionNativeCycles ?? plan.NativeCycles + _indexedOperandExtraCycles };
             CompleteTimingPlan(plan);
@@ -19121,7 +19202,7 @@ namespace Copper68k
 
         private void CompleteTimingPlan(M68kInstructionPlan plan)
         {
-            _timing.CompleteInstruction(plan);
+            _timing.CompleteInstruction(ApplyEc020DecodeOverlap(plan));
             CompleteInstructionPipeAfterTiming(plan);
         }
 

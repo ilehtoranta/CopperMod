@@ -1404,7 +1404,10 @@ namespace Copper68k
             // MC68020UM 8.2.15 best case when the target can be supplied on chip.
             => ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz) &&
                 TryReadInstructionCacheWord(_state.ProgramCounter, out _)
-                ? _branchByteTakenPlan with { NativeCycles = 3 }
+                ? _branchByteTakenPlan with
+                {
+                    NativeCycles = (_state.LastOpcode & 0xFF00) == 0x6000 ? 2 : 3
+                }
                 : _branchByteTakenPlan;
 
         [MethodImpl(MethodImplOptions.NoInlining)]
