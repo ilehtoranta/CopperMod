@@ -10598,6 +10598,12 @@ namespace Copper68k
                     var programCounter = PullLong();
                     AddInstructionCycles(16);
                     BranchTo(programCounter, State.ProgramCounter);
+                    if (_m68000BusCycleTiming is not null && !UsesFormatWordExceptionFrames)
+                    {
+                        // RTS polls IPL after the returned-to opcode, before
+                        // the committed second fetch refreshes the queue.
+                        SampleM68000IplAtQueuedOpcode();
+                    }
                     return true;
                 }
                 case 0x4E74 when Has68010SystemInstructions:

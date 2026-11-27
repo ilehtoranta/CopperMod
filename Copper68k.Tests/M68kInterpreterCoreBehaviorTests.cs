@@ -4589,6 +4589,44 @@ public sealed class M68kInterpreterCoreBehaviorTests
 
 		Assert.True(firstInterruptPhase.RequestedCycle >= extensionReadyCycle);
 	}
+
+	[Theory]
+	[InlineData(0)]
+	[InlineData(12)]
+	public void RtsPollsIplBeforeTheReturnTargetRefill(int refillWait)
+	{
+		var bus = new M68000CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x2002,
+			DelayedInstructionFetchCycles = refillWait
+		};
+		Write(bus.Memory, 0x1000, Words(0x4E75, 0x4E71)); // RTS
+		Write(bus.Memory, 0x8000, Words(0, 0x2000));
+		Write(bus.Memory, 0x2000, Words(0x3080, 0x4E71, 0x4E71)); // MOVE.W D0,(A0)
+		Write(bus.Memory, 0x2800, Words(0x55AA));
+		using var cpu = CreateCycleParityCpu(bus, true, M68kOpcodePlanDispatch.PackedPlan);
+		cpu.State.A[0] = 0x2800;
+		cpu.State.StatusRegister = M68kCpuState.Supervisor;
+		var recognition = (IM68000InterruptRecognition)cpu;
+
+		cpu.ExecuteInstruction();
+
+		var target = ((IM68000PipelineStateTransfer)cpu).ExportM68000PipelineState();
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(2, target.PrefetchCount);
+		Assert.Equal(target.ReadyCycle0, recognition.LastInterruptSampleCycle);
+
+		var pinChange = target.ReadyCycle0 - 2;
+		Assert.False(recognition.HasRecognizedInterrupt(4, pinChange, interruptMask: 0));
+
+		cpu.ExecuteInstruction();
+
+		var write = Assert.Single(bus.CpuBusPhases, phase => phase.IsWrite);
+		Assert.True(write.RequestedCycle >= target.ReadyCycle1);
+		Assert.Equal(0, ReadWord(bus.Memory, 0x2800));
+		Assert.True(recognition.HasRecognizedInterrupt(4, pinChange, interruptMask: 0));
+	}
+
 	[Fact]
 	public void RoxrUsesExtendAsIncomingBitAndUpdatesCarryExtend()
 	{
