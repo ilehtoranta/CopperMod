@@ -11505,6 +11505,9 @@ namespace Copper68k
 
             var clearWithoutRead = unary == 0x4200 &&
                 (typeof(TBus) == typeof(M68010AddressMaskedBus) || _useM68020BriefIndexedAddressing);
+            var timedAbsoluteWordClear = unary == 0x4200 &&
+                size == M68kOperandSize.Word && mode == 7 && reg == 1 &&
+                !clearWithoutRead && _m68000BusCycleTiming is not null;
             var writesEffectiveAddress = unary != 0x4A00;
             var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
                 size == M68kOperandSize.Long &&
@@ -11539,6 +11542,9 @@ namespace Copper68k
 
             var isMemoryTstLong =
                 unary == 0x4A00 && size == M68kOperandSize.Long;
+            if (timedAbsoluteWordClear)
+                SampleM68000IplAtQueuedOpcode();
+
             var value = isMemoryTstLong
                 ? ea.ReadTstLongWithIplSampleBetweenWords()
                 : clearWithoutRead ? 0u : ea.Read();
@@ -11550,6 +11556,15 @@ namespace Copper68k
                     break;
                 case 0x4200:
                     value = 0;
+                    if (timedAbsoluteWordClear)
+                    {
+                        // The MC68000 reads the destination, refills the queue,
+                        // and only then writes the cleared word.
+                        State.SetSizedLogicFlags(0, size);
+                        PrefetchFallthroughBeforeMemoryWriteback();
+                        ea.Write(0, readModifyWrite: true);
+                        break;
+                    }
                     ea.Write(value, readModifyWrite: true);
                     State.SetSizedLogicFlags(0, size);
                     break;

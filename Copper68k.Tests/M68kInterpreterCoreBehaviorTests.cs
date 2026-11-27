@@ -1965,6 +1965,38 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	[InlineData(false, (int)M68kOpcodePlanDispatch.KindTable)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan)]
+	public void AbsoluteLongWordClearRefillsBetweenOperandReadAndWrite(
+		bool enableOpcodePlan, int dispatch)
+	{
+		const int refillWait = 6;
+		var bus = new M68000CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x100C,
+			DelayedInstructionFetchCycles = refillWait
+		};
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, 0x4279, 0, 0x3000, 0x4E71, 0x4E71));
+		Write(bus.Memory, 0x3000, Words(0x8142));
+		using var cpu = CreateCycleParityCpu(bus, enableOpcodePlan, (M68kOpcodePlanDispatch)dispatch);
+		cpu.State.StatusRegister |= M68kCpuState.Extend;
+		cpu.ExecuteInstruction();
+		bus.CpuBusPhases.Clear();
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(new[] { 0x1008u, 0x100Au, 0x3000u, 0x100Cu, 0x3000u },
+			bus.CpuBusPhases.Select(phase => phase.Address));
+		Assert.False(bus.CpuBusPhases[2].IsWrite);
+		Assert.True(bus.CpuBusPhases[4].IsWrite);
+		Assert.Equal(20 + refillWait, elapsed);
+		Assert.Equal(0, ReadWord(bus.Memory, 0x3000));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Zero));
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Extend));
+	}
+
+	[Theory]
+	[InlineData(false, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan)]
 	public void WordPostincrementMoveRefillsBeforeTheNextPopAfterDmaWait(
 		bool enableOpcodePlan, int dispatch)
 	{
