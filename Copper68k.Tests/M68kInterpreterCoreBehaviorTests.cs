@@ -1938,6 +1938,33 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	[InlineData(false, (int)M68kOpcodePlanDispatch.KindTable)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable)]
 	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan)]
+	public void AbsoluteLongWordMoveReadsOperandBeforeFinalRefill(
+		bool enableOpcodePlan, int dispatch)
+	{
+		const int wait = 6;
+		var bus = new M68000CycleCountingBus
+		{
+			DelayedWordReadAddress = 0x3000,
+			DelayedWordReadCycles = wait
+		};
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, 0x3439, 0, 0x3000, 0x4E71, 0x4E71));
+		Write(bus.Memory, 0x3000, Words(0x8142));
+		using var cpu = CreateCycleParityCpu(bus, enableOpcodePlan, (M68kOpcodePlanDispatch)dispatch);
+		cpu.ExecuteInstruction();
+		bus.CpuBusPhases.Clear();
+
+		var elapsed = cpu.ExecuteInstruction();
+
+		Assert.Equal(new[] { 0x1008u, 0x100Au, 0x3000u, 0x100Cu },
+			bus.CpuBusPhases.Select(phase => phase.Address));
+		Assert.Equal(16 + wait, elapsed);
+		Assert.Equal(0x8142u, cpu.State.D[2]);
+	}
+
+	[Theory]
+	[InlineData(false, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan)]
 	public void WordPostincrementMoveRefillsBeforeTheNextPopAfterDmaWait(
 		bool enableOpcodePlan, int dispatch)
 	{
@@ -1961,6 +1988,40 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x3004u, cpu.State.A[7]);
 		Assert.Equal(0x8142u, cpu.State.D[2]);
 		Assert.Equal(0x2468u, cpu.State.D[1]);
+	}
+
+	[Theory]
+	[InlineData((int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData((int)M68kOpcodePlanDispatch.PackedPlan)]
+	public void WordPostincrementMoveRetiresWhenTheFastRefillWordIsReady(int dispatch)
+	{
+		var bus = new M68000CycleCountingBus
+		{
+			ZeroWaitInstructionFetch = true,
+			FastInstructionFetchBusTail = true,
+			DelayedWordReadAddress = 0x3000,
+			DelayedWordReadCycles = 6
+		};
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, 0x341F, 0x321F, 0x4E71, 0x4E71));
+		Write(bus.Memory, 0x3000, Words(0x8142, 0x2468));
+		using var cpu = CreateCycleParityCpu(bus, true, (M68kOpcodePlanDispatch)dispatch);
+		cpu.State.A[7] = 0x3000;
+		cpu.ExecuteInstruction(); // Prime the queue with the two MOVE.W opcodes.
+		bus.CpuBusPhases.Clear();
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(0x1008u, bus.CpuBusPhases[1].Address);
+		var refillReady = bus.CpuBusPhases[1].CompletedCycle;
+		Assert.Equal(refillReady, cpu.State.Cycles);
+		var pipeline = ((IM68000PipelineStateTransfer)cpu).ExportM68000PipelineState();
+		Assert.Equal(refillReady + 4, pipeline.NextBusTransferCycle);
+
+		cpu.ExecuteInstruction();
+
+		var nextOperand = bus.CpuBusPhases[2];
+		Assert.Equal(0x3002u, nextOperand.Address);
+		Assert.True(nextOperand.RequestedCycle + bus.M68000BusCycleStartDelay >= pipeline.NextBusTransferCycle);
 	}
 
 	[Theory]
@@ -5957,6 +6018,8 @@ public sealed class M68kInterpreterCoreBehaviorTests
 
 	private sealed class M68000CycleCountingBus : CycleCountingBus, IM68000BusCycleTiming
 	{
+		public bool FastInstructionFetchBusTail { get; init; }
+
 		public int M68000BusCycleStartDelay => 2;
 
 		public bool RequiresExactM68000PipelineFallback => false;
@@ -5971,10 +6034,12 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		{
 			_ = address;
 			_ = size;
-			_ = accessKind;
 			_ = isWrite;
 			_ = requestedCycle;
-			return new M68000BusAccessTiming(completedCycle, completedCycle + 2);
+			var busTail = FastInstructionFetchBusTail && accessKind == M68kBusAccessKind.CpuInstructionFetch
+				? 4
+				: 2;
+			return new M68000BusAccessTiming(completedCycle, completedCycle + busTail);
 		}
 	}
 }

@@ -7118,7 +7118,7 @@ namespace Copper68k
             }
 
             PrefetchMoveSourceExtensionsBeforeRead(
-                GetMoveSourceExtensionWordCount(sourceMode, sourceRegister, size));
+                GetMoveSourcePrefetchCount(sourceMode, sourceRegister, destinationMode, size));
 
             var value = ReadPlannedEaValue(in source);
             if (!moveWritesMemory)
@@ -7418,9 +7418,9 @@ namespace Copper68k
             if (size == M68kOperandSize.Word && _m68000BusCycleTiming is not null &&
                 !UsesFormatWordExceptionFrames)
             {
-                // The next instruction can reuse the queued opcode, but its
-                // operand must follow this MOVE's final refill on the bus.
-                CommitRequiredSequentialFinalPrefetch(requireTransferRetirementEdge: true);
+                // Require the final refill before retirement. The bus tail
+                // still constrains the next operand after the word is ready.
+                PrefetchFallthroughAfterMoveSourceRead();
             }
 
             AddInstructionCycles(EstimateMoveCycles(GetEaOperandCycles(3, sourceRegister, size), 0, destinationRegister, size));
@@ -8336,7 +8336,8 @@ namespace Copper68k
             }
 
             PrefetchMoveSourceExtensionsBeforeRead(
-                GetMoveSourceExtensionWordCount(plan.SourceMode, plan.SourceRegister, plan.Size));
+                GetMoveSourcePrefetchCount(
+                    plan.SourceMode, plan.SourceRegister, plan.DestinationMode, plan.Size));
 
             var value = ReadPlannedEaValue(in source);
             if (!moveWritesMemory)
@@ -9748,7 +9749,7 @@ namespace Copper68k
             }
 
             PrefetchMoveSourceExtensionsBeforeRead(
-                GetMoveSourceExtensionWordCount(srcMode, srcReg, size));
+                GetMoveSourcePrefetchCount(srcMode, srcReg, destMode, size));
 
             var value = src.Read();
             if (!moveWritesMemory)
@@ -13990,9 +13991,10 @@ namespace Copper68k
             => mode is 5 or 6 || (mode == 7 && register <= 1);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int GetMoveSourceExtensionWordCount(
+        private int GetMoveSourcePrefetchCount(
             int mode,
             int register,
+            int destinationMode,
             M68kOperandSize size)
         {
             if (mode is 5 or 6)
@@ -14003,6 +14005,14 @@ namespace Copper68k
             if (mode != 7)
             {
                 return 0;
+            }
+
+            if (register == 1 && size == M68kOperandSize.Word && destinationMode == 0 &&
+                _m68000BusCycleTiming is not null && !UsesFormatWordExceptionFrames)
+            {
+                // The MC68000 loads the next opcode before reading the word
+                // operand. The final queue refill follows the operand read.
+                return 1;
             }
 
             return register switch
