@@ -8537,7 +8537,7 @@ namespace Copper68k
             if ((opcode & 0x0040) == 0)
             {
                 State.StatusRegister = (ushort)((State.StatusRegister & 0xFFE0) | (result & 0x001F));
-                CompleteTiming(M68kInstructionTimingKey.ImmediateWordToConditionCodeRegister);
+                CompleteImmediateLogicalStatusTiming(M68kInstructionTimingKey.ImmediateWordToConditionCodeRegister);
                 return true;
             }
 
@@ -8548,8 +8548,21 @@ namespace Copper68k
             }
 
             State.StatusRegister = (ushort)result;
-            CompleteTiming(M68kInstructionTimingKey.ImmediateWordToStatusRegister);
+            CompleteImmediateLogicalStatusTiming(M68kInstructionTimingKey.ImmediateWordToStatusRegister);
             return true;
+        }
+
+        private void CompleteImmediateLogicalStatusTiming(M68kInstructionTimingKey key)
+        {
+            if (ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz))
+            {
+                // MC68020UM §8.2.16 includes the immediate word in the 12-clock cache case.
+                var plan = _timing.GetPlan(key);
+                CompleteTimingPlan(plan with { NativeCycles = 12 });
+                return;
+            }
+
+            CompleteTiming(key);
         }
 
         private void ExecuteNop()
@@ -12697,11 +12710,12 @@ namespace Copper68k
             var sourceRegister = opcode & 7;
             var displacement = unchecked((int)(short)FetchWord());
             var destination = State.D[destinationRegister];
+            var readStart = State.NativeCycles;
             var source = ReadLong(unchecked((uint)(State.A[sourceRegister] + displacement)));
             var result = destination - source;
             State.D[destinationRegister] = result;
             SetSubtractFlags(destination, source, result, M68kOperandSize.Long);
-            CompleteTiming(M68kInstructionTimingKey.SubLongAddressDisplacementToData);
+            CompleteSingleOperandReadTiming(M68kInstructionTimingKey.SubLongAddressDisplacementToData, readStart, 7);
         }
 
         private void ExecuteSubLongImmediateToData(ushort opcode)
@@ -12725,12 +12739,14 @@ namespace Copper68k
             var destinationRegister = opcode & 7;
             var displacement = unchecked((int)(short)FetchWord());
             var address = unchecked((uint)(State.A[destinationRegister] + displacement));
+            var readStart = State.NativeCycles;
             var destination = ReadLong(address);
             var source = State.D[sourceRegister];
             var result = destination - source;
+            var writeStart = BeginDisplacementArithmeticWrite();
             WriteLong(address, result);
             SetSubtractFlags(destination, source, result, M68kOperandSize.Long);
-            CompleteTiming(M68kInstructionTimingKey.SubLongDataToAddressDisplacement);
+            CompleteDisplacementArithmeticTiming(M68kInstructionTimingKey.SubLongDataToAddressDisplacement, readStart, writeStart);
         }
 
         private void ExecuteAddLongDataToData(ushort opcode)
@@ -14254,12 +14270,14 @@ namespace Copper68k
             var destinationRegister = opcode & 7;
             var displacement = unchecked((int)(short)FetchWord());
             var address = unchecked((uint)(State.A[destinationRegister] + displacement));
+            var readStart = State.NativeCycles;
             var destination = ReadLong(address);
             var source = State.D[sourceRegister];
             var result = destination + source;
+            var writeStart = BeginDisplacementArithmeticWrite();
             WriteLong(address, result);
             SetAddFlags(destination, source, result, M68kOperandSize.Long);
-            CompleteTiming(M68kInstructionTimingKey.AddLongDataToAddressDisplacement);
+            CompleteDisplacementArithmeticTiming(M68kInstructionTimingKey.AddLongDataToAddressDisplacement, readStart, writeStart);
         }
 
         private void ExecuteAddaLongImmediateToAddress(ushort opcode)
@@ -14386,9 +14404,10 @@ namespace Copper68k
             var destinationRegister = (opcode >> 9) & 7;
             var addressRegister = opcode & 7;
             var displacement = unchecked((int)(short)FetchWord());
+            var readStart = State.NativeCycles;
             var source = ReadLong(unchecked((uint)(State.A[addressRegister] + displacement)));
             WriteGeneralRegister(true, destinationRegister, State.A[destinationRegister] + source);
-            CompleteTiming(M68kInstructionTimingKey.AddaLongAddressDisplacementToAddress);
+            CompleteSingleOperandReadTiming(M68kInstructionTimingKey.AddaLongAddressDisplacementToAddress, readStart, 7);
         }
 
         private void ExecuteSubaAddressIndirectToAddress(ushort opcode)
@@ -16770,9 +16789,10 @@ namespace Copper68k
             BeginInstruction(opcode);
             _ = FetchWord();
             var bit = FetchWord() & 7;
+            var readStart = State.NativeCycles;
             var value = ReadByte(State.A[opcode & 7]);
             State.SetFlag(M68kCpuState.Zero, (value & (1 << bit)) == 0);
-            CompleteTiming(M68kInstructionTimingKey.BtstByteImmediateAddressIndirect);
+            CompleteSingleOperandReadTiming(M68kInstructionTimingKey.BtstByteImmediateAddressIndirect, readStart, 8);
         }
 
         private void ExecuteBtstByteImmediatePostIncrement(ushort opcode)
@@ -16782,10 +16802,11 @@ namespace Copper68k
             var bit = FetchWord() & 7;
             var addressRegister = opcode & 7;
             var address = State.A[addressRegister];
+            var readStart = State.NativeCycles;
             var value = ReadByte(address);
             WriteGeneralRegister(true, addressRegister, address + (addressRegister == 7 ? 2u : 1u));
             State.SetFlag(M68kCpuState.Zero, (value & (1 << bit)) == 0);
-            CompleteTiming(M68kInstructionTimingKey.BtstByteImmediatePostIncrement);
+            CompleteSingleOperandReadTiming(M68kInstructionTimingKey.BtstByteImmediatePostIncrement, readStart, 10);
         }
 
         private void ExecuteBtstByteImmediateAddressDisplacement(ushort opcode)
@@ -16795,9 +16816,10 @@ namespace Copper68k
             var addressRegister = opcode & 7;
             var bit = FetchWord() & 7;
             var displacement = unchecked((int)(short)FetchWord());
+            var readStart = State.NativeCycles;
             var value = ReadByte(unchecked((uint)(State.A[addressRegister] + displacement)));
             State.SetFlag(M68kCpuState.Zero, (value & (1 << bit)) == 0);
-            CompleteTiming(M68kInstructionTimingKey.BtstByteImmediateAddressDisplacement);
+            CompleteSingleOperandReadTiming(M68kInstructionTimingKey.BtstByteImmediateAddressDisplacement, readStart, 9);
         }
 
         private void ExecuteBchgByteImmediateAbsoluteLong()
@@ -19061,6 +19083,63 @@ namespace Copper68k
             => !_timing.Pipeline.SuppressNextOverlap &&
                 _timing.TryReadInstructionCacheWord(State.ProgramCounter, out _);
 
+        private bool CanOverlapEc020ShiftAtBranchTarget()
+        {
+            if (!_timing.Pipeline.SuppressNextOverlap)
+                return false;
+
+            // A short taken branch still flushes the pipe. When the branch
+            // target and its following word are cached, the shift can decode
+            // without waiting for an external instruction fetch.
+            var previous = _timing.LastInstructionTiming.Plan;
+            return previous.Key == M68kInstructionTimingKey.BranchByteTaken && previous.NativeCycles <= 3 &&
+                _timing.TryReadInstructionCacheWord(State.LastInstructionProgramCounter, out _) &&
+                _timing.TryReadInstructionCacheWord(State.ProgramCounter, out _);
+        }
+
+        private void CompleteSingleOperandReadTiming(M68kInstructionTimingKey key, long readStart, int cacheCaseCycles)
+        {
+            if (!ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz))
+            {
+                CompleteTiming(key);
+                return;
+            }
+
+            // MC68020UM §§8.2.1–8.2.2 include the operand transfer in the
+            // cache-case total. Only its nominal clocks are counted twice.
+            var plan = _timing.GetPlan(key);
+            var readCredit = (int)Math.Min(3, State.NativeCycles - readStart);
+            CompleteTimingPlan(plan with { NativeCycles = cacheCaseCycles - readCredit });
+        }
+
+        private long BeginDisplacementArithmeticWrite()
+        {
+            if (!ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz))
+                return -1;
+
+            // The sequencer performs arithmetic after the read before it
+            // presents the result for the posted write.
+            State.NativeCycles++;
+            return State.NativeCycles;
+        }
+
+        private void CompleteDisplacementArithmeticTiming(M68kInstructionTimingKey key, long readStart, long writeStart)
+        {
+            if (writeStart < 0)
+            {
+                CompleteTiming(key);
+                return;
+            }
+
+            // MC68020UM §§8.2.1 and 8.2.8 give nine clocks. One has already
+            // elapsed before the write. The bus keeps any remaining write wait.
+            var plan = _timing.GetPlan(key);
+            var readCredit = (int)Math.Min(3, writeStart - readStart - 1);
+            var writeRequest = _profile.MachineToNativeCycles(_profile.NativeToMachineCycles(writeStart));
+            var writeCredit = (int)Math.Clamp(_timing.BusControllerAvailableNativeCycle - writeRequest, 0, 3);
+            CompleteTimingPlan(plan with { NativeCycles = 8 - readCredit - writeCredit });
+        }
+
         internal void CompleteTiming(
             M68kInstructionTimingKey key, long readStart = -1, long postedWriteStart = -1)
         {
@@ -19077,6 +19156,8 @@ namespace Copper68k
                 plan = key switch
                 {
                     M68kInstructionTimingKey.Nop when State.LastOpcode == 0x4E71 =>
+                        plan with { NativeCycles = 2 },
+                    M68kInstructionTimingKey.LsrWordImmediateData when CanOverlapEc020ShiftAtBranchTarget() =>
                         plan with { NativeCycles = 2 },
                     M68kInstructionTimingKey.LslByteImmediateData or
                     M68kInstructionTimingKey.LslWordImmediateData or

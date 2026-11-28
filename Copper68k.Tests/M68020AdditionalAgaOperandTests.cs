@@ -7,6 +7,153 @@ public sealed class M68020AdditionalAgaOperandTests
 {
     private const uint Code = 0xF80000;
 
+    [Theory]
+    [InlineData(0x4000u, 0, 21)]
+    [InlineData(0x4000u, 7, 51)]
+    [InlineData(0x4002u, 7, 54)]
+    public void Ec020NormalRteCountsCompletedStackReadsOnce(uint frame, int readWait, int nativeCycles)
+    {
+        const uint target = Code + 0x20;
+        var bus = new ZeroWaitCodeBus { ReadMachineDelay = readWait };
+        WriteWords(bus, Code, 0x4E73); // RTE
+        WriteWords(bus, target, 0x4E71);
+        WriteWords(bus, frame, 0x2104, (ushort)(target >> 16), unchecked((ushort)target), 0x0068);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, frame);
+
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(target, cpu.State.ProgramCounter);
+        Assert.Equal(frame + 8, cpu.State.A[7]);
+        Assert.Equal(0x2104, cpu.State.StatusRegister);
+        Assert.Equal(2 * readWait, bus.LastDataReadStartCycle);
+        Assert.Equal(nativeCycles, cpu.State.NativeCycles);
+    }
+
+    [Theory]
+    [InlineData(0x0810, 0, 8)] // BTST #7,(A0)
+    [InlineData(0x0810, 7, 19)]
+    [InlineData(0x0818, 0, 10)] // BTST #7,(A0)+
+    [InlineData(0x0818, 7, 21)]
+    [InlineData(0x0828, 0, 9)] // BTST #7,(4,A0)
+    [InlineData(0x0828, 7, 20)]
+    public void Ec020ImmediateMemoryBitTestCountsTheOperandReadOnce(ushort opcode, int readWait, int nativeCycles)
+    {
+        var bus = new ZeroWaitCodeBus { ReadMachineDelay = readWait };
+        WriteWords(bus, Code, opcode, 7, 4, 0x4E71);
+        bus.WriteLong(0x2000, 0x80000000);
+        bus.WriteLong(0x2004, 0x80000000);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        cpu.State.A[0] = 0x2000;
+        cpu.State.StatusRegister = 0x2004;
+
+        cpu.ExecuteInstruction();
+
+        Assert.False(cpu.State.GetFlag(M68kCpuState.Zero));
+        Assert.Equal(opcode == 0x0818 ? 0x2001u : 0x2000u, cpu.State.A[0]);
+        Assert.Equal(Code + (opcode == 0x0828 ? 6u : 4u), cpu.State.ProgramCounter);
+        Assert.Equal(nativeCycles, cpu.State.NativeCycles);
+    }
+
+    [Theory]
+    [InlineData(0xD1A8, 0, 9)] // ADD.L D0,(4,A0)
+    [InlineData(0xD1A8, 7, 17)]
+    [InlineData(0x91A8, 0, 9)] // SUB.L D0,(4,A0)
+    [InlineData(0x91A8, 7, 17)]
+    public void Ec020DisplacementArithmeticAccountsForReadAndPostedWrite(ushort opcode, int busWait, int nativeCycles)
+    {
+        var bus = new ZeroWaitCodeBus { ReadMachineDelay = busWait, WriteMachineDelay = busWait };
+        WriteWords(bus, Code, opcode, 4, 0x4E71);
+        bus.WriteLong(0x2004, 0x100);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        cpu.State.A[0] = 0x2000;
+        cpu.State.D[0] = 0x20;
+
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(opcode == 0xD1A8 ? 0x120u : 0xE0u, bus.ReadLong(0x2004));
+        Assert.Equal(0x2000u, cpu.State.A[0]);
+        Assert.Equal(Code + 4, cpu.State.ProgramCounter);
+        Assert.Equal(nativeCycles, cpu.State.NativeCycles);
+    }
+
+    [Theory]
+    [InlineData(0x92AE, 0, 7)] // SUB.L (4,A6),D1
+    [InlineData(0x92AE, 7, 18)]
+    [InlineData(0xD3EE, 0, 7)] // ADDA.L (4,A6),A1
+    [InlineData(0xD3EE, 7, 18)]
+    public void Ec020DisplacementArithmeticAccountsForTheOperandReadOnce(ushort opcode, int readWait, int nativeCycles)
+    {
+        var bus = new ZeroWaitCodeBus { ReadMachineDelay = readWait };
+        WriteWords(bus, Code, opcode, 4, 0x4E71);
+        bus.WriteLong(0x2004, 0x20);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        cpu.State.A[6] = 0x2000;
+        cpu.State.D[1] = cpu.State.A[1] = 0x100;
+        cpu.State.StatusRegister = 0x201F;
+
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(Code + 4, cpu.State.ProgramCounter);
+        Assert.Equal(opcode == 0x92AE ? 0xE0u : 0x100u, cpu.State.D[1]);
+        Assert.Equal(opcode == 0xD3EE ? 0x120u : 0x100u, cpu.State.A[1]);
+        Assert.Equal(opcode == 0xD3EE ? 0x201F : 0x2000, cpu.State.StatusRegister);
+        Assert.Equal(nativeCycles, cpu.State.NativeCycles);
+    }
+
+    [Theory]
+    [InlineData(0x7000, 4)]
+    [InlineData(0x7009, 2)]
+    public void Ec020WordShiftAfterAConditionalBranchUsesTheCachedTargetTiming(ushort moveqOpcode, int nativeCycles)
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, Code, moveqOpcode, 0x4E7B, 0x0002, 0xE249, 0x66FC, 0x4E71);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        cpu.State.D[1] = 8;
+        cpu.ExecuteInstruction(); // MOVEQ controlling the instruction cache
+        cpu.ExecuteInstruction(); // MOVEC D0,CACR
+        cpu.ExecuteInstruction(); // LSR.W #1,D1
+        cpu.ExecuteInstruction(); // BNE.B to the LSR
+
+        Assert.Equal(Code + 6, cpu.State.ProgramCounter);
+        var start = cpu.State.NativeCycles;
+        var fetches = bus.InstructionFetchWords;
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(Code + 8, cpu.State.ProgramCounter);
+        Assert.Equal(2u, cpu.State.D[1]);
+        Assert.Equal(nativeCycles, cpu.State.NativeCycles - start);
+        if (moveqOpcode == 0x7009)
+            Assert.Equal(fetches, bus.InstructionFetchWords);
+    }
+
+    [Theory]
+    [InlineData(0x007C, 0x0100, 0x2000, 0x2100)] // ORI to SR
+    [InlineData(0x027C, 0xFEFF, 0x2100, 0x2000)] // ANDI to SR
+    [InlineData(0x0A7C, 0x0100, 0x2000, 0x2100)] // EORI to SR
+    [InlineData(0x003C, 0x0004, 0x2000, 0x2004)] // ORI to CCR
+    [InlineData(0x023C, 0x00FB, 0x2004, 0x2000)] // ANDI to CCR
+    [InlineData(0x0A3C, 0x0004, 0x2000, 0x2004)] // EORI to CCR
+    public void Ec020ImmediateLogicalStatusOperationsUseTwelveNativeClocks(
+        ushort opcode, ushort operand, ushort status, ushort result)
+    {
+        var bus = new ZeroWaitCodeBus();
+        WriteWords(bus, Code, opcode, operand, 0x4E71);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        cpu.State.StatusRegister = status;
+
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(result, cpu.State.StatusRegister);
+        Assert.Equal(Code + 4, cpu.State.ProgramCounter);
+        Assert.Equal(12, cpu.State.NativeCycles);
+    }
+
     [Fact]
     public void Ec020CachesInstructionFetchesFromTheExtendedRomBank()
     {

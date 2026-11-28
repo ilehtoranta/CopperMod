@@ -52,6 +52,7 @@ internal partial class M68kAdvancedTimingInterpreter
 
     private void ExecuteRte020(RteValidation020? resume = null, uint? supplied = null)
     {
+        var readStart = resume is null ? State.NativeCycles : -1;
         try
         {
             while (true)
@@ -79,8 +80,22 @@ internal partial class M68kAdvancedTimingInterpreter
                 }
                 State.SetActiveStackPointer(unchecked(context.Frame + size));
                 State.StatusRegister = context.Sr;
-                if (format == 1) continue;
+                if (format == 1)
+                {
+                    readStart = -1;
+                    continue;
+                }
                 State.ProgramCounter = context.Pc;
+                if (format == 0 && readStart >= 0 && ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz))
+                {
+                    // MC68020UM §8.2.18 includes the stack transfers in the
+                    // cache case. An unaligned PC requires two bus transfers.
+                    var plan = _timing.GetPlan(M68kInstructionTimingKey.Rte);
+                    var transfers = (context.Frame & 3) == 0 ? 4 : 3;
+                    var readCredit = (int)System.Math.Min(3 * transfers, State.NativeCycles - readStart);
+                    CompleteTimingPlan(plan with { NativeCycles = 21 - readCredit });
+                    return;
+                }
                 CompleteTiming(M68kInstructionTimingKey.Rte);
                 return;
             }
