@@ -2099,6 +2099,61 @@ public sealed class M68kInterpreterCoreBehaviorTests
 	}
 
 	[Theory]
+	[InlineData((int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData((int)M68kOpcodePlanDispatch.PackedPlan)]
+	public void M68000MoveLongPostincrementRefillsBeforeFollowingDbra(int dispatch)
+	{
+		var bus = new M68000CycleCountingBus
+		{
+			LongwordWriteCycles = 6,
+			ZeroWaitInstructionFetch = true,
+			FastInstructionFetchBusTail = true
+		};
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, 0x20C2, 0x51C8, 0xFFFC, 0x4E71));
+		using var cpu = CreateCycleParityCpu(bus, true, (M68kOpcodePlanDispatch)dispatch);
+		cpu.State.A[0] = 0x2000;
+		cpu.State.D[0] = 3;
+		cpu.State.D[2] = 0x12345678;
+		cpu.ExecuteInstruction();
+		bus.CpuBusPhases.Clear();
+
+		cpu.ExecuteInstruction();
+
+		var write = Assert.Single(bus.CpuBusPhases.Where(phase => phase.IsWrite));
+		var refill = Assert.Single(bus.CpuBusPhases.Where(phase => phase.AccessKind == M68kBusAccessKind.CpuInstructionFetch));
+		Assert.Equal(0x1008u, refill.Address);
+		Assert.Equal(write.RequestedCycle + 8, refill.RequestedCycle);
+
+		Assert.Equal(0x2004u, cpu.State.A[0]);
+		Assert.Equal(0x1006u, cpu.State.ProgramCounter);
+	}
+
+	[Theory]
+	[InlineData((int)M68kOpcodePlanDispatch.Scalar)]
+	[InlineData((int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData((int)M68kOpcodePlanDispatch.PackedPlan)]
+	public void M68000IndexedByteMoveSpendsIndexTimeBeforeTheFirstRefill(int dispatch)
+	{
+		var bus = new M68000CycleCountingBus();
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, 0x1532, 0x20FF, 0x4E71, 0x4E71));
+		using var cpu = CreateCycleParityCpu(bus, dispatch != (int)M68kOpcodePlanDispatch.Scalar,
+			(M68kOpcodePlanDispatch)dispatch);
+		cpu.State.A[2] = 0x2000;
+		cpu.State.D[2] = 4;
+		bus.Memory[0x2003] = 0xA5;
+		cpu.ExecuteInstruction();
+		var indexWord = bus.CpuBusPhases.Last(phase => phase.Address == 0x1006);
+		bus.CpuBusPhases.Clear();
+
+		cpu.ExecuteInstruction();
+
+		var refill = bus.CpuBusPhases.First();
+		Assert.Equal(0x1008u, refill.Address);
+		Assert.Equal(indexWord.RequestedCycle + 6, refill.RequestedCycle);
+		Assert.Equal(0xA5, bus.Memory[0x1FFF]);
+	}
+
+	[Theory]
 	[MemberData(nameof(OpcodePlanDispatchVariants))]
 	public void PlannedShortSelfBranchBatchMatchesScalarQueueAndBusOrder(int dispatchValue)
 	{
@@ -5816,6 +5871,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		public int DelayedWordReadCycles { get; init; }
 		public int DataByteReadDelayCycles { get; init; }
 		public int LongwordReadCycles { get; init; } = AccessCycles * 2;
+		public int LongwordWriteCycles { get; init; } = AccessCycles * 2;
 		public uint? ThrowingInstructionFetchAddress { get; init; }
 		public bool ZeroWaitInstructionFetch { get; init; }
 		public bool FixedPlanRunEnabled { get; init; }
@@ -5900,7 +5956,7 @@ public sealed class M68kInterpreterCoreBehaviorTests
 			Memory[address + 1] = (byte)(value >> 16);
 			Memory[address + 2] = (byte)(value >> 8);
 			Memory[address + 3] = (byte)value;
-			cycle += AccessCycles * 2;
+			cycle += LongwordWriteCycles;
 		}
 		public bool HasHostTrapStub(uint address)
 		{
