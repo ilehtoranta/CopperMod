@@ -105,6 +105,29 @@ public sealed class M68020AdditionalAgaOperandTests
     }
 
     [Theory]
+    [InlineData(0, 7)]
+    [InlineData(7, 18)]
+    public void Ec020DisplacementAndAccountsForTheOperandReadOnce(int readWait, int nativeCycles)
+    {
+        var bus = new ZeroWaitCodeBus { ReadMachineDelay = readWait };
+        WriteWords(bus, Code, 0xC0A9, 4, 0x4E71); // AND.L (4,A1),D0
+        bus.WriteLong(0x2004, 0xF0F00000);
+        using var cpu = M68kCoreFactory.Default.CreateA1200Ec020(bus);
+        cpu.Reset(Code, 0x4000);
+        cpu.State.A[1] = 0x2000;
+        cpu.State.D[0] = 0xAABBCCDD;
+        cpu.State.StatusRegister = 0x2017;
+
+        cpu.ExecuteInstruction();
+
+        Assert.Equal(Code + 4, cpu.State.ProgramCounter);
+        Assert.Equal(0x2000u, cpu.State.A[1]);
+        Assert.Equal(0xA0B00000u, cpu.State.D[0]);
+        Assert.Equal(0x2018, cpu.State.StatusRegister);
+        Assert.Equal(nativeCycles, cpu.State.NativeCycles);
+    }
+
+    [Theory]
     [InlineData(0x7000, 4)]
     [InlineData(0x7009, 2)]
     public void Ec020WordShiftAfterAConditionalBranchUsesTheCachedTargetTiming(ushort moveqOpcode, int nativeCycles)

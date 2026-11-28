@@ -15461,7 +15461,19 @@ namespace Copper68k
             var mode = (opcode >> 3) & 7;
             var sourceRegister = opcode & 7;
             var destinationRegister = (opcode >> 9) & 7;
-            var source = ReadLongDataSource(mode, sourceRegister, opcode);
+            var readStart = -1L;
+            uint source;
+            if (mode == 5 && ReferenceEquals(_profile, M68020CpuProfile.A1200Ec02014Mhz))
+            {
+                var displacement = unchecked((short)FetchWord());
+                var address = unchecked((uint)(State.A[sourceRegister] + displacement));
+                readStart = State.NativeCycles;
+                source = ReadLong(address);
+            }
+            else
+            {
+                source = ReadLongDataSource(mode, sourceRegister, opcode);
+            }
             var result = State.D[destinationRegister] & source;
             State.D[destinationRegister] = result;
             State.SetNegativeZero(result, M68kOperandSize.Long);
@@ -15469,7 +15481,7 @@ namespace Copper68k
             State.SetFlag(M68kCpuState.Carry, false);
             CompleteOperandShapeTiming(
                 M68kInstructionTimingKey.AndLongEffectiveAddressToData,
-                GetAndLongTimingLabel(mode, sourceRegister));
+                GetAndLongTimingLabel(mode, sourceRegister), readStart);
         }
 
         private static string GetAndLongTimingLabel(int mode, int register)
@@ -19223,13 +19235,19 @@ namespace Copper68k
             CompleteInstructionPipeAfterTiming(plan);
         }
 
-        private void CompleteOperandShapeTiming(M68kInstructionTimingKey key, string name)
+        private void CompleteOperandShapeTiming(M68kInstructionTimingKey key, string name, long readStart = -1)
         {
             var plan = M68kTimingFormula.CreateOperandShapePlan(
                 key,
                 name,
                 _profile.Model,
                 _profile.FixedInstructionNativeCycles);
+            if (readStart >= 0)
+            {
+                // MC68020UM §§8.2.1 and 8.2.8 include the operand read in the cache case.
+                var readCredit = (int)Math.Min(3, State.NativeCycles - readStart);
+                plan = plan with { NativeCycles = plan.NativeCycles - readCredit };
+            }
             if (_indexedOperandExtraCycles != 0)
                 plan = plan with { NativeCycles = _profile.FixedInstructionNativeCycles ?? plan.NativeCycles + _indexedOperandExtraCycles };
             CompleteTimingPlan(plan);
