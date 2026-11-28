@@ -7087,6 +7087,7 @@ namespace Copper68k
             var sourceRegister = opcode & 7;
             var destinationMode = (opcode >> 6) & 7;
             var destinationRegister = (opcode >> 9) & 7;
+            SampleMoveImmediatePostincrementIpl(sourceMode, sourceRegister, destinationMode, size);
             if ((sourceMode == 3 || destinationMode == 3) &&
                 TryExecuteMoveFast(sourceMode, sourceRegister, destinationMode, destinationRegister, size))
             {
@@ -7117,8 +7118,7 @@ namespace Copper68k
                 AddPendingInternalCycles(2);
             }
 
-            PrefetchMoveSourceExtensionsBeforeRead(
-                GetMoveSourcePrefetchCount(sourceMode, sourceRegister, destinationMode, size));
+            PrefetchMoveSourceExtensionsBeforeRead(sourceMode, sourceRegister, destinationMode, size);
 
             var value = ReadPlannedEaValue(in source);
             if (!moveWritesMemory)
@@ -8283,6 +8283,8 @@ namespace Copper68k
 
         private void ExecutePackedMove(in M68kPackedOpcodePlan plan)
         {
+            SampleMoveImmediatePostincrementIpl(
+                plan.SourceMode, plan.SourceRegister, plan.DestinationMode, plan.Size);
             if ((plan.SourceMode == 3 || plan.DestinationMode == 3) &&
                 TryExecuteMoveFast(
                     plan.SourceMode,
@@ -8318,9 +8320,7 @@ namespace Copper68k
                 AddPendingInternalCycles(2);
             }
 
-            PrefetchMoveSourceExtensionsBeforeRead(
-                GetMoveSourcePrefetchCount(
-                    plan.SourceMode, plan.SourceRegister, plan.DestinationMode, plan.Size));
+            PrefetchMoveSourceExtensionsBeforeRead(plan.SourceMode, plan.SourceRegister, plan.DestinationMode, plan.Size);
 
             var value = ReadPlannedEaValue(in source);
             if (!moveWritesMemory)
@@ -9722,6 +9722,7 @@ namespace Copper68k
                 return true;
             }
 
+            SampleMoveImmediatePostincrementIpl(srcMode, srcReg, destMode, size);
             var moveWritesMemory = destMode != 1 && destMode != 0;
             var src = ResolveEaWithoutPrefetchTopUp(
                 srcMode,
@@ -9740,8 +9741,7 @@ namespace Copper68k
                 AddPendingInternalCycles(2);
             }
 
-            PrefetchMoveSourceExtensionsBeforeRead(
-                GetMoveSourcePrefetchCount(srcMode, srcReg, destMode, size));
+            PrefetchMoveSourceExtensionsBeforeRead(srcMode, srcReg, destMode, size);
 
             var value = src.Read();
             if (!moveWritesMemory)
@@ -9985,12 +9985,12 @@ namespace Copper68k
                 if ((target & 1) != 0)
                 {
                     AddInstructionCycles(18);
-                    PushBsrReturnAddress(State.ProgramCounter);
+                    PushBranchReturnAddress(State.ProgramCounter);
                     BranchTo(target, target);
                     return true;
                 }
 
-                PushBsrReturnAddress(State.ProgramCounter);
+                PushBranchReturnAddress(State.ProgramCounter);
                 if (_useM68020BriefIndexedAddressing)
                 {
                     SetProgramCounterAndFlushPrefetch(target);
@@ -11500,19 +11500,30 @@ namespace Copper68k
             var timedAbsoluteWordClear = unary == 0x4200 &&
                 size == M68kOperandSize.Word && mode == 7 && reg == 1 &&
                 !clearWithoutRead && _m68000BusCycleTiming is not null;
+            var timedAbsoluteByteTest = unary == 0x4A00 && size == M68kOperandSize.Byte &&
+                mode == 7 && reg == 1 && _m68000BusCycleTiming is not null && !UsesFormatWordExceptionFrames;
             var writesEffectiveAddress = unary != 0x4A00;
             var addressErrorStackedProgramCounterOffset = writesEffectiveAddress &&
                 size == M68kOperandSize.Long &&
                 mode is 4 or 5 or 6
                     ? -2
                     : 0;
-            var ea = ResolveEa(
-                mode,
-                reg,
-                size,
-                write: writesEffectiveAddress,
-                completeWordPostIncrementBeforeRead: !clearWithoutRead && size == M68kOperandSize.Word,
-                addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
+            var ea = timedAbsoluteByteTest
+                ? ResolveEaWithoutPrefetchTopUp(mode, reg, size)
+                : ResolveEa(
+                    mode,
+                    reg,
+                    size,
+                    write: writesEffectiveAddress,
+                    completeWordPostIncrementBeforeRead: !clearWithoutRead && size == M68kOperandSize.Word,
+                    addressErrorStackedProgramCounterOffset: addressErrorStackedProgramCounterOffset);
+            if (timedAbsoluteByteTest)
+            {
+                // Decode both address words and fetch the next opcode. The
+                // tested byte is read before the successor queue refill.
+                PrefetchFallthroughBeforeMemoryWriteback();
+                SampleM68000IplAtCurrentBusPhase();
+            }
             // 68010 CLR faults on the write. Its alignment check precedes An writeback.
             if (typeof(TBus) == typeof(M68010AddressMaskedBus) && clearWithoutRead &&
                 size != M68kOperandSize.Byte && (ea.Address & 1) != 0)
@@ -11571,7 +11582,7 @@ namespace Copper68k
                     break;
                 case 0x4A00:
                     State.SetSizedLogicFlags(value, size);
-                    if (isMemoryTstLong)
+                    if (isMemoryTstLong || timedAbsoluteByteTest)
                     {
                         CommitRequiredSequentialFinalPrefetch(
                             requireTransferRetirementEdge: true);
@@ -13339,6 +13350,21 @@ namespace Copper68k
                     useDataAccessStackedProgramCounter: true);
             }
 
+            if (prefetchFallthroughBeforeStackWrite && !UsesFormatWordExceptionFrames &&
+                !_useM68020BriefIndexedAddressing)
+            {
+                // MC68000 JSR (An) replaces the queued fall-through before
+                // the return-address writes, then fetches the second target word.
+                SampleM68000IplAtCurrentBusPhase();
+                SetProgramCounterAndFlushPrefetch(target);
+                _prefetchAddress = target;
+                TopUpPrefetchOne();
+                PushBranchReturnAddress(stackedProgramCounter);
+                _cpuRetireBusCycle = Math.Max(_cpuRetireBusCycle, TopUpPrefetchOne());
+                _skipRetirePrefetchTopUp = true;
+                return;
+            }
+
             if (prefetchFallthroughBeforeStackWrite)
             {
                 TopUpPrefetchOne();
@@ -13357,7 +13383,7 @@ namespace Copper68k
             WriteLongDescending(State.A[7], value);
         }
 
-        private void PushBsrReturnAddress(uint value)
+        private void PushBranchReturnAddress(uint value)
         {
             if (_useM68020BriefIndexedAddressing)
             {
@@ -13365,7 +13391,7 @@ namespace Copper68k
                 return;
             }
 
-            // The MC68000/010 BSR stack transfer is high-word first, unlike
+            // These MC68000/010 control transfers write the high word first, unlike
             // a generic longword predecrement write.
             State.SetActiveStackPointer(State.A[7] - 4);
             WriteWord(State.A[7], (ushort)(value >> 16));
@@ -14044,15 +14070,25 @@ namespace Copper68k
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void PrefetchMoveSourceExtensionsBeforeRead(int extensionWordCount)
+        private void PrefetchMoveSourceExtensionsBeforeRead(
+            int sourceMode, int sourceRegister, int destinationMode, M68kOperandSize size)
         {
+            var extensionWordCount = GetMoveSourcePrefetchCount(sourceMode, sourceRegister, destinationMode, size);
             if (extensionWordCount <= 0)
             {
                 return;
             }
 
             PrefetchFallthroughBeforeMemoryWriteback();
-            if (extensionWordCount > 1)
+            var readBeforeFinalFetch = sourceMode == 7 && sourceRegister == 1 && destinationMode == 0 &&
+                size is M68kOperandSize.Byte or M68kOperandSize.Word &&
+                _m68000BusCycleTiming is not null && !UsesFormatWordExceptionFrames;
+            if (readBeforeFinalFetch)
+            {
+                if (size == M68kOperandSize.Byte)
+                    SampleM68000IplAtCurrentBusPhase();
+            }
+            else if (extensionWordCount > 1)
             {
                 PrefetchFallthroughBeforeMemoryWriteback();
             }
@@ -14120,6 +14156,19 @@ namespace Copper68k
             }
 
             _skipRetirePrefetchTopUp = true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void SampleMoveImmediatePostincrementIpl(
+            int sourceMode, int sourceRegister, int destinationMode, M68kOperandSize size)
+        {
+            // The MC68000 polls before consuming the immediate and issuing
+            // its replacement fetch. A later write wait cannot move this poll.
+            if (sourceMode == 7 && sourceRegister == 4 && destinationMode == 3 &&
+                size is M68kOperandSize.Byte or M68kOperandSize.Word && !UsesFormatWordExceptionFrames)
+            {
+                SampleM68000IplAtCurrentBusPhase();
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

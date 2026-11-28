@@ -441,6 +441,56 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x1234u, cpu.State.D[0] & 0xFFFF);
 		Assert.Contains((Address: 0x2000u, Cycle: 4L), bus.DataReadCycles);
 	}
+	[Theory]
+	[InlineData(0, 0x1039)]
+	[InlineData(1, 0x1039)]
+	[InlineData(2, 0x1039)]
+	[InlineData(0, 0x4A39)]
+	[InlineData(1, 0x4A39)]
+	[InlineData(2, 0x4A39)]
+	public void AbsoluteByteReadSamplesIplThenReadsBeforeFinalPrefetch(int dispatch, ushort opcode)
+	{
+		var bus = new M68000CycleCountingBus { DataByteReadDelayCycles = 10 };
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, opcode, 0, 0x2000, 0x4E71, 0x4E71));
+		bus.Memory[0x2000] = 0x80;
+		var cpu = new M68kInterpreter(bus, (M68kOpcodePlanDispatch)dispatch);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.ExecuteInstruction();
+		var before = bus.CpuBusPhases.Count;
+
+		cpu.ExecuteInstruction();
+
+		var phases = bus.CpuBusPhases.Skip(before).ToArray();
+		Assert.Equal(new uint[] { 0x1008, 0x100A, 0x2000, 0x100C }, phases.Select(phase => phase.Address));
+		Assert.Equal(M68kBusAccessKind.CpuDataRead, phases[2].AccessKind);
+		Assert.Equal(phases[1].CompletedCycle, ((IM68000InterruptRecognition)cpu).LastInterruptSampleCycle);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Negative));
+		Assert.Equal(opcode == 0x1039 ? 0x80u : 0u, cpu.State.D[0]);
+	}
+
+	[Fact]
+	public void JsrAddressIndirectFetchesTheTargetAroundTheStackWrites()
+	{
+		var bus = new CycleCountingBus();
+		Write(bus.Memory, 0x1000, 0x60, 0x02); // BRA.S $1004
+		Write(bus.Memory, 0x1004, 0x4E, 0x90, 0x4E, 0x71); // JSR (A0)
+		Write(bus.Memory, 0x2000, 0x4E, 0x71, 0x4E, 0x75);
+		var cpu = new M68kInterpreter(bus);
+		cpu.Reset(0x1000, 0x3000);
+		cpu.State.A[0] = 0x2000;
+		cpu.ExecuteInstruction();
+		var before = bus.CpuBusPhases.Count;
+
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(
+			new[] { (0x2000u, false), (0x2FFCu, true), (0x2FFEu, true), (0x2002u, false) },
+			bus.CpuBusPhases.Skip(before).Select(phase => (phase.Address, phase.IsWrite)));
+		Assert.Equal(0x2000u, cpu.State.ProgramCounter);
+		Assert.Equal(0x2FFCu, cpu.State.A[7]);
+		Assert.Equal(new byte[] { 0, 0, 0x10, 6 }, bus.Memory.AsSpan(0x2FFC, 4).ToArray());
+	}
+
 	[Fact]
 	public void CpuBusPhaseTraceRecordsDataReadBehindPendingPrefetch()
 	{
