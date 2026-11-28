@@ -468,6 +468,33 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(opcode == 0x1039 ? 0x80u : 0u, cpu.State.D[0]);
 	}
 
+	[Theory]
+	[InlineData(false, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.KindTable)]
+	[InlineData(true, (int)M68kOpcodePlanDispatch.PackedPlan)]
+	public void WordBraStartsInternalCyclesAfterRtsDisplacementArrives(bool enableOpcodePlan, int dispatch)
+	{
+		var bus = new M68000CycleCountingBus
+		{
+			DelayedInstructionFetchAddress = 0x2002,
+			DelayedInstructionFetchCycles = 6
+		};
+		Write(bus.Memory, 0x1000, Words(0x4E75, 0x4E71)); // RTS
+		Write(bus.Memory, 0x2000, Words(0x6000, 0x01FE)); // BRA.W $2200
+		Write(bus.Memory, 0x2200, Words(0x4E71, 0x4E71));
+		Write(bus.Memory, 0x8000, Words(0, 0x2000));
+		using var cpu = CreateCycleParityCpu(bus, enableOpcodePlan, (M68kOpcodePlanDispatch)dispatch);
+
+		cpu.ExecuteInstruction();
+		var displacement = Assert.Single(bus.CpuBusPhases, phase => phase.Address == 0x2002);
+		bus.CpuBusPhases.Clear();
+		cpu.ExecuteInstruction();
+
+		Assert.Equal(new uint[] { 0x2200, 0x2202 }, bus.CpuBusPhases.Select(phase => phase.Address));
+		Assert.Equal(displacement.CompletedCycle + 2, bus.CpuBusPhases[0].RequestedCycle);
+		Assert.Equal(0x2200u, cpu.State.ProgramCounter);
+	}
+
 	[Fact]
 	public void JsrAddressIndirectFetchesTheTargetAroundTheStackWrites()
 	{

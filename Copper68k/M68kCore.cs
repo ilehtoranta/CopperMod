@@ -6911,7 +6911,9 @@ namespace Copper68k
             var extensionDisplacement = displacement == 0;
             var condition = (opcode >> 8) & 0x0F;
             var taken = condition == 0 || CheckCondition(condition);
-            AddPendingInternalCycles(taken ? 2 : 4);
+            var dependentWordBra = extensionDisplacement && condition == 0 && !UsesFormatWordExceptionFrames;
+            if (!dependentWordBra)
+                AddPendingInternalCycles(taken ? 2 : 4);
 			if (condition >= 2 && !extensionDisplacement)
 			{
 				CommitStartedConditionalBranchFallthroughPrefetch();
@@ -6921,6 +6923,8 @@ namespace Copper68k
                 ? unchecked((short)FetchWord())
                 : unchecked((sbyte)displacement);
             _consumeWithoutPrefetch = false;
+            if (dependentWordBra)
+                AddPendingInternalCycles(2);
             if (taken)
             {
                 var target = unchecked((uint)(branchBase + offset));
@@ -8192,7 +8196,9 @@ namespace Copper68k
         {
 			var branchBase = State.ProgramCounter;
 			var taken = plan.Condition == 0 || CheckCondition(plan.Condition);
-            AddPendingInternalCycles(taken ? 2 : 4);
+            var dependentWordBra = plan.ExtensionDisplacement && plan.Condition == 0 && !UsesFormatWordExceptionFrames;
+            if (!dependentWordBra)
+                AddPendingInternalCycles(taken ? 2 : 4);
 			if (plan.Condition >= 2 && !plan.ExtensionDisplacement)
 			{
 				CommitStartedConditionalBranchFallthroughPrefetch();
@@ -8202,6 +8208,8 @@ namespace Copper68k
                 ? unchecked((short)FetchWord())
                 : plan.Displacement;
             _consumeWithoutPrefetch = false;
+            if (dependentWordBra)
+                AddPendingInternalCycles(2);
             if (taken)
             {
                 var target = unchecked((uint)(branchBase + offset));
@@ -9950,9 +9958,9 @@ namespace Copper68k
 			var displacement = opcode & 0xFF;
 			var branchBase = State.ProgramCounter;
 			var taken = condition < 2 || CheckCondition(condition);
-			var dependentWordBsrInternalPhase =
-				condition == 1 && displacement == 0 && !_useM68020BriefIndexedAddressing;
-			if (!dependentWordBsrInternalPhase)
+			var dependentWordBranch = displacement == 0 && !_useM68020BriefIndexedAddressing &&
+				(condition == 1 || (condition == 0 && !UsesFormatWordExceptionFrames));
+			if (!dependentWordBranch)
 			{
                 AddPendingInternalCycles(taken ? 2 : 4);
 			}
@@ -9971,10 +9979,10 @@ namespace Copper68k
                 offset = unchecked((sbyte)displacement);
             }
             _consumeWithoutPrefetch = false;
-			if (dependentWordBsrInternalPhase)
+			if (dependentWordBranch)
 			{
-				// The MC68000/010 word displacement is an operand dependency.
-				// Its IRC transfer must finish before BSR's two internal CPU
+				// The IRC word displacement is an operand dependency.
+				// Its transfer must finish before the branch's two internal CPU
 				// cycles; otherwise a future-ready word absorbs that phase.
 				AddPendingInternalCycles(2);
 			}
