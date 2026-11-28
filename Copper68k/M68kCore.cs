@@ -12058,6 +12058,12 @@ namespace Copper68k
                 AddInstructionCyclesFromBase(_instructionCycleFloor, 4);
             }
 
+            var m68000AbsoluteLongWordCompare = line == 0xB && opmode == 1 &&
+                mode == 7 && eaReg == 1 && !UsesFormatWordExceptionFrames;
+            if (m68000AbsoluteLongWordCompare)
+            {
+                SampleM68000IplAtCurrentBusPhase();
+            }
             var eaValue = eaOperand.Read();
             if (mode == 7 && eaReg == 4 && !writesEffectiveAddress)
             {
@@ -12147,10 +12153,8 @@ namespace Copper68k
                     break;
             }
 
-            if (!_useM68020BriefIndexedAddressing &&
-                mode == 7 &&
-                eaReg == 4 &&
-                !writesEffectiveAddress)
+            if (m68000AbsoluteLongWordCompare ||
+                (!_useM68020BriefIndexedAddressing && mode == 7 && eaReg == 4 && !writesEffectiveAddress))
             {
                 CommitRequiredSequentialFinalPrefetch();
             }

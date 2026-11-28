@@ -428,6 +428,30 @@ public sealed class M68kInterpreterCoreBehaviorTests
 		Assert.Equal(0x7EC5, ReadWord(bus.Memory, 0x7FF8));
 	}
 
+	[Theory]
+	[InlineData(0)]
+	[InlineData(1)]
+	[InlineData(2)]
+	public void AbsoluteLongWordCompareSamplesIplBeforeOperandAndRefillsTheBranch(int dispatch)
+	{
+		var bus = new M68000CycleCountingBus();
+		Write(bus.Memory, 0x1000, Words(0x6002, 0x4E71, 0xB079, 0, 0x2000, 0x6400, 8));
+		Write(bus.Memory, 0x2000, Words(0x8000));
+		using var cpu = new M68kInterpreter(bus, (M68kOpcodePlanDispatch)dispatch);
+		cpu.Reset(0x1000, 0x8000);
+		cpu.ExecuteInstruction();
+		bus.CpuBusPhases.Clear();
+
+		cpu.ExecuteInstruction();
+
+		var phases = bus.CpuBusPhases;
+		Assert.Equal(new uint[] { 0x1008, 0x100A, 0x2000, 0x100C }, phases.Select(phase => phase.Address));
+		Assert.Equal(M68kBusAccessKind.CpuDataRead, phases[2].AccessKind);
+		Assert.Equal(phases[1].CompletedCycle, ((IM68000InterruptRecognition)cpu).LastInterruptSampleCycle);
+		Assert.True(cpu.State.GetFlag(M68kCpuState.Carry));
+		Assert.Equal(0x100Au, cpu.State.ProgramCounter);
+	}
+
 	[Fact]
 	public void CpuDataReadWaitsBehindPendingPrefetch()
 	{
