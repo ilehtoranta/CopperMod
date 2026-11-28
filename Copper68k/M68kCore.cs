@@ -7112,7 +7112,7 @@ namespace Copper68k
 
             var indexedWordToAbsoluteLong = IsM68000IndexedWordMoveToAbsoluteLong(
                 sourceMode, destinationMode, destinationRegister, size);
-            if (indexedWordToAbsoluteLong)
+            if (indexedWordToAbsoluteLong || IsM68000IndexedByteMoveToPredecrement(sourceMode, destinationMode, size))
             {
                 AddPendingInternalCycles(2);
             }
@@ -7639,24 +7639,7 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePlannedMoveLongDataToPostincrement(ushort opcode)
-        {
-            var sourceRegister = opcode & 7;
-            var destinationRegister = (opcode >> 9) & 7;
-            var destinationAddress = State.A[destinationRegister];
-            var value = State.D[sourceRegister];
-            _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
-            if ((destinationAddress & 1) != 0)
-            {
-                AddInstructionCycles(8);
-            }
-
-            WriteLong(destinationAddress, value);
-            SetAddressRegister(destinationRegister, unchecked(destinationAddress + 4));
-            State.SetNegativeZeroLong(value);
-            State.SetFlag(M68kCpuState.Overflow, false);
-            State.SetFlag(M68kCpuState.Carry, false);
-            AddInstructionCycles(12);
-        }
+            => ExecuteMoveLongDataToPostincrement(opcode & 7, (opcode >> 9) & 7);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePlannedMoveLongDataToAbsoluteLong(ushort opcode)
@@ -8330,7 +8313,7 @@ namespace Copper68k
 
             var indexedWordToAbsoluteLong = IsM68000IndexedWordMoveToAbsoluteLong(
                 plan.SourceMode, plan.DestinationMode, plan.DestinationRegister, plan.Size);
-            if (indexedWordToAbsoluteLong)
+            if (indexedWordToAbsoluteLong || IsM68000IndexedByteMoveToPredecrement(plan.SourceMode, plan.DestinationMode, plan.Size))
             {
                 AddPendingInternalCycles(2);
             }
@@ -8558,10 +8541,13 @@ namespace Copper68k
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ExecutePackedMoveLongDataToPostincrement(in M68kPackedOpcodePlan plan)
+            => ExecuteMoveLongDataToPostincrement(plan.SourceRegister, plan.DestinationRegister);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void ExecuteMoveLongDataToPostincrement(int sourceRegister, int destinationRegister)
         {
-            var destinationRegister = plan.DestinationRegister;
             var destinationAddress = State.A[destinationRegister];
-            var value = State.D[plan.SourceRegister];
+            var value = State.D[sourceRegister];
             _dataAccessStackedProgramCounter = State.ProgramCounter + 2;
             if ((destinationAddress & 1) != 0)
             {
@@ -8573,6 +8559,12 @@ namespace Copper68k
             State.SetNegativeZeroLong(value);
             State.SetFlag(M68kCpuState.Overflow, false);
             State.SetFlag(M68kCpuState.Carry, false);
+            if (_m68000BusCycleTiming is not null && !UsesFormatWordExceptionFrames)
+            {
+                // The final IRC refill follows the two writes. Deferring it
+                // to a following DBcc moves it past that instruction's delay.
+                PrefetchFallthroughAfterMemoryWriteback();
+            }
             AddInstructionCycles(12);
         }
 
@@ -9743,7 +9735,7 @@ namespace Copper68k
 
             var indexedWordToAbsoluteLong = IsM68000IndexedWordMoveToAbsoluteLong(
                 srcMode, destMode, destReg, size);
-            if (indexedWordToAbsoluteLong)
+            if (indexedWordToAbsoluteLong || IsM68000IndexedByteMoveToPredecrement(srcMode, destMode, size))
             {
                 AddPendingInternalCycles(2);
             }
@@ -13998,6 +13990,12 @@ namespace Copper68k
             => sourceMode == 6 && destinationMode == 7 && destinationRegister == 1 &&
                 size == M68kOperandSize.Word && _m68000BusCycleTiming is not null &&
                 !UsesFormatWordExceptionFrames;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsM68000IndexedByteMoveToPredecrement(
+            int sourceMode, int destinationMode, M68kOperandSize size)
+            => sourceMode == 6 && destinationMode == 4 && size == M68kOperandSize.Byte &&
+                _m68000BusCycleTiming is not null && !_useM68020BriefIndexedAddressing;
 
         private void CompleteM68000IndexedWordMovePrefetch()
         {
